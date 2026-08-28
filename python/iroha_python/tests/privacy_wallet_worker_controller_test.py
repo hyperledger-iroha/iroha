@@ -20,7 +20,7 @@ sys.modules[SPEC.name] = worker
 SPEC.loader.exec_module(worker)
 
 AUTH_KEY = bytes(range(1, 33))
-PROTOCOL = "iroha-jindo-polynomial-commitment-v0"
+PROTOCOL = "iroha-jindo-polynomial-commitment-v1"
 OPERATION = "jindo_polynomial_evaluation_v1"
 
 
@@ -176,12 +176,12 @@ def written_frames(process: FakeProcess) -> list[tuple[object, int, bytes]]:
 
 def test_generic11_worker_registry_is_closed_and_ordered() -> None:
     assert list(worker.PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1.items()) == [
-        ("zk-ace-pq-authorization-v0", "zk_ace_authorization_action_v1"),
+        ("zk-ace-pq-authorization-v1", "zk_ace_authorization_action_v1"),
         ("anonymous-pgc-k-out-of-n-v1", "anonymous_pgc_payment_action_v1"),
         ("verange-transparent-range-v1", "verange_range_proof_v1"),
         ("iroha-zk-ams-v1", "zk_ams_admission_and_provisioning_v1"),
-        ("vega-existing-credential-zk-v0", "vega_credential_presentation_v1"),
-        ("iroha-jindo-polynomial-commitment-v0", "jindo_polynomial_evaluation_v1"),
+        ("vega-existing-credential-zk-v1", "vega_credential_presentation_v1"),
+        ("iroha-jindo-polynomial-commitment-v1", "jindo_polynomial_evaluation_v1"),
         (
             "iroha-bootle-lantern-anoncred-v1",
             "bootle_lantern_credential_presentation_v1",
@@ -189,7 +189,7 @@ def test_generic11_worker_registry_is_closed_and_ordered() -> None:
         ("orchard-halo2-actions-v1", "orchard_note_action_v1"),
         ("monero-fcmp-plus-plus-v1", "fcmp_membership_payment_v1"),
         ("iroha-ivm-private-note-stark-v1", "ivm_private_note_action_v1"),
-        ("pq-masp-stark-v0", "pq_masp_note_action_v1"),
+        ("pq-masp-stark-v1", "pq_masp_note_action_v1"),
     ]
 
 
@@ -204,7 +204,7 @@ def test_public_intent_digest_matches_the_rust_domain_contract() -> None:
     [
         ({"protocol_id": "sis-with-hints"}, ValueError),
         ({"protocol_id": "jindo-lattice-pcs-zk-v0"}, ValueError),
-        ({"protocol_id": "iroha-zk-x509-stark-p256-v0"}, ValueError),
+        ({"protocol_id": "iroha-zk-x509-stark-p256-v1"}, ValueError),
         ({"chain_id": "taira-testnet"}, TypeError),
         ({"genesis_digest": b"\x11" * 32}, TypeError),
         ({"network_id": b"\0" * 32}, ValueError),

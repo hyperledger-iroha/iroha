@@ -957,6 +957,16 @@ class SccpClientExactTest {
             SccpJsonParser.parseRegistry(jsonBytes(retired))
         }
 
+        val noncanonicalWireName = registry()
+        @Suppress("UNCHECKED_CAST")
+        val noncanonicalSource = (((noncanonicalWireName["lanes"] as MutableList<Any?>)[0]
+            as MutableMap<String, Any?>)["lane_id"] as MutableMap<String, Any?>)["source"]
+            as MutableMap<String, Any?>
+        noncanonicalSource["network"] = "bsc-mainnet"
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(noncanonicalWireName))
+        }
+
         val missingPolicy = registry()
         deployment(missingPolicy).remove("outbound_proof_policy")
         assertFailsWith<IllegalArgumentException> {
@@ -972,6 +982,88 @@ class SccpClientExactTest {
         semantic["public_signal_schema_hash"] = upper(0x2e, 32)
         assertFailsWith<IllegalArgumentException> {
             SccpJsonParser.parseRegistry(jsonBytes(wrongSchema))
+        }
+
+        val replayAddressAlias = registry()
+        deployment(replayAddressAlias).let {
+            it["replay_verifier_address"] = it["route_address"]
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(replayAddressAlias))
+        }
+
+        val replayAddressSubstitution = registry()
+        deployment(replayAddressSubstitution)["replay_verifier_address"] = upper(0x73, 20)
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(replayAddressSubstitution))
+        }
+
+        val replayRuntimeSubstitution = registry()
+        deployment(replayRuntimeSubstitution)["replay_verifier_code_hash"] = upper(0x44, 32)
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(replayRuntimeSubstitution))
+        }
+
+        val breakerAddressSubstitution = registry()
+        deployment(breakerAddressSubstitution)["mint_breaker_address"] = upper(0x74, 20)
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(breakerAddressSubstitution))
+        }
+
+        val breakerRuntimeSubstitution = registry()
+        deployment(breakerRuntimeSubstitution)["mint_breaker_code_hash"] = upper(0x45, 32)
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(breakerRuntimeSubstitution))
+        }
+
+        val swappedRoles = registry()
+        deployment(swappedRoles).let {
+            val replayAddress = it.getValue("replay_verifier_address")
+            val replayCodeHash = it.getValue("replay_verifier_code_hash")
+            it["replay_verifier_address"] = it.getValue("mint_breaker_address")
+            it["replay_verifier_code_hash"] = it.getValue("mint_breaker_code_hash")
+            it["mint_breaker_address"] = replayAddress
+            it["mint_breaker_code_hash"] = replayCodeHash
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(swappedRoles))
+        }
+
+        val emptyRuntimeHash = registry()
+        deployment(emptyRuntimeHash)["mint_breaker_code_hash"] =
+            "C5D2460186F7233C927E7DB2DCC703C0E500B653CA82273B7BFAD8045D85A470"
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(emptyRuntimeHash))
+        }
+
+        val zeroCap = registry()
+        deployment(zeroCap)["max_wrapped_supply"] = 0
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(zeroCap))
+        }
+
+        val missingExecutionPolicy = registry()
+        route(missingExecutionPolicy).remove("sora_outbound_execution_policy")
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(missingExecutionPolicy))
+        }
+
+        val wrongExecutionSemantics = registry()
+        @Suppress("UNCHECKED_CAST")
+        (route(wrongExecutionSemantics)["sora_outbound_execution_policy"] as MutableMap<String, Any?>)[
+            "semantics"
+        ] = "unproved_record_sccp_message_v1"
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(wrongExecutionSemantics))
+        }
+
+        val wrongLiabilityCap = registry()
+        @Suppress("UNCHECKED_CAST")
+        (route(wrongLiabilityCap)["settlement"] as MutableMap<String, Any?>)[
+            "max_outstanding_liability"
+        ] = 8
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(wrongLiabilityCap))
         }
     }
 
@@ -1275,6 +1367,33 @@ class SccpClientExactTest {
         assertFailsWith<IllegalArgumentException> {
             SccpJsonParser.parseRegistry(jsonBytes(malformedKey))
         }
+
+        val unsortedGuardians = tonRegistry()
+        val unsorted = routeDeployment(route(unsortedGuardians))["mint_breaker_guardian_keys"]
+            as MutableMap<String, Any?>
+        unsorted["guardian_1"] = unsorted["guardian_0"]
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(unsortedGuardians))
+        }
+
+        val zeroGuardian = tonRegistry()
+        val zero = routeDeployment(route(zeroGuardian))["mint_breaker_guardian_keys"]
+            as MutableMap<String, Any?>
+        zero["guardian_0"] = upper(0, 32)
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(zeroGuardian))
+        }
+
+        val zeroCap = tonRegistry()
+        routeDeployment(route(zeroCap))["max_wrapped_supply"] = 0
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(zeroCap))
+        }
+
+        requireSccpTonAmountWithinCapV1(BigInteger.valueOf(9), BigInteger.TEN)
+        assertFailsWith<IllegalArgumentException> {
+            requireSccpTonAmountWithinCapV1(BigInteger.valueOf(11), BigInteger.TEN)
+        }
     }
 
     @Test
@@ -1367,7 +1486,7 @@ class SccpClientExactTest {
         assertEquals(upper(0xa2, 32), request.soraFinalityAnchor.checkpointContextId)
         assertEquals(upper(0xa3, 32), request.soraFinalityAnchor.checkpointFinalityArtifactHash)
         assertEquals(
-            "0x4410ee4ccfd06f2d0e3a658615d516ac8cf65255d8a8716ce511ea95e135c8c3",
+            "0xcdbec097fed4ad21e44a354fe09a3c43ad489f4ac78cff8944ba8bb5cc2fd577",
             request.soraFinalityAnchor.anchorHash,
         )
         assertEquals("0x${finalityAnchorHash().lowercase()}", request.soraFinalityAnchor.anchorHash)
@@ -1917,6 +2036,19 @@ class SccpClientExactTest {
         "sora_finality_anchor" to finalityAnchor(),
     )
 
+    private fun soraOutboundExecutionPolicy(): MutableMap<String, Any?> = linkedMapOf(
+        "version" to 1,
+        "semantics" to "ivm_proved_record_sccp_message_v1",
+        "contract_artifact_sha256" to upper(0xb1, 32),
+        "vk_ref" to linkedMapOf(
+            "backend" to "stark/fri/v1",
+            "name" to "ivm-execution-v1",
+            "version" to 1,
+            "commitment" to upper(0xb2, 32),
+        ),
+        "gas_limit" to 50_000_000,
+    )
+
     private fun registry(): MutableMap<String, Any?> {
         val key = verifyingKey()
         val routeAddress = upper(0x31, 20)
@@ -1951,13 +2083,19 @@ class SccpClientExactTest {
                     "outbound_proof_policy" to outboundPolicy(),
                     "route_address" to routeAddress,
                     "route_code_hash" to routeCodeHash,
+                    "replay_verifier_address" to upper(0x71, 20),
+                    "replay_verifier_code_hash" to upper(0x42, 32),
+                    "mint_breaker_address" to upper(0x72, 20),
+                    "mint_breaker_code_hash" to upper(0x43, 32),
                     "taira_to_token_multiplier" to 1_000_000_000,
+                    "max_wrapped_supply" to 9_000_000_000L,
                 ),
             ),
+            "sora_outbound_execution_policy" to soraOutboundExecutionPolicy(),
             "settlement" to linkedMapOf(
                 "asset_definition_id" to "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                "custody_owner" to "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "payload_amount_scale" to 9,
+                "max_outstanding_liability" to 9,
             ),
         )
         assertEquals(DEFAULT_ROUTE_CONFIG_HASH, fixtureRouteConfigurationHash(route))
@@ -2036,15 +2174,23 @@ class SccpClientExactTest {
                     "verifying_key" to key,
                     "verifier_key_hash" to bls12381KeyHash(key),
                     "proof_profile_commitment" to tonProofProfileCommitment(),
+                    "mint_breaker_guardian_keys" to linkedMapOf(
+                        "guardian_0" to upper(1, 32),
+                        "guardian_1" to upper(2, 32),
+                        "guardian_2" to upper(3, 32),
+                        "guardian_3" to upper(4, 32),
+                        "guardian_4" to upper(5, 32),
+                    ),
                     "outbound_proof_policy" to tonOutboundPolicy(),
                     "taira_to_token_multiplier" to 1,
+                    "max_wrapped_supply" to 9_000_000_000L,
                 ),
             ),
+            "sora_outbound_execution_policy" to soraOutboundExecutionPolicy(),
             "settlement" to linkedMapOf(
                 "asset_definition_id" to "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                "custody_owner" to
-                    "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "payload_amount_scale" to 9,
+                "max_outstanding_liability" to 9_000_000_000L,
             ),
         )
         sourceIdentity(route)["route_config_hash"] = fixtureTonRouteConfigurationHash(route)
@@ -2218,6 +2364,10 @@ class SccpClientExactTest {
         val routeAddress = deployment["route_address"] as String
         val verifierCodeHash = (deployment["verifier_code_hash"] as String).hexToBytes()
         val verifierKeyHash = (deployment["verifier_key_hash"] as String).hexToBytes()
+        val replayVerifierAddress = deployment["replay_verifier_address"] as String
+        val replayVerifierCodeHash = (deployment["replay_verifier_code_hash"] as String).hexToBytes()
+        val mintBreakerAddress = deployment["mint_breaker_address"] as String
+        val mintBreakerCodeHash = (deployment["mint_breaker_code_hash"] as String).hexToBytes()
         val destinationBindingHash = if (isTron) {
             keccak(
                 concatenate(
@@ -2233,6 +2383,10 @@ class SccpClientExactTest {
                         verifierKeyHash,
                         semanticHash,
                         anchorHash,
+                        abiTronAddress(replayVerifierAddress),
+                        replayVerifierCodeHash,
+                        abiTronAddress(mintBreakerAddress),
+                        mintBreakerCodeHash,
                     ),
                 ),
             )
@@ -2249,6 +2403,10 @@ class SccpClientExactTest {
             anchorHash,
         )
         destinationBindingHash?.let(deploymentWords::add)
+        deploymentWords.add(abiAddress(replayVerifierAddress))
+        deploymentWords.add(replayVerifierCodeHash)
+        deploymentWords.add(abiAddress(mintBreakerAddress))
+        deploymentWords.add(mintBreakerCodeHash)
         val deploymentConfigurationHash = keccak(concatenate(deploymentWords))
         val routeId = route["route_id"] as String
         val revision = (route["revision"] as Number).toLong()
@@ -2260,6 +2418,7 @@ class SccpClientExactTest {
                     keccak(routeId.toByteArray(Charsets.US_ASCII)),
                     abiWord(revision),
                     abiWord(multiplier),
+                    abiWord((deployment["max_wrapped_supply"] as Number).toLong()),
                 ),
             ),
         )
@@ -2298,6 +2457,7 @@ class SccpClientExactTest {
             output.write((deployment["verifier_circuit_hash"] as String).hexToBytes())
             output.write((deployment["verifier_key_hash"] as String).hexToBytes())
             output.write((deployment["proof_profile_commitment"] as String).hexToBytes())
+            guardianKeys(deployment).forEach(output::write)
             output.write(tonSemanticProfileHash().hexToBytes())
             output.write(finalityAnchorHash().hexToBytes())
             output.write(binding.hexToBytes())
@@ -2307,6 +2467,7 @@ class SccpClientExactTest {
             writeLengthPrefixed(output, (route["route_id"] as String).toByteArray(Charsets.US_ASCII))
             writeU32(output, (route["revision"] as Number).toInt())
             writeU64(output, (deployment["taira_to_token_multiplier"] as Number).toLong())
+            writeU128(output, BigInteger(deployment["max_wrapped_supply"].toString()))
         }.toByteArray()
         val payload = ByteArrayOutputStream().also { output ->
             output.write("sccp:concrete-route-config:v1".toByteArray(Charsets.UTF_8))
@@ -2341,10 +2502,17 @@ class SccpClientExactTest {
             output.write((deployment["verifier_circuit_hash"] as String).hexToBytes())
             output.write((deployment["verifier_key_hash"] as String).hexToBytes())
             output.write((deployment["proof_profile_commitment"] as String).hexToBytes())
+            guardianKeys(deployment).forEach(output::write)
             output.write(tonSemanticProfileHash().hexToBytes())
             output.write(finalityAnchorHash().hexToBytes())
         }.toByteArray()
         return sha256(payload).toUpperHex()
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun guardianKeys(deployment: Map<String, Any?>): List<ByteArray> {
+        val guardians = deployment["mint_breaker_guardian_keys"] as Map<String, Any?>
+        return (0..4).map { (guardians["guardian_$it"] as String).hexToBytes() }
     }
 
     private fun transferPayload(): MutableMap<String, Any?> = linkedMapOf(
@@ -2700,7 +2868,7 @@ class SccpClientExactTest {
     private fun finalityAnchorHash(protocolVersion: Int = 4): String {
         val canonical = ByteArrayOutputStream().also { output ->
             output.write(1)
-            output.write(1)
+            output.write(SccpNetworkV1.SORA_TAIRA.tag)
             writeU16(output, protocolVersion)
             output.write(tairaChainIdHash().hexToBytes())
             writeU64(output, 7)
@@ -2725,6 +2893,12 @@ class SccpClientExactTest {
 
     private fun writeU64(out: ByteArrayOutputStream, value: Long) {
         repeat(8) { shift -> out.write(((value ushr (shift * 8)) and 0xff).toInt()) }
+    }
+
+    private fun writeU128(out: ByteArrayOutputStream, value: BigInteger) {
+        repeat(16) { shift ->
+            out.write(value.shiftRight(shift * 8).and(BigInteger.valueOf(0xff)).toInt())
+        }
     }
 
     private fun writeU16(out: ByteArrayOutputStream, value: Int) {
@@ -2780,9 +2954,9 @@ class SccpClientExactTest {
         )
         // These authenticate this fixture's semantic commitments and deployment code hashes.
         const val DEFAULT_ROUTE_CONFIG_HASH =
-            "65ABF3081D137062860FD712B5414A17C3664FD42C7567373FF3302BA331EFDD"
+            "FDCE93E148D8A9BD3BE2E7051AF681A757CA273F409073F9402F5534D32C399B"
         const val TRON_ROUTE_CONFIG_HASH =
-            "1BB8C081AA96766CF63FFE063E5B506FF17005E033C7B47E9760214C4C8D5519"
+            "60544E93C2B5E96761C90DC96E7E24EC1D6EDD5BEE2E2A946D7ED9632535177D"
         val BLS12381_SCALAR_MODULUS = BigInteger(
             "73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001",
             16,

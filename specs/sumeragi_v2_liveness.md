@@ -80,8 +80,11 @@ FIFO position with a retryable `Busy` disposition; it is not terminally marked
 irrelevant. Although that certificate shares the Progress lane, an ordinary
 production turn detects when it is the view-blocked class minimum. If ordinary
 timer/FIFO arbitration has selected FIFO, the turn uses the ownership-sealed
-pacemaker selector for one later authenticated current-view TimeoutVote, TC,
-or CommitQC. Its scheduler receipt binds the exact blocked occurrence,
+pacemaker selector for one later authenticated admissible TimeoutVote,
+at-or-ahead TC, or same-height CommitQC. TimeoutVotes retain the reducer's
+current-or-adjacent-view window; a TC may install a newer view, and a CommitQC
+already supersedes the blocked PrepareQC with terminal decision evidence. Its
+scheduler receipt binds the exact blocked occurrence,
 lifecycle and FIFO position, and target view to the pre- and post-selection
 queue snapshots. This allows a TC to install the missing view without
 discarding or reordering the certificate's FIFO owner. The exact PrepareQC is
@@ -556,6 +559,16 @@ reach later archives or predecessor members, including a responsive peer beyond
 the original corridor capacity. Either authoritative cancellation path removes
 the retained request fanout and drops any actor ticket it owns.
 
+A canonical historical-body request keeps one immutable request hash while its
+bounded retry cursor samples current configured archives. Every identity whose
+request effect was actually queued remains response-authorized across later
+rotations, so a delayed exact response from an earlier live attempt cannot be
+invalidated by the next retry. That union is preflighted atomically against the
+lane session bound before any new fanout becomes visible. Exceeding the bound
+retains every live identity and fails closed for restart; completion or request
+replacement retires the request, its entire responder union, and all retained
+exact-output occurrences together.
+
 An authenticated merge-sidecar `GenerationHint` which durably advances a
 requester stream also retains the strongest pending cancellation fence for that
 semantic responder. The table is bounded by the protocol's maximum responder
@@ -686,8 +699,10 @@ separate certified-fence-escape corridor;
 requires a current-roster semantic origin. The two request-bound historical
 responses are the bounded exceptions: a certified-body response may come from
 the authenticated current archive peer named in its signed response, while a
-lane recovery response may come from an authenticated predecessor signer. The
-adapters admit either exception only for its outstanding exact request and
+canonical-block lane recovery response may come from an exact current archive
+which the outstanding request actually solicited. Autonomous-payload lane
+recovery retains its authenticated predecessor-signer authority. The adapters
+admit each exception only for its outstanding exact request and
 revalidate the corresponding frozen certificate or finality artifact. Relay
 delivery keeps semantic origin separate from authenticated transport via: the
 reducer and equivocation checks use origin, while count, bytes, and fair service
@@ -912,6 +927,14 @@ remote-only eviction. This witness is bounded Kura-local serving authority,
 not an inclusion proof exported to consensus: every requester independently
 matches the reference and certified entry to its own canonical carrier and
 rejects a substituted or non-holder response.
+An authenticated current-roster requester may obtain that exact historical
+merge sidecar even when it was absent from the old finality roster; a requester
+outside the current roster must still belong to the exact historical finality
+roster. Conversely, an archive serving a canonical historical block need not
+have signed the old CommitQC when it is a currently configured destination and
+its Kura record independently matches the exact finality, header, body, and
+wire commitments. These topology allowances change transport reachability,
+not the immutable historical authority.
 Canonical version-2 retained records remain restart-readable. They expose no
 merge witness because none was stored. If their exact body remains available,
 the same persistence operation that precedes eviction replaces the legacy
@@ -1000,6 +1023,45 @@ response hash. A historical lane-certificate response rereads the exact
 certified Kura lane artifact and requires the same lane/height, proposal,
 PrepareQC, CommitQC, target, and certificate hash. Cached claims alone are
 never sufficient.
+
+Ordinary exact-output retry may use that applied-height authority before the
+terminal rollover pass only after `State` has committed the same height. The
+worker then rereads and cryptographically validates the exact Kura finality
+artifact; Kura persistence by itself is not an application witness. An
+unranked topology target may be retired only when the existing typed
+applied-height verifier covers its complete fan-out. This includes exact
+current-height global control and manifest-bound, sender-signed payload chunks.
+A target with a live actor ticket, a manual or untyped claim, a mismatched
+creation scope, or substituted payload bytes remains owned.
+
+The same ordering applies to a durable Kura replica advert: Kura finality alone
+cannot release it. Only after `State` commits the height may ordinary retry
+reread the exact finality and retire an unranked topology target whose typed
+claim is exactly `DurableKuraReplicaAdvert`. Released source heights are
+rescheduled through the process-lifetime refresh owner after the output locks
+drop. Ticketed output, pre-application state, and any substituted claim remain
+owned.
+
+QueuePlan admission output uses the same ticketless applied-height release but
+requires the independently reread Kura certificate bytes to match its exact
+hash-addressed claim. Missing or substituted bytes and live actor tickets remain
+owned. Releasing QueuePlan output does not schedule a Kura replica-advert
+refresh.
+
+A WAL-recovered Decision fetch retains its original signed request, quorum
+certificate, height context, and response verifier, but reconstructs delivery
+destinations from the bounded current configured-peer snapshot. The frozen
+height roster is used only when that snapshot has no remote target. Thus an
+offline topology or key rotation cannot recreate the same request indefinitely
+against departed peers, while a response still has to bind its authenticated
+outer identity, request hash, signature, subject, manifest, and canonical body.
+
+Canonical executed-block recovery follows the same current-archive-first rule,
+with the frozen finality roster as the empty-snapshot fallback. A multi-chunk
+response pins the exact selected responder, request, finality, executed-wire
+hash, and chunk geometry until completion. Timeout or poisoned assembly clears
+that pin before the next bounded retry samples a fresh archive; chunks from an
+unscheduled or mixed responder cannot complete the block.
 
 The chain-scoped block-sync server retains one coarse logical slot per
 requester/context request and separately fingerprints the signed request's
@@ -1102,6 +1164,14 @@ delivery keeps that queue full. While the progress occurrence is queued, an
 ordinary source returned by downstream backpressure may re-enter beside it;
 the combined queue remains bounded at `effect_capacity + 1`, and draining the
 NewView occurrence restores the ordinary configured bound.
+
+Autonomous producer rechecks distinguish immutable planning failures from
+State/Kura races. `BlockedPredecessor` and `PlanningSnapshotChanged` leave the
+route unattempted, preserve its FIFO work, and retry on the configured bounded
+producer cadence; once the exact predecessor application receipt or stable
+snapshot exists, the next tick may reserve and publish normally. Conflicting,
+inactive, malformed, and otherwise immutable planning failures retain terminal
+height-local suppression and never reserve work.
 
 A successor adapter treats every moved earlier-height proposal, vote, QC,
 certificate, executable payload, and NewView artifact as historical work. Each

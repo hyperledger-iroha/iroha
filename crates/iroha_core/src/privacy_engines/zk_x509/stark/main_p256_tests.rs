@@ -102,7 +102,10 @@ fn main_log19_query_union_rejects_wrong_count_duplicate_range_and_tampering() {
     ));
     let mut wrong_digest = MainLog19VerifierQueryScheduleV1::from_query_coordinates_v1(&canonical)
         .expect("canonical schedule");
-    wrong_digest.order_digest[0] ^= 1;
+    let mut wrong_words = wrong_digest.order_digest.words();
+    wrong_words[0] ^= 1;
+    wrong_digest.order_digest =
+        GoldilocksDigest384V1::new(wrong_words).expect("canonical changed order digest");
     assert!(matches!(
         wrong_digest.validate_v1(),
         Err(ZkX509StarkErrorV1::TraceOpening)

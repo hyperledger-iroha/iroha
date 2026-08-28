@@ -6060,7 +6060,7 @@ mod tests {
         assert!(decode_ivm_proved_stark_open_proof(&alternate_open).is_err());
         let envelope = ZkOpenVerifyEnvelope {
             backend: ZkBackendTag::Stark,
-            circuit_id: "stark/fri/sha256-goldilocks:ivm-execution-v1".to_owned(),
+            circuit_id: "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1".to_owned(),
             vk_hash: [9_u8; 32],
             public_inputs: b"ivm-execution-v1".to_vec(),
             proof_bytes: canonical_open,
@@ -7187,8 +7187,8 @@ seiyaku ProtectedProvedOverlay {
             let bytes = norito::to_bytes(&overlay).expect("encode overlay");
             Hash::new(&bytes)
         };
-        let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = "stark/fri/sha256-goldilocks:ivm-execution-v1";
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1";
         let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
@@ -7198,7 +7198,6 @@ seiyaku ProtectedProvedOverlay {
             fold_arity: 2,
             queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
-            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
         let vk_box = VerifyingKeyBox::new(
             backend.into(),
@@ -7323,8 +7322,8 @@ seiyaku ProtectedProvedOverlay {
             let bytes = norito::to_bytes(&overlay).expect("encode overlay");
             Hash::new(&bytes)
         };
-        let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = "stark/fri/sha256-goldilocks:ivm-execution-v1";
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1";
         let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
@@ -7334,7 +7333,6 @@ seiyaku ProtectedProvedOverlay {
             fold_arity: 2,
             queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
-            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
         let vk_box = VerifyingKeyBox::new(
             backend.into(),
@@ -7409,7 +7407,7 @@ seiyaku ProtectedProvedOverlay {
         );
         let err = crate::zk::prove_stark_fri_ivm_execution_envelope(
             backend,
-            "stark/fri/sha256-goldilocks:not-ivm-execution-v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1:not-ivm-execution-v1",
             &vk_box,
             code_hash,
             overlay_hash,

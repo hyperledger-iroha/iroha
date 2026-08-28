@@ -46,8 +46,10 @@ mod tests {
     use crate::{OperationKind, StateTransition};
     #[test]
     fn ordering_hash_stable_under_permutations() {
-        let mut original =
-            TransitionBatch::new("fastpq-lane-balanced", crate::PublicInputs::default());
+        let mut original = TransitionBatch::new(
+            "fastpq-state-transition-stark-v1",
+            crate::PublicInputs::default(),
+        );
         original.push(StateTransition::new(
             b"asset/a".to_vec(),
             vec![1],
@@ -75,8 +77,10 @@ mod tests {
     }
     #[test]
     fn ordering_hash_matches_expected_digest() {
-        let mut batch =
-            TransitionBatch::new("fastpq-lane-balanced", crate::PublicInputs::default());
+        let mut batch = TransitionBatch::new(
+            "fastpq-state-transition-stark-v1",
+            crate::PublicInputs::default(),
+        );
         batch.push(StateTransition::new(
             b"k1".to_vec(),
             vec![0x01],
@@ -103,16 +107,20 @@ mod tests {
     }
     #[test]
     fn ordering_hash_distinguishes_trailing_zero_bytes() {
-        let mut baseline =
-            TransitionBatch::new("fastpq-lane-balanced", crate::PublicInputs::default());
+        let mut baseline = TransitionBatch::new(
+            "fastpq-state-transition-stark-v1",
+            crate::PublicInputs::default(),
+        );
         baseline.push(StateTransition::new(
             b"key".to_vec(),
             vec![0x01],
             vec![],
             OperationKind::Transfer,
         ));
-        let mut padded =
-            TransitionBatch::new("fastpq-lane-balanced", crate::PublicInputs::default());
+        let mut padded = TransitionBatch::new(
+            "fastpq-state-transition-stark-v1",
+            crate::PublicInputs::default(),
+        );
         padded.push(StateTransition::new(
             b"key".to_vec(),
             vec![0x01, 0x00],

@@ -457,15 +457,8 @@ from .privacy import (
     stream_privacy_events,
 )
 from .privacy_catalog import (
-    PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1,
-    PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
     PRIVACY_PROTOCOL_IDS_V1,
-    PrivacyCapabilityRowV1,
-    PrivacyCapabilitySnapshotError,
-    PrivacyCapabilitySnapshotV1,
     PrivacyProtocolIdV1,
-    parse_privacy_capability_snapshot_json_v1,
-    parse_privacy_capability_snapshot_v1,
 )
 from .privacy_exact12 import (
     PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
@@ -873,15 +866,8 @@ _BASE_EXPORTS = [
     "load_privacy_events_from_ndjson",
     "fetch_privacy_events",
     "stream_privacy_events",
-    "PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1",
-    "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
     "PRIVACY_PROTOCOL_IDS_V1",
-    "PrivacyCapabilityRowV1",
-    "PrivacyCapabilitySnapshotError",
-    "PrivacyCapabilitySnapshotV1",
     "PrivacyProtocolIdV1",
-    "parse_privacy_capability_snapshot_json_v1",
-    "parse_privacy_capability_snapshot_v1",
     "PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1",
     "PRIVACY_WALLET_WORKER_MAX_EXECUTION_PLAN_BYTES_V1",
     "PRIVACY_WALLET_WORKER_MAX_FRAME_BYTES_V1",

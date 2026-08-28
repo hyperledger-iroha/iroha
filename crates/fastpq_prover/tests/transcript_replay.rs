@@ -38,7 +38,7 @@ fn annotate_batch(batch: &mut TransitionBatch) {
 }
 #[cfg(feature = "fastpq-gpu")]
 fn preview_fixture_batch(rows: usize) -> TransitionBatch {
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+    let mut batch = TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
     let mut transcripts = Vec::new();
     let mut row_idx = 0usize;
     let mut transfer_idx = 0usize;
@@ -158,7 +158,7 @@ fn v1_preview_fixture_verifies_transcript() {
     let batch = preview_fixture_batch(64);
     let path = fixture_path();
     if fixture_update_requested() {
-        let prover = Prover::canonical("fastpq-lane-balanced").expect("prover");
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").expect("prover");
         let proof = prover
             .prove_raw_statement(&batch)
             .expect("raw fixture proof");
@@ -173,7 +173,7 @@ fn v1_preview_fixture_verifies_transcript() {
     );
     let proof: Proof = norito::decode_from_bytes(expected).expect("decode proof");
     verify_raw_statement(&batch, &proof).expect("raw fixture proof verifies");
-    let prover = Prover::canonical("fastpq-lane-balanced").expect("prover");
+    let prover = Prover::canonical("fastpq-state-transition-stark-v1").expect("prover");
     let regenerated = prover
         .prove_raw_statement(&batch)
         .expect("regenerate raw fixture proof");

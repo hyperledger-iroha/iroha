@@ -1479,24 +1479,38 @@ fn sccp_evm_lane_for_testing(
     }
 }
 fn eth_test_lane_for_testing() -> SccpGovernedLaneV1 {
-    sccp_evm_lane_for_testing(iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia)
+    sccp_evm_lane_for_testing(iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet)
 }
 fn bsc_test_lane_for_testing() -> SccpGovernedLaneV1 {
-    sccp_evm_lane_for_testing(iroha_data_model::bridge::SccpNetworkV1::BscTestnet)
+    sccp_evm_lane_for_testing(iroha_data_model::bridge::SccpNetworkV1::BscMainnet)
 }
-fn sccp_lane_with_custody_seed_for_testing(
+fn sccp_lane_with_cap_seed_for_testing(
     network: iroha_data_model::bridge::SccpNetworkV1,
     seed: u8,
 ) -> SccpGovernedLaneV1 {
     let mut lane = sccp_evm_lane_for_testing(network);
-    lane.routes[0].settlement.custody_owner = AccountId::new(
-        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-            .expect("derive SCCP custody fixture")
-            .public_key()
-            .clone(),
-    );
+    let revision = {
+        let route = &mut lane.routes[0];
+        route.settlement.max_outstanding_liability = route
+            .settlement
+            .max_outstanding_liability
+            .checked_add(u128::from(seed))
+            .expect("seeded SCCP liability cap fits u128");
+        let iroha_data_model::bridge::SccpDestinationDeploymentV1::Evm(deployment) =
+            &mut route.destination
+        else {
+            panic!("EVM lane fixture has an EVM destination deployment")
+        };
+        deployment.max_wrapped_supply = route
+            .settlement
+            .max_outstanding_liability
+            .checked_mul(u128::from(deployment.taira_to_token_multiplier))
+            .expect("seeded SCCP wrapped-supply cap fits u128");
+        route.revision
+    };
+    set_sccp_route_revision_for_testing(&mut lane.routes[0], revision);
     lane.validate()
-        .expect("mutated custody fixture remains valid");
+        .expect("mutated liability-cap fixture remains valid");
     lane
 }
 fn set_sccp_route_revision_for_testing(
@@ -1512,9 +1526,6 @@ fn set_sccp_route_revision_for_testing(
         iroha_data_model::bridge::SccpSourceEmitterV1::Tron(_) => {
             unreachable!("state helper constructs EVM routes")
         }
-        iroha_data_model::bridge::SccpSourceEmitterV1::Solana(_) => {
-            unreachable!("state helper constructs EVM routes")
-        }
         iroha_data_model::bridge::SccpSourceEmitterV1::Ton(_) => {
             unreachable!("state helper constructs EVM routes")
         }
@@ -1528,6 +1539,329 @@ fn install_sccp_registry_for_transaction(
     let_row! { validated = ValidatedSccpRegistryV1::try_from_wire(wire).expect("valid SCCP registry fixture") };
     *transaction.world.sccp_registry.get_mut() = validated.to_wire();
     transaction.sccp_registry = validated;
+}
+pub(crate) fn ton_breaker_hydration_fixture_for_testing() -> (
+    Arc<ValidatedSccpRegistryV1>,
+    iroha_data_model::bridge::SccpRouteKeyV1,
+    iroha_data_model::bridge::SccpTonBreakerObservationRecordV1,
+) {
+    use iroha_data_model::bridge::{
+        SCCP_TON_MAINNET_GLOBAL_ID_V1, SCCP_TON_MASTERCHAIN_SHARD_V1,
+        SCCP_TON_MASTERCHAIN_WORKCHAIN_V1, SCCP_V1_TON_STORAGE_VERSION,
+        SccpDestinationDeploymentV1, SccpLaneIdV1, SccpNetworkV1, SccpRouteActivationV1,
+        SccpTonAccountStateReadbackV1, SccpTonBlockIdExtV1, SccpTonBreakerObservationRecordV1,
+        SccpTonBridgePendingReadbackV1, SccpTonDeploymentReadbackV1,
+        SccpTonFinalizedMasterchainBlockV1, SccpTonMasterStorageReadbackV1,
+        SccpTonReplayForestReadbackV1, SccpTonRouteStorageReadbackV1,
+        canonical_sccp_lane_id_bytes_v1, sccp_lane_id_hash_v1,
+    };
+
+    let route = iroha_sccp::sccp_exact_ton_governed_route_test_fixture_v1(
+        SccpNetworkV1::TonMainnet,
+        SccpRouteActivationV1::Staged,
+    );
+    let route_key = route.key();
+    let SccpDestinationDeploymentV1::Ton(deployment) = route.destination else {
+        unreachable!("the exact TON fixture must contain a TON deployment")
+    };
+    let source_lane = route.lane_id;
+    let destination_lane = SccpLaneIdV1 {
+        source: SccpNetworkV1::SoraTaira,
+        target: SccpNetworkV1::TonMainnet,
+    };
+    let route_configuration_hash = route
+        .route_configuration_hash()
+        .expect("exact TON fixture has a route configuration hash");
+    let destination_binding_hash = route
+        .destination_binding_hash()
+        .expect("exact TON fixture has a destination binding hash");
+    let semantic_proof_profile_hash = deployment
+        .outbound_proof_policy
+        .semantic_profile_hash()
+        .expect("exact TON fixture has a semantic profile hash");
+    let sora_finality_anchor_hash = deployment
+        .outbound_proof_policy
+        .sora_finality_anchor_hash()
+        .expect("exact TON fixture has a finality anchor hash");
+    let bridge_config_cell_hash = [0xb1; 32];
+    let verifying_key_cell_hash = [0xb2; 32];
+    let master_metadata_hash = [0xb3; 32];
+    let masterchain_seqno = 41;
+    let masterchain_gen_utime = 1_700_000_000;
+    let shard_block = SccpTonBlockIdExtV1 {
+        workchain: 0,
+        shard: 0x8000_0000_0000_0000,
+        seqno: 39,
+        root_hash: [0xc1; 32],
+        file_hash: [0xc2; 32],
+    };
+    let empty_replay = SccpTonReplayForestReadbackV1 {
+        root_hash: None,
+        leaf_count: 0,
+        update_sequence: 0,
+    };
+    let mut record = SccpTonBreakerObservationRecordV1 {
+        route_key: route_key.clone(),
+        masterchain: SccpTonFinalizedMasterchainBlockV1 {
+            block_id: SccpTonBlockIdExtV1 {
+                workchain: SCCP_TON_MASTERCHAIN_WORKCHAIN_V1,
+                shard: SCCP_TON_MASTERCHAIN_SHARD_V1,
+                seqno: masterchain_seqno,
+                root_hash: [0xc3; 32],
+                file_hash: [0xc4; 32],
+            },
+            gen_utime: masterchain_gen_utime,
+        },
+        route_account: SccpTonAccountStateReadbackV1 {
+            address: deployment.route_address,
+            shard_block,
+            registered_masterchain_seqno: masterchain_seqno,
+            shard_state_hash: [0xc5; 32],
+            account_state_hash: [0xc6; 32],
+            code_hash: deployment.route_code_hash,
+            data_hash: [0xc7; 32],
+        },
+        jetton_master_account: SccpTonAccountStateReadbackV1 {
+            address: deployment.jetton_master_address,
+            shard_block: SccpTonBlockIdExtV1 {
+                root_hash: [0xc8; 32],
+                file_hash: [0xc9; 32],
+                ..shard_block
+            },
+            registered_masterchain_seqno: masterchain_seqno,
+            shard_state_hash: [0xca; 32],
+            account_state_hash: [0xcb; 32],
+            code_hash: deployment.jetton_master_code_hash,
+            data_hash: [0xcc; 32],
+        },
+        deployment: SccpTonDeploymentReadbackV1 {
+            jetton_master_address: deployment.jetton_master_address,
+            route_address: deployment.route_address,
+            expected_global_id: SCCP_TON_MAINNET_GLOBAL_ID_V1,
+            route_revision: route.revision,
+            taira_to_ton_multiplier: deployment.taira_to_token_multiplier,
+            max_wrapped_supply: deployment.max_wrapped_supply,
+            source_lane_bytes: canonical_sccp_lane_id_bytes_v1(source_lane)
+                .expect("TON source lane has canonical bytes"),
+            destination_lane_bytes: canonical_sccp_lane_id_bytes_v1(destination_lane)
+                .expect("TON destination lane has canonical bytes"),
+            source_lane_hash: sccp_lane_id_hash_v1(source_lane)
+                .expect("TON source lane has a canonical hash"),
+            destination_lane_hash: sccp_lane_id_hash_v1(destination_lane)
+                .expect("TON destination lane has a canonical hash"),
+            route_configuration_hash,
+            destination_binding_hash,
+            bridge_config_cell_hash,
+            jetton_master_code_hash: deployment.jetton_master_code_hash,
+            jetton_master_initial_data_hash: deployment.jetton_master_initial_data_hash,
+            jetton_wallet_code_hash: deployment.jetton_wallet_code_hash,
+            route_code_hash: deployment.route_code_hash,
+            route_initial_data_hash: deployment.route_initial_data_hash,
+            embedded_verifier_code_hash: deployment.embedded_verifier_code_hash,
+            verifier_circuit_hash: deployment.verifier_circuit_hash,
+            verifying_key_hash: deployment.verifier_key_hash,
+            verifying_key_cell_hash,
+            proof_profile_commitment: deployment.proof_profile_commitment,
+            semantic_proof_profile_hash,
+            sora_finality_anchor_hash,
+            mint_breaker_guardian_keys: deployment.mint_breaker_guardian_keys,
+            master_metadata_hash,
+        },
+        route_storage: SccpTonRouteStorageReadbackV1 {
+            storage_version: SCCP_V1_TON_STORAGE_VERSION,
+            route_configuration_hash,
+            bridge_config_cell_hash,
+            inbound_mint_replay: empty_replay,
+            outbound_burn_replay: empty_replay,
+            pending: SccpTonBridgePendingReadbackV1 {
+                mint_root_hash: None,
+                burn_root_hash: None,
+                mint_count: 0,
+                burn_count: 0,
+            },
+            minting_disabled: false,
+        },
+        master_storage: SccpTonMasterStorageReadbackV1 {
+            storage_version: SCCP_V1_TON_STORAGE_VERSION,
+            route_configuration_hash,
+            bridge_config_cell_hash,
+            total_supply: 1,
+            metadata_hash: master_metadata_hash,
+            route_address: deployment.route_address,
+            mint_replay: empty_replay,
+            burn_replay: empty_replay,
+            pending_mint_root_hash: None,
+            pending_mint_count: 0,
+            minting_disabled: false,
+        },
+        effective_disabled: false,
+        disabled_latched: false,
+        proof_sha256: [0xcd; 32],
+        proof_size_bytes: 1_024,
+        accepted_at_height: 7,
+        accepted_at_unix_ms: u64::from(masterchain_gen_utime) * 1_000,
+        observation_digest: [0; 32],
+    };
+    record.observation_digest = record.computed_digest();
+    assert!(
+        record.is_well_formed(),
+        "TON hydration fixture is canonical"
+    );
+
+    let registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 {
+        version: 1,
+        lanes: vec![SccpGovernedLaneV1 {
+            lane_id: route.lane_id,
+            native_trust_anchors: Vec::new(),
+            current_native_trust_anchor_hash: None,
+            routes: vec![route],
+        }],
+    })
+    .expect("exact staged TON registry fixture is valid");
+    (registry, route_key, record)
+}
+fn world_with_ton_breaker_observation_for_testing(
+    registry: &ValidatedSccpRegistryV1,
+    map_key: iroha_data_model::bridge::SccpRouteKeyV1,
+    record: iroha_data_model::bridge::SccpTonBreakerObservationRecordV1,
+) -> World {
+    let mut world = World::default();
+    world.sccp_registry = Cell::new(registry.to_wire());
+    world.sccp_ton_breaker_observations.insert(map_key, record);
+    world
+}
+state_test! { sync sccp_ton_breaker_observation_hydration_accepts_canonical_record
+    let (registry, route_key, record) = ton_breaker_hydration_fixture_for_testing();
+    let world = world_with_ton_breaker_observation_for_testing(
+        registry.as_ref(),
+        route_key,
+        record,
+    );
+    validate_sccp_ton_breaker_observations_v1(&world, registry.as_ref(), 7)
+        .expect("a self-consistent TON observation bound to retained governance must hydrate");
+}
+state_test! { sync sccp_ton_breaker_observation_hydration_rejects_corruption_and_governance_drift
+    let (registry, route_key, record) = ton_breaker_hydration_fixture_for_testing();
+    let assert_rejected = |
+        registry: &ValidatedSccpRegistryV1,
+        map_key: iroha_data_model::bridge::SccpRouteKeyV1,
+        record: iroha_data_model::bridge::SccpTonBreakerObservationRecordV1,
+        committed_height: usize,
+        expected: &str,
+    | {
+        let world = world_with_ton_breaker_observation_for_testing(registry, map_key, record);
+        let error = validate_sccp_ton_breaker_observations_v1(
+            &world,
+            registry,
+            committed_height,
+        )
+        .expect_err("hostile TON breaker state must fail hydration");
+        assert!(
+            error.contains(expected),
+            "unexpected TON breaker hydration error: {error}"
+        );
+    };
+
+    let mut wrong_map_key = route_key.clone();
+    wrong_map_key.revision = wrong_map_key
+        .revision
+        .checked_add(1)
+        .expect("fixture revision leaves room for a mismatched key");
+    assert_rejected(
+        registry.as_ref(),
+        wrong_map_key,
+        record.clone(),
+        7,
+        "not self-consistent",
+    );
+
+    let mut bad_digest = record.clone();
+    bad_digest.observation_digest[0] ^= 1;
+    assert_rejected(
+        registry.as_ref(),
+        route_key.clone(),
+        bad_digest,
+        7,
+        "not self-consistent",
+    );
+
+    let mut future_height = record.clone();
+    future_height.accepted_at_height = 8;
+    future_height.observation_digest = future_height.computed_digest();
+    assert!(future_height.is_well_formed());
+    assert_rejected(
+        registry.as_ref(),
+        route_key.clone(),
+        future_height,
+        7,
+        "accepted above committed height",
+    );
+
+    let empty_registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1::default())
+        .expect("empty SCCP registry is canonical");
+    assert_rejected(
+        empty_registry.as_ref(),
+        route_key.clone(),
+        record.clone(),
+        7,
+        "has no retained governed route",
+    );
+
+    for (label, mut hostile) in [
+        ("master initial data", record.clone()),
+        ("route initial data", record.clone()),
+        ("master address", record.clone()),
+        ("route address", record.clone()),
+        ("master code", record.clone()),
+        ("route code", record.clone()),
+    ] {
+        match label {
+            "master initial data" => {
+                hostile.deployment.jetton_master_initial_data_hash = [0xd1; 32];
+            }
+            "route initial data" => {
+                hostile.deployment.route_initial_data_hash = [0xd2; 32];
+            }
+            "master address" => {
+                let substituted = iroha_data_model::bridge::SccpTonAddressV1 {
+                    workchain: 0,
+                    account: [0xd3; 32],
+                };
+                hostile.deployment.jetton_master_address = substituted;
+                hostile.jetton_master_account.address = substituted;
+            }
+            "route address" => {
+                let substituted = iroha_data_model::bridge::SccpTonAddressV1 {
+                    workchain: 0,
+                    account: [0xd4; 32],
+                };
+                hostile.deployment.route_address = substituted;
+                hostile.route_account.address = substituted;
+                hostile.master_storage.route_address = substituted;
+            }
+            "master code" => {
+                hostile.deployment.jetton_master_code_hash = [0xd5; 32];
+                hostile.jetton_master_account.code_hash = [0xd5; 32];
+            }
+            "route code" => {
+                hostile.deployment.route_code_hash = [0xd6; 32];
+                hostile.route_account.code_hash = [0xd6; 32];
+            }
+            _ => unreachable!("closed mutation inventory"),
+        }
+        hostile.observation_digest = hostile.computed_digest();
+        assert!(
+            hostile.is_well_formed(),
+            "{label} mutation must remain internally canonical"
+        );
+        assert_rejected(
+            registry.as_ref(),
+            route_key.clone(),
+            hostile,
+            7,
+            "differs from its governed deployment",
+        );
+    }
 }
 fn axt_proof_blob_for_remote_spend(
     dsid: DataSpaceId,
@@ -5368,7 +5702,7 @@ state_test! { sync sccp_registry_hash_commits_settlement_lifecycle_and_native_an
     let_row! { anchor = iroha_data_model::bridge::SccpNativeTrustAnchorV1 { backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::EthereumBeacon, anchor_hash: [0xA5; 32], checkpoint_height: 17, } };
     anchored.native_trust_anchors = vec![anchor];
     anchored.current_native_trust_anchor_hash = Some(anchor.anchor_hash);
-    let_row! { mutations = [ sccp_lane_with_custody_seed_for_testing( iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia, 0x6A, ), lifecycle, anchored, ] };
+    let_row! { mutations = [ sccp_lane_with_cap_seed_for_testing( iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet, 0x6A, ), lifecycle, anchored, ] };
     let mut policy_hashes = BTreeSet::from([baseline.policy_hash()]);
     let mut revisions = BTreeSet::from([baseline.registry_digest()]);
     for lane in mutations {
@@ -5381,8 +5715,8 @@ state_test! { sync sccp_registry_hash_commits_settlement_lifecycle_and_native_an
 }
 state_test! { sync sccp_registry_transaction_discard_and_block_revert_are_atomic
     let state = blank_test_state();
-    let_row! { registry = |seed| SccpOnChainRegistryV1 { version: 1, lanes: vec![sccp_lane_with_custody_seed_for_testing( iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia, seed, )], } };
-    let_row! { committed_custody = || { state.sccp_registry_snapshot().lanes()[0].routes[0] .settlement .custody_owner .clone() } };
+    let_row! { registry = |seed| SccpOnChainRegistryV1 { version: 1, lanes: vec![sccp_lane_with_cap_seed_for_testing( iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet, seed, )], } };
+    let_row! { committed_cap = || { state.sccp_registry_snapshot().lanes()[0].routes[0] .settlement .max_outstanding_liability } };
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block1 = state.lane_application_block(header1);
     {
@@ -5391,7 +5725,7 @@ state_test! { sync sccp_registry_transaction_discard_and_block_revert_are_atomic
         transaction.apply();
     }
     block1.commit().expect("commit exact registry A");
-    let custody_a = committed_custody();
+    let cap_a = committed_cap();
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut discarded_block = state.lane_application_block(header2);
     {
@@ -5401,7 +5735,7 @@ state_test! { sync sccp_registry_transaction_discard_and_block_revert_are_atomic
     discarded_block
         .commit()
         .expect("commit block after discarded transaction");
-    assert_eq!(committed_custody(), custody_a);
+    assert_eq!(committed_cap(), cap_a);
     let header3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut block3 = state.lane_application_block(header3.clone());
     {
@@ -5410,12 +5744,12 @@ state_test! { sync sccp_registry_transaction_discard_and_block_revert_are_atomic
         transaction.apply();
     }
     block3.commit().expect("commit exact registry B");
-    assert_ne!(committed_custody(), custody_a);
+    assert_ne!(committed_cap(), cap_a);
     state
         .block_and_revert(header3)
         .commit()
         .expect("revert exact SCCP registry journal entry");
-    assert_eq!(committed_custody(), custody_a);
+    assert_eq!(committed_cap(), cap_a);
 }
 #[test]
 fn executor_reconciliation_strips_retired_sccp_parameter_and_preserves_typed_registry() {
@@ -32653,7 +32987,7 @@ fn set_uniform_sccp_test_limits(
     limits.max_bls12_381_pairing_checks_per_transaction = transaction_count;
     limits.max_bls12_381_pairing_checks_per_block = block_count;
 }
-state_test! { sync sccp_verifier_work_accepts_every_exact_boundary_and_commits_atomically
+state_test! { sync sccp_verifier_work_accepts_every_exact_boundary_and_charges_before_crypto
     let state = blank_state();
     let block = new_dummy_block();
     let mut state_block = state.block(block.as_ref().header());
@@ -32678,7 +33012,7 @@ state_test! { sync sccp_verifier_work_accepts_every_exact_boundary_and_commits_a
             .expect("every exact SCCP transaction and block boundary is accepted");
         assert_eq!(transaction.sccp_verifier_work_in_tx, expected);
         assert_eq!(transaction.sccp_verifier_work_after_block, expected);
-        assert!((*transaction.block_sccp_verifier_work).is_zero());
+        assert_eq!(*transaction.block_sccp_verifier_work, expected);
         transaction.apply();
     }
     assert_eq!(state_block.sccp_verifier_work_in_block, expected);
@@ -32799,18 +33133,35 @@ state_test! { sync sccp_verifier_work_rejects_every_transaction_limit_without_pa
     );
 }
 #[test]
-fn sccp_verifier_work_rejects_every_block_limit_and_abandoned_transactions_do_not_leak() {
+fn sccp_verifier_work_rejects_every_block_limit_and_rejected_transactions_retain_charge() {
     let state = blank_state();
     let block = new_dummy_block();
     let mut state_block = state.block(block.as_ref().header());
     {
-        let mut abandoned = state_block.transaction();
-        set_uniform_sccp_test_limits(&mut abandoned.zk.sccp, 100, 100);
-        abandoned
+        let mut rejected_after_registration = state_block.transaction();
+        set_uniform_sccp_test_limits(&mut rejected_after_registration.zk.sccp, 1, 1);
+        rejected_after_registration
             .register_sccp_proof(1, SccpVerifierWorkV1::default())
-            .expect("abandoned reservation fits");
+            .expect("first proof reaches its pre-cryptography reservation");
     }
-    assert!(state_block.sccp_verifier_work_in_block.is_zero());
+    assert_eq!(
+        state_block.sccp_verifier_work_in_block,
+        SccpVerifierWorkV1 {
+            proofs: 1,
+            proof_bytes: 1,
+            ..SccpVerifierWorkV1::default()
+        },
+        "dropping a rejected transaction must not refund attempted verifier work"
+    );
+    {
+        let mut second = state_block.transaction();
+        set_uniform_sccp_test_limits(&mut second.zk.sccp, 1, 1);
+        let_row! { error = second .register_sccp_proof(1, SccpVerifierWorkV1::default()) .expect_err("a second proof must see the rejected transaction's retained charge") };
+        assert!(
+            format!("{error:?}").contains("proof count per block"),
+            "unexpected retained-charge error: {error:?}"
+        );
+    }
     macro_rules! assert_block_work_limit {
         ($field:ident, $limit_field:ident, $label:literal, $nonzero:ident) => {{
             let_row! { delta = SccpVerifierWorkV1 { $field: 1, ..SccpVerifierWorkV1::default() } };
@@ -32951,13 +33302,15 @@ state_test! { sync sccp_verifier_work_rejects_internal_aliases_and_counter_overf
     assert_eq!(transaction.sccp_verifier_work_in_tx, transaction_before);
     assert_eq!(transaction.sccp_verifier_work_after_block, block_before);
     transaction.sccp_verifier_work_in_tx = SccpVerifierWorkV1::default();
-    transaction.sccp_verifier_work_after_block.proofs = u64::MAX;
+    transaction.block_sccp_verifier_work.proofs = u64::MAX;
     let transaction_before = transaction.sccp_verifier_work_in_tx;
-    let block_before = transaction.sccp_verifier_work_after_block;
+    let block_before = *transaction.block_sccp_verifier_work;
+    let mirror_before = transaction.sccp_verifier_work_after_block;
     let_row! { error = transaction .register_sccp_proof(1, SccpVerifierWorkV1::default()) .expect_err("block counter overflow must be rejected") };
     assert!(format!("{error:?}").contains("block work overflow"));
     assert_eq!(transaction.sccp_verifier_work_in_tx, transaction_before);
-    assert_eq!(transaction.sccp_verifier_work_after_block, block_before);
+    assert_eq!(*transaction.block_sccp_verifier_work, block_before);
+    assert_eq!(transaction.sccp_verifier_work_after_block, mirror_before);
 }
 state_test! { sync sccp_registry_revision_is_order_independent_and_tracks_native_authority
     let bsc_lane = bsc_test_lane_for_testing();
@@ -33037,25 +33390,25 @@ state_test! { sync sccp_registry_json_rejects_retired_and_unknown_fields_at_ever
         );
     }
 }
-state_test! { sync sccp_registry_allows_distinct_exact_profiles_in_one_protocol_domain
-    let sepolia = eth_test_lane_for_testing();
-    let_row! { mainnet = sccp_evm_lane_for_testing(iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet) };
-    let_row! { registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![sepolia.clone(), mainnet.clone()], }) .expect("distinct exact Ethereum profiles may coexist") };
-    assert!(registry.lane(sepolia.lane_id).is_some());
-    assert!(registry.lane(mainnet.lane_id).is_some());
+state_test! { sync sccp_registry_allows_distinct_admitted_mainnet_profiles
+    let ethereum = eth_test_lane_for_testing();
+    let bsc = bsc_test_lane_for_testing();
+    let_row! { registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![ethereum.clone(), bsc.clone()], }) .expect("distinct admitted mainnet profiles may coexist") };
+    assert!(registry.lane(ethereum.lane_id).is_some());
+    assert!(registry.lane(bsc.lane_id).is_some());
     assert_ne!(
-        sepolia.routes[0]
+        ethereum.routes[0]
             .destination_binding_hash()
-            .expect("Sepolia binding"),
-        mainnet.routes[0]
+            .expect("Ethereum binding"),
+        bsc.routes[0]
             .destination_binding_hash()
-            .expect("mainnet binding")
+            .expect("BSC binding")
     );
 }
 state_test! { sync sccp_registry_rejects_mismatched_typed_source_identity
     let mut lane = bsc_test_lane_for_testing();
     lane.routes[0].source_identity.lane.source =
-        iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia;
+        iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet;
     let_row! { error = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![lane], }) .expect_err("identity for another exact lane must reject") };
     assert!(error.contains("source"), "{error}");
 }

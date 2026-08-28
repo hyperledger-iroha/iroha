@@ -25,7 +25,8 @@ use super::{
     p256_window_air::{P256WindowAirErrorV1, P256WindowScalarV1, P256WindowTraceV1},
 };
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
+    TransparentTranscriptV1,
 };
 use thiserror::Error;
 /// Stable descriptor for the aggregate-only first-release scalar-bit copy bus.
@@ -1884,12 +1885,17 @@ mod tests {
         F::ONE.sub(bit)
     }
     fn post_commitment_transcript_v1(
-        arithmetic_commitment: [u8; 32],
-        window_commitments: &[[u8; 32]; 128],
+        arithmetic_commitment: GoldilocksDigest384V1,
+        window_commitments: &[GoldilocksDigest384V1; 128],
     ) -> TransparentTranscriptV1 {
-        let mut transcript =
-            TransparentTranscriptV1::new(b"p256-scalar-bit-bus-test", &[0x31; 32], &[0x72; 32])
-                .expect("test transcript");
+        let mut transcript = TransparentTranscriptV1::new(
+            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            b"p256-scalar-bit-bus-test",
+            &GoldilocksDigest384V1::new([0x31; 6]).expect("profile digest"),
+            &GoldilocksDigest384V1::new([0x72; 6]).expect("public digest"),
+        )
+        .expect("test transcript");
+        let arithmetic_commitment = arithmetic_commitment.to_le_bytes();
         transcript
             .absorb(
                 b"zk-x509-p256-arithmetic-base-commitment-v1",
@@ -1897,10 +1903,11 @@ mod tests {
             )
             .expect("arithmetic commitment");
         for (index, commitment) in window_commitments.iter().enumerate() {
+            let commitment = commitment.to_le_bytes();
             transcript
                 .absorb(
                     b"zk-x509-p256-window-base-commitment-v1",
-                    &[&(index as u32).to_be_bytes(), commitment],
+                    &[&(index as u32).to_be_bytes(), &commitment],
                 )
                 .expect("window commitment");
         }
@@ -2973,9 +2980,12 @@ mod tests {
             ),
             Err(P256ScalarBitBusErrorV1::Constraint)
         );
-        let arithmetic_commitment = [0x81; 32];
-        let window_commitments: [[u8; 32]; 128] =
-            core::array::from_fn(|index| core::array::from_fn(|byte| (index + byte) as u8));
+        let arithmetic_commitment =
+            GoldilocksDigest384V1::new([0x81; 6]).expect("arithmetic root");
+        let window_commitments: [GoldilocksDigest384V1; 128] = core::array::from_fn(|index| {
+            GoldilocksDigest384V1::new(core::array::from_fn(|lane| (index + lane + 1) as u64))
+                .expect("window root")
+        });
         let mut first = post_commitment_transcript_v1(arithmetic_commitment, &window_commitments);
         let first_challenges = derive_zk_x509_p256_scalar_bit_bus_challenges_v1(&mut first)
             .expect("post-commitment challenges");
@@ -2989,22 +2999,32 @@ mod tests {
             first_challenges
         );
         let mut changed_windows = window_commitments;
-        changed_windows[91][7] ^= 1;
+        let mut changed_words = changed_windows[91].words();
+        changed_words[0] ^= 1;
+        changed_windows[91] =
+            GoldilocksDigest384V1::new(changed_words).expect("changed window root");
         let mut changed = post_commitment_transcript_v1(arithmetic_commitment, &changed_windows);
         assert_ne!(
             derive_zk_x509_p256_scalar_bit_bus_challenges_v1(&mut changed)
                 .expect("changed commitment challenges"),
             first_challenges
         );
-        let mut changed = post_commitment_transcript_v1([0x82; 32], &window_commitments);
+        let mut changed = post_commitment_transcript_v1(
+            GoldilocksDigest384V1::new([0x82; 6]).expect("changed arithmetic root"),
+            &window_commitments,
+        );
         assert_ne!(
             derive_zk_x509_p256_scalar_bit_bus_challenges_v1(&mut changed)
                 .expect("changed arithmetic commitment challenges"),
             first_challenges
         );
-        let mut bare =
-            TransparentTranscriptV1::new(b"p256-scalar-bit-bus-test", &[0x31; 32], &[0x72; 32])
-                .expect("bare transcript");
+        let mut bare = TransparentTranscriptV1::new(
+            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            b"p256-scalar-bit-bus-test",
+            &GoldilocksDigest384V1::new([0x31; 6]).expect("profile digest"),
+            &GoldilocksDigest384V1::new([0x72; 6]).expect("public digest"),
+        )
+        .expect("bare transcript");
         assert_ne!(
             derive_zk_x509_p256_scalar_bit_bus_challenges_v1(&mut bare)
                 .expect("premature challenges"),

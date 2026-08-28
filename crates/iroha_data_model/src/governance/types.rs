@@ -14,10 +14,7 @@ use crate::{
     NetworkId,
     account::AccountId,
     asset::AssetId,
-    isi::{
-        governance::parliament_timed_ovn_required_chunk_blocks_v1,
-        sorafs::SorafsProviderGovernanceActionV1,
-    },
+    isi::sorafs::SorafsProviderGovernanceActionV1,
     musubi::MusubiParliamentActionV1,
     runtime::RuntimeUpgradeManifest,
     smart_contract::{ContractAddress, manifest::ManifestProvenance},
@@ -35,6 +32,18 @@ use std::{
     string::String,
     vec::Vec,
 };
+
+/// Maximum number of contiguous timed-OVN ballot records accepted by one transition.
+pub const PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32;
+
+/// Return the minimum number of blocks needed to admit a configured ballot corpus.
+#[must_use]
+pub fn parliament_timed_ovn_required_chunk_blocks_v1(max_corpus_entries: u32) -> u64 {
+    let chunk_records = u64::try_from(PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1)
+        .expect("the V1 Parliament ballot chunk bound fits u64");
+    u64::from(max_corpus_entries).div_ceil(chunk_records)
+}
+
 /// Voting mode for a referendum.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,

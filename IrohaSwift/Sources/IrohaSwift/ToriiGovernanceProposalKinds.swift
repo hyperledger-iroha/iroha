@@ -1,11 +1,140 @@
+import CryptoKit
 import Foundation
+
+private let maximumUInt128 = "340282366920938463463374607431768211455"
+private let maximumTonCoins = "1329227995784915872903807060280344575"
+private let keccak256EmptyBytes = Data(hexString: "C5D2460186F7233C927E7DB2DCC703C0E500B653CA82273B7BFAD8045D85A470")!
+
+let governanceExactIntegerLexemesUserInfoKey = CodingUserInfoKey(
+    rawValue: "org.hyperledger.iroha.governance.exact-integer-lexemes"
+)!
+
+private func governanceCodingPathKey(_ path: [CodingKey]) -> String {
+    path.map { key in
+        if let index = key.intValue {
+            return "i:\(index)"
+        }
+        return "k:\(key.stringValue)"
+    }.joined(separator: "/")
+}
+
+/// Scan one proposal with the SCCP exact JSON parser and retain every integer lexeme.
+///
+/// `JSONDecoder` routes JSON numbers through Foundation numeric types and therefore
+/// cannot preserve all UInt128 values. The proposal entry point installs this table in
+/// `Decoder.userInfo`, allowing the SCCP cap decoders to validate the original token.
+func governanceExactJSONIntegerLexemes(_ data: Data) throws -> [String: String] {
+    let root = try SccpStrictJSON.object(data, label: "governance proposal")
+    var lexemes: [String: String] = [:]
+
+    func walk(_ value: Any, path: [GovernanceProposalCodingKey]) throws {
+        if value is Bool || value is String || value is NSNull {
+            return
+        }
+        if let exact = value as? SccpStrictJSON.ExactUnsignedInteger {
+            let field = path.last?.stringValue
+            guard field == "max_wrapped_supply" || field == "max_outstanding_liability" else {
+                throw SccpV1Error.invalid(
+                    "governance proposal integer is outside the exact first-release JSON range"
+                )
+            }
+            lexemes[governanceCodingPathKey(path)] = exact.text
+            return
+        }
+        if let number = value as? NSNumber,
+           CFGetTypeID(number) != CFBooleanGetTypeID(),
+           !CFNumberIsFloatType(number)
+        {
+            let text = number.stringValue
+            let field = path.last?.stringValue
+            if field != "max_wrapped_supply" && field != "max_outstanding_liability" {
+                guard let parsed = UInt64(text), parsed <= 9_007_199_254_740_991 else {
+                    throw SccpV1Error.invalid(
+                        "governance proposal integer is outside the exact first-release JSON range"
+                    )
+                }
+            }
+            lexemes[governanceCodingPathKey(path)] = text
+            return
+        }
+        if let object = value as? [String: Any] {
+            for (key, item) in object {
+                try walk(item, path: path + [GovernanceProposalCodingKey(key)])
+            }
+            return
+        }
+        if let array = value as? [Any] {
+            for (index, item) in array.enumerated() {
+                try walk(item, path: path + [GovernanceProposalCodingKey(intValue: index)!])
+            }
+            return
+        }
+        throw SccpV1Error.invalid("governance proposal contains an unsupported JSON value")
+    }
+
+    try walk(root, path: [])
+    return lexemes
+}
+
+private func governanceExactPositiveInteger<Key: CodingKey>(
+    decoder: Decoder,
+    container: KeyedDecodingContainer<Key>,
+    key: Key,
+    maximum: String
+) throws -> String {
+    let path = decoder.codingPath + [key]
+    let pathKey = governanceCodingPathKey(path)
+    let text: String
+    if let lexemes = decoder.userInfo[governanceExactIntegerLexemesUserInfoKey]
+        as? [String: String],
+       let exact = lexemes[pathKey]
+    {
+        text = exact
+    } else if let value = try? container.decode(UInt64.self, forKey: key) {
+        text = String(value)
+    } else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(key.stringValue) requires its exact unsigned JSON integer lexeme"
+        )
+    }
+    guard !text.isEmpty,
+          text.first != "0",
+          text.utf8.allSatisfy({ (48...57).contains($0) }),
+          text.count < maximum.count || text.count == maximum.count && text <= maximum else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(key.stringValue) is outside its canonical positive range"
+        )
+    }
+    return text
+}
+
+private func governanceMultiplyDecimal(_ value: String, by multiplier: UInt64) -> String {
+    var carry: UInt64 = 0
+    var digits: [UInt8] = []
+    digits.reserveCapacity(value.count + 20)
+    for byte in value.utf8.reversed() {
+        let product = UInt64(byte - 48) * multiplier + carry
+        digits.append(UInt8(product % 10))
+        carry = product / 10
+    }
+    while carry != 0 {
+        digits.append(UInt8(carry % 10))
+        carry /= 10
+    }
+    return digits.reversed().map(String.init).joined()
+}
 
 let governanceFirstReleaseMaxExactJSONInteger = 9_007_199_254_740_991.0
 
 func governanceRequireExactJSONIntegers(
     _ value: ToriiJSONValue,
     codingPath: [CodingKey],
-    context: String
+    context: String,
+    exactIntegerLexemes: [String: String]? = nil
 ) throws {
     switch value {
     case let .array(values):
@@ -13,7 +142,8 @@ func governanceRequireExactJSONIntegers(
             try governanceRequireExactJSONIntegers(
                 item,
                 codingPath: codingPath + [GovernanceProposalCodingKey(intValue: index)!],
-                context: "\(context)[\(index)]"
+                context: "\(context)[\(index)]",
+                exactIntegerLexemes: exactIntegerLexemes
             )
         }
     case let .object(object):
@@ -21,13 +151,16 @@ func governanceRequireExactJSONIntegers(
             try governanceRequireExactJSONIntegers(
                 item,
                 codingPath: codingPath + [GovernanceProposalCodingKey(key)],
-                context: "\(context).\(key)"
+                context: "\(context).\(key)",
+                exactIntegerLexemes: exactIntegerLexemes
             )
         }
     case let .number(number):
-        guard number.isFinite,
-              number.rounded(.towardZero) == number,
-              abs(number) <= governanceFirstReleaseMaxExactJSONInteger else {
+        let isSafelyRepresentable = number.isFinite
+            && number.rounded(.towardZero) == number
+            && abs(number) <= governanceFirstReleaseMaxExactJSONInteger
+        let hasValidatedExactLexeme = exactIntegerLexemes?[governanceCodingPathKey(codingPath)] != nil
+        guard isSafelyRepresentable || hasValidatedExactLexeme else {
             throw DecodingError.dataCorrupted(
                 .init(
                     codingPath: codingPath,
@@ -432,13 +565,9 @@ public struct ToriiGovernanceSccpRouteAnchor: Decodable, Sendable, Equatable {
 public enum ToriiGovernanceSccpNetwork: String, Decodable, Sendable, Equatable {
     case soraTaira = "sora_taira"
     case ethereumMainnet = "ethereum_mainnet"
-    case ethereumSepolia = "ethereum_sepolia"
     case bscMainnet = "bsc_mainnet"
-    case bscTestnet = "bsc_testnet"
     case tronMainnet = "tron_mainnet"
-    case tronNile = "tron_nile"
-    case tronShasta = "tron_shasta"
-    case solanaTestnet = "solana_testnet"
+    case tonMainnet = "ton_mainnet"
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case network
@@ -474,12 +603,23 @@ public enum ToriiGovernanceSccpNetwork: String, Decodable, Sendable, Equatable {
 
     fileprivate var family: String {
         switch self {
-        case .ethereumMainnet, .ethereumSepolia, .bscMainnet, .bscTestnet: return "evm"
-        case .tronMainnet, .tronNile, .tronShasta: return "tron"
-        case .solanaTestnet: return "solana"
+        case .ethereumMainnet, .bscMainnet: return "evm"
+        case .tronMainnet: return "tron"
+        case .tonMainnet: return "ton"
         case .soraTaira: return "sora"
         }
     }
+
+    var discoveryValue: SccpNetworkV1 {
+        switch self {
+        case .soraTaira: .soraTaira
+        case .ethereumMainnet: .ethereumMainnet
+        case .bscMainnet: .bscMainnet
+        case .tronMainnet: .tronMainnet
+        case .tonMainnet: .tonMainnet
+        }
+    }
+
 }
 
 /// Directed SCCP V1 lane used by a governed route.
@@ -509,6 +649,10 @@ public struct ToriiGovernanceSccpLane: Decodable, Sendable, Equatable {
     }
 
     fileprivate var isInbound: Bool { !source.isSora && target.isSora }
+
+    var discoveryValue: SccpLaneIdV1 {
+        get throws { try SccpLaneIdV1(source: source.discoveryValue, target: target.discoveryValue) }
+    }
 }
 
 /// Closed directional state of a governed SCCP route revision.
@@ -609,7 +753,7 @@ public enum ToriiGovernanceSccpNativeBackend: String, Decodable, Sendable, Equat
     case ethereumBeacon = "ethereum_beacon_v1"
     case bscParlia = "bsc_parlia_v1"
     case tronDpos = "tron_dpos_v1"
-    case solanaAgave = "solana_agave_v1"
+    case tonMasterchain = "ton_masterchain_v1"
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case backend
@@ -644,10 +788,10 @@ public enum ToriiGovernanceSccpNativeBackend: String, Decodable, Sendable, Equat
 
     fileprivate func supports(_ network: ToriiGovernanceSccpNetwork) -> Bool {
         switch (self, network) {
-        case (.ethereumBeacon, .ethereumMainnet), (.ethereumBeacon, .ethereumSepolia),
-             (.bscParlia, .bscMainnet), (.bscParlia, .bscTestnet),
-             (.tronDpos, .tronMainnet), (.tronDpos, .tronNile), (.tronDpos, .tronShasta),
-             (.solanaAgave, .solanaTestnet):
+        case (.ethereumBeacon, .ethereumMainnet),
+             (.bscParlia, .bscMainnet),
+             (.tronDpos, .tronMainnet),
+             (.tonMasterchain, .tonMainnet):
             return true
         default:
             return false
@@ -1094,21 +1238,47 @@ public struct ToriiGovernanceSccpContractEmitter: Decodable, Sendable, Equatable
     }
 }
 
-/// Exact Solana source-program identity in a governed SCCP route.
-public struct ToriiGovernanceSccpSolanaEmitter: Decodable, Sendable, Equatable {
-    public let programId: Data
-    public let programDataAddress: Data
-    public let programDataSlot: UInt64
-    public let stateAccount: Data
-    public let programCodeHash: Data
+/// Canonical raw TON basechain contract address used in governance payloads.
+public struct ToriiGovernanceSccpTonAddress: Decodable, Sendable, Equatable {
+    public let workchain: Int32
+    public let account: Data
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case workchain, account }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "SCCP TON address"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        workchain = try container.decode(Int32.self, forKey: .workchain)
+        account = try governanceFixedBytes(
+            container.decode([UInt8].self, forKey: .account),
+            count: 32,
+            nonzero: true,
+            codingPath: container.codingPath + [CodingKeys.account],
+            field: "account"
+        )
+        guard workchain == 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .workchain,
+                in: container,
+                debugDescription: "SCCP TON contracts must use basechain workchain 0"
+            )
+        }
+    }
+}
+
+/// Exact TON route-contract source identity in a governed SCCP route.
+public struct ToriiGovernanceSccpTonEmitter: Decodable, Sendable, Equatable {
+    public let address: ToriiGovernanceSccpTonAddress
+    public let codeHash: Data
     public let routeConfigHash: Data
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case programId = "program_id"
-        case programDataAddress = "program_data_address"
-        case programDataSlot = "program_data_slot"
-        case stateAccount = "state_account"
-        case programCodeHash = "program_code_hash"
+        case address
+        case codeHash = "code_hash"
         case routeConfigHash = "route_config_hash"
     }
 
@@ -1116,10 +1286,11 @@ public struct ToriiGovernanceSccpSolanaEmitter: Decodable, Sendable, Equatable {
         try governanceRejectUnknownFields(
             decoder,
             allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            name: "SCCP Solana source emitter"
+            name: "SCCP TON source emitter"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        func bytes(_ key: CodingKeys) throws -> Data {
+        address = try container.decode(ToriiGovernanceSccpTonAddress.self, forKey: .address)
+        func hash(_ key: CodingKeys) throws -> Data {
             try governanceFixedBytes(
                 container.decode([UInt8].self, forKey: key),
                 count: 32,
@@ -1128,19 +1299,13 @@ public struct ToriiGovernanceSccpSolanaEmitter: Decodable, Sendable, Equatable {
                 field: key.stringValue
             )
         }
-        programId = try bytes(.programId)
-        programDataAddress = try bytes(.programDataAddress)
-        programDataSlot = try container.decode(UInt64.self, forKey: .programDataSlot)
-        stateAccount = try bytes(.stateAccount)
-        programCodeHash = try bytes(.programCodeHash)
-        routeConfigHash = try bytes(.routeConfigHash)
-        guard programDataSlot > 0,
-              Set([programId, programDataAddress, stateAccount, programCodeHash, routeConfigHash])
-                .count == 5 else {
+        codeHash = try hash(.codeHash)
+        routeConfigHash = try hash(.routeConfigHash)
+        guard codeHash != routeConfigHash else {
             throw DecodingError.dataCorrupted(
                 .init(
                     codingPath: container.codingPath,
-                    debugDescription: "SCCP Solana source-emitter roles must be non-zero and distinct"
+                    debugDescription: "SCCP TON source-emitter hash roles must be distinct"
                 )
             )
         }
@@ -1151,7 +1316,7 @@ public struct ToriiGovernanceSccpSolanaEmitter: Decodable, Sendable, Equatable {
 public enum ToriiGovernanceSccpSourceEmitter: Decodable, Sendable, Equatable {
     case evm(ToriiGovernanceSccpContractEmitter)
     case tron(ToriiGovernanceSccpContractEmitter)
-    case solana(ToriiGovernanceSccpSolanaEmitter)
+    case ton(ToriiGovernanceSccpTonEmitter)
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case emitter
@@ -1174,9 +1339,9 @@ public enum ToriiGovernanceSccpSourceEmitter: Decodable, Sendable, Equatable {
             self = .tron(
                 try container.decode(ToriiGovernanceSccpContractEmitter.self, forKey: .identity)
             )
-        case "solana":
-            self = .solana(
-                try container.decode(ToriiGovernanceSccpSolanaEmitter.self, forKey: .identity)
+        case "ton":
+            self = .ton(
+                try container.decode(ToriiGovernanceSccpTonEmitter.self, forKey: .identity)
             )
         case let tag:
             throw DecodingError.dataCorruptedError(
@@ -1191,9 +1356,33 @@ public enum ToriiGovernanceSccpSourceEmitter: Decodable, Sendable, Equatable {
         switch self {
         case .evm: return "evm"
         case .tron: return "tron"
-        case .solana: return "solana"
+        case .ton: return "ton"
         }
     }
+
+    fileprivate var routeConfigurationHash: Data {
+        switch self {
+        case let .evm(value), let .tron(value): value.routeConfigHash
+        case let .ton(value): value.routeConfigHash
+        }
+    }
+
+    fileprivate func matches(_ destination: ToriiGovernanceSccpDestination) -> Bool {
+        switch (self, destination) {
+        case let (.evm(source), .evm(deployment)):
+            source.address == deployment.routeAddress
+                && source.runtimeCodeHash == deployment.routeCodeHash
+        case let (.tron(source), .tron(deployment)):
+            source.address == deployment.routeAddress
+                && source.runtimeCodeHash == deployment.routeCodeHash
+        case let (.ton(source), .ton(deployment)):
+            source.address == deployment.routeAddress
+                && source.codeHash == deployment.routeCodeHash
+        default:
+            false
+        }
+    }
+
 }
 
 /// Lane-bound external source identity for a governed SCCP route.
@@ -1280,6 +1469,8 @@ public struct ToriiGovernanceSccpBn254G1Point: Decodable, Sendable, Equatable {
             )
         }
     }
+
+    fileprivate var canonicalBytes: Data { x + y }
 }
 
 /// Canonical non-infinity BN254 G2 point in verifier limb order.
@@ -1323,6 +1514,8 @@ public struct ToriiGovernanceSccpBn254G2Point: Decodable, Sendable, Equatable {
             )
         }
     }
+
+    fileprivate var canonicalBytes: Data { xC0 + xC1 + yC0 + yC1 }
 }
 
 /// Fixed Groth16 IC vector: one constant point and exactly eleven signal points.
@@ -1375,6 +1568,11 @@ public struct ToriiGovernanceSccpGroth16Ic: Decodable, Sendable, Equatable {
         signal9 = try container.decode(ToriiGovernanceSccpBn254G1Point.self, forKey: .signal9)
         signal10 = try container.decode(ToriiGovernanceSccpBn254G1Point.self, forKey: .signal10)
     }
+
+    fileprivate var ordered: [ToriiGovernanceSccpBn254G1Point] {
+        [constant, signal0, signal1, signal2, signal3, signal4, signal5, signal6,
+         signal7, signal8, signal9, signal10]
+    }
 }
 
 /// Closed BN254 Groth16 verification key used by SCCP V1 destinations.
@@ -1411,6 +1609,240 @@ public struct ToriiGovernanceSccpGroth16VerifyingKey: Decodable, Sendable, Equat
             )
         }
     }
+
+    fileprivate var canonicalBytes: Data {
+        alpha1.canonicalBytes
+            + beta2.canonicalBytes
+            + gamma2.canonicalBytes
+            + delta2.canonicalBytes
+            + ic.ordered.reduce(into: Data()) { $0.append($1.canonicalBytes) }
+    }
+}
+
+private let governanceBls12381BaseField = Data(hexString:
+    "1A0111EA397FE69A4B1BA7B6434BACD764774B84F38512BF6730D2A0F6B0F6241EABFFFEB153FFFFB9FEFFFFFFFFAAAB"
+)!
+
+private func governanceBls12381Point(
+    _ bytes: [UInt8],
+    count: Int,
+    codingPath: [CodingKey],
+    field: String
+) throws -> Data {
+    let value = Data(bytes)
+    func validG1(_ point: Data) -> Bool {
+        guard point.count == 48, point[0] & 0x80 != 0, point[0] & 0x40 == 0 else { return false }
+        var x = point
+        x[0] &= 0x1f
+        return x.lexicographicallyPrecedes(governanceBls12381BaseField)
+    }
+    let valid = count == 48
+        ? validG1(value)
+        : count == 96
+            && validG1(Data(value.prefix(48)))
+            && Data(value.suffix(48)).lexicographicallyPrecedes(governanceBls12381BaseField)
+    guard valid else {
+        throw DecodingError.dataCorrupted(
+            .init(codingPath: codingPath, debugDescription: "\(field) is not a canonical compressed BLS12-381 point")
+        )
+    }
+    return value
+}
+
+/// Fixed BLS12-381 Groth16 IC vector with one constant and eleven signal points.
+public struct ToriiGovernanceSccpBls12381Ic: Decodable, Sendable, Equatable {
+    public let constant: Data
+    public let signal0: Data
+    public let signal1: Data
+    public let signal2: Data
+    public let signal3: Data
+    public let signal4: Data
+    public let signal5: Data
+    public let signal6: Data
+    public let signal7: Data
+    public let signal8: Data
+    public let signal9: Data
+    public let signal10: Data
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case constant
+        case signal0 = "signal_0"
+        case signal1 = "signal_1"
+        case signal2 = "signal_2"
+        case signal3 = "signal_3"
+        case signal4 = "signal_4"
+        case signal5 = "signal_5"
+        case signal6 = "signal_6"
+        case signal7 = "signal_7"
+        case signal8 = "signal_8"
+        case signal9 = "signal_9"
+        case signal10 = "signal_10"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "SCCP BLS12-381 IC vector"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func point(_ key: CodingKeys) throws -> Data {
+            try governanceBls12381Point(
+                container.decode([UInt8].self, forKey: key),
+                count: 48,
+                codingPath: container.codingPath + [key],
+                field: key.stringValue
+            )
+        }
+        constant = try point(.constant)
+        signal0 = try point(.signal0)
+        signal1 = try point(.signal1)
+        signal2 = try point(.signal2)
+        signal3 = try point(.signal3)
+        signal4 = try point(.signal4)
+        signal5 = try point(.signal5)
+        signal6 = try point(.signal6)
+        signal7 = try point(.signal7)
+        signal8 = try point(.signal8)
+        signal9 = try point(.signal9)
+        signal10 = try point(.signal10)
+    }
+
+    fileprivate var ordered: [Data] {
+        [constant, signal0, signal1, signal2, signal3, signal4, signal5, signal6,
+         signal7, signal8, signal9, signal10]
+    }
+}
+
+/// Closed compressed BLS12-381 Groth16 verification key used by TON SCCP V1.
+public struct ToriiGovernanceSccpGroth16Bls12381VerifyingKey: Decodable, Sendable, Equatable {
+    public let version: UInt8
+    public let alpha1: Data
+    public let beta2: Data
+    public let gamma2: Data
+    public let delta2: Data
+    public let ic: ToriiGovernanceSccpBls12381Ic
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case version, alpha1, beta2, gamma2, delta2, ic
+    }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "SCCP BLS12-381 Groth16 verifying key"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(UInt8.self, forKey: .version)
+        alpha1 = try governanceBls12381Point(
+            container.decode([UInt8].self, forKey: .alpha1), count: 48,
+            codingPath: container.codingPath + [CodingKeys.alpha1], field: "alpha1"
+        )
+        func g2(_ key: CodingKeys) throws -> Data {
+            try governanceBls12381Point(
+                container.decode([UInt8].self, forKey: key), count: 96,
+                codingPath: container.codingPath + [key], field: key.stringValue
+            )
+        }
+        beta2 = try g2(.beta2)
+        gamma2 = try g2(.gamma2)
+        delta2 = try g2(.delta2)
+        ic = try container.decode(ToriiGovernanceSccpBls12381Ic.self, forKey: .ic)
+        guard version == 1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .version, in: container,
+                debugDescription: "SCCP BLS12-381 verifying-key version must be exactly 1"
+            )
+        }
+    }
+
+    fileprivate var canonicalBytes: Data {
+        Data([version]) + alpha1 + beta2 + gamma2 + delta2
+            + ic.ordered.reduce(into: Data()) { $0.append($1) }
+    }
+}
+
+private let governanceBn254PublicSignalLabels = [
+    "sccp:groth16-bn254:signal:message-id:v1",
+    "sccp:groth16-bn254:signal:payload-hash:v1",
+    "sccp:groth16-bn254:signal:target-domain:v1",
+    "sccp:groth16-bn254:signal:commitment-root:v1",
+    "sccp:groth16-bn254:signal:finality-height:v1",
+    "sccp:groth16-bn254:signal:finality-block-hash:v1",
+    "sccp:groth16-bn254:signal:source-domain:v1",
+    "sccp:groth16-bn254:signal:statement-hash:v1",
+    "sccp:groth16-bn254:signal:destination-binding-hash:v1",
+    "sccp:groth16-bn254:signal:route-configuration-hash:v1",
+    "sccp:groth16-bn254:signal:sora-finality-anchor-hash:v1",
+]
+
+private let governanceBls12381PublicSignalLabels = [
+    "sccp:groth16-bls12381:signal:message-id:v1",
+    "sccp:groth16-bls12381:signal:payload-hash:v1",
+    "sccp:groth16-bls12381:signal:target-domain:v1",
+    "sccp:groth16-bls12381:signal:commitment-root:v1",
+    "sccp:groth16-bls12381:signal:finality-height:v1",
+    "sccp:groth16-bls12381:signal:finality-block-hash:v1",
+    "sccp:groth16-bls12381:signal:source-domain:v1",
+    "sccp:groth16-bls12381:signal:statement-hash:v1",
+    "sccp:groth16-bls12381:signal:destination-binding-hash:v1",
+    "sccp:groth16-bls12381:signal:route-config-hash:v1",
+    "sccp:groth16-bls12381:signal:sora-finality-anchor-hash:v1",
+]
+
+private let governanceTairaChainId = Data([
+    0xfc, 0x56, 0x98, 0x4b, 0x2b, 0xe7, 0x43, 0x1d,
+    0x84, 0x0e, 0x21, 0x51, 0x4d, 0x18, 0x83, 0xf0,
+])
+
+private var governanceTairaChainIdHash: Data { irohaKeccak256(governanceTairaChainId) }
+
+private func governanceAppendUInt16LE(_ value: UInt16, to output: inout Data) {
+    var little = value.littleEndian
+    withUnsafeBytes(of: &little) { output.append(contentsOf: $0) }
+}
+
+private func governanceAppendUInt32LE(_ value: UInt32, to output: inout Data) {
+    var little = value.littleEndian
+    withUnsafeBytes(of: &little) { output.append(contentsOf: $0) }
+}
+
+private func governanceAppendUInt64LE(_ value: UInt64, to output: inout Data) {
+    var little = value.littleEndian
+    withUnsafeBytes(of: &little) { output.append(contentsOf: $0) }
+}
+
+private func governancePublicSignalSchemaHash(
+    labels: [String],
+    domain: String,
+    sha256: Bool
+) -> Data {
+    var canonical = Data([1])
+    governanceAppendUInt32LE(UInt32(labels.count), to: &canonical)
+    for label in labels {
+        let bytes = Data(label.utf8)
+        governanceAppendUInt32LE(UInt32(bytes.count), to: &canonical)
+        canonical.append(bytes)
+    }
+    let preimage = Data(domain.utf8) + canonical
+    return sha256 ? Data(SHA256.hash(data: preimage)) : irohaKeccak256(preimage)
+}
+
+private var governanceBn254PublicSignalSchemaHash: Data {
+    governancePublicSignalSchemaHash(
+        labels: governanceBn254PublicSignalLabels,
+        domain: "sccp:groth16-bn254:public-signal-schema:v1",
+        sha256: false
+    )
+}
+
+private var governanceBls12381PublicSignalSchemaHash: Data {
+    governancePublicSignalSchemaHash(
+        labels: governanceBls12381PublicSignalLabels,
+        domain: "sccp:groth16-bls12381:public-signal-schema:v1",
+        sha256: true
+    )
 }
 
 /// Commitments identifying the one audited SCCP V1 semantic circuit.
@@ -1462,6 +1894,7 @@ public struct ToriiGovernanceSccpSemanticCircuit: Decodable, Sendable, Equatable
 /// Closed semantic-proof profile accepted by SCCP V1.
 public enum ToriiGovernanceSccpSemanticProofProfile: Decodable, Sendable, Equatable {
     case soraTairaFinalityInclusionGroth16Bn254(ToriiGovernanceSccpSemanticCircuit)
+    case soraTairaFinalityInclusionGroth16Bls12381(ToriiGovernanceSccpSemanticCircuit)
 
     private enum CodingKeys: String, CodingKey, CaseIterable { case profile, commitments }
 
@@ -1472,28 +1905,91 @@ public enum ToriiGovernanceSccpSemanticProofProfile: Decodable, Sendable, Equata
             name: "SCCP semantic-proof profile"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard try container.decode(String.self, forKey: .profile)
-            == "sora_taira_finality_inclusion_groth16_bn254" else {
+        switch try container.decode(String.self, forKey: .profile) {
+        case "sora_taira_finality_inclusion_groth16_bn254":
+            let circuit = try container.decode(
+                ToriiGovernanceSccpSemanticCircuit.self,
+                forKey: .commitments
+            )
+            guard circuit.publicSignalSchemaHash == governanceBn254PublicSignalSchemaHash else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .commitments,
+                    in: container,
+                    debugDescription: "BN254 proof profile must commit the exact SCCP V1 signal schema"
+                )
+            }
+            self = .soraTairaFinalityInclusionGroth16Bn254(circuit)
+        case "sora_taira_finality_inclusion_groth16_bls12381":
+            let circuit = try container.decode(
+                ToriiGovernanceSccpSemanticCircuit.self,
+                forKey: .commitments
+            )
+            guard circuit.publicSignalSchemaHash == governanceBls12381PublicSignalSchemaHash else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .commitments,
+                    in: container,
+                    debugDescription: "BLS12-381 proof profile must commit the exact SCCP V1 signal schema"
+                )
+            }
+            self = .soraTairaFinalityInclusionGroth16Bls12381(circuit)
+        default:
             throw DecodingError.dataCorruptedError(
                 forKey: .profile,
                 in: container,
                 debugDescription: "unsupported SCCP semantic-proof profile"
             )
         }
-        self = .soraTairaFinalityInclusionGroth16Bn254(
-            try container.decode(ToriiGovernanceSccpSemanticCircuit.self, forKey: .commitments)
-        )
     }
 
     fileprivate var commitments: [Data] {
         switch self {
-        case let .soraTairaFinalityInclusionGroth16Bn254(circuit):
+        case let .soraTairaFinalityInclusionGroth16Bn254(circuit),
+             let .soraTairaFinalityInclusionGroth16Bls12381(circuit):
             return [
                 circuit.circuitCommitment,
                 circuit.witnessGeneratorCommitment,
                 circuit.publicSignalSchemaHash,
             ]
         }
+    }
+
+    fileprivate var isBls12381: Bool {
+        if case .soraTairaFinalityInclusionGroth16Bls12381 = self { return true }
+        return false
+    }
+
+    fileprivate var isBn254: Bool {
+        if case .soraTairaFinalityInclusionGroth16Bn254 = self { return true }
+        return false
+    }
+
+    fileprivate var discoveryValue: SccpSemanticProofProfileV1 {
+        let circuit: ToriiGovernanceSccpSemanticCircuit
+        let kind: SccpSemanticProofProfileKindV1
+        let curveTag: UInt8
+        switch self {
+        case let .soraTairaFinalityInclusionGroth16Bn254(value):
+            circuit = value
+            kind = .groth16Bn254
+            curveTag = 0
+        case let .soraTairaFinalityInclusionGroth16Bls12381(value):
+            circuit = value
+            kind = .groth16Bls12381
+            curveTag = 1
+        }
+        let canonical = Data([1, curveTag, 1])
+            + circuit.circuitCommitment
+            + circuit.witnessGeneratorCommitment
+            + circuit.publicSignalSchemaHash
+        return SccpSemanticProofProfileV1(
+            kind: kind,
+            circuitCommitment: circuit.circuitCommitment,
+            witnessGeneratorCommitment: circuit.witnessGeneratorCommitment,
+            publicSignalSchemaHash: circuit.publicSignalSchemaHash,
+            profileHash: irohaKeccak256(
+                Data("sccp:semantic-proof-profile:v1".utf8) + canonical
+            )
+        )
     }
 }
 
@@ -1546,6 +2042,7 @@ public struct ToriiGovernanceSccpSoraFinalityAnchor: Decodable, Sendable, Equata
         guard version == 1,
               sourceNetwork == .soraTaira,
               protocolVersion == 4,
+              chainIdHash == governanceTairaChainIdHash,
               checkpointHeight > 0,
               Set([
                   chainIdHash,
@@ -1560,6 +2057,27 @@ public struct ToriiGovernanceSccpSoraFinalityAnchor: Decodable, Sendable, Equata
                 )
             )
         }
+    }
+
+    fileprivate var discoveryValue: SccpSoraFinalityAnchorV1 {
+        var canonical = Data([1, SccpNetworkV1.soraTaira.tag])
+        governanceAppendUInt16LE(protocolVersion, to: &canonical)
+        canonical.append(chainIdHash)
+        governanceAppendUInt64LE(checkpointHeight, to: &canonical)
+        canonical.append(checkpointBlockHash)
+        canonical.append(checkpointContextId)
+        canonical.append(checkpointFinalityArtifactHash)
+        return SccpSoraFinalityAnchorV1(
+            protocolVersion: protocolVersion,
+            chainIdHash: chainIdHash,
+            checkpointHeight: checkpointHeight,
+            checkpointBlockHash: checkpointBlockHash,
+            checkpointContextId: checkpointContextId,
+            checkpointFinalityArtifactHash: checkpointFinalityArtifactHash,
+            anchorHash: irohaKeccak256(
+                Data("sccp:sora-finality-anchor:v1".utf8) + canonical
+            )
+        )
     }
 }
 
@@ -1591,13 +2109,35 @@ public struct ToriiGovernanceSccpOutboundProofPolicy: Decodable, Sendable, Equat
             ToriiGovernanceSccpSoraFinalityAnchor.self,
             forKey: .soraFinalityAnchor
         )
-        guard version == 1 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .version,
-                in: container,
-                debugDescription: "SCCP outbound-proof policy version must be exactly 1"
+        let semantic = semanticProfile.discoveryValue
+        let anchor = soraFinalityAnchor.discoveryValue
+        let hashRoles = [
+            semantic.circuitCommitment,
+            semantic.witnessGeneratorCommitment,
+            semantic.publicSignalSchemaHash,
+            semantic.profileHash,
+            anchor.chainIdHash,
+            anchor.checkpointBlockHash,
+            anchor.checkpointContextId,
+            anchor.checkpointFinalityArtifactHash,
+            anchor.anchorHash,
+        ]
+        guard version == 1, Set(hashRoles).count == hashRoles.count else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "SCCP outbound-proof policy is invalid or reuses a hash role"
+                )
             )
         }
+    }
+
+    var discoveryValue: SccpOutboundProofPolicyV1 {
+        SccpOutboundProofPolicyV1(
+            version: version,
+            semanticProfile: semanticProfile.discoveryValue,
+            soraFinalityAnchor: soraFinalityAnchor.discoveryValue
+        )
     }
 }
 
@@ -1612,7 +2152,13 @@ public struct ToriiGovernanceSccpEvmDestinationDeployment: Decodable, Sendable, 
     public let outboundProofPolicy: ToriiGovernanceSccpOutboundProofPolicy
     public let routeAddress: Data
     public let routeCodeHash: Data
+    public let replayVerifierAddress: Data
+    public let replayVerifierCodeHash: Data
+    public let mintBreakerAddress: Data
+    public let mintBreakerCodeHash: Data
     public let tairaToTokenMultiplier: UInt64
+    /// Exact canonical positive UInt128 JSON integer.
+    public let maxWrappedSupply: String
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case tokenAddress = "token_address"
@@ -1624,7 +2170,12 @@ public struct ToriiGovernanceSccpEvmDestinationDeployment: Decodable, Sendable, 
         case outboundProofPolicy = "outbound_proof_policy"
         case routeAddress = "route_address"
         case routeCodeHash = "route_code_hash"
+        case replayVerifierAddress = "replay_verifier_address"
+        case replayVerifierCodeHash = "replay_verifier_code_hash"
+        case mintBreakerAddress = "mint_breaker_address"
+        case mintBreakerCodeHash = "mint_breaker_code_hash"
         case tairaToTokenMultiplier = "taira_to_token_multiplier"
+        case maxWrappedSupply = "max_wrapped_supply"
     }
 
     public init(from decoder: Decoder) throws {
@@ -1655,10 +2206,31 @@ public struct ToriiGovernanceSccpEvmDestinationDeployment: Decodable, Sendable, 
         )
         routeAddress = try bytes(.routeAddress, count: 20)
         routeCodeHash = try bytes(.routeCodeHash, count: 32)
+        replayVerifierAddress = try bytes(.replayVerifierAddress, count: 20)
+        replayVerifierCodeHash = try bytes(.replayVerifierCodeHash, count: 32)
+        mintBreakerAddress = try bytes(.mintBreakerAddress, count: 20)
+        mintBreakerCodeHash = try bytes(.mintBreakerCodeHash, count: 32)
         tairaToTokenMultiplier = try container.decode(UInt64.self, forKey: .tairaToTokenMultiplier)
+        maxWrappedSupply = try governanceExactPositiveInteger(
+            decoder: decoder,
+            container: container,
+            key: .maxWrappedSupply,
+            maximum: maximumUInt128
+        )
+        let proofPolicy = outboundProofPolicy.discoveryValue
+        let deploymentHashRoles = [
+            tokenCodeHash, verifierCodeHash, verifierKeyHash, routeCodeHash,
+            replayVerifierCodeHash, mintBreakerCodeHash,
+            proofPolicy.semanticProfile.profileHash,
+            proofPolicy.soraFinalityAnchor.anchorHash,
+        ]
         guard tairaToTokenMultiplier == 1_000_000_000,
-              Set([tokenAddress, verifierAddress, routeAddress]).count == 3,
-              Set([tokenCodeHash, verifierCodeHash, verifierKeyHash, routeCodeHash]).count == 4 else {
+              outboundProofPolicy.semanticProfile.isBn254,
+              irohaKeccak256(verifyingKey.canonicalBytes) == verifierKeyHash,
+              Set([tokenAddress, verifierAddress, routeAddress, replayVerifierAddress, mintBreakerAddress]).count == 5,
+              Set(deploymentHashRoles).count == deploymentHashRoles.count,
+              ![tokenCodeHash, verifierCodeHash, routeCodeHash, replayVerifierCodeHash, mintBreakerCodeHash]
+                  .contains(keccak256EmptyBytes) else {
             throw DecodingError.dataCorrupted(
                 .init(
                     codingPath: container.codingPath,
@@ -1680,7 +2252,13 @@ public struct ToriiGovernanceSccpTronDestinationDeployment: Decodable, Sendable,
     public let outboundProofPolicy: ToriiGovernanceSccpOutboundProofPolicy
     public let routeAddress: Data
     public let routeCodeHash: Data
+    public let replayVerifierAddress: Data
+    public let replayVerifierCodeHash: Data
+    public let mintBreakerAddress: Data
+    public let mintBreakerCodeHash: Data
     public let tairaToTokenMultiplier: UInt64
+    /// Exact canonical positive UInt128 JSON integer.
+    public let maxWrappedSupply: String
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case tokenAddress = "token_address"
@@ -1692,7 +2270,12 @@ public struct ToriiGovernanceSccpTronDestinationDeployment: Decodable, Sendable,
         case outboundProofPolicy = "outbound_proof_policy"
         case routeAddress = "route_address"
         case routeCodeHash = "route_code_hash"
+        case replayVerifierAddress = "replay_verifier_address"
+        case replayVerifierCodeHash = "replay_verifier_code_hash"
+        case mintBreakerAddress = "mint_breaker_address"
+        case mintBreakerCodeHash = "mint_breaker_code_hash"
         case tairaToTokenMultiplier = "taira_to_token_multiplier"
+        case maxWrappedSupply = "max_wrapped_supply"
     }
 
     public init(from decoder: Decoder) throws {
@@ -1723,10 +2306,31 @@ public struct ToriiGovernanceSccpTronDestinationDeployment: Decodable, Sendable,
         )
         routeAddress = try bytes(.routeAddress, count: 20)
         routeCodeHash = try bytes(.routeCodeHash, count: 32)
+        replayVerifierAddress = try bytes(.replayVerifierAddress, count: 20)
+        replayVerifierCodeHash = try bytes(.replayVerifierCodeHash, count: 32)
+        mintBreakerAddress = try bytes(.mintBreakerAddress, count: 20)
+        mintBreakerCodeHash = try bytes(.mintBreakerCodeHash, count: 32)
         tairaToTokenMultiplier = try container.decode(UInt64.self, forKey: .tairaToTokenMultiplier)
+        maxWrappedSupply = try governanceExactPositiveInteger(
+            decoder: decoder,
+            container: container,
+            key: .maxWrappedSupply,
+            maximum: maximumUInt128
+        )
+        let proofPolicy = outboundProofPolicy.discoveryValue
+        let deploymentHashRoles = [
+            tokenCodeHash, verifierCodeHash, verifierKeyHash, routeCodeHash,
+            replayVerifierCodeHash, mintBreakerCodeHash,
+            proofPolicy.semanticProfile.profileHash,
+            proofPolicy.soraFinalityAnchor.anchorHash,
+        ]
         guard tairaToTokenMultiplier == 1_000_000_000,
-              Set([tokenAddress, verifierAddress, routeAddress]).count == 3,
-              Set([tokenCodeHash, verifierCodeHash, verifierKeyHash, routeCodeHash]).count == 4 else {
+              outboundProofPolicy.semanticProfile.isBn254,
+              irohaKeccak256(verifyingKey.canonicalBytes) == verifierKeyHash,
+              Set([tokenAddress, verifierAddress, routeAddress, replayVerifierAddress, mintBreakerAddress]).count == 5,
+              Set(deploymentHashRoles).count == deploymentHashRoles.count,
+              ![tokenCodeHash, verifierCodeHash, routeCodeHash, replayVerifierCodeHash, mintBreakerCodeHash]
+                  .contains(keccak256EmptyBytes) else {
             throw DecodingError.dataCorrupted(
                 .init(
                     codingPath: container.codingPath,
@@ -1737,52 +2341,142 @@ public struct ToriiGovernanceSccpTronDestinationDeployment: Decodable, Sendable,
     }
 }
 
-/// Exact Solana route and native-verifier destination deployment.
-public struct ToriiGovernanceSccpSolanaDestinationDeployment: Decodable, Sendable, Equatable {
-    public let tokenMintAddress: Data
-    public let routeProgramId: Data
-    public let routeProgramDataAddress: Data
-    public let routeProgramDataSlot: UInt64
-    public let routeStateAccount: Data
-    public let routeProgramCodeHash: Data
-    public let nativeVerifierProgramId: Data
-    public let nativeVerifierProgramDataAddress: Data
-    public let nativeVerifierProgramDataSlot: UInt64
-    public let nativeVerifierMaterialAccount: Data
-    public let nativeVerifierProgramCodeHash: Data
-    public let nativeVerifierConfigHash: Data
-    public let verifyingKey: ToriiGovernanceSccpGroth16VerifyingKey
-    public let verifierKeyHash: Data
-    public let outboundProofPolicy: ToriiGovernanceSccpOutboundProofPolicy
-    public let tairaToTokenMultiplier: UInt64
+/// Exact ordered five-key TON mint-breaker guardian set in governance payloads.
+public struct ToriiGovernanceSccpTonMintBreakerGuardianKeys: Decodable, Sendable, Equatable {
+    public let guardian0: Data
+    public let guardian1: Data
+    public let guardian2: Data
+    public let guardian3: Data
+    public let guardian4: Data
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case tokenMintAddress = "token_mint_address"
-        case routeProgramId = "route_program_id"
-        case routeProgramDataAddress = "route_program_data_address"
-        case routeProgramDataSlot = "route_program_data_slot"
-        case routeStateAccount = "route_state_account"
-        case routeProgramCodeHash = "route_program_code_hash"
-        case nativeVerifierProgramId = "native_verifier_program_id"
-        case nativeVerifierProgramDataAddress = "native_verifier_program_data_address"
-        case nativeVerifierProgramDataSlot = "native_verifier_program_data_slot"
-        case nativeVerifierMaterialAccount = "native_verifier_material_account"
-        case nativeVerifierProgramCodeHash = "native_verifier_program_code_hash"
-        case nativeVerifierConfigHash = "native_verifier_config_hash"
-        case verifyingKey = "verifying_key"
-        case verifierKeyHash = "verifier_key_hash"
-        case outboundProofPolicy = "outbound_proof_policy"
-        case tairaToTokenMultiplier = "taira_to_token_multiplier"
+        case guardian0 = "guardian_0"
+        case guardian1 = "guardian_1"
+        case guardian2 = "guardian_2"
+        case guardian3 = "guardian_3"
+        case guardian4 = "guardian_4"
     }
 
     public init(from decoder: Decoder) throws {
         try governanceRejectUnknownFields(
             decoder,
             allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            name: "SCCP Solana destination deployment"
+            name: "SCCP TON mint-breaker guardian keys"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        func bytes(_ key: CodingKeys) throws -> Data {
+        func key(_ codingKey: CodingKeys) throws -> Data {
+            try governanceFixedBytes(
+                container.decode([UInt8].self, forKey: codingKey),
+                count: 32,
+                nonzero: true,
+                codingPath: container.codingPath + [codingKey],
+                field: codingKey.stringValue
+            )
+        }
+        guardian0 = try key(.guardian0)
+        guardian1 = try key(.guardian1)
+        guardian2 = try key(.guardian2)
+        guardian3 = try key(.guardian3)
+        guardian4 = try key(.guardian4)
+        let keys = ordered
+        guard zip(keys, keys.dropFirst()).allSatisfy({ $0.lexicographicallyPrecedes($1) }) else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "SCCP TON guardian keys must be strictly increasing"
+                )
+            )
+        }
+    }
+
+    fileprivate var ordered: [Data] { [guardian0, guardian1, guardian2, guardian3, guardian4] }
+}
+
+private func governanceTonProofProfileCommitment() -> Data {
+    let labels = [
+        "sccp:groth16-bls12381:signal:message-id:v1",
+        "sccp:groth16-bls12381:signal:payload-hash:v1",
+        "sccp:groth16-bls12381:signal:target-domain:v1",
+        "sccp:groth16-bls12381:signal:commitment-root:v1",
+        "sccp:groth16-bls12381:signal:finality-height:v1",
+        "sccp:groth16-bls12381:signal:finality-block-hash:v1",
+        "sccp:groth16-bls12381:signal:source-domain:v1",
+        "sccp:groth16-bls12381:signal:statement-hash:v1",
+        "sccp:groth16-bls12381:signal:destination-binding-hash:v1",
+        "sccp:groth16-bls12381:signal:route-config-hash:v1",
+        "sccp:groth16-bls12381:signal:sora-finality-anchor-hash:v1",
+    ]
+    func appendUInt32LE(_ value: UInt32, to data: inout Data) {
+        var little = value.littleEndian
+        withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+    }
+    var schema = Data([1])
+    appendUInt32LE(UInt32(labels.count), to: &schema)
+    for label in labels {
+        let bytes = Data(label.utf8)
+        appendUInt32LE(UInt32(bytes.count), to: &schema)
+        schema.append(bytes)
+    }
+    let schemaHash = Data(SHA256.hash(
+        data: Data("sccp:groth16-bls12381:public-signal-schema:v1".utf8) + schema
+    ))
+    var profile = Data("sccp:ton:groth16-bls12381:proof-profile:v1".utf8)
+    profile.append(1)
+    profile.append(Data("ietf-bls12381-compressed-g1-48-g2-96".utf8))
+    profile.append(Data("groth16-a-g1-b-g2-c-g1".utf8))
+    profile.append(Data("sha256-sha256-label-value-mod-r".utf8))
+    profile.append(Data(hexString: "73EDA753299D7D483339D80809A1D80553BDA402FFFE5BFEFFFFFFFF00000001")!)
+    profile.append(schemaHash)
+    return Data(SHA256.hash(data: profile))
+}
+
+/// Exact TON Jetton route and linked BLS12-381 verifier deployment.
+public struct ToriiGovernanceSccpTonDestinationDeployment: Decodable, Sendable, Equatable {
+    public let jettonMasterAddress: ToriiGovernanceSccpTonAddress
+    public let jettonMasterCodeHash: Data
+    public let jettonMasterInitialDataHash: Data
+    public let jettonWalletCodeHash: Data
+    public let routeAddress: ToriiGovernanceSccpTonAddress
+    public let routeCodeHash: Data
+    public let routeInitialDataHash: Data
+    public let embeddedVerifierCodeHash: Data
+    public let verifierCircuitHash: Data
+    public let verifyingKey: ToriiGovernanceSccpGroth16Bls12381VerifyingKey
+    public let verifierKeyHash: Data
+    public let proofProfileCommitment: Data
+    public let mintBreakerGuardianKeys: ToriiGovernanceSccpTonMintBreakerGuardianKeys
+    public let outboundProofPolicy: ToriiGovernanceSccpOutboundProofPolicy
+    public let tairaToTokenMultiplier: UInt64
+    /// Exact canonical positive integer no greater than 2^120 - 1.
+    public let maxWrappedSupply: String
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case jettonMasterAddress = "jetton_master_address"
+        case jettonMasterCodeHash = "jetton_master_code_hash"
+        case jettonMasterInitialDataHash = "jetton_master_initial_data_hash"
+        case jettonWalletCodeHash = "jetton_wallet_code_hash"
+        case routeAddress = "route_address"
+        case routeCodeHash = "route_code_hash"
+        case routeInitialDataHash = "route_initial_data_hash"
+        case embeddedVerifierCodeHash = "embedded_verifier_code_hash"
+        case verifierCircuitHash = "verifier_circuit_hash"
+        case verifyingKey = "verifying_key"
+        case verifierKeyHash = "verifier_key_hash"
+        case proofProfileCommitment = "proof_profile_commitment"
+        case mintBreakerGuardianKeys = "mint_breaker_guardian_keys"
+        case outboundProofPolicy = "outbound_proof_policy"
+        case tairaToTokenMultiplier = "taira_to_token_multiplier"
+        case maxWrappedSupply = "max_wrapped_supply"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "SCCP TON destination deployment"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func hash(_ key: CodingKeys) throws -> Data {
             try governanceFixedBytes(
                 container.decode([UInt8].self, forKey: key),
                 count: 32,
@@ -1791,60 +2485,65 @@ public struct ToriiGovernanceSccpSolanaDestinationDeployment: Decodable, Sendabl
                 field: key.stringValue
             )
         }
-        tokenMintAddress = try bytes(.tokenMintAddress)
-        routeProgramId = try bytes(.routeProgramId)
-        routeProgramDataAddress = try bytes(.routeProgramDataAddress)
-        routeProgramDataSlot = try container.decode(UInt64.self, forKey: .routeProgramDataSlot)
-        routeStateAccount = try bytes(.routeStateAccount)
-        routeProgramCodeHash = try bytes(.routeProgramCodeHash)
-        nativeVerifierProgramId = try bytes(.nativeVerifierProgramId)
-        nativeVerifierProgramDataAddress = try bytes(.nativeVerifierProgramDataAddress)
-        nativeVerifierProgramDataSlot = try container.decode(
-            UInt64.self,
-            forKey: .nativeVerifierProgramDataSlot
+        jettonMasterAddress = try container.decode(
+            ToriiGovernanceSccpTonAddress.self, forKey: .jettonMasterAddress
         )
-        nativeVerifierMaterialAccount = try bytes(.nativeVerifierMaterialAccount)
-        nativeVerifierProgramCodeHash = try bytes(.nativeVerifierProgramCodeHash)
-        nativeVerifierConfigHash = try bytes(.nativeVerifierConfigHash)
-        verifyingKey = try container.decode(ToriiGovernanceSccpGroth16VerifyingKey.self, forKey: .verifyingKey)
-        verifierKeyHash = try bytes(.verifierKeyHash)
+        jettonMasterCodeHash = try hash(.jettonMasterCodeHash)
+        jettonMasterInitialDataHash = try hash(.jettonMasterInitialDataHash)
+        jettonWalletCodeHash = try hash(.jettonWalletCodeHash)
+        routeAddress = try container.decode(ToriiGovernanceSccpTonAddress.self, forKey: .routeAddress)
+        routeCodeHash = try hash(.routeCodeHash)
+        routeInitialDataHash = try hash(.routeInitialDataHash)
+        embeddedVerifierCodeHash = try hash(.embeddedVerifierCodeHash)
+        verifierCircuitHash = try hash(.verifierCircuitHash)
+        verifyingKey = try container.decode(
+            ToriiGovernanceSccpGroth16Bls12381VerifyingKey.self, forKey: .verifyingKey
+        )
+        verifierKeyHash = try hash(.verifierKeyHash)
+        proofProfileCommitment = try hash(.proofProfileCommitment)
+        mintBreakerGuardianKeys = try container.decode(
+            ToriiGovernanceSccpTonMintBreakerGuardianKeys.self,
+            forKey: .mintBreakerGuardianKeys
+        )
         outboundProofPolicy = try container.decode(
-            ToriiGovernanceSccpOutboundProofPolicy.self,
-            forKey: .outboundProofPolicy
+            ToriiGovernanceSccpOutboundProofPolicy.self, forKey: .outboundProofPolicy
         )
         tairaToTokenMultiplier = try container.decode(UInt64.self, forKey: .tairaToTokenMultiplier)
-        let fixedRoles = [
-            tokenMintAddress,
-            routeProgramId,
-            routeProgramDataAddress,
-            routeStateAccount,
-            routeProgramCodeHash,
-            nativeVerifierProgramId,
-            nativeVerifierProgramDataAddress,
-            nativeVerifierMaterialAccount,
-            nativeVerifierProgramCodeHash,
-            nativeVerifierConfigHash,
-            verifierKeyHash,
+        maxWrappedSupply = try governanceExactPositiveInteger(
+            decoder: decoder,
+            container: container,
+            key: .maxWrappedSupply,
+            maximum: maximumTonCoins
+        )
+        let proofPolicy = outboundProofPolicy.discoveryValue
+        let hashes = [
+            jettonMasterCodeHash, jettonMasterInitialDataHash, jettonWalletCodeHash,
+            routeCodeHash, routeInitialDataHash, embeddedVerifierCodeHash,
+            verifierCircuitHash, verifierKeyHash, proofProfileCommitment,
+        ] + Array(outboundProofPolicy.semanticProfile.commitments.dropFirst()) + [
+            proofPolicy.semanticProfile.profileHash,
+            proofPolicy.soraFinalityAnchor.anchorHash,
         ]
-        guard routeProgramDataSlot > 0,
-              nativeVerifierProgramDataSlot > 0,
+        guard jettonMasterAddress != routeAddress,
+              Data(SHA256.hash(data: verifyingKey.canonicalBytes)) == verifierKeyHash,
+              outboundProofPolicy.semanticProfile.isBls12381,
+              verifierCircuitHash == outboundProofPolicy.semanticProfile.commitments[0],
+              proofProfileCommitment == governanceTonProofProfileCommitment(),
               tairaToTokenMultiplier == 1,
-              Set(fixedRoles).count == fixedRoles.count else {
+              Set(hashes).count == hashes.count else {
             throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: container.codingPath,
-                    debugDescription: "invalid or role-reused SCCP Solana destination deployment"
-                )
+                .init(codingPath: container.codingPath, debugDescription: "invalid SCCP TON destination deployment")
             )
         }
     }
 }
 
+
 /// Closed destination-deployment family in a governed SCCP route.
 public enum ToriiGovernanceSccpDestination: Decodable, Sendable, Equatable {
     case evm(ToriiGovernanceSccpEvmDestinationDeployment)
     case tron(ToriiGovernanceSccpTronDestinationDeployment)
-    case solana(ToriiGovernanceSccpSolanaDestinationDeployment)
+    case ton(ToriiGovernanceSccpTonDestinationDeployment)
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case family
@@ -1873,10 +2572,10 @@ public enum ToriiGovernanceSccpDestination: Decodable, Sendable, Equatable {
                     forKey: .deployment
                 )
             )
-        case "solana":
-            self = .solana(
+        case "ton":
+            self = .ton(
                 try container.decode(
-                    ToriiGovernanceSccpSolanaDestinationDeployment.self,
+                    ToriiGovernanceSccpTonDestinationDeployment.self,
                     forKey: .deployment
                 )
             )
@@ -1893,7 +2592,131 @@ public enum ToriiGovernanceSccpDestination: Decodable, Sendable, Equatable {
         switch self {
         case .evm: return "evm"
         case .tron: return "tron"
-        case .solana: return "solana"
+        case .ton: return "ton"
+        }
+    }
+
+    fileprivate var tairaToTokenMultiplier: UInt64 {
+        switch self {
+        case let .evm(deployment): return deployment.tairaToTokenMultiplier
+        case let .tron(deployment): return deployment.tairaToTokenMultiplier
+        case let .ton(deployment): return deployment.tairaToTokenMultiplier
+        }
+    }
+
+    fileprivate var maxWrappedSupply: String {
+        switch self {
+        case let .evm(deployment): return deployment.maxWrappedSupply
+        case let .tron(deployment): return deployment.maxWrappedSupply
+        case let .ton(deployment): return deployment.maxWrappedSupply
+        }
+    }
+
+    func discoveryValue(for lane: SccpLaneIdV1) throws -> SccpDestinationDeploymentV1 {
+        func contract(
+            _ deployment: ToriiGovernanceSccpEvmDestinationDeployment,
+            binding: Data
+        ) throws -> SccpEvmTronDestinationDeploymentV1 {
+            SccpEvmTronDestinationDeploymentV1(
+                tokenAddress: deployment.tokenAddress,
+                tokenCodeHash: deployment.tokenCodeHash,
+                verifierAddress: deployment.verifierAddress,
+                verifierCodeHash: deployment.verifierCodeHash,
+                verifierKeyHash: deployment.verifierKeyHash,
+                outboundProofPolicy: deployment.outboundProofPolicy.discoveryValue,
+                routeAddress: deployment.routeAddress,
+                routeCodeHash: deployment.routeCodeHash,
+                replayVerifierAddress: deployment.replayVerifierAddress,
+                replayVerifierCodeHash: deployment.replayVerifierCodeHash,
+                mintBreakerAddress: deployment.mintBreakerAddress,
+                mintBreakerCodeHash: deployment.mintBreakerCodeHash,
+                tairaToTokenMultiplier: deployment.tairaToTokenMultiplier,
+                maxWrappedSupply: deployment.maxWrappedSupply,
+                destinationBindingHash: binding
+            )
+        }
+
+        func contract(
+            _ deployment: ToriiGovernanceSccpTronDestinationDeployment,
+            binding: Data
+        ) throws -> SccpEvmTronDestinationDeploymentV1 {
+            SccpEvmTronDestinationDeploymentV1(
+                tokenAddress: deployment.tokenAddress,
+                tokenCodeHash: deployment.tokenCodeHash,
+                verifierAddress: deployment.verifierAddress,
+                verifierCodeHash: deployment.verifierCodeHash,
+                verifierKeyHash: deployment.verifierKeyHash,
+                outboundProofPolicy: deployment.outboundProofPolicy.discoveryValue,
+                routeAddress: deployment.routeAddress,
+                routeCodeHash: deployment.routeCodeHash,
+                replayVerifierAddress: deployment.replayVerifierAddress,
+                replayVerifierCodeHash: deployment.replayVerifierCodeHash,
+                mintBreakerAddress: deployment.mintBreakerAddress,
+                mintBreakerCodeHash: deployment.mintBreakerCodeHash,
+                tairaToTokenMultiplier: deployment.tairaToTokenMultiplier,
+                maxWrappedSupply: deployment.maxWrappedSupply,
+                destinationBindingHash: binding
+            )
+        }
+
+        switch self {
+        case let .evm(deployment):
+            let partial = try contract(deployment, binding: Data())
+            let binding = try SccpExactParser.destinationBindingHash(
+                lane: lane,
+                destination: .evm(partial)
+            )
+            return .evm(try contract(deployment, binding: binding))
+        case let .tron(deployment):
+            let partial = try contract(deployment, binding: Data())
+            let binding = try SccpExactParser.destinationBindingHash(
+                lane: lane,
+                destination: .tron(partial)
+            )
+            return .tron(try contract(deployment, binding: binding))
+        case let .ton(deployment):
+            let master = try SccpTonAddressV1(
+                workchain: deployment.jettonMasterAddress.workchain,
+                account: deployment.jettonMasterAddress.account
+            )
+            let route = try SccpTonAddressV1(
+                workchain: deployment.routeAddress.workchain,
+                account: deployment.routeAddress.account
+            )
+            let keys = deployment.mintBreakerGuardianKeys
+            let guardians = try SccpTonMintBreakerGuardianKeysV1(
+                guardian0: keys.guardian0,
+                guardian1: keys.guardian1,
+                guardian2: keys.guardian2,
+                guardian3: keys.guardian3,
+                guardian4: keys.guardian4
+            )
+            func ton(binding: Data) throws -> SccpTonDestinationDeploymentV1 {
+                SccpTonDestinationDeploymentV1(
+                    jettonMasterAddress: master,
+                    jettonMasterCodeHash: deployment.jettonMasterCodeHash,
+                    jettonMasterInitialDataHash: deployment.jettonMasterInitialDataHash,
+                    jettonWalletCodeHash: deployment.jettonWalletCodeHash,
+                    routeAddress: route,
+                    routeCodeHash: deployment.routeCodeHash,
+                    routeInitialDataHash: deployment.routeInitialDataHash,
+                    embeddedVerifierCodeHash: deployment.embeddedVerifierCodeHash,
+                    verifierCircuitHash: deployment.verifierCircuitHash,
+                    verifierKeyHash: deployment.verifierKeyHash,
+                    proofProfileCommitment: deployment.proofProfileCommitment,
+                    mintBreakerGuardianKeys: guardians,
+                    outboundProofPolicy: deployment.outboundProofPolicy.discoveryValue,
+                    tairaToTokenMultiplier: deployment.tairaToTokenMultiplier,
+                    maxWrappedSupply: deployment.maxWrappedSupply,
+                    destinationBindingHash: binding
+                )
+            }
+            let partial = try ton(binding: Data())
+            let binding = try SccpExactParser.destinationBindingHash(
+                lane: lane,
+                destination: .ton(partial)
+            )
+            return .ton(try ton(binding: binding))
         }
     }
 }
@@ -1994,13 +2817,14 @@ public struct ToriiGovernanceSccpOutboundExecutionPolicy: Decodable, Sendable, E
 /// Typed TAIRA settlement policy for a governed SCCP route.
 public struct ToriiGovernanceSccpSettlement: Decodable, Sendable, Equatable {
     public let assetDefinitionId: String
-    public let custodyOwner: String
     public let payloadAmountScale: UInt32
+    /// Exact canonical positive UInt128 JSON integer.
+    public let maxOutstandingLiability: String
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case assetDefinitionId = "asset_definition_id"
-        case custodyOwner = "custody_owner"
         case payloadAmountScale = "payload_amount_scale"
+        case maxOutstandingLiability = "max_outstanding_liability"
     }
 
     public init(from decoder: Decoder) throws {
@@ -2015,12 +2839,13 @@ public struct ToriiGovernanceSccpSettlement: Decodable, Sendable, Equatable {
             codingPath: container.codingPath + [CodingKeys.assetDefinitionId],
             field: "asset_definition_id"
         )
-        custodyOwner = try governanceCanonicalAccount(
-            container.decode(String.self, forKey: .custodyOwner),
-            codingPath: container.codingPath + [CodingKeys.custodyOwner],
-            field: "custody_owner"
-        )
         payloadAmountScale = try container.decode(UInt32.self, forKey: .payloadAmountScale)
+        maxOutstandingLiability = try governanceExactPositiveInteger(
+            decoder: decoder,
+            container: container,
+            key: .maxOutstandingLiability,
+            maximum: maximumUInt128
+        )
         guard assetDefinitionId == "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
               payloadAmountScale == 9 else {
             throw DecodingError.dataCorrupted(
@@ -2097,12 +2922,62 @@ public struct ToriiGovernanceSccpGovernedRoute: Decodable, Sendable, Equatable {
             forKey: .soraOutboundExecutionPolicy
         )
         settlement = try container.decode(ToriiGovernanceSccpSettlement.self, forKey: .settlement)
+        let discoveryLane = try laneId.discoveryValue
+        let discoveryDestination = try destination.discoveryValue(for: discoveryLane)
+        let routeConfigurationHash = try SccpExactParser.routeConfigurationHash(
+            lane: discoveryLane,
+            routeId: routeId,
+            assetKey: assetKey,
+            revision: revision,
+            destination: discoveryDestination
+        )
+        var governedHashRoles = [
+            soraOutboundExecutionPolicy.contractArtifactSha256,
+            soraOutboundExecutionPolicy.verifyingKeyReference.commitment,
+            routeConfigurationHash,
+            discoveryDestination.destinationBindingHash,
+        ]
+        switch discoveryDestination {
+        case let .evm(deployment), let .tron(deployment):
+            governedHashRoles.append(contentsOf: [
+                deployment.tokenCodeHash,
+                deployment.verifierCodeHash,
+                deployment.replayVerifierCodeHash,
+                deployment.mintBreakerCodeHash,
+                deployment.verifierKeyHash,
+                deployment.routeCodeHash,
+                deployment.outboundProofPolicy.semanticProfile.profileHash,
+                deployment.outboundProofPolicy.soraFinalityAnchor.anchorHash,
+            ])
+        case let .ton(deployment):
+            governedHashRoles.append(contentsOf: [
+                deployment.jettonMasterCodeHash,
+                deployment.jettonMasterInitialDataHash,
+                deployment.jettonWalletCodeHash,
+                deployment.routeCodeHash,
+                deployment.routeInitialDataHash,
+                deployment.embeddedVerifierCodeHash,
+                deployment.verifierCircuitHash,
+                deployment.verifierKeyHash,
+                deployment.proofProfileCommitment,
+                deployment.outboundProofPolicy.semanticProfile.profileHash,
+                deployment.outboundProofPolicy.soraFinalityAnchor.anchorHash,
+            ])
+        }
+        let expectedWrappedSupply = governanceMultiplyDecimal(
+            settlement.maxOutstandingLiability,
+            by: destination.tairaToTokenMultiplier
+        )
         guard laneId.isInbound,
               governanceCanonicalKey(routeId),
               governanceCanonicalKey(assetKey),
               revision > 0,
               sourceIdentity.lane == laneId,
+              sourceIdentity.emitter.matches(destination),
+              sourceIdentity.emitter.routeConfigurationHash == routeConfigurationHash,
               destination.family == laneId.source.family,
+              Set(governedHashRoles).count == governedHashRoles.count,
+              expectedWrappedSupply == destination.maxWrappedSupply,
               activation.isTerminal == (inboundFinalityCutoff != nil) else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: container.codingPath, debugDescription: "governed SCCP route is invalid")

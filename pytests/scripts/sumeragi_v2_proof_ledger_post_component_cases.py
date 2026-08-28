@@ -1031,6 +1031,7 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_authority.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs"),
+        Path("crates/iroha_p2p/src/network.rs"),
         Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
         Path("crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs"),
         Path("crates/iroha_core/src/sumeragi/tests/v2_lifecycle_scheduler_certified_serve_cases.rs"),

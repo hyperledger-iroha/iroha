@@ -253,7 +253,7 @@ pub enum Error {
     #[error("trace column `{0}` missing from layout")]
     MissingColumn(String),
     /// Unsupported FRI arity advertised by the parameter set.
-    #[error("unsupported FRI arity {0}; expected 8 or 16")]
+    #[error("unsupported FRI arity {0}; first-release FASTPQ requires binary arity 2")]
     FriArity(u32),
     /// A FRI layer cannot be partitioned into complete multiplicative cosets.
     #[error("FRI layer length {length} is not compatible with effective arity {arity}")]

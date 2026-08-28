@@ -148,6 +148,7 @@ use iroha_data_model::{
     parliament_types::BallotAttemptId,
     peer::PeerId,
     prelude::Name,
+    privacy::GoldilocksDigest384V1,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
     validation_fee::ValidationFeePolicyWitnessProofV1,
 };

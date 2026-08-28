@@ -6,6 +6,7 @@ const PRODUCTION_SOURCES: &[&str] = &[
     "src/dial_policy.rs",
     "src/lib.rs",
     "src/network.rs",
+    "src/network/admission.rs",
     "src/network/best_effort_admission.rs",
     "src/network/reliable_actor.rs",
     "src/peer.rs",
@@ -94,6 +95,12 @@ const PRODUCTION_EDGES: &[ProductionEdge<'_>] = &[
     },
     ProductionEdge {
         parent: "src/network.rs",
+        declaration: "mod admission;",
+        child: "src/network/admission.rs",
+        gate: ProductionGate::Unconditional,
+    },
+    ProductionEdge {
+        parent: "src/network.rs",
         declaration: "mod best_effort_admission;",
         child: "src/network/best_effort_admission.rs",
         gate: ProductionGate::Unconditional,
@@ -133,6 +140,38 @@ fn collect_rust_sources(root: &Path, directory: &Path, output: &mut BTreeSet<Str
             assert!(output.insert(relative), "duplicate P2P source path");
         }
     }
+}
+
+fn locked_package_versions<'a>(lockfile: &'a str, package: &str) -> Vec<&'a str> {
+    lockfile
+        .split("[[package]]")
+        .filter_map(|entry| {
+            let mut name = None;
+            let mut version = None;
+            for line in entry.lines().map(str::trim) {
+                if let Some(value) = line
+                    .strip_prefix("name = \"")
+                    .and_then(|value| value.strip_suffix('"'))
+                {
+                    name = Some(value);
+                } else if let Some(value) = line
+                    .strip_prefix("version = \"")
+                    .and_then(|value| value.strip_suffix('"'))
+                {
+                    version = Some(value);
+                }
+            }
+            (name == Some(package)).then_some(version).flatten()
+        })
+        .collect()
+}
+
+fn stable_semver_triplet(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    parts.next().is_none().then_some((major, minor, patch))
 }
 
 fn declaration_attributes<'a>(source: &'a str, declaration: &str) -> Vec<&'a str> {
@@ -232,4 +271,48 @@ fn shipping_source_inventory_and_module_graph_are_closed() {
         reached, production,
         "every shipping P2P source must have an explicit production module edge"
     );
+}
+
+#[test]
+fn shipping_quinn_resolution_keeps_unqualified_releases_fail_closed() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = crate_root
+        .parent()
+        .and_then(Path::parent)
+        .expect("P2P crate lives below the workspace root");
+    let lockfile =
+        fs::read_to_string(workspace_root.join("Cargo.lock")).expect("read the workspace lockfile");
+
+    let quinn = locked_package_versions(&lockfile, "quinn");
+    assert_eq!(
+        quinn.len(),
+        1,
+        "the workspace must resolve one Quinn release"
+    );
+    let quinn = stable_semver_triplet(quinn[0]).expect("Quinn uses stable semver");
+    assert!(quinn >= (0, 11, 9) && quinn < (0, 12, 0));
+
+    let proto = locked_package_versions(&lockfile, "quinn-proto");
+    assert_eq!(
+        proto.len(),
+        1,
+        "the workspace must resolve exactly one Quinn protocol release"
+    );
+    let proto = stable_semver_triplet(proto[0]).expect("quinn-proto uses stable semver");
+    assert!(proto >= (0, 11, 15) && proto < (0, 12, 0));
+
+    if proto < (0, 11, 17) {
+        for relative in [
+            "src/network.rs",
+            "src/transport.rs",
+            "src/streaming/quic.rs",
+        ] {
+            let source = fs::read_to_string(crate_root.join(relative))
+                .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+            assert!(
+                source.contains("QUIC_DEPENDENCY_BLOCK_REASON"),
+                "{relative} must fail closed while quinn-proto {proto:?} is locked"
+            );
+        }
+    }
 }

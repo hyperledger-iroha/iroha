@@ -16,7 +16,7 @@ use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
 use std::fs;
 fn v1_captured_fixture_batch(rows: usize) -> TransitionBatch {
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+    let mut batch = TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
     let mut transcripts = Vec::new();
     let mut row_idx = 0usize;
     let mut transfer_idx = 0usize;
@@ -128,7 +128,7 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
 #[test]
 fn v1_artifact_balanced_1k_matches_fixture() {
     let update = fixture_update_requested();
-    let prover = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
+    let prover = Prover::canonical_with_execution_mode("fastpq-state-transition-stark-v1", ExecutionMode::Cpu)
         .expect("prover");
     let batch = v1_captured_fixture_batch(1_000);
     let proof = prover
@@ -160,9 +160,9 @@ fn v1_artifact_balanced_cpu_gpu_parity() {
     }
     let expected = include_bytes!("fixtures/v1_balanced_1k.bin");
     let batch = v1_captured_fixture_batch(1_000);
-    let cpu = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
+    let cpu = Prover::canonical_with_execution_mode("fastpq-state-transition-stark-v1", ExecutionMode::Cpu)
         .expect("cpu prover");
-    let gpu = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Gpu)
+    let gpu = Prover::canonical_with_execution_mode("fastpq-state-transition-stark-v1", ExecutionMode::Gpu)
         .expect("gpu prover");
     let cpu_proof = cpu
         .prove_raw_statement(&batch)
@@ -187,7 +187,7 @@ fn v1_artifact_balanced_cpu_gpu_parity() {
 #[test]
 fn v1_artifact_balanced_5k_matches_fixture() {
     let update = fixture_update_requested();
-    let prover = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
+    let prover = Prover::canonical_with_execution_mode("fastpq-state-transition-stark-v1", ExecutionMode::Cpu)
         .expect("prover");
     let batch = v1_captured_fixture_batch(5_000);
     let proof = prover

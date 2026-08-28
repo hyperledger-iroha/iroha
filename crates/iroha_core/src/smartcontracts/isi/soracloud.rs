@@ -1500,7 +1500,13 @@ fn validate_soracloud_fhe_full_bootstrap_native_air_statement_binding_v1(
             "{label} native AIR must not carry auxiliary composition value commitments"
         )));
     }
-    if air.public_digest != <[u8; Hash::LENGTH]>::from(statement_hash) {
+    let statement_bytes: [u8; Hash::LENGTH] = statement_hash.into();
+    if crate::zk_stark::stark_public_digest_v1(
+        &native.params,
+        expected_circuit_id,
+        &statement_bytes,
+    ) != Some(air.public_digest)
+    {
         return Err(invalid_parameter(format!(
             "{label} native AIR public digest mismatch"
         )));
@@ -1530,11 +1536,6 @@ fn validate_soracloud_fhe_stark_verifier_key_payload(
         label,
     )
     .map_err(invalid_parameter)?;
-    if payload.hash_fn != crate::zk_stark::STARK_HASH_SHA256_V1 {
-        return Err(invalid_parameter(format!(
-            "{label} verifier-key must use SHA-256 STARK/FRI"
-        )));
-    }
     Ok(())
 }
 #[cfg(feature = "zk-stark")]
@@ -1673,7 +1674,6 @@ fn soracloud_fhe_full_bootstrap_native_air_stark_params_v1(
         fold_arity: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1,
         queries: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1,
         merkle_arity: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1,
-        hash_fn: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
         domain_tag: iroha_crypto::fhe_bfv::bfv_full_bootstrap_native_stark_air_domain_tag_v1(
             statement_hash,
         ),
@@ -1779,13 +1779,6 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary_with_limits(
             "{label} native BFV AIR Merkle arity mismatch"
         )));
     }
-    if native.params.hash_fn
-        != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1
-    {
-        return Err(invalid_parameter(format!(
-            "{label} native BFV AIR hash function mismatch"
-        )));
-    }
     if air.circuit_id != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1 {
         return Err(invalid_parameter(format!(
             "{label} native BFV AIR circuit id mismatch"
@@ -1835,7 +1828,14 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary_with_limits(
             "{label} native BFV AIR composition root mismatch"
         )));
     }
-    if air.public_digest != <[u8; Hash::LENGTH]>::from(statement_hash) {
+    let expected_public_digest =
+        crate::zk_stark::bfv_full_bootstrap_stark_public_digest_v1(&native.params, statement_hash)
+            .ok_or_else(|| {
+                invalid_parameter(format!(
+                    "{label} native BFV AIR public digest derivation failed"
+                ))
+            })?;
+    if air.public_digest != expected_public_digest {
         return Err(invalid_parameter(format!(
             "{label} native BFV AIR public digest mismatch"
         )));
@@ -2129,8 +2129,8 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary_with_limits(
     Ok(())
 }
 #[cfg(feature = "zk-stark")]
-fn is_zero_stark_digest(digest: &[u8; Hash::LENGTH]) -> bool {
-    digest.iter().all(|&byte| byte == 0)
+fn is_zero_stark_digest(digest: &iroha_data_model::privacy::GoldilocksDigest384V1) -> bool {
+    digest.words().iter().all(|&word| word == 0)
 }
 #[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_row(
@@ -2287,7 +2287,13 @@ fn verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
                 "{label} native BFV AIR governed composition values are required"
             ))
         })?;
-    let expected_public_digest = <[u8; Hash::LENGTH]>::from(statement_hash);
+    let expected_public_digest =
+        crate::zk_stark::bfv_full_bootstrap_stark_public_digest_v1(&native.params, statement_hash)
+            .ok_or_else(|| {
+                invalid_parameter(format!(
+                    "{label} native BFV AIR public digest derivation failed"
+                ))
+            })?;
     let expected_base_indices =
         iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
             statement_hash,
@@ -3259,7 +3265,6 @@ fn validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
         fold_arity: native_payload.fold_arity,
         queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: native_payload.merkle_arity,
-        hash_fn: native_payload.hash_fn,
     };
     verifier_key.bytes = norito::encode_canonical(&payload).map_err(|err| {
         invalid_parameter(format!(
@@ -3272,11 +3277,6 @@ fn validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
         "FHE full-bootstrap execution verifier-key artifact",
     )
     .map_err(invalid_parameter)?;
-    if payload.hash_fn != crate::zk_stark::STARK_HASH_SHA256_V1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution verifier-key artifact must use SHA-256 STARK/FRI",
-        ));
-    }
     Ok(())
 }
 #[cfg(all(test, feature = "zk-stark"))]
@@ -3315,11 +3315,6 @@ fn canonical_soracloud_fhe_full_bootstrap_prover_verifier_key(
         label,
     )
     .map_err(invalid_parameter)?;
-    if payload.hash_fn != crate::zk_stark::STARK_HASH_SHA256_V1 {
-        return Err(invalid_parameter(format!(
-            "{label} verifier-key must use SHA-256 STARK/FRI"
-        )));
-    }
     Ok(verifier_key.clone())
 }
 #[cfg(feature = "zk-stark")]
@@ -16476,7 +16471,15 @@ fn validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for
         envelope_bytes,
         &limits,
         iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
-        &<[u8; Hash::LENGTH]>::from(statement_hash),
+        &crate::zk_stark::bfv_full_bootstrap_stark_public_digest_v1(
+            &native_envelope.params,
+            statement_hash,
+        )
+        .ok_or_else(|| {
+            invalid_parameter(
+                "FHE full-bootstrap execution native AIR public digest derivation failed",
+            )
+        })?,
         &arithmetic_trace_material.rows,
         &arithmetic_air_evaluation_material.composition_values,
         &expected_base_indices,

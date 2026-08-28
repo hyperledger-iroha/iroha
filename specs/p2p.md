@@ -402,6 +402,11 @@ trust_min_score = -20              # drop trust gossip at or below this score
   completes address validation, before the connection waits for global
   pre-authentication capacity.
   Successful peers are governed only by `idle_timeout_ms` after authentication.
+- Each authenticated connection admits a shared burst of two inbound `Ping`/`Pong`
+  health frames and refills one credit every `idle_timeout_ms / 2`. Excess health
+  frames receive no response and do not refresh liveness; admitted health frames
+  and application data do. This bounds Pong amplification without turning a
+  short burst into forced reconnect churn.
 - `preauth_max_connections_per_ip` caps concurrent accepted-but-unauthenticated
   transports from one canonical source IP (default: 8). One shared reservation
   gate covers TCP and address-validated QUIC, and reserves the source before
@@ -536,8 +541,12 @@ admission API.
   - `allow_keys`: array of peer public keys.
   - `deny_keys`: array of peer public keys to always reject.
 - Networks:
-  - `allow_cidrs`: list of IPv4/IPv6 CIDRs that are permitted for inbound IPs (e.g., `192.168.1.0/24`, `2001:db8::/32`). Effective when `allowlist_only` is true.
+  - `allow_cidrs`: list of IPv4/IPv6 CIDRs that are permitted for inbound IPs (e.g., `192.168.1.0/24`, `2001:db8::/32`). A non-empty list gates inbound IPs independently of the peer-key `allowlist_only` switch.
   - `deny_cidrs`: list of IPv4/IPv6 CIDRs rejected for inbound IPs (checked before throttles).
+- Invalid CIDR entries fail network startup. A malformed hot-reload update is
+  rejected as a unit and leaves the installed ACL unchanged. IPv4-mapped IPv6
+  CIDRs with prefixes from `/96` through `/128` are canonicalized to the
+  equivalent IPv4 network; broader mapped prefixes are rejected.
 - Precedence: `deny_*` takes precedence. CIDR checks apply before per‑IP throttling; key checks apply after handshake (and are also applied to topology for outbound).
 
 ### Accept throttle (prefix + per-IP)
@@ -552,6 +561,9 @@ admission API.
   - CIDR allowlists still gate access first; allowlisted IPs bypass both prefix and per-IP buckets.
   - Prefix bucket (when enabled) runs before per-IP buckets; a throttled prefix stops evaluation early.
   - Buckets prune idle entries on every evaluation and evict the least-recently-used entry when above `max_accept_buckets`.
+  - The cap must retain at least one bucket for each enabled throttle dimension
+    (two when both prefix and per-IP throttles are enabled); smaller geometry is
+    rejected before listener binding.
 - Telemetry:
   - `p2p_accept_buckets_current` gauges active bucket count; `p2p_accept_bucket_evictions_total` tracks idle/LRU evictions.
   - `p2p_accept_prefix_cache_total{result}` surfaces prefix cache hit/miss ratios.

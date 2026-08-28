@@ -6,8 +6,8 @@
 //! reconnects it to the private row. ZK-ACE therefore uses the self-contained construction below:
 //!
 //! - every witness byte is range constrained through a bit decomposition;
-//! - the two dense-MDS Poseidon `x^7` sponge computations are represented by a complete
-//!   quadratic execution trace;
+//! - all twelve independently initialized Poseidon `x^7` lanes behind the typed identity and
+//!   replay digests are represented by a complete quadratic execution trace;
 //! - trace columns are interpolated and masked with random multiples of the
 //!   trace-domain vanishing polynomial before the verifier sees any opening;
 //! - one quartic-extension composition quotient shares the base-field trace
@@ -41,16 +41,18 @@ use super::{
     },
     zk_ace::ZkAcePrivacyWitnessV1,
 };
-use fastpq_prover::poseidon_manifest;
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
+    privacy::GoldilocksDigest384V1,
     proof::VerifyingKeyId,
     zk::{
-        ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER, ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-        ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        derive_zk_ace_transfer_digest, zk_ace_dense_mds_goldilocks_x7_domain_hash_v1,
+        ZK_ACE_IDENTITY_COMMITMENT_PHASE_V1, ZK_ACE_IDENTITY_COMMITMENT_ROLE_V1,
+        ZK_ACE_PQ_AUTHORIZATION_V1_ACTION_TRANSFER, ZK_ACE_PQ_AUTHORIZATION_V1_BACKEND,
+        ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID, ZK_ACE_PQ_AUTHORIZATION_V1_DOMAIN_TAG,
+        ZK_ACE_PUBLIC_TRANSCRIPT_ROLE_V1, ZK_ACE_REPLAY_NULLIFIER_PHASE_V1,
+        ZK_ACE_REPLAY_NULLIFIER_ROLE_V1, derive_zk_ace_transfer_digest, zk_ace_digest384_domain_v1,
         zk_ace_pack_bytes_to_field_limbs,
     },
 };
@@ -66,13 +68,13 @@ use thiserror::Error;
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct ZkAceAirRelationInputsV1 {
     pub(super) version: u16,
-    pub(super) identity_commitment: [u8; 32],
-    pub(super) tx_digest: [u8; 32],
-    pub(super) authorization_digest: [u8; 32],
+    pub(super) identity_commitment: [u8; GoldilocksDigest384V1::BYTES],
+    pub(super) tx_digest: [u8; GoldilocksDigest384V1::BYTES],
+    pub(super) authorization_digest: [u8; GoldilocksDigest384V1::BYTES],
     pub(super) network_id: NetworkId,
     pub(super) domain_tag: String,
     pub(super) action_class: String,
-    pub(super) replay_nullifier: [u8; 32],
+    pub(super) replay_nullifier: [u8; GoldilocksDigest384V1::BYTES],
     pub(super) policy_hash: [u8; 32],
     pub(super) from: AccountId,
     pub(super) to: AccountId,
@@ -83,11 +85,11 @@ pub(super) struct ZkAceAirRelationInputsV1 {
 impl ZkAceAirRelationInputsV1 {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn transparent_transfer(
-        identity_commitment: [u8; 32],
-        tx_digest: [u8; 32],
-        authorization_digest: [u8; 32],
+        identity_commitment: [u8; GoldilocksDigest384V1::BYTES],
+        tx_digest: [u8; GoldilocksDigest384V1::BYTES],
+        authorization_digest: [u8; GoldilocksDigest384V1::BYTES],
         network_id: NetworkId,
-        replay_nullifier: [u8; 32],
+        replay_nullifier: [u8; GoldilocksDigest384V1::BYTES],
         policy_hash: [u8; 32],
         from: AccountId,
         to: AccountId,
@@ -100,8 +102,8 @@ impl ZkAceAirRelationInputsV1 {
             tx_digest,
             authorization_digest,
             network_id,
-            domain_tag: ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-            action_class: ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+            domain_tag: ZK_ACE_PQ_AUTHORIZATION_V1_DOMAIN_TAG.to_owned(),
+            action_class: ZK_ACE_PQ_AUTHORIZATION_V1_ACTION_TRANSFER.to_owned(),
             replay_nullifier,
             policy_hash,
             from,
@@ -109,8 +111,8 @@ impl ZkAceAirRelationInputsV1 {
             asset,
             amount,
             verifier_key_id: VerifyingKeyId::new(
-                ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-                ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+                ZK_ACE_PQ_AUTHORIZATION_V1_BACKEND,
+                ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID,
             ),
         }
     }
@@ -118,11 +120,9 @@ impl ZkAceAirRelationInputsV1 {
 /// Exact, type-name-independent public transcript schema.
 ///
 /// The schema descriptor is itself the first framed part. Every following part is ordered and
-/// independently length-framed by
-/// [`zk_ace_dense_mds_goldilocks_x7_domain_hash_v1`], whose byte packing is
-/// fixed to seven-byte little-endian Goldilocks limbs.
-pub(super) const AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1: &[u8] = b"framing=poseidon-domain-words:dense-mds-goldilocks-x7:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=version:u16be|part2=identity-commitment:bytes32|part3=transfer-digest:bytes32|part4=authorization-digest:bytes32|part5=network-id:bytes32|part6=fixed-domain:utf8|part7=fixed-action:utf8|part8=replay-nullifier:bytes32|part9=policy-digest:bytes32|part10=source:account-canonical-hex-v1-utf8|part11=destination:account-canonical-hex-v1-utf8|part12=asset-definition-id:uuid-bytes16|part13=amount:u128be|part14=fixed-verifier-backend:utf8|part15=fixed-verifier-circuit:utf8";
-const AIR_PUBLIC_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ace:air-public-digest:v1";
+/// independently length-framed by the shared `GoldilocksDigest384V1` builder,
+/// whose byte packing is fixed to seven-byte little-endian Goldilocks limbs.
+pub(super) const AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1: &[u8] = b"framing=goldilocks-digest384-v1:typed-domain+ordered-length-delimited-7byte-le-fields|field0=this-schema|field1=version:u16be|field2=identity-commitment:bytes48|field3=transfer-digest:bytes48|field4=authorization-digest:bytes48|field5=network-id:bytes32|field6=fixed-domain:utf8|field7=fixed-action:utf8|field8=replay-nullifier:bytes48|field9=policy-digest:bytes32|field10=source:account-canonical-hex-v1-utf8|field11=destination:account-canonical-hex-v1-utf8|field12=asset-definition-id:uuid-bytes16|field13=amount:u128be|field14=fixed-verifier-backend:utf8|field15=fixed-verifier-circuit:utf8";
 fn air_public_transcript_parts_v1(
     public_inputs: &ZkAceAirRelationInputsV1,
 ) -> Result<Vec<Vec<u8>>, ZkAceStarkError> {
@@ -160,13 +160,18 @@ fn air_public_transcript_parts_v1(
         public_inputs.verifier_key_id.name.as_bytes().to_vec(),
     ])
 }
-fn hash_air_public_transcript_parts_v1(parts: &[Vec<u8>]) -> [u8; 32] {
+fn hash_air_public_transcript_parts_v1(parts: &[Vec<u8>]) -> GoldilocksDigest384V1 {
     let parts = parts.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    zk_ace_dense_mds_goldilocks_x7_domain_hash_v1(AIR_PUBLIC_TRANSCRIPT_DOMAIN_V1, &parts)
+    fastpq_prover::fastpq_isi_v1::hash_bytes_384_v1(
+        zk_ace_digest384_domain_v1(ZK_ACE_PUBLIC_TRANSCRIPT_ROLE_V1, b"air-input-binding"),
+        &parts,
+    )
+    .expect("bounded AIR public fields fit the canonical digest frame")
+    .into()
 }
 fn derive_zk_ace_air_public_digest(
     public_inputs: &ZkAceAirRelationInputsV1,
-) -> Result<[u8; 32], ZkAceStarkError> {
+) -> Result<GoldilocksDigest384V1, ZkAceStarkError> {
     air_public_transcript_parts_v1(public_inputs)
         .map(|parts| hash_air_public_transcript_parts_v1(&parts))
 }
@@ -248,7 +253,7 @@ pub(crate) const AIR_TOTAL_DEGREE_V1: usize = maximum_air_constraint_degree_v1()
 pub(crate) const REDUCED_AIR_DEGREE_V1: usize = AIR_TOTAL_DEGREE_V1 - 1;
 const _: () = assert!(AIR_TOTAL_DEGREE_V1 == 2);
 /// Complete consensus-relevant algebraic and commitment profile.
-pub(crate) const COMPILED_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|base-field=goldilocks:0xffffffff00000001|challenge-field=goldilocks-fp4:w4=7:coefficients-c0-c3:u64be|generator=7|field_challenge=sha256:four-u64be-canonical-rejection:framed-u64be-attempt:max-attempts256:distinct270:max-hash-calls69120|poseidon=dense-mds:goldilocks:x7:width3:rate2:full8:partial57:constants-sha256=99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21:outputs=4-sequential-state0:binding-ceiling32:activation-disabled|air-public-transcript=poseidon-domain-words:domain=iroha:privacy:zk-ace:air-public-digest:v1:schema=compiled-air-relation-schema-v1:parts16:ordered:length-framed:type-name-independent|air-total-degree=2|trace_rows=4096|trace_width=88|trace_mask_degree=511|trace_mask_coefficients=512|zk-bound=fft-decomposition:d-air2:d1:e4:n-deep1:n-fri108:formula=2d(e*n-deep+n-fri)+n-fri:required332:provided512|lde_rows=65536|blowup=16|constraint_lanes=1-fp4|deep-ali=one-point:z-uniform-outside-D-H-zero:excluded69633:sampling-cardinality=p^4-69633:trace-z-gz:composition-z:multi-point-trace-quotients|queries=108|query_schedule=sha256-prefix-u64be-mask16:unique-without-replacement:hypergeometric<=independent-power|merkle=sha256:binary:trace-u64be:fp4-c0-c3-u64be|fri=fp4-fold2:rounds12:terminal16:degree1:code-degree-exclusive8192:domain65536:rho=1/8:m=3:theta=1-7/(12sqrt2):unique-radius<theta<johnson-radius:gs-correlated-agreement:affine-oracles90:affine-random-coefficients89:fold-arities=12x2:sum-a=24|fri_mask=fp4:coefficients8191:degree-exclusive8191:protocol3-optimized-k5120:actual-rounded-k8192:max-structured-batch-degree5117:root-before-batch-challenges|soundness=haboeck-2022-1216-theorem2+theorem8:field-size=p^4:rho=1/8:m=3:D=65536:sum-a=24:fri-commit-1<2^-207:fri-commit-2<2^-230:fri-query=(7/(12sqrt2))^108<2^-135:deep-k-plus8194:deep-list-factor=(7/2)/sqrt(8194/65536):deep-constraint-count168:deep-identity-degree-bound24577:deep-weighted-numerator<245000:deep-denominator=p^4-69633:deep-link<2^-238:rbr-total<2^-134:rbr-certified-bits=129:block-et-al-2023-1071-bcs+block-tiwari-2024-1161:classical-rom:work-normalized:q-ro-max2^124:fs-over-q=eps-rbr+3(q+1/q)/2^256<2^-128:qrom-not-claimed:rom-bits-lower-bound128|wire=ZKA1:fixed-shape:big-endian:1341142|max_proof_bytes=1341142|domains=iroha:privacy:zk-ace:{transparent-stark,air-public-digest,trace-leaf,composition-leaf,fri-mask-leaf,batch-transcript,deep-transcript,fri-leaf,merkle-node,field-challenge,composition-transcript,fri-lane-transcript,fri-round-transcript,query-transcript,query-index}:v1";
+pub(crate) const COMPILED_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|base-field=goldilocks:0xffffffff00000001|challenge-field=goldilocks-fp4:w4=7:coefficients-c0-c3:u64be|generator=7|field_challenge=sha256:four-u64be-canonical-rejection:framed-u64be-attempt:max-attempts256:distinct274:max-hash-calls70144|identity-nullifier-digest=poseidon-x7-goldilocks-digest384:lanes6-independent:width3:rate2:capacity1:full8:partial57:parameter-generator=shake256-rejection-sampling-u64le-below-goldilocks-v1:parameters-sha3-256=84c5055b47cc7289835e0a5f31d4563849244ffddbf51f5d67b1db95222ce3e6:canonical=u64le:identity-outputs6:replay-outputs6:generic-collision-target>=128:relation-remediated|air-public-transcript=goldilocks-digest384-v1:typed-domain:catalog=privacy-exact12-v1:protocol=zk_ace_pq_authorization_v1:profile=poseidon-x7-goldilocks-6x64-v1:role=public-transcript:phase=air-input-binding:schema=compiled-air-relation-schema-v1:parts16:ordered:length-framed:type-name-independent|air-total-degree=2|trace_rows=4096|trace_width=88|trace_mask_degree=511|trace_mask_coefficients=512|zk-bound=fft-decomposition:d-air2:d1:e4:n-deep1:n-fri108:formula=2d(e*n-deep+n-fri)+n-fri:required332:provided512|lde_rows=65536|blowup=16|constraint_lanes=1-fp4|deep-ali=one-point:z-uniform-outside-D-H-zero:excluded69633:sampling-cardinality=p^4-69633:trace-z-gz:composition-z:multi-point-trace-quotients|queries=108|query_schedule=sha256-prefix-u64be-mask16:unique-without-replacement:hypergeometric<=independent-power|merkle=sha256:binary:trace-u64be:fp4-c0-c3-u64be|fri=fp4-fold2:rounds12:terminal16:degree1:code-degree-exclusive8192:domain65536:rho=1/8:m=3:theta=1-7/(12sqrt2):unique-radius<theta<johnson-radius:gs-correlated-agreement:affine-oracles90:affine-random-coefficients89:fold-arities=12x2:sum-a=24|fri_mask=fp4:coefficients8191:degree-exclusive8191:protocol3-optimized-k5120:actual-rounded-k8192:max-structured-batch-degree5117:root-before-batch-challenges|soundness=haboeck-2022-1216-theorem2+theorem8:field-size=p^4:rho=1/8:m=3:D=65536:sum-a=24:fri-commit-1<2^-207:fri-commit-2<2^-230:fri-query=(7/(12sqrt2))^108<2^-135:deep-k-plus8194:deep-list-factor=(7/2)/sqrt(8194/65536):deep-constraint-count172:deep-identity-degree-bound24577:deep-weighted-numerator<245000:deep-denominator=p^4-69633:deep-link<2^-238:rbr-total<2^-134:rbr-certified-bits=129:block-et-al-2023-1071-bcs+block-tiwari-2024-1161:classical-rom:work-normalized:q-ro-max2^124:fs-over-q=eps-rbr+3(q+1/q)/2^256<2^-128:qrom-not-claimed:rom-bits-lower-bound128|wire=ZKA1:fixed-shape:big-endian:1341142|max_proof_bytes=1341142|activation=disabled:reason=qrom-stark-qualification-incomplete|domains=typed-goldilocks-digest384:{identity:commitment,replay:nullifier,action:transparent-transfer,authorization:statement-projection,public-transcript:air-input-binding}+sha256-stark:{transparent-stark,trace-leaf,composition-leaf,fri-mask-leaf,batch-transcript,deep-transcript,fri-leaf,merkle-node,field-challenge,composition-transcript,fri-lane-transcript,fri-round-transcript,query-transcript,query-index}:v1";
 /// Degree of the random trace masking polynomial.
 const MASK_DEGREE: usize = 511;
 const TRACE_MASK_COEFFICIENTS: usize = MASK_DEGREE + 1;
@@ -291,8 +296,10 @@ const PROTOCOL3_OPTIMIZED_DEGREE_BOUND_EXCLUSIVE: usize =
 const MAX_STRUCTURED_BATCH_DEGREE: usize = COMPOSITION_MAX_DEGREE - 1;
 const PRIVATE_LIMBS: usize = 15;
 const LIMB_BITS: usize = 56;
+const DIGEST_LANES: usize = fastpq_prover::fastpq_isi_v1::GOLDILOCKS_DIGEST384_LANES_V1;
+const PUBLIC_OUTPUTS: usize = DIGEST_LANES * 2;
 const POSEIDON_FULL_ROUNDS_HALF: usize = 4;
-const POSEIDON_ROUNDS: usize = 65;
+const POSEIDON_ROUNDS: usize = fastpq_prover::fastpq_isi_v1::GOLDILOCKS_DIGEST384_ROUNDS_V1;
 const PROOF_VERSION: u16 = 1;
 const MAX_QUERY_DERIVATION_ATTEMPTS: usize = LDE_SIZE * 2;
 /// Hard fail-closed bound for deriving one unbiased extension-field challenge.
@@ -318,12 +325,13 @@ const FIX_PARTIAL: usize = FIX_FULL + 1;
 const FIX_ABSORB_0: usize = FIX_PARTIAL + 1;
 const FIX_ABSORB_1: usize = FIX_ABSORB_0 + 1;
 const FIX_RESET: usize = FIX_ABSORB_1 + 1;
-const FIX_LOAD_OFFSET: usize = FIX_RESET + 1;
+const FIX_RESET_STATE_OFFSET: usize = FIX_RESET + 1;
+const FIX_LOAD_OFFSET: usize = FIX_RESET_STATE_OFFSET + 3;
 const FIX_MESSAGE_CONST: usize = FIX_LOAD_OFFSET + PRIVATE_LIMBS;
 const FIX_MESSAGE_WITNESS_OFFSET: usize = FIX_MESSAGE_CONST + 1;
 const FIX_RC_OFFSET: usize = FIX_MESSAGE_WITNESS_OFFSET + PRIVATE_LIMBS;
 const FIX_OUTPUT_OFFSET: usize = FIX_RC_OFFSET + 3;
-const FIXED_WIDTH: usize = FIX_OUTPUT_OFFSET + 8;
+const FIXED_WIDTH: usize = FIX_OUTPUT_OFFSET + PUBLIC_OUTPUTS;
 const TRANSCRIPT_DOMAIN: &[u8] = b"iroha:privacy:zk-ace:transparent-stark:v1";
 const TRACE_LEAF_DOMAIN: &[u8] = b"iroha:privacy:zk-ace:trace-leaf:v1";
 const COMPOSITION_LEAF_DOMAIN: &[u8] = b"iroha:privacy:zk-ace:composition-leaf:v1";
@@ -333,16 +341,16 @@ const MERKLE_NODE_DOMAIN: &[u8] = b"iroha:privacy:zk-ace:merkle-node:v1";
 #[derive(Clone, Copy, Debug)]
 enum MessageWord {
     Constant(u64),
-    Witness(usize),
+    Witness { index: usize, additive: u64 },
 }
 #[derive(Clone, Copy, Debug)]
 enum ScheduleOp {
     Hold,
-    Reset,
+    Reset { state: [u64; 3] },
     Load(usize),
     Absorb { position: usize, word: MessageWord },
-    FullRound { round: usize },
-    PartialRound { round: usize },
+    FullRound { lane: usize, round: usize },
+    PartialRound { lane: usize, round: usize },
     Output { output_index: usize },
 }
 #[derive(Clone, Copy, Debug)]
@@ -353,7 +361,7 @@ struct ScheduleRow {
 struct TraceMaterial {
     trace_columns: Vec<Vec<F>>,
     fixed_columns: Vec<Vec<F>>,
-    public_outputs: [F; 8],
+    public_outputs: [F; PUBLIC_OUTPUTS],
 }
 struct MaskedTraceMaterial {
     lde_columns: Vec<Vec<F>>,
@@ -1021,62 +1029,54 @@ fn transpose_rows(rows: &[Vec<F>], width: usize) -> Result<Vec<Vec<F>>, ZkAceSta
     }
     Ok(columns)
 }
-fn bytes_as_constant_words(bytes: &[u8]) -> Vec<MessageWord> {
-    zk_ace_pack_bytes_to_field_limbs(bytes)
-        .limbs
-        .into_iter()
-        .map(MessageWord::Constant)
-        .collect()
-}
-fn append_framed_constant_part(words: &mut Vec<MessageWord>, bytes: &[u8]) {
-    words.push(MessageWord::Constant(bytes.len() as u64));
-    words.extend(bytes_as_constant_words(bytes));
-}
-fn identity_message_words(public_inputs: &ZkAceAirRelationInputsV1) -> Vec<MessageWord> {
-    let mut words = Vec::new();
-    let hash_domain = b"zk-ace.identity-commitment.v1";
-    words.push(MessageWord::Constant(hash_domain.len() as u64));
-    words.extend(bytes_as_constant_words(hash_domain));
-    words.push(MessageWord::Constant(3));
-    words.push(MessageWord::Constant(32));
-    words.extend((0..5).map(MessageWord::Witness));
-    words.push(MessageWord::Constant(32));
-    words.extend((5..10).map(MessageWord::Witness));
-    append_framed_constant_part(&mut words, public_inputs.domain_tag.as_bytes());
+fn identity_message_words() -> Vec<MessageWord> {
+    let mut words = (0..10)
+        .map(|index| MessageWord::Witness {
+            index,
+            additive: if index == 9 { 1 << 8 } else { 0 },
+        })
+        .collect::<Vec<_>>();
+    words.push(MessageWord::Constant(1));
     words
 }
-fn replay_message_words(public_inputs: &ZkAceAirRelationInputsV1) -> Vec<MessageWord> {
-    let mut words = Vec::new();
-    let hash_domain = b"zk-ace.replay-nullifier.v1";
-    words.push(MessageWord::Constant(hash_domain.len() as u64));
-    words.extend(bytes_as_constant_words(hash_domain));
-    words.push(MessageWord::Constant(5));
-    words.push(MessageWord::Constant(32));
-    words.extend((10..15).map(MessageWord::Witness));
-    append_framed_constant_part(&mut words, &public_inputs.authorization_digest);
-    append_framed_constant_part(&mut words, public_inputs.network_id.as_bytes());
-    append_framed_constant_part(&mut words, public_inputs.action_class.as_bytes());
-    append_framed_constant_part(&mut words, public_inputs.domain_tag.as_bytes());
+
+fn replay_message_words() -> Vec<MessageWord> {
+    let mut words = (10..15)
+        .map(|index| MessageWord::Witness {
+            index,
+            additive: if index == 14 { 1 << 32 } else { 0 },
+        })
+        .collect::<Vec<_>>();
+    words.push(MessageWord::Constant(1));
     words
 }
-fn append_poseidon_permutation(schedule: &mut Vec<ScheduleRow>) {
+
+fn append_poseidon_permutation(schedule: &mut Vec<ScheduleRow>, lane: usize) {
     for round in 0..POSEIDON_ROUNDS {
         let full = round < POSEIDON_FULL_ROUNDS_HALF || round >= POSEIDON_FULL_ROUNDS_HALF + 57;
         schedule.push(ScheduleRow {
             op: if full {
-                ScheduleOp::FullRound { round }
+                ScheduleOp::FullRound { lane, round }
             } else {
-                ScheduleOp::PartialRound { round }
+                ScheduleOp::PartialRound { lane, round }
             },
         });
     }
 }
-fn append_poseidon_hash(
+fn append_poseidon_lane(
     schedule: &mut Vec<ScheduleRow>,
+    lane: usize,
+    initial_state: [u64; 3],
+    initial_rate_position: usize,
     words: &[MessageWord],
-    output_offset: usize,
+    output_index: usize,
 ) {
-    let mut rate_index = 0usize;
+    schedule.push(ScheduleRow {
+        op: ScheduleOp::Reset {
+            state: initial_state,
+        },
+    });
+    let mut rate_index = initial_rate_position;
     for word in words.iter().copied() {
         schedule.push(ScheduleRow {
             op: ScheduleOp::Absorb {
@@ -1086,20 +1086,9 @@ fn append_poseidon_hash(
         });
         rate_index += 1;
         if rate_index == 2 {
-            append_poseidon_permutation(schedule);
+            append_poseidon_permutation(schedule, lane);
             rate_index = 0;
         }
-    }
-    schedule.push(ScheduleRow {
-        op: ScheduleOp::Absorb {
-            position: rate_index,
-            word: MessageWord::Constant(1),
-        },
-    });
-    rate_index += 1;
-    if rate_index == 2 {
-        append_poseidon_permutation(schedule);
-        rate_index = 0;
     }
     while rate_index != 0 {
         schedule.push(ScheduleRow {
@@ -1110,20 +1099,48 @@ fn append_poseidon_hash(
         });
         rate_index += 1;
         if rate_index == 2 {
-            append_poseidon_permutation(schedule);
+            append_poseidon_permutation(schedule, lane);
             rate_index = 0;
         }
     }
-    for output_index in 0..4 {
-        schedule.push(ScheduleRow {
-            op: ScheduleOp::Output {
-                output_index: output_offset + output_index,
-            },
-        });
-        if output_index != 3 {
-            append_poseidon_permutation(schedule);
-        }
-    }
+    schedule.push(ScheduleRow {
+        op: ScheduleOp::Output { output_index },
+    });
+}
+
+fn identity_prefix_stream(
+    public_inputs: &ZkAceAirRelationInputsV1,
+) -> Result<fastpq_prover::fastpq_isi_v1::GoldilocksDigest384LastFieldStreamV1, ZkAceStarkError> {
+    fastpq_prover::fastpq_isi_v1::GoldilocksDigest384LastFieldStreamV1::new(
+        zk_ace_digest384_domain_v1(
+            ZK_ACE_IDENTITY_COMMITMENT_ROLE_V1,
+            ZK_ACE_IDENTITY_COMMITMENT_PHASE_V1,
+        ),
+        &[public_inputs.domain_tag.as_bytes()],
+        64,
+    )
+    .map_err(|_| {
+        ZkAceStarkError::InternalInvariant("identity digest prefix exceeds framing bounds")
+    })
+}
+
+fn replay_prefix_stream(
+    public_inputs: &ZkAceAirRelationInputsV1,
+) -> Result<fastpq_prover::fastpq_isi_v1::GoldilocksDigest384LastFieldStreamV1, ZkAceStarkError> {
+    fastpq_prover::fastpq_isi_v1::GoldilocksDigest384LastFieldStreamV1::new(
+        zk_ace_digest384_domain_v1(
+            ZK_ACE_REPLAY_NULLIFIER_ROLE_V1,
+            ZK_ACE_REPLAY_NULLIFIER_PHASE_V1,
+        ),
+        &[
+            &public_inputs.authorization_digest,
+            public_inputs.network_id.as_bytes(),
+            public_inputs.action_class.as_bytes(),
+            public_inputs.domain_tag.as_bytes(),
+        ],
+        32,
+    )
+    .map_err(|_| ZkAceStarkError::InternalInvariant("replay digest prefix exceeds framing bounds"))
 }
 fn build_schedule(
     public_inputs: &ZkAceAirRelationInputsV1,
@@ -1134,14 +1151,40 @@ fn build_schedule(
             op: ScheduleOp::Load(index),
         });
     }
-    schedule.push(ScheduleRow {
-        op: ScheduleOp::Reset,
-    });
-    append_poseidon_hash(&mut schedule, &identity_message_words(public_inputs), 0);
-    schedule.push(ScheduleRow {
-        op: ScheduleOp::Reset,
-    });
-    append_poseidon_hash(&mut schedule, &replay_message_words(public_inputs), 4);
+    let identity_prefix = identity_prefix_stream(public_inputs)?;
+    let replay_prefix = replay_prefix_stream(public_inputs)?;
+    for lane in 0..DIGEST_LANES {
+        let prefix =
+            identity_prefix
+                .lane_prefix_v1(lane)
+                .ok_or(ZkAceStarkError::InternalInvariant(
+                    "identity digest lane is out of range",
+                ))?;
+        append_poseidon_lane(
+            &mut schedule,
+            lane,
+            prefix.state(),
+            prefix.next_rate_position(),
+            &identity_message_words(),
+            lane,
+        );
+    }
+    for lane in 0..DIGEST_LANES {
+        let prefix =
+            replay_prefix
+                .lane_prefix_v1(lane)
+                .ok_or(ZkAceStarkError::InternalInvariant(
+                    "replay digest lane is out of range",
+                ))?;
+        append_poseidon_lane(
+            &mut schedule,
+            lane,
+            prefix.state(),
+            prefix.next_rate_position(),
+            &replay_message_words(),
+            DIGEST_LANES + lane,
+        );
+    }
     if schedule.len() >= TRACE_SIZE {
         return Err(ZkAceStarkError::InternalInvariant(
             "compiled ZK-ACE schedule exceeds its trace domain",
@@ -1157,39 +1200,36 @@ fn build_schedule(
 }
 fn witness_limbs(witness: &ZkAcePrivacyWitnessV1) -> Result<[F; PRIVATE_LIMBS], ZkAceStarkError> {
     let mut result = [F::ZERO; PRIVATE_LIMBS];
-    for (group, bytes) in [
-        witness.identity_root,
-        witness.identity_blinding,
-        witness.replay_secret,
-    ]
-    .iter()
-    .enumerate()
+    let mut identity_witness = [0_u8; 64];
+    identity_witness[..32].copy_from_slice(&witness.identity_root);
+    identity_witness[32..].copy_from_slice(&witness.identity_blinding);
+    let identity = zk_ace_pack_bytes_to_field_limbs(&identity_witness);
+    let replay = zk_ace_pack_bytes_to_field_limbs(&witness.replay_secret);
+    if identity.length != 64
+        || identity.limbs.len() != 10
+        || replay.length != 32
+        || replay.limbs.len() != 5
     {
-        let packed = zk_ace_pack_bytes_to_field_limbs(bytes);
-        if packed.length != 32 || packed.limbs.len() != 5 {
-            return Err(ZkAceStarkError::WitnessPacking);
-        }
-        for (offset, limb) in packed.limbs.into_iter().enumerate() {
-            result[group * 5 + offset] =
-                F::canonical(limb).ok_or(ZkAceStarkError::WitnessPacking)?;
-        }
+        return Err(ZkAceStarkError::WitnessPacking);
+    }
+    for (offset, limb) in identity.limbs.into_iter().chain(replay.limbs).enumerate() {
+        result[offset] = F::canonical(limb).ok_or(ZkAceStarkError::WitnessPacking)?;
     }
     Ok(result)
 }
 fn public_output_words(
     public_inputs: &ZkAceAirRelationInputsV1,
-) -> Result<[F; 8], ZkAceStarkError> {
-    let mut words = [F::ZERO; 8];
+) -> Result<[F; PUBLIC_OUTPUTS], ZkAceStarkError> {
+    let mut words = [F::ZERO; PUBLIC_OUTPUTS];
     for (word_index, chunk) in public_inputs
         .identity_commitment
         .chunks_exact(8)
         .chain(public_inputs.replay_nullifier.chunks_exact(8))
         .enumerate()
     {
-        // Candidate data-model Poseidon digests are four sequential canonical
-        // Goldilocks residues encoded little-endian. Proof-field elements use
-        // big-endian on the outer ZKA1 wire, but changing byte order at this
-        // relation boundary would compare the AIR against different elements.
+        // Canonical digest lanes are independent Goldilocks residues encoded
+        // little-endian. Proof-field elements use big-endian on the outer ZKA1
+        // wire, but this relation boundary preserves the digest representation.
         let raw = u64::from_le_bytes(
             chunk
                 .try_into()
@@ -1200,7 +1240,7 @@ fn public_output_words(
     Ok(words)
 }
 fn apply_mds(state: [F; 3]) -> [F; 3] {
-    let mds = poseidon_manifest().mds();
+    let mds = fastpq_prover::fastpq_isi_v1::poseidon::MDS;
     let mut result = [F::ZERO; 3];
     for row in 0..3 {
         for (column, value) in state.iter().copied().enumerate() {
@@ -1210,7 +1250,7 @@ fn apply_mds(state: [F; 3]) -> [F; 3] {
     result
 }
 fn apply_mds_extension(state: [E; 3]) -> [E; 3] {
-    let mds = poseidon_manifest().mds();
+    let mds = fastpq_prover::fastpq_isi_v1::poseidon::MDS;
     let mut result = [E::ZERO; 3];
     for row in 0..3 {
         for (column, value) in state.iter().copied().enumerate() {
@@ -1251,7 +1291,12 @@ fn fixed_row(schedule: ScheduleRow) -> Vec<F> {
     let mut fixed = vec![F::ZERO; FIXED_WIDTH];
     match schedule.op {
         ScheduleOp::Hold => {}
-        ScheduleOp::Reset => fixed[FIX_RESET] = F::ONE,
+        ScheduleOp::Reset { state } => {
+            fixed[FIX_RESET] = F::ONE;
+            for (index, value) in state.into_iter().enumerate() {
+                fixed[FIX_RESET_STATE_OFFSET + index] = F(value);
+            }
+        }
         ScheduleOp::Load(index) => fixed[FIX_LOAD_OFFSET + index] = F::ONE,
         ScheduleOp::Absorb { position, word } => {
             fixed[if position == 0 {
@@ -1261,23 +1306,32 @@ fn fixed_row(schedule: ScheduleRow) -> Vec<F> {
             }] = F::ONE;
             match word {
                 MessageWord::Constant(value) => fixed[FIX_MESSAGE_CONST] = F(value),
-                MessageWord::Witness(index) => {
+                MessageWord::Witness { index, additive } => {
+                    fixed[FIX_MESSAGE_CONST] = F(additive);
                     fixed[FIX_MESSAGE_WITNESS_OFFSET + index] = F::ONE;
                 }
             }
         }
-        ScheduleOp::FullRound { round } => {
+        ScheduleOp::FullRound { lane, round } => {
             fixed[FIX_FULL] = F::ONE;
+            let constants =
+                fastpq_prover::fastpq_isi_v1::goldilocks_digest384_lane_round_constants_v1(
+                    lane, round,
+                )
+                .expect("compiled digest lane and round are in range");
             for index in 0..3 {
-                fixed[FIX_RC_OFFSET + index] =
-                    F(poseidon_manifest().round_constants()[round][index]);
+                fixed[FIX_RC_OFFSET + index] = F(constants[index]);
             }
         }
-        ScheduleOp::PartialRound { round } => {
+        ScheduleOp::PartialRound { lane, round } => {
             fixed[FIX_PARTIAL] = F::ONE;
+            let constants =
+                fastpq_prover::fastpq_isi_v1::goldilocks_digest384_lane_round_constants_v1(
+                    lane, round,
+                )
+                .expect("compiled digest lane and round are in range");
             for index in 0..3 {
-                fixed[FIX_RC_OFFSET + index] =
-                    F(poseidon_manifest().round_constants()[round][index]);
+                fixed[FIX_RC_OFFSET + index] = F(constants[index]);
             }
         }
         ScheduleOp::Output { output_index } => {
@@ -1290,8 +1344,8 @@ fn build_trace_material(
     public_inputs: &ZkAceAirRelationInputsV1,
     witness: &ZkAcePrivacyWitnessV1,
 ) -> Result<TraceMaterial, ZkAceStarkError> {
-    if public_inputs.domain_tag != ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG
-        || public_inputs.action_class != ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER
+    if public_inputs.domain_tag != ZK_ACE_PQ_AUTHORIZATION_V1_DOMAIN_TAG
+        || public_inputs.action_class != ZK_ACE_PQ_AUTHORIZATION_V1_ACTION_TRANSFER
     {
         return Err(ZkAceStarkError::WitnessRelation);
     }
@@ -1316,14 +1370,14 @@ fn build_trace_material(
         let message = match schedule_row.op {
             ScheduleOp::Absorb { word, .. } => match word {
                 MessageWord::Constant(value) => F(value),
-                MessageWord::Witness(index) => queue[index],
+                MessageWord::Witness { index, additive } => queue[index].add(F(additive)),
             },
             _ => F::ZERO,
         };
         let row = trace_row(state, queue, limb, message, round_constants);
         match schedule_row.op {
             ScheduleOp::Hold | ScheduleOp::Output { .. } => {}
-            ScheduleOp::Reset => state = [F::ZERO; 3],
+            ScheduleOp::Reset { state: reset_state } => state = reset_state.map(F),
             ScheduleOp::Load(index) => queue[index] = limb,
             ScheduleOp::Absorb { position, .. } => {
                 state[position] = state[position].add(message);
@@ -1404,7 +1458,12 @@ fn accumulate_fixed_row(result: &mut [F], schedule_row: ScheduleRow, weight: F) 
     };
     match schedule_row.op {
         ScheduleOp::Hold => {}
-        ScheduleOp::Reset => add(FIX_RESET, F::ONE),
+        ScheduleOp::Reset { state } => {
+            add(FIX_RESET, F::ONE);
+            for (index, value) in state.into_iter().enumerate() {
+                add(FIX_RESET_STATE_OFFSET + index, F(value));
+            }
+        }
         ScheduleOp::Load(index) => add(FIX_LOAD_OFFSET + index, F::ONE),
         ScheduleOp::Absorb { position, word } => {
             add(
@@ -1419,12 +1478,13 @@ fn accumulate_fixed_row(result: &mut [F], schedule_row: ScheduleRow, weight: F) 
                 MessageWord::Constant(value) => {
                     add(FIX_MESSAGE_CONST, F(value));
                 }
-                MessageWord::Witness(index) => {
+                MessageWord::Witness { index, additive } => {
+                    add(FIX_MESSAGE_CONST, F(additive));
                     add(FIX_MESSAGE_WITNESS_OFFSET + index, F::ONE);
                 }
             }
         }
-        ScheduleOp::FullRound { round } | ScheduleOp::PartialRound { round } => {
+        ScheduleOp::FullRound { lane, round } | ScheduleOp::PartialRound { lane, round } => {
             add(
                 if matches!(schedule_row.op, ScheduleOp::FullRound { .. }) {
                     FIX_FULL
@@ -1433,11 +1493,13 @@ fn accumulate_fixed_row(result: &mut [F], schedule_row: ScheduleRow, weight: F) 
                 },
                 F::ONE,
             );
-            for index in 0..3 {
-                add(
-                    FIX_RC_OFFSET + index,
-                    F(poseidon_manifest().round_constants()[round][index]),
-                );
+            let constants =
+                fastpq_prover::fastpq_isi_v1::goldilocks_digest384_lane_round_constants_v1(
+                    lane, round,
+                )
+                .expect("compiled digest lane and round are in range");
+            for (index, constant) in constants.into_iter().enumerate() {
+                add(FIX_RC_OFFSET + index, F(constant));
             }
         }
         ScheduleOp::Output { output_index } => {
@@ -1588,7 +1650,12 @@ fn accumulate_fixed_row_extension(result: &mut [E], schedule_row: ScheduleRow, w
     };
     match schedule_row.op {
         ScheduleOp::Hold => {}
-        ScheduleOp::Reset => add(FIX_RESET, F::ONE),
+        ScheduleOp::Reset { state } => {
+            add(FIX_RESET, F::ONE);
+            for (index, value) in state.into_iter().enumerate() {
+                add(FIX_RESET_STATE_OFFSET + index, F(value));
+            }
+        }
         ScheduleOp::Load(index) => add(FIX_LOAD_OFFSET + index, F::ONE),
         ScheduleOp::Absorb { position, word } => {
             add(
@@ -1601,12 +1668,13 @@ fn accumulate_fixed_row_extension(result: &mut [E], schedule_row: ScheduleRow, w
             );
             match word {
                 MessageWord::Constant(value) => add(FIX_MESSAGE_CONST, F(value)),
-                MessageWord::Witness(index) => {
+                MessageWord::Witness { index, additive } => {
+                    add(FIX_MESSAGE_CONST, F(additive));
                     add(FIX_MESSAGE_WITNESS_OFFSET + index, F::ONE);
                 }
             }
         }
-        ScheduleOp::FullRound { round } | ScheduleOp::PartialRound { round } => {
+        ScheduleOp::FullRound { lane, round } | ScheduleOp::PartialRound { lane, round } => {
             add(
                 if matches!(schedule_row.op, ScheduleOp::FullRound { .. }) {
                     FIX_FULL
@@ -1615,11 +1683,13 @@ fn accumulate_fixed_row_extension(result: &mut [E], schedule_row: ScheduleRow, w
                 },
                 F::ONE,
             );
-            for index in 0..3 {
-                add(
-                    FIX_RC_OFFSET + index,
-                    F(poseidon_manifest().round_constants()[round][index]),
-                );
+            let constants =
+                fastpq_prover::fastpq_isi_v1::goldilocks_digest384_lane_round_constants_v1(
+                    lane, round,
+                )
+                .expect("compiled digest lane and round are in range");
+            for (index, constant) in constants.into_iter().enumerate() {
+                add(FIX_RC_OFFSET + index, F(constant));
             }
         }
         ScheduleOp::Output { output_index } => add(FIX_OUTPUT_OFFSET + output_index, F::ONE),
@@ -1638,7 +1708,8 @@ fn row_at(columns: &[Vec<F>], index: usize) -> Result<Vec<F>, ZkAceStarkError> {
         })
         .collect()
 }
-const LOCAL_CONSTRAINT_COUNT: usize = 12 + LIMB_BITS + 1 + 1 + 8 + 3 * (LIMB_BITS - 32);
+const LOCAL_CONSTRAINT_COUNT: usize =
+    12 + LIMB_BITS + 1 + 1 + PUBLIC_OUTPUTS + (LIMB_BITS - 8) + (LIMB_BITS - 32);
 const TRANSITION_CONSTRAINT_COUNT: usize = 3 + PRIVATE_LIMBS;
 const CONSTRAINT_COUNT: usize = LOCAL_CONSTRAINT_COUNT + TRANSITION_CONSTRAINT_COUNT;
 /// Number of distinct quartic-extension challenges in one proof transcript.
@@ -1658,7 +1729,7 @@ fn hash_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     }
     hasher.finalize().into()
 }
-fn base_transcript_seed(public_digest: &[u8; 32], trace_root: &[u8; 32]) -> [u8; 32] {
+fn base_transcript_seed(public_digest: &GoldilocksDigest384V1, trace_root: &[u8; 32]) -> [u8; 32] {
     hash_parts(
         TRANSCRIPT_DOMAIN,
         &[
@@ -1668,7 +1739,7 @@ fn base_transcript_seed(public_digest: &[u8; 32], trace_root: &[u8; 32]) -> [u8;
             &(SECURITY_LANES as u64).to_be_bytes(),
             &(MASK_DEGREE as u64).to_be_bytes(),
             &(FRI_MASK_COEFFICIENTS as u64).to_be_bytes(),
-            public_digest,
+            public_digest.as_ref(),
             trace_root,
         ],
     )
@@ -1868,7 +1939,7 @@ fn constraint_quotient_value(
     current: &[E],
     next: &[E],
     fixed: &[E],
-    public_outputs: &[E; 8],
+    public_outputs: &[E; PUBLIC_OUTPUTS],
     alphas: &[E],
 ) -> Result<E, ZkAceStarkError> {
     let (inverse_trace_vanishing, transition_factor) = constraint_quotient_factors(x)?;
@@ -1898,7 +1969,7 @@ fn constraint_quotient_value_with_factors(
     current: &[E],
     next: &[E],
     fixed: &[E],
-    public_outputs: &[E; 8],
+    public_outputs: &[E; PUBLIC_OUTPUTS],
     alphas: &[E],
     inverse_trace_vanishing: E,
     transition_factor: E,
@@ -1945,14 +2016,14 @@ fn constraint_quotient_value_with_factors(
             .add(fixed[FIX_MESSAGE_WITNESS_OFFSET + index].mul(current[QUEUE_OFFSET + index]));
     }
     absorb_local(current[MESSAGE_OFFSET].sub(expected_message));
-    for output in 0..8 {
+    for output in 0..PUBLIC_OUTPUTS {
         absorb_local(
             fixed[FIX_OUTPUT_OFFSET + output]
                 .mul(current[STATE_OFFSET].sub(public_outputs[output])),
         );
     }
-    for limb_index in [4usize, 9, 14] {
-        for bit in 32..LIMB_BITS {
+    for (limb_index, used_bits) in [(9usize, 8usize), (14, 32)] {
+        for bit in used_bits..LIMB_BITS {
             absorb_local(fixed[FIX_LOAD_OFFSET + limb_index].mul(current[BIT_OFFSET + bit]));
         }
     }
@@ -1994,7 +2065,8 @@ fn constraint_quotient_value_with_factors(
             } else {
                 E::ZERO
             })
-            .add(hold.mul(current[STATE_OFFSET + word]));
+            .add(hold.mul(current[STATE_OFFSET + word]))
+            .add(reset.mul(fixed[FIX_RESET_STATE_OFFSET + word]));
         let residue = next[STATE_OFFSET + word].sub(expected);
         result = result.add(alphas[alpha_index].mul(residue).mul(transition_factor));
         alpha_index += 1;
@@ -2023,7 +2095,7 @@ fn trace_tree(trace_lde: &[Vec<F>]) -> Result<MerkleTree, ZkAceStarkError> {
 fn composition_lanes(
     trace_lde: &[Vec<F>],
     fixed_lde: &[Vec<F>],
-    public_outputs: &[F; 8],
+    public_outputs: &[F; PUBLIC_OUTPUTS],
     lane_alphas: &[Vec<E>],
 ) -> Result<Vec<Vec<E>>, ZkAceStarkError> {
     if lane_alphas.len() != SECURITY_LANES
@@ -2424,12 +2496,12 @@ fn ensure_terminal_degree(values: &[E]) -> Result<(), ZkAceStarkError> {
 }
 fn validate_relation_inputs(
     public_inputs: &ZkAceAirRelationInputsV1,
-) -> Result<[F; 8], ZkAceStarkError> {
+) -> Result<[F; PUBLIC_OUTPUTS], ZkAceStarkError> {
     if public_inputs.version != 1
-        || public_inputs.domain_tag != ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG
-        || public_inputs.action_class != ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER
-        || public_inputs.verifier_key_id.backend.as_str() != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
-        || public_inputs.verifier_key_id.name != ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
+        || public_inputs.domain_tag != ZK_ACE_PQ_AUTHORIZATION_V1_DOMAIN_TAG
+        || public_inputs.action_class != ZK_ACE_PQ_AUTHORIZATION_V1_ACTION_TRANSFER
+        || public_inputs.verifier_key_id.backend.as_str() != ZK_ACE_PQ_AUTHORIZATION_V1_BACKEND
+        || public_inputs.verifier_key_id.name != ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID
         || public_inputs.amount == 0
         || public_inputs.policy_hash == [0; 32]
     {
@@ -2441,11 +2513,11 @@ fn validate_relation_inputs(
         &public_inputs.asset,
         public_inputs.amount,
         &public_inputs.network_id,
-        ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+        ZK_ACE_PQ_AUTHORIZATION_V1_ACTION_TRANSFER,
         &public_inputs.policy_hash,
     )
     .map_err(|_| ZkAceStarkError::InvalidPublicInputs)?;
-    if public_inputs.tx_digest != expected_transfer_digest {
+    if public_inputs.tx_digest != expected_transfer_digest.to_le_bytes() {
         return Err(ZkAceStarkError::InvalidPublicInputs);
     }
     public_output_words(public_inputs)
@@ -3063,11 +3135,12 @@ mod tests {
         let destination = account(2);
         let asset = asset();
         let policy_hash = [0x47; 32];
-        let authorization_digest = [0xA6; 32];
+        let authorization_digest =
+            GoldilocksDigest384V1::new([0xA6; DIGEST_LANES]).expect("canonical test digest");
         let identity_commitment = derive_zk_ace_identity_commitment(
             &witness.identity_root,
             &witness.identity_blinding,
-            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+            ZK_ACE_PQ_AUTHORIZATION_V1_DOMAIN_TAG,
         );
         let tx_digest = derive_zk_ace_transfer_digest(
             &source,
@@ -3075,7 +3148,7 @@ mod tests {
             &asset,
             19,
             &network_id,
-            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+            ZK_ACE_PQ_AUTHORIZATION_V1_ACTION_TRANSFER,
             &policy_hash,
         )
         .expect("canonical test accounts have domainless encodings");
@@ -3083,16 +3156,16 @@ mod tests {
             &witness.replay_secret,
             &authorization_digest,
             &network_id,
-            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+            ZK_ACE_PQ_AUTHORIZATION_V1_ACTION_TRANSFER,
+            ZK_ACE_PQ_AUTHORIZATION_V1_DOMAIN_TAG,
         );
         (
             ZkAceAirRelationInputsV1::transparent_transfer(
-                identity_commitment,
-                tx_digest,
-                authorization_digest,
+                identity_commitment.into_bytes(),
+                tx_digest.to_le_bytes(),
+                authorization_digest.to_le_bytes(),
                 network_id,
-                replay_nullifier,
+                replay_nullifier.into_bytes(),
                 policy_hash,
                 source,
                 destination,
@@ -3131,31 +3204,35 @@ mod tests {
         let parts = vec![
             AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1.to_vec(),
             1_u16.to_be_bytes().to_vec(),
-            vec![0x11; 32],
-            vec![0x22; 32],
-            vec![0x33; 32],
+            vec![0x11; GoldilocksDigest384V1::BYTES],
+            vec![0x22; GoldilocksDigest384V1::BYTES],
+            vec![0x33; GoldilocksDigest384V1::BYTES],
             b"taira-transcript-kat".to_vec(),
-            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.as_bytes().to_vec(),
-            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER
+            ZK_ACE_PQ_AUTHORIZATION_V1_DOMAIN_TAG.as_bytes().to_vec(),
+            ZK_ACE_PQ_AUTHORIZATION_V1_ACTION_TRANSFER
                 .as_bytes()
                 .to_vec(),
-            vec![0x44; 32],
+            vec![0x44; GoldilocksDigest384V1::BYTES],
             vec![0x55; 32],
             b"0x012345".to_vec(),
             b"0xabcdef".to_vec(),
             vec![0x66; 16],
             19_u128.to_be_bytes().to_vec(),
-            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.as_bytes().to_vec(),
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.as_bytes().to_vec(),
+            ZK_ACE_PQ_AUTHORIZATION_V1_BACKEND.as_bytes().to_vec(),
+            ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID.as_bytes().to_vec(),
         ];
         let expected = hash_air_public_transcript_parts_v1(&parts);
         assert_eq!(
             expected,
-            [
-                0x9d, 0x3a, 0xa6, 0x3e, 0xc9, 0xb1, 0xcd, 0x37, 0xdc, 0x31, 0x0b, 0xea, 0x4a, 0xe8,
-                0xb9, 0x11, 0x10, 0xca, 0xa0, 0x79, 0xc0, 0xef, 0x5a, 0xfc, 0x47, 0x52, 0x01, 0x78,
-                0x31, 0x33, 0x36, 0x8c,
-            ]
+            GoldilocksDigest384V1::new([
+                0x473c_96c3_af64_a878,
+                0xbb80_2497_bd3f_5b65,
+                0x61c8_6932_9d30_c9c0,
+                0xa4ef_8f41_da4f_9ab8,
+                0xadce_cbfd_24ed_9274,
+                0xe62b_3cb1_b57f_d945,
+            ])
+            .expect("fixed AIR transcript KAT words are canonical")
         );
         let mut permuted = parts.clone();
         permuted.swap(2, 3);
@@ -3241,99 +3318,8 @@ mod tests {
         }
     }
 
-    fn legacy_pow5(value: F) -> F {
-        let x2 = value.mul(value);
-        let x4 = x2.mul(x2);
-        x4.mul(value)
-    }
-
-    fn legacy_poseidon_permute(state: &mut [F; 3]) {
-        for (round, constants) in poseidon_manifest().round_constants().iter().enumerate() {
-            for (word, constant) in state.iter_mut().zip(constants) {
-                *word = word.add(F(*constant));
-            }
-            if round < POSEIDON_FULL_ROUNDS_HALF || round >= POSEIDON_FULL_ROUNDS_HALF + 57 {
-                for word in state.iter_mut() {
-                    *word = legacy_pow5(*word);
-                }
-            } else {
-                state[0] = legacy_pow5(state[0]);
-            }
-            *state = apply_mds(*state);
-        }
-    }
-
-    fn legacy_poseidon_domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-        let words =
-            iroha_data_model::zk::zk_ace_dense_mds_goldilocks_x7_domain_words_v1(domain, parts);
-        let mut state = [F::ZERO; 3];
-        let mut rate_index = 0usize;
-        let absorb = |word: F, state: &mut [F; 3], rate_index: &mut usize| {
-            state[*rate_index] = state[*rate_index].add(word);
-            *rate_index += 1;
-            if *rate_index == 2 {
-                legacy_poseidon_permute(state);
-                *rate_index = 0;
-            }
-        };
-        for word in words {
-            absorb(F(word), &mut state, &mut rate_index);
-        }
-        absorb(F::ONE, &mut state, &mut rate_index);
-        while rate_index != 0 {
-            absorb(F::ZERO, &mut state, &mut rate_index);
-        }
-        let mut output = [0u8; 32];
-        for chunk in output.chunks_exact_mut(FIELD_BYTES) {
-            chunk.copy_from_slice(&state[0].0.to_le_bytes());
-            legacy_poseidon_permute(&mut state);
-        }
-        output
-    }
-
     #[test]
-    fn reachable_legacy_identity_collision_is_separated_by_x7() {
-        let mut left_root = [0u8; 32];
-        left_root[0] = 0x50;
-        let mut right_root = [0u8; 32];
-        right_root[..7].copy_from_slice(&[0x45, 0xa8, 0x65, 0xa3, 0xb5, 0x38, 0xff]);
-        let mut blinding = [0u8; 32];
-        blinding[0] = 1;
-        let domain_tag = ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.as_bytes();
-        let legacy_left = legacy_poseidon_domain_hash(
-            b"zk-ace.identity-commitment.v1",
-            &[&left_root, &blinding, domain_tag],
-        );
-        let legacy_right = legacy_poseidon_domain_hash(
-            b"zk-ace.identity-commitment.v1",
-            &[&right_root, &blinding, domain_tag],
-        );
-        assert_ne!(left_root, right_root);
-        assert_eq!(legacy_left, legacy_right);
-        assert_eq!(
-            legacy_left,
-            [
-                0xda, 0xd3, 0x8e, 0x9e, 0xc1, 0x57, 0x22, 0x80, 0x46, 0xbe, 0x88, 0xf0, 0x35, 0x93,
-                0x5f, 0xe7, 0x79, 0xba, 0xd1, 0x48, 0xcd, 0x3e, 0x06, 0x76, 0x5f, 0x60, 0xb1, 0x44,
-                0xe6, 0x30, 0x10, 0xfd,
-            ]
-        );
-        assert_ne!(
-            derive_zk_ace_identity_commitment(
-                &left_root,
-                &blinding,
-                ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-            ),
-            derive_zk_ace_identity_commitment(
-                &right_root,
-                &blinding,
-                ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-            )
-        );
-    }
-
-    #[test]
-    fn complete_trace_constrains_x7_chain_and_matches_both_poseidon_relations() {
+    fn complete_trace_constrains_x7_chain_and_matches_all_twelve_digest_lanes() {
         let (public_inputs, witness) = public_inputs_and_witness();
         let material = build_trace_material(&public_inputs, &witness).expect("valid trace");
         let expected_public_outputs = public_inputs
@@ -3711,12 +3697,12 @@ mod tests {
         );
         // Haböck Theorem 8 uses k+=k+2=8,194 and
         // L+=(7/2)/sqrt(k+/|D|).  For the quadratic AIR its root-count term is
-        // 2*(k+-1)+(k-1)=24,577, while constraint batching contributes C=168.
-        // The exact comparisons prove L+*(168+24,577)<245,000.
+        // 2*(k+-1)+(k-1)=24,577, while constraint batching contributes C=172.
+        // The exact comparisons prove L+*(172+24,577)<245,000.
         assert_eq!(DEEP_CANDIDATE_DEGREE_BOUND_EXCLUSIVE, 8_194);
         assert_eq!(DEEP_IDENTITY_DEGREE_BOUND, 24_577);
-        assert_eq!(CONSTRAINT_COUNT, 168);
-        assert!(802_816_u128 * 24_745_u128.pow(2) < 8_194_u128 * 245_000_u128.pow(2));
+        assert_eq!(CONSTRAINT_COUNT, 172);
+        assert!(802_816_u128 * 24_749_u128.pow(2) < 8_194_u128 * 245_000_u128.pow(2));
         // z is uniform over Fp4 \ (D union H union {0}).  D is a disjoint
         // 65,536-point coset and H has 4,096 points, so the exact denominator
         // is p^4-69,633.  Since p>63*2^58 and the excluded set is <2^232,
@@ -3750,9 +3736,9 @@ mod tests {
     }
     #[test]
     fn field_challenge_rejection_is_bounded_uniform_and_replayable() {
-        assert_eq!(CONSTRAINT_COUNT, 168);
-        assert_eq!(DISTINCT_FIELD_CHALLENGE_COUNT, 270);
-        assert_eq!(MAX_FIELD_CHALLENGE_HASH_CALLS, 69_120);
+        assert_eq!(CONSTRAINT_COUNT, 172);
+        assert_eq!(DISTINCT_FIELD_CHALLENGE_COUNT, 274);
+        assert_eq!(MAX_FIELD_CHALLENGE_HASH_CALLS, 70_144);
         // Each coefficient rejects exactly the `2^64 - p = 2^32 - 1`
         // non-canonical encodings. The rejection probability is therefore
         // strictly less than `2^-32`, not equal to it. Zero is a valid

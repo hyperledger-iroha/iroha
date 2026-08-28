@@ -23,32 +23,32 @@ public final class PrivacyNativeBridgeTest {
       PROTOCOL_ROWS.stream().map(row -> row.get(2)).collect(Collectors.toUnmodifiableList());
   private static final List<PrivacyProofSystemIdV1> EXPECTED_PROOF_SYSTEMS =
       List.of(
-          PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
+          PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1,
           PrivacyProofSystemIdV1.ANONYMOUS_PGC_P256,
           PrivacyProofSystemIdV1.IROHA_VERANGE_P256,
           PrivacyProofSystemIdV1.ZK_AMS_MASKED_RELAXED_SPARTAN_T256_RISTRETTO255_SHA3_512,
           PrivacyProofSystemIdV1.VEGA_NEUTRON_NOVA_SPARTAN_HYRAX_T256,
-          PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
+          PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1,
           PrivacyProofSystemIdV1.JINDO_POLYNOMIAL_COMMITMENT,
           PrivacyProofSystemIdV1.LANTERN_LNP22_MODULE_LINEAR_NORM,
           PrivacyProofSystemIdV1.HALO2_IPA_PASTA,
           PrivacyProofSystemIdV1.FCMP_PLUS_PLUS_CURVE_TREE_BULLETPROOFS,
-          PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
-          PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS);
+          PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1,
+          PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1);
   private static final List<PrivacyEngineIdV1> EXPECTED_ENGINES =
       List.of(
-          PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
+          PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1,
           PrivacyEngineIdV1.NATIVE_ANONYMOUS_PGC_P256,
           PrivacyEngineIdV1.NATIVE_VERANGE_P256,
           PrivacyEngineIdV1.NATIVE_ZK_AMS_MASKED_RELAXED_SPARTAN_T256_RISTRETTO255,
           PrivacyEngineIdV1.NATIVE_VEGA,
-          PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
+          PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1,
           PrivacyEngineIdV1.NATIVE_JINDO,
           PrivacyEngineIdV1.NATIVE_LANTERN_LNP22,
           PrivacyEngineIdV1.NATIVE_HALO2_ORCHARD,
           PrivacyEngineIdV1.NATIVE_FCMP_PLUS_PLUS,
-          PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
-          PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI);
+          PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1,
+          PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1);
 
   private PrivacyNativeBridgeTest() {}
 
@@ -68,6 +68,19 @@ public final class PrivacyNativeBridgeTest {
   private static void exactClosedRegistryIsStable() {
     assert PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION == 23;
     assert PrivacyNativeBridge.protocolsV1().size() == 12;
+    assert PrivacyProtocolIdV1.ZK_ACE_PQ_AUTHORIZATION_V1.ordinal() == 0;
+    assert PrivacyProtocolIdV1.VEGA_EXISTING_CREDENTIAL_ZK_V1.ordinal() == 4;
+    assert PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1.ordinal() == 5;
+    assert PrivacyProtocolIdV1.IROHA_JINDO_POLYNOMIAL_COMMITMENT_V1.ordinal() == 6;
+    assert PrivacyProtocolIdV1.PQ_MASP_STARK_V1.ordinal() == 11;
+    assert PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1.ordinal() == 0;
+    assert PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1
+        .canonicalLabel()
+        .equals("stark-fri-poseidon-x7-goldilocks-6x64-v1");
+    assert PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1.ordinal() == 0;
+    assert PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1
+        .canonicalLabel()
+        .equals("native-goldilocks-poseidon-x7-stark-fri-6x64-v1");
     for (int index = 0; index < EXPECTED.size(); index++) {
       final String label = EXPECTED.get(index);
       final PrivacyProtocolIdV1 protocol = PrivacyNativeBridge.protocolsV1().get(index);

@@ -6425,14 +6425,17 @@ mod tests_null_decode {
         let context = iroha_data_model::bridge::SccpOutboundMessageContextV1::new(
             iroha_data_model::bridge::SccpLaneIdV1 {
                 source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-                target: iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
+                target: iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
             },
             [0x44; 32],
             [0x45; 32],
         )
         .expect("valid SCCP context");
-        let record =
-            iroha_data_model::isi::bridge::RecordSccpMessage::new(context, vec![0xAA, 0xBB]);
+        let record = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+            context,
+            vec![0xAA, 0xBB],
+            iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+        );
         let record_payload = encode_canonical_norito(&DMInstructionBox::from(record))
             .expect("encode RecordSccpMessage InstructionBox");
         let ptr = vm

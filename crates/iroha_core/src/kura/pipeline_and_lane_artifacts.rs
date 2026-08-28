@@ -243,8 +243,8 @@ pub struct FastpqProofSnapshot {
     pub parameter: String,
     /// Number of transitions carried by `batch`.
     pub transition_count: u32,
-    /// Batch trace commitment proven by `proof`.
-    pub trace_commitment: Hash,
+    /// Canonical six-lane batch trace commitment proven by `proof`.
+    pub trace_commitment: GoldilocksDigest384V1,
     /// Stable digest of the Norito-encoded FASTPQ proof bytes.
     pub proof_digest: Hash,
     /// Canonical transition batch proven by the FASTPQ proof, or compact public inputs for sidecars.
@@ -262,7 +262,7 @@ impl FastpqProofSnapshot {
         entry_hash: Hash,
         batch_index: u32,
         batch: &fastpq_prover::TransitionBatch,
-        trace_commitment: Hash,
+        trace_commitment: GoldilocksDigest384V1,
         proof_digest: Hash,
     ) -> Self {
         let transition_count = u32::try_from(batch.transitions.len()).unwrap_or(u32::MAX);
@@ -338,7 +338,7 @@ impl FastpqProofSnapshot {
         );
         entry.insert(
             "trace_commitment".to_string(),
-            norito::json::to_value(&self.trace_commitment.to_string())
+            norito::json::to_value(&hex::encode(self.trace_commitment.to_le_bytes()))
                 .expect("serialize trace commitment"),
         );
         entry.insert(

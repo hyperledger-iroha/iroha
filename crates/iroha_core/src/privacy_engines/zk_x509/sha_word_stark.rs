@@ -31,7 +31,8 @@ use super::{
     },
 };
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
+    TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -3808,13 +3809,18 @@ mod tests {
     }
     #[test]
     fn complete_word_challenges_are_commitment_bound_and_domain_separated() {
-        let profile = [0x11; 32];
-        let public = [0x22; 32];
-        let root = [0x33; 32];
-        let sample = |root: [u8; 32]| {
-            let mut transcript =
-                TransparentTranscriptV1::new(b"zk-x509-sha-word-test", &profile, &public)
-                    .expect("transcript");
+        let profile = GoldilocksDigest384V1::new([0x11; 6]).expect("profile digest");
+        let public = GoldilocksDigest384V1::new([0x22; 6]).expect("public digest");
+        let root = GoldilocksDigest384V1::new([0x33; 6]).expect("base root");
+        let sample = |root: GoldilocksDigest384V1| {
+            let root = root.to_le_bytes();
+            let mut transcript = TransparentTranscriptV1::new(
+                super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+                b"zk-x509-sha-word-test",
+                &profile,
+                &public,
+            )
+            .expect("transcript");
             transcript
                 .absorb(b"zk-x509-sha-word-base-root-v1", &[&root])
                 .expect("root");
@@ -3823,8 +3829,10 @@ mod tests {
         let challenges = sample(root);
         validate_zk_x509_sha_word_stark_challenges_v1(challenges).expect("valid challenges");
         assert_eq!(challenges, sample(root));
-        let mut changed_root = root;
-        changed_root[0] ^= 1;
+        let mut changed_words = root.words();
+        changed_words[0] ^= 1;
+        let changed_root =
+            GoldilocksDigest384V1::new(changed_words).expect("changed base root");
         assert_ne!(challenges, sample(changed_root));
         assert!(
             challenges

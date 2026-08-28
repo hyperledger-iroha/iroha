@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove that the pinned, externally signed SCCP protocol-v3 fixture is retired.
+"""Prove that the pinned pre-final-V1 SCCP fixture is rejected.
 
 The fixture remains checked in only as negative evidence. It cannot be validated,
 bundled, verified, or resealed into a first-release SCCP artifact.
@@ -38,16 +38,16 @@ def _retired_protocol_versions() -> set[int]:
 
 
 def reject_retired_fixture() -> dict[str, object]:
-    """Require the current V1 policy loader to reject the pinned v3 fixture."""
+    """Require the final-V1 loader to reject the entire retired schema."""
 
     if _retired_protocol_versions() != {3}:
         raise SccpReleaseError("retired SCCP fixture no longer records exactly protocol v3")
     try:
         load_trust_policy(FIXTURE_POLICY, allow_test_policy=True)
     except SccpReleaseError as error:
-        if "protocol_version" not in str(error):
+        if "schema/environment" not in str(error):
             raise SccpReleaseError(
-                "retired SCCP fixture failed before the protocol-v3 rejection boundary"
+                "retired SCCP fixture failed before the final-V1 schema boundary"
             ) from error
     else:
         raise SccpReleaseError("retired SCCP protocol-v3 fixture was accepted")
@@ -57,7 +57,7 @@ def reject_retired_fixture() -> dict[str, object]:
         "release_id": FIXTURE_RELEASE_ID,
         "rejected": True,
         "retired_protocol_version": 3,
-        "schema": "sccp-retired-v3-fixture-rejection-v1",
+        "schema": "sccp-retired-prefinal-fixture-rejection-final-v1",
     }
 
 

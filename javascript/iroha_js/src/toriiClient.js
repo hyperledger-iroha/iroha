@@ -68,10 +68,7 @@ import {
   ensureNodeDataModelCompatibility,
   normalizeNodeCapabilitiesResponse,
 } from "./toriiCompatibility.js";
-import {
-  privacyCapabilityTransportV1,
-  privacyExact12CapabilityManifestTransportV1,
-} from "./privacyCapabilityTransport.js";
+import { privacyExact12CapabilityManifestTransportV1 } from "./privacyCapabilityTransport.js";
 import {
   parseStrictLosslessIntegerJson,
   stringifyStrictLosslessIntegerJson,
@@ -245,7 +242,7 @@ const VERIFYING_KEY_CLIENT_URL = new URL(
   "./verifyingKeyClient.js",
   import.meta.url,
 ).href;
-const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
+const PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES = 256 * 1024;
 const KAGEMUSHA_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
 const FEE_QUOTE_JSON_MAX_BYTES = 64 * 1024;
 const FEE_SPONSOR_PROGRAM_JSON_MAX_BYTES = 64 * 1024;
@@ -6693,23 +6690,6 @@ export class ToriiClient {
     return normalizeNodeCapabilitiesResponse(payload);
   }
 
-  /** @internal Raw bounded transport for the optional privacy-capabilities API. */
-  async [privacyCapabilityTransportV1](options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getPrivacyCapabilitiesV1");
-    const response = await this._request("GET", "/v1/privacy/capabilities", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal, canonicalAuth,
-    });
-    await this._expectStatus(response, [200], { signal });
-    const payload = await this._readBoundedLosslessIntegerJson(
-      response,
-      PRIVACY_CAPABILITIES_JSON_MAX_BYTES,
-      "privacy capabilities response",
-      { signal },
-    );
-    return payload;
-  }
-
   /** @internal Raw bounded canonical manifest transport for N-API admission. */
   async [privacyExact12CapabilityManifestTransportV1](options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
@@ -6740,7 +6720,7 @@ export class ToriiClient {
     }
     const { bytes } = await this._readBoundedResponseBytes(
       response,
-      PRIVACY_CAPABILITIES_JSON_MAX_BYTES,
+      PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES,
       context,
       { signal },
     );
@@ -31950,13 +31930,9 @@ function normalizeSccpMessageIdPath(value, context) {
 
 const SCCP_EXTERNAL_ROUTE_PROFILES = new Set([
   "ethereum-mainnet",
-  "ethereum-sepolia",
   "bsc-mainnet",
-  "bsc-testnet",
-  "solana-testnet",
   "tron-mainnet",
-  "tron-nile",
-  "tron-shasta",
+  "ton-mainnet",
 ]);
 const SCCP_ROUTE_KEY_SEGMENT = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/u;
 
@@ -32755,10 +32731,7 @@ const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
   "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-  "stark/fri",
-  "stark/fri/sha256-goldilocks",
-  "stark/fri/poseidon2-goldilocks",
-  "stark/fri/sha256_goldilocks.v1",
+  "stark/fri/poseidon-x7-goldilocks-6x64-v1",
 ]);
 
 function assertProductionVerifyBackendLabel(value, context) {

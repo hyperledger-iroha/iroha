@@ -5,22 +5,25 @@ Iroha 3 codebase. Envelopes are versioned, deterministic, and designed to be
 portable between components (clients, IVM, node).
 
 Scope (current)
-- IPA (transparent; no trusted setup): Polynomial opening proofs used for
-  Halo2-like flows via a native verifier. Envelope type: `OpenVerifyEnvelope`.
-- STARK (FRI-style): Multi-fold consistency proofs over a 2^k domain using
-  SHA-256 Merkle commitments and a deterministic transcript.
+- IPA (transparent; no trusted setup): non-privacy polynomial opening proofs
+  admitted under the exact `halo2/ipa` verifier label. Privacy protocols use
+  their protocol-specific typed verifiers and cannot be selected through this
+  generic envelope. Envelope type: `OpenVerifyEnvelope`.
+- STARK (FRI-style): binary-FRI consistency proofs over a 2^k Goldilocks domain
+  using the canonical six-lane Poseidon-x7 digest and an Fp4 transcript.
 
 Backends (tags)
-- Standalone native IPA verifier entrypoint: `halo2/ipa/poly-open`
+- Generic non-privacy IPA verifier entrypoint: `halo2/ipa`
   - The envelope selects the concrete curve/backend with `curve_id`
     (`1 = Pallas`, `2 = Goldilocks`, `20 = BN254`).
-- STARK (native): `stark/fri/<profile>` (e.g., `stark/fri/sha256-goldilocks-v1`)
+- STARK (native): `stark/fri/poseidon-x7-goldilocks-6x64-v1`
 
 General notes
 - Norito encoding is used for the envelopes and their nested payloads. Unless
   otherwise specified, scalars are little-endian and sized as per struct types.
 - Determinism: challenges are derived from fixed transcript labels and byte
-  sequences; hashing is specified (SHA-256 for STARK envelopes; SHA3 for IPA).
+  sequences; native STARK hashing uses the single six-lane construction below
+  and IPA uses SHA3 where specified by its statement.
 - Size limits and validation: implementers must bound vector sizes and reject
   malformed payloads early (see code for current limits). The native verifier
   applies `StarkVerifierLimits` (envelope byte budget, domain/tag length, fold
@@ -160,20 +163,24 @@ Example (JSON-like, annotated)
 ## STARK: FRI-Style Multi-Fold Envelope
 
 Hashing and transcript
-- Leaves: SHA-256 uses `LEAF || u64_le(value)`; selector `2` uses the
-  `iroha:zk:stark:leaf:v1` domain over the field value.
-- Internal nodes: SHA-256(left || right), or selector `2` under
-  `iroha:zk:stark:node:v1`.
-- Per-layer challenge `r_k = H(label || params || u32_le(k) || root_k)` mapped to
-  the field, where `params` = `version || n_log2 || blowup_log2 || fold_arity ||
-  merkle_arity || hash_fn || queries || len(domain_tag) || domain_tag`. Query
-  sampling binds the same label/parameter prefix, the query ordinal, and every
-  layer root.
-- Field: Goldilocks prime `p = 2^64 - 2^32 + 1`. Raw hash selector `hash_fn`
-  supports SHA-256 (`1`) and the shared dense-MDS Goldilocks `x^7`
-  construction (`2`). The latter retains historical `Poseidon2` names in the
-  Rust constant/backend label, but it is not the Poseidon2 construction and a
-  one-field root is not ledger-grade.
+- Every leaf, node, root, public-statement commitment, query draw, and FRI
+  challenge uses `GoldilocksDigest384V1`: six independently parameterized
+  Poseidon-x7 lanes over `p = 2^64 - 2^32 + 1`, each with width 3, rate 2,
+  capacity 1, 8 full rounds, and 57 partial rounds.
+- Bytes use canonical seven-byte field packing with explicit length
+  termination. A digest is encoded as six canonical little-endian Goldilocks
+  words (48 bytes); words greater than or equal to `p` are rejected.
+- Every invocation binds the Exact12 catalog commitment and typed protocol,
+  profile, tree-role, transcript-phase, level, index, lane, and counter domains.
+  Merkle roles distinguish FRI layers, AIR trace rows, AIR composition values,
+  and auxiliary composition values.
+- Per-layer challenges take four independent digest lanes as the coefficients
+  of `Fp4 = Fp[U]/(U^4 - 7)`. Query-index draws use canonical rejection
+  sampling and bind the label, selector-free parameters, query ordinal, retry
+  counter, and all relevant roots.
+- There is no hash selector or alternate native-STARK decoder. Pre-release
+  selector-bearing parameter, verifier-key, proof, and envelope bytes fail
+  canonical V1 decoding.
 
 Wire types (as implemented in `iroha_core::zk_stark`)
 
@@ -184,23 +191,23 @@ Wire types (as implemented in `iroha_core::zk_stark`)
   - `fold_arity: u8` — FRI arity (power-of-two; current backend supports 2)
   - `queries: u16` — expected query count (must match `proof.queries.len()`)
   - `merkle_arity: u8` — Merkle branching factor (binary only in v1)
-  - `hash_fn: u8` — hash selector (`1 = SHA-256`, `2 = legacy-named dense-MDS Goldilocks x^7`)
   - `domain_tag: String` — domain separator baked into the transcript/sampler
 
 - `MerklePath`
   - `dirs: Vec<u8>` — direction bits (packed, low bit = lowest level)
-  - `siblings: Vec<[u8; 32]>` — sibling hashes from leaf to root
+  - `siblings: Vec<GoldilocksDigest384V1>` — 48-byte sibling digests from leaf to root
 
 - `StarkCommitmentsV1`
   - `version: u16`
-  - `roots: Vec<[u8; 32]>` — layer roots from 0…L
-  - `comp_root: Option<[u8; 32]>` — optional Merkle root over composition leaves (one per query index)
+  - `roots: Vec<GoldilocksDigest384V1>` — 48-byte Fp4 FRI layer roots from 0…L
+  - `comp_root: Option<GoldilocksDigest384V1>` — optional typed Merkle root over auxiliary composition leaves
 
 - `FoldDecommitV1`
   - `j: u32` — index at this layer
-  - `y0: u64`, `y1: u64` — inputs at positions (2*j, 2*j+1)
+  - `y0: GoldilocksFp4V1`, `y1: GoldilocksFp4V1` — four canonical
+    little-endian Goldilocks coefficients for inputs at positions `(2*j, 2*j+1)`
   - `path_y0: MerklePath`, `path_y1: MerklePath`
-  - `z: u64` — domain-aware binary FRI fold
+  - `z: GoldilocksFp4V1` — domain-aware binary FRI fold
     `(y0 + y1)/2 + r_k * (y0 - y1)/(2x)`, where `x` is the domain element for
     the opened `(x, -x)` pair
   - `path_z: MerklePath` — Merkle path for `z` under `roots[k+1]`
@@ -229,17 +236,16 @@ Wire types (as implemented in `iroha_core::zk_stark`)
   - `transcript_label: String`
 
 Limits and validation
-- Bounds enforced by the raw native verifier: `n_log2 ≤ 24`, `queries ≤ 32`,
+- Bounds enforced by the raw native verifier: `n_log2 ≤ 24`, `queries ≤ 64`,
   `layers ≤ 32`, `merkle depth ≤ 32`, `aux_terms ≤ 64`, `domain_tag` length ≤
-  64 bytes. Raw `hash_fn` may be `1` or `2`, and `merkle_arity`/`fold_arity`
-  must both be `2`. Canonical ledger verifier keys must use `1 (SHA-256)`;
-  selector `2` is rejected because its one-field root has only roughly 32 bits
-  of generic collision binding.
-- Query sampling and per-round challenges are domain-separated by `domain_tag`, hash selector,
-  blowup, fold arity, query count, and roots; mismatched headers or roots are rejected.
+  64 bytes. `merkle_arity` and `fold_arity` must both be `2`. Canonical ledger
+  verifier keys require blowup 8 and at least 64 queries; the current exact
+  profile fixes the verifier maximum to the same 64-query value.
+- Query sampling and per-round challenges are domain-separated by `domain_tag`,
+  the fixed profile, blowup, fold arity, query count, typed phases, and roots;
+  mismatched headers or roots are rejected.
 - Bad roots, broken Merkle paths, tampered folds, non-canonical field encodings, and
-  query-count/hash-selector mismatches are covered by regression tests in
-  `crates/iroha_core/tests/zk_stark.rs` (`stark_single_fold_roundtrip_ok_and_fail`).
+  query-count/profile mismatches are covered by `iroha_core::zk_stark` regression tests.
 
 Verifier behavior (native STARK)
 - For each query, replays all folds:
@@ -270,8 +276,8 @@ Verifier behavior (native STARK)
   verification, and activation as unavailable pending commitment remediation.
 - Validation: query indices derive from the transcript label + params + roots; the verifier
   rejects mismatched `j`, missing folds, bad roots/paths, non-canonical field encodings,
-  unsupported hash selectors, and mismatched query-count headers. Depth/size caps guard
-  against oversized envelopes.
+  selector-bearing retired layouts, and mismatched query-count headers. Depth/size caps
+  guard against oversized envelopes.
 
 	Example (Rust)
 	```rust
@@ -296,7 +302,7 @@ Verifier behavior (native STARK)
 	- `StarkFriOpenProofV1.envelope_bytes` (inner payload): Norito `StarkVerifyEnvelopeV1`
 	- `VerifyingKeyBox.bytes` (for `stark/fri/*`): Norito `StarkFriVerifyingKeyV1`
 	  containing the expected `circuit_id` and the FRI parameter set (`n_log2`, `blowup_log2`,
-	  `fold_arity`, `queries`, `merkle_arity`, `hash_fn`).
+	  `fold_arity`, `queries`, `merkle_arity`).
 	  `VerifyingKeyBox.backend` must exactly match the `ProofBox.backend` /
 	  `verify_backend` label.
 	  Consensus `verify_backend("stark/fri/*", ...)` admission requires this payload
@@ -402,12 +408,11 @@ Verifier behavior (native STARK)
   // StarkVerifyEnvelopeV1
   "params": {
     "version": 1,
-    "n_log2": 3,             // domain size 8
+    "n_log2": 6,             // domain size 64
     "blowup_log2": 3,        // blowup factor 8×
     "fold_arity": 2,         // binary FRI folds
-    "queries": 1,            // one query chain
+    "queries": 64,           // fixed production query count
     "merkle_arity": 2,       // binary Merkle trees
-    "hash_fn": 1,            // SHA-256 transcript
     "domain_tag": "fastpq:v1:fri"
   },
   "proof": {
@@ -425,20 +430,20 @@ Verifier behavior (native STARK)
       [ // query 0 chain (layers 0->1->2)
         {
           "j": 0,
-          "y0": 5,
-          "y1": 8,
+          "y0": { "c0": 5, "c1": 1, "c2": 2, "c3": 3 },
+          "y1": { "c0": 8, "c1": 4, "c2": 5, "c3": 6 },
           "path_y0": { "dirs": "AA==", "siblings": ["0xsib0...", "0xsib1..."] },
           "path_y1": { "dirs": "AA==", "siblings": ["0xsib0...", "0xsib1..."] },
-          "z": 29, // y0 + r0*y1 (mod p)
+          "z": { "c0": 29, "c1": 7, "c2": 11, "c3": 13 },
           "path_z": { "dirs": "AA==", "siblings": ["0xsib0..."] }
         },
         {
           "j": 0,
-          "y0": 29,
-          "y1": 42,
+          "y0": { "c0": 29, "c1": 7, "c2": 11, "c3": 13 },
+          "y1": { "c0": 42, "c1": 17, "c2": 19, "c3": 23 },
           "path_y0": { "dirs": "AA==", "siblings": ["0xsib0..."] },
           "path_y1": { "dirs": "AA==", "siblings": ["0xsib0..."] },
-          "z": 113,
+          "z": { "c0": 113, "c1": 31, "c2": 37, "c3": 41 },
           "path_z": { "dirs": "AA==", "siblings": [] }
         }
       ]
@@ -461,11 +466,9 @@ Verifier behavior (native STARK)
 }
 ```
 
-- All structs carry `version` fields to enable evolution.
-- Future updates may add fields or new composition profiles; keep existing
-  behavior stable for existing versions.
-- Golden vector: `crates/iroha_core/tests/zk_stark.rs::stark_single_fold_envelope_golden_vector`
-  encodes the sample envelope into hex and guards the Norito byte layout.
+- All structs carry the first-release `version = 1`. There is no compatibility
+  decoder: changing the V1 layout requires regenerating fixtures, and retired
+  pre-release bytes remain invalid.
 - Query indices are derived deterministically from the transcript label, parameters,
   and commitment roots; the verifier recomputes the index and rejects envelopes whose
   payload `j` values do not match the derived result.

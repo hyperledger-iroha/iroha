@@ -33,6 +33,31 @@ pub const PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_NAME_V1: &str =
 pub const PRIVACY_PROOF_SCHEMA_NAME_V1: &str = "iroha.privacy.proof.v1";
 /// Permanent Norito schema identity for the cross-SDK privacy proof envelope.
 pub const PRIVACY_PROOF_ENVELOPE_SCHEMA_NAME_V1: &str = "iroha.privacy.proof-envelope.v1";
+/// Exact binary marker that begins every first-release privacy proof envelope.
+pub const PRIVACY_PROOF_WIRE_MAGIC_BYTES_V1: [u8; 8] = *b"IRHZK1\xA5\x5A";
+/// Stable identity of the final first-release Exact12 catalog.
+pub const PRIVACY_EXACT12_CATALOG_ID_V1: &[u8] = b"iroha-privacy-exact12-v1";
+/// Canonical ordered catalog material committed by every proof and release manifest.
+///
+/// Each row is `decimal ordinal NUL protocol-id NUL security-model NUL`.
+/// The prefix prevents the row encoding from being reused under another
+/// catalog construction.
+pub const PRIVACY_EXACT12_CATALOG_PREIMAGE_V1: &[u8] = concat!(
+    "iroha.privacy.exact12.catalog.v1\0",
+    "0\0zk-ace-pq-authorization-v1\0pq-qrom\0",
+    "1\0anonymous-pgc-k-out-of-n-v1\0classical-rom\0",
+    "2\0verange-transparent-range-v1\0classical-rom\0",
+    "3\0iroha-zk-ams-v1\0classical-rom\0",
+    "4\0vega-existing-credential-zk-v1\0classical-rom\0",
+    "5\0iroha-zk-x509-stark-p256-v1\0classical-rom\0",
+    "6\0iroha-jindo-polynomial-commitment-v1\0pq-qrom\0",
+    "7\0iroha-bootle-lantern-anoncred-v1\0pq-qrom\0",
+    "8\0orchard-halo2-actions-v1\0classical-rom\0",
+    "9\0monero-fcmp-plus-plus-v1\0classical-rom\0",
+    "10\0iroha-ivm-private-note-stark-v1\0pq-qrom\0",
+    "11\0pq-masp-stark-v1\0pq-qrom\0",
+)
+.as_bytes();
 /// Permanent Norito schema identity for local compiled-profile build metadata.
 pub const PRIVACY_COMPILED_PROFILE_CATALOG_SCHEMA_NAME_V1: &str =
     "iroha.privacy.compiled-profile-catalog.v1";
@@ -172,9 +197,9 @@ pub const MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1: u64 = 300;
     norito(tag = "protocol", content = "value", deny_unknown_fields)
 )]
 pub enum PrivacyProtocolIdV1 {
-    /// Native ZK-ACE post-quantum authorization protocol v0.
-    #[cfg_attr(feature = "json", norito(rename = "zk-ace-pq-authorization-v0"))]
-    ZkAcePqAuthorizationV0,
+    /// Native ZK-ACE post-quantum authorization protocol v1.
+    #[cfg_attr(feature = "json", norito(rename = "zk-ace-pq-authorization-v1"))]
+    ZkAcePqAuthorizationV1,
     /// Anonymous PGC k-out-of-n payment protocol v1.
     #[cfg_attr(feature = "json", norito(rename = "anonymous-pgc-k-out-of-n-v1"))]
     AnonymousPgcKOutOfNV1,
@@ -184,18 +209,18 @@ pub enum PrivacyProtocolIdV1 {
     /// Native Iroha ZK-AMS admission and anonymous-account provisioning suite v1.
     #[cfg_attr(feature = "json", norito(rename = "iroha-zk-ams-v1"))]
     IrohaZkAmsV1,
-    /// Vega proof over an existing credential v0.
-    #[cfg_attr(feature = "json", norito(rename = "vega-existing-credential-zk-v0"))]
-    VegaExistingCredentialZkV0,
-    /// Native Iroha P-256 X.509 predicate STARK protocol v0.
-    #[cfg_attr(feature = "json", norito(rename = "iroha-zk-x509-stark-p256-v0"))]
-    IrohaZkX509StarkP256V0,
-    /// Native Iroha Jindo batched univariate lattice polynomial-commitment protocol v0.
+    /// Vega proof over an existing credential v1.
+    #[cfg_attr(feature = "json", norito(rename = "vega-existing-credential-zk-v1"))]
+    VegaExistingCredentialZkV1,
+    /// Native Iroha P-256 X.509 predicate STARK protocol v1.
+    #[cfg_attr(feature = "json", norito(rename = "iroha-zk-x509-stark-p256-v1"))]
+    IrohaZkX509StarkP256V1,
+    /// Native Iroha Jindo batched univariate lattice polynomial-commitment protocol v1.
     #[cfg_attr(
         feature = "json",
-        norito(rename = "iroha-jindo-polynomial-commitment-v0")
+        norito(rename = "iroha-jindo-polynomial-commitment-v1")
     )]
-    IrohaJindoPolynomialCommitmentV0,
+    IrohaJindoPolynomialCommitmentV1,
     /// Native Bootle Lantern/LNP22 module-lattice anonymous credential v1.
     #[cfg_attr(feature = "json", norito(rename = "iroha-bootle-lantern-anoncred-v1"))]
     IrohaBootleLanternAnoncredV1,
@@ -208,44 +233,60 @@ pub enum PrivacyProtocolIdV1 {
     /// Native IVM private-note STARK protocol v1.
     #[cfg_attr(feature = "json", norito(rename = "iroha-ivm-private-note-stark-v1"))]
     IrohaIvmPrivateNoteStarkV1,
-    /// Post-quantum MASP STARK protocol v0.
-    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v0"))]
-    PqMaspStarkV0,
+    /// Post-quantum MASP STARK protocol v1.
+    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v1"))]
+    PqMaspStarkV1,
 }
-/// Frozen protocol labels retired before the first-release privacy registry.
+/// Overall security model claimed by a final first-release privacy protocol.
 ///
-/// These identifiers remain reserved so generic proof systems, SDKs, and
-/// governance tooling cannot reuse them for a different protocol. Order is
-/// the canonical order carried by `fixtures/privacy/exact12_v1.tsv`.
-pub const PRIVACY_RETIRED_PROTOCOL_LABELS_V1: [&str; 10] = [
-    "zkat-policy-private-auth-v1",
-    "zk-ams-recursive-admission-v0",
-    "silent-threshold-anoncred-v0",
-    "zk-x509-onchain-identity-v0",
-    "jindo-lattice-pcs-zk-v0",
-    "sis-hints-anoncred-pq-v0",
-    "sis-with-hints",
-    "penumbra-masp-v1",
-    "miden-stark-note-v1",
-    "aztec-private-rollup-v1",
-];
+/// This records the weakest primitive in the complete protocol composition.
+/// A post-quantum STARK component therefore does not upgrade a protocol that
+/// also depends on P-256, Pasta, or another classical primitive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "security_model", content = "value", deny_unknown_fields)
+)]
+pub enum PrivacySecurityModelV1 {
+    /// Post-quantum security in the quantum random-oracle model.
+    #[cfg_attr(feature = "json", norito(rename = "pq-qrom"))]
+    PostQuantumQrom,
+    /// Classical security in the random-oracle model.
+    #[cfg_attr(feature = "json", norito(rename = "classical-rom"))]
+    ClassicalRom,
+}
+
+impl PrivacySecurityModelV1 {
+    /// Exact label committed by the final Exact12 catalog.
+    #[must_use]
+    pub const fn canonical_label(self) -> &'static str {
+        match self {
+            Self::PostQuantumQrom => "pq-qrom",
+            Self::ClassicalRom => "classical-rom",
+        }
+    }
+}
 impl PrivacyProtocolIdV1 {
     /// Number of protocols in the closed first-release registry.
     pub const COUNT: usize = 12;
     /// Every protocol in canonical Norito discriminant order.
     pub const ALL: [Self; Self::COUNT] = [
-        Self::ZkAcePqAuthorizationV0,
+        Self::ZkAcePqAuthorizationV1,
         Self::AnonymousPgcKOutOfNV1,
         Self::VeRangeTransparentRangeV1,
         Self::IrohaZkAmsV1,
-        Self::VegaExistingCredentialZkV0,
-        Self::IrohaZkX509StarkP256V0,
-        Self::IrohaJindoPolynomialCommitmentV0,
+        Self::VegaExistingCredentialZkV1,
+        Self::IrohaZkX509StarkP256V1,
+        Self::IrohaJindoPolynomialCommitmentV1,
         Self::IrohaBootleLanternAnoncredV1,
         Self::OrchardHalo2ActionsV1,
         Self::MoneroFcmpPlusPlusV1,
         Self::IrohaIvmPrivateNoteStarkV1,
-        Self::PqMaspStarkV0,
+        Self::PqMaspStarkV1,
     ];
     /// Exact external identifier used by SDK catalogs, governance tooling, and
     /// the BOI Privacy Lab.
@@ -255,18 +296,18 @@ impl PrivacyProtocolIdV1 {
     #[must_use]
     pub const fn canonical_label(self) -> &'static str {
         match self {
-            Self::ZkAcePqAuthorizationV0 => "zk-ace-pq-authorization-v0",
+            Self::ZkAcePqAuthorizationV1 => "zk-ace-pq-authorization-v1",
             Self::AnonymousPgcKOutOfNV1 => "anonymous-pgc-k-out-of-n-v1",
             Self::VeRangeTransparentRangeV1 => "verange-transparent-range-v1",
             Self::IrohaZkAmsV1 => "iroha-zk-ams-v1",
-            Self::VegaExistingCredentialZkV0 => "vega-existing-credential-zk-v0",
-            Self::IrohaZkX509StarkP256V0 => "iroha-zk-x509-stark-p256-v0",
-            Self::IrohaJindoPolynomialCommitmentV0 => "iroha-jindo-polynomial-commitment-v0",
+            Self::VegaExistingCredentialZkV1 => "vega-existing-credential-zk-v1",
+            Self::IrohaZkX509StarkP256V1 => "iroha-zk-x509-stark-p256-v1",
+            Self::IrohaJindoPolynomialCommitmentV1 => "iroha-jindo-polynomial-commitment-v1",
             Self::IrohaBootleLanternAnoncredV1 => "iroha-bootle-lantern-anoncred-v1",
             Self::OrchardHalo2ActionsV1 => "orchard-halo2-actions-v1",
             Self::MoneroFcmpPlusPlusV1 => "monero-fcmp-plus-plus-v1",
             Self::IrohaIvmPrivateNoteStarkV1 => "iroha-ivm-private-note-stark-v1",
-            Self::PqMaspStarkV0 => "pq-masp-stark-v0",
+            Self::PqMaspStarkV1 => "pq-masp-stark-v1",
         }
     }
     /// Exact Norito statement/proof variant label carried by the first-release
@@ -279,18 +320,18 @@ impl PrivacyProtocolIdV1 {
     #[must_use]
     pub const fn canonical_typed_variant_label(self) -> &'static str {
         match self {
-            Self::ZkAcePqAuthorizationV0 => "ZkAcePqAuthorizationV0",
+            Self::ZkAcePqAuthorizationV1 => "ZkAcePqAuthorizationV1",
             Self::AnonymousPgcKOutOfNV1 => "AnonymousPgcKOutOfNV1",
             Self::VeRangeTransparentRangeV1 => "VeRangeTransparentRangeV1",
             Self::IrohaZkAmsV1 => "IrohaZkAmsV1",
-            Self::VegaExistingCredentialZkV0 => "VegaExistingCredentialZkV0",
-            Self::IrohaZkX509StarkP256V0 => "IrohaZkX509StarkP256V0",
-            Self::IrohaJindoPolynomialCommitmentV0 => "IrohaJindoPolynomialCommitmentV0",
+            Self::VegaExistingCredentialZkV1 => "VegaExistingCredentialZkV1",
+            Self::IrohaZkX509StarkP256V1 => "IrohaZkX509StarkP256V1",
+            Self::IrohaJindoPolynomialCommitmentV1 => "IrohaJindoPolynomialCommitmentV1",
             Self::IrohaBootleLanternAnoncredV1 => "IrohaBootleLanternAnoncredV1",
             Self::OrchardHalo2ActionsV1 => "OrchardHalo2ActionsV1",
             Self::MoneroFcmpPlusPlusV1 => "MoneroFcmpPlusPlusV1",
             Self::IrohaIvmPrivateNoteStarkV1 => "IrohaIvmPrivateNoteStarkV1",
-            Self::PqMaspStarkV0 => "PqMaspStarkV0",
+            Self::PqMaspStarkV1 => "PqMaspStarkV1",
         }
     }
     /// Parse one exact first-release external identifier.
@@ -300,29 +341,47 @@ impl PrivacyProtocolIdV1 {
     #[must_use]
     pub const fn from_canonical_label(label: &str) -> Option<Self> {
         match label.as_bytes() {
-            b"zk-ace-pq-authorization-v0" => Some(Self::ZkAcePqAuthorizationV0),
+            b"zk-ace-pq-authorization-v1" => Some(Self::ZkAcePqAuthorizationV1),
             b"anonymous-pgc-k-out-of-n-v1" => Some(Self::AnonymousPgcKOutOfNV1),
             b"verange-transparent-range-v1" => Some(Self::VeRangeTransparentRangeV1),
             b"iroha-zk-ams-v1" => Some(Self::IrohaZkAmsV1),
-            b"vega-existing-credential-zk-v0" => Some(Self::VegaExistingCredentialZkV0),
-            b"iroha-zk-x509-stark-p256-v0" => Some(Self::IrohaZkX509StarkP256V0),
-            b"iroha-jindo-polynomial-commitment-v0" => Some(Self::IrohaJindoPolynomialCommitmentV0),
+            b"vega-existing-credential-zk-v1" => Some(Self::VegaExistingCredentialZkV1),
+            b"iroha-zk-x509-stark-p256-v1" => Some(Self::IrohaZkX509StarkP256V1),
+            b"iroha-jindo-polynomial-commitment-v1" => Some(Self::IrohaJindoPolynomialCommitmentV1),
             b"iroha-bootle-lantern-anoncred-v1" => Some(Self::IrohaBootleLanternAnoncredV1),
             b"orchard-halo2-actions-v1" => Some(Self::OrchardHalo2ActionsV1),
             b"monero-fcmp-plus-plus-v1" => Some(Self::MoneroFcmpPlusPlusV1),
             b"iroha-ivm-private-note-stark-v1" => Some(Self::IrohaIvmPrivateNoteStarkV1),
-            b"pq-masp-stark-v0" => Some(Self::PqMaspStarkV0),
+            b"pq-masp-stark-v1" => Some(Self::PqMaspStarkV1),
             _ => None,
+        }
+    }
+    /// Overall security model of the complete protocol composition.
+    #[must_use]
+    pub const fn security_model(self) -> PrivacySecurityModelV1 {
+        match self {
+            Self::ZkAcePqAuthorizationV1
+            | Self::IrohaJindoPolynomialCommitmentV1
+            | Self::IrohaBootleLanternAnoncredV1
+            | Self::IrohaIvmPrivateNoteStarkV1
+            | Self::PqMaspStarkV1 => PrivacySecurityModelV1::PostQuantumQrom,
+            Self::AnonymousPgcKOutOfNV1
+            | Self::VeRangeTransparentRangeV1
+            | Self::IrohaZkAmsV1
+            | Self::VegaExistingCredentialZkV1
+            | Self::IrohaZkX509StarkP256V1
+            | Self::OrchardHalo2ActionsV1
+            | Self::MoneroFcmpPlusPlusV1 => PrivacySecurityModelV1::ClassicalRom,
         }
     }
     /// Exact proof system required by this protocol.
     #[must_use]
     pub const fn expected_proof_system(self) -> PrivacyProofSystemIdV1 {
         match self {
-            Self::ZkAcePqAuthorizationV0
-            | Self::IrohaZkX509StarkP256V0
+            Self::ZkAcePqAuthorizationV1
+            | Self::IrohaZkX509StarkP256V1
             | Self::IrohaIvmPrivateNoteStarkV1
-            | Self::PqMaspStarkV0 => PrivacyProofSystemIdV1::StarkFriSha256Goldilocks,
+            | Self::PqMaspStarkV1 => PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
             Self::IrohaBootleLanternAnoncredV1 => {
                 PrivacyProofSystemIdV1::LanternLnp22ModuleLinearNorm
             }
@@ -331,10 +390,10 @@ impl PrivacyProtocolIdV1 {
             }
             Self::AnonymousPgcKOutOfNV1 => PrivacyProofSystemIdV1::AnonymousPgcP256,
             Self::VeRangeTransparentRangeV1 => PrivacyProofSystemIdV1::IrohaVeRangeP256,
-            Self::VegaExistingCredentialZkV0 => {
+            Self::VegaExistingCredentialZkV1 => {
                 PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256
             }
-            Self::IrohaJindoPolynomialCommitmentV0 => {
+            Self::IrohaJindoPolynomialCommitmentV1 => {
                 PrivacyProofSystemIdV1::JindoPolynomialCommitment
             }
             Self::OrchardHalo2ActionsV1 => PrivacyProofSystemIdV1::Halo2IpaPasta,
@@ -345,18 +404,18 @@ impl PrivacyProtocolIdV1 {
     #[must_use]
     pub const fn expected_engine(self) -> PrivacyEngineIdV1 {
         match self {
-            Self::ZkAcePqAuthorizationV0
-            | Self::IrohaZkX509StarkP256V0
+            Self::ZkAcePqAuthorizationV1
+            | Self::IrohaZkX509StarkP256V1
             | Self::IrohaIvmPrivateNoteStarkV1
-            | Self::PqMaspStarkV0 => PrivacyEngineIdV1::NativeGoldilocksStarkFri,
+            | Self::PqMaspStarkV1 => PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64,
             Self::IrohaBootleLanternAnoncredV1 => PrivacyEngineIdV1::NativeLanternLnp22,
             Self::IrohaZkAmsV1 => {
                 PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255
             }
             Self::AnonymousPgcKOutOfNV1 => PrivacyEngineIdV1::NativeAnonymousPgcP256,
             Self::VeRangeTransparentRangeV1 => PrivacyEngineIdV1::NativeVeRangeP256,
-            Self::VegaExistingCredentialZkV0 => PrivacyEngineIdV1::NativeVega,
-            Self::IrohaJindoPolynomialCommitmentV0 => PrivacyEngineIdV1::NativeJindo,
+            Self::VegaExistingCredentialZkV1 => PrivacyEngineIdV1::NativeVega,
+            Self::IrohaJindoPolynomialCommitmentV1 => PrivacyEngineIdV1::NativeJindo,
             Self::OrchardHalo2ActionsV1 => PrivacyEngineIdV1::NativeHalo2Orchard,
             Self::MoneroFcmpPlusPlusV1 => PrivacyEngineIdV1::NativeFcmpPlusPlus,
         }
@@ -371,15 +430,13 @@ pub use exact12_fixture::{
     privacy_exact12_matrix_bytes_v1, privacy_exact12_typed_envelope_rows_v1,
     validate_privacy_exact12_fixture_bundle_v1,
 };
-/// Return whether `label` is reserved by the first-release privacy registry.
+/// Return whether `label` is an exact member of the first-release privacy catalog.
 ///
-/// Active and retired labels are both exact, case-sensitive reservations.
-/// This predicate deliberately performs no trimming, normalization, or alias
-/// matching so near-miss identifiers remain available to unrelated protocols.
+/// This predicate deliberately performs no trimming, normalization, alias
+/// matching, or recognition of pre-release identifiers.
 #[must_use]
-pub fn privacy_protocol_label_is_reserved_v1(label: &str) -> bool {
+pub fn privacy_protocol_label_is_exact12_v1(label: &str) -> bool {
     PrivacyProtocolIdV1::from_canonical_label(label).is_some()
-        || PRIVACY_RETIRED_PROTOCOL_LABELS_V1.contains(&label)
 }
 /// Exact proof-system profile selected by a privacy protocol.
 ///
@@ -395,9 +452,12 @@ pub fn privacy_protocol_label_is_reserved_v1(label: &str) -> bool {
     norito(tag = "proof_system", content = "value", deny_unknown_fields)
 )]
 pub enum PrivacyProofSystemIdV1 {
-    /// STARK/FRI over Goldilocks with SHA-256 transcript and commitments.
-    #[cfg_attr(feature = "json", norito(rename = "stark-fri-sha256-goldilocks"))]
-    StarkFriSha256Goldilocks,
+    /// Six-lane Poseidon-x7 STARK/FRI over the Goldilocks field.
+    #[cfg_attr(
+        feature = "json",
+        norito(rename = "stark-fri-poseidon-x7-goldilocks-6x64-v1")
+    )]
+    StarkFriPoseidonX7Goldilocks6x64,
     /// ZK-AMS masked relaxed-R1CS admission plus Ristretto255 possession and LSAG.
     ///
     /// Batch admission uses Poseidon2/Goldilocks commitment digests and a
@@ -440,7 +500,7 @@ pub enum PrivacyProofSystemIdV1 {
 }
 /// Native verifier engine implementation selected by a privacy protocol.
 ///
-/// Engine identity binds the pinned experimental Rust implementation
+/// Engine identity binds the pinned final Rust implementation
 /// independently of the mathematical proof-system profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -453,8 +513,11 @@ pub enum PrivacyProofSystemIdV1 {
 )]
 pub enum PrivacyEngineIdV1 {
     /// Native Goldilocks STARK/FRI verifier.
-    #[cfg_attr(feature = "json", norito(rename = "native-goldilocks-stark-fri"))]
-    NativeGoldilocksStarkFri,
+    #[cfg_attr(
+        feature = "json",
+        norito(rename = "native-goldilocks-poseidon-x7-stark-fri-6x64-v1")
+    )]
+    NativeGoldilocksPoseidonX7StarkFri6x64,
     /// Native ZK-AMS masked relaxed-R1CS and Ristretto255 verifier suite.
     #[cfg_attr(
         feature = "json",
@@ -483,15 +546,125 @@ pub enum PrivacyEngineIdV1 {
     #[cfg_attr(feature = "json", norito(rename = "native-lantern-lnp22"))]
     NativeLanternLnp22,
 }
+/// Validated first-release privacy proof wire marker.
+///
+/// Its field is private and both Norito and JSON decoders compare all eight
+/// bytes to [`PRIVACY_PROOF_WIRE_MAGIC_BYTES_V1`]. This makes pre-release
+/// envelopes fail while decoding, before an ordinal can be interpreted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+#[repr(transparent)]
+pub struct PrivacyProofWireMagicV1([u8; 8]);
+
+impl PrivacyProofWireMagicV1 {
+    /// Return the sole valid first-release marker.
+    #[must_use]
+    pub const fn canonical() -> Self {
+        Self(PRIVACY_PROOF_WIRE_MAGIC_BYTES_V1)
+    }
+
+    /// Borrow the exact marker bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 8] {
+        &self.0
+    }
+
+    fn from_bytes(bytes: [u8; 8]) -> Option<Self> {
+        (bytes == PRIVACY_PROOF_WIRE_MAGIC_BYTES_V1).then_some(Self(bytes))
+    }
+}
+
+impl Default for PrivacyProofWireMagicV1 {
+    fn default() -> Self {
+        Self::canonical()
+    }
+}
+
+impl norito::core::NoritoSerialize for PrivacyProofWireMagicV1 {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        writer.write_all(&self.0)?;
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(PRIVACY_PROOF_WIRE_MAGIC_BYTES_V1.len())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(PRIVACY_PROOF_WIRE_MAGIC_BYTES_V1.len())
+    }
+}
+
+impl<'de> norito::core::NoritoDeserialize<'de> for PrivacyProofWireMagicV1 {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("canonical privacy proof wire magic")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let bytes = <[u8; 8] as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
+        Self::from_bytes(bytes).ok_or_else(|| {
+            norito::core::Error::Message("invalid first-release privacy proof wire magic".into())
+        })
+    }
+}
+
+impl<'de> norito::core::DecodeFromSlice<'de> for PrivacyProofWireMagicV1 {
+    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let (magic, used) = <[u8; 8] as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        Self::from_bytes(magic)
+            .map(|value| (value, used))
+            .ok_or_else(|| {
+                norito::core::Error::Message(
+                    "invalid first-release privacy proof wire magic".into(),
+                )
+            })
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for PrivacyProofWireMagicV1 {
+    fn write_json(&self, out: &mut String) {
+        crate::json_helpers::fixed_bytes::serialize(&self.0, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        crate::json_helpers::fixed_bytes::serialize_bounded(&self.0, out)
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for PrivacyProofWireMagicV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let bytes = crate::json_helpers::fixed_bytes::deserialize(parser)?;
+        Self::from_bytes(bytes).ok_or_else(|| {
+            norito::json::Error::Message(
+                "invalid first-release privacy proof wire magic".to_owned(),
+            )
+        })
+    }
+}
+
 /// Canonical 384-bit native-STARK digest encoded as six little-endian
 /// Goldilocks field elements.
 ///
 /// Construction and every decoder reject words greater than or equal to the
 /// Goldilocks modulus. Keeping the words private prevents callers from
 /// manufacturing a non-canonical wire value after validation.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
 #[repr(transparent)]
-pub struct GoldilocksDigest384V1([u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1]);
+pub struct GoldilocksDigest384V1([u8; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1]);
+
+impl Default for GoldilocksDigest384V1 {
+    fn default() -> Self {
+        Self([0; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1])
+    }
+}
 
 impl GoldilocksDigest384V1 {
     /// Canonical encoded byte length.
@@ -500,58 +673,57 @@ impl GoldilocksDigest384V1 {
     /// Construct from six canonical Goldilocks field elements.
     #[must_use]
     pub fn new(words: [u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1]) -> Option<Self> {
-        fastpq_isi::GoldilocksDigest384V1::new(words).map(|digest| Self(digest.words()))
+        fastpq_isi::GoldilocksDigest384V1::new(words).map(|digest| Self(digest.to_le_bytes()))
     }
 
     /// Decode six canonical little-endian Goldilocks field elements.
     #[must_use]
     pub fn from_le_bytes(bytes: [u8; Self::BYTES]) -> Option<Self> {
-        fastpq_isi::GoldilocksDigest384V1::from_le_bytes(bytes).map(|digest| Self(digest.words()))
+        fastpq_isi::GoldilocksDigest384V1::from_le_bytes(bytes).map(|_| Self(bytes))
     }
 
     /// Borrow the six canonical field elements in lane order.
     #[must_use]
-    pub const fn words(&self) -> &[u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] {
-        &self.0
+    pub fn words(&self) -> [u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] {
+        self.as_fastpq().words()
     }
 
     /// Consume the digest and return its canonical field elements.
     #[must_use]
-    pub const fn into_words(self) -> [u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] {
-        self.0
+    pub fn into_words(self) -> [u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] {
+        self.as_fastpq().words()
     }
 
     /// Encode the six words in canonical little-endian lane order.
     #[must_use]
-    pub fn to_le_bytes(self) -> [u8; Self::BYTES] {
-        fastpq_isi::GoldilocksDigest384V1::new(self.0)
-            .expect("GoldilocksDigest384V1 preserves canonical construction")
-            .to_le_bytes()
+    pub const fn to_le_bytes(self) -> [u8; Self::BYTES] {
+        self.0
     }
 
     /// Convert to the shared scalar digest representation.
     #[must_use]
     pub fn as_fastpq(self) -> fastpq_isi::GoldilocksDigest384V1 {
-        fastpq_isi::GoldilocksDigest384V1::new(self.0)
+        fastpq_isi::GoldilocksDigest384V1::from_le_bytes(self.0)
             .expect("GoldilocksDigest384V1 preserves canonical construction")
     }
 }
 
 impl From<fastpq_isi::GoldilocksDigest384V1> for GoldilocksDigest384V1 {
     fn from(digest: fastpq_isi::GoldilocksDigest384V1) -> Self {
-        Self(digest.words())
+        Self(digest.to_le_bytes())
     }
 }
 
-impl AsRef<[u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1]> for GoldilocksDigest384V1 {
-    fn as_ref(&self) -> &[u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] {
-        self.words()
+impl AsRef<[u8; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1]> for GoldilocksDigest384V1 {
+    fn as_ref(&self) -> &[u8; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1] {
+        &self.0
     }
 }
 
 impl norito::core::NoritoSerialize for GoldilocksDigest384V1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.0, writer)
+        writer.write_all(&self.0)?;
+        Ok(())
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -571,8 +743,8 @@ impl<'de> norito::core::NoritoDeserialize<'de> for GoldilocksDigest384V1 {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let words = <[u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
-        Self::new(words).ok_or_else(|| {
+        let bytes = <[u8; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1] as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
+        Self::from_le_bytes(bytes).ok_or_else(|| {
             norito::core::Error::Message("non-canonical GoldilocksDigest384V1 field element".into())
         })
     }
@@ -580,8 +752,8 @@ impl<'de> norito::core::NoritoDeserialize<'de> for GoldilocksDigest384V1 {
 
 impl<'de> norito::core::DecodeFromSlice<'de> for GoldilocksDigest384V1 {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let (words, used) = <[u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        Self::new(words)
+        let (encoded, used) = <[u8; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1] as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        Self::from_le_bytes(encoded)
             .map(|digest| (digest, used))
             .ok_or_else(|| {
                 norito::core::Error::Message(
@@ -614,6 +786,251 @@ impl norito::json::JsonDeserialize for GoldilocksDigest384V1 {
         Self::from_le_bytes(bytes).ok_or_else(|| {
             norito::json::Error::Message(
                 "non-canonical GoldilocksDigest384V1 field element".to_owned(),
+            )
+        })
+    }
+}
+
+macro_rules! define_zk_ace_digest384 {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[derive(
+            Clone,
+            Copy,
+            Debug,
+            Default,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            Decode,
+            Encode,
+            IntoSchema,
+        )]
+        #[repr(transparent)]
+        #[norito(decode_from_slice)]
+        pub struct $name(GoldilocksDigest384V1);
+
+        impl $name {
+            /// Construct from six canonical Goldilocks field elements.
+            #[must_use]
+            pub fn new(
+                words: [u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1],
+            ) -> Option<Self> {
+                GoldilocksDigest384V1::new(words).map(Self)
+            }
+
+            /// Wrap an already validated canonical six-lane digest.
+            #[must_use]
+            pub const fn from_digest(digest: GoldilocksDigest384V1) -> Self {
+                Self(digest)
+            }
+
+            /// Decode six canonical little-endian Goldilocks field elements.
+            #[must_use]
+            pub fn from_le_bytes(bytes: [u8; GoldilocksDigest384V1::BYTES]) -> Option<Self> {
+                GoldilocksDigest384V1::from_le_bytes(bytes).map(Self)
+            }
+
+            /// Borrow the canonical 48-byte lane encoding.
+            #[must_use]
+            pub fn as_bytes(&self) -> &[u8; GoldilocksDigest384V1::BYTES] {
+                self.0.as_ref()
+            }
+
+            /// Consume this value and return its canonical 48-byte encoding.
+            #[must_use]
+            pub const fn into_bytes(self) -> [u8; GoldilocksDigest384V1::BYTES] {
+                self.0.to_le_bytes()
+            }
+
+            /// Return the validated six-lane digest.
+            #[must_use]
+            pub const fn digest(self) -> GoldilocksDigest384V1 {
+                self.0
+            }
+
+            /// Return true only for the all-zero six-field sentinel.
+            #[must_use]
+            pub fn is_zero(&self) -> bool {
+                self.0.words().iter().all(|word| *word == 0)
+            }
+        }
+
+        #[cfg(feature = "json")]
+        impl norito::json::FastJsonWrite for $name {
+            fn write_json(&self, out: &mut String) {
+                norito::json::FastJsonWrite::write_json(&self.0, out);
+            }
+
+            fn write_json_to(
+                &self,
+                out: &mut dyn norito::json::JsonWriteSink,
+            ) -> Result<(), norito::json::BoundedJsonError> {
+                norito::json::FastJsonWrite::write_json_to(&self.0, out)
+            }
+        }
+
+        #[cfg(feature = "json")]
+        impl norito::json::JsonDeserialize for $name {
+            fn json_deserialize(
+                parser: &mut norito::json::Parser<'_>,
+            ) -> Result<Self, norito::json::Error> {
+                GoldilocksDigest384V1::json_deserialize(parser).map(Self)
+            }
+        }
+    };
+}
+
+define_zk_ace_digest384!(
+    /// Canonical six-lane identity commitment used only by ZK-ACE.
+    PrivacyZkAceIdentityCommitmentV1
+);
+define_zk_ace_digest384!(
+    /// Canonical six-lane replay nullifier used only by ZK-ACE.
+    PrivacyZkAceReplayNullifierV1
+);
+
+/// Pinned six-word commitment to [`PRIVACY_EXACT12_CATALOG_PREIMAGE_V1`].
+pub const PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1: [u64;
+    fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] = [
+    0x7c30_a004_39f1_37e0,
+    0x6b40_fb5c_d815_db00,
+    0x49a9_4401_d272_97d7,
+    0x2e34_8ea7_fdf3_f0de,
+    0xfabf_bf7c_7865_7f74,
+    0xffbb_e269_c311_4fc9,
+];
+
+/// Recompute the final Exact12 catalog commitment from its canonical preimage.
+///
+/// Release tests compare this result to
+/// [`PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1`].
+#[must_use]
+pub fn compute_privacy_exact12_catalog_commitment_v1() -> GoldilocksDigest384V1 {
+    fastpq_isi::hash_bytes_384_v1(
+        fastpq_isi::GoldilocksDigestDomainV1 {
+            catalog: PRIVACY_EXACT12_CATALOG_ID_V1,
+            protocol: b"privacy-exact12-catalog-v1",
+            profile: b"poseidon-x7-goldilocks-6x64-v1",
+            role: b"catalog",
+            phase: b"commitment",
+            level: 0,
+            index: 0,
+            counter: 0,
+        },
+        &[PRIVACY_EXACT12_CATALOG_PREIMAGE_V1],
+    )
+    .expect("the fixed Exact12 catalog preimage is within framing limits")
+    .into()
+}
+
+/// Validated commitment to the only first-release Exact12 catalog.
+///
+/// Unlike a generic digest, every decoder requires the single pinned value.
+/// Consequently a proof envelope cannot select a different catalog while
+/// retaining otherwise valid protocol ordinals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+#[repr(transparent)]
+pub struct PrivacyExact12CatalogCommitmentV1(GoldilocksDigest384V1);
+
+impl PrivacyExact12CatalogCommitmentV1 {
+    /// Return the sole catalog commitment accepted by first-release nodes.
+    #[must_use]
+    pub fn canonical() -> Self {
+        Self(
+            GoldilocksDigest384V1::new(PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1)
+                .expect("pinned Exact12 catalog words are canonical"),
+        )
+    }
+
+    /// Borrow the underlying six-lane digest.
+    #[must_use]
+    pub const fn digest(&self) -> &GoldilocksDigest384V1 {
+        &self.0
+    }
+
+    fn from_digest(digest: GoldilocksDigest384V1) -> Option<Self> {
+        (digest.into_words() == PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1).then_some(Self(digest))
+    }
+}
+
+impl Default for PrivacyExact12CatalogCommitmentV1 {
+    fn default() -> Self {
+        Self::canonical()
+    }
+}
+
+impl norito::core::NoritoSerialize for PrivacyExact12CatalogCommitmentV1 {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        norito::core::NoritoSerialize::serialize(&self.0, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(GoldilocksDigest384V1::BYTES)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(GoldilocksDigest384V1::BYTES)
+    }
+}
+
+impl<'de> norito::core::NoritoDeserialize<'de> for PrivacyExact12CatalogCommitmentV1 {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("canonical Exact12 catalog commitment")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let digest = <GoldilocksDigest384V1 as norito::core::NoritoDeserialize>::try_deserialize(
+            archived.cast(),
+        )?;
+        Self::from_digest(digest).ok_or_else(|| {
+            norito::core::Error::Message("unknown first-release Exact12 catalog commitment".into())
+        })
+    }
+}
+
+impl<'de> norito::core::DecodeFromSlice<'de> for PrivacyExact12CatalogCommitmentV1 {
+    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let (digest, used) =
+            <GoldilocksDigest384V1 as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        Self::from_digest(digest)
+            .map(|commitment| (commitment, used))
+            .ok_or_else(|| {
+                norito::core::Error::Message(
+                    "unknown first-release Exact12 catalog commitment".into(),
+                )
+            })
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for PrivacyExact12CatalogCommitmentV1 {
+    fn write_json(&self, out: &mut String) {
+        norito::json::FastJsonWrite::write_json(&self.0, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::FastJsonWrite::write_json_to(&self.0, out)
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for PrivacyExact12CatalogCommitmentV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let digest =
+            <GoldilocksDigest384V1 as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Self::from_digest(digest).ok_or_else(|| {
+            norito::json::Error::Message(
+                "unknown first-release Exact12 catalog commitment".to_owned(),
             )
         })
     }
@@ -698,12 +1115,36 @@ define_privacy_digest!(
     PrivacyStatementSchemaDigestV1
 );
 define_privacy_digest!(
-    /// Digest of the pinned experimental native engine manifest.
+    /// Digest of the exact native engine manifest.
     PrivacyEngineManifestDigestV1
 );
 define_privacy_digest!(
     /// Self-digest of one canonical committed Exact12 capability manifest.
     PrivacyExact12CapabilityManifestDigestV1
+);
+define_privacy_digest!(
+    /// Digest of one final protocol security-reduction artifact.
+    PrivacySecurityReductionDigestV1
+);
+define_privacy_digest!(
+    /// Digest of one independently reviewed final protocol security claim.
+    PrivacySecurityClaimDigestV1
+);
+define_privacy_digest!(
+    /// Digest of the portable final Exact12 release manifest.
+    PrivacyExact12ReleaseManifestDigestV1
+);
+define_privacy_digest!(
+    /// Digest of the network-bound four-validator deployment qualification.
+    PrivacyExact12DeploymentQualificationDigestV1
+);
+define_privacy_digest!(
+    /// Digest of the complete independent audit and disposition bundle.
+    PrivacyAuditBundleDigestV1
+);
+define_privacy_digest!(
+    /// Digest of one immutable source, build, proof, SDK, hardware, audit, or deployment artifact.
+    PrivacyReleaseArtifactDigestV1
 );
 define_privacy_digest!(
     /// Digest of a canonical protocol-specific public statement.
@@ -968,6 +1409,8 @@ define_ristretto255_encoding!(
 include!("privacy/protocol.rs");
 mod capability_manifest;
 pub use capability_manifest::*;
+mod release_manifest;
+pub use release_manifest::*;
 include!("privacy/credentials.rs");
 include!("privacy/statements.rs");
 include!("privacy/proofs.rs");
@@ -975,6 +1418,7 @@ include!("privacy/proofs.rs");
 mod tests {
     include!("privacy/tests/protocol_and_proofs.rs");
     include!("privacy/tests/capability_manifest.rs");
+    include!("privacy/tests/release_manifest.rs");
     include!("privacy/tests/namespaces_and_governance.rs");
     include!("privacy/tests/adversarial.rs");
 }

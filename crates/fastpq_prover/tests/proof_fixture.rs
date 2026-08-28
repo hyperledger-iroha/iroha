@@ -22,7 +22,7 @@ fn fixture_path(name: &str) -> PathBuf {
 }
 /// Construct the regression batch used for V1 fixtures.
 fn v1_fixture_batch(rows: usize) -> TransitionBatch {
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+    let mut batch = TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
     let mut transcripts = Vec::new();
     let mut row_idx = 0usize;
     let mut transfer_idx = 0usize;
@@ -136,7 +136,7 @@ fn golden_v1_proof_matches_fixture() {
     let path = fixture_path("v1_balanced_1k.bin");
     if fixture_update_requested() {
         let prover =
-            Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
+            Prover::canonical_with_execution_mode("fastpq-state-transition-stark-v1", ExecutionMode::Cpu)
                 .unwrap();
         let batch = v1_fixture_batch(1_000);
         let proof = prover
@@ -148,7 +148,7 @@ fn golden_v1_proof_matches_fixture() {
     }
     let bytes = fs::read(&path).expect("read proof fixture");
     let prover =
-        Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu).unwrap();
+        Prover::canonical_with_execution_mode("fastpq-state-transition-stark-v1", ExecutionMode::Cpu).unwrap();
     let batch = v1_fixture_batch(1_000);
     let proof = prover
         .prove_raw_statement(&batch)

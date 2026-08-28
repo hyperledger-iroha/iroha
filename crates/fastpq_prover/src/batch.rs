@@ -229,7 +229,8 @@ mod tests {
     }
     #[test]
     fn sort_orders_by_key() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
             b"b".to_vec(),
             vec![],
@@ -248,7 +249,8 @@ mod tests {
     }
     #[test]
     fn sort_respects_operation_rank() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
             b"key".to_vec(),
             vec![0],
@@ -277,7 +279,8 @@ mod tests {
     }
     #[test]
     fn sorted_batch_norito_roundtrip_ignores_local_ordinals() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
             b"b".to_vec(),
             vec![0],

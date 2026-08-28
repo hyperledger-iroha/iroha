@@ -618,14 +618,14 @@ checksum-repaired mutations. `DecodeCanonicalBase64` expects a single padded
 standard-Base64 string with no whitespace; remove the fixture file's one final
 LF only after checking that it is the sole line terminator.
 
-The enum contains exactly twelve IDs: `zk-ace-pq-authorization-v0`,
+The enum contains exactly twelve IDs: `zk-ace-pq-authorization-v1`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
-`iroha-zk-ams-v1`, `vega-existing-credential-zk-v0`,
-`iroha-zk-x509-stark-p256-v0`,
-`iroha-jindo-polynomial-commitment-v0`,
+`iroha-zk-ams-v1`, `vega-existing-credential-zk-v1`,
+`iroha-zk-x509-stark-p256-v1`,
+`iroha-jindo-polynomial-commitment-v1`,
 `iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
 `monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
-`pq-masp-stark-v0`. `ParseCanonicalLabel` rejects aliases, retired IDs, case
+`pq-masp-stark-v1`. `ParseCanonicalLabel` rejects aliases, retired IDs, case
 changes, and whitespace normalization.
 
 ## Native SoraFS Reference Validation

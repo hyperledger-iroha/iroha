@@ -283,7 +283,12 @@ def test_contract_phase_contains_only_direct_contract_smoke() -> None:
     assert "node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js" in trace
     assert "bash scripts/sccp_evm_contract_smoke.sh" in trace
     assert "bash -n scripts/sccp_ton_contract_build.sh" in trace
-    assert "bash scripts/sccp_ton_contract_build.sh" in trace
+    assert "scripts/tests/ton_sccp_builder_test.py" in trace
+    assert "python3 scripts/ton_sccp_builder.py --help" in trace
+    assert (
+        "bash scripts/sccp_ton_contract_build.sh development-local "
+        "--acton /usr/local/bin/acton"
+    ) in trace
     for retired in RETIRED_STEMS:
         assert retired not in trace
 
@@ -316,6 +321,8 @@ def test_retired_operator_surface_is_physically_absent() -> None:
         "sccp_release_fixture.py",
         "sccp_phase_log_runner.py",
         "sccp_release_readiness_report.py",
+        "sccp_validator_builder.py",
+        "sccp_validator_builder_driver.py",
         "sccp_verify_release_bundle.py",
     }
     actual = {path.name for path in (ROOT / "scripts").glob("sccp*")}
@@ -350,7 +357,12 @@ def test_workflow_exposes_every_phase_and_strict_automatic_aggregate() -> None:
             assert f"--phase {phase}" in job
             if phase == "contract-smoke":
                 assert "github.event.inputs.phase == 'tvm-contract-smoke'" in job
-        assert f"tee dist/sccp-production-corridor/{phase}.log" in job
+        assert "| tee" not in job
+        assert "sccp_phase_log_runner.py" in job or (
+            "--log-dir dist/sccp-production-corridor" in job
+        )
+        assert f"dist/sccp-production-corridor/{phase}.log" in job
+        assert f"dist/sccp-production-corridor/{phase}.manifest.json" in job
         assert "if-no-files-found: error" in job
     aggregate = workflow_job(workflow, "sccp-production-corridor")
     assert f"needs: [runner-self-check, {', '.join(AUTOMATIC_PHASES)}]" in aggregate
@@ -358,6 +370,7 @@ def test_workflow_exposes_every_phase_and_strict_automatic_aggregate() -> None:
     for state in ("failure", "cancelled", "skipped"):
         assert f"contains(needs.*.result, '{state}')" in aggregate
     assert "exit 1" in aggregate
+    assert "| tee" not in workflow
 
 
 def test_evidence_workflow_installs_rust_and_runs_real_corridor() -> None:

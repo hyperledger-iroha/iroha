@@ -174,6 +174,7 @@ pub mod openapi;
 use iso_profile::from_request as iso_profile_from_request;
 mod content;
 mod proof_filters;
+pub mod sccp_replay;
 pub mod sorafs;
 use axum::{
     Router,
@@ -2318,6 +2319,7 @@ struct AppState {
     transaction_batch_max_transactions: usize,
     transaction_batch_max_bytes: usize,
     state: Arc<CoreState>,
+    sccp_replay_archive: Option<Arc<sccp_replay::ToriiSccpReplayArchiveServiceV1>>,
     #[cfg(feature = "app_api")]
     parliament_tle_release_coordinator: Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
     #[cfg(feature = "app_api")]
@@ -44787,6 +44789,7 @@ pub struct Torii {
     ws_message_timeout: Duration,
     address: WithOrigin<SocketAddr>,
     state: Arc<CoreState>,
+    sccp_replay_archive: Option<Arc<sccp_replay::ToriiSccpReplayArchiveServiceV1>>,
     #[cfg(feature = "app_api")]
     parliament_tle_release_coordinator:
         Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
@@ -48621,6 +48624,7 @@ impl Torii {
             // the next Strict restart; Fast never opens their journals or
             // starts their mutation workers.
             config.privacy_bootle_lantern_issuer = None;
+            config.sccp_replay_archive = None;
             config.webhooks_enabled = false;
             config.zk_attachments_enabled = false;
             config.zk_prover_enabled = false;
@@ -49959,6 +49963,16 @@ impl Torii {
         } else {
             select_initial_musubi_search_index(rebuild_musubi_search_index(state.as_ref(), None))
         }));
+        let sccp_replay_archive = config.sccp_replay_archive.clone().map(|archive_config| {
+            sccp_replay::ToriiSccpReplayArchiveServiceV1::bootstrap(
+                archive_config,
+                Arc::clone(&state),
+                Arc::clone(&kura),
+            )
+            .unwrap_or_else(|error| {
+                panic!("SCCP replay archive failed closed during startup: {error}")
+            })
+        });
         Self {
             chain_id: Arc::new(chain_id),
             signed_query_admission,
@@ -49969,6 +49983,7 @@ impl Torii {
             query_service,
             kura,
             state,
+            sccp_replay_archive,
             #[cfg(feature = "app_api")]
             parliament_tle_release_coordinator,
             #[cfg(feature = "app_api")]
@@ -50548,6 +50563,7 @@ impl Torii {
                 .try_into()
                 .unwrap_or(usize::MAX),
             state: self.state.clone(),
+            sccp_replay_archive: self.sccp_replay_archive.clone(),
             #[cfg(feature = "app_api")]
             parliament_tle_release_coordinator: self.parliament_tle_release_coordinator.clone(),
             #[cfg(feature = "app_api")]
@@ -50792,6 +50808,7 @@ impl Torii {
             &app_state.mcp_rate_limiter,
             &app_state.mcp_tools,
             &app_state.mcp_dispatch_router,
+            &app_state.sccp_replay_archive,
         );
         #[cfg(feature = "app_api")]
         let _ = (

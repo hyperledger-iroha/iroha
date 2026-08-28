@@ -2142,7 +2142,7 @@ fn decode_protocol_request_v1(
     protocol_witness: &[u8],
 ) -> Result<PrivacyNativeActionRequestV1, PrivacyWalletBundleErrorV1> {
     match protocol_id {
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => {
             decode_zk_ace_request_v1(public_action, protocol_witness)
         }
         PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
@@ -2154,10 +2154,10 @@ fn decode_protocol_request_v1(
         PrivacyProtocolIdV1::IrohaZkAmsV1 => {
             decode_zk_ams_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => {
             decode_vega_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => {
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
             decode_jindo_request_v1(public_action, protocol_witness)
         }
         PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
@@ -2172,7 +2172,7 @@ fn decode_protocol_request_v1(
         PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
             decode_ivm_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::PqMaspStarkV0 => {
+        PrivacyProtocolIdV1::PqMaspStarkV1 => {
             decode_pq_masp_request_v1(public_action, protocol_witness)
         }
         _ => Err(PrivacyWalletBundleErrorV1::at("unsupported-protocol")),
@@ -2182,7 +2182,7 @@ fn decode_protocol_request_v1(
 mod tests {
     use super::*;
     const WALLET_ID: &str = "wallet-retail-adult-001";
-    const PROTOCOL: &str = "iroha-jindo-polynomial-commitment-v0";
+    const PROTOCOL: &str = "iroha-jindo-polynomial-commitment-v1";
     const OPERATION_SCHEMA: &str = "jindo_polynomial_evaluation_v1";
     const PUBLIC_ACTION: &str = concat!(
         "{\"evaluation_point_hex\":\"",
@@ -2265,7 +2265,7 @@ mod tests {
         );
         assert_eq!(
             inspected.manifest.protocol_id,
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
         );
         assert_eq!(inspected.manifest.operation_schema, OPERATION_SCHEMA);
         assert_eq!(
@@ -2277,7 +2277,7 @@ mod tests {
                 .expect("decode bundle");
         assert_eq!(
             decoded.request.protocol_id(),
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
         );
     }
     #[test]
@@ -2349,7 +2349,7 @@ mod tests {
         let unsupported = bundle_with(
             [7; 32],
             &authority_for_seed([7; 32]),
-            "iroha-zk-x509-stark-p256-v0",
+            "iroha-zk-x509-stark-p256-v1",
             "zk_x509_identity_presentation_v1",
             PUBLIC_ACTION.as_bytes(),
             WITNESS.as_bytes(),

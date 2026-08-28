@@ -24,6 +24,7 @@ mod digest;
 mod error;
 mod fastpq_cuda;
 mod fft;
+mod field;
 pub mod gadgets;
 #[cfg(feature = "fastpq-gpu")]
 #[path = "gpu.rs"]
@@ -75,7 +76,10 @@ pub use error::{Error, Result};
 pub use fastpq_cuda::{
     CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde, fastpq_fft, fastpq_ifft, fastpq_lde,
 };
+/// Canonical FASTPQ parameter and six-lane native-STARK digest API.
+pub use fastpq_isi as fastpq_isi_v1;
 pub use fft::Planner;
+pub use field::{GOLDILOCKS_MODULUS_V1, GoldilocksFp4V1};
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 pub use metal::{
     AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, ColumnStagingPhase, ColumnStagingPhaseStats,

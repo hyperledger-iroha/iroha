@@ -1162,8 +1162,8 @@ mod tests {
         assert_eq!(cpu_columns, gpu_columns);
     }
     #[test]
-    fn gpu_fft_matches_cpu_output_for_latency_parameters() {
-        let params = CANONICAL_PARAMETER_SETS[1];
+    fn gpu_fft_matches_cpu_output_for_final_v1_parameters() {
+        let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
         let trace_log = params.trace_log_size - 3;
         let trace_len = 1usize << trace_log;
@@ -1196,7 +1196,7 @@ mod tests {
     #[test]
     fn concurrent_cuda_ffts_match_cpu_output_across_parameter_sets() {
         let params_balanced = CANONICAL_PARAMETER_SETS[0];
-        let params_latency = CANONICAL_PARAMETER_SETS[1];
+        let params_latency = CANONICAL_PARAMETER_SETS[0];
         let planner_balanced = Planner::new(&params_balanced);
         let planner_latency = Planner::new(&params_latency);
         let trace_log_balanced = params_balanced.trace_log_size - 2;
@@ -1356,7 +1356,7 @@ mod tests {
     }
     #[test]
     fn lde_coset_matches_manual_linear_polynomial() {
-        let params = CANONICAL_PARAMETER_SETS[1];
+        let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
         let trace_len = 1usize << params.trace_log_size;
         let mut coeff_column = vec![0u64; trace_len];
@@ -1409,8 +1409,8 @@ mod tests {
         assert_eq!(cpu, gpu);
     }
     #[test]
-    fn gpu_lde_matches_cpu_output_for_latency_parameters() {
-        let params = CANONICAL_PARAMETER_SETS[1];
+    fn gpu_lde_matches_cpu_output_for_final_v1_parameters() {
+        let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
         let trace_log = params.trace_log_size - 3;
         let trace_len = 1usize << trace_log;
@@ -1446,7 +1446,7 @@ mod tests {
     #[test]
     fn concurrent_cuda_ldes_match_cpu_output_across_parameter_sets() {
         let params_balanced = CANONICAL_PARAMETER_SETS[0];
-        let params_latency = CANONICAL_PARAMETER_SETS[1];
+        let params_latency = CANONICAL_PARAMETER_SETS[0];
         let planner_balanced = Planner::new(&params_balanced);
         let planner_latency = Planner::new(&params_latency);
         let trace_log_balanced = params_balanced.trace_log_size - 1;

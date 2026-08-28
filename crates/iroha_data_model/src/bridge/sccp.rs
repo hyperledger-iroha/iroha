@@ -3,7 +3,6 @@
 //! These types deliberately model only the first-release network inventory. There is no catch-all
 //! network, emitter, or arbitrary network identifier: unsupported profiles must fail decoding
 //! instead of being interpreted by node-local policy.
-use super::SccpNativeTrustAnchorV1;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use core::cmp::Ordering;
@@ -24,19 +23,8 @@ pub const SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1: usize = 4 * 1024;
 /// also limiting blocks whose transactions contain multiple SCCP instructions. A transaction that
 /// would exceed this bound is rejected atomically, so failed execution never consumes an index.
 pub const SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1: u32 = 512;
-/// Canonical raw 32-byte genesis hash of the Solana testnet profile.
-///
-/// The bytes are the Base58 decoding of Solana's published
-/// `4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY` genesis hash. Consensus encodings use these raw
-/// bytes directly; Base58 is presentation-only and is deliberately absent from the SCCP wire model.
-pub const SCCP_SOLANA_TESTNET_GENESIS_HASH_V1: [u8; 32] = [
-    0x3a, 0x13, 0x2e, 0xce, 0x10, 0x30, 0x5e, 0xc1, 0x83, 0x07, 0x25, 0x50, 0x2f, 0xa2, 0xb7, 0xe7,
-    0xeb, 0x81, 0x57, 0xe9, 0x12, 0x3d, 0x4c, 0x1f, 0x65, 0x4a, 0x71, 0x78, 0x71, 0x61, 0xdc, 0x21,
-];
 /// TON mainnet global identifier committed by the V1 network profile.
 pub const SCCP_TON_MAINNET_GLOBAL_ID_V1: i32 = -239;
-/// TON testnet global identifier committed by the V1 network profile.
-pub const SCCP_TON_TESTNET_GLOBAL_ID_V1: i32 = -3;
 /// TON masterchain workchain used by both governed zero-state identities.
 pub const SCCP_TON_MASTERCHAIN_WORKCHAIN_V1: i32 = -1;
 /// TON all-shards masterchain shard id used by both governed zero states.
@@ -53,16 +41,6 @@ pub const SCCP_TON_MAINNET_ZERO_STATE_FILE_HASH_V1: [u8; 32] = [
     0x5e, 0x99, 0x4f, 0xcf, 0x4d, 0x42, 0x5c, 0x0a, 0x6c, 0xe6, 0xa7, 0x92, 0x59, 0x4b, 0x71, 0x73,
     0x20, 0x5f, 0x74, 0x0a, 0x39, 0xcd, 0x56, 0xf5, 0x37, 0xde, 0xfd, 0x28, 0xb4, 0x8a, 0x0f, 0x6e,
 ];
-/// TON testnet zero-state root hash.
-pub const SCCP_TON_TESTNET_ZERO_STATE_ROOT_HASH_V1: [u8; 32] = [
-    0x82, 0x3f, 0x81, 0xf3, 0x06, 0xff, 0x02, 0x69, 0x4f, 0x93, 0x5c, 0xf5, 0x02, 0x15, 0x48, 0xe3,
-    0xce, 0x2b, 0x86, 0xb5, 0x29, 0x81, 0x2a, 0xf6, 0xa1, 0x21, 0x48, 0x87, 0x9e, 0x95, 0xa1, 0x28,
-];
-/// TON testnet zero-state file hash.
-pub const SCCP_TON_TESTNET_ZERO_STATE_FILE_HASH_V1: [u8; 32] = [
-    0x67, 0xe2, 0x0a, 0xc1, 0x84, 0xb9, 0xe0, 0x39, 0xa6, 0x26, 0x67, 0xac, 0xc3, 0xf9, 0xc0, 0x0f,
-    0x90, 0xf3, 0x59, 0xa7, 0x67, 0x38, 0x23, 0x33, 0x79, 0xef, 0xa4, 0x76, 0x04, 0x98, 0x0c, 0xe8,
-];
 /// TON basechain workchain used by the first-release SCCP contracts.
 pub const SCCP_TON_BASECHAIN_WORKCHAIN_V1: i32 = 0;
 /// A supported SCCP network profile for the V1 wire format.
@@ -74,60 +52,25 @@ pub const SCCP_TON_BASECHAIN_WORKCHAIN_V1: i32 = 0;
 #[norito(tag = "network", content = "profile")]
 pub enum SccpNetworkV1 {
     /// The sole production SORA endpoint admitted by SCCP V1.
-    // Tag 0 is permanently reserved for the removed pre-release SORA profile.
-    // Exact V1 contract and governance hashes commit Taira as tag 1.
-    #[codec(index = 1)]
+    #[codec(index = 64)]
     #[norito(rename = "sora_taira")]
     SoraTaira,
     /// Ethereum mainnet.
-    #[codec(index = 2)]
+    #[codec(index = 65)]
     #[norito(rename = "ethereum_mainnet")]
     EthereumMainnet,
-    /// Ethereum Sepolia testnet.
-    #[codec(index = 3)]
-    #[norito(rename = "ethereum_sepolia")]
-    EthereumSepolia,
     /// BNB Smart Chain mainnet.
-    #[codec(index = 4)]
+    #[codec(index = 66)]
     #[norito(rename = "bsc_mainnet")]
     BscMainnet,
-    /// BNB Smart Chain testnet.
-    #[codec(index = 5)]
-    #[norito(rename = "bsc_testnet")]
-    BscTestnet,
     /// TRON mainnet.
-    // Tags 6 through 9 are intentionally reserved. They belonged to retired
-    // pre-release profile identities and must never be reassigned: the exact
-    // transfer contracts already commit TRON as 10 through 12.
-    #[codec(index = 10)]
+    #[codec(index = 67)]
     #[norito(rename = "tron_mainnet")]
     TronMainnet,
-    /// TRON Nile testnet.
-    #[codec(index = 11)]
-    #[norito(rename = "tron_nile")]
-    TronNile,
-    /// TRON Shasta testnet.
-    #[codec(index = 12)]
-    #[norito(rename = "tron_shasta")]
-    TronShasta,
-    /// Solana testnet, bound to [`SCCP_SOLANA_TESTNET_GENESIS_HASH_V1`].
-    ///
-    /// Tag 13 is the first unassigned exact-profile tag after the retained
-    /// TRON inventory. The retired tags `6..=9` remain permanently reserved.
-    #[codec(index = 13)]
-    #[norito(rename = "solana_testnet")]
-    SolanaTestnet,
     /// TON mainnet, bound to global id [`SCCP_TON_MAINNET_GLOBAL_ID_V1`].
-    ///
-    /// Tags `6..=9` remain permanently reserved; TON begins at the next free
-    /// profile tag after the retained Solana identity.
-    #[codec(index = 14)]
+    #[codec(index = 68)]
     #[norito(rename = "ton_mainnet")]
     TonMainnet,
-    /// TON testnet, bound to global id [`SCCP_TON_TESTNET_GLOBAL_ID_V1`].
-    #[codec(index = 15)]
-    #[norito(rename = "ton_testnet")]
-    TonTestnet,
 }
 impl SccpNetworkV1 {
     /// Return the SCCP protocol domain carried by messages for this profile.
@@ -135,11 +78,10 @@ impl SccpNetworkV1 {
     pub const fn domain_id(self) -> u32 {
         match self {
             Self::SoraTaira => 0,
-            Self::EthereumMainnet | Self::EthereumSepolia => 1,
-            Self::BscMainnet | Self::BscTestnet => 2,
-            Self::SolanaTestnet => 3,
-            Self::TonMainnet | Self::TonTestnet => 4,
-            Self::TronMainnet | Self::TronNile | Self::TronShasta => 5,
+            Self::EthereumMainnet => 1,
+            Self::BscMainnet => 2,
+            Self::TonMainnet => 4,
+            Self::TronMainnet => 5,
         }
     }
     /// Return the canonical, stable textual key for this exact profile.
@@ -148,15 +90,9 @@ impl SccpNetworkV1 {
         match self {
             Self::SoraTaira => "sora-taira",
             Self::EthereumMainnet => "ethereum-mainnet",
-            Self::EthereumSepolia => "ethereum-sepolia",
             Self::BscMainnet => "bsc-mainnet",
-            Self::BscTestnet => "bsc-testnet",
             Self::TronMainnet => "tron-mainnet",
-            Self::TronNile => "tron-nile",
-            Self::TronShasta => "tron-shasta",
-            Self::SolanaTestnet => "solana-testnet",
             Self::TonMainnet => "ton-mainnet",
-            Self::TonTestnet => "ton-testnet",
         }
     }
     /// Parse an exact canonical profile key.
@@ -169,29 +105,16 @@ impl SccpNetworkV1 {
         match profile {
             "sora-taira" => Some(Self::SoraTaira),
             "ethereum-mainnet" => Some(Self::EthereumMainnet),
-            "ethereum-sepolia" => Some(Self::EthereumSepolia),
             "bsc-mainnet" => Some(Self::BscMainnet),
-            "bsc-testnet" => Some(Self::BscTestnet),
             "tron-mainnet" => Some(Self::TronMainnet),
-            "tron-nile" => Some(Self::TronNile),
-            "tron-shasta" => Some(Self::TronShasta),
-            "solana-testnet" => Some(Self::SolanaTestnet),
             "ton-mainnet" => Some(Self::TonMainnet),
-            "ton-testnet" => Some(Self::TonTestnet),
             _ => None,
         }
     }
     /// Return whether this is a production network profile.
     #[must_use]
     pub const fn is_production_profile(self) -> bool {
-        matches!(
-            self,
-            Self::SoraTaira
-                | Self::EthereumMainnet
-                | Self::BscMainnet
-                | Self::TronMainnet
-                | Self::TonMainnet
-        )
+        true
     }
     /// Return whether this is a staging or test network profile.
     #[must_use]
@@ -216,16 +139,7 @@ impl SccpNetworkV1 {
     pub const fn supports_native_inbound_source(self) -> bool {
         matches!(
             self,
-            Self::EthereumMainnet
-                | Self::EthereumSepolia
-                | Self::BscMainnet
-                | Self::BscTestnet
-                | Self::TronMainnet
-                | Self::TronNile
-                | Self::TronShasta
-                | Self::SolanaTestnet
-                | Self::TonMainnet
-                | Self::TonTestnet
+            Self::EthereumMainnet | Self::BscMainnet | Self::TronMainnet | Self::TonMainnet
         )
     }
 }
@@ -396,17 +310,6 @@ impl SccpOutboundMessageIndexKeyV1 {
         }
         Self::from_descriptor(key, record.descriptor())
     }
-    /// Build an ordered locator from one accepted terminal proof record.
-    #[must_use]
-    pub fn from_terminal(
-        key: SccpOutboundMessageKeyV1,
-        record: &SccpOutboundProofRecordV1,
-    ) -> Option<Self> {
-        if !record.is_well_formed_for_key(&key) {
-            return None;
-        }
-        Self::from_descriptor(key, record.descriptor())
-    }
     /// Build an ordered locator from a validated fixed descriptor.
     #[must_use]
     pub fn from_descriptor(
@@ -530,9 +433,10 @@ impl SccpOutboundMessageDescriptorV1 {
 }
 /// Payload-bearing pending admission evidence for a SORA-origin outbound SCCP message.
 ///
-/// The record is removed as soon as its destination proof is accepted. Its fixed descriptor
-/// moves to [`SccpOutboundProofRecordV1`], while Kura's immutable finalized-height archive keeps
-/// the canonical payload available for historical proof serving.
+/// The record is removed as soon as its destination proof is accepted. Its fixed descriptor and
+/// replay transition are retained by the route-scoped accumulator and Kura's immutable
+/// finalized-height archive, which also keeps the canonical payload available for historical
+/// proof serving.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
@@ -557,7 +461,7 @@ pub struct SccpOutboundPendingMessageRecordV1 {
     pub commitment_index: u32,
 }
 impl SccpOutboundPendingMessageRecordV1 {
-    /// Return the fixed replay descriptor shared with the terminal proof record.
+    /// Return the fixed replay descriptor retained by the route accumulator and archive.
     #[must_use]
     pub const fn descriptor(&self) -> SccpOutboundMessageDescriptorV1 {
         SccpOutboundMessageDescriptorV1 {
@@ -637,105 +541,6 @@ impl SccpOutboundPendingUsageV1 {
             || (self.message_count != 0 && self.payload_bytes >= self.message_count)
     }
 }
-/// Durable accepted destination-proof evidence for a SORA-origin SCCP message.
-///
-/// The authoritative [`SccpOutboundMessageKeyV1`] is reused as the replay key,
-/// so a deterministic `BTreeMap` lookup identifies one exact outbound lane and
-/// message in `O(log n)` time. Only fixed-size commitments are retained here;
-/// proof history may be pruned without weakening proof-submission replay protection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
-#[norito(decode_from_slice)]
-#[norito(deny_unknown_fields)]
-pub struct SccpOutboundProofRecordV1 {
-    /// Hash of the exact canonical SCCP payload authenticated for the key.
-    pub payload_hash: [u8; 32],
-    /// Governed destination binding authenticated by the accepted artifact.
-    pub destination_binding_hash: [u8; 32],
-    /// Immutable governed route configuration authenticated by the artifact.
-    pub route_configuration_hash: [u8; 32],
-    /// Finalized Taira block hash authenticated by the destination proof.
-    pub finality_block_hash: [u8; 32],
-    /// Domain-separated proof-registry commitment to the accepted proof.
-    pub destination_proof_commitment: [u8; 32],
-    /// Finalized Taira height containing the authoritative outbound message.
-    pub finality_height: u64,
-    /// Zero-based position authenticated by the finalized block's SCCP commitment root.
-    pub commitment_index: u32,
-    /// Local Taira height at which proof admission was committed.
-    pub accepted_at_height: u64,
-}
-impl SccpOutboundProofRecordV1 {
-    /// Return the fixed descriptor retained after pending payload removal.
-    #[must_use]
-    pub const fn descriptor(self) -> SccpOutboundMessageDescriptorV1 {
-        SccpOutboundMessageDescriptorV1 {
-            destination_binding_hash: self.destination_binding_hash,
-            route_configuration_hash: self.route_configuration_hash,
-            payload_hash: self.payload_hash,
-            recorded_at_height: self.finality_height,
-            commitment_index: self.commitment_index,
-        }
-    }
-    /// Return whether every commitment and both heights are nonzero and every
-    /// hash role is distinct from the lane-bound message identifier.
-    #[must_use]
-    pub fn is_well_formed_for_key(&self, key: &SccpOutboundMessageKeyV1) -> bool {
-        let hashes = [
-            key.message_id,
-            self.payload_hash,
-            self.destination_binding_hash,
-            self.route_configuration_hash,
-            self.finality_block_hash,
-            self.destination_proof_commitment,
-        ];
-        key.is_well_formed()
-            && self.finality_height != 0
-            && self.commitment_index < SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
-            && self.accepted_at_height != 0
-            && self.accepted_at_height >= self.finality_height
-            && self.descriptor().is_well_formed_for_key(key)
-            && hashes.iter().all(nonzero)
-            && hashes
-                .iter()
-                .enumerate()
-                .all(|(index, hash)| !hashes[index + 1..].contains(hash))
-    }
-}
-/// Durable replay key for a native external-to-SORA SCCP message.
-///
-/// The exact source and target profiles are part of the key. Consequently, a message identifier
-/// observed on a test network, another external chain, or a different SORA deployment cannot alias
-/// an admitted production message. A `BTreeMap` keyed by this type provides deterministic `O(log
-/// n)` replay checks in world state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
-#[norito(decode_from_slice)]
-#[norito(deny_unknown_fields)]
-pub struct SccpInboundMessageKeyV1 {
-    /// Exact external-to-SORA lane on which the message was authenticated.
-    pub lane: SccpLaneIdV1,
-    /// Nonzero identifier derived from the canonical SCCP message payload.
-    pub message_id: [u8; 32],
-}
-impl SccpInboundMessageKeyV1 {
-    /// Construct a replay key after validating its inbound topology and identifier.
-    #[must_use]
-    pub fn new(lane: SccpLaneIdV1, message_id: [u8; 32]) -> Option<Self> {
-        let key = Self { lane, message_id };
-        key.is_well_formed().then_some(key)
-    }
-    /// Return whether this is an external-to-SORA lane with a nonzero message identifier.
-    #[must_use]
-    pub fn is_well_formed(&self) -> bool {
-        self.lane.is_well_formed()
-            && self.lane.source.is_external()
-            && self.lane.target.is_sora()
-            && nonzero(&self.message_id)
-    }
-}
 /// Durable high-water key for admissions under one governed native trust anchor.
 ///
 /// The value stored under this key is the greatest authenticated backend-specific
@@ -766,68 +571,6 @@ impl SccpInboundAnchorHighWaterKeyV1 {
             && self.lane.source.is_external()
             && self.lane.target.is_sora()
             && nonzero(&self.anchor_hash)
-    }
-}
-/// Durable admission evidence bound to an inbound SCCP replay key.
-///
-/// This record stores only fixed-size commitments. The accepted native proof remains reproducibly
-/// identifiable without retaining attacker-controlled proof bytes in the replay index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
-#[norito(decode_from_slice)]
-#[norito(deny_unknown_fields)]
-pub struct SccpInboundMessageRecordV1 {
-    /// Hash of the exact canonical SCCP payload admitted for the key.
-    pub payload_hash: [u8; 32],
-    /// Immutable governed route configuration, including typed settlement.
-    pub route_configuration_hash: [u8; 32],
-    /// Domain-separated hash of the exact typed source identity used at admission.
-    pub source_identity_hash: [u8; 32],
-    /// Governed native verifier and checkpoint commitment used at admission.
-    pub trust_anchor: SccpNativeTrustAnchorV1,
-    /// Authenticated backend-specific consensus-progress coordinate used for
-    /// trust-anchor interval and retired-route cutoff admission.
-    ///
-    /// Ethereum lanes persist the finalized beacon slot. BSC and TRON lanes
-    /// persist the finalized block height.
-    pub anchor_interval_height: u64,
-    /// Native source-chain finality height authenticated by the verifier.
-    pub source_finality_height: u64,
-    /// Native source-chain finalized block or checkpoint hash.
-    pub source_finality_hash: [u8; 32],
-    /// Domain-separated proof-registry commitment to the exact accepted native bridge proof.
-    pub source_proof_commitment: [u8; 32],
-    /// Local SORA block height at which admission was committed.
-    pub admitted_at_height: u64,
-}
-impl SccpInboundMessageRecordV1 {
-    /// Return whether every commitment and authenticated coordinate is valid.
-    #[must_use]
-    pub fn is_well_formed(&self) -> bool {
-        nonzero(&self.payload_hash)
-            && nonzero(&self.route_configuration_hash)
-            && nonzero(&self.source_identity_hash)
-            && self.route_configuration_hash != self.payload_hash
-            && self.route_configuration_hash != self.source_identity_hash
-            && self.trust_anchor.is_well_formed()
-            && self.anchor_interval_height >= self.trust_anchor.checkpoint_height
-            && self.source_finality_height != 0
-            && nonzero(&self.source_finality_hash)
-            && nonzero(&self.source_proof_commitment)
-            && self.admitted_at_height != 0
-    }
-    /// Return whether the recorded native verifier belongs to the key's exact source family.
-    #[must_use]
-    pub fn is_well_formed_for_lane(&self, lane: SccpLaneIdV1) -> bool {
-        self.is_well_formed()
-            && lane.is_well_formed()
-            && lane.source.is_external()
-            && lane.target.is_sora()
-            && self
-                .trust_anchor
-                .backend
-                .supports_source_network(lane.source)
     }
 }
 /// Exact direct, non-proxy EVM transfer-route contract identity.
@@ -866,31 +609,6 @@ pub struct SccpTronSourceEmitterV1 {
     /// Keccak-256 hash of the governed deployed TVM runtime bytecode.
     pub runtime_code_hash: [u8; 32],
     /// Keccak-256 commitment to the immutable route/token/network configuration.
-    pub route_config_hash: [u8; 32],
-}
-/// Exact governed immutable Solana source-program deployment identity.
-///
-/// Every address is the raw 32-byte Solana public key. No Base58 text enters
-/// consensus state. The Loader-v3 `ProgramData` identity and deployment slot
-/// make the reviewed executable revision explicit, while the state account
-/// and route commitment bind the program to one configured value-moving lane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
-#[norito(decode_from_slice)]
-#[norito(deny_unknown_fields)]
-pub struct SccpSolanaSourceEmitterV1 {
-    /// Immutable source bridge program public key.
-    pub program_id: [u8; 32],
-    /// Loader-v3 `ProgramData` account public key for the reviewed executable.
-    pub program_data_address: [u8; 32],
-    /// Nonzero Loader-v3 deployment slot of the reviewed executable.
-    pub program_data_slot: u64,
-    /// Program-owned source-state account public key.
-    pub state_account: [u8; 32],
-    /// Blake2b-256 hash of the immutable source `ProgramData` executable bytes.
-    pub program_code_hash: [u8; 32],
-    /// Commitment to the exact source program's immutable route configuration.
     pub route_config_hash: [u8; 32],
 }
 /// Canonical TON raw account identifier.
@@ -958,10 +676,6 @@ pub enum SccpSourceEmitterV1 {
     #[codec(index = 1)]
     #[norito(rename = "tron")]
     Tron(SccpTronSourceEmitterV1),
-    /// Solana Loader-v3 program, `ProgramData`, and route-state identity.
-    #[codec(index = 2)]
-    #[norito(rename = "solana")]
-    Solana(SccpSolanaSourceEmitterV1),
     /// TON basechain source-bridge identity.
     #[codec(index = 3)]
     #[norito(rename = "ton")]
@@ -975,18 +689,9 @@ impl SccpSourceEmitterV1 {
             (self, network),
             (
                 Self::Evm(_),
-                SccpNetworkV1::EthereumMainnet
-                    | SccpNetworkV1::EthereumSepolia
-                    | SccpNetworkV1::BscMainnet
-                    | SccpNetworkV1::BscTestnet
-            ) | (
-                Self::Tron(_),
-                SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
-            ) | (Self::Solana(_), SccpNetworkV1::SolanaTestnet)
-                | (
-                    Self::Ton(_),
-                    SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
-                )
+                SccpNetworkV1::EthereumMainnet | SccpNetworkV1::BscMainnet
+            ) | (Self::Tron(_), SccpNetworkV1::TronMainnet)
+                | (Self::Ton(_), SccpNetworkV1::TonMainnet)
         )
     }
     /// Return whether chain-specific identity roles match the exact network profile.
@@ -1007,15 +712,12 @@ impl SccpSourceEmitterV1 {
     /// Return whether reviewed material is complete enough for governance to
     /// activate native inbound settlement for `network`.
     ///
-    /// Solana testnet is the single explicit first-release exception to the production-profile
-    /// requirement: it remains testnet-classified while governance may activate it after reviewing
-    /// the closed Agave backend and immutable deployment pins. Other staging profiles retain their
-    /// existing fail-closed activation policy.
+    /// Every external profile in the closed final-V1 inventory is a production profile.
     #[must_use]
     pub fn is_governance_activatable_source_for(&self, network: SccpNetworkV1) -> bool {
         network.is_external()
             && network.supports_native_inbound_source()
-            && (network.is_production_profile() || network == SccpNetworkV1::SolanaTestnet)
+            && network.is_production_profile()
             && self.is_well_formed()
             && self.matches_profile(network)
     }
@@ -1034,21 +736,6 @@ impl SccpSourceEmitterV1 {
                     && nonzero(&emitter.runtime_code_hash)
                     && nonzero(&emitter.route_config_hash)
                     && emitter.runtime_code_hash != emitter.route_config_hash
-            }
-            Self::Solana(emitter) => {
-                emitter.program_data_slot != 0
-                    && nonzero(&emitter.program_id)
-                    && nonzero(&emitter.program_data_address)
-                    && nonzero(&emitter.state_account)
-                    && nonzero(&emitter.program_code_hash)
-                    && nonzero(&emitter.route_config_hash)
-                    && all_distinct(&[
-                        emitter.program_id,
-                        emitter.program_data_address,
-                        emitter.state_account,
-                        emitter.program_code_hash,
-                        emitter.route_config_hash,
-                    ])
             }
             Self::Ton(emitter) => {
                 emitter.address.is_sccp_basechain_contract()
@@ -1090,8 +777,7 @@ impl SccpSourceIdentityV1 {
         self.is_well_formed() && self.emitter.is_production_source_for(self.lane.source)
     }
     /// Return whether exact reviewed source material satisfies the closed governance-activation
-    /// policy. This is true for production profiles and for the explicit Solana-testnet
-    /// first-release lane, without changing that lane's environment classification.
+    /// policy.
     #[must_use]
     pub fn has_governance_activatable_source(&self) -> bool {
         self.is_well_formed()
@@ -1113,29 +799,17 @@ impl SccpSourceIdentityV1 {
 fn nonzero<const N: usize>(bytes: &[u8; N]) -> bool {
     bytes.iter().any(|byte| *byte != 0)
 }
-fn all_distinct<const N: usize>(values: &[[u8; N]]) -> bool {
-    values
-        .iter()
-        .enumerate()
-        .all(|(index, value)| values[index + 1..].iter().all(|other| value != other))
-}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bridge::BridgeNativeProofBackendV1;
+    use crate::bridge::{BridgeNativeProofBackendV1, SccpNativeTrustAnchorV1};
     use norito::codec::DecodeAll as _;
-    const NETWORKS: [SccpNetworkV1; 11] = [
+    const NETWORKS: [SccpNetworkV1; 5] = [
         SccpNetworkV1::SoraTaira,
         SccpNetworkV1::EthereumMainnet,
-        SccpNetworkV1::EthereumSepolia,
         SccpNetworkV1::BscMainnet,
-        SccpNetworkV1::BscTestnet,
         SccpNetworkV1::TronMainnet,
-        SccpNetworkV1::TronNile,
-        SccpNetworkV1::TronShasta,
-        SccpNetworkV1::SolanaTestnet,
         SccpNetworkV1::TonMainnet,
-        SccpNetworkV1::TonTestnet,
     ];
     fn evm_emitter() -> SccpSourceEmitterV1 {
         SccpSourceEmitterV1::Evm(SccpEvmSourceEmitterV1 {
@@ -1150,19 +824,6 @@ mod tests {
             runtime_code_hash: [5; 32],
             route_config_hash: [6; 32],
         })
-    }
-    fn solana_emitter_value() -> SccpSolanaSourceEmitterV1 {
-        SccpSolanaSourceEmitterV1 {
-            program_id: [7; 32],
-            program_data_address: [8; 32],
-            program_data_slot: 9,
-            state_account: [10; 32],
-            program_code_hash: [11; 32],
-            route_config_hash: [12; 32],
-        }
-    }
-    fn solana_emitter() -> SccpSourceEmitterV1 {
-        SccpSourceEmitterV1::Solana(solana_emitter_value())
     }
     fn ton_address(byte: u8) -> SccpTonAddressV1 {
         SccpTonAddressV1 {
@@ -1199,19 +860,6 @@ mod tests {
             checkpoint_height: 7,
         }
     }
-    fn inbound_record(backend: BridgeNativeProofBackendV1) -> SccpInboundMessageRecordV1 {
-        SccpInboundMessageRecordV1 {
-            payload_hash: [10; 32],
-            route_configuration_hash: [11; 32],
-            source_identity_hash: [12; 32],
-            trust_anchor: trust_anchor(backend),
-            anchor_interval_height: 7,
-            source_finality_height: 8,
-            source_finality_hash: [13; 32],
-            source_proof_commitment: [14; 32],
-            admitted_at_height: 9,
-        }
-    }
     fn outbound_record() -> SccpOutboundPendingMessageRecordV1 {
         SccpOutboundPendingMessageRecordV1 {
             destination_binding_hash: [15; 32],
@@ -1220,18 +868,6 @@ mod tests {
             payload_bytes: vec![0x91],
             recorded_at_height: 10,
             commitment_index: 0,
-        }
-    }
-    fn outbound_proof_record() -> SccpOutboundProofRecordV1 {
-        SccpOutboundProofRecordV1 {
-            payload_hash: [17; 32],
-            destination_binding_hash: [15; 32],
-            route_configuration_hash: [16; 32],
-            finality_block_hash: [19; 32],
-            destination_proof_commitment: [20; 32],
-            finality_height: 10,
-            commitment_index: 0,
-            accepted_at_height: 11,
         }
     }
     #[cfg(feature = "json")]
@@ -1255,7 +891,7 @@ mod tests {
     }
     #[test]
     fn network_inventory_and_profile_keys_are_exact() {
-        assert_eq!(NETWORKS.len(), 11);
+        assert_eq!(NETWORKS.len(), 5);
         for network in NETWORKS {
             assert_eq!(
                 SccpNetworkV1::from_profile_key(network.profile_key()),
@@ -1267,10 +903,16 @@ mod tests {
             "sora-nexus",
             "sora_nexus",
             "ethereum",
+            "ethereum-sepolia",
             "ETHEREUM-MAINNET",
+            "bsc-testnet",
+            "tron-nile",
+            "tron-shasta",
             "solana-mainnet-beta",
+            "solana-testnet",
             "solana_testnet",
             "ton",
+            "ton-testnet",
             "TON-MAINNET",
             "ton_mainnet",
         ] {
@@ -1278,19 +920,19 @@ mod tests {
         }
         assert_eq!(SccpNetworkV1::SoraTaira.domain_id(), 0);
         assert_eq!(SccpNetworkV1::EthereumMainnet.domain_id(), 1);
-        assert_eq!(SccpNetworkV1::EthereumSepolia.domain_id(), 1);
         assert_eq!(SccpNetworkV1::BscMainnet.domain_id(), 2);
-        assert_eq!(SccpNetworkV1::BscTestnet.domain_id(), 2);
         assert_eq!(SccpNetworkV1::TronMainnet.domain_id(), 5);
-        assert_eq!(SccpNetworkV1::TronNile.domain_id(), 5);
-        assert_eq!(SccpNetworkV1::TronShasta.domain_id(), 5);
-        assert_eq!(SccpNetworkV1::SolanaTestnet.domain_id(), 3);
         assert_eq!(SccpNetworkV1::TonMainnet.domain_id(), 4);
-        assert_eq!(SccpNetworkV1::TonTestnet.domain_id(), 4);
-        assert!(SccpNetworkV1::SolanaTestnet.is_staging_profile());
-        assert!(!SccpNetworkV1::SolanaTestnet.is_production_profile());
-        assert!(SccpNetworkV1::TonMainnet.is_production_profile());
-        assert!(SccpNetworkV1::TonTestnet.is_staging_profile());
+        assert!(
+            NETWORKS
+                .into_iter()
+                .all(SccpNetworkV1::is_production_profile)
+        );
+        assert!(
+            NETWORKS
+                .into_iter()
+                .all(|network| !network.is_staging_profile())
+        );
     }
     #[test]
     fn network_and_emitter_binary_roundtrips_cover_the_closed_inventory() {
@@ -1301,12 +943,7 @@ mod tests {
                 network
             );
         }
-        for emitter in [
-            evm_emitter(),
-            tron_emitter(),
-            solana_emitter(),
-            ton_emitter(),
-        ] {
+        for emitter in [evm_emitter(), tron_emitter(), ton_emitter()] {
             let encoded = emitter.encode();
             assert_eq!(
                 SccpSourceEmitterV1::decode_all(&mut encoded.as_slice()).expect("emitter decodes"),
@@ -1316,14 +953,30 @@ mod tests {
     }
     #[test]
     fn unknown_binary_enum_tags_are_rejected() {
-        for unsupported_tag in [0_u32, 6, 7, 8, 9, 16, u32::MAX] {
+        for unsupported_tag in [
+            0_u32,
+            1,
+            2,
+            3,
+            4,
+            5,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            63,
+            69,
+            u32::MAX,
+        ] {
             let encoded = unsupported_tag.encode();
             assert!(
                 SccpNetworkV1::decode_all(&mut encoded.as_slice()).is_err(),
                 "network tag {unsupported_tag} unexpectedly decoded"
             );
         }
-        for unsupported_tag in [4_u32, 5, u32::MAX] {
+        for unsupported_tag in [2_u32, 4, 5, u32::MAX] {
             let encoded = unsupported_tag.encode();
             assert!(
                 SccpSourceEmitterV1::decode_all(&mut encoded.as_slice()).is_err(),
@@ -1332,19 +985,13 @@ mod tests {
         }
     }
     #[test]
-    fn binary_tags_reserve_zero_and_six_through_nine_and_match_contract_profiles() {
+    fn binary_tags_use_the_fresh_final_v1_block() {
         let expected = [
-            (SccpNetworkV1::SoraTaira, 1_u32),
-            (SccpNetworkV1::EthereumMainnet, 2),
-            (SccpNetworkV1::EthereumSepolia, 3),
-            (SccpNetworkV1::BscMainnet, 4),
-            (SccpNetworkV1::BscTestnet, 5),
-            (SccpNetworkV1::TronMainnet, 10),
-            (SccpNetworkV1::TronNile, 11),
-            (SccpNetworkV1::TronShasta, 12),
-            (SccpNetworkV1::SolanaTestnet, 13),
-            (SccpNetworkV1::TonMainnet, 14),
-            (SccpNetworkV1::TonTestnet, 15),
+            (SccpNetworkV1::SoraTaira, 0x40_u32),
+            (SccpNetworkV1::EthereumMainnet, 0x41),
+            (SccpNetworkV1::BscMainnet, 0x42),
+            (SccpNetworkV1::TronMainnet, 0x43),
+            (SccpNetworkV1::TonMainnet, 0x44),
         ];
         for (network, tag) in expected {
             assert_eq!(
@@ -1357,7 +1004,16 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn unsupported_networks_and_emitters_are_not_json_decodable() {
-        for profile in ["sora_nexus", "solana_mainnet_beta", "unknown_network"] {
+        for profile in [
+            "sora_nexus",
+            "ethereum_sepolia",
+            "bsc_testnet",
+            "tron_nile",
+            "tron_shasta",
+            "solana_testnet",
+            "ton_testnet",
+            "unknown_network",
+        ] {
             let json = format!(r#"{{"network":"{profile}","profile":null}}"#);
             assert!(
                 norito::json::from_json::<SccpNetworkV1>(&json).is_err(),
@@ -1382,12 +1038,7 @@ mod tests {
                 network
             );
         }
-        for emitter in [
-            evm_emitter(),
-            tron_emitter(),
-            solana_emitter(),
-            ton_emitter(),
-        ] {
+        for emitter in [evm_emitter(), tron_emitter(), ton_emitter()] {
             let json = norito::json::to_json(&emitter).expect("emitter serializes");
             assert_eq!(
                 norito::json::from_json::<SccpSourceEmitterV1>(&json).expect("emitter decodes"),
@@ -1444,8 +1095,7 @@ mod tests {
             }
         }
         assert!(inbound_lane(SccpNetworkV1::EthereumMainnet).is_production_environment());
-        assert!(!inbound_lane(SccpNetworkV1::EthereumSepolia).is_production_environment());
-        assert!(outbound_lane(SccpNetworkV1::TronNile).is_staging_environment());
+        assert!(outbound_lane(SccpNetworkV1::TronMainnet).is_production_environment());
     }
     #[test]
     fn native_source_support_is_closed_to_exact_external_inventory() {
@@ -1463,31 +1113,16 @@ mod tests {
                 evm_emitter().matches_network(network),
                 matches!(
                     network,
-                    SccpNetworkV1::EthereumMainnet
-                        | SccpNetworkV1::EthereumSepolia
-                        | SccpNetworkV1::BscMainnet
-                        | SccpNetworkV1::BscTestnet
+                    SccpNetworkV1::EthereumMainnet | SccpNetworkV1::BscMainnet
                 )
             );
             assert_eq!(
                 tron_emitter().matches_network(network),
-                matches!(
-                    network,
-                    SccpNetworkV1::TronMainnet
-                        | SccpNetworkV1::TronNile
-                        | SccpNetworkV1::TronShasta
-                )
-            );
-            assert_eq!(
-                solana_emitter().matches_network(network),
-                matches!(network, SccpNetworkV1::SolanaTestnet)
+                matches!(network, SccpNetworkV1::TronMainnet)
             );
             assert_eq!(
                 ton_emitter().matches_network(network),
-                matches!(
-                    network,
-                    SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
-                )
+                matches!(network, SccpNetworkV1::TonMainnet)
             );
         }
     }
@@ -1495,7 +1130,6 @@ mod tests {
     fn emitter_components_are_nonzero_and_role_separated() {
         assert!(evm_emitter().is_well_formed());
         assert!(tron_emitter().is_well_formed());
-        assert!(solana_emitter().is_well_formed());
         assert!(ton_emitter().is_well_formed());
         for invalid in [
             SccpSourceEmitterV1::Evm(SccpEvmSourceEmitterV1 {
@@ -1537,42 +1171,6 @@ mod tests {
                 address: [4; 20],
                 runtime_code_hash: [5; 32],
                 route_config_hash: [5; 32],
-            }),
-            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
-                program_id: [0; 32],
-                ..solana_emitter_value()
-            }),
-            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
-                program_data_slot: 0,
-                ..solana_emitter_value()
-            }),
-            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
-                program_data_address: [0; 32],
-                ..solana_emitter_value()
-            }),
-            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
-                state_account: [0; 32],
-                ..solana_emitter_value()
-            }),
-            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
-                program_code_hash: [0; 32],
-                ..solana_emitter_value()
-            }),
-            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
-                route_config_hash: [0; 32],
-                ..solana_emitter_value()
-            }),
-            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
-                program_data_address: [7; 32],
-                ..solana_emitter_value()
-            }),
-            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
-                state_account: [8; 32],
-                ..solana_emitter_value()
-            }),
-            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
-                program_code_hash: [12; 32],
-                ..solana_emitter_value()
             }),
             SccpSourceEmitterV1::Ton(SccpTonSourceEmitterV1 {
                 address: ton_address(0),
@@ -1618,29 +1216,6 @@ mod tests {
             assert!(identity.has_production_source());
             assert!(identity.is_production_lane());
         }
-        let solana = SccpSourceIdentityV1 {
-            lane: inbound_lane(SccpNetworkV1::SolanaTestnet),
-            emitter: solana_emitter(),
-        };
-        assert!(solana.is_well_formed());
-        assert!(solana.has_governance_activatable_source());
-        assert!(!solana.has_production_source());
-        assert!(!solana.is_production_lane());
-        assert!(solana.uses_staging_environment());
-        let sepolia = SccpSourceIdentityV1 {
-            lane: inbound_lane(SccpNetworkV1::EthereumSepolia),
-            emitter: evm_emitter(),
-        };
-        assert!(sepolia.is_well_formed());
-        assert!(!sepolia.has_governance_activatable_source());
-        assert!(!sepolia.has_production_source());
-        let ton_testnet = SccpSourceIdentityV1 {
-            lane: inbound_lane(SccpNetworkV1::TonTestnet),
-            emitter: ton_emitter(),
-        };
-        assert!(ton_testnet.is_well_formed());
-        assert!(!ton_testnet.has_governance_activatable_source());
-        assert!(!ton_testnet.has_production_source());
         for identity in [
             SccpSourceIdentityV1 {
                 lane: outbound_lane(SccpNetworkV1::EthereumMainnet),
@@ -1653,14 +1228,6 @@ mod tests {
             SccpSourceIdentityV1 {
                 lane: inbound_lane(SccpNetworkV1::TronMainnet),
                 emitter: evm_emitter(),
-            },
-            SccpSourceIdentityV1 {
-                lane: inbound_lane(SccpNetworkV1::SolanaTestnet),
-                emitter: evm_emitter(),
-            },
-            SccpSourceIdentityV1 {
-                lane: inbound_lane(SccpNetworkV1::EthereumMainnet),
-                emitter: solana_emitter(),
             },
             SccpSourceIdentityV1 {
                 lane: inbound_lane(SccpNetworkV1::EthereumMainnet),
@@ -1686,18 +1253,67 @@ mod tests {
         }
     }
     #[test]
-    fn replay_keys_reject_zero_ids_and_wrong_direction() {
+    fn retained_replay_keys_reject_zero_ids_and_wrong_direction() {
         let inbound = inbound_lane(SccpNetworkV1::EthereumMainnet);
         let outbound = outbound_lane(SccpNetworkV1::EthereumMainnet);
-        assert!(SccpInboundMessageKeyV1::new(inbound, [1; 32]).is_some());
-        assert!(SccpInboundMessageKeyV1::new(inbound, [0; 32]).is_none());
-        assert!(SccpInboundMessageKeyV1::new(outbound, [1; 32]).is_none());
         assert!(SccpInboundAnchorHighWaterKeyV1::new(inbound, [2; 32]).is_some());
         assert!(SccpInboundAnchorHighWaterKeyV1::new(inbound, [0; 32]).is_none());
         assert!(SccpInboundAnchorHighWaterKeyV1::new(outbound, [2; 32]).is_none());
         assert!(SccpOutboundMessageKeyV1::new(outbound, [1; 32]).is_some());
         assert!(SccpOutboundMessageKeyV1::new(outbound, [0; 32]).is_none());
         assert!(SccpOutboundMessageKeyV1::new(inbound, [1; 32]).is_none());
+    }
+    #[test]
+    fn outbound_pending_record_schema_is_exact() {
+        let schema = <SccpOutboundPendingMessageRecordV1 as iroha_schema::IntoSchema>::schema();
+        let iroha_schema::Metadata::Struct(metadata) = schema
+            .get::<SccpOutboundPendingMessageRecordV1>()
+            .expect("pending outbound record has schema metadata")
+        else {
+            panic!("pending outbound record must have named-field schema metadata")
+        };
+        let field_names = metadata
+            .declarations
+            .iter()
+            .map(|declaration| declaration.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            field_names,
+            [
+                "destination_binding_hash",
+                "route_configuration_hash",
+                "payload_hash",
+                "payload_bytes",
+                "recorded_at_height",
+                "commitment_index",
+            ]
+        );
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn retired_terminal_record_fields_are_rejected() {
+        for retired_field in [
+            "finality_block_hash",
+            "destination_proof_commitment",
+            "finality_height",
+            "accepted_at_height",
+        ] {
+            let mut hostile =
+                norito::json::to_value(&outbound_record()).expect("serialize outbound record");
+            let norito::json::Value::Object(object) = &mut hostile else {
+                panic!("outbound record JSON must be an object")
+            };
+            object.insert(retired_field.to_owned(), norito::json::Value::Null);
+            let hostile_json =
+                norito::json::to_json(&hostile).expect("serialize retired outbound shape");
+            let error =
+                norito::json::from_json::<SccpOutboundPendingMessageRecordV1>(&hostile_json)
+                    .expect_err("retired terminal replay-map field must fail closed");
+            assert!(
+                error.to_string().contains(retired_field),
+                "unexpected rejection for {retired_field}: {error}"
+            );
+        }
     }
     #[test]
     fn outbound_context_and_record_enforce_distinct_commitment_roles() {
@@ -1766,11 +1382,6 @@ mod tests {
         assert_eq!(index.commitment_index, record.commitment_index);
         assert_eq!(index.message_key(), key);
         assert!(index.is_well_formed());
-        assert_eq!(
-            SccpOutboundMessageIndexKeyV1::from_terminal(key, &outbound_proof_record()),
-            Some(index),
-            "moving a message to terminal replay state must preserve its ordered locator"
-        );
         assert!(
             SccpOutboundMessageIndexKeyV1::new(
                 key,
@@ -1824,73 +1435,6 @@ mod tests {
             }
             .is_structurally_valid()
         );
-    }
-    #[test]
-    fn outbound_proof_record_is_fixed_size_and_rejects_aliases_and_invalid_heights() {
-        let key =
-            SccpOutboundMessageKeyV1::new(outbound_lane(SccpNetworkV1::EthereumMainnet), [18; 32])
-                .expect("valid outbound proof key");
-        let record = outbound_proof_record();
-        assert!(record.is_well_formed_for_key(&key));
-        let encoded = record.encode();
-        assert_eq!(
-            SccpOutboundProofRecordV1::decode_all(&mut encoded.as_slice())
-                .expect("outbound proof record must roundtrip"),
-            record
-        );
-        for hostile in [
-            SccpOutboundProofRecordV1 {
-                payload_hash: [0; 32],
-                ..record
-            },
-            SccpOutboundProofRecordV1 {
-                destination_binding_hash: record.payload_hash,
-                ..record
-            },
-            SccpOutboundProofRecordV1 {
-                route_configuration_hash: record.destination_binding_hash,
-                ..record
-            },
-            SccpOutboundProofRecordV1 {
-                finality_block_hash: record.route_configuration_hash,
-                ..record
-            },
-            SccpOutboundProofRecordV1 {
-                destination_proof_commitment: record.finality_block_hash,
-                ..record
-            },
-            SccpOutboundProofRecordV1 {
-                finality_height: 0,
-                ..record
-            },
-            SccpOutboundProofRecordV1 {
-                commitment_index: SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
-                ..record
-            },
-            SccpOutboundProofRecordV1 {
-                accepted_at_height: record.finality_height - 1,
-                ..record
-            },
-        ] {
-            assert!(!hostile.is_well_formed_for_key(&key), "{hostile:?}");
-        }
-        for collision in [
-            record.payload_hash,
-            record.destination_binding_hash,
-            record.route_configuration_hash,
-            record.finality_block_hash,
-            record.destination_proof_commitment,
-        ] {
-            assert!(!record.is_well_formed_for_key(&SccpOutboundMessageKeyV1 {
-                message_id: collision,
-                ..key
-            }));
-        }
-        let inbound_key = SccpOutboundMessageKeyV1 {
-            lane: inbound_lane(SccpNetworkV1::EthereumMainnet),
-            ..key
-        };
-        assert!(!record.is_well_formed_for_key(&inbound_key));
     }
     #[test]
     fn ordered_outbound_index_seeks_newest_at_or_before_height() {
@@ -1969,116 +1513,6 @@ mod tests {
             )
             .is_none()
         );
-    }
-    #[test]
-    fn inbound_record_requires_exact_backend_and_distinct_commitments() {
-        let cases = [
-            (
-                SccpNetworkV1::EthereumMainnet,
-                BridgeNativeProofBackendV1::EthereumBeacon,
-            ),
-            (
-                SccpNetworkV1::EthereumSepolia,
-                BridgeNativeProofBackendV1::EthereumBeacon,
-            ),
-            (
-                SccpNetworkV1::BscMainnet,
-                BridgeNativeProofBackendV1::BscParlia,
-            ),
-            (
-                SccpNetworkV1::BscTestnet,
-                BridgeNativeProofBackendV1::BscParlia,
-            ),
-            (
-                SccpNetworkV1::TronMainnet,
-                BridgeNativeProofBackendV1::TronDpos,
-            ),
-            (
-                SccpNetworkV1::TronNile,
-                BridgeNativeProofBackendV1::TronDpos,
-            ),
-            (
-                SccpNetworkV1::TronShasta,
-                BridgeNativeProofBackendV1::TronDpos,
-            ),
-            (
-                SccpNetworkV1::SolanaTestnet,
-                BridgeNativeProofBackendV1::SolanaAgave,
-            ),
-            (
-                SccpNetworkV1::TonMainnet,
-                BridgeNativeProofBackendV1::TonMasterchain,
-            ),
-            (
-                SccpNetworkV1::TonTestnet,
-                BridgeNativeProofBackendV1::TonMasterchain,
-            ),
-        ];
-        for (source, backend) in cases {
-            let record = inbound_record(backend);
-            let lane = inbound_lane(source);
-            assert!(record.is_well_formed_for_lane(lane));
-            for wrong in [
-                BridgeNativeProofBackendV1::EthereumBeacon,
-                BridgeNativeProofBackendV1::BscParlia,
-                BridgeNativeProofBackendV1::TronDpos,
-                BridgeNativeProofBackendV1::SolanaAgave,
-                BridgeNativeProofBackendV1::TonMasterchain,
-            ] {
-                assert_eq!(
-                    SccpInboundMessageRecordV1 {
-                        trust_anchor: trust_anchor(wrong),
-                        ..record
-                    }
-                    .is_well_formed_for_lane(lane),
-                    wrong == backend
-                );
-            }
-        }
-        let valid = inbound_record(BridgeNativeProofBackendV1::EthereumBeacon);
-        for hostile in [
-            SccpInboundMessageRecordV1 {
-                payload_hash: [0; 32],
-                ..valid
-            },
-            SccpInboundMessageRecordV1 {
-                route_configuration_hash: valid.payload_hash,
-                ..valid
-            },
-            SccpInboundMessageRecordV1 {
-                source_identity_hash: valid.route_configuration_hash,
-                ..valid
-            },
-            SccpInboundMessageRecordV1 {
-                anchor_interval_height: 0,
-                ..valid
-            },
-            SccpInboundMessageRecordV1 {
-                anchor_interval_height: valid.trust_anchor.checkpoint_height - 1,
-                ..valid
-            },
-            SccpInboundMessageRecordV1 {
-                source_finality_height: 0,
-                ..valid
-            },
-            SccpInboundMessageRecordV1 {
-                source_finality_hash: [0; 32],
-                ..valid
-            },
-            SccpInboundMessageRecordV1 {
-                source_proof_commitment: [0; 32],
-                ..valid
-            },
-            SccpInboundMessageRecordV1 {
-                admitted_at_height: 0,
-                ..valid
-            },
-        ] {
-            assert!(
-                !hostile.is_well_formed_for_lane(inbound_lane(SccpNetworkV1::EthereumMainnet)),
-                "{hostile:?}"
-            );
-        }
     }
     #[test]
     fn trust_anchor_rejects_zero_hash_or_height() {

@@ -2,7 +2,7 @@
 //!
 //! This module owns proof-system mechanics and relation-neutral note chips: canonical byte range
 //! checks, a three-lane byte-copy permutation, masked trace LDEs, verifier-fixed preprocessing,
-//! quotient composition, SHA-256 vector-row commitments, binary FRI, grinding, and the exact
+//! quotient composition, six-lane Poseidon vector-row commitments, binary FRI, grinding, and the exact
 //! aggregate proof codec. Protocol adapters retain their statement policy, ordered hash schedule,
 //! profile-only rows, public-input digest, and error mapping.
 //!
@@ -12,16 +12,18 @@
 use super::{
     aggregate_stark::{self as aggregate, AggregateOpenedRowEvaluatorV1},
     transparent_stark::{
-        GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
-        ReplayableTraceMaskV1, TransparentStarkErrorV1, TransparentTranscriptV1,
-        goldilocks_evaluate_coset_v1, goldilocks_ifft_v1, goldilocks_primitive_root_v1,
-        grind_nonce_v1, masked_trace_lde_column_with_mask_v1, sample_trace_mask_v1,
+        GOLDILOCKS_GENERATOR_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
+        GoldilocksFp4V1 as E, ReplayableTraceMaskV1, TransparentStarkErrorV1,
+        TransparentTranscriptV1, goldilocks_digest384_frame_v1, goldilocks_evaluate_coset_v1,
+        goldilocks_ifft_v1, goldilocks_primitive_root_v1, grind_nonce_v1,
+        masked_trace_lde_column_with_mask_v1, sample_trace_mask_v1,
         transparent_stark_zk_mask_geometry_v1, verify_grinding_nonce_v1,
     },
 };
 use iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1;
+#[cfg(test)]
+use iroha_data_model::privacy::PrivacyProtocolIdV1;
 use rand::TryRngCore;
-use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
 use thiserror::Error;
 /// Number of byte-copy cells in every shared note row.
@@ -80,17 +82,17 @@ const NOTE_SHARED_PROFILE_BINDING_LABEL_V1: &[u8] =
 const NOTE_COMBINED_PROFILE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.privacy.proof-managed-note-stark.combined-profile.v1";
 /// Sole first-release proof-system identity for proof-managed note pools.
-pub(crate) const PROOF_MANAGED_NOTE_STARK_SUITE_V1: &[u8] = b"StarkFriSha256Goldilocks";
+pub(crate) const PROOF_MANAGED_NOTE_STARK_SUITE_V1: &[u8] = b"StarkFriPoseidonX7Goldilocks6x64";
 /// Independent composition and FRI lanes in the first-release profile.
 pub(crate) const PROOF_MANAGED_NOTE_SECURITY_LANES_V1: usize = 1;
 /// Unique shared extension-domain queries in the first-release profile.
-pub(crate) const PROOF_MANAGED_NOTE_QUERY_COUNT_V1: usize = 60;
+pub(crate) const PROOF_MANAGED_NOTE_QUERY_COUNT_V1: usize = 136;
 /// Trace-to-LDE blow-up logarithm in the first-release profile.
-pub(crate) const PROOF_MANAGED_NOTE_BLOWUP_LOG2_V1: u8 = 6;
+pub(crate) const PROOF_MANAGED_NOTE_BLOWUP_LOG2_V1: u8 = 3;
 /// Terminal FRI vector logarithm in the first-release profile.
 pub(crate) const PROOF_MANAGED_NOTE_TERMINAL_LOG2_V1: u8 = 10;
 /// Exact terminal FRI polynomial-degree bound.
-pub(crate) const PROOF_MANAGED_NOTE_TERMINAL_DEGREE_BOUND_V1: usize = 31;
+pub(crate) const PROOF_MANAGED_NOTE_TERMINAL_DEGREE_BOUND_V1: usize = 143;
 /// Coefficient chunks used to normalize degree-four quotient polynomials.
 pub(crate) const PROOF_MANAGED_NOTE_COMPOSITION_DEGREE_CHUNKS_V1: usize = 4;
 /// One out-of-domain DEEP-ALI query binds each neighboring-row AIR.
@@ -98,23 +100,23 @@ pub(crate) const PROOF_MANAGED_NOTE_DEEP_QUERY_COUNT_V1: usize = 1;
 /// Largest native trace supported by the shared first-release soundness proof.
 pub(crate) const PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1: u8 = 14;
 /// Inclusive trace zero-knowledge mask degree.
-pub(crate) const PROOF_MANAGED_NOTE_MASK_DEGREE_V1: usize = 443;
+pub(crate) const PROOF_MANAGED_NOTE_MASK_DEGREE_V1: usize = 975;
 /// Largest constraint degree supported by the first-release FRI profile.
 pub(crate) const PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1: u8 = 4;
 /// Exact transcript grinding target.
 pub(crate) const PROOF_MANAGED_NOTE_GRINDING_BITS_V1: u8 = 20;
 /// Required non-grinding soundness floor for every proof-managed note profile.
 pub(crate) const PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1: u16 = 128;
-/// Machine-checked affine-batched FRI query-error exponent at 60 queries.
-pub(crate) const PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1: u16 = 136;
+/// Machine-checked affine-batched FRI query-error exponent at 136 queries.
+pub(crate) const PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1: u16 = 160;
 /// Worst-case commitment-error exponent at the maximum native trace.
-pub(crate) const PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1: u16 = 191;
+pub(crate) const PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1: u16 = 197;
 /// Affine batching parameter in the sole first-release FRI theorem instance.
 pub(crate) const PROOF_MANAGED_NOTE_FRI_BATCHING_PARAMETER_M_V1: u8 = 3;
 /// Exact effective FRI code-rate numerator.
 pub(crate) const PROOF_MANAGED_NOTE_FRI_RATE_NUMERATOR_V1: u8 = 1;
 /// Exact effective FRI code-rate denominator.
-pub(crate) const PROOF_MANAGED_NOTE_FRI_RATE_DENOMINATOR_V1: u8 = 32;
+pub(crate) const PROOF_MANAGED_NOTE_FRI_RATE_DENOMINATOR_V1: u8 = 7;
 /// Complete affine arities whose sum enters the commitment-error term.
 pub(crate) const PROOF_MANAGED_NOTE_FRI_AFFINE_ARITIES_V1: [u8; 3] = [2, 2, 2];
 /// Proven lower-bound exponent for the Goldilocks quartic extension field.
@@ -124,25 +126,40 @@ pub(crate) const PROOF_MANAGED_NOTE_EXTENSION_FIELD_LOWER_BOUND_BITS_V1: u16 = 2
 /// Protocol adapters bind a separate relation descriptor. The canonical
 /// profile digest frames this shared descriptor first and the relation
 /// descriptor second, so neither layer can silently restate stale geometry.
-pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-stark-geometry-v1:proof=StarkFriSha256Goldilocks:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=sha256:transcript=sha256:copy-width=8:copy-lanes=3:copy-aux-width=118:copy-fixed-width=43:copy-constraints=151:copy-constraint-degree=2:security-lanes=1:queries=60:lde-blowup=64:composition-degree-chunks=4:deep-points=1:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2=14:trace-mask-degree=443:trace-mask-coefficients=444:max-constraint-degree=4:fri-terminal=1024:fri-degree=31:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m=3:rho=1/32:affine-arities=2,2,2:extension-field-lower-bound-bits=252:query-error-bits=136:commitment-error-bits-min=191:target-soundness-bits=128:grinding=20-nonadditive:codec=fixed-shape-big-endian";
-/// SHA-256 of [`PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1`].
-pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DIGEST_V1: [u8; 32] = [
-    0x44, 0x2a, 0xf0, 0x7c, 0xaf, 0x81, 0x76, 0xe5, 0x5e, 0xaf, 0x01, 0xdd, 0x72, 0x3a, 0xbd, 0x10,
-    0xf8, 0xd9, 0x3a, 0x8e, 0xc0, 0xf3, 0x62, 0x98, 0x0f, 0xb7, 0xa3, 0xa1, 0x62, 0x61, 0x93, 0xe4,
-];
+pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-stark-geometry-v1:proof=StarkFriPoseidonX7Goldilocks6x64:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=poseidon-x7-goldilocks-6x64:transcript=poseidon-x7-goldilocks-6x64:copy-width=8:copy-lanes=3:copy-aux-width=118:copy-fixed-width=43:copy-constraints=151:copy-constraint-degree=2:security-lanes=1:queries=136:lde-blowup=8:composition-degree-chunks=4:deep-points=1:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2=14:trace-mask-degree=975:trace-mask-coefficients=976:max-constraint-degree=4:fri-terminal=1024:fri-degree=143:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m=3:rho-upper-bound=1/7:affine-arities=2,2,2:extension-field-lower-bound-bits=252:query-error-bits=160:commitment-error-bits-min=197:target-soundness-bits=128:grinding=20-nonadditive:codec=fixed-shape-big-endian-digest384";
 /// Derive the canonical digest of shared proof geometry plus one relation.
-pub(crate) fn proof_managed_note_stark_profile_digest_v1(relation_descriptor: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(NOTE_COMBINED_PROFILE_DIGEST_DOMAIN_V1);
-    hasher.update(2_u64.to_be_bytes());
-    for field in [
-        PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
-        relation_descriptor,
-    ] {
-        hasher.update(u64::try_from(field.len()).unwrap_or(u64::MAX).to_be_bytes());
-        hasher.update(field);
-    }
-    hasher.finalize().into()
+pub(crate) fn proof_managed_note_stark_profile_digest_v1(
+    domains: aggregate::AggregateStarkDomainsV1,
+    relation_descriptor: &[u8],
+) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
+    goldilocks_digest384_frame_v1(
+        domains.digest_context,
+        NOTE_COMBINED_PROFILE_DIGEST_DOMAIN_V1,
+        b"compiled-profile",
+        0,
+        0,
+        0,
+        &[
+            PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
+            relation_descriptor,
+        ],
+    )
+    .map_err(map_transparent_error_v1)
+}
+/// Derive the protocol-bound digest of the shared proof geometry.
+pub(crate) fn proof_managed_note_stark_geometry_digest_v1(
+    domains: aggregate::AggregateStarkDomainsV1,
+) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
+    goldilocks_digest384_frame_v1(
+        domains.digest_context,
+        NOTE_COMBINED_PROFILE_DIGEST_DOMAIN_V1,
+        b"shared-geometry",
+        0,
+        0,
+        0,
+        &[PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1],
+    )
+    .map_err(map_transparent_error_v1)
 }
 /// Shared proof-driver or copy-chip failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -244,12 +261,10 @@ fn map_aggregate_error_v1(error: aggregate::AggregateStarkErrorV1) -> ProofManag
 pub(crate) struct ProofManagedNoteStarkProtocolV1 {
     /// Exact aggregate proof dimensions and wire limits.
     pub(crate) parameters: aggregate::AggregateStarkParametersV1,
-    /// Complete SHA-256 Merkle and transcript domains.
+    /// Complete six-lane Poseidon Merkle and transcript domains.
     pub(crate) domains: aggregate::AggregateStarkDomainsV1,
     /// Maximum algebraic degree across shared and profile constraints.
     pub(crate) maximum_constraint_degree: u8,
-    /// Digest of the complete compiled profile.
-    pub(crate) profile_digest: [u8; 32],
     /// Transcript label binding the human-auditable compiled descriptor.
     pub(crate) profile_binding_label: &'static [u8],
     /// Complete immutable profile descriptor.
@@ -323,10 +338,8 @@ impl ProofManagedNoteStarkProtocolV1 {
         .map_err(map_transparent_error_v1)?;
         let consensus_proof_cap = usize::try_from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1)
             .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
-        let shared_descriptor_digest: [u8; 32] =
-            Sha256::digest(PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1).into();
-        let combined_profile_digest =
-            proof_managed_note_stark_profile_digest_v1(self.profile_descriptor);
+        let _combined_profile_digest =
+            proof_managed_note_stark_profile_digest_v1(self.domains, self.profile_descriptor)?;
         if self.parameters.security_lanes != PROOF_MANAGED_NOTE_SECURITY_LANES_V1
             || self.parameters.query_count != PROOF_MANAGED_NOTE_QUERY_COUNT_V1
             || self.parameters.blowup_log2 != PROOF_MANAGED_NOTE_BLOWUP_LOG2_V1
@@ -346,9 +359,6 @@ impl ProofManagedNoteStarkProtocolV1 {
                 < PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1
             || fri_soundness.query_error_bits < PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1
             || fri_soundness.commitment_error_bits < PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1
-            || shared_descriptor_digest != PROOF_MANAGED_NOTE_STARK_GEOMETRY_DIGEST_V1
-            || self.profile_digest == [0; 32]
-            || self.profile_digest != combined_profile_digest
             || self.profile_binding_label.is_empty()
             || self.profile_descriptor.is_empty()
             || self.relation_layout_domain.is_empty()
@@ -419,7 +429,9 @@ pub(crate) trait ProofManagedNoteStarkAdapterV1 {
     /// Closed proof protocol.
     fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1;
     /// Exact digest of all public statement fields.
-    fn public_input_digest_v1(&self) -> Result<[u8; 32], ProofManagedNoteStarkErrorV1>;
+    fn public_input_digest_v1(
+        &self,
+    ) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1>;
     /// Binary logarithm of the sole native trace group.
     fn trace_log2_v1(&self) -> u8;
     /// Exact base-trace width, including the eight copy cells.
@@ -1134,11 +1146,19 @@ fn evaluate_masked_native_columns_at_deep_v1(
 }
 fn new_note_transcript_v1(
     prepared: &PreparedNoteProfileV1,
-    public_digest: &[u8; 32],
+    public_digest: &GoldilocksDigest384V1,
 ) -> Result<TransparentTranscriptV1, ProofManagedNoteStarkErrorV1> {
+    let profile_digest = proof_managed_note_stark_profile_digest_v1(
+        prepared.protocol.domains,
+        prepared.protocol.profile_descriptor,
+    )?;
+    let geometry_digest =
+        proof_managed_note_stark_geometry_digest_v1(prepared.protocol.domains)?;
+    let geometry_digest = geometry_digest.to_le_bytes();
     let mut transcript = TransparentTranscriptV1::new(
+        prepared.protocol.domains.digest_context,
         PROOF_MANAGED_NOTE_STARK_SUITE_V1,
-        &prepared.protocol.profile_digest,
+        &profile_digest,
         public_digest,
     )
     .map_err(map_transparent_error_v1)?;
@@ -1148,7 +1168,7 @@ fn new_note_transcript_v1(
             NOTE_SHARED_PROFILE_BINDING_LABEL_V1,
             &[
                 PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
-                &PROOF_MANAGED_NOTE_STARK_GEOMETRY_DIGEST_V1,
+                &geometry_digest,
             ],
         )
         .map_err(map_transparent_error_v1)?;
@@ -1568,6 +1588,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     let (base_lde, base_masks) =
         masked_lde_columns_v1(base_columns, prepared.trace_log2, lde_log2, rng)?;
     let base_tree = aggregate::row_tree_v1(
+        prepared.protocol.domains.digest_context,
         prepared.protocol.domains.base_leaf,
         prepared.protocol.domains.base_node,
         0,
@@ -1578,7 +1599,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     let mut transcript = new_note_transcript_v1(&prepared, &public_digest)?;
     let mut trace_group_proofs = vec![aggregate::AggregateTraceGroupProofV1 {
         base_root: base_tree.root(),
-        aux_root: [0; 32],
+        aux_root: GoldilocksDigest384V1::default(),
         base_frontier: Vec::new(),
         aux_frontier: Vec::new(),
     }];
@@ -1623,6 +1644,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     let (aux_lde, aux_masks) =
         masked_lde_columns_v1(&aux_columns, prepared.trace_log2, lde_log2, rng)?;
     let aux_tree = aggregate::row_tree_v1(
+        prepared.protocol.domains.digest_context,
         prepared.protocol.domains.aux_leaf,
         prepared.protocol.domains.aux_node,
         0,
@@ -1665,9 +1687,13 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         &composition_roots,
     )
     .map_err(map_aggregate_error_v1)?;
-    let fri_masks =
-        aggregate::build_fri_mask_oracles_v1(prepared.protocol.parameters, &prepared.layout, rng)
-            .map_err(map_aggregate_error_v1)?;
+    let fri_masks = aggregate::build_fri_mask_oracles_v1(
+        prepared.protocol.parameters,
+        prepared.protocol.domains,
+        &prepared.layout,
+        rng,
+    )
+    .map_err(map_aggregate_error_v1)?;
     let fri_mask_roots = fri_masks
         .iter()
         .map(|mask| mask.tree.root())
@@ -1675,6 +1701,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     aggregate::absorb_fri_mask_roots_v1(
         &mut transcript,
         prepared.protocol.parameters,
+        prepared.protocol.domains,
         &fri_mask_roots,
     )
     .map_err(map_aggregate_error_v1)?;
@@ -1784,8 +1811,12 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         );
     }
     let grinding_state = transcript.state();
-    let grinding_nonce = grind_nonce_v1(&grinding_state, PROOF_MANAGED_NOTE_GRINDING_BITS_V1)
-        .map_err(map_transparent_error_v1)?;
+    let grinding_nonce = grind_nonce_v1(
+        prepared.protocol.domains.digest_context,
+        &grinding_state,
+        PROOF_MANAGED_NOTE_GRINDING_BITS_V1,
+    )
+    .map_err(map_transparent_error_v1)?;
     absorb_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
     let query_indices = aggregate::query_indices_v1(
         &transcript,
@@ -1973,6 +2004,7 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
     aggregate::absorb_fri_mask_roots_v1(
         &mut transcript,
         prepared.protocol.parameters,
+        prepared.protocol.domains,
         &proof.fri_mask_roots,
     )
     .map_err(map_aggregate_error_v1)?;
@@ -2007,6 +2039,7 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
     .map_err(map_aggregate_error_v1)?;
     let grinding_state = transcript.state();
     verify_grinding_nonce_v1(
+        prepared.protocol.domains.digest_context,
         &grinding_state,
         PROOF_MANAGED_NOTE_GRINDING_BITS_V1,
         proof.grinding_nonce,
@@ -2181,10 +2214,14 @@ mod tests {
     use super::*;
     use rand::{RngCore, SeedableRng as _, rngs::StdRng};
     use std::sync::OnceLock;
-    const MOCK_PROFILE_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-mock-relation-v1:wire=PMN1-v1:trace=2^12:base=8:profile-aux=0:profile-fixed=0:profile-constraints=1:constraint-degree=2:max-proof=4194304";
-    const MOCK_TRACE_LOG2_V1: u8 = 12;
+    const MOCK_PROFILE_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-mock-relation-v1:wire=PMN1-v1:trace=2^13:base=8:profile-aux=0:profile-fixed=0:profile-constraints=1:constraint-degree=2:max-proof=4194304";
+    const MOCK_TRACE_LOG2_V1: u8 = 13;
     const MOCK_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
         aggregate::AggregateStarkDomainsV1 {
+            digest_context: super::super::transparent_stark::TransparentStarkDigestContextV1::new(
+                PrivacyProtocolIdV1::PqMaspStarkV1,
+                b"proof-managed-note-mock-profile-v1",
+            ),
             base_leaf: b"proof-managed-note-mock-base-leaf-v1",
             base_node: b"proof-managed-note-mock-base-node-v1",
             aux_leaf: b"proof-managed-note-mock-aux-leaf-v1",
@@ -2224,8 +2261,7 @@ mod tests {
     struct MockAdapterV1 {
         parameters: aggregate::AggregateStarkParametersV1,
         maximum_constraint_degree: u8,
-        profile_digest: [u8; 32],
-        public_digest: [u8; 32],
+        public_digest: GoldilocksDigest384V1,
         corrupt_schedule: bool,
     }
     impl Default for MockAdapterV1 {
@@ -2233,10 +2269,8 @@ mod tests {
             Self {
                 parameters: mock_parameters_v1(),
                 maximum_constraint_degree: NOTE_COPY_CONSTRAINT_DEGREE_V1,
-                profile_digest: proof_managed_note_stark_profile_digest_v1(
-                    MOCK_PROFILE_DESCRIPTOR_V1,
-                ),
-                public_digest: [0x24; 32],
+                public_digest: GoldilocksDigest384V1::new([0x24; 6])
+                    .expect("mock public digest is canonical"),
                 corrupt_schedule: false,
             }
         }
@@ -2248,13 +2282,14 @@ mod tests {
                 parameters: self.parameters,
                 domains: MOCK_DOMAINS_V1,
                 maximum_constraint_degree: self.maximum_constraint_degree,
-                profile_digest: self.profile_digest,
                 profile_binding_label: b"proof-managed-note-mock-profile-binding-v1",
                 profile_descriptor: MOCK_PROFILE_DESCRIPTOR_V1,
                 relation_layout_domain: b"proof-managed-note-mock-relation-layout-v1",
             }
         }
-        fn public_input_digest_v1(&self) -> Result<[u8; 32], ProofManagedNoteStarkErrorV1> {
+        fn public_input_digest_v1(
+            &self,
+        ) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
             Ok(self.public_digest)
         }
         fn trace_log2_v1(&self) -> u8 {
@@ -2356,7 +2391,7 @@ mod tests {
     #[test]
     fn shared_geometry_descriptor_and_digest_match_every_driver_constant() {
         let expected = format!(
-            "proof-managed-note-stark-geometry-v1:proof={}:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=sha256:transcript=sha256:copy-width={}:copy-lanes={}:copy-aux-width={}:copy-fixed-width={}:copy-constraints={}:copy-constraint-degree={}:security-lanes={}:queries={}:lde-blowup={}:composition-degree-chunks={}:deep-points={}:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2={}:trace-mask-degree={}:trace-mask-coefficients={}:max-constraint-degree={}:fri-terminal={}:fri-degree={}:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m={}:rho={}/{}:affine-arities={},{},{}:extension-field-lower-bound-bits={}:query-error-bits={}:commitment-error-bits-min={}:target-soundness-bits={}:grinding={}-nonadditive:codec=fixed-shape-big-endian",
+            "proof-managed-note-stark-geometry-v1:proof={}:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=poseidon-x7-goldilocks-6x64:transcript=poseidon-x7-goldilocks-6x64:copy-width={}:copy-lanes={}:copy-aux-width={}:copy-fixed-width={}:copy-constraints={}:copy-constraint-degree={}:security-lanes={}:queries={}:lde-blowup={}:composition-degree-chunks={}:deep-points={}:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2={}:trace-mask-degree={}:trace-mask-coefficients={}:max-constraint-degree={}:fri-terminal={}:fri-degree={}:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m={}:rho-upper-bound={}/{}:affine-arities={},{},{}:extension-field-lower-bound-bits={}:query-error-bits={}:commitment-error-bits-min={}:target-soundness-bits={}:grinding={}-nonadditive:codec=fixed-shape-big-endian-digest384",
             std::str::from_utf8(PROOF_MANAGED_NOTE_STARK_SUITE_V1).expect("ASCII suite"),
             NOTE_COPY_WIDTH_V1,
             NOTE_COPY_LANES_V1,
@@ -2391,16 +2426,18 @@ mod tests {
             PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
             expected.as_bytes()
         );
+        let digest = proof_managed_note_stark_profile_digest_v1(
+            MOCK_DOMAINS_V1,
+            MOCK_PROFILE_DESCRIPTOR_V1,
+        )
+        .expect("profile digest");
         assert_eq!(
-            <[u8; 32]>::from(Sha256::digest(
-                PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1
-            )),
-            PROOF_MANAGED_NOTE_STARK_GEOMETRY_DIGEST_V1
-        );
-        assert_ne!(
-            proof_managed_note_stark_profile_digest_v1(MOCK_PROFILE_DESCRIPTOR_V1),
-            <[u8; 32]>::from(Sha256::digest(MOCK_PROFILE_DESCRIPTOR_V1)),
-            "the canonical profile digest must frame the shared geometry before the relation"
+            digest,
+            proof_managed_note_stark_profile_digest_v1(
+                MOCK_DOMAINS_V1,
+                MOCK_PROFILE_DESCRIPTOR_V1,
+            )
+            .expect("replayed profile digest"),
         );
     }
     #[test]
@@ -2411,7 +2448,7 @@ mod tests {
             mock_bound,
             aggregate::AggregateFriTheorem2BoundV1 {
                 query_error_bits: PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1,
-                commitment_error_bits: 195,
+                commitment_error_bits: 199,
             }
         );
         let mut maximum_release_parameters = mock_parameters_v1();
@@ -2431,7 +2468,7 @@ mod tests {
         // This is the smallest native domain that satisfies the release
         // geometry's Protocol-2 FRI-mask dimension. A smaller trace would make
         // the fixture invalid before reaching the DEEP differential check.
-        const DIFFERENTIAL_TRACE_LOG2_V1: u8 = 9;
+        const DIFFERENTIAL_TRACE_LOG2_V1: u8 = 13;
         let mut parameters = mock_parameters_v1();
         parameters.minimum_trace_log2 = DIFFERENTIAL_TRACE_LOG2_V1;
         parameters.maximum_trace_log2 = DIFFERENTIAL_TRACE_LOG2_V1;
@@ -2474,6 +2511,7 @@ mod tests {
                 .collect::<Vec<_>>(),
         ];
         let base_tree = aggregate::row_tree_v1(
+            MOCK_DOMAINS_V1.digest_context,
             MOCK_DOMAINS_V1.base_leaf,
             MOCK_DOMAINS_V1.base_node,
             0,
@@ -2482,6 +2520,7 @@ mod tests {
         )
         .expect("base tree");
         let aux_tree = aggregate::row_tree_v1(
+            MOCK_DOMAINS_V1.digest_context,
             MOCK_DOMAINS_V1.aux_leaf,
             MOCK_DOMAINS_V1.aux_node,
             0,
@@ -2637,8 +2676,8 @@ mod tests {
         let mut transcript =
             new_note_transcript_v1(&prepared, &adapter.public_digest).expect("transcript");
         let dummy_groups = [aggregate::AggregateTraceGroupProofV1 {
-            base_root: [7; 32],
-            aux_root: [0; 32],
+            base_root: GoldilocksDigest384V1::new([7; 6]).expect("base root"),
+            aux_root: GoldilocksDigest384V1::default(),
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
         }];
@@ -2789,8 +2828,8 @@ mod tests {
         let mut transcript =
             new_note_transcript_v1(&prepared, &adapter.public_digest).expect("transcript");
         let groups = [aggregate::AggregateTraceGroupProofV1 {
-            base_root: [9; 32],
-            aux_root: [0; 32],
+            base_root: GoldilocksDigest384V1::new([9; 6]).expect("base root"),
+            aux_root: GoldilocksDigest384V1::default(),
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
         }];
@@ -2815,14 +2854,23 @@ mod tests {
         verify_proof_managed_note_stark_v1(adapter, proof).expect("canonical proof verifies");
         assert_eq!(&proof[..4], b"PMN1");
         assert!(proof.len() < adapter.parameters.maximum_proof_bytes);
-        let digest: [u8; 32] = Sha256::digest(proof).into();
-        assert_ne!(digest, [0; 32]);
+        let digest = goldilocks_digest384_frame_v1(
+            MOCK_DOMAINS_V1.digest_context,
+            b"proof-managed-note-test-proof",
+            b"complete-wire",
+            0,
+            0,
+            0,
+            &[proof],
+        )
+        .expect("proof digest");
+        assert_ne!(digest, GoldilocksDigest384V1::default());
         let mut wrong_public = adapter.clone();
-        wrong_public.public_digest[0] ^= 1;
+        let mut wrong_public_words = wrong_public.public_digest.words();
+        wrong_public_words[0] += 1;
+        wrong_public.public_digest =
+            GoldilocksDigest384V1::new(wrong_public_words).expect("mutated public digest");
         assert!(verify_proof_managed_note_stark_v1(&wrong_public, proof).is_err());
-        let mut wrong_profile = adapter.clone();
-        wrong_profile.profile_digest[0] ^= 1;
-        assert!(verify_proof_managed_note_stark_v1(&wrong_profile, proof).is_err());
     }
     #[test]
     fn exact_wire_and_committed_values_reject_adversarial_mutations() {
@@ -3018,12 +3066,12 @@ mod tests {
             prepare_note_profile_v1(&insufficient_fri_capacity),
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
         ));
-        let mut zero_profile = adapter;
-        zero_profile.profile_digest = [0; 32];
-        assert!(matches!(
-            prepare_note_profile_v1(&zero_profile),
-            Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
-        ));
+        let mut empty_profile = adapter.protocol_v1();
+        empty_profile.profile_descriptor = b"";
+        assert_eq!(
+            empty_profile.validate(),
+            Err(ProofManagedNoteStarkErrorV1::InvalidProfile),
+        );
     }
     #[test]
     fn mock_profile_cannot_exceed_the_consensus_proof_cap() {

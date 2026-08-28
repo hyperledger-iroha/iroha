@@ -12,8 +12,19 @@ use iroha_core::zk::confidential_v2::{
     derive_confidential_sequential_append_paths_v3, validate_confidential_membership_path_v3,
     validate_confidential_next_zero_path_v3,
 };
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{NetworkId, block::BlockHeader};
+use iroha_crypto::{
+    Hash, HashOf,
+    confidential_memo::{ConfidentialMemoKemSuiteV1, generate_confidential_memo_keypair_v1},
+};
+use iroha_data_model::{
+    NetworkId,
+    block::BlockHeader,
+    confidential::{
+        CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1, CONFIDENTIAL_MEMO_MAX_WIRE_BYTES_V1,
+        CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1, ConfidentialMemoEnvelopeV1,
+        ConfidentialMemoSuiteV1,
+    },
+};
 use libc::{c_int, c_uchar, c_ulong};
 use std::{ptr, slice, str};
 const DIGEST_BYTES: usize = 32;
@@ -553,8 +564,8 @@ mod jni_exports {
     use super::*;
     use jni::{
         JNIEnv,
-        objects::{JByteArray, JClass},
-        sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jint, jlong},
+        objects::{JByteArray, JClass, JObject},
+        sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jint, jlong, jobjectArray},
     };
     use zeroize::Zeroizing;
     fn read(env: &mut JNIEnv<'_>, value: JByteArray<'_>, maximum: usize) -> Option<Vec<u8>> {
@@ -711,6 +722,135 @@ mod jni_exports {
             JNI_FALSE
         }
     }
+
+    fn memo_suite(tag: jint) -> Option<(ConfidentialMemoKemSuiteV1, ConfidentialMemoSuiteV1)> {
+        match tag {
+            0 => Some((
+                ConfidentialMemoKemSuiteV1::MlKem768,
+                ConfidentialMemoSuiteV1::MlKem768XChaCha20Poly1305,
+            )),
+            1 => Some((
+                ConfidentialMemoKemSuiteV1::MlKem1024,
+                ConfidentialMemoSuiteV1::MlKem1024XChaCha20Poly1305,
+            )),
+            _ => None,
+        }
+    }
+
+    fn memo_keypair(env: &mut JNIEnv<'_>, suite_tag: jint) -> jobjectArray {
+        let Some((suite, _)) = memo_suite(suite_tag) else {
+            return ptr::null_mut();
+        };
+        let Ok(keypair) = generate_confidential_memo_keypair_v1(suite) else {
+            return ptr::null_mut();
+        };
+        let Ok(public_key) = env.byte_array_from_slice(keypair.public_key()) else {
+            return ptr::null_mut();
+        };
+        let Ok(secret_key) = env.byte_array_from_slice(keypair.secret_key()) else {
+            return ptr::null_mut();
+        };
+        let Ok(byte_array_class) = env.find_class("[B") else {
+            return ptr::null_mut();
+        };
+        let Ok(result) = env.new_object_array(2, byte_array_class, JObject::null()) else {
+            return ptr::null_mut();
+        };
+        if env
+            .set_object_array_element(&result, 0, &public_key)
+            .is_err()
+            || env
+                .set_object_array_element(&result, 1, &secret_key)
+                .is_err()
+        {
+            return ptr::null_mut();
+        }
+        result.into_raw()
+    }
+
+    fn seal_memo(
+        env: &mut JNIEnv<'_>,
+        suite_tag: jint,
+        packed_public_keys: JByteArray<'_>,
+        recipient_count: jint,
+        plaintext: JByteArray<'_>,
+    ) -> jbyteArray {
+        let Some((crypto_suite, data_suite)) = memo_suite(suite_tag) else {
+            return ptr::null_mut();
+        };
+        let Ok(recipient_count) = usize::try_from(recipient_count) else {
+            return ptr::null_mut();
+        };
+        if !(1..=8).contains(&recipient_count) {
+            return ptr::null_mut();
+        }
+        let key_bytes = crypto_suite.mlkem_suite().public_key_len();
+        let Some(packed_public_keys) = read(
+            env,
+            packed_public_keys,
+            recipient_count.saturating_mul(key_bytes),
+        ) else {
+            return ptr::null_mut();
+        };
+        if packed_public_keys.len() != recipient_count.saturating_mul(key_bytes) {
+            return ptr::null_mut();
+        }
+        let Some(plaintext) = read_allow_empty(
+            env,
+            plaintext,
+            CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1 - CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1,
+        ) else {
+            return ptr::null_mut();
+        };
+        let plaintext = Zeroizing::new(plaintext);
+        let recipients = packed_public_keys
+            .chunks_exact(key_bytes)
+            .map(<[u8]>::to_vec)
+            .collect::<Vec<_>>();
+        ConfidentialMemoEnvelopeV1::seal(data_suite, &recipients, &plaintext)
+            .and_then(|envelope| {
+                envelope.encode_wire().map_err(|error| {
+                    iroha_data_model::confidential::ConfidentialMemoOperationErrorV1::WireShape(
+                        error.to_string(),
+                    )
+                })
+            })
+            .ok()
+            .and_then(|wire| env.byte_array_from_slice(&wire).ok())
+            .map_or(ptr::null_mut(), JByteArray::into_raw)
+    }
+
+    fn open_memo(
+        env: &mut JNIEnv<'_>,
+        suite_tag: jint,
+        secret_key: JByteArray<'_>,
+        envelope: JByteArray<'_>,
+    ) -> jbyteArray {
+        let Some((crypto_suite, data_suite)) = memo_suite(suite_tag) else {
+            return ptr::null_mut();
+        };
+        let Some(secret_key) = read(env, secret_key, crypto_suite.mlkem_suite().secret_key_len())
+        else {
+            return ptr::null_mut();
+        };
+        if secret_key.len() != crypto_suite.mlkem_suite().secret_key_len() {
+            return ptr::null_mut();
+        }
+        let secret_key = Zeroizing::new(secret_key);
+        let Some(envelope) = read(env, envelope, CONFIDENTIAL_MEMO_MAX_WIRE_BYTES_V1) else {
+            return ptr::null_mut();
+        };
+        let Some(plaintext) = ConfidentialMemoEnvelopeV1::decode_wire(&envelope)
+            .ok()
+            .and_then(|envelope| envelope.open(data_suite, &secret_key).ok())
+        else {
+            return ptr::null_mut();
+        };
+        let plaintext = Zeroizing::new(plaintext);
+        env.byte_array_from_slice(&plaintext)
+            .ok()
+            .map_or(ptr::null_mut(), JByteArray::into_raw)
+    }
     macro_rules! revision_export {
         ($name:ident) => {
             #[allow(clippy::missing_safety_doc)]
@@ -825,6 +965,62 @@ mod jni_exports {
     merkle_path_export!(
         Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeDeriveConfidentialMerklePathV3,
         Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeVerifyConfidentialMerklePathV3
+    );
+
+    macro_rules! memo_exports {
+        ($keypair:ident, $seal:ident, $open:ident) => {
+            #[allow(clippy::missing_safety_doc)]
+            #[unsafe(no_mangle)]
+            pub unsafe extern "system" fn $keypair(
+                mut env: JNIEnv<'_>,
+                _class: JClass<'_>,
+                suite_tag: jint,
+            ) -> jobjectArray {
+                memo_keypair(&mut env, suite_tag)
+            }
+
+            #[allow(clippy::missing_safety_doc)]
+            #[unsafe(no_mangle)]
+            pub unsafe extern "system" fn $seal(
+                mut env: JNIEnv<'_>,
+                _class: JClass<'_>,
+                suite_tag: jint,
+                packed_public_keys: JByteArray<'_>,
+                recipient_count: jint,
+                plaintext: JByteArray<'_>,
+            ) -> jbyteArray {
+                seal_memo(
+                    &mut env,
+                    suite_tag,
+                    packed_public_keys,
+                    recipient_count,
+                    plaintext,
+                )
+            }
+
+            #[allow(clippy::missing_safety_doc)]
+            #[unsafe(no_mangle)]
+            pub unsafe extern "system" fn $open(
+                mut env: JNIEnv<'_>,
+                _class: JClass<'_>,
+                suite_tag: jint,
+                secret_key: JByteArray<'_>,
+                envelope: JByteArray<'_>,
+            ) -> jbyteArray {
+                open_memo(&mut env, suite_tag, secret_key, envelope)
+            }
+        };
+    }
+
+    memo_exports!(
+        Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeGenerateConfidentialMemoKeypairV1,
+        Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeSealConfidentialMemoV1,
+        Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeOpenConfidentialMemoV1
+    );
+    memo_exports!(
+        Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeGenerateConfidentialMemoKeypairV1,
+        Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeSealConfidentialMemoV1,
+        Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeOpenConfidentialMemoV1
     );
 }
 #[cfg(test)]

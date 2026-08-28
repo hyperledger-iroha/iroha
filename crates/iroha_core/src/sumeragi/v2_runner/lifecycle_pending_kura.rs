@@ -132,7 +132,10 @@ fn recover_pending_canonical_bodies(
                     }
                     let now = Instant::now();
                     if body_recovery.has_pending() && now >= next_retry {
-                        let request_queued = body_recovery.service_next()?;
+                        let request_queued = service_canonical_executed_block_recovery(
+                            &mut body_recovery,
+                            services,
+                        )?;
                         let serviced_at = Instant::now();
                         refresh_canonical_recovery_retry_deadline(
                             &mut next_retry,
@@ -151,7 +154,10 @@ fn recover_pending_canonical_bodies(
                         CanonicalRecoveryIngressDrain::default()
                     };
                     if ingress.exact_response_progress && body_recovery.has_pending() {
-                        let request_queued = body_recovery.service_next()?;
+                        let request_queued = service_canonical_executed_block_recovery(
+                            &mut body_recovery,
+                            services,
+                        )?;
                         let serviced_at = Instant::now();
                         refresh_canonical_recovery_retry_deadline_after_progress(
                             &mut next_retry,
@@ -477,10 +483,11 @@ fn run_pending_active_height(
         }
         activated.with_runner_runtime(
             &mut active_runner,
-            |executor, _services, lane_work| -> Result<_, V2RunnerError> {
+            |executor, services, lane_work| -> Result<_, V2RunnerError> {
                 drain_lane_relay_ingress(
                     lane_relay_rx,
                     lane_work,
+                    services,
                     executor.current_tag().view(),
                     control_queue_capacity,
                 )
@@ -558,13 +565,14 @@ fn run_pending_active_height(
                 drain_lane_relay_ingress(
                     lane_relay_rx,
                     lane_work,
+                    services,
                     executor.current_tag().view(),
                     control_queue_capacity,
                 )?;
                 drive_merge_sidecar_recovery(executor, services, lane_work)?;
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
-                    let _ = service_historical_recovery_tick(lane_work)?;
+                    let _ = service_historical_recovery_tick(lane_work, services)?;
                     lane_work.schedule_autonomous_new_view_timeouts(
                         now,
                         executor.current_tag().view(),
@@ -614,9 +622,10 @@ fn run_pending_active_height(
         let rollover_ready = if finalization_ready {
             let rollover_ready = activated.with_runner_runtime(
                 &mut active_runner,
-                |executor, _services, lane_work| {
+                |executor, services, lane_work| {
                     super::preflight_finalized_lane_rollover(
                         executor,
+                        services,
                         lane_work,
                         &mut canonical_lane_body_recovered,
                     )

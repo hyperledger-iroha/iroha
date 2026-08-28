@@ -98,6 +98,7 @@ public final class SccpJsonParser {
           "inbound_finality_cutoff",
           "source_identity",
           "destination",
+          "sora_outbound_execution_policy",
           "settlement");
   private static final Set<String> DESTINATION_FIELDS =
       Set.of(
@@ -110,7 +111,12 @@ public final class SccpJsonParser {
           "outbound_proof_policy",
           "route_address",
           "route_code_hash",
-          "taira_to_token_multiplier");
+          "replay_verifier_address",
+          "replay_verifier_code_hash",
+          "mint_breaker_address",
+          "mint_breaker_code_hash",
+          "taira_to_token_multiplier",
+          "max_wrapped_supply");
   private static final Set<String> TON_DESTINATION_FIELDS =
       Set.of(
           "jetton_master_address",
@@ -125,8 +131,10 @@ public final class SccpJsonParser {
           "verifying_key",
           "verifier_key_hash",
           "proof_profile_commitment",
+          "mint_breaker_guardian_keys",
           "outbound_proof_policy",
-          "taira_to_token_multiplier");
+          "taira_to_token_multiplier",
+          "max_wrapped_supply");
   private static final Set<String> VERIFYING_KEY_FIELDS =
       Set.of("version", "alpha1", "beta2", "gamma2", "delta2", "ic");
   private static final List<String> IC_FIELD_ORDER =
@@ -242,6 +250,8 @@ public final class SccpJsonParser {
   private static final String TON_SEMANTIC_PROFILE =
       "sora_taira_finality_inclusion_groth16_bls12381";
   private static final String TAIRA_XOR_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+  private static final String SORA_OUTBOUND_EXECUTION_SEMANTICS =
+      "ivm_proved_record_sccp_message_v1";
   private static final String EVM_DESTINATION_BINDING_DOMAIN =
       "iroha:sccp:evm-destination-binding:v1";
   private static final String TRON_DESTINATION_BINDING_DOMAIN =
@@ -268,6 +278,10 @@ public final class SccpJsonParser {
   private static final BigInteger MAX_JSON_SAFE_INTEGER =
       new BigInteger("9007199254740991");
   private static final BigInteger MAX_U128 = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE);
+  private static final BigInteger MAX_TON_COINS =
+      BigInteger.ONE.shiftLeft(120).subtract(BigInteger.ONE);
+  private static final String KECCAK256_EMPTY_BYTES =
+      "C5D2460186F7233C927E7DB2DCC703C0E500B653CA82273B7BFAD8045D85A470";
   private static final String TAIRA_CHAIN_ID_HASH =
       upperHex(
           keccak(
@@ -1140,6 +1154,10 @@ public final class SccpJsonParser {
         parseSourceIdentity(requiredObject(value, "source_identity"), lane, label);
     final DestinationRoles destination =
         parseDestination(requiredObject(value, "destination"), lane, revision, label);
+    final SccpModels.SoraOutboundExecutionPolicyV1 executionPolicy =
+        parseSoraOutboundExecutionPolicy(
+            requiredObject(value, "sora_outbound_execution_policy"),
+            label + ".sora_outbound_execution_policy");
     final boolean sourceMatchesDestination;
     if ("ton".equals(source.family()) && "ton".equals(destination.family())) {
       sourceMatchesDestination =
@@ -1163,13 +1181,35 @@ public final class SccpJsonParser {
     final Map<String, Object> settlement = requiredObject(value, "settlement");
     exactFields(
         settlement,
-        Set.of("asset_definition_id", "custody_owner", "payload_amount_scale"),
+        Set.of("asset_definition_id", "payload_amount_scale", "max_outstanding_liability"),
         label + ".settlement");
     if (!TAIRA_XOR_ASSET_ID.equals(requiredText(settlement, "asset_definition_id"))) {
       throw new IllegalArgumentException(label + " settlement must use canonical Taira XOR");
     }
-    requiredText(settlement, "custody_owner");
     requiredInt(settlement, "payload_amount_scale", 9, 9);
+    final BigInteger maxOutstandingLiability =
+        requiredUnsignedInteger(settlement, "max_outstanding_liability", MAX_U128, true);
+    if (!maxOutstandingLiability
+        .multiply(BigInteger.valueOf(destination.multiplier()))
+        .equals(destination.maxWrappedSupply())) {
+      throw new IllegalArgumentException(
+          label + " wrapped-supply cap does not match its SORA liability cap");
+    }
+    final List<String> governedRoles =
+        new ArrayList<>(
+            List.of(
+                executionPolicy.contractArtifactSha256,
+                executionPolicy.verifyingKeyReference.commitment,
+                destination.routeConfigurationHash(),
+                destination.destinationBindingHash(),
+                destination.verifierKeyHash(),
+                destination.semanticProfileHash(),
+                destination.finalityAnchorHash()));
+    if ("ton".equals(destination.family())) {
+      governedRoles.add(destination.governedHashRoles().get(1));
+      governedRoles.add(destination.governedHashRoles().get(4));
+    }
+    requireDistinctRawHashes(governedRoles, label + " governed execution and deployment");
     final String lineage = routeId + '\0' + assetKey;
     return new ParsedRoute(
         lineage,
@@ -1184,7 +1224,66 @@ public final class SccpJsonParser {
         activation,
         inboundFinalityCutoff,
         destination.destinationBindingHash(),
-        destination.routeConfigurationHash());
+        destination.routeConfigurationHash(),
+        executionPolicy,
+        maxOutstandingLiability);
+  }
+
+  private static SccpModels.SoraOutboundExecutionPolicyV1 parseSoraOutboundExecutionPolicy(
+      final Map<String, Object> value, final String label) {
+    exactFields(
+        value,
+        Set.of("version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit"),
+        label);
+    final int version = requiredInt(value, "version", 1, 1);
+    final String semantics = requiredText(value, "semantics");
+    if (!SORA_OUTBOUND_EXECUTION_SEMANTICS.equals(semantics)) {
+      throw new IllegalArgumentException(label + ".semantics is unsupported");
+    }
+    final String artifact = upperBytes(value, "contract_artifact_sha256", 32);
+    final Map<String, Object> referenceValue = requiredObject(value, "vk_ref");
+    exactFields(referenceValue, Set.of("backend", "name", "version", "commitment"), label + ".vk_ref");
+    final String backend = requiredText(referenceValue, "backend");
+    final String name = requiredText(referenceValue, "name");
+    if (!portableVerifyingKeyField(backend) || !portableVerifyingKeyField(name)) {
+      throw new IllegalArgumentException(label + ".vk_ref is not a portable verifying-key identity");
+    }
+    final SccpModels.PortableVerifyingKeyReferenceV1 reference =
+        new SccpModels.PortableVerifyingKeyReferenceV1(
+            backend,
+            name,
+            requiredLong(referenceValue, "version", 1, 0xffff_ffffL),
+            upperBytes(referenceValue, "commitment", 32));
+    if (artifact.equals(reference.commitment)) {
+      throw new IllegalArgumentException(
+          label + " reuses its artifact and verification-key hash roles");
+    }
+    return new SccpModels.SoraOutboundExecutionPolicyV1(
+        version,
+        semantics,
+        artifact,
+        reference,
+        requiredLong(value, "gas_limit", 1, 1_000_000_000L));
+  }
+
+  private static boolean portableVerifyingKeyField(final String value) {
+    final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+    if (bytes.length == 0 || bytes.length > 256 || !isAsciiLowerOrDigit(value.charAt(0))
+        || !isAsciiLowerOrDigit(value.charAt(value.length() - 1))) {
+      return false;
+    }
+    for (final String forbidden : List.of("..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:")) {
+      if (value.contains(forbidden)) return false;
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char item = value.charAt(index);
+      if (!isAsciiLowerOrDigit(item) && "-_/:.".indexOf(item) < 0) return false;
+    }
+    return true;
+  }
+
+  private static boolean isAsciiLowerOrDigit(final char value) {
+    return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9');
   }
 
   private static GovernanceRouteKey parseGovernanceRouteKey(
@@ -1301,17 +1400,27 @@ public final class SccpJsonParser {
         List.of(
             upperBytes(deployment, "token_address", 20),
             upperBytes(deployment, "verifier_address", 20),
-            upperBytes(deployment, "route_address", 20));
+            upperBytes(deployment, "route_address", 20),
+            upperBytes(deployment, "replay_verifier_address", 20),
+            upperBytes(deployment, "mint_breaker_address", 20));
     final List<String> hashes =
         List.of(
             upperBytes(deployment, "token_code_hash", 32),
             upperBytes(deployment, "verifier_code_hash", 32),
             upperBytes(deployment, "verifier_key_hash", 32),
-            upperBytes(deployment, "route_code_hash", 32));
+            upperBytes(deployment, "route_code_hash", 32),
+            upperBytes(deployment, "replay_verifier_code_hash", 32),
+            upperBytes(deployment, "mint_breaker_code_hash", 32));
     if (new HashSet<>(addresses).size() != addresses.size()
         || new HashSet<>(hashes).size() != hashes.size()) {
       throw new IllegalArgumentException(
           label + " deployment reuses a role-separated address or hash");
+    }
+    for (final int index : List.of(0, 1, 3, 4, 5)) {
+      if (KECCAK256_EMPTY_BYTES.equals(hashes.get(index))) {
+        throw new IllegalArgumentException(
+            label + " deployment runtime code hash must not identify empty bytecode");
+      }
     }
     validateVerifyingKey(
         requiredObject(deployment, "verifying_key"), hashes.get(2), label + ".verifying_key");
@@ -1331,6 +1440,8 @@ public final class SccpJsonParser {
             "taira_to_token_multiplier",
             1_000_000_000L,
             1_000_000_000L);
+    final BigInteger maxWrappedSupply =
+        requiredUnsignedInteger(deployment, "max_wrapped_supply", MAX_U128, true);
     final DestinationHashes derived =
         deriveDestinationHashes(
             family,
@@ -1339,13 +1450,19 @@ public final class SccpJsonParser {
             hashes,
             policyHashes,
             routeRevision,
-            multiplier);
+            multiplier,
+            maxWrappedSupply);
     return new DestinationRoles(
         family,
         addresses.get(2),
         hashes.get(3),
         derived.destinationBindingHash(),
         derived.routeConfigurationHash(),
+        multiplier,
+        maxWrappedSupply,
+        hashes.get(2),
+        policyHashes.profileHash(),
+        policyHashes.anchorHash(),
         addresses,
         deploymentRoles);
   }
@@ -1373,6 +1490,10 @@ public final class SccpJsonParser {
     final String circuit = upperBytes(deployment, "verifier_circuit_hash", 32);
     final String keyHash = upperBytes(deployment, "verifier_key_hash", 32);
     final String proofProfile = upperBytes(deployment, "proof_profile_commitment", 32);
+    final SccpModels.TonMintBreakerGuardianKeysV1 guardianKeys =
+        tonGuardianKeys(
+            requiredObject(deployment, "mint_breaker_guardian_keys"),
+            label + ".mint_breaker_guardian_keys");
     validateBls12381VerifyingKey(
         requiredObject(deployment, "verifying_key"), keyHash, label + ".verifying_key");
     final ParsedProofPolicy policy =
@@ -1403,9 +1524,10 @@ public final class SccpJsonParser {
             policy.anchorHash());
     requireDistinctRawHashes(governedHashes, label + " TON deployment");
     requiredLong(deployment, "taira_to_token_multiplier", 1, 1);
+    final BigInteger maxWrappedSupply =
+        requiredUnsignedInteger(deployment, "max_wrapped_supply", MAX_TON_COINS, true);
     final int globalId;
     if (lane.source() == SccpNetworkV1.TON_MAINNET) globalId = -239;
-    else if (lane.source() == SccpNetworkV1.TON_TESTNET) globalId = -3;
     else throw new IllegalArgumentException(label + " requires a TON lane");
 
     final ByteArrayOutputStream binding = new ByteArrayOutputStream();
@@ -1424,11 +1546,14 @@ public final class SccpJsonParser {
             embeddedCode,
             circuit,
             keyHash,
-            proofProfile,
-            policy.profileHash(),
-            policy.anchorHash())) {
+            proofProfile)) {
       writeRaw(binding, hexBytes(role));
     }
+    for (final String guardian : guardianKeys.ordered()) {
+      writeRaw(binding, hexBytes(guardian));
+    }
+    writeRaw(binding, hexBytes(policy.profileHash()));
+    writeRaw(binding, hexBytes(policy.anchorHash()));
     final byte[] bindingHash = sha256(binding.toByteArray());
 
     final ByteArrayOutputStream deploymentConfig = new ByteArrayOutputStream();
@@ -1440,11 +1565,14 @@ public final class SccpJsonParser {
             embeddedCode,
             circuit,
             keyHash,
-            proofProfile,
-            policy.profileHash(),
-            policy.anchorHash())) {
+            proofProfile)) {
       writeRaw(deploymentConfig, hexBytes(role));
     }
+    for (final String guardian : guardianKeys.ordered()) {
+      writeRaw(deploymentConfig, hexBytes(guardian));
+    }
+    writeRaw(deploymentConfig, hexBytes(policy.profileHash()));
+    writeRaw(deploymentConfig, hexBytes(policy.anchorHash()));
     writeRaw(deploymentConfig, bindingHash);
     final byte[] deploymentHash = sha256(deploymentConfig.toByteArray());
 
@@ -1453,6 +1581,7 @@ public final class SccpJsonParser {
     writeBytes(assetRoute, "taira_ton_xor".getBytes(StandardCharsets.US_ASCII));
     writeU32(assetRoute, (int) routeRevision);
     writeU64(assetRoute, BigInteger.ONE);
+    writeU128(assetRoute, maxWrappedSupply);
 
     final byte[] sourceLaneHash = SccpV1.laneHash(lane);
     final byte[] destinationLaneHash =
@@ -1479,6 +1608,11 @@ public final class SccpJsonParser {
         routeCode,
         upperHex(bindingHash),
         upperHex(sha256(routeConfiguration.toByteArray())),
+        1,
+        maxWrappedSupply,
+        keyHash,
+        policy.profileHash(),
+        policy.anchorHash(),
         List.of(master.identity(), route.identity()),
         governedHashes);
   }
@@ -1490,15 +1624,20 @@ public final class SccpJsonParser {
       final List<String> hashes,
       final ParsedProofPolicy policy,
       final long routeRevision,
-      final long multiplier) {
+      final long multiplier,
+      final BigInteger maxWrappedSupply) {
     final boolean tron = "tron".equals(family);
     final ExternalNetworkParameters network = externalNetworkParameters(lane.source());
     final byte[] tokenAddress = hexBytes(addresses.get(0));
     final byte[] verifierAddress = hexBytes(addresses.get(1));
     final byte[] routeAddress = hexBytes(addresses.get(2));
+    final byte[] replayVerifierAddress = hexBytes(addresses.get(3));
+    final byte[] mintBreakerAddress = hexBytes(addresses.get(4));
     final byte[] tokenCodeHash = hexBytes(hashes.get(0));
     final byte[] verifierCodeHash = hexBytes(hashes.get(1));
     final byte[] verifierKeyHash = hexBytes(hashes.get(2));
+    final byte[] replayVerifierCodeHash = hexBytes(hashes.get(4));
+    final byte[] mintBreakerCodeHash = hexBytes(hashes.get(5));
     final byte[] semanticHash = hexBytes(policy.profileHash());
     final byte[] anchorHash = hexBytes(policy.anchorHash());
 
@@ -1516,21 +1655,20 @@ public final class SccpJsonParser {
                 verifierCodeHash,
                 verifierKeyHash,
                 semanticHash,
-                anchorHash));
+                anchorHash,
+                abiWordAddress(replayVerifierAddress, tron),
+                replayVerifierCodeHash,
+                abiWordAddress(mintBreakerAddress, tron),
+                mintBreakerCodeHash));
 
     final byte[] sourceLaneHash = SccpV1.laneHash(lane);
     final byte[] destinationLaneHash =
         SccpV1.laneHash(new SccpLaneIdV1(lane.target(), lane.source()));
     final List<String> routeHashRoles =
-        new ArrayList<>(
-            List.of(
-                upperHex(sourceLaneHash),
-                upperHex(destinationLaneHash),
-                hashes.get(0),
-                hashes.get(1),
-                hashes.get(2),
-                policy.profileHash(),
-                policy.anchorHash()));
+        new ArrayList<>(List.of(upperHex(sourceLaneHash), upperHex(destinationLaneHash)));
+    routeHashRoles.addAll(hashes);
+    routeHashRoles.add(policy.profileHash());
+    routeHashRoles.add(policy.anchorHash());
     if (tron) routeHashRoles.add(upperHex(destinationBinding));
     requireDistinctRawHashes(routeHashRoles, "SCCP route configuration");
 
@@ -1545,6 +1683,10 @@ public final class SccpJsonParser {
                 semanticHash,
                 anchorHash));
     if (tron) deploymentWords.add(destinationBinding);
+    deploymentWords.add(abiWordAddress(replayVerifierAddress, false));
+    deploymentWords.add(replayVerifierCodeHash);
+    deploymentWords.add(abiWordAddress(mintBreakerAddress, false));
+    deploymentWords.add(mintBreakerCodeHash);
     final byte[] deploymentConfigHash =
         keccak(concatenate(deploymentWords.toArray(new byte[0][])));
     final byte[] assetRouteConfigHash =
@@ -1553,7 +1695,8 @@ public final class SccpJsonParser {
                 keccakText("xor"),
                 keccakText(network.routeId()),
                 abiWordUnsigned(routeRevision),
-                abiWordUnsigned(multiplier)));
+                abiWordUnsigned(multiplier),
+                abiWordUnsigned(maxWrappedSupply)));
     final byte[] routeConfiguration =
         keccak(
             concatenate(
@@ -1573,15 +1716,9 @@ public final class SccpJsonParser {
       final SccpNetworkV1 network) {
     return switch (network) {
       case ETHEREUM_MAINNET -> new ExternalNetworkParameters(1, "taira_eth_xor");
-      case ETHEREUM_SEPOLIA ->
-          new ExternalNetworkParameters(11_155_111L, "taira_eth_xor");
       case BSC_MAINNET -> new ExternalNetworkParameters(56, "taira_bsc_xor");
-      case BSC_TESTNET -> new ExternalNetworkParameters(97, "taira_bsc_xor");
       case TRON_MAINNET -> new ExternalNetworkParameters(0x2b66_53dcL, "taira_tron_xor");
-      case TRON_NILE -> new ExternalNetworkParameters(0xcd86_90dcL, "taira_tron_xor");
-      case TRON_SHASTA -> new ExternalNetworkParameters(0x94a9_059eL, "taira_tron_xor");
       case TON_MAINNET -> new ExternalNetworkParameters(-239, "taira_ton_xor");
-      case TON_TESTNET -> new ExternalNetworkParameters(-3, "taira_ton_xor");
       case SORA_TAIRA ->
           throw new IllegalArgumentException("SORA Taira is not an external SCCP network");
     };
@@ -2105,8 +2242,14 @@ public final class SccpJsonParser {
     if (value.get("profile") != null) {
       throw new IllegalArgumentException(label + ".profile must be null");
     }
-    final SccpNetworkV1 network =
-        SccpNetworkV1.fromProfileKey(requiredText(value, "network").replace('_', '-'));
+    final String wireName = requiredText(value, "network");
+    SccpNetworkV1 network = null;
+    for (final SccpNetworkV1 candidate : SccpNetworkV1.values()) {
+      if (candidate.profileKey().replace('-', '_').equals(wireName)) {
+        network = candidate;
+        break;
+      }
+    }
     if (network == null) throw new IllegalArgumentException(label + " is unsupported or retired");
     return network;
   }
@@ -2133,6 +2276,20 @@ public final class SccpJsonParser {
       throw new IllegalArgumentException(label + " must use TON basechain workchain 0");
     }
     return new TonAddress(workchain, account);
+  }
+
+  private static SccpModels.TonMintBreakerGuardianKeysV1 tonGuardianKeys(
+      final Map<String, Object> value, final String label) {
+    exactFields(
+        value,
+        Set.of("guardian_0", "guardian_1", "guardian_2", "guardian_3", "guardian_4"),
+        label);
+    return new SccpModels.TonMintBreakerGuardianKeysV1(
+        upperBytes(value, "guardian_0", 32),
+        upperBytes(value, "guardian_1", 32),
+        upperBytes(value, "guardian_2", 32),
+        upperBytes(value, "guardian_3", 32),
+        upperBytes(value, "guardian_4", 32));
   }
 
   private static String canonicalRouteKey(
@@ -2617,6 +2774,12 @@ public final class SccpJsonParser {
     }
   }
 
+  private static void writeU128(final ByteArrayOutputStream out, final BigInteger value) {
+    for (int shift = 0; shift < 16; shift++) {
+      out.write(value.shiftRight(shift * 8).and(BigInteger.valueOf(0xff)).intValue());
+    }
+  }
+
   private static void writeU16(final ByteArrayOutputStream out, final int value) {
     for (int shift = 0; shift < 2; shift++) out.write((value >>> (shift * 8)) & 0xff);
   }
@@ -2646,7 +2809,9 @@ public final class SccpJsonParser {
       String activation,
       SccpModels.InboundFinalityCutoffV1 inboundFinalityCutoff,
       String destinationBindingHash,
-      String routeConfigurationHash) {}
+      String routeConfigurationHash,
+      SccpModels.SoraOutboundExecutionPolicyV1 soraOutboundExecutionPolicy,
+      BigInteger maxOutstandingLiability) {}
 
   private record GovernanceRouteKey(
       SccpLaneIdV1 lane, String routeId, String assetKey, long revision) {}
@@ -2660,6 +2825,11 @@ public final class SccpJsonParser {
       String routeCodeHash,
       String destinationBindingHash,
       String routeConfigurationHash,
+      long multiplier,
+      BigInteger maxWrappedSupply,
+      String verifierKeyHash,
+      String semanticProfileHash,
+      String finalityAnchorHash,
       List<String> governedAddressRoles,
       List<String> governedHashRoles) {}
 

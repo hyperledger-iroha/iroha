@@ -21,10 +21,7 @@ public final class VerifyingKeyInstructionUtilsTests {
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-    "stark/fri",
-    "stark/fri/sha256-goldilocks",
-    "stark/fri/poseidon2-goldilocks",
-    "stark/fri/sha256_goldilocks.v1"
+    "stark/fri/poseidon-x7-goldilocks-6x64-v1"
   };
 
   private VerifyingKeyInstructionUtilsTests() {}
@@ -92,7 +89,7 @@ public final class VerifyingKeyInstructionUtilsTests {
 
   private static void verifierRegistryIsClosedExactTypedAndImmutable() {
     final Set<String> expected = new LinkedHashSet<>(Arrays.asList(EXACT_REGISTRY));
-    assert expected.size() == 12 : "test registry must not contain duplicates";
+    assert expected.size() == 9 : "test registry must not contain duplicates";
     assert expected.equals(VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1)
         : "Java registry must exactly mirror the native registry";
 
@@ -144,13 +141,16 @@ public final class VerifyingKeyInstructionUtilsTests {
       "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
       "halo2/pasta/tiny-add",
       "stark/fri/",
+      "stark/fri",
       "STARK/FRI",
       "stark/FRI",
+      "stark/fri/poseidon2-goldilocks",
+      "stark/fri/sha256_goldilocks.v1",
       "stark/fri/latest",
-      "stark/fri/sha256-goldilocks/extra",
+      "stark/fri/poseidon-x7-goldilocks-6x64-v1/extra",
       "stark/fri/sha256 goldilocks",
       "stark/fri/sha256+goldilocks",
-      "stark/fri/sha256-goldilocks\u200B",
+      "stark/fri/poseidon-x7-goldilocks-6x64-v1\u200B",
       "halo2\uFF0Fipa",
       "halo2/\u200Bipa",
       "h\u0430lo2/ipa",
@@ -170,7 +170,7 @@ public final class VerifyingKeyInstructionUtilsTests {
       "jindo-lattice-pcs-zk",
       "sis-hints-anoncred-pq-v0",
       "sis-with-hints",
-      "vega-existing-credential-zk-v0",
+      "vega-existing-credential-zk-v1",
       "anonymous-pgc-k-out-of-n-v1",
       "stark/fri/dev-fixture",
       "stark/fri/externally-audited",
@@ -289,7 +289,7 @@ public final class VerifyingKeyInstructionUtilsTests {
         VerifyingKeyInstructionUtils.parseRecord(baseArguments(), "halo2/ipa");
     assertThrows(
         IllegalArgumentException.class,
-        () -> record.toArguments("stark/fri/sha256-goldilocks"),
+        () -> record.toArguments("stark/fri/poseidon-x7-goldilocks-6x64-v1"),
         "record engine must not change during serialization");
     assertThrows(
         IllegalArgumentException.class,
@@ -297,7 +297,7 @@ public final class VerifyingKeyInstructionUtilsTests {
         "inline verifier commitment must remain bound to the exact registry label");
 
     final VerifyingKeyRecordDescription mismatchedRecord =
-        VerifyingKeyInstructionUtils.parseRecord(starkArguments(), "stark/fri/sha256-goldilocks");
+        VerifyingKeyInstructionUtils.parseRecord(starkArguments(), "stark/fri/poseidon-x7-goldilocks-6x64-v1");
     assertThrows(
         IllegalArgumentException.class,
         () ->
@@ -345,7 +345,10 @@ public final class VerifyingKeyInstructionUtilsTests {
 
   private static void catalogClassifierAcceptsOnlyExactProductionLabels() {
     for (final String label :
-        new String[] {"halo2-ipa-pasta", "stark", "halo2/ipa", "stark/fri"}) {
+        new String[] {
+          "halo2-ipa-pasta", "stark", "halo2/ipa",
+          "stark/fri/poseidon-x7-goldilocks-6x64-v1"
+        }) {
       assert VerifyingKeyBackendTag.CatalogBackendTag.PRODUCTION
           == VerifyingKeyBackendTag.fromCatalogLabel(label);
     }
@@ -423,13 +426,13 @@ public final class VerifyingKeyInstructionUtilsTests {
 
     final UpdateVerifyingKeyInstruction validUpdate =
         UpdateVerifyingKeyInstruction.builder()
-            .setBackend("stark/fri/sha256-goldilocks")
+            .setBackend("stark/fri/poseidon-x7-goldilocks-6x64-v1")
             .setName("vk_test")
             .setRecord(
                 VerifyingKeyInstructionUtils.parseRecord(
-                    starkArguments(), "stark/fri/sha256-goldilocks"))
+                    starkArguments(), "stark/fri/poseidon-x7-goldilocks-6x64-v1"))
             .build();
-    assert "stark/fri/sha256-goldilocks".equals(validUpdate.backend());
+    assert "stark/fri/poseidon-x7-goldilocks-6x64-v1".equals(validUpdate.backend());
   }
 
   private static void registerAndUpdateRejectBlankNames() {

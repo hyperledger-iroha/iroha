@@ -58,6 +58,7 @@ fn drain_finalized_lane_work_output(
 /// certificate/application persistence check on every readiness turn.
 pub(super) fn preflight_finalized_lane_rollover(
     executor: &V2EffectExecutor<SerializedV2Runtime>,
+    services: &ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
     canonical_lane_body_recovered: &mut bool,
 ) -> Result<bool, V2RunnerError> {
@@ -72,7 +73,7 @@ pub(super) fn preflight_finalized_lane_rollover(
         *canonical_lane_body_recovered = true;
     }
     let _ = lane_work.persist_anchored_sessions()?;
-    let _ = lane_work.service_next_historical_recovery()?;
+    let _ = service_historical_recovery_tick(lane_work, services)?;
     if lane_work.has_pending_historical_recovery() {
         return Ok(false);
     }
@@ -100,7 +101,7 @@ fn rollover_finalized_height_outputs(
     )?;
     let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
     lane_work.persist_anchored_sessions()?;
-    let _ = lane_work.service_next_historical_recovery()?;
+    let _ = service_historical_recovery_tick(&mut lane_work, services)?;
     if lane_work.has_pending_historical_recovery() {
         return Err(V2RunnerError::Service(
             "finalized lane output still owns predecessor-height recovery".to_owned(),

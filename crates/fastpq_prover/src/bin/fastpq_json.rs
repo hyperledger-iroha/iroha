@@ -406,7 +406,7 @@ fn handle_verify(input: VerifyInput) -> Result<VerifyResponse, String> {
         proof_sha256: sha256_hex(&proof_bytes),
         proof_bytes_len: proof_bytes.len(),
         verify_ms: duration_ms(verify_time),
-        trace_commitment: proof.commitment().to_string(),
+        trace_commitment: hex::encode(proof.commitment().to_le_bytes()),
         batch_manifest_sha256: batch_manifest_sha256(&request),
     })
 }
@@ -517,7 +517,7 @@ fn prove_request(
         proof_bytes,
         prove_time,
         verify_time,
-        proof.commitment().to_string(),
+        hex::encode(proof.commitment().to_le_bytes()),
         batch_manifest_sha256(request),
     ))
 }

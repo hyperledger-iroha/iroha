@@ -3033,6 +3033,17 @@ pub struct SccpRecentMessages {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub next: Option<SccpRecentCursor>,
 }
+const fn is_final_v1_external_sccp_network(
+    network: iroha_data_model::bridge::SccpNetworkV1,
+) -> bool {
+    matches!(
+        network,
+        iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::BscMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::TronMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::TonMainnet
+    )
+}
 fn sccp_recent_projection_text(value: &iroha_sccp::SccpNormalizedCodecValueV1) -> Option<&str> {
     match value {
         iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { value } => Some(value.as_str()),
@@ -3042,36 +3053,32 @@ fn sccp_recent_projection_text(value: &iroha_sccp::SccpNormalizedCodecValueV1) -
 fn sccp_recent_projection_value_is_canonical(
     value: &iroha_sccp::SccpNormalizedCodecValueV1,
 ) -> bool {
-    let (codec, bytes): (u8, &[u8]) = match value {
-        iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { value } => {
+    if let iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { workchain, account } = value {
+        let Some(bytes) = iroha_sccp::canonical_sccp_ton_account36_bytes_v1(
+            iroha_data_model::bridge::SccpTonAddressV1 {
+                workchain: *workchain,
+                account: *account,
+            },
+        ) else {
+            return false;
+        };
+        return iroha_sccp::decode_sccp_normalized_codec_value(
+            iroha_sccp::SCCP_CODEC_TON_ACCOUNT36,
+            &bytes,
+        )
+        .as_ref()
+            == Some(value);
+    }
+    let (codec, bytes): (u8, &[u8]) =
+        if let iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText { value } = value {
             (iroha_sccp::SCCP_CODEC_CANONICAL_TEXT, value.as_bytes())
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 { bytes } => {
+        } else if let iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 { bytes } = value {
             (iroha_sccp::SCCP_CODEC_EVM_ADDRESS20, bytes)
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { bytes } => {
+        } else if let iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { bytes } = value {
             (iroha_sccp::SCCP_CODEC_TRON_ADDRESS21, bytes)
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes } => {
-            (iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32, bytes)
-        }
-        iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { workchain, account } => {
-            let Some(bytes) = iroha_sccp::canonical_sccp_ton_account36_bytes_v1(
-                iroha_data_model::bridge::SccpTonAddressV1 {
-                    workchain: *workchain,
-                    account: *account,
-                },
-            ) else {
-                return false;
-            };
-            return iroha_sccp::decode_sccp_normalized_codec_value(
-                iroha_sccp::SCCP_CODEC_TON_ACCOUNT36,
-                &bytes,
-            )
-            .as_ref()
-                == Some(value);
-        }
-    };
+        } else {
+            return false;
+        };
     iroha_sccp::decode_sccp_normalized_codec_value(codec, bytes).as_ref() == Some(value)
 }
 fn validate_sccp_recent_projection(
@@ -3085,21 +3092,13 @@ fn validate_sccp_recent_projection(
         (target, &transfer.recipient),
         (
             iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet
-                | iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia
-                | iroha_data_model::bridge::SccpNetworkV1::BscMainnet
-                | iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
+                | iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
             iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 { .. },
         ) | (
-            iroha_data_model::bridge::SccpNetworkV1::TronMainnet
-                | iroha_data_model::bridge::SccpNetworkV1::TronNile
-                | iroha_data_model::bridge::SccpNetworkV1::TronShasta,
+            iroha_data_model::bridge::SccpNetworkV1::TronMainnet,
             iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { .. },
         ) | (
-            iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
-            iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { .. },
-        ) | (
-            iroha_data_model::bridge::SccpNetworkV1::TonMainnet
-                | iroha_data_model::bridge::SccpNetworkV1::TonTestnet,
+            iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
             iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { .. },
         )
     );
@@ -3197,7 +3196,7 @@ fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
                 .ok_or_else(|| eyre!("{label} has an unsupported target profile"))?;
         let lane = iroha_data_model::bridge::SccpLaneIdV1 { source, target };
         if source != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
-            || !target.is_external()
+            || !is_final_v1_external_sccp_network(target)
             || !lane.is_well_formed()
             || item.target_domain != target.domain_id()
         {
@@ -4103,7 +4102,7 @@ fn validate_taira_only_sccp_registry(
         .map_err(|error| eyre!("node returned an invalid SCCP registry: {error}"))?;
     if registry.lanes.iter().any(|lane| {
         lane.lane_id.target != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
-            || !lane.lane_id.source.is_external()
+            || !is_final_v1_external_sccp_network(lane.lane_id.source)
             || lane.routes.iter().any(|route| {
                 route.lane_id.target != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
             })
@@ -4238,7 +4237,7 @@ fn preflight_sccp_destination_submit(
     let lane = bundle.commitment.context.lane;
     if !lane.is_well_formed()
         || !lane.source.is_sora()
-        || !lane.target.is_external()
+        || !is_final_v1_external_sccp_network(lane.target)
         || destination.backend != parsed.backend()
         || destination.route_configuration_hash
             != bundle.commitment.context.route_configuration_hash
@@ -4282,7 +4281,7 @@ fn preflight_sccp_native_submit(
     validate_sccp_taira_transfer_recipient(&native.payload)?;
     let lane = native.source.lane;
     if !lane.is_well_formed()
-        || !lane.source.is_external()
+        || !is_final_v1_external_sccp_network(lane.source)
         || lane.target != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
         || iroha_sccp::sccp_message_source_domain(&native.payload) != lane.source.domain_id()
         || iroha_sccp::sccp_message_target_domain(&native.payload) != lane.target.domain_id()
@@ -4384,7 +4383,7 @@ fn validate_sccp_message_bundle_for_request(
     }
     let lane = bundle.commitment.context.lane;
     if lane.source != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
-        || !lane.target.is_external()
+        || !is_final_v1_external_sccp_network(lane.target)
         || !lane.is_well_formed()
     {
         return Err(eyre!(
@@ -4408,7 +4407,7 @@ fn validate_sccp_proof_request_for_message(
         ));
     }
     if request.source_network() != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
-        || !request.target_network().is_external()
+        || !is_final_v1_external_sccp_network(request.target_network())
     {
         return Err(eyre!(
             "node returned an SCCP Groth16 proof request outside the exact Taira-to-external surface"
@@ -4715,7 +4714,7 @@ fn decode_sccp_bridge_submit_response(
     }
     if response.counterparty_chain != expectation.counterparty.profile_key()
         || response.counterparty_domain != expectation.counterparty.domain_id()
-        || !expectation.counterparty.is_external()
+        || !is_final_v1_external_sccp_network(expectation.counterparty)
     {
         return Err(eyre!(
             "bridge submit response counterparty does not match the request's exact external network"
@@ -33370,6 +33369,7 @@ mod tests {
             version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
             committed_height: 42,
             consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
+            qualification: None,
             protocols: PrivacyProtocolIdV1::ALL
                 .into_iter()
                 .map(|protocol_id| PrivacyCapabilityRowV1 {
@@ -33393,7 +33393,7 @@ mod tests {
                 message_id_hex: "67".repeat(32),
                 kind: "transfer".to_owned(),
                 source_profile: "sora-taira".to_owned(),
-                target_profile: "tron-nile".to_owned(),
+                target_profile: "tron-mainnet".to_owned(),
                 destination_binding_hash: format!("0x{}", "56".repeat(32)),
                 route_configuration_hash: format!("0x{}", "57".repeat(32)),
                 target_domain: iroha_sccp::SCCP_DOMAIN_TRON,
@@ -34434,6 +34434,36 @@ mod tests {
         assert!(error.to_string().contains("invalid SCCP registry"));
     }
     #[test]
+    fn final_v1_external_sccp_network_allowlist_is_exact() {
+        for retained in [
+            "ethereum-mainnet",
+            "bsc-mainnet",
+            "tron-mainnet",
+            "ton-mainnet",
+        ] {
+            let network = iroha_data_model::bridge::SccpNetworkV1::from_profile_key(retained)
+                .expect("retained final V1 profile");
+            assert!(is_final_v1_external_sccp_network(network));
+        }
+        assert!(!is_final_v1_external_sccp_network(
+            iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+        ));
+        for retired in [
+            "ethereum-sepolia",
+            "bsc-testnet",
+            "tron-nile",
+            "tron-shasta",
+            "ton-testnet",
+            "solana-testnet",
+        ] {
+            assert!(
+                !iroha_data_model::bridge::SccpNetworkV1::from_profile_key(retired)
+                    .is_some_and(is_final_v1_external_sccp_network),
+                "retired profile `{retired}` must not enter the final V1 external allowlist"
+            );
+        }
+    }
+    #[test]
     fn get_sccp_recent_messages_uses_only_canonical_window_fields() {
         let payload = sample_sccp_recent_messages();
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -34507,22 +34537,6 @@ mod tests {
     fn sccp_recent_messages_reject_bounds_duplicates_aliases_and_malformed_items() {
         let valid = sample_sccp_recent_messages();
         validate_sccp_recent_messages(&valid).expect("valid recent response");
-        let mut solana = valid.clone();
-        solana.items[0].target_profile = iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet
-            .profile_key()
-            .to_owned();
-        solana.items[0].target_domain = iroha_sccp::SCCP_DOMAIN_SOLANA;
-        solana.items[0].route_id = Some(iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.to_owned());
-        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
-            &mut solana.items[0].payload_projection;
-        transfer.dest_domain = iroha_sccp::SCCP_DOMAIN_SOLANA;
-        transfer.recipient =
-            iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0x93; 32] };
-        transfer.route_id = iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
-            value: iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.to_owned(),
-        };
-        validate_sccp_recent_messages(&solana).expect("valid Solana recent response");
-
         let mut ton = valid.clone();
         ton.items[0].target_profile = iroha_data_model::bridge::SccpNetworkV1::TonMainnet
             .profile_key()
@@ -34549,12 +34563,6 @@ mod tests {
         };
         assert!(validate_sccp_recent_messages(&wrong_ton_workchain).is_err());
 
-        let mut zero_solana_recipient = solana.clone();
-        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
-            &mut zero_solana_recipient.items[0].payload_projection;
-        transfer.recipient =
-            iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0; 32] };
-        assert!(validate_sccp_recent_messages(&zero_solana_recipient).is_err());
         let mut duplicate = valid.clone();
         duplicate.items.push(duplicate.items[0].clone());
         assert!(validate_sccp_recent_messages(&duplicate).is_err());
@@ -34580,9 +34588,22 @@ mod tests {
         let mut overflow = valid.clone();
         overflow.items[0].amount = u128::MAX.into();
         assert!(validate_sccp_recent_messages(&overflow).is_err());
-        let mut retired = valid.clone();
-        retired.items[0].target_profile = "solana-mainnet-beta".to_owned();
-        assert!(validate_sccp_recent_messages(&retired).is_err());
+        for target_profile in [
+            "ethereum-sepolia",
+            "bsc-testnet",
+            "tron-nile",
+            "tron-shasta",
+            "ton-testnet",
+            "solana-testnet",
+            "solana-mainnet-beta",
+        ] {
+            let mut retired = valid.clone();
+            retired.items[0].target_profile = target_profile.to_owned();
+            assert!(
+                validate_sccp_recent_messages(&retired).is_err(),
+                "retired target profile `{target_profile}` must reject"
+            );
+        }
         let mut wrong_link = valid.clone();
         wrong_link.items[0].links.proof_request_path = "/v1/sccp/jobs/retired".to_owned();
         assert!(validate_sccp_recent_messages(&wrong_link).is_err());
@@ -35651,7 +35672,7 @@ mod tests {
             creation_time_ms: Some(9),
             payload_kind: "transfer".to_owned(),
             message_id: [1; 32],
-            counterparty: iroha_data_model::bridge::SccpNetworkV1::TronNile,
+            counterparty: iroha_data_model::bridge::SccpNetworkV1::TronMainnet,
             backend: "bridge/sccp/native/tron-dpos-v1".to_owned(),
             route_binding: SccpBridgeExpectedRouteBinding::Exact([2; 32]),
             range_start_height: 7,
@@ -35673,7 +35694,7 @@ mod tests {
                 JsonValue::from("bridge/sccp/native/tron-dpos-v1"),
             ),
             ("counterparty_domain".into(), JsonValue::from(5_u64)),
-            ("counterparty_chain".into(), JsonValue::from("tron-nile")),
+            ("counterparty_chain".into(), JsonValue::from("tron-mainnet")),
             (
                 "route_configuration_hash_hex".into(),
                 JsonValue::from(hex::encode([2; 32])),

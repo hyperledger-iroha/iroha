@@ -118,6 +118,7 @@ macro_rules! impl_direct_instruction_box {
 impl_direct_instruction_box!(crate::isi::zk::VerifyProof);
 impl_direct_instruction_box!(crate::isi::zk::PruneProofs);
 impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyProtocolActivationV1);
+impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyExact12QualificationV1);
 impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1);
 impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1);
 impl_direct_instruction_box!(crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1);
@@ -149,6 +150,7 @@ impl_direct_instruction_box!(crate::isi::bridge::SubmitBridgeProof);
 impl_direct_instruction_box!(crate::isi::bridge::RecordBridgeReceipt);
 impl_direct_instruction_box!(crate::isi::bridge::RecordSccpMessage);
 impl_direct_instruction_box!(crate::isi::bridge::ApplySccpRouteGovernance);
+impl_direct_instruction_box!(crate::isi::bridge::SubmitSccpTonBreakerObservationV1);
 impl_direct_instruction_box!(crate::isi::asset_alias::SetAssetDefinitionAlias);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferAvailability);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferBlacklist);
@@ -2670,6 +2672,7 @@ pub mod prelude {
         },
         bridge::{
             ApplySccpRouteGovernance, RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof,
+            SubmitSccpTonBreakerObservationV1,
         },
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,

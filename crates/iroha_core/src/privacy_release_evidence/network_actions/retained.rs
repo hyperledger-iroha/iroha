@@ -215,6 +215,8 @@ fn placeholder_envelope_v1(
     proof: PrivacyProofV1,
 ) -> PrivacyProofEnvelopeV1 {
     PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -237,6 +239,8 @@ fn final_envelope_v1(
         .digest()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     Ok(PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -287,7 +291,7 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
         return Err(evidence_error());
     }
     let profile = compiled_privacy_profile_v1(
-        iroha_data_model::privacy::PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        iroha_data_model::privacy::PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
     )
     .map_err(|error| match error {
         crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable { .. } => {
@@ -325,14 +329,14 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
         public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
         amount,
         authorization_epoch: policy.authorization_epoch,
-        replay_nullifier: iroha_data_model::privacy::PrivacyNullifierV1::new([0; 32]),
+        replay_nullifier: Default::default(),
     };
     let intent = draft_intent_v1(
         &transaction_context,
         placeholder_envelope_v1(
             profile,
-            PrivacyStatementV1::ZkAcePqAuthorizationV0(statement.clone()),
-            PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(Vec::new())),
+            PrivacyStatementV1::ZkAcePqAuthorizationV1(statement.clone()),
+            PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(Vec::new())),
         ),
     )?;
     statement.context.transaction_intent_digest = intent;
@@ -349,8 +353,8 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     let envelope = final_envelope_v1(
         profile,
-        PrivacyStatementV1::ZkAcePqAuthorizationV0(statement.clone()),
-        PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(proof)),
+        PrivacyStatementV1::ZkAcePqAuthorizationV1(statement.clone()),
+        PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(proof)),
     )?;
     let transaction = finish_transaction_v1(&transaction_context, envelope, intent, private_key)?;
     Ok(PrivacyReleaseZkAceNetworkActionV1 {

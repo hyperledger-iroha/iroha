@@ -37,24 +37,14 @@ public final class SccpV1 {
     switch (network) {
       case SORA_TAIRA -> write(out, decodeLowerHex("fc56984b2be7431d840e21514d1883f0"));
       case ETHEREUM_MAINNET -> writeUnsignedLe(out, BigInteger.ONE, 8);
-      case ETHEREUM_SEPOLIA -> writeUnsignedLe(out, BigInteger.valueOf(11_155_111L), 8);
       case BSC_MAINNET -> writeUnsignedLe(out, BigInteger.valueOf(56), 8);
-      case BSC_TESTNET -> writeUnsignedLe(out, BigInteger.valueOf(97), 8);
       case TRON_MAINNET -> writeU32Bits(out, 0x2b6653dcL);
-      case TRON_NILE -> writeU32Bits(out, 0xcd8690dcL);
-      case TRON_SHASTA -> writeU32Bits(out, 0x94a9059eL);
       case TON_MAINNET ->
           writeTonNetwork(
               out,
               -239,
               "17a3a92992aabea785a7a090985a265cd31f323d849da51239737e321fb05569",
               "5e994fcf4d425c0a6ce6a792594b7173205f740a39cd56f537defd28b48a0f6e");
-      case TON_TESTNET ->
-          writeTonNetwork(
-              out,
-              -3,
-              "823f81f306ff02694f935cf5021548e3ce2b86b529812af6a12148879e95a128",
-              "67e20ac184b9e039a62667acc3f9c00f90f359a76738233379efa47604980ce8");
     }
     return out.toByteArray();
   }

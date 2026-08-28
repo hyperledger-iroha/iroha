@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.sccp
 
+import java.io.ByteArrayOutputStream
 import java.math.BigInteger
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -13,24 +14,159 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 class SccpV1Test {
     @Test
+    fun replayForestMatchesFinalV1CrossLanguageGolden() {
+        val boundary = SccpReplayBoundaryV1.SORA_OUTBOUND_LOCK
+        val domainHash = SccpReplayV1.domainHash(
+            SccpNetworkV1.SORA_TAIRA,
+            SccpNetworkV1.ETHEREUM_MAINNET,
+            boundary,
+            7,
+            hash(0x44),
+            SccpReplayActorV1.route(),
+        )
+        assertEquals(
+            "de11cbd183f55063fe715fcf120773d799dfb1185e057f758c126306832fdc3d",
+            SccpV1.encodeLowerHex(domainHash),
+        )
+        val key = SccpReplayV1.replayKey(domainHash, hash(0x11))
+        assertEquals(
+            "139f57881d055a13ecf390d7441dadfc065ded40181c42a7aa3ab0a27469f17b",
+            SccpV1.encodeLowerHex(key),
+        )
+        val record = SccpReplayV1.recordDigest(
+            boundary,
+            hash(0x11),
+            hash(0x22),
+            BigInteger.valueOf(9),
+            SccpReplayPrincipalV1.evm(ByteArray(20) { 0x33 }),
+            hash(0x55),
+        )
+        assertEquals(
+            "35ab8613a0be06397609861d3cb3383770948b24b1cf098f4006c232240a2c07",
+            SccpV1.encodeLowerHex(record),
+        )
+        val empty = SccpReplayV1.emptyHashes()
+        assertEquals(249, empty.size)
+        assertEquals(
+            "cefd4f39c0d2ba5c33835008c6c3e7bca47d6ea1c4da5bfc8a63f09dbc66651f",
+            SccpV1.encodeLowerHex(empty.last()),
+        )
+        val zero = ByteArray(32)
+        val nonMembership = SccpReplayV1.rootFromWitness(
+            key,
+            null,
+            SccpSparseMerkleWitnessV1(empty.last(), zero, zero, emptyList()),
+        )
+        assertTrue(nonMembership.matchesExpectedRoot)
+        assertEquals(19, nonMembership.shard)
+        val occupiedRoot = SccpV1.decodeLowerHex(
+            "7b47c79900f052fd4b73691e2fe2230fdf170225d54e9a248e176f30495ac918",
+        )
+        val membership = SccpReplayV1.rootFromWitness(
+            key,
+            record,
+            SccpSparseMerkleWitnessV1(occupiedRoot, record, zero, emptyList()),
+        )
+        assertTrue(membership.matchesExpectedRoot)
+        assertContentEquals(occupiedRoot, membership.root())
+
+        assertFailsWith<IllegalArgumentException> {
+            SccpReplayV1.rootFromWitness(
+                key,
+                null,
+                SccpSparseMerkleWitnessV1(
+                    empty.last(),
+                    zero,
+                    ByteArray(32).also { it[0] = 1 },
+                    listOf(hash(0x77)),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpReplayV1.rootFromWitness(
+                key,
+                null,
+                SccpSparseMerkleWitnessV1(
+                    empty.last(),
+                    zero,
+                    ByteArray(32).also { it[31] = 1 },
+                    listOf(empty.first()),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpReplayV1.recordDigest(
+                boundary,
+                hash(0x11),
+                hash(0x22),
+                BigInteger.ONE.shiftLeft(128),
+                SccpReplayPrincipalV1.evm(ByteArray(20) { 0x33 }),
+                hash(0x55),
+            )
+        }
+    }
+
+    @Test
+    fun soraReplayPrincipalRequiresExactCanonicalAccountIdPayload() {
+        val account = AccountAddress
+            .fromAccount(TestEd25519Keys.publicKey(0x61), "ed25519")
+            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+        val canonical = TransferWirePayloadEncoder.encodeAccountIdPayload(account)
+        SccpReplayPrincipalV1.soraAccount(canonical)
+
+        val nonCompact = nonCompactSingleAccountPayload(canonical)
+        assertEquals(
+            account,
+            TransferWirePayloadEncoder.decodeAccountIdPayload(
+                nonCompact,
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+                flags = 0,
+            ),
+            "alternate fixture must be a valid non-compact encoding of the same AccountId",
+        )
+        val wrongController = canonical.copyOf().also { it[0] = 2 }
+        val wrongAlgorithm = canonical.copyOf().also { it[14] = 0x7f }
+        for (invalid in listOf(
+            ByteArray(0),
+            byteArrayOf(0, 0, 0),
+            nonCompact,
+            wrongController,
+            wrongAlgorithm,
+            canonical + byteArrayOf(0),
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                SccpReplayPrincipalV1.soraAccount(invalid)
+            }
+        }
+    }
+
+    @Test
     fun closedInventoryReservesRetiredTagsAndAliases() {
         assertEquals(
-            listOf(1, 2, 3, 4, 5, 10, 11, 12, 14, 15),
+            listOf(0x40, 0x41, 0x42, 0x43, 0x44),
             SccpNetworkV1.values().map(SccpNetworkV1::tag),
         )
         assertSame(SccpNetworkV1.SORA_TAIRA, SccpNetworkV1.fromProfileKey("sora-taira"))
         assertTrue(SccpNetworkV1.SORA_TAIRA.production)
-        assertNull(SccpNetworkV1.fromTag(0), "removed tag 0")
-        for (tag in 6..9) assertNull(SccpNetworkV1.fromTag(tag), "retired tag $tag")
+        for (tag in 0..255) {
+            if (tag !in 0x40..0x44) assertNull(SccpNetworkV1.fromTag(tag), "unsupported tag $tag")
+        }
         for (alias in listOf(
             "sora-nexus",
             "sora_nexus",
             "solana-mainnet-beta",
+            "ethereum-sepolia",
+            "bsc-testnet",
+            "tron-nile",
+            "tron-shasta",
+            "ton-testnet",
+            "solana-testnet",
             "SORA-TAIRA",
             "sora_taira",
             "sora-taira ",
@@ -42,14 +178,20 @@ class SccpV1Test {
     }
 
     @Test
-    fun allSharedEthBscTronTransferVectorsMatchRust() {
+    fun allSharedMainnetTransferVectorsMatchRust() {
         val fixture = loadFixture("native_transfer_event_v1.json")
         assertEquals(1, (fixture["version"] as Number).toInt())
+        var supported = 0
         for (raw in fixture.list("vectors")) {
             val vector = raw.asObject()
+            val source = SccpNetworkV1.fromProfileKey(vector.string("source_profile"))
+                ?: throw AssertionError("fixture contains a retired SCCP source profile")
+            val target = SccpNetworkV1.fromProfileKey(vector.string("target_profile"))
+                ?: throw AssertionError("fixture contains a retired SCCP target profile")
+            supported++
             val lane = SccpLaneIdV1(
-                profile(vector.string("source_profile")),
-                profile(vector.string("target_profile")),
+                source,
+                target,
             )
             val payloadBytes = SccpV1.decodeLowerHex(vector.string("canonical_payload_hex"))
             val payload = SccpV1.decodeCanonicalPayload(payloadBytes)
@@ -81,6 +223,7 @@ class SccpV1Test {
                 ),
             )
         }
+        assertEquals(4, supported)
     }
 
     @Test
@@ -178,20 +321,13 @@ class SccpV1Test {
     }
 
     @Test
-    fun tonProfilesBindCanonicalZeroStates() {
+    fun tonMainnetBindsCanonicalZeroState() {
         val mainnet = SccpV1.canonicalNetworkBytes(SccpNetworkV1.TON_MAINNET)
-        val testnet = SccpV1.canonicalNetworkBytes(SccpNetworkV1.TON_TESTNET)
         assertEquals(90, mainnet.size)
-        assertEquals(90, testnet.size)
         assertContentEquals(
-            byteArrayOf(1, 14, 4, 0, 0, 0, 0x11, 0xff.toByte(), 0xff.toByte(), 0xff.toByte()),
+            byteArrayOf(1, 0x44, 4, 0, 0, 0, 0x11, 0xff.toByte(), 0xff.toByte(), 0xff.toByte()),
             mainnet.copyOfRange(0, 10),
         )
-        assertContentEquals(
-            byteArrayOf(1, 15, 4, 0, 0, 0, 0xfd.toByte(), 0xff.toByte(), 0xff.toByte(), 0xff.toByte()),
-            testnet.copyOfRange(0, 10),
-        )
-        assertFalse(mainnet.contentEquals(testnet))
     }
 
     @Test
@@ -265,7 +401,7 @@ class SccpV1Test {
 
     @Test
     fun commitmentDecoderRejectsTagTamperingCollisionsAndTrailingBytes() {
-        val lane = SccpLaneIdV1(SccpNetworkV1.SORA_TAIRA, SccpNetworkV1.TRON_NILE)
+        val lane = SccpLaneIdV1(SccpNetworkV1.SORA_TAIRA, SccpNetworkV1.TRON_MAINNET)
         val payload = transfer(
             destination = 5,
             recipientCodec = 5,
@@ -347,6 +483,41 @@ class SccpV1Test {
     )
 
     private fun hash(value: Int): ByteArray = ByteArray(32) { value.toByte() }
+
+    private fun nonCompactSingleAccountPayload(compact: ByteArray): ByteArray {
+        require(compact.size > 14 && (compact[4].toInt() and 0xff) == compact.size - 5)
+        val elementCount = readU64Le(compact, 5)
+        require(elementCount > 0 && elementCount <= Int.MAX_VALUE)
+        var offset = 13
+        val elements = ByteArray(elementCount.toInt())
+        for (index in elements.indices) {
+            require((compact[offset].toInt() and 0xff) == 1)
+            elements[index] = compact[offset + 1]
+            offset += 2
+        }
+        require(offset == compact.size)
+        val out = ByteArrayOutputStream()
+        out.write(compact, 0, 4)
+        writeU64Le(out, 8L + 9L * elements.size)
+        writeU64Le(out, elements.size.toLong())
+        for (element in elements) {
+            writeU64Le(out, 1)
+            out.write(element.toInt())
+        }
+        return out.toByteArray()
+    }
+
+    private fun readU64Le(value: ByteArray, offset: Int): Long {
+        var result = 0L
+        for (index in 0 until 8) {
+            result = result or ((value[offset + index].toLong() and 0xff) shl (index * 8))
+        }
+        return result
+    }
+
+    private fun writeU64Le(out: ByteArrayOutputStream, value: Long) {
+        for (index in 0 until 8) out.write((value ushr (index * 8)).toInt() and 0xff)
+    }
 
     private fun profile(value: String): SccpNetworkV1 =
         SccpNetworkV1.fromProfileKey(value) ?: error("fixture profile")

@@ -554,6 +554,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path('crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs'): (
         Path('v2_effects_kura_tip_replay.rs'),
         Path('v2_effects_01_view_churn_and_runtime_steps.rs'),
+        Path('v2_effects_highest_prepare_retention.rs'),
         Path('v2_effects_02_admission_handoffs.rs'),
     ),
 }

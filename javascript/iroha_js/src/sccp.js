@@ -11,7 +11,6 @@ import { NumericV1 } from "./numericV1.js";
 export const SCCP_DOMAIN_SORA = 0;
 export const SCCP_DOMAIN_ETH = 1;
 export const SCCP_DOMAIN_BSC = 2;
-export const SCCP_DOMAIN_SOLANA = 3;
 export const SCCP_DOMAIN_TON = 4;
 export const SCCP_DOMAIN_TRON = 5;
 
@@ -19,14 +18,12 @@ export const SCCP_DOMAIN_TRON = 5;
 export const SCCP_CODEC_CANONICAL_TEXT = 1;
 export const SCCP_CODEC_EVM_ADDRESS20 = 2;
 export const SCCP_CODEC_TRON_ADDRESS21 = 5;
-export const SCCP_CODEC_SOLANA_PUBKEY32 = 6;
 export const SCCP_CODEC_TON_ACCOUNT36 = 7;
 
 export const SCCP_CODEC_KEYS = Object.freeze({
   [SCCP_CODEC_CANONICAL_TEXT]: "canonical_text",
   [SCCP_CODEC_EVM_ADDRESS20]: "evm_address20",
   [SCCP_CODEC_TRON_ADDRESS21]: "tron_address21",
-  [SCCP_CODEC_SOLANA_PUBKEY32]: "solana_pubkey32",
   [SCCP_CODEC_TON_ACCOUNT36]: "ton_account36",
 });
 
@@ -45,21 +42,14 @@ const EVM_DESTINATION_BINDING_PREFIX = new TextEncoder().encode(
 const TRON_DESTINATION_BINDING_PREFIX = new TextEncoder().encode(
   "iroha:sccp:tron-destination-binding:v1",
 );
-const SOLANA_DESTINATION_BINDING_PREFIX = new TextEncoder().encode(
-  "iroha:sccp:solana-destination-binding:v1",
-);
 const TON_DESTINATION_BINDING_PREFIX = new TextEncoder().encode(
   "iroha:sccp:ton-destination-binding:v1",
-);
-const SOLANA_NATIVE_VERIFIER_CONFIG_PREFIX = new TextEncoder().encode(
-  "sccp:solana:verifier-config:v1",
 );
 const CONCRETE_ROUTE_CONFIG_PREFIX = new TextEncoder().encode(
   "sccp:concrete-route-config:v1",
 );
 const EVM_GROTH16_BACKEND = new TextEncoder().encode("evm-groth16-bn254-v1");
 const TRON_GROTH16_BACKEND = new TextEncoder().encode("tron-groth16-bn254-v1");
-const SOLANA_GROTH16_BACKEND = new TextEncoder().encode("solana-groth16-bn254-v1");
 const TON_GROTH16_BLS12381_BACKEND = new TextEncoder().encode(
   "ton-groth16-bls12381-v1",
 );
@@ -92,25 +82,12 @@ const NATIVE_MESSAGE_PROOF_NORITO_TYPE =
   "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffffn;
+const MAX_TON_COINS = (1n << 120n) - 1n;
 const MAX_U32 = 0xffff_ffff;
+const KECCAK256_EMPTY_BYTES =
+  "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
 const MAX_MERKLE_PROOF_STEPS = 64;
 const MAX_FINALITY_PROOF_BYTES = 16 * 1024 * 1024;
-export const SCCP_SOLANA_TESTNET_GENESIS_HASH =
-  "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY";
-// Keep this module browser-native. `instructionBuilders.js` imports SCCP at
-// module evaluation time, before an application could install a Node Buffer
-// compatibility global, so even an otherwise unrelated browser transfer flow
-// must not depend on `Buffer` here.
-const SOLANA_TESTNET_GENESIS_BYTES = Uint8Array.from([
-  0x3a, 0x13, 0x2e, 0xce, 0x10, 0x30, 0x5e, 0xc1,
-  0x83, 0x07, 0x25, 0x50, 0x2f, 0xa2, 0xb7, 0xe7,
-  0xeb, 0x81, 0x57, 0xe9, 0x12, 0x3d, 0x4c, 0x1f,
-  0x65, 0x4a, 0x71, 0x78, 0x71, 0x61, 0xdc, 0x21,
-]);
-const SOLANA_CLASSIC_TOKEN_PROGRAM_ID = Uint8Array.from([
-  6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172,
-  28, 180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169,
-]);
 const TON_MAINNET_ZERO_STATE_ROOT_HASH = Uint8Array.from(
   "17a3a92992aabea785a7a090985a265cd31f323d849da51239737e321fb05569"
     .match(/../gu)
@@ -121,21 +98,10 @@ const TON_MAINNET_ZERO_STATE_FILE_HASH = Uint8Array.from(
     .match(/../gu)
     .map((byte) => Number.parseInt(byte, 16)),
 );
-const TON_TESTNET_ZERO_STATE_ROOT_HASH = Uint8Array.from(
-  "823f81f306ff02694f935cf5021548e3ce2b86b529812af6a12148879e95a128"
-    .match(/../gu)
-    .map((byte) => Number.parseInt(byte, 16)),
-);
-const TON_TESTNET_ZERO_STATE_FILE_HASH = Uint8Array.from(
-  "67e20ac184b9e039a62667acc3f9c00f90f359a76738233379efa47604980ce8"
-    .match(/../gu)
-    .map((byte) => Number.parseInt(byte, 16)),
-);
 const CLOSED_DOMAINS = new Set([
   SCCP_DOMAIN_SORA,
   SCCP_DOMAIN_ETH,
   SCCP_DOMAIN_BSC,
-  SCCP_DOMAIN_SOLANA,
   SCCP_DOMAIN_TON,
   SCCP_DOMAIN_TRON,
 ]);
@@ -174,32 +140,35 @@ const BLS12381_PUBLIC_SIGNAL_FIELDS = Object.freeze([
 const ROUTE_KEY = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/u;
 
 const NETWORKS = Object.freeze({
-  "sora-taira": Object.freeze({ tag: 1, domain: SCCP_DOMAIN_SORA, sora: true }),
-  "ethereum-mainnet": Object.freeze({ tag: 2, domain: SCCP_DOMAIN_ETH, sora: false }),
-  "ethereum-sepolia": Object.freeze({ tag: 3, domain: SCCP_DOMAIN_ETH, sora: false }),
-  "bsc-mainnet": Object.freeze({ tag: 4, domain: SCCP_DOMAIN_BSC, sora: false }),
-  "bsc-testnet": Object.freeze({ tag: 5, domain: SCCP_DOMAIN_BSC, sora: false }),
-  "tron-mainnet": Object.freeze({ tag: 10, domain: SCCP_DOMAIN_TRON, sora: false }),
-  "tron-nile": Object.freeze({ tag: 11, domain: SCCP_DOMAIN_TRON, sora: false }),
-  "tron-shasta": Object.freeze({ tag: 12, domain: SCCP_DOMAIN_TRON, sora: false }),
-  "solana-testnet": Object.freeze({
-    tag: 13,
-    domain: SCCP_DOMAIN_SOLANA,
-    sora: false,
-    genesisHash: SCCP_SOLANA_TESTNET_GENESIS_HASH,
-  }),
+  "sora-taira": Object.freeze({ tag: 0x40, domain: SCCP_DOMAIN_SORA, sora: true }),
+  "ethereum-mainnet": Object.freeze({ tag: 0x41, domain: SCCP_DOMAIN_ETH, sora: false }),
+  "bsc-mainnet": Object.freeze({ tag: 0x42, domain: SCCP_DOMAIN_BSC, sora: false }),
+  "tron-mainnet": Object.freeze({ tag: 0x43, domain: SCCP_DOMAIN_TRON, sora: false }),
   "ton-mainnet": Object.freeze({
-    tag: 14,
+    tag: 0x44,
     domain: SCCP_DOMAIN_TON,
     sora: false,
     globalId: -239,
   }),
-  "ton-testnet": Object.freeze({
-    tag: 15,
-    domain: SCCP_DOMAIN_TON,
-    sora: false,
-    globalId: -3,
-  }),
+});
+
+const SCCP_REPLAY_MAGIC_V1 = new TextEncoder().encode("SCCP-REPLAY-SMT-V1");
+export const SCCP_REPLAY_SMT_DEPTH_V1 = 248;
+export const SCCP_REPLAY_BOUNDARIES_V1 = Object.freeze({
+  sora_outbound_lock: 0x01,
+  sora_inbound_release: 0x02,
+  evm_source_burn: 0x10,
+  evm_destination_mint: 0x11,
+  tron_source_burn: 0x20,
+  tron_destination_mint: 0x21,
+  ton_bridge_inbound_mint: 0x30,
+  ton_bridge_outbound_burn: 0x31,
+  ton_master_mint: 0x32,
+  ton_master_burn: 0x33,
+  ton_wallet_mint_credit: 0x34,
+  ton_wallet_burn_debit: 0x35,
+  ton_wallet_refund_debit: 0x36,
+  ton_wallet_refund_credit: 0x37,
 });
 
 export const SCCP_NETWORK_PROFILES = Object.freeze(
@@ -218,17 +187,15 @@ const NETWORK_WIRE_NAMES = Object.freeze(
 );
 
 const NATIVE_BACKENDS = Object.freeze({
-  ethereum_beacon_v1: new Set(["ethereum-mainnet", "ethereum-sepolia"]),
-  bsc_parlia_v1: new Set(["bsc-mainnet", "bsc-testnet"]),
-  tron_dpos_v1: new Set(["tron-mainnet", "tron-nile", "tron-shasta"]),
-  solana_agave_v1: new Set(["solana-testnet"]),
-  ton_masterchain_v1: new Set(["ton-mainnet", "ton-testnet"]),
+  ethereum_beacon_v1: new Set(["ethereum-mainnet"]),
+  bsc_parlia_v1: new Set(["bsc-mainnet"]),
+  tron_dpos_v1: new Set(["tron-mainnet"]),
+  ton_masterchain_v1: new Set(["ton-mainnet"]),
 });
 
 const DESTINATION_BACKENDS = Object.freeze({
   evm_groth16_bn254_v1: "evm",
   tron_groth16_bn254_v1: "tron",
-  solana_groth16_bn254_v1: "solana",
   ton_groth16_bls12381_v1: "ton",
 });
 
@@ -236,7 +203,6 @@ const INBOUND_ACTIVATABLE_PROFILES = new Set([
   "ethereum-mainnet",
   "bsc-mainnet",
   "tron-mainnet",
-  "solana-testnet",
   "ton-mainnet",
 ]);
 
@@ -469,9 +435,380 @@ function prefixedLowerHex(value) {
   return `0x${lowerHexBytes(value)}`;
 }
 
+function replayHashV1(...parts) {
+  return Uint8Array.from(sha256(concatenateBytes(...parts)));
+}
+
+function replayFixedBytesV1(value, length, label, { nonzero = true } = {}) {
+  let bytes;
+  if (typeof value === "string") {
+    const match = /^(?:0x)?([0-9a-f]+)$/u.exec(value);
+    if (match === null || match[1].length !== length * 2) {
+      throw new TypeError(`${label} must be ${length} canonical bytes`);
+    }
+    bytes = Uint8Array.from(match[1].match(/../gu), (byte) => Number.parseInt(byte, 16));
+  } else {
+    bytes = binary(value, label);
+  }
+  if (bytes.length !== length || (nonzero && allZero(bytes))) {
+    throw new TypeError(`${label} must be ${nonzero ? "nonzero " : ""}${length} canonical bytes`);
+  }
+  return bytes;
+}
+
+function replayUnsignedBigEndianV1(value, width, label, { positive = false } = {}) {
+  let integerValue;
+  if (typeof value === "bigint") integerValue = value;
+  else if (typeof value === "string" && /^(?:0|[1-9][0-9]*)$/u.test(value)) {
+    integerValue = BigInt(value);
+  } else if (Number.isSafeInteger(value)) integerValue = BigInt(value);
+  else throw new TypeError(`${label} must be a canonical unsigned integer`);
+  if (integerValue < 0n || (positive && integerValue === 0n)) {
+    throw new TypeError(`${label} must be ${positive ? "positive" : "unsigned"}`);
+  }
+  return unsignedBigIntBigEndian(integerValue, width, label);
+}
+
+function replaySignedI32BigEndianV1(value, label) {
+  integer(value, label, -0x8000_0000, 0x7fff_ffff);
+  const encoded = value < 0 ? BigInt(value) + 0x1_0000_0000n : BigInt(value);
+  return unsignedBigIntBigEndian(encoded, 4, label);
+}
+
+function replayBoundaryV1(value, label = "SCCP replay boundary") {
+  integer(value, label, 0, 0xff);
+  if (!Object.values(SCCP_REPLAY_BOUNDARIES_V1).includes(value)) {
+    throw new TypeError(`${label} is unsupported`);
+  }
+  return value;
+}
+
+function replayProfileV1(value, label) {
+  if (
+    typeof value !== "string" ||
+    !new Set([
+      "sora-taira",
+      "ethereum-mainnet",
+      "bsc-mainnet",
+      "tron-mainnet",
+      "ton-mainnet",
+    ]).has(value)
+  ) {
+    throw new TypeError(`${label} must name a final-V1 production network`);
+  }
+  return value;
+}
+
+function replayActorV1(value, label) {
+  const actor = plainObject(value, label);
+  if (actor.kind === "route" && Object.keys(actor).length === 1) {
+    return Object.freeze({ kind: 0, bytes: new Uint8Array() });
+  }
+  if ((actor.kind === "evm" || actor.kind === "tron") && Object.keys(actor).length === 2) {
+    return Object.freeze({
+      kind: actor.kind === "evm" ? 1 : 2,
+      bytes: replayFixedBytesV1(actor.address, 20, `${label}.address`),
+    });
+  }
+  if (actor.kind === "ton" && Object.keys(actor).length === 3) {
+    return Object.freeze({
+      kind: 3,
+      bytes: concatenateBytes(
+        replaySignedI32BigEndianV1(actor.workchain, `${label}.workchain`),
+        replayFixedBytesV1(actor.account, 32, `${label}.account`),
+      ),
+    });
+  }
+  throw new TypeError(`${label} has a non-canonical actor shape`);
+}
+
+function replayPrincipalV1(value, label) {
+  const principal = plainObject(value, label);
+  let kind;
+  let bytes;
+  if (principal.kind === "sora_account" && Object.keys(principal).length === 2) {
+    kind = 1;
+    bytes = binary(principal.canonicalBytes, `${label}.canonicalBytes`);
+  } else if (
+    (principal.kind === "evm" || principal.kind === "tron") &&
+    Object.keys(principal).length === 2
+  ) {
+    kind = principal.kind === "evm" ? 2 : 3;
+    bytes = replayFixedBytesV1(principal.address, 20, `${label}.address`);
+  } else if (principal.kind === "ton" && Object.keys(principal).length === 3) {
+    kind = 4;
+    bytes = concatenateBytes(
+      replaySignedI32BigEndianV1(principal.workchain, `${label}.workchain`),
+      replayFixedBytesV1(principal.account, 32, `${label}.account`),
+    );
+  } else {
+    throw new TypeError(`${label} has a non-canonical principal shape`);
+  }
+  if (bytes.length === 0 || bytes.length > 0xffff) {
+    throw new TypeError(`${label} has an invalid canonical length`);
+  }
+  return Object.freeze({ kind, bytes });
+}
+
+function replayDomainDirectionIsValidV1(source, target, boundary, actorKind) {
+  const B = SCCP_REPLAY_BOUNDARIES_V1;
+  if (
+    boundary === B.sora_outbound_lock && source === "sora-taira" &&
+    ["ethereum-mainnet", "bsc-mainnet", "tron-mainnet", "ton-mainnet"].includes(target)
+  ) return actorKind === 0;
+  if (
+    boundary === B.sora_inbound_release && target === "sora-taira" &&
+    ["ethereum-mainnet", "bsc-mainnet", "tron-mainnet", "ton-mainnet"].includes(source)
+  ) return actorKind === 0;
+  if ([B.evm_source_burn, B.evm_destination_mint].includes(boundary)) {
+    const destination = boundary === B.evm_destination_mint;
+    return actorKind === 1 &&
+      (destination ? source === "sora-taira" : target === "sora-taira") &&
+      ["ethereum-mainnet", "bsc-mainnet"].includes(destination ? target : source);
+  }
+  if ([B.tron_source_burn, B.tron_destination_mint].includes(boundary)) {
+    const destination = boundary === B.tron_destination_mint;
+    return actorKind === 2 &&
+      (destination
+        ? source === "sora-taira" && target === "tron-mainnet"
+        : source === "tron-mainnet" && target === "sora-taira");
+  }
+  const tonInbound = [
+    B.ton_bridge_inbound_mint,
+    B.ton_master_mint,
+    B.ton_wallet_mint_credit,
+    B.ton_wallet_refund_debit,
+    B.ton_wallet_refund_credit,
+  ];
+  const tonOutbound = [B.ton_bridge_outbound_burn, B.ton_master_burn, B.ton_wallet_burn_debit];
+  return actorKind === 3 &&
+    ((tonInbound.includes(boundary) && source === "sora-taira" && target === "ton-mainnet") ||
+      (tonOutbound.includes(boundary) && source === "ton-mainnet" && target === "sora-taira"));
+}
+
+/** Hash one exact final-V1 SCCP replay-forest domain. */
+export function sccpReplayDomainHashV1(value) {
+  const domain = exactFields(
+    value,
+    new Set([
+      "sourceProfile",
+      "targetProfile",
+      "boundary",
+      "routeRevision",
+      "routeConfigurationHash",
+      "actor",
+    ]),
+    "SCCP replay domain",
+  );
+  const source = replayProfileV1(domain.sourceProfile, "SCCP replay sourceProfile");
+  const target = replayProfileV1(domain.targetProfile, "SCCP replay targetProfile");
+  const boundary = replayBoundaryV1(domain.boundary);
+  const revision = integer(domain.routeRevision, "SCCP replay routeRevision", 1, MAX_U32);
+  const routeHash = replayFixedBytesV1(
+    domain.routeConfigurationHash,
+    32,
+    "SCCP replay routeConfigurationHash",
+  );
+  const actor = replayActorV1(domain.actor, "SCCP replay actor");
+  if (!replayDomainDirectionIsValidV1(source, target, boundary, actor.kind)) {
+    throw new TypeError("SCCP replay domain has an invalid boundary, direction, or actor");
+  }
+  const actorLength = replayUnsignedBigEndianV1(actor.bytes.length, 2, "SCCP replay actor length");
+  return prefixedLowerHex(
+    replayHashV1(
+      SCCP_REPLAY_MAGIC_V1,
+      Uint8Array.of(0x00),
+      replayUnsignedBigEndianV1(NETWORKS[source].tag, 4, "SCCP replay source tag"),
+      replayUnsignedBigEndianV1(NETWORKS[target].tag, 4, "SCCP replay target tag"),
+      Uint8Array.of(boundary),
+      replayUnsignedBigEndianV1(revision, 4, "SCCP replay route revision"),
+      routeHash,
+      Uint8Array.of(actor.kind),
+      actorLength,
+      actor.bytes,
+    ),
+  );
+}
+
+/** Derive the sharded sparse-Merkle key for one SCCP replay identity. */
+export function sccpReplayKeyV1(domainHash, replayId) {
+  return prefixedLowerHex(
+    replayHashV1(
+      SCCP_REPLAY_MAGIC_V1,
+      Uint8Array.of(0x01),
+      replayFixedBytesV1(domainHash, 32, "SCCP replay domain hash"),
+      replayFixedBytesV1(replayId, 32, "SCCP replay id"),
+    ),
+  );
+}
+
+/** Hash one exact occupied final-V1 SCCP replay record. */
+export function sccpReplayRecordDigestV1(value) {
+  const record = exactFields(
+    value,
+    new Set([
+      "operation",
+      "replayId",
+      "payloadSha256",
+      "amount",
+      "principal",
+      "auxiliaryIdentitySha256",
+    ]),
+    "SCCP replay record",
+  );
+  const operation = replayBoundaryV1(record.operation, "SCCP replay operation");
+  const replayId = replayFixedBytesV1(record.replayId, 32, "SCCP replay id");
+  const payload = replayFixedBytesV1(record.payloadSha256, 32, "SCCP replay payload SHA-256");
+  const amount = replayUnsignedBigEndianV1(record.amount, 16, "SCCP replay scale-9 amount", {
+    positive: true,
+  });
+  const principal = replayPrincipalV1(record.principal, "SCCP replay principal");
+  const auxiliary = replayFixedBytesV1(
+    record.auxiliaryIdentitySha256,
+    32,
+    "SCCP replay auxiliary identity SHA-256",
+  );
+  const principalDigest = replayHashV1(
+    SCCP_REPLAY_MAGIC_V1,
+    Uint8Array.of(0x03, principal.kind),
+    replayUnsignedBigEndianV1(principal.bytes.length, 2, "SCCP replay principal length"),
+    principal.bytes,
+  );
+  const auxiliaryDigest = replayHashV1(
+    SCCP_REPLAY_MAGIC_V1,
+    Uint8Array.of(0x04, operation),
+    auxiliary,
+  );
+  return prefixedLowerHex(
+    replayHashV1(
+      SCCP_REPLAY_MAGIC_V1,
+      Uint8Array.of(0x02, operation),
+      replayId,
+      payload,
+      amount,
+      principalDigest,
+      auxiliaryDigest,
+    ),
+  );
+}
+
+function sccpReplayParentHashV1(level, left, right) {
+  return replayHashV1(
+    SCCP_REPLAY_MAGIC_V1,
+    Uint8Array.of(0x12),
+    replayUnsignedBigEndianV1(level, 2, "SCCP replay tree level"),
+    left,
+    right,
+  );
+}
+
+/** Return the 249 canonical empty hashes, indexed in leaf-up order. */
+export function sccpReplayEmptyHashesV1() {
+  const hashes = [replayHashV1(SCCP_REPLAY_MAGIC_V1, Uint8Array.of(0x10))];
+  for (let level = 0; level < SCCP_REPLAY_SMT_DEPTH_V1; level += 1) {
+    hashes.push(sccpReplayParentHashV1(level, hashes[level], hashes[level]));
+  }
+  return Object.freeze(hashes.map(prefixedLowerHex));
+}
+
+function replayBitmapBitV1(bitmap, level) {
+  return (bitmap[31 - Math.floor(level / 8)] & (1 << (level % 8))) !== 0;
+}
+
+function replayKeyBitV1(key, level) {
+  return (key[31 - Math.floor(level / 8)] & (1 << (level % 8))) !== 0;
+}
+
+/**
+ * Reconstruct a shard root from one canonical compressed witness.
+ * `recordDigest` is null for an empty leaf and the exact digest for membership.
+ */
+export function sccpReplayRootFromWitnessV1(keyValue, recordDigest, witnessValue) {
+  const key = replayFixedBytesV1(keyValue, 32, "SCCP replay key");
+  const witness = exactFields(
+    witnessValue,
+    new Set(["expectedShardRoot", "priorRecordDigest", "siblingBitmap", "siblings"]),
+    "SCCP sparse-Merkle witness",
+  );
+  const expectedRoot = replayFixedBytesV1(
+    witness.expectedShardRoot,
+    32,
+    "SCCP witness expected shard root",
+  );
+  const prior = replayFixedBytesV1(
+    witness.priorRecordDigest,
+    32,
+    "SCCP witness prior record digest",
+    { nonzero: false },
+  );
+  const bitmap = replayFixedBytesV1(
+    witness.siblingBitmap,
+    32,
+    "SCCP witness sibling bitmap",
+    { nonzero: false },
+  );
+  if (bitmap[0] !== 0) throw new TypeError("SCCP witness bitmap has reserved high bits");
+  const supplied = array(witness.siblings, "SCCP witness siblings").map((sibling, index) =>
+    replayFixedBytesV1(sibling, 32, `SCCP witness siblings[${index}]`),
+  );
+  const setBits = bitmap.reduce((count, byte) => {
+    let current = byte;
+    let next = count;
+    while (current !== 0) {
+      next += current & 1;
+      current >>>= 1;
+    }
+    return next;
+  }, 0);
+  if (setBits !== supplied.length || supplied.length > SCCP_REPLAY_SMT_DEPTH_V1) {
+    throw new TypeError("SCCP witness sibling count does not match its bitmap");
+  }
+  const emptyHex = sccpReplayEmptyHashesV1();
+  const empty = emptyHex.map((hash, level) =>
+    replayFixedBytesV1(hash, 32, `SCCP empty hash ${level}`),
+  );
+  let suppliedIndex = 0;
+  let current;
+  if (recordDigest === null) {
+    if (!allZero(prior)) throw new TypeError("SCCP non-membership witness has an occupied digest");
+    current = empty[0];
+  } else {
+    const digest = replayFixedBytesV1(recordDigest, 32, "SCCP occupied record digest");
+    if (lowerHexBytes(digest) !== lowerHexBytes(prior)) {
+      throw new TypeError("SCCP membership witness record digest mismatch");
+    }
+    current = replayHashV1(SCCP_REPLAY_MAGIC_V1, Uint8Array.of(0x11), key, digest);
+  }
+  for (let level = 0; level < SCCP_REPLAY_SMT_DEPTH_V1; level += 1) {
+    let sibling = empty[level];
+    if (replayBitmapBitV1(bitmap, level)) {
+      sibling = supplied[suppliedIndex];
+      suppliedIndex += 1;
+      if (lowerHexBytes(sibling) === lowerHexBytes(empty[level])) {
+        throw new TypeError("SCCP witness explicitly encodes a default sibling");
+      }
+    }
+    current = replayKeyBitV1(key, level)
+      ? sccpReplayParentHashV1(level, sibling, current)
+      : sccpReplayParentHashV1(level, current, sibling);
+  }
+  return Object.freeze({
+    root: prefixedLowerHex(current),
+    expectedRoot: prefixedLowerHex(expectedRoot),
+    matchesExpectedRoot: lowerHexBytes(current) === lowerHexBytes(expectedRoot),
+    shard: key[0],
+  });
+}
+
 function abiWordUnsigned(value, label) {
-  integer(value, label, 0);
-  let remaining = BigInt(value);
+  let remaining;
+  if (typeof value === "bigint") {
+    if (value < 0n) throw new TypeError(`${label} must be an unsigned integer`);
+    remaining = value;
+  } else {
+    integer(value, label, 0);
+    remaining = BigInt(value);
+  }
   const result = new Uint8Array(32);
   for (let index = result.length - 1; index >= 0 && remaining !== 0n; index -= 1) {
     result[index] = Number(remaining & 0xffn);
@@ -627,7 +964,6 @@ function sameLane(left, right) {
 
 function emitterFamily(network) {
   if (network.profile.startsWith("tron-")) return "tron";
-  if (network.profile.startsWith("solana-")) return "solana";
   if (network.profile.startsWith("ton-")) return "ton";
   return "evm";
 }
@@ -728,76 +1064,6 @@ function parseEmitter(value, lane, label) {
   const family = canonicalText(record.emitter, `${label}.emitter`, 16);
   if (family !== emitterFamily(lane.source)) {
     throw new TypeError(`${label}.emitter does not match the lane source`);
-  }
-  if (family === "solana") {
-    const identity = exactFields(
-      record.identity,
-      new Set([
-        "program_id",
-        "program_data_address",
-        "program_data_slot",
-        "state_account",
-        "program_code_hash",
-        "route_config_hash",
-      ]),
-      `${label}.identity`,
-    );
-    const programId = exactUpperHex(
-      identity.program_id,
-      `${label}.identity.program_id`,
-      32,
-    );
-    const programDataAddress = exactUpperHex(
-      identity.program_data_address,
-      `${label}.identity.program_data_address`,
-      32,
-    );
-    const programDataSlot = integer(
-      identity.program_data_slot,
-      `${label}.identity.program_data_slot`,
-      1,
-    );
-    const stateAccount = exactUpperHex(
-      identity.state_account,
-      `${label}.identity.state_account`,
-      32,
-    );
-    const programCodeHash = exactUpperHex(
-      identity.program_code_hash,
-      `${label}.identity.program_code_hash`,
-      32,
-    );
-    const routeConfigHash = exactUpperHex(
-      identity.route_config_hash,
-      `${label}.identity.route_config_hash`,
-      32,
-    );
-    const roles = [
-      programId,
-      programDataAddress,
-      stateAccount,
-      programCodeHash,
-      routeConfigHash,
-    ];
-    if (new Set(roles).size !== roles.length) {
-      throw new TypeError(`${label} reuses a Solana source deployment role`);
-    }
-    const canonicalBytes = concatenateBytes(
-      Uint8Array.of(1, 2),
-      ...roles.slice(0, 2).map((role) => Uint8Array.from(Buffer.from(role, "hex"))),
-      unsignedLittleEndian(programDataSlot, 8, `${label}.identity.program_data_slot`),
-      ...roles.slice(2).map((role) => Uint8Array.from(Buffer.from(role, "hex"))),
-    );
-    return Object.freeze({
-      family,
-      address: programId,
-      runtime: programCodeHash,
-      configuration: routeConfigHash,
-      programDataAddress,
-      programDataSlot,
-      stateAccount,
-      canonicalBytes,
-    });
   }
   if (family === "ton") {
     const identity = exactFields(
@@ -1247,26 +1513,11 @@ function canonicalNetworkBytes(network) {
     case "ethereum-mainnet":
       identity = unsignedLittleEndian(1, 8, `${network.profile}.chain_id`);
       break;
-    case "ethereum-sepolia":
-      identity = unsignedLittleEndian(11_155_111, 8, `${network.profile}.chain_id`);
-      break;
     case "bsc-mainnet":
       identity = unsignedLittleEndian(56, 8, `${network.profile}.chain_id`);
       break;
-    case "bsc-testnet":
-      identity = unsignedLittleEndian(97, 8, `${network.profile}.chain_id`);
-      break;
     case "tron-mainnet":
       identity = unsignedLittleEndian(0x2b66_53dc, 4, `${network.profile}.network_id`);
-      break;
-    case "tron-nile":
-      identity = unsignedLittleEndian(0xcd86_90dc, 4, `${network.profile}.network_id`);
-      break;
-    case "tron-shasta":
-      identity = unsignedLittleEndian(0x94a9_059e, 4, `${network.profile}.network_id`);
-      break;
-    case "solana-testnet":
-      identity = SOLANA_TESTNET_GENESIS_BYTES;
       break;
     case "ton-mainnet":
       identity = concatenateBytes(
@@ -1280,20 +1531,6 @@ function canonicalNetworkBytes(network) {
         unsignedLittleEndian(0, 4, `${network.profile}.zero_state_seqno`),
         TON_MAINNET_ZERO_STATE_ROOT_HASH,
         TON_MAINNET_ZERO_STATE_FILE_HASH,
-      );
-      break;
-    case "ton-testnet":
-      identity = concatenateBytes(
-        signedLittleEndian32(-3, `${network.profile}.global_id`),
-        signedLittleEndian32(-1, `${network.profile}.masterchain_workchain`),
-        unsignedBigIntLittleEndian(
-          0x8000_0000_0000_0000n,
-          8,
-          `${network.profile}.masterchain_shard`,
-        ),
-        unsignedLittleEndian(0, 4, `${network.profile}.zero_state_seqno`),
-        TON_TESTNET_ZERO_STATE_ROOT_HASH,
-        TON_TESTNET_ZERO_STATE_FILE_HASH,
       );
       break;
     default:
@@ -1323,24 +1560,12 @@ function externalNetworkParameters(network) {
   switch (network.profile) {
     case "ethereum-mainnet":
       return Object.freeze({ chainOrNetworkId: 1, routeId: "taira_eth_xor" });
-    case "ethereum-sepolia":
-      return Object.freeze({ chainOrNetworkId: 11_155_111, routeId: "taira_eth_xor" });
     case "bsc-mainnet":
       return Object.freeze({ chainOrNetworkId: 56, routeId: "taira_bsc_xor" });
-    case "bsc-testnet":
-      return Object.freeze({ chainOrNetworkId: 97, routeId: "taira_bsc_xor" });
     case "tron-mainnet":
       return Object.freeze({ chainOrNetworkId: 0x2b66_53dc, routeId: "taira_tron_xor" });
-    case "tron-nile":
-      return Object.freeze({ chainOrNetworkId: 0xcd86_90dc, routeId: "taira_tron_xor" });
-    case "tron-shasta":
-      return Object.freeze({ chainOrNetworkId: 0x94a9_059e, routeId: "taira_tron_xor" });
-    case "solana-testnet":
-      return Object.freeze({ chainOrNetworkId: null, routeId: "taira_sol_xor" });
     case "ton-mainnet":
       return Object.freeze({ chainOrNetworkId: -239, routeId: "taira_ton_xor" });
-    case "ton-testnet":
-      return Object.freeze({ chainOrNetworkId: -3, routeId: "taira_ton_xor" });
     default:
       throw new TypeError(`${network.profile} is not an external SCCP V1 destination`);
   }
@@ -1352,57 +1577,6 @@ function requireDistinctHashRoles(roles, label) {
   }
 }
 
-function deriveSolanaNativeVerifierConfigHash({
-  lane,
-  routeRevision,
-  values,
-  policy,
-  multiplier,
-  sourceProgramId,
-  label,
-}) {
-  if (lane.source.profile !== "solana-testnet" || lane.target.profile !== "sora-taira") {
-    throw new TypeError(`${label} must use the exact Solana-testnet to SORA-Taira lane`);
-  }
-  const sourceLaneHash = laneHash(lane);
-  const destinationLaneHash = laneHash({ source: lane.target, target: lane.source });
-  const [circuitCommitment, witnessGeneratorCommitment, publicSignalSchemaHash] =
-    policy.semanticRoles;
-  return Uint8Array.from(
-    sha256(
-      concatenateBytes(
-        SOLANA_NATIVE_VERIFIER_CONFIG_PREFIX,
-        Uint8Array.of(1),
-        canonicalNetworkBytes(lane.target),
-        canonicalNetworkBytes(lane.source),
-        new TextEncoder().encode("taira_sol_xor"),
-        unsignedLittleEndian(routeRevision, 4, "SCCP Solana route revision"),
-        Uint8Array.of(3),
-        new TextEncoder().encode("xor"),
-        unsignedBigIntLittleEndian(
-          BigInt(multiplier),
-          16,
-          "SCCP Taira-to-SPL-token multiplier",
-        ),
-        values.verifier_key_hash,
-        values.native_verifier_program_id,
-        values.route_program_id,
-        sourceProgramId,
-        values.route_state_account,
-        values.token_mint_address,
-        SOLANA_CLASSIC_TOKEN_PROGRAM_ID,
-        sourceLaneHash,
-        destinationLaneHash,
-        policy.anchorHash,
-        policy.semanticHash,
-        circuitCommitment,
-        witnessGeneratorCommitment,
-        publicSignalSchemaHash,
-      ),
-    ),
-  );
-}
-
 function deriveDestinationHashes({
   family,
   lane,
@@ -1411,11 +1585,20 @@ function deriveDestinationHashes({
   policy,
   routeRevision,
   multiplier,
+  maxWrappedSupply,
 }) {
   const network = lane.source;
   const { chainOrNetworkId, routeId } = externalNetworkParameters(network);
-  const [tokenAddress, verifierAddress, routeAddress] = addresses;
-  const [tokenCodeHash, verifierCodeHash, verifierKeyHash] = hashes;
+  const [tokenAddress, verifierAddress, routeAddress, replayVerifierAddress, mintBreakerAddress] =
+    addresses;
+  const [
+    tokenCodeHash,
+    verifierCodeHash,
+    verifierKeyHash,
+    routeCodeHash,
+    replayVerifierCodeHash,
+    mintBreakerCodeHash,
+  ] = hashes;
   const destinationBindingHash = Uint8Array.from(
     keccak_256(
       concatenateBytes(
@@ -1436,6 +1619,14 @@ function deriveDestinationHashes({
         verifierKeyHash,
         policy.semanticHash,
         policy.anchorHash,
+        abiWordAddress20(replayVerifierAddress, "SCCP replay-verifier address", {
+          tron: family === "tron",
+        }),
+        replayVerifierCodeHash,
+        abiWordAddress20(mintBreakerAddress, "SCCP mint-breaker address", {
+          tron: family === "tron",
+        }),
+        mintBreakerCodeHash,
       ),
     ),
   );
@@ -1447,6 +1638,9 @@ function deriveDestinationHashes({
     destinationLaneHash,
     tokenCodeHash,
     verifierCodeHash,
+    routeCodeHash,
+    replayVerifierCodeHash,
+    mintBreakerCodeHash,
     verifierKeyHash,
     policy.semanticHash,
     policy.anchorHash,
@@ -1464,6 +1658,12 @@ function deriveDestinationHashes({
     policy.anchorHash,
   ];
   if (family === "tron") deploymentConfigWords.push(destinationBindingHash);
+  deploymentConfigWords.push(
+    abiWordAddress20(replayVerifierAddress, "SCCP replay-verifier address"),
+    replayVerifierCodeHash,
+    abiWordAddress20(mintBreakerAddress, "SCCP mint-breaker address"),
+    mintBreakerCodeHash,
+  );
   const deploymentConfigHash = Uint8Array.from(
     keccak_256(concatenateBytes(...deploymentConfigWords)),
   );
@@ -1474,6 +1674,7 @@ function deriveDestinationHashes({
         keccak_256(new TextEncoder().encode(routeId)),
         abiWordUnsigned(routeRevision, "SCCP route revision"),
         abiWordUnsigned(multiplier, "SCCP Taira-to-token multiplier"),
+        abiWordUnsigned(maxWrappedSupply, "SCCP maximum wrapped supply"),
       ),
     ),
   );
@@ -1495,240 +1696,6 @@ function deriveDestinationHashes({
     destinationBindingHash,
     deploymentConfigHash,
     routeConfigurationHash,
-  });
-}
-
-function parseSolanaDestinationDeployment(
-  deploymentValue,
-  lane,
-  routeRevision,
-  sourceProgramId,
-  label,
-  { enforceNativeConfig = true } = {},
-) {
-  integer(routeRevision, `${label}.route_revision`, 1, 1);
-  const fields = [
-    "token_mint_address",
-    "route_program_id",
-    "route_program_data_address",
-    "route_program_data_slot",
-    "route_state_account",
-    "route_program_code_hash",
-    "native_verifier_program_id",
-    "native_verifier_program_data_address",
-    "native_verifier_program_data_slot",
-    "native_verifier_material_account",
-    "native_verifier_program_code_hash",
-    "native_verifier_config_hash",
-    "verifying_key",
-    "verifier_key_hash",
-    "outbound_proof_policy",
-    "taira_to_token_multiplier",
-  ];
-  const deployment = exactFields(deploymentValue, new Set(fields), `${label}.deployment`);
-  const addressFields = [
-    "token_mint_address",
-    "route_program_id",
-    "route_program_data_address",
-    "route_state_account",
-    "native_verifier_program_id",
-    "native_verifier_program_data_address",
-    "native_verifier_material_account",
-  ];
-  const hashFields = [
-    "route_program_code_hash",
-    "native_verifier_program_code_hash",
-    "native_verifier_config_hash",
-    "verifier_key_hash",
-  ];
-  const values = Object.fromEntries(
-    [...addressFields, ...hashFields].map((field) => [
-      field,
-      bytesFromUpperHex(deployment[field], `${label}.deployment.${field}`, 32),
-    ]),
-  );
-  const routeProgramDataSlot = integer(
-    deployment.route_program_data_slot,
-    `${label}.deployment.route_program_data_slot`,
-    1,
-  );
-  const nativeVerifierProgramDataSlot = integer(
-    deployment.native_verifier_program_data_slot,
-    `${label}.deployment.native_verifier_program_data_slot`,
-    1,
-  );
-  const keyBytes = parseVerifyingKey(deployment.verifying_key, `${label}.deployment.verifying_key`);
-  if (
-    lowerHexBytes(keccak_256(keyBytes)).toUpperCase() !== deployment.verifier_key_hash
-  ) {
-    throw new TypeError(`${label}.deployment.verifier_key_hash does not match verifying_key`);
-  }
-  const policy = parseOutboundProofPolicy(
-    deployment.outbound_proof_policy,
-    `${label}.deployment.outbound_proof_policy`,
-    "bn254",
-  );
-  const allRoles = [
-    ...addressFields.map((field) => values[field]),
-    ...hashFields.map((field) => values[field]),
-    policy.semanticHash,
-    policy.anchorHash,
-    SOLANA_CLASSIC_TOKEN_PROGRAM_ID,
-  ];
-  requireDistinctHashRoles(allRoles, `${label}.deployment`);
-  if (
-    [values.route_program_id, values.native_verifier_program_id].some(
-      (programId) => lowerHexBytes(programId) === lowerHexBytes(sourceProgramId),
-    )
-  ) {
-    throw new TypeError(`${label}.source_program_id reuses a destination program role`);
-  }
-  const multiplier = integer(
-    deployment.taira_to_token_multiplier,
-    `${label}.deployment.taira_to_token_multiplier`,
-    1,
-    1,
-  );
-  const nativeVerifierConfigHash = deriveSolanaNativeVerifierConfigHash({
-    lane,
-    routeRevision,
-    values,
-    policy,
-    multiplier,
-    sourceProgramId,
-    label,
-  });
-  if (
-    enforceNativeConfig &&
-    lowerHexBytes(nativeVerifierConfigHash) !== lowerHexBytes(values.native_verifier_config_hash)
-  ) {
-    throw new TypeError(
-      `${label}.deployment.native_verifier_config_hash does not match the exact V1 preimage`,
-    );
-  }
-
-  const destinationBindingHash = Uint8Array.from(
-    keccak_256(
-      concatenateBytes(
-        SOLANA_DESTINATION_BINDING_PREFIX,
-        Uint8Array.of(1),
-        SOLANA_GROTH16_BACKEND,
-        Uint8Array.of(NETWORKS["solana-testnet"].tag),
-        unsignedLittleEndian(SCCP_DOMAIN_SORA, 4, "SCCP source domain"),
-        unsignedLittleEndian(SCCP_DOMAIN_SOLANA, 4, "SCCP target domain"),
-        SOLANA_TESTNET_GENESIS_BYTES,
-        values.token_mint_address,
-        values.route_program_id,
-        values.route_program_data_address,
-        unsignedLittleEndian(
-          routeProgramDataSlot,
-          8,
-          `${label}.deployment.route_program_data_slot`,
-        ),
-        values.route_state_account,
-        values.route_program_code_hash,
-        values.native_verifier_program_id,
-        values.native_verifier_program_data_address,
-        unsignedLittleEndian(
-          nativeVerifierProgramDataSlot,
-          8,
-          `${label}.deployment.native_verifier_program_data_slot`,
-        ),
-        values.native_verifier_material_account,
-        values.native_verifier_program_code_hash,
-        values.native_verifier_config_hash,
-        values.verifier_key_hash,
-        policy.semanticHash,
-        policy.anchorHash,
-      ),
-    ),
-  );
-
-  const sourceLaneHash = laneHash(lane);
-  const destinationLaneHash = laneHash({ source: lane.target, target: lane.source });
-  requireDistinctHashRoles(
-    [
-      sourceLaneHash,
-      destinationLaneHash,
-      values.route_program_code_hash,
-      values.native_verifier_program_code_hash,
-      values.native_verifier_config_hash,
-      values.verifier_key_hash,
-      policy.semanticHash,
-      policy.anchorHash,
-      destinationBindingHash,
-    ],
-    "SCCP Solana route configuration",
-  );
-  const deploymentConfigHash = Uint8Array.from(
-    keccak_256(
-      concatenateBytes(
-        values.token_mint_address,
-        values.route_program_id,
-        values.route_program_data_address,
-        unsignedLittleEndian(
-          routeProgramDataSlot,
-          8,
-          `${label}.deployment.route_program_data_slot`,
-        ),
-        values.route_state_account,
-        values.route_program_code_hash,
-        values.native_verifier_program_id,
-        values.native_verifier_program_data_address,
-        unsignedLittleEndian(
-          nativeVerifierProgramDataSlot,
-          8,
-          `${label}.deployment.native_verifier_program_data_slot`,
-        ),
-        values.native_verifier_material_account,
-        values.native_verifier_program_code_hash,
-        values.native_verifier_config_hash,
-        values.verifier_key_hash,
-        policy.semanticHash,
-        policy.anchorHash,
-        destinationBindingHash,
-      ),
-    ),
-  );
-  const assetRouteConfigHash = Uint8Array.from(
-    keccak_256(
-      concatenateBytes(
-        new TextEncoder().encode("xor"),
-        new TextEncoder().encode("taira_sol_xor"),
-        unsignedLittleEndian(routeRevision, 4, "SCCP route revision"),
-        unsignedLittleEndian(multiplier, 8, "SCCP Taira-to-token multiplier"),
-      ),
-    ),
-  );
-  const routeConfigurationHash = Uint8Array.from(
-    keccak_256(
-      concatenateBytes(
-        CONCRETE_ROUTE_CONFIG_PREFIX,
-        Uint8Array.of(1),
-        unsignedLittleEndian(SCCP_DOMAIN_SOLANA, 4, "SCCP target domain"),
-        Uint8Array.of(NETWORKS["solana-testnet"].tag),
-        SOLANA_TESTNET_GENESIS_BYTES,
-        sourceLaneHash,
-        destinationLaneHash,
-        deploymentConfigHash,
-        assetRouteConfigHash,
-      ),
-    ),
-  );
-  return Object.freeze({
-    family: "solana",
-    routeAddress: lowerHexBytes(values.route_program_id).toUpperCase(),
-    routeCodeHash: lowerHexBytes(values.route_program_code_hash).toUpperCase(),
-    destinationBindingHash,
-    deploymentConfigHash,
-    routeConfigurationHash,
-    nativeVerifierConfigHash,
-    proofPolicyRoles: Object.freeze([
-      values.verifier_key_hash,
-      policy.semanticHash,
-      policy.anchorHash,
-    ]),
-    deploymentRoles: Object.freeze(allRoles.map(lowerHexBytes)),
   });
 }
 
@@ -1767,8 +1734,10 @@ function parseTonDestinationDeployment(deploymentValue, lane, routeRevision, lab
     "verifying_key",
     "verifier_key_hash",
     "proof_profile_commitment",
+    "mint_breaker_guardian_keys",
     "outbound_proof_policy",
     "taira_to_token_multiplier",
+    "max_wrapped_supply",
   ];
   const deployment = exactFields(deploymentValue, new Set(fields), `${label}.deployment`);
   const master = parseTonAddress(
@@ -1827,6 +1796,25 @@ function parseTonDestinationDeployment(deploymentValue, lane, routeRevision, lab
   ) {
     throw new TypeError(`${label}.deployment.proof_profile_commitment is not canonical`);
   }
+  const guardianRecord = exactFields(
+    deployment.mint_breaker_guardian_keys,
+    new Set(["guardian_0", "guardian_1", "guardian_2", "guardian_3", "guardian_4"]),
+    `${label}.deployment.mint_breaker_guardian_keys`,
+  );
+  const guardianKeys = [0, 1, 2, 3, 4].map((index) =>
+    bytesFromUpperHex(
+      guardianRecord[`guardian_${index}`],
+      `${label}.deployment.mint_breaker_guardian_keys.guardian_${index}`,
+      32,
+    ),
+  );
+  for (let index = 1; index < guardianKeys.length; index += 1) {
+    if (lowerHexBytes(guardianKeys[index - 1]) >= lowerHexBytes(guardianKeys[index])) {
+      throw new TypeError(
+        `${label}.deployment.mint_breaker_guardian_keys must be strictly increasing`,
+      );
+    }
+  }
   const governedHashRoles = [
     ...hashFields.map((field) => hashes[field]),
     policy.semanticHash,
@@ -1839,8 +1827,16 @@ function parseTonDestinationDeployment(deploymentValue, lane, routeRevision, lab
     1,
     1,
   );
+  const maxWrappedSupply = BigInt(
+    canonicalUnsignedDecimal(
+      deployment.max_wrapped_supply,
+      `${label}.deployment.max_wrapped_supply`,
+      MAX_TON_COINS,
+      { positive: true },
+    ),
+  );
   const network = lane.source;
-  if (network.domain !== SCCP_DOMAIN_TON) {
+  if (network.profile !== "ton-mainnet") {
     throw new TypeError(`${label} requires an exact TON source lane`);
   }
   const globalId = externalNetworkParameters(network).chainOrNetworkId;
@@ -1864,6 +1860,7 @@ function parseTonDestinationDeployment(deploymentValue, lane, routeRevision, lab
         hashes.verifier_circuit_hash,
         hashes.verifier_key_hash,
         hashes.proof_profile_commitment,
+        ...guardianKeys,
         policy.semanticHash,
         policy.anchorHash,
       ),
@@ -1885,6 +1882,7 @@ function parseTonDestinationDeployment(deploymentValue, lane, routeRevision, lab
         hashes.verifier_circuit_hash,
         hashes.verifier_key_hash,
         hashes.proof_profile_commitment,
+        ...guardianKeys,
         policy.semanticHash,
         policy.anchorHash,
         destinationBindingHash,
@@ -1901,6 +1899,11 @@ function parseTonDestinationDeployment(deploymentValue, lane, routeRevision, lab
         ),
         unsignedLittleEndian(routeRevision, 4, "SCCP TON route revision"),
         unsignedLittleEndian(multiplier, 8, "SCCP Taira-to-TON-token multiplier"),
+        unsignedBigIntLittleEndian(
+          maxWrappedSupply,
+          16,
+          "SCCP TON maximum wrapped supply",
+        ),
       ),
     ),
   );
@@ -1921,6 +1924,8 @@ function parseTonDestinationDeployment(deploymentValue, lane, routeRevision, lab
   );
   return Object.freeze({
     family: "ton",
+    multiplier,
+    maxWrappedSupply,
     routeAddress: route.key,
     routeCodeHash: lowerHexBytes(hashes.route_code_hash).toUpperCase(),
     destinationBindingHash,
@@ -1930,6 +1935,10 @@ function parseTonDestinationDeployment(deploymentValue, lane, routeRevision, lab
       hashes.verifier_key_hash,
       policy.semanticHash,
       policy.anchorHash,
+    ]),
+    executionPolicyHashRoles: Object.freeze([
+      hashes.jetton_master_initial_data_hash,
+      hashes.route_initial_data_hash,
     ]),
     deploymentAddressRoles: Object.freeze([master.key, route.key]),
     deploymentHashRoles: Object.freeze(governedHashRoles.map(lowerHexBytes)),
@@ -1941,18 +1950,6 @@ function parseDestination(value, lane, routeRevision, source, label) {
   const family = canonicalText(record.family, `${label}.family`, 16);
   if (family !== emitterFamily(lane.source)) {
     throw new TypeError(`${label}.family does not match the lane source`);
-  }
-  if (family === "solana") {
-    if (source?.family !== "solana") {
-      throw new TypeError(`${label} requires an exact Solana source identity`);
-    }
-    return parseSolanaDestinationDeployment(
-      record.deployment,
-      lane,
-      routeRevision,
-      bytesFromUpperHex(source.address, `${label}.source_program_id`, 32),
-      label,
-    );
   }
   if (family === "ton") {
     return parseTonDestinationDeployment(record.deployment, lane, routeRevision, label);
@@ -1967,17 +1964,41 @@ function parseDestination(value, lane, routeRevision, source, label) {
     "outbound_proof_policy",
     "route_address",
     "route_code_hash",
+    "replay_verifier_address",
+    "replay_verifier_code_hash",
+    "mint_breaker_address",
+    "mint_breaker_code_hash",
     "taira_to_token_multiplier",
+    "max_wrapped_supply",
   ];
   const deployment = exactFields(record.deployment, new Set(fields), `${label}.deployment`);
-  const addresses = ["token_address", "verifier_address", "route_address"].map((field) =>
-    exactUpperHex(deployment[field], `${label}.deployment.${field}`, 20),
-  );
-  const hashes = ["token_code_hash", "verifier_code_hash", "verifier_key_hash", "route_code_hash"].map(
-    (field) => exactUpperHex(deployment[field], `${label}.deployment.${field}`, 32),
+  const addresses = [
+    "token_address",
+    "verifier_address",
+    "route_address",
+    "replay_verifier_address",
+    "mint_breaker_address",
+  ].map((field) => exactUpperHex(deployment[field], `${label}.deployment.${field}`, 20));
+  const hashFields = [
+    "token_code_hash",
+    "verifier_code_hash",
+    "verifier_key_hash",
+    "route_code_hash",
+    "replay_verifier_code_hash",
+    "mint_breaker_code_hash",
+  ];
+  const hashes = hashFields.map((field) =>
+    exactUpperHex(deployment[field], `${label}.deployment.${field}`, 32),
   );
   if (new Set(addresses).size !== addresses.length || new Set(hashes).size !== hashes.length) {
     throw new TypeError(`${label}.deployment reuses a role-separated address or hash`);
+  }
+  for (const index of [0, 1, 3, 4, 5]) {
+    if (hashes[index].toLowerCase() === KECCAK256_EMPTY_BYTES) {
+      throw new TypeError(
+        `${label}.deployment.${hashFields[index]} must not identify empty runtime bytecode`,
+      );
+    }
   }
   const keyBytes = parseVerifyingKey(deployment.verifying_key, `${label}.deployment.verifying_key`);
   if (lowerHexBytes(keccak_256(keyBytes)).toUpperCase() !== deployment.verifier_key_hash) {
@@ -2002,17 +2023,28 @@ function parseDestination(value, lane, routeRevision, source, label) {
     1_000_000_000,
     1_000_000_000,
   );
+  const maxWrappedSupply = BigInt(
+    canonicalUnsignedDecimal(
+      deployment.max_wrapped_supply,
+      `${label}.deployment.max_wrapped_supply`,
+      MAX_U128,
+      { positive: true },
+    ),
+  );
   const derived = deriveDestinationHashes({
     family,
     lane,
     addresses,
-    hashes: hashes.slice(0, 3).map((hash) => Uint8Array.from(Buffer.from(hash, "hex"))),
+    hashes: hashes.map((hash) => Uint8Array.from(Buffer.from(hash, "hex"))),
     policy,
     routeRevision,
     multiplier,
+    maxWrappedSupply,
   });
   return Object.freeze({
     family,
+    multiplier,
+    maxWrappedSupply,
     routeAddress: addresses[2],
     routeCodeHash: hashes[3],
     proofPolicyRoles: Object.freeze([
@@ -2020,35 +2052,8 @@ function parseDestination(value, lane, routeRevision, source, label) {
       policy.semanticHash,
       policy.anchorHash,
     ]),
+    executionPolicyHashRoles: Object.freeze([]),
     ...derived,
-  });
-}
-
-/** Derive exact governed hashes for one Solana-testnet XOR destination deployment. */
-export function deriveSccpSolanaDestinationHashesV1(
-  deployment,
-  sourceProgramId,
-  routeRevision = 1,
-) {
-  const revision = integer(routeRevision, "SCCP Solana route revision", 1, 1);
-  const lane = parseLaneId(
-    {
-      source: { network: "solana_testnet", profile: null },
-      target: { network: "sora_taira", profile: null },
-    },
-    "SCCP Solana destination lane",
-  );
-  const parsed = parseSolanaDestinationDeployment(
-    deployment,
-    lane,
-    revision,
-    bytesFromUpperHex(sourceProgramId, "SCCP Solana source program id", 32),
-    "SCCP Solana destination",
-  );
-  return Object.freeze({
-    destination_binding_hash: prefixedLowerHex(parsed.destinationBindingHash),
-    deployment_config_hash: prefixedLowerHex(parsed.deploymentConfigHash),
-    route_configuration_hash: prefixedLowerHex(parsed.routeConfigurationHash),
   });
 }
 
@@ -2059,8 +2064,8 @@ export function deriveSccpTonDestinationHashesV1(
   routeRevision = 1,
 ) {
   const networkDescriptor = profile(networkProfile, "SCCP TON network profile");
-  if (networkDescriptor.domain !== SCCP_DOMAIN_TON) {
-    throw new TypeError("SCCP TON network profile must be ton-mainnet or ton-testnet");
+  if (networkDescriptor.profile !== "ton-mainnet") {
+    throw new TypeError("SCCP TON network profile must be ton-mainnet");
   }
   const revision = integer(routeRevision, "SCCP TON route revision", 1, 0xffff_ffff);
   const lane = parseLaneId(
@@ -2083,63 +2088,14 @@ export function deriveSccpTonDestinationHashesV1(
   });
 }
 
-/**
- * Derive the exact one-way material-config commitment for the native Solana verifier.
- *
- * Destination-binding and route-configuration hashes are deliberately excluded:
- * both commit this result and feeding either one back would require a cryptographic
- * fixed point. The supplied config field is ignored so deployment tooling can derive
- * the commitment before creating its config-addressed material account.
- */
-export function deriveSccpSolanaNativeVerifierConfigHashV1(
-  deployment,
-  sourceProgramId,
-  routeRevision = 1,
-) {
-  const revision = integer(routeRevision, "SCCP Solana route revision", 1, 1);
-  const lane = parseLaneId(
-    {
-      source: { network: "solana_testnet", profile: null },
-      target: { network: "sora_taira", profile: null },
-    },
-    "SCCP Solana destination lane",
-  );
-  const parsed = parseSolanaDestinationDeployment(
-    deployment,
-    lane,
-    revision,
-    bytesFromUpperHex(sourceProgramId, "SCCP Solana source program id", 32),
-    "SCCP Solana destination",
-    { enforceNativeConfig: false },
-  );
-  return prefixedLowerHex(parsed.nativeVerifierConfigHash);
-}
-
-/** Derive exact governed emitter and source-identity hashes for Solana testnet. */
-export function deriveSccpSolanaSourceIdentityHashesV1(identity) {
-  const record = exactFields(
-    identity,
-    new Set(["lane", "emitter"]),
-    "SCCP Solana source identity",
-  );
-  const lane = parseLaneId(record.lane, "SCCP Solana source identity.lane");
-  if (lane.source.profile !== "solana-testnet") {
-    throw new TypeError("SCCP Solana source identity must use the exact Solana-testnet lane");
-  }
-  const parsed = parseSourceIdentity(record, lane, "SCCP Solana source identity");
-  if (parsed.family !== "solana") {
-    throw new TypeError("SCCP Solana source identity must contain a Solana emitter");
-  }
-  return Object.freeze({
-    source_emitter_identity_hash: parsed.emitterIdentityHash,
-    source_identity_hash: parsed.sourceIdentityHash,
-  });
-}
-
 function parseSettlement(value, label) {
   const record = exactFields(
     value,
-    new Set(["asset_definition_id", "custody_owner", "payload_amount_scale"]),
+    new Set([
+      "asset_definition_id",
+      "payload_amount_scale",
+      "max_outstanding_liability",
+    ]),
     label,
   );
   const assetDefinitionId = canonicalText(
@@ -2150,15 +2106,21 @@ function parseSettlement(value, label) {
   if (assetDefinitionId !== TAIRA_XOR_ASSET_DEFINITION_ID) {
     throw new TypeError(`${label}.asset_definition_id is not the first-release Taira XOR asset`);
   }
-  const custody = canonicalText(record.custody_owner, `${label}.custody_owner`, 512);
-  AccountAddress.fromAccountId(custody);
   const payloadAmountScale = integer(
     record.payload_amount_scale,
     `${label}.payload_amount_scale`,
     9,
     9,
   );
-  return Object.freeze({ payloadAmountScale });
+  const maxOutstandingLiability = BigInt(
+    canonicalUnsignedDecimal(
+      record.max_outstanding_liability,
+      `${label}.max_outstanding_liability`,
+      MAX_U128,
+      { positive: true },
+    ),
+  );
+  return Object.freeze({ payloadAmountScale, maxOutstandingLiability });
 }
 
 function parseGovernedRoute(value, lane, label) {
@@ -2206,6 +2168,16 @@ function parseGovernedRoute(value, lane, label) {
     source,
     `${label}.destination`,
   );
+  const expectedWrappedSupply =
+    settlement.maxOutstandingLiability * BigInt(destination.multiplier);
+  if (
+    expectedWrappedSupply > MAX_U128 ||
+    expectedWrappedSupply !== destination.maxWrappedSupply
+  ) {
+    throw new TypeError(
+      `${label} destination wrapped-supply cap does not match the settlement liability cap`,
+    );
+  }
   const executionPolicy = parseSoraOutboundExecutionPolicy(
     record.sora_outbound_execution_policy,
     `${label}.sora_outbound_execution_policy`,
@@ -2217,22 +2189,12 @@ function parseGovernedRoute(value, lane, label) {
       destination.destinationBindingHash,
       destination.routeConfigurationHash,
       ...destination.proofPolicyRoles,
+      ...destination.executionPolicyHashRoles,
     ],
     `${label}.sora_outbound_execution_policy`,
   );
   if (source.family !== destination.family) throw new TypeError(`${label} family roles disagree`);
-  if (
-    source.family === "solana" &&
-    [source.address, source.programDataAddress, source.stateAccount, source.runtime].some((role) =>
-      destination.deploymentRoles.includes(role.toLowerCase()),
-    )
-  ) {
-    throw new TypeError(`${label} aliases a Solana source role with a destination deployment role`);
-  }
-  if (
-    source.family !== "solana" &&
-    (source.address !== destination.routeAddress || source.runtime !== destination.routeCodeHash)
-  ) {
+  if (source.address !== destination.routeAddress || source.runtime !== destination.routeCodeHash) {
     throw new TypeError(`${label} source emitter does not identify the destination route deployment`);
   }
   if (
@@ -2469,9 +2431,6 @@ export function normalizeSccpCodecValue(codec, value) {
   if (codec === SCCP_CODEC_EVM_ADDRESS20 && raw.length !== 20) {
     throw new TypeError("evm_address20 must contain exactly 20 bytes");
   }
-  if (codec === SCCP_CODEC_SOLANA_PUBKEY32 && raw.length !== 32) {
-    throw new TypeError("solana_pubkey32 must contain exactly 32 bytes");
-  }
   if (
     codec === SCCP_CODEC_TON_ACCOUNT36 &&
     (raw.length !== 36 || raw.subarray(0, 4).some((byte) => byte !== 0) || allZero(raw.subarray(4)))
@@ -2496,8 +2455,6 @@ function accountCodecForDomain(domain) {
     case SCCP_DOMAIN_ETH:
     case SCCP_DOMAIN_BSC:
       return SCCP_CODEC_EVM_ADDRESS20;
-    case SCCP_DOMAIN_SOLANA:
-      return SCCP_CODEC_SOLANA_PUBKEY32;
     case SCCP_DOMAIN_TON:
       return SCCP_CODEC_TON_ACCOUNT36;
     case SCCP_DOMAIN_TRON:
@@ -2935,7 +2892,7 @@ export function normalizeSccpRegistry(value) {
         !INBOUND_ACTIVATABLE_PROFILES.has(lane.source.profile)
       ) {
         throw new TypeError(
-          `${label} cannot enable inbound settlement for an unapproved staging profile`,
+          `${label} cannot enable inbound settlement unless its source is an approved external mainnet profile`,
         );
       }
       if (routeKeys.has(parsed.key)) throw new TypeError("SCCP registry contains a duplicate route");
@@ -3008,22 +2965,13 @@ function parseProjectionRecipient(value, domain, label) {
     });
     return;
   }
-  const tag =
-    domain === SCCP_DOMAIN_TRON
-      ? "TronAddress21"
-      : domain === SCCP_DOMAIN_SOLANA
-        ? "SolanaPubkey32"
-        : "EvmAddress20";
-  const bytes =
-    domain === SCCP_DOMAIN_TRON ? 21 : domain === SCCP_DOMAIN_SOLANA ? 32 : 20;
+  const tag = domain === SCCP_DOMAIN_TRON ? "TronAddress21" : "EvmAddress20";
+  const bytes = domain === SCCP_DOMAIN_TRON ? 21 : 20;
   const tagged = exactFields(value, new Set([tag]), label);
   const payload = exactFields(tagged[tag], new Set(["bytes"]), `${label}.${tag}`);
   const address = exactLowerHex(payload.bytes, `${label}.${tag}.bytes`, bytes, { prefix: true });
   if (domain === SCCP_DOMAIN_TRON && !address.startsWith("0x41")) {
     throw new TypeError(`${label}.TronAddress21.bytes must use the canonical 0x41 prefix`);
-  }
-  if (domain === SCCP_DOMAIN_SOLANA && /^0x0{64}$/u.test(address)) {
-    throw new TypeError(`${label}.SolanaPubkey32.bytes must be nonzero`);
   }
 }
 
@@ -3054,7 +3002,6 @@ function parsePayloadProjection(value, expectedDomain, label) {
     ![
       SCCP_DOMAIN_ETH,
       SCCP_DOMAIN_BSC,
-      SCCP_DOMAIN_SOLANA,
       SCCP_DOMAIN_TON,
       SCCP_DOMAIN_TRON,
     ].includes(domain)
@@ -3083,9 +3030,7 @@ function parsePayloadProjection(value, expectedDomain, label) {
       ? "taira_eth_xor"
       : domain === SCCP_DOMAIN_BSC
         ? "taira_bsc_xor"
-        : domain === SCCP_DOMAIN_SOLANA
-          ? "taira_sol_xor"
-          : domain === SCCP_DOMAIN_TON
+      : domain === SCCP_DOMAIN_TON
             ? "taira_ton_xor"
             : "taira_tron_xor";
   if (routeId !== expectedRouteId) {
@@ -3326,10 +3271,6 @@ function validateCodecValue(record, codecField, valueField, domain = null, label
   } else if (codec === SCCP_CODEC_TRON_ADDRESS21) {
     if (bytes.length !== 21 || bytes[0] !== 0x41 || !bytes.slice(1).some(Boolean)) {
       throw new TypeError(`${label}.${valueField} does not match tron_address21`);
-    }
-  } else if (codec === SCCP_CODEC_SOLANA_PUBKEY32) {
-    if (bytes.length !== 32 || !nonzero) {
-      throw new TypeError(`${label}.${valueField} does not match solana_pubkey32`);
     }
   } else if (codec === SCCP_CODEC_TON_ACCOUNT36) {
     if (

@@ -18259,7 +18259,9 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
         try governanceRequireExactJSONIntegers(
             payloadWire,
             codingPath: container.codingPath + [CodingKeys.payload],
-            context: "governance proposal payload"
+            context: "governance proposal payload",
+            exactIntegerLexemes: decoder.userInfo[governanceExactIntegerLexemesUserInfoKey]
+                as? [String: String]
         )
         switch tag {
         case "DeployContract":

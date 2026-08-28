@@ -156,25 +156,17 @@ Completed history lives in [`status.md`](./status.md).
   connection-ID retirement, and zero-length DATAGRAM accounting. Shipping P2P,
   streaming, SoraNet relay, and VPN-helper QUIC reject endpoint creation while
   the vulnerable resolution remains locked. After the dependency fix lands,
-  reactivate the QUIC and DATAGRAM-on abuse suites before removing those
-  fail-closed gates. Strict SoraNet configuration and live preflight remain
-  rejected without downgrade.
-- Expose the documented deterministic Norito streaming media fallback over
-  bounded unidirectional streams. The current QUIC helper exposes its control
-  streams but no stream-based media payload API; until both that fallback and
-  fixed Quinn DATAGRAM accounting are qualified, DATAGRAM media remains
-  dormant.
+  reactivate the QUIC and DATAGRAM-on abuse suites and requalify the deterministic
+  media-stream fallback before removing those fail-closed gates. Strict SoraNet
+  configuration and live preflight remain rejected without downgrade.
 - Requalify the dormant strict SoraNet mux after per-entry DATAGRAM accounting
   lands. Application/exit, measurement, and VPN payload are wired through the
   authenticated fixed-rate scheduler; unavailability, missed deadlines, bounded
-  queue exhaustion, send failure, sequence loss, and unscheduled streams are
-  circuit-fatal, with direct mixed-channel and loss regressions. Final activation
-  still requires dependency-level zero-length-DATAGRAM abuse coverage and full
-  relay/helper end-to-end traffic-shape qualification.
-- Split the large peer and network actors along their existing transport,
-  handshake, admission, queueing, and relay ownership boundaries after adding a
-  production-source reachability guard. Keep the single TLS/optional-QUIC wire
-  protocol and fail-closed admission behavior byte-for-byte identical.
+  queue exhaustion, send failure, sequence loss, early-arrival bursts, prolonged
+  silence, and unscheduled streams are circuit-fatal, with direct mixed-channel,
+  loss, pacing, and deadline regressions. Final activation still requires
+  dependency-level zero-length-DATAGRAM abuse coverage and full relay/helper
+  end-to-end traffic-shape qualification.
 
 ## Sumeragi first-release closure
 
@@ -500,8 +492,6 @@ Completed history lives in [`status.md`](./status.md).
   guards until that policy exists. Supporting aliasless relays would likewise
   require a signed home-domain field or a protected relay-to-home index; do not
   restore global allowlist discovery.
-- Decide whether the currently unreachable
-  `halo2/ipa/poly-open` backend belongs in the closed first-release registry.
 - Run the focused native-STARK and FASTPQ regressions, then the full workspace
   test and strict all-target Clippy matrices from one settled candidate.
 - On CUDA- and Metal-capable release hosts, compile the corrected BN254 kernels
@@ -5441,7 +5431,7 @@ workflows remain excluded from the first release.
 					  including bare `stark/fri` and alternate production-profile aliases.
 			  Soracloud BFV input-admission, bootstrap-key, full-bootstrap material,
 			  and execution proof attachments now require the canonical BFV STARK/FRI backend
-			  (`stark/fri/sha256-goldilocks`) and advertise that backend in their
+			  (`stark/fri/poseidon-x7-goldilocks-6x64-v1`) and advertise that backend in their
 			  public-input schema descriptors, so alternate production STARK profiles
 			  cannot satisfy governed BFV proof gates.
 				  BFV full-bootstrap proof-key profile validation also rejects known

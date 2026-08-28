@@ -186,6 +186,21 @@ The canonical data-model types live in
 | `committed_amount` | Optional non-zero scalar that must exactly match the canonical 16-byte little-endian `u128` in `axt_fastpq_committed_amount_v1` metadata inserted before the FastPQ batch seal and proof are generated. Missing or mismatched proof-bound metadata is rejected. |
 | `amount_commitment` | Optional deterministic hidden-amount copy checked against the spend intent; recomputing it cannot replace or alter the proof-bound `committed_amount`. |
 
+The final anchored-spend wire is `AxtAnchoredSpendV1`. Its
+`AxtFinalizedSpendAnchorV1` binds the genesis-derived network identity and exact
+genesis hash, source dataspace, lane and lane incarnation, finalized height,
+canonical block header, commit QC, ordered committee, pre/post state roots,
+ordered transaction-set digest, and signed RS16 DA-manifest digest. The fresh
+issuer signature additionally binds the complete reusable handle, exact
+`RemoteSpendIntent`, canonical proof blob, clear or committed amount fields,
+expiry, and a non-zero `AxtSpendNonceV1`. The nonce replay key includes the full
+issuer context, so key/policy, asset-incarnation, network, and dataspace changes
+cannot alias an earlier spend. A submitted anchor is only a selector: block and
+host admission must exact-match it to the immutable WSV record before checking
+both issuer signatures. Until that shared resolver and durable nonce ledger are
+wired into all admission paths, handle-backed authorization remains
+release-blocked.
+
 The proof metadata also always contains `axt_fastpq_expiry_slot_v1` as an
 eight-byte little-endian `u64`, where zero means authenticated `None` and any
 non-zero value means `Some(slot)`. The manifest and DA keys are required even

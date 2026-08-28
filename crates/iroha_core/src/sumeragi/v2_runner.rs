@@ -2988,12 +2988,15 @@ fn drain_lane_relay_prefix(
 fn drain_lane_relay_ingress(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
     active_view: wire::View,
     limit: usize,
 ) -> std::result::Result<bool, V2LaneWorkError> {
     let drained_any = drain_lane_relay_prefix(lane_relay_rx, lane_work, active_view, limit);
     if drained_any {
-        let _ = lane_work.service_next_historical_recovery()?;
+        let current_archive_targets = services.current_archive_targets();
+        let _ = lane_work
+            .service_next_historical_recovery_with_archive_targets(&current_archive_targets)?;
     }
     Ok(drained_any)
 }

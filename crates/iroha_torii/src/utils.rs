@@ -2477,7 +2477,7 @@ pub mod extractors {
                     .any(|window| window == marker.as_bytes())
             );
             let envelope: iroha_torii_shared::ErrorEnvelope =
-                norito::json::from_slice(&body).expect("decode fixed rejection envelope");
+                norito::decode_from_bytes(&body).expect("decode fixed Norito rejection envelope");
             assert_eq!(envelope.code(), "invalid_query_payload");
         }
         #[test]

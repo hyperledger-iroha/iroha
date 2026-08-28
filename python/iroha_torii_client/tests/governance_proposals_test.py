@@ -25,7 +25,6 @@ from iroha_torii_client.governance_proposals import (
     GovernanceSccpRouteAction,
     GovernanceSccpRouteKey,
     GovernanceSccpSetRouteActivation,
-    GovernanceSccpSolanaDestinationDeployment,
     GovernanceSccpSwitchRouteRevision,
 )
 
@@ -147,7 +146,12 @@ def _register_action() -> dict[str, object]:
                 "outbound_proof_policy": _outbound_proof_policy(),
                 "route_address": route_address,
                 "route_code_hash": route_code_hash,
+                "replay_verifier_address": "14" * 20,
+                "replay_verifier_code_hash": "1B" * 32,
+                "mint_breaker_address": "15" * 20,
+                "mint_breaker_code_hash": "1C" * 32,
                 "taira_to_token_multiplier": 1_000_000_000,
+                "max_wrapped_supply": "1000000000000000000000",
             },
         },
         "sora_outbound_execution_policy": {
@@ -164,79 +168,8 @@ def _register_action() -> dict[str, object]:
         },
         "settlement": {
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-            "custody_owner": CANONICAL_OWNER,
             "payload_amount_scale": 9,
-        },
-    }
-    return {
-        "action": "Register",
-        "route": {"route": route, "native_trust_anchor": None},
-    }
-
-
-def _solana_register_action() -> dict[str, object]:
-    lane = {
-        "source": {"network": "solana_testnet", "profile": None},
-        "target": {"network": "sora_taira", "profile": None},
-    }
-    route = {
-        "lane_id": lane,
-        "route_id": "taira_sol_xor",
-        "asset_key": "xor",
-        "revision": 1,
-        "activation": _activation("staged"),
-        "inbound_finality_cutoff": None,
-        "source_identity": {
-            "lane": copy.deepcopy(lane),
-            "emitter": {
-                "emitter": "solana",
-                "identity": {
-                    "program_id": "31" * 32,
-                    "program_data_address": "32" * 32,
-                    "program_data_slot": 3,
-                    "state_account": "33" * 32,
-                    "program_code_hash": "34" * 32,
-                    "route_config_hash": "35" * 32,
-                },
-            },
-        },
-        "destination": {
-            "family": "solana",
-            "deployment": {
-                "token_mint_address": "41" * 32,
-                "route_program_id": "42" * 32,
-                "route_program_data_address": "43" * 32,
-                "route_program_data_slot": 4,
-                "route_state_account": "44" * 32,
-                "route_program_code_hash": "45" * 32,
-                "native_verifier_program_id": "46" * 32,
-                "native_verifier_program_data_address": "47" * 32,
-                "native_verifier_program_data_slot": 5,
-                "native_verifier_material_account": "48" * 32,
-                "native_verifier_program_code_hash": "49" * 32,
-                "native_verifier_config_hash": "4A" * 32,
-                "verifying_key": _verifying_key(),
-                "verifier_key_hash": "4B" * 32,
-                "outbound_proof_policy": _outbound_proof_policy(),
-                "taira_to_token_multiplier": 1,
-            },
-        },
-        "sora_outbound_execution_policy": {
-            "version": 1,
-            "semantics": "ivm_proved_record_sccp_message_v1",
-            "contract_artifact_sha256": "51" * 32,
-            "vk_ref": {
-                "backend": "halo2/ipa",
-                "name": "sccp_solana_route_v1",
-                "version": 1,
-                "commitment": "52" * 32,
-            },
-            "gas_limit": 1_000_000,
-        },
-        "settlement": {
-            "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-            "custody_owner": CANONICAL_OWNER,
-            "payload_amount_scale": 9,
+            "max_outstanding_liability": "1000000000000",
         },
     }
     return {
@@ -476,39 +409,7 @@ def test_sccp_register_action_is_recursively_typed() -> None:
     )
     assert parsed.route.route.destination.deployment.outbound_proof_policy.version == 1
     assert parsed.route.route.sora_outbound_execution_policy.vk_ref.name == "sccp_route_v1"
-    assert parsed.route.route.settlement.custody_owner == CANONICAL_OWNER
-
-
-def test_sccp_solana_register_uses_the_exact_typed_deployment() -> None:
-    parsed = GovernanceSccpRouteAction.from_payload(_solana_register_action())
-
-    assert isinstance(parsed.route, GovernanceSccpRegisterRoute)
-    deployment = parsed.route.route.destination.deployment
-    assert isinstance(deployment, GovernanceSccpSolanaDestinationDeployment)
-    assert deployment.native_verifier_material_account == "48" * 32
-    assert deployment.route_program_data_slot == 4
-
-
-@pytest.mark.parametrize(
-    "field",
-    ["native_verifier_material_account", "native_verifier_config_hash"],
-)
-def test_sccp_solana_register_rejects_missing_closed_deployment_roles(field: str) -> None:
-    action = _solana_register_action()
-    action["route"]["route"]["destination"]["deployment"].pop(field)  # type: ignore[index]
-
-    with pytest.raises(TypeError, match="missing required field"):
-        GovernanceSccpRouteAction.from_payload(action)
-
-
-def test_sccp_solana_slots_reject_unsafe_json_integers() -> None:
-    action = _solana_register_action()
-    action["route"]["route"]["destination"]["deployment"][
-        "native_verifier_program_data_slot"
-    ] = 1 << 53  # type: ignore[index]
-
-    with pytest.raises(TypeError, match="integer"):
-        GovernanceSccpRouteAction.from_payload(action)
+    assert parsed.route.route.settlement.max_outstanding_liability == 1_000_000_000_000
 
 
 @pytest.mark.parametrize(
@@ -581,6 +482,14 @@ def test_every_non_register_sccp_action_has_a_typed_payload(
             "rpc_url", "https://example.invalid"
         ),
         lambda action: action["route"]["route"].pop("sora_outbound_execution_policy"),
+        lambda action: action["route"]["route"]["sora_outbound_execution_policy"][
+            "vk_ref"
+        ].__setitem__(
+            "commitment",
+            action["route"]["route"]["sora_outbound_execution_policy"][
+                "contract_artifact_sha256"
+            ],
+        ),
         lambda action: action["route"]["route"]["destination"]["deployment"][
             "outbound_proof_policy"
         ]["sora_finality_anchor"].__setitem__("checkpoint_height", 1 << 53),

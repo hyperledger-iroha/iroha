@@ -21,7 +21,7 @@ pub(crate) const ZK_X509_RELATION_VERSION_V1: u16 = 1;
 /// Exact native proof-container version.
 pub(crate) const ZK_X509_PROOF_VERSION_V1: u16 = 1;
 /// Canonical protocol suite string committed by every transcript.
-pub(crate) const ZK_X509_SUITE_V1: &[u8] = b"iroha-zk-x509-stark-p256-v0";
+pub(crate) const ZK_X509_SUITE_V1: &[u8] = b"iroha-zk-x509-stark-p256-v1";
 /// Source identity for the original Iroha implementation.
 pub(crate) const ZK_X509_SOURCE_PROFILE_V1: &[u8] =
     b"iroha-native-rust:strict-der:rfc5280-p256-sha256:private-chain-crl-ownership:goldilocks-stark:v1";
@@ -39,7 +39,7 @@ pub(crate) const ZK_X509_MAX_CRL_BYTES_V1: usize = 4_096;
 ///
 /// Every active serial is parsed and compared in the RFC 5280 AIR. Sixty-four entries keep that
 /// exact comparison table bounded. A policy whose issuer's complete base CRL exceeds this ceiling
-/// is unusable under v0; partitioning, delta CRLs, and omission are not fallback paths.
+/// is unusable under V1; partitioning, delta CRLs, and omission are not fallback paths.
 pub(crate) const ZK_X509_MAX_CRL_ENTRIES_V1: usize = 64;
 /// Maximum canonical unsigned certificate-serial bytes.
 pub(crate) const ZK_X509_MAX_SERIAL_BYTES_V1: usize = 20;

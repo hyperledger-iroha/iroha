@@ -9,8 +9,9 @@
 use super::{
     H256, SCCP_CODEC_TRON_ADDRESS21, SccpPayloadV1, canonical_sccp_payload_bytes, keccak256_bytes,
     payload_hash, prefixed_blake2b, read_protobuf_varint_at, sccp_lane_id_hash_v1,
-    sccp_lane_source_event_digest_v1, sccp_message_id, sccp_source_identity_hash_v1,
-    tron_recoverable_signature_for_recovery, verify_sccp_payload_structure,
+    sccp_lane_source_event_digest_v1, sccp_message_id, sccp_network_tag_v1,
+    sccp_source_identity_hash_v1, tron_recoverable_signature_for_recovery,
+    verify_sccp_payload_structure,
 };
 use alloc::{collections::BTreeSet, vec::Vec};
 use iroha_crypto::EcdsaSecp256k1Sha256;
@@ -397,9 +398,7 @@ struct ParsedTronRawHeaderV1 {
 }
 fn tron_network_tag(network: SccpNetworkV1) -> Option<u8> {
     match network {
-        SccpNetworkV1::TronMainnet => Some(0),
-        SccpNetworkV1::TronNile => Some(1),
-        SccpNetworkV1::TronShasta => Some(2),
+        SccpNetworkV1::TronMainnet => Some(sccp_network_tag_v1(network)),
         _ => None,
     }
 }
@@ -1324,10 +1323,7 @@ pub fn verify_tron_native_sccp_transaction(
         || expected_contract_address.iter().all(|byte| *byte == 0)
         || !verify_sccp_payload_structure(payload)
         || !matches!(lane.target, SccpNetworkV1::SoraTaira)
-        || !matches!(
-            lane.source,
-            SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
-        )
+        || lane.source != SccpNetworkV1::TronMainnet
         || transfer.sender_codec != SCCP_CODEC_TRON_ADDRESS21
         || !is_tron_address(&expected_sender_address)
         || expected_contract_address == expected_sender_address[1..]
@@ -1403,10 +1399,7 @@ pub fn verify_tron_native_source(
     payload: &SccpPayloadV1,
 ) -> Result<ValidatedTronNativeSourceV1, TronNativeSourceError> {
     if !source_identity.is_well_formed()
-        || !matches!(
-            source_identity.lane.source,
-            SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
-        )
+        || source_identity.lane.source != SccpNetworkV1::TronMainnet
     {
         return Err(TronNativeSourceError::InvalidSourceIdentity);
     }
@@ -2147,6 +2140,7 @@ mod tests {
         // This literal is the resulting deterministic raw-data protobuf for
         // the test SCCP trigger, with `00 00` height bytes and `44` hash bytes.
         const JAVA_TRON_RAW_DATA_HEX: &str = concat!(
+            "0x",
             "0a020000220844444444444444444080897a5a9002081f128b020a31747970652e676f6f676c65617069732e636f6d2f",
             "70726f746f636f6c2e54726967676572536d617274436f6e747261637412d5010a154122222222222222222222222222",
             "22222222222222121541333333333333333333333333333333333333333322a401ebfc6ca80000000000000000000000",
@@ -2431,13 +2425,12 @@ mod tests {
             Err(TronNativeSourceError::SourceIdentityHashMismatch)
         );
         let mut wrong_profile = identity;
-        wrong_profile.lane.source = SccpNetworkV1::TronNile;
-        let wrong_profile_hash = sccp_source_identity_hash_v1(&wrong_profile).unwrap();
+        wrong_profile.lane.source = SccpNetworkV1::EthereumMainnet;
         assert_eq!(
             verify_tron_native_source(
                 &proof,
                 &wrong_profile,
-                wrong_profile_hash,
+                [0xAA; 32],
                 anchor_hash,
                 statement.message_id,
                 statement.payload_hash,
@@ -2517,7 +2510,7 @@ mod tests {
         let admitted =
             verify_sccp_native_inbound_message_proof_v1(&inbound, &identity, trust_anchor)
                 .expect("canonical TRON native admission");
-        assert_eq!(admitted.message_key.message_id, statement.message_id);
+        assert_eq!(admitted.message_id, statement.message_id);
         let mut changed_nonce = inbound;
         let SccpPayloadV1::Transfer(transfer) = &mut changed_nonce.payload;
         transfer.nonce += 1;
@@ -2761,7 +2754,7 @@ mod tests {
         assert!(tron_native_anchor_hash(&wrong_skip).is_none());
         let (proof, _) = proof_with_distinct_confirmations();
         assert_eq!(
-            verify_tron_native_finality(&proof, SccpNetworkV1::TronNile, hash),
+            verify_tron_native_finality(&proof, SccpNetworkV1::EthereumMainnet, hash),
             Err(TronNativeFinalityError::WrongNetwork)
         );
         assert_eq!(

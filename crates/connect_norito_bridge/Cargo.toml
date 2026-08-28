@@ -51,7 +51,7 @@ iroha_core = { path = "../iroha_core", default-features = false, features = ["no
 iroha_zkp_halo2 = { workspace = true }
 iroha_torii_shared = { workspace = true }
 fastpq_prover = { workspace = true }
-iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost", "sm"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost", "pqc", "sm"] }
 # The bridge ships the exact-12 KAT generator/validator, but must not expose the
 # data model's general fixture constructors or block-tampering helpers.
 iroha_data_model = { workspace = true, features = ["application-model", "sm", "privacy-exact12-conformance"], default-features = false }

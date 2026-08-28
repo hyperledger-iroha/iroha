@@ -1,6 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Four-peer lifecycle, admission, replay, and restart coverage for the
-//! canonical native Jindo direct action.
+//! Four-peer lifecycle and restart coverage proving that an active Jindo
+//! protocol remains unavailable without registered Exact12 evidence.
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::TryStreamExt as _;
 use integration_tests::sandbox;
@@ -15,20 +15,17 @@ use iroha_core::{
 };
 use iroha_data_model::{
     Level,
-    isi::{
-        Grant, InstructionBox, Log,
-        privacy::{RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1},
-    },
+    isi::{Grant, InstructionBox, Log, privacy::RegisterPrivacyProtocolActivationV1},
     metadata::Metadata,
     permission::Permission,
     privacy::{
-        PrivacyCapabilityLimitationV1, PrivacyCapabilityReadinessV1,
-        PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
+        PrivacyCapabilityReadinessV1, PrivacyCapabilityRowV1, PrivacyCapabilityUnavailableReasonV1,
+        PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
         PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1,
-        PrivacyParameterDigestV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        PrivacyParameterDigestV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
+        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
     },
-    transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
+    transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
@@ -37,7 +34,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{Instant, sleep, timeout};
-const JINDO_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0;
+const JINDO_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(60);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -65,18 +62,6 @@ fn error_chain_contains(error: &eyre::Report, needle: &str) -> bool {
     error
         .chain()
         .any(|cause| cause.to_string().to_ascii_lowercase().contains(&needle))
-}
-fn is_exact_replay_error(error: &eyre::Report) -> bool {
-    [
-        "prtry:already_committed",
-        "prtry:already_enqueued",
-        "already_committed",
-        "already_enqueued",
-        "transaction already committed",
-        "transaction already present in the queue",
-    ]
-    .iter()
-    .any(|needle| error_chain_contains(error, needle))
 }
 fn jindo_row(
     snapshot: &PrivacyExact12CapabilityManifestV1,
@@ -108,16 +93,66 @@ fn assert_exact_jindo_row(
         "{context}: Jindo activation mismatch: expected {activation:?}, got {:?}",
         row.activation
     );
+    let expected_readiness = match activation {
+        None => PrivacyCapabilityReadinessV1::Unavailable(
+            PrivacyCapabilityUnavailableReasonV1::NotRegistered,
+        ),
+        Some(PrivacyProtocolActivationRecordV1 {
+            lifecycle: PrivacyProtocolLifecycleV1::Proposed(_),
+            ..
+        }) => PrivacyCapabilityReadinessV1::Unavailable(
+            PrivacyCapabilityUnavailableReasonV1::Proposed,
+        ),
+        Some(PrivacyProtocolActivationRecordV1 {
+            lifecycle: PrivacyProtocolLifecycleV1::Active(_),
+            ..
+        }) if snapshot.qualification.is_none() => PrivacyCapabilityReadinessV1::Unavailable(
+            PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification,
+        ),
+        Some(PrivacyProtocolActivationRecordV1 {
+            lifecycle: PrivacyProtocolLifecycleV1::Suspended(_),
+            ..
+        }) => PrivacyCapabilityReadinessV1::Unavailable(
+            PrivacyCapabilityUnavailableReasonV1::Suspended,
+        ),
+        Some(PrivacyProtocolActivationRecordV1 {
+            lifecycle: PrivacyProtocolLifecycleV1::Retired(_),
+            ..
+        }) => {
+            PrivacyCapabilityReadinessV1::Unavailable(PrivacyCapabilityUnavailableReasonV1::Retired)
+        }
+        Some(PrivacyProtocolActivationRecordV1 {
+            lifecycle: PrivacyProtocolLifecycleV1::Active(_),
+            ..
+        }) => {
+            if snapshot
+                .qualification
+                .as_ref()
+                .is_some_and(|qualification| {
+                    qualification
+                        .validate_protocol_at_snapshot(
+                            snapshot.committed_height,
+                            &PrivacyCapabilityRowV1 {
+                                protocol_id: row.protocol_id,
+                                compiled_profile: row.compiled_profile,
+                                activation: row.activation,
+                            },
+                        )
+                        .is_ok()
+                })
+            {
+                PrivacyCapabilityReadinessV1::ProductionQualified
+            } else {
+                PrivacyCapabilityReadinessV1::Unavailable(
+                    PrivacyCapabilityUnavailableReasonV1::InvalidProductionQualification,
+                )
+            }
+        }
+    };
     ensure!(
-        row.readiness == PrivacyCapabilityReadinessV1::AvailableExperimental,
-        "{context}: revised Jindo must remain explicitly available-experimental"
-    );
-    ensure!(
-        row.limitation
-            == Some(
-                PrivacyCapabilityLimitationV1::MissingDistributionWideKnowledgeSoundnessEvidence,
-            ),
-        "{context}: revised Jindo omitted its missing knowledge-soundness evidence"
+        row.readiness == expected_readiness,
+        "{context}: Jindo readiness was not evidence-derived: expected {expected_readiness:?}, got {:?}",
+        row.readiness
     );
     Ok(())
 }
@@ -216,50 +251,6 @@ fn build_jindo_action(
         "Jindo builder-reported hash differs from the canonical signed transaction hash"
     );
     Ok(signed.into_signed_transaction())
-}
-fn independently_resign_corrupted_jindo_proof(
-    client: &Client,
-    valid: &SignedTransaction,
-) -> Result<SignedTransaction> {
-    let (valid_intent, submission) = valid
-        .privacy_transaction_intent_binding_if_present_v1()
-        .wrap_err("scan canonical Jindo action before proof corruption")?
-        .ok_or_else(|| eyre!("canonical Jindo action omitted its direct privacy submission"))?;
-    let mut envelope = submission.envelope.clone();
-    let PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(proof) = &mut envelope.proof else {
-        return Err(eyre!(
-            "canonical Jindo action carried a different proof variant"
-        ));
-    };
-    ensure!(
-        !proof.bytes.is_empty(),
-        "canonical Jindo proof unexpectedly had no magic byte"
-    );
-    proof.bytes[0] ^= 0x80;
-    envelope
-        .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
-        .wrap_err("proof corruption must preserve the generic envelope contract")?;
-    let corrupted = TransactionBuilder::from_payload(valid.payload().clone())
-        .wrap_err("re-open canonical Jindo payload for proof corruption")?
-        .with_instructions([SubmitPrivacyProofV1::new(envelope)])
-        .try_sign(client.key_pair.private_key())
-        .wrap_err("independently sign corrupted Jindo proof payload")?;
-    corrupted
-        .verify_signature()
-        .wrap_err("verify independently signed corrupted Jindo transaction")?;
-    let (corrupted_intent, _) = corrupted
-        .privacy_transaction_intent_binding_if_present_v1()
-        .wrap_err("corrupted Jindo proof lost its valid transaction-intent binding")?
-        .ok_or_else(|| eyre!("corrupted Jindo proof omitted its direct privacy submission"))?;
-    ensure!(
-        corrupted_intent == valid_intent,
-        "proof-only corruption changed the proof-independent Jindo transaction intent"
-    );
-    ensure!(
-        corrupted.hash() != valid.hash(),
-        "proof corruption did not change the canonical signed transaction hash"
-    );
-    Ok(corrupted)
 }
 async fn submit_instruction(
     client: &Client,
@@ -384,81 +375,12 @@ async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<
     );
     Ok(())
 }
-fn exact_applied_transaction_visible(
-    client: &Client,
-    transaction: &SignedTransaction,
-) -> Result<bool> {
-    let signed_hash = transaction.hash();
-    let Some(status) = client
-        .get_transaction_status_response_local(signed_hash)
-        .wrap_err("query exact peer-local transaction status")?
-    else {
-        return Ok(false);
-    };
-    match (status.status.kind.as_str(), status.resolved_from.as_str()) {
-        ("Applied", "state") => {}
-        ("Rejected" | "Expired", "state") => {
-            return Err(eyre!(
-                "canonical privacy transaction reached terminal {} status",
-                status.status.kind
-            ));
-        }
-        _ => return Ok(false),
-    }
-    let expected_hash = transaction.hash_as_entrypoint();
-    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
-    let details = client
-        .get_successful_transaction_details(expected_hash)
-        .wrap_err("query exact successful transaction details")?;
-    let committed = &details.transaction;
-    ensure!(
-        committed.entrypoint() == &expected_entrypoint,
-        "entrypoint hash matched different transaction bytes"
-    );
-    ensure!(
-        committed.result().0.is_ok(),
-        "canonical Jindo transaction is visible but finalized as rejected"
-    );
-    Ok(true)
-}
-async fn wait_for_transaction_on_peers(
-    clients: &[Client],
-    transaction: &SignedTransaction,
-    context: &str,
-) -> Result<()> {
-    let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
-    let mut last_observed = Vec::new();
-    loop {
-        let mut visible = 0_usize;
-        last_observed.clear();
-        for (index, client) in clients.iter().enumerate() {
-            match exact_applied_transaction_visible(client, transaction) {
-                Ok(true) => {
-                    visible += 1;
-                    last_observed.push(format!("peer {index}: exact applied transaction visible"));
-                }
-                Ok(false) => last_observed.push(format!("peer {index}: transaction absent")),
-                Err(error) => last_observed.push(format!("peer {index}: {error}")),
-            }
-        }
-        if visible == clients.len() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "{context}: finalized transaction did not converge within {PEER_CONVERGENCE_TIMEOUT:?}; {}",
-                last_observed.join("; ")
-            ));
-        }
-        sleep(POLL_INTERVAL).await;
-    }
-}
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_restart()
--> Result<()> {
+async fn active_jindo_stays_unavailable_without_exact12_qualification_across_restart() -> Result<()>
+{
     init_instruction_registry();
     let context =
-        stringify!(canonical_jindo_direct_action_survives_four_peer_activation_replay_and_restart);
+        stringify!(active_jindo_stays_unavailable_without_exact12_qualification_across_restart);
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -688,94 +610,38 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
         )
         .await?;
         let final_action = build_jindo_action(&client, genesis_hash, 2)?;
-        let corrupted_action = independently_resign_corrupted_jindo_proof(&client, &final_action)?;
-        let corruption_error = submit_signed_transaction(
+        let qualification_error = submit_signed_transaction(
             &client,
-            &corrupted_action,
-            "post-activation corrupted Jindo proof must reject",
+            &final_action,
+            "active Jindo action without Exact12 qualification must reject",
         )
         .await
-        .expect_err("post-activation corrupted Jindo proof was accepted");
+        .expect_err("active Jindo action bypassed missing Exact12 qualification");
         ensure!(
-            error_chain_contains(&corruption_error, "native Jindo verification failed"),
-            "corrupted Jindo proof bypassed native verification: {corruption_error:?}"
+            error_chain_contains(
+                &qualification_error,
+                "production qualification is not registered"
+            ),
+            "unqualified Jindo action rejected for the wrong reason: {qualification_error:?}"
         );
-        ensure!(
-            error_chain_contains(&corruption_error, "proof magic is invalid"),
-            "corrupted Jindo proof rejected for the wrong native reason: {corruption_error:?}"
-        );
-        let post_corruption_height = client
+        let rejection_height = client
             .get_privacy_capabilities()
-            .wrap_err("query height after corrupted Jindo rejection")?
+            .wrap_err("query height after unqualified Jindo rejection")?
             .committed_height;
         wait_for_all_peer_activations(
             &network,
-            post_corruption_height,
+            rejection_height,
             compiled_snapshot,
             Some(active),
-            "corrupted Jindo rejection must preserve exact Active state",
+            "qualification rejection must preserve Active-but-unavailable state",
         )
         .await?;
-        ensure!(
-            !exact_applied_transaction_visible(&client, &final_action)?,
-            "canonical Jindo action was visible before its own submission"
-        );
         let restart_index = network.peers().len() - 1;
         let restart_peer = network.peers()[restart_index].clone();
         let config_layers = network.config_layers().collect::<Vec<_>>();
         ensure!(
             restart_peer.shutdown_if_started().await,
             "selected Active Jindo peer was not running before restart coverage"
-        );
-        let submitted_hash = submit_signed_transaction(
-            &client,
-            &final_action,
-            "submit canonical active Jindo direct action",
-        )
-        .await?;
-        ensure!(
-            *submitted_hash.as_ref() == *final_action.hash().as_ref(),
-            "submitted Jindo transaction hash differs from the signed action"
-        );
-        let finalized_height = client
-            .get_privacy_capabilities()
-            .wrap_err("query height after Jindo finality")?
-            .committed_height;
-        let expected_finalized_height = post_corruption_height
-            .checked_add(1)
-            .ok_or_else(|| eyre!("Jindo finality height overflowed"))?;
-        ensure!(
-            finalized_height == expected_finalized_height,
-            "Jindo finality landed at height {finalized_height}, expected \
-             {expected_finalized_height}"
-        );
-        let healthy_clients = network
-            .peers()
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != restart_index)
-            .map(|(_, peer)| bounded_client(peer.client()))
-            .collect::<Vec<_>>();
-        wait_for_transaction_on_peers(
-            &healthy_clients,
-            &final_action,
-            "healthy-peer Jindo finality",
-        )
-        .await?;
-        let replay_error = client
-            .submit_transaction(&final_action)
-            .expect_err("exact Jindo transaction replay was accepted");
-        ensure!(
-            is_exact_replay_error(&replay_error),
-            "exact Jindo replay rejected for the wrong reason: {replay_error:?}"
-        );
-        ensure!(
-            client
-                .get_privacy_capabilities()
-                .wrap_err("query height after exact replay rejection")?
-                .committed_height
-                == finalized_height,
-            "exact transaction replay unexpectedly committed another block"
         );
         timeout(
             RESTART_TIMEOUT,
@@ -786,21 +652,10 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
         .wrap_err("restart Jindo peer")?;
         wait_for_all_peer_activations(
             &network,
-            finalized_height,
+            rejection_height,
             compiled_snapshot,
             Some(active),
-            "post-restart Active Jindo binding and state",
-        )
-        .await?;
-        let all_clients = network
-            .peers()
-            .iter()
-            .map(|peer| bounded_client(peer.client()))
-            .collect::<Vec<_>>();
-        wait_for_transaction_on_peers(
-            &all_clients,
-            &final_action,
-            "post-restart finalized Jindo transaction visibility",
+            "post-restart Active-but-unavailable Jindo binding and state",
         )
         .await?;
         ensure!(
@@ -808,7 +663,7 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
             "restarted peer derived a different canonical genesis hash"
         );
         println!(
-            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_jindo_network::canonical_jindo_direct_action_survives_four_peer_activation_replay_and_restart:passed"
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_jindo_network::active_jindo_stays_unavailable_without_exact12_qualification_across_restart:passed"
         );
         Ok(())
     }

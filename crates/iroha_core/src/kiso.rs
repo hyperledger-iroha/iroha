@@ -1039,6 +1039,7 @@ mod tests {
                 peer_geo: iroha_config::parameters::actual::ToriiPeerGeo::default(),
                 soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest::default(),
                 privacy_bootle_lantern_issuer: None,
+                sccp_replay_archive: None,
                 debug_match_filters: false,
                 webhooks_enabled: iroha_config::parameters::defaults::torii::WEBHOOKS_ENABLED,
                 zk_attachments_enabled:

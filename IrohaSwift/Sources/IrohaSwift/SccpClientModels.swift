@@ -987,11 +987,69 @@ private struct SccpCompactTransactionCursor {
 
 enum SccpStrictJSON {
     static func object(_ data: Data, label: String) throws -> [String: Any] {
-        try rejectDuplicateKeys(data)
-        guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let text = String(data: data, encoding: .utf8), Data(text.utf8) == data else {
+            throw SccpV1Error.invalid("JSON must be valid UTF-8")
+        }
+        var parser = ExactParser(text)
+        guard let value = try parser.parse() as? [String: Any] else {
             throw SccpV1Error.invalid("\(label) must be a JSON object")
         }
         return value
+    }
+
+    /// Serialize a value returned by the exact parser without routing wide integers
+    /// through Foundation's floating-point JSON representation.
+    static func canonicalData(_ value: Any) throws -> Data {
+        var data = Data()
+        try appendCanonical(value, to: &data)
+        return data
+    }
+
+    private static func appendCanonical(_ value: Any, to data: inout Data) throws {
+        switch value {
+        case let value as Bool:
+            data.append(value ? Data("true".utf8) : Data("false".utf8))
+        case is NSNull:
+            data.append(Data("null".utf8))
+        case let value as String:
+            // Foundation is used only to escape text; numeric values never enter this path.
+            let encoded = try JSONSerialization.data(withJSONObject: [value], options: [])
+            guard encoded.count >= 2, encoded.first == 0x5b, encoded.last == 0x5d else {
+                throw SccpV1Error.invalid("failed to encode canonical JSON text")
+            }
+            data.append(encoded.dropFirst().dropLast())
+        case let value as ExactUnsignedInteger:
+            data.append(Data(value.text.utf8))
+        case let value as NSNumber:
+            guard CFGetTypeID(value) != CFBooleanGetTypeID(),
+                  !CFNumberIsFloatType(value),
+                  let integer = UInt64(value.stringValue),
+                  String(integer) == value.stringValue else {
+                throw SccpV1Error.invalid("canonical JSON contains a non-integer number")
+            }
+            data.append(Data(value.stringValue.utf8))
+        case let value as [Any]:
+            data.append(0x5b)
+            for (index, item) in value.enumerated() {
+                if index != 0 { data.append(0x2c) }
+                try appendCanonical(item, to: &data)
+            }
+            data.append(0x5d)
+        case let value as [String: Any]:
+            data.append(0x7b)
+            for (index, key) in value.keys.sorted().enumerated() {
+                if index != 0 { data.append(0x2c) }
+                try appendCanonical(key, to: &data)
+                data.append(0x3a)
+                guard let item = value[key] else {
+                    throw SccpV1Error.invalid("canonical JSON object changed during encoding")
+                }
+                try appendCanonical(item, to: &data)
+            }
+            data.append(0x7d)
+        default:
+            throw SccpV1Error.invalid("canonical JSON contains an unsupported value")
+        }
     }
 
     static func exactFields(_ value: [String: Any], _ fields: Set<String>, label: String) throws {
@@ -1065,15 +1123,11 @@ enum SccpStrictJSON {
         return result
     }
 
-    private static func rejectDuplicateKeys(_ data: Data) throws {
-        guard let text = String(data: data, encoding: .utf8), Data(text.utf8) == data else {
-            throw SccpV1Error.invalid("JSON must be valid UTF-8")
-        }
-        var parser = DuplicateKeyParser(text)
-        try parser.parse()
+    struct ExactUnsignedInteger {
+        let text: String
     }
 
-    private struct DuplicateKeyParser {
+    private struct ExactParser {
         let text: String
         var index: String.Index
 
@@ -1082,55 +1136,57 @@ enum SccpStrictJSON {
             index = text.startIndex
         }
 
-        mutating func parse() throws {
-            try value()
+        mutating func parse() throws -> Any {
+            let result = try value()
             whitespace()
             guard index == text.endIndex else { throw SccpV1Error.invalid("invalid JSON") }
+            return result
         }
 
-        mutating func value() throws {
+        mutating func value() throws -> Any {
             whitespace()
             guard let char = peek() else { throw SccpV1Error.invalid("invalid JSON") }
             switch char {
-            case "{": try object()
-            case "[": try array()
-            case "\"": _ = try string()
-            case "-", "0"..."9": try number()
-            case "t": try consume("true")
-            case "f": try consume("false")
-            case "n": try consume("null")
+            case "{": return try object()
+            case "[": return try array()
+            case "\"": return try string()
+            case "0"..."9": return try number()
+            case "t": try consume("true"); return true
+            case "f": try consume("false"); return false
+            case "n": try consume("null"); return NSNull()
             default: throw SccpV1Error.invalid("invalid JSON")
             }
         }
 
-        mutating func object() throws {
+        mutating func object() throws -> [String: Any] {
             try consume("{")
             whitespace()
-            var keys = Set<String>()
-            if consumeIf("}") { return }
+            var result: [String: Any] = [:]
+            if consumeIf("}") { return result }
             while true {
                 whitespace()
                 let key = try string()
-                guard keys.insert(key).inserted else {
+                guard result[key] == nil else {
                     throw SccpV1Error.invalid("JSON contains duplicate object key `\(key)`")
                 }
                 whitespace()
                 try consume(":")
-                try value()
+                result[key] = try value()
                 whitespace()
-                if consumeIf("}") { return }
+                if consumeIf("}") { return result }
                 try consume(",")
             }
         }
 
-        mutating func array() throws {
+        mutating func array() throws -> [Any] {
             try consume("[")
             whitespace()
-            if consumeIf("]") { return }
+            var result: [Any] = []
+            if consumeIf("]") { return result }
             while true {
-                try value()
+                result.append(try value())
                 whitespace()
-                if consumeIf("]") { return }
+                if consumeIf("]") { return result }
                 try consume(",")
             }
         }
@@ -1189,27 +1245,37 @@ enum SccpStrictJSON {
         mutating func hexQuad() throws -> UInt32 {
             var result: UInt32 = 0
             for _ in 0..<4 {
-                guard let char = peek(), let digit = char.hexDigitValue else {
+                guard let char = peek(), let digit = asciiHexDigit(char) else {
                     throw SccpV1Error.invalid("invalid JSON Unicode escape")
                 }
-                result = result * 16 + UInt32(digit)
+                result = result * 16 + digit
                 advance()
             }
             return result
         }
 
-        mutating func number() throws {
-            guard let first = peek(), first.isNumber else { throw SccpV1Error.invalid("invalid JSON number") }
+        mutating func number() throws -> Any {
+            let start = index
+            guard let first = peek(), isASCIIDigit(first) else {
+                throw SccpV1Error.invalid("invalid JSON number")
+            }
             if first == "0" {
                 advance()
-                if let next = peek(), next.isNumber { throw SccpV1Error.invalid("invalid JSON number") }
+                if let next = peek(), isASCIIDigit(next) {
+                    throw SccpV1Error.invalid("invalid JSON number")
+                }
             } else {
-                while let char = peek(), char.isNumber { advance() }
+                while let char = peek(), isASCIIDigit(char) { advance() }
             }
             // SCCP V1 has no signed or fractional JSON fields. The scanner
             // deliberately leaves '.', 'e', and 'E' unconsumed so the
             // surrounding grammar rejects coercible spellings such as 1.0,
-            // 1e0, or -0 before JSONSerialization loses their wire form.
+            // 1e0, or -0 without first coercing their exact wire form.
+            let canonical = String(text[start..<index])
+            if let value = UInt64(canonical) {
+                return NSNumber(value: value)
+            }
+            return ExactUnsignedInteger(text: canonical)
         }
 
         mutating func whitespace() {
@@ -1228,6 +1294,16 @@ enum SccpStrictJSON {
         }
 
         func peek() -> Character? { index == text.endIndex ? nil : text[index] }
+        func isASCIIDigit(_ character: Character) -> Bool { ("0"..."9").contains(character) }
+        func asciiHexDigit(_ character: Character) -> UInt32? {
+            guard let byte = character.asciiValue else { return nil }
+            switch byte {
+            case 48...57: return UInt32(byte - 48)
+            case 65...70: return UInt32(byte - 55)
+            case 97...102: return UInt32(byte - 87)
+            default: return nil
+            }
+        }
         mutating func advance() { index = text.index(after: index) }
     }
 }

@@ -1494,11 +1494,11 @@ use crate::{
 };
 use iroha_core::smartcontracts::Execute;
 #[test]
-fn stark_fri_backend_labels_require_non_empty_profile() {
-    assert!(is_stark_fri_v1_backend("stark/fri"));
-    assert!(is_stark_fri_v1_backend("stark/fri/sha256-goldilocks"));
-    assert!(is_stark_fri_v1_backend("stark/fri/poseidon2-goldilocks"));
-    assert!(is_stark_fri_v1_backend("stark/fri/sha256_goldilocks.v1"));
+fn stark_fri_backend_label_is_singular_and_exact() {
+    assert!(is_stark_fri_v1_backend("stark/fri/poseidon-x7-goldilocks-6x64-v1"));
+    assert!(!is_stark_fri_v1_backend("stark/fri"));
+    assert!(!is_stark_fri_v1_backend("stark/fri/poseidon2-goldilocks"));
+    assert!(!is_stark_fri_v1_backend("stark/fri/sha256_goldilocks.v1"));
     assert!(!is_stark_fri_v1_backend("stark/fri/"));
     assert!(!is_stark_fri_v1_backend("stark/fri/latest"));
     assert!(!is_stark_fri_v1_backend("stark/fri/random-profile"));
@@ -2270,7 +2270,6 @@ async fn tx_history_viewer_from_headers_rejects_duplicate_authorization_headers(
 fn sample_stark_vk_box(
     backend: &str,
     circuit_id: &str,
-    hash_fn: u8,
 ) -> iroha_data_model::proof::VerifyingKeyBox {
     let vk_payload = iroha_core::zk_stark::StarkFriVerifyingKeyV1 {
         version: 1,
@@ -2280,7 +2279,6 @@ fn sample_stark_vk_box(
         fold_arity: 2,
         queries: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
-        hash_fn,
     };
     let bytes = norito::to_bytes(&vk_payload).expect("encode stark vk payload");
     iroha_data_model::proof::VerifyingKeyBox::new(backend.to_owned(), bytes)

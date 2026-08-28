@@ -4305,7 +4305,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
             if rec.circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
                 || !iroha_data_model::zk::open_verify_circuit_id_is_portable(&rec.circuit_id)
-                || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+                || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
                     &rec.circuit_id,
                 )
             {
@@ -4398,7 +4398,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn normalize_halo2_circuit_id(raw: &str) -> Option<String> {
         if raw.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
             || !iroha_data_model::zk::open_verify_circuit_id_is_portable(raw)
-            || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+            || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
                 raw,
             )
         {
@@ -4429,7 +4429,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let is_admissible = |circuit_id: &str| {
             circuit_id.len() <= iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
                 && iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
-                && !iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+                && !iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
                     circuit_id,
                 )
         };
@@ -16967,7 +16967,7 @@ mod tests {
     };
     use iroha_data_model::{
         parameter::{CustomParameter, Parameter, SmartContractParameter},
-        privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1},
+        privacy::PrivacyProtocolIdV1,
         proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
         zk::BackendTag,
@@ -23644,8 +23644,8 @@ seiyaku DurableOwner {
     #[cfg(feature = "zk-stark")]
     #[test]
     fn set_verifying_keys_rejects_weak_stark_parameters_during_rehydration() {
-        let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = "stark/fri/sha256-goldilocks:weak-rehydrated-key";
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:weak-rehydrated-key";
         let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_owned(),
@@ -23654,7 +23654,6 @@ seiyaku DurableOwner {
             fold_arity: 2,
             queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES - 1,
             merkle_arity: 2,
-            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
         let vk_bytes = norito::encode_canonical(&payload).expect("encode weak STARK key");
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
@@ -23824,10 +23823,8 @@ seiyaku DurableOwner {
         );
     }
     #[test]
-    fn set_verifying_keys_rejects_reserved_privacy_ids_during_state_rehydration() {
-        let active = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0.canonical_label();
-        let retired = PRIVACY_RETIRED_PROTOCOL_LABELS_V1[0];
-        for (case, circuit_id) in [("active", active), ("retired", retired)] {
+    fn set_verifying_keys_rejects_exact12_privacy_ids_during_state_rehydration() {
+        for circuit_id in PrivacyProtocolIdV1::ALL.map(PrivacyProtocolIdV1::canonical_label) {
             let mut host = CoreHost::new(fixture_account("alice"));
             let backend = "halo2/ipa";
             let vk_bytes = vec![1, 2, 3, 4];
@@ -23838,15 +23835,16 @@ seiyaku DurableOwner {
             let map = BTreeMap::from([(VerifyingKeyId::new(backend, "vk"), record)]);
             assert!(
                 host.set_verifying_keys(map).is_err(),
-                "{case} privacy circuit id {circuit_id:?} must not rehydrate"
+                "Exact12 privacy circuit id {circuit_id:?} must not rehydrate"
             );
             assert!(host.verifying_keys.is_empty());
             assert!(host.prepared_verifying_keys.is_empty());
         }
+        let exact12 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1.canonical_label();
         for (case, circuit_id) in [
-            ("leading-whitespace", format!(" {active}")),
-            ("trailing-whitespace", format!("{retired} ")),
-            ("uppercase", active.to_ascii_uppercase()),
+            ("leading-whitespace", format!(" {exact12}")),
+            ("trailing-whitespace", format!("{exact12} ")),
+            ("uppercase", exact12.to_ascii_uppercase()),
         ] {
             let mut host = CoreHost::new(fixture_account("alice"));
             let backend = "halo2/ipa";
@@ -23872,7 +23870,7 @@ seiyaku DurableOwner {
         let backend = "halo2/ipa";
         let vk_bytes = vec![1, 2, 3, 4];
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let near_miss = format!("generic-{active}");
+        let near_miss = format!("generic-{exact12}");
         let record = active_vk_record(
             commitment, [0x42; 32], backend, &near_miss, "core", vk_bytes,
         );
@@ -23980,8 +23978,8 @@ seiyaku DurableOwner {
             (
                 "halo2-registry-stark-record",
                 "halo2/ipa",
-                "stark/fri/sha256-goldilocks",
-                "stark/fri/sha256-goldilocks:zk-ace",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:zk-ace",
             ),
         ] {
             let mut host = CoreHost::new(fixture_account("alice"));
@@ -24357,6 +24355,8 @@ seiyaku DurableOwner {
             "sc/0123456789abcdef/counter",
             "da_ingest_quota_v1",
             "da_ingest_quota_v1/authority/deadbeef",
+            "faucet_claim_consumed_v1",
+            "faucet_claim_consumed_v1/deadbeef",
             "merge_execution_batch_applied_1_deadbeef",
             "merge_execution_lane_applied_1_2_3_deadbeef",
             "merge_lane_frontier_v1",
@@ -24399,6 +24399,7 @@ seiyaku DurableOwner {
         for key in [
             "scatter/counter",
             "da_ingest_quota_v1x",
+            "faucet_claim_consumed_v1x",
             "merge_lane_frontier_v1x",
             "queue_plan_admission_v2x",
             "queue_plan_pending_obligation_v1x",

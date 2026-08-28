@@ -10,18 +10,18 @@ namespace Hyperledger.Iroha.Privacy;
 /// <summary>Closed first-release privacy protocol identity in canonical Norito order.</summary>
 public enum PrivacyProtocolIdV1 : uint
 {
-    ZkAcePqAuthorizationV0 = 0,
+    ZkAcePqAuthorizationV1 = 0,
     AnonymousPgcKOutOfNV1 = 1,
     VeRangeTransparentRangeV1 = 2,
     IrohaZkAmsV1 = 3,
-    VegaExistingCredentialZkV0 = 4,
-    IrohaZkX509StarkP256V0 = 5,
-    IrohaJindoPolynomialCommitmentV0 = 6,
+    VegaExistingCredentialZkV1 = 4,
+    IrohaZkX509StarkP256V1 = 5,
+    IrohaJindoPolynomialCommitmentV1 = 6,
     IrohaBootleLanternAnoncredV1 = 7,
     OrchardHalo2ActionsV1 = 8,
     MoneroFcmpPlusPlusV1 = 9,
     IrohaIvmPrivateNoteStarkV1 = 10,
-    PqMaspStarkV0 = 11,
+    PqMaspStarkV1 = 11,
 }
 
 /// <summary>Stable ABI-23 result of validating one typed local compiled-profile catalog.</summary>
@@ -64,21 +64,21 @@ public static class PrivacyProtocolsV1
     public static string CanonicalLabel(this PrivacyProtocolIdV1 protocol) =>
         protocol switch
         {
-            PrivacyProtocolIdV1.ZkAcePqAuthorizationV0 => "zk-ace-pq-authorization-v0",
+            PrivacyProtocolIdV1.ZkAcePqAuthorizationV1 => "zk-ace-pq-authorization-v1",
             PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1 => "anonymous-pgc-k-out-of-n-v1",
             PrivacyProtocolIdV1.VeRangeTransparentRangeV1 => "verange-transparent-range-v1",
             PrivacyProtocolIdV1.IrohaZkAmsV1 => "iroha-zk-ams-v1",
-            PrivacyProtocolIdV1.VegaExistingCredentialZkV0 => "vega-existing-credential-zk-v0",
-            PrivacyProtocolIdV1.IrohaZkX509StarkP256V0 => "iroha-zk-x509-stark-p256-v0",
-            PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0 =>
-                "iroha-jindo-polynomial-commitment-v0",
+            PrivacyProtocolIdV1.VegaExistingCredentialZkV1 => "vega-existing-credential-zk-v1",
+            PrivacyProtocolIdV1.IrohaZkX509StarkP256V1 => "iroha-zk-x509-stark-p256-v1",
+            PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1 =>
+                "iroha-jindo-polynomial-commitment-v1",
             PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1 =>
                 "iroha-bootle-lantern-anoncred-v1",
             PrivacyProtocolIdV1.OrchardHalo2ActionsV1 => "orchard-halo2-actions-v1",
             PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1 => "monero-fcmp-plus-plus-v1",
             PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1 =>
                 "iroha-ivm-private-note-stark-v1",
-            PrivacyProtocolIdV1.PqMaspStarkV0 => "pq-masp-stark-v0",
+            PrivacyProtocolIdV1.PqMaspStarkV1 => "pq-masp-stark-v1",
             _ => throw new ArgumentOutOfRangeException(nameof(protocol)),
         };
 
@@ -91,20 +91,20 @@ public static class PrivacyProtocolsV1
         ArgumentNullException.ThrowIfNull(label);
         return label switch
         {
-            "zk-ace-pq-authorization-v0" => PrivacyProtocolIdV1.ZkAcePqAuthorizationV0,
+            "zk-ace-pq-authorization-v1" => PrivacyProtocolIdV1.ZkAcePqAuthorizationV1,
             "anonymous-pgc-k-out-of-n-v1" => PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1,
             "verange-transparent-range-v1" => PrivacyProtocolIdV1.VeRangeTransparentRangeV1,
             "iroha-zk-ams-v1" => PrivacyProtocolIdV1.IrohaZkAmsV1,
-            "vega-existing-credential-zk-v0" => PrivacyProtocolIdV1.VegaExistingCredentialZkV0,
-            "iroha-zk-x509-stark-p256-v0" => PrivacyProtocolIdV1.IrohaZkX509StarkP256V0,
-            "iroha-jindo-polynomial-commitment-v0" =>
-                PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0,
+            "vega-existing-credential-zk-v1" => PrivacyProtocolIdV1.VegaExistingCredentialZkV1,
+            "iroha-zk-x509-stark-p256-v1" => PrivacyProtocolIdV1.IrohaZkX509StarkP256V1,
+            "iroha-jindo-polynomial-commitment-v1" =>
+                PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1,
             "iroha-bootle-lantern-anoncred-v1" =>
                 PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1,
             "orchard-halo2-actions-v1" => PrivacyProtocolIdV1.OrchardHalo2ActionsV1,
             "monero-fcmp-plus-plus-v1" => PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1,
             "iroha-ivm-private-note-stark-v1" => PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1,
-            "pq-masp-stark-v0" => PrivacyProtocolIdV1.PqMaspStarkV0,
+            "pq-masp-stark-v1" => PrivacyProtocolIdV1.PqMaspStarkV1,
             _ => throw new ArgumentException(
                 "Unknown canonical privacy protocol id.",
                 nameof(label)),
@@ -117,21 +117,21 @@ public static class PrivacyProtocolsV1
     public static string CanonicalTypedVariantLabel(this PrivacyProtocolIdV1 protocol) =>
         protocol switch
         {
-            PrivacyProtocolIdV1.ZkAcePqAuthorizationV0 => "ZkAcePqAuthorizationV0",
+            PrivacyProtocolIdV1.ZkAcePqAuthorizationV1 => "ZkAcePqAuthorizationV1",
             PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1 => "AnonymousPgcKOutOfNV1",
             PrivacyProtocolIdV1.VeRangeTransparentRangeV1 => "VeRangeTransparentRangeV1",
             PrivacyProtocolIdV1.IrohaZkAmsV1 => "IrohaZkAmsV1",
-            PrivacyProtocolIdV1.VegaExistingCredentialZkV0 => "VegaExistingCredentialZkV0",
-            PrivacyProtocolIdV1.IrohaZkX509StarkP256V0 => "IrohaZkX509StarkP256V0",
-            PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0 =>
-                "IrohaJindoPolynomialCommitmentV0",
+            PrivacyProtocolIdV1.VegaExistingCredentialZkV1 => "VegaExistingCredentialZkV1",
+            PrivacyProtocolIdV1.IrohaZkX509StarkP256V1 => "IrohaZkX509StarkP256V1",
+            PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1 =>
+                "IrohaJindoPolynomialCommitmentV1",
             PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1 =>
                 "IrohaBootleLanternAnoncredV1",
             PrivacyProtocolIdV1.OrchardHalo2ActionsV1 => "OrchardHalo2ActionsV1",
             PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1 => "MoneroFcmpPlusPlusV1",
             PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1 =>
                 "IrohaIvmPrivateNoteStarkV1",
-            PrivacyProtocolIdV1.PqMaspStarkV0 => "PqMaspStarkV0",
+            PrivacyProtocolIdV1.PqMaspStarkV1 => "PqMaspStarkV1",
             _ => throw new ArgumentOutOfRangeException(nameof(protocol)),
         };
 
@@ -144,20 +144,20 @@ public static class PrivacyProtocolsV1
         ArgumentNullException.ThrowIfNull(label);
         return label switch
         {
-            "ZkAcePqAuthorizationV0" => PrivacyProtocolIdV1.ZkAcePqAuthorizationV0,
+            "ZkAcePqAuthorizationV1" => PrivacyProtocolIdV1.ZkAcePqAuthorizationV1,
             "AnonymousPgcKOutOfNV1" => PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1,
             "VeRangeTransparentRangeV1" => PrivacyProtocolIdV1.VeRangeTransparentRangeV1,
             "IrohaZkAmsV1" => PrivacyProtocolIdV1.IrohaZkAmsV1,
-            "VegaExistingCredentialZkV0" => PrivacyProtocolIdV1.VegaExistingCredentialZkV0,
-            "IrohaZkX509StarkP256V0" => PrivacyProtocolIdV1.IrohaZkX509StarkP256V0,
-            "IrohaJindoPolynomialCommitmentV0" =>
-                PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0,
+            "VegaExistingCredentialZkV1" => PrivacyProtocolIdV1.VegaExistingCredentialZkV1,
+            "IrohaZkX509StarkP256V1" => PrivacyProtocolIdV1.IrohaZkX509StarkP256V1,
+            "IrohaJindoPolynomialCommitmentV1" =>
+                PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1,
             "IrohaBootleLanternAnoncredV1" =>
                 PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1,
             "OrchardHalo2ActionsV1" => PrivacyProtocolIdV1.OrchardHalo2ActionsV1,
             "MoneroFcmpPlusPlusV1" => PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1,
             "IrohaIvmPrivateNoteStarkV1" => PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1,
-            "PqMaspStarkV0" => PrivacyProtocolIdV1.PqMaspStarkV0,
+            "PqMaspStarkV1" => PrivacyProtocolIdV1.PqMaspStarkV1,
             _ => throw new ArgumentException(
                 "Unknown canonical privacy statement/proof variant.",
                 nameof(label)),

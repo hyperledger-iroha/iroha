@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.sccp;
 
+import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -9,6 +10,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.client.JsonParser;
+import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 
 /** Shared-vector and adversarial tests for the closed exact SCCP V1 layout. */
@@ -16,9 +18,11 @@ public final class SccpV1Tests {
   private SccpV1Tests() {}
 
   public static void main(final String[] args) throws Exception {
+    replayForestMatchesFinalV1CrossLanguageGolden();
+    soraReplayPrincipalRequiresExactCanonicalAccountIdPayload();
     closedInventoryReservesRetiredTagsAndAliases();
-    tonProfilesBindCanonicalZeroStates();
-    allSharedEthBscTronTransferVectorsMatchRust();
+    tonMainnetBindsCanonicalZeroState();
+    allSharedMainnetTransferVectorsMatchRust();
     governedHashRotationPreservesReplayIdentityButChangesCommitment();
     payloadDecoderRejectsRetiredAndNoncanonicalForms();
     transferRejectsRetiredDomainsCodecsAndInvalidWidths();
@@ -29,18 +33,126 @@ public final class SccpV1Tests {
     System.out.println("[IrohaAndroid] exact SCCP V1 tests passed.");
   }
 
+  private static void replayForestMatchesFinalV1CrossLanguageGolden() {
+    final SccpReplayV1.Boundary boundary = SccpReplayV1.Boundary.SORA_OUTBOUND_LOCK;
+    final byte[] domain =
+        SccpReplayV1.domainHash(
+            SccpNetworkV1.SORA_TAIRA,
+            SccpNetworkV1.ETHEREUM_MAINNET,
+            boundary,
+            7,
+            hash(0x44),
+            SccpReplayV1.Actor.route());
+    assert SccpV1.encodeLowerHex(domain)
+        .equals("de11cbd183f55063fe715fcf120773d799dfb1185e057f758c126306832fdc3d");
+    final byte[] key = SccpReplayV1.replayKey(domain, hash(0x11));
+    assert SccpV1.encodeLowerHex(key)
+        .equals("139f57881d055a13ecf390d7441dadfc065ded40181c42a7aa3ab0a27469f17b");
+    final byte[] record =
+        SccpReplayV1.recordDigest(
+            boundary,
+            hash(0x11),
+            hash(0x22),
+            BigInteger.valueOf(9),
+            SccpReplayV1.Principal.evm(repeated(0x33, 20)),
+            hash(0x55));
+    assert SccpV1.encodeLowerHex(record)
+        .equals("35ab8613a0be06397609861d3cb3383770948b24b1cf098f4006c232240a2c07");
+    final List<byte[]> empty = SccpReplayV1.emptyHashes();
+    assert empty.size() == 249;
+    assert SccpV1.encodeLowerHex(empty.get(248))
+        .equals("cefd4f39c0d2ba5c33835008c6c3e7bca47d6ea1c4da5bfc8a63f09dbc66651f");
+    final byte[] zero = new byte[32];
+    final SccpReplayV1.WitnessRoot nonMembership =
+        SccpReplayV1.rootFromWitness(
+            key, null, new SccpReplayV1.Witness(empty.get(248), zero, zero, List.of()));
+    assert nonMembership.matchesExpectedRoot();
+    assert nonMembership.shard() == 19;
+    final byte[] occupied =
+        SccpV1.decodeLowerHex(
+            "7b47c79900f052fd4b73691e2fe2230fdf170225d54e9a248e176f30495ac918");
+    final SccpReplayV1.WitnessRoot membership =
+        SccpReplayV1.rootFromWitness(
+            key,
+            record,
+            new SccpReplayV1.Witness(occupied, record, zero, List.of()));
+    assert membership.matchesExpectedRoot();
+    assert Arrays.equals(occupied, membership.root());
+    final byte[] reservedBitmap = new byte[32];
+    reservedBitmap[0] = 1;
+    expectFailure(
+        () ->
+            SccpReplayV1.rootFromWitness(
+                key,
+                null,
+                new SccpReplayV1.Witness(
+                    empty.get(248), zero, reservedBitmap, List.of(hash(0x77)))));
+    final byte[] explicitDefaultBitmap = new byte[32];
+    explicitDefaultBitmap[31] = 1;
+    expectFailure(
+        () ->
+            SccpReplayV1.rootFromWitness(
+                key,
+                null,
+                new SccpReplayV1.Witness(
+                    empty.get(248), zero, explicitDefaultBitmap, List.of(empty.get(0)))));
+    expectFailure(
+        () ->
+            SccpReplayV1.recordDigest(
+                boundary,
+                hash(0x11),
+                hash(0x22),
+                BigInteger.ONE.shiftLeft(128),
+                SccpReplayV1.Principal.evm(repeated(0x33, 20)),
+                hash(0x55)));
+  }
+
+  private static void soraReplayPrincipalRequiresExactCanonicalAccountIdPayload() {
+    final String account = TestAccountIds.ed25519Authority(0x61);
+    final byte[] canonical = TransferWirePayloadEncoder.encodeAccountIdPayload(account);
+    SccpReplayV1.Principal.soraAccount(canonical);
+
+    final byte[] nonCompact = nonCompactSingleAccountPayload(canonical);
+    assert TransferWirePayloadEncoder.decodeAccountIdPayload(
+            nonCompact, SccpV1.TAIRA_I105_DISCRIMINANT_V1, 0)
+        .equals(
+            TransferWirePayloadEncoder.decodeAccountIdPayload(
+                canonical, SccpV1.TAIRA_I105_DISCRIMINANT_V1));
+    final byte[] wrongController = canonical.clone();
+    wrongController[0] = 2;
+    final byte[] wrongAlgorithm = canonical.clone();
+    wrongAlgorithm[14] = 0x7f;
+    for (final byte[] invalid :
+        List.of(
+            new byte[0],
+            new byte[] {0, 0, 0},
+            nonCompact,
+            wrongController,
+            wrongAlgorithm,
+            Arrays.copyOf(canonical, canonical.length + 1))) {
+      expectFailure(() -> SccpReplayV1.Principal.soraAccount(invalid));
+    }
+  }
+
   private static void closedInventoryReservesRetiredTagsAndAliases() {
     assert Arrays.stream(SccpNetworkV1.values()).map(SccpNetworkV1::tag).toList()
-        .equals(List.of(1, 2, 3, 4, 5, 10, 11, 12, 14, 15));
+        .equals(List.of(0x40, 0x41, 0x42, 0x43, 0x44));
     assert SccpNetworkV1.fromProfileKey("sora-taira") == SccpNetworkV1.SORA_TAIRA;
     assert SccpNetworkV1.SORA_TAIRA.isProduction();
-    assert SccpNetworkV1.fromTag(0) == null;
-    for (int tag = 6; tag <= 9; tag++) assert SccpNetworkV1.fromTag(tag) == null;
+    for (int tag = 0; tag <= 0xff; tag++) {
+      if (tag < 0x40 || tag > 0x44) assert SccpNetworkV1.fromTag(tag) == null;
+    }
     for (final String alias :
         List.of(
             "sora-nexus",
             "sora_nexus",
             "solana-mainnet-beta",
+            "ethereum-sepolia",
+            "bsc-testnet",
+            "tron-nile",
+            "tron-shasta",
+            "ton-testnet",
+            "solana-testnet",
             "SORA-TAIRA",
             "sora_taira",
             "sora-taira ",
@@ -50,35 +162,36 @@ public final class SccpV1Tests {
     }
   }
 
-  private static void tonProfilesBindCanonicalZeroStates() {
+  private static void tonMainnetBindsCanonicalZeroState() {
     assert SccpNetworkV1.fromProfileKey("ton-mainnet") == SccpNetworkV1.TON_MAINNET;
-    assert SccpNetworkV1.fromProfileKey("ton-testnet") == SccpNetworkV1.TON_TESTNET;
-    assert SccpNetworkV1.fromTag(14) == SccpNetworkV1.TON_MAINNET;
-    assert SccpNetworkV1.fromTag(15) == SccpNetworkV1.TON_TESTNET;
+    assert SccpNetworkV1.fromProfileKey("ton-testnet") == null;
+    assert SccpNetworkV1.fromTag(0x44) == SccpNetworkV1.TON_MAINNET;
+    assert SccpNetworkV1.fromTag(0x45) == null;
 
     final byte[] mainnet = SccpV1.canonicalNetworkBytes(SccpNetworkV1.TON_MAINNET);
-    final byte[] testnet = SccpV1.canonicalNetworkBytes(SccpNetworkV1.TON_TESTNET);
     assert mainnet.length == 90;
-    assert testnet.length == 90;
-    assert (mainnet[0] & 0xff) == 1 && (mainnet[1] & 0xff) == 14;
-    assert (testnet[0] & 0xff) == 1 && (testnet[1] & 0xff) == 15;
+    assert (mainnet[0] & 0xff) == 1 && (mainnet[1] & 0xff) == 0x44;
     assert Arrays.equals(Arrays.copyOfRange(mainnet, 2, 6), new byte[] {4, 0, 0, 0});
-    assert Arrays.equals(Arrays.copyOfRange(testnet, 2, 6), new byte[] {4, 0, 0, 0});
     assert Arrays.equals(
         Arrays.copyOfRange(mainnet, 6, 10), new byte[] {0x11, (byte) 0xff, (byte) 0xff, (byte) 0xff});
-    assert Arrays.equals(
-        Arrays.copyOfRange(testnet, 6, 10), new byte[] {(byte) 0xfd, (byte) 0xff, (byte) 0xff, (byte) 0xff});
   }
 
-  private static void allSharedEthBscTronTransferVectorsMatchRust() throws Exception {
+  private static void allSharedMainnetTransferVectorsMatchRust() throws Exception {
     final Map<String, Object> fixture = fixture("native_transfer_event_v1.json");
     assert intValue(fixture, "version") == 1;
+    int supported = 0;
     for (final Object raw : list(fixture, "vectors")) {
       final Map<String, Object> vector = object(raw);
+      final SccpNetworkV1 source =
+          SccpNetworkV1.fromProfileKey(string(vector, "source_profile"));
+      final SccpNetworkV1 target =
+          SccpNetworkV1.fromProfileKey(string(vector, "target_profile"));
+      if (source == null || target == null) {
+        throw new AssertionError("fixture contains a retired SCCP network profile");
+      }
+      supported++;
       final SccpLaneIdV1 lane =
-          new SccpLaneIdV1(
-              profile(string(vector, "source_profile")),
-              profile(string(vector, "target_profile")));
+          new SccpLaneIdV1(source, target);
       final byte[] payloadBytes =
           SccpV1.decodeLowerHex(string(vector, "canonical_payload_hex"));
       final SccpTransferPayloadV1 payload = SccpV1.decodeCanonicalPayload(payloadBytes);
@@ -99,6 +212,7 @@ public final class SccpV1Tests {
                       SccpV1.decodeLowerHex(string(vector, "message_id_hex")),
                       SccpV1.decodeLowerHex(string(vector, "payload_hash_hex")))));
     }
+    assert supported == 4;
   }
 
   private static void governedHashRotationPreservesReplayIdentityButChangesCommitment() {
@@ -296,7 +410,7 @@ public final class SccpV1Tests {
 
   private static void commitmentDecoderRejectsTamperingCollisionsAndTrailingBytes() {
     final SccpLaneIdV1 lane =
-        new SccpLaneIdV1(SccpNetworkV1.SORA_TAIRA, SccpNetworkV1.TRON_NILE);
+        new SccpLaneIdV1(SccpNetworkV1.SORA_TAIRA, SccpNetworkV1.TRON_MAINNET);
     final byte[] tron = repeated(4, 21);
     tron[0] = 0x41;
     final SccpTransferPayloadV1 payload =
@@ -386,6 +500,49 @@ public final class SccpV1Tests {
     final byte[] out = new byte[length];
     Arrays.fill(out, (byte) value);
     return out;
+  }
+
+  private static byte[] nonCompactSingleAccountPayload(final byte[] compact) {
+    if (compact.length <= 14 || (compact[4] & 0xff) != compact.length - 5) {
+      throw new AssertionError("unexpected compact AccountId fixture layout");
+    }
+    final long count = readU64Le(compact, 5);
+    if (count <= 0 || count > Integer.MAX_VALUE) {
+      throw new AssertionError("unexpected AccountId public-key length");
+    }
+    int offset = 13;
+    final byte[] elements = new byte[(int) count];
+    for (int index = 0; index < elements.length; index++) {
+      if ((compact[offset] & 0xff) != 1) {
+        throw new AssertionError("unexpected compact AccountId element length");
+      }
+      elements[index] = compact[offset + 1];
+      offset += 2;
+    }
+    if (offset != compact.length) {
+      throw new AssertionError("unexpected compact AccountId suffix");
+    }
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(compact, 0, 4);
+    writeU64Le(out, 8L + 9L * elements.length);
+    writeU64Le(out, elements.length);
+    for (final byte element : elements) {
+      writeU64Le(out, 1);
+      out.write(element);
+    }
+    return out.toByteArray();
+  }
+
+  private static long readU64Le(final byte[] value, final int offset) {
+    long result = 0;
+    for (int index = 0; index < 8; index++) {
+      result |= (long) (value[offset + index] & 0xff) << (index * 8);
+    }
+    return result;
+  }
+
+  private static void writeU64Le(final ByteArrayOutputStream out, final long value) {
+    for (int index = 0; index < 8; index++) out.write((int) (value >>> (index * 8)) & 0xff);
   }
 
   private static boolean allZero(final byte[] value) {

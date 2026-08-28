@@ -15,37 +15,27 @@ public enum SccpV1Error: Error, Equatable, CustomStringConvertible {
 public enum SccpNetworkV1: String, CaseIterable, Sendable {
     case soraTaira = "sora-taira"
     case ethereumMainnet = "ethereum-mainnet"
-    case ethereumSepolia = "ethereum-sepolia"
     case bscMainnet = "bsc-mainnet"
-    case bscTestnet = "bsc-testnet"
     case tronMainnet = "tron-mainnet"
-    case tronNile = "tron-nile"
-    case tronShasta = "tron-shasta"
     case tonMainnet = "ton-mainnet"
-    case tonTestnet = "ton-testnet"
 
     public var tag: UInt8 {
         switch self {
-        case .soraTaira: 1
-        case .ethereumMainnet: 2
-        case .ethereumSepolia: 3
-        case .bscMainnet: 4
-        case .bscTestnet: 5
-        case .tronMainnet: 10
-        case .tronNile: 11
-        case .tronShasta: 12
-        case .tonMainnet: 14
-        case .tonTestnet: 15
+        case .soraTaira: 0x40
+        case .ethereumMainnet: 0x41
+        case .bscMainnet: 0x42
+        case .tronMainnet: 0x43
+        case .tonMainnet: 0x44
         }
     }
 
     public var domainId: UInt32 {
         switch self {
         case .soraTaira: 0
-        case .ethereumMainnet, .ethereumSepolia: 1
-        case .bscMainnet, .bscTestnet: 2
-        case .tonMainnet, .tonTestnet: 4
-        case .tronMainnet, .tronNile, .tronShasta: 5
+        case .ethereumMainnet: 1
+        case .bscMainnet: 2
+        case .tonMainnet: 4
+        case .tronMainnet: 5
         }
     }
 
@@ -142,10 +132,10 @@ public enum SccpNativeBackendV1: String, CaseIterable, Sendable {
 
     public func supports(_ network: SccpNetworkV1) -> Bool {
         switch self {
-        case .ethereumBeacon: network == .ethereumMainnet || network == .ethereumSepolia
-        case .bscParlia: network == .bscMainnet || network == .bscTestnet
-        case .tronDpos: network == .tronMainnet || network == .tronNile || network == .tronShasta
-        case .tonMasterchain: network == .tonMainnet || network == .tonTestnet
+        case .ethereumBeacon: network == .ethereumMainnet
+        case .bscParlia: network == .bscMainnet
+        case .tronDpos: network == .tronMainnet
+        case .tonMasterchain: network == .tonMainnet
         }
     }
 }
@@ -244,18 +234,10 @@ public enum SccpV1 {
             out.append(try! decodeLowerHex("fc56984b2be7431d840e21514d1883f0"))
         case .ethereumMainnet:
             appendUInt64LE(1, to: &out)
-        case .ethereumSepolia:
-            appendUInt64LE(11_155_111, to: &out)
         case .bscMainnet:
             appendUInt64LE(56, to: &out)
-        case .bscTestnet:
-            appendUInt64LE(97, to: &out)
         case .tronMainnet:
             appendUInt32LE(0x2b66_53dc, to: &out)
-        case .tronNile:
-            appendUInt32LE(0xcd86_90dc, to: &out)
-        case .tronShasta:
-            appendUInt32LE(0x94a9_059e, to: &out)
         case .tonMainnet:
             appendInt32LE(-239, to: &out)
             appendInt32LE(-1, to: &out)
@@ -263,13 +245,6 @@ public enum SccpV1 {
             appendUInt32LE(0, to: &out)
             out.append(try! decodeLowerHex("17a3a92992aabea785a7a090985a265cd31f323d849da51239737e321fb05569"))
             out.append(try! decodeLowerHex("5e994fcf4d425c0a6ce6a792594b7173205f740a39cd56f537defd28b48a0f6e"))
-        case .tonTestnet:
-            appendInt32LE(-3, to: &out)
-            appendInt32LE(-1, to: &out)
-            appendUInt64LE(0x8000_0000_0000_0000, to: &out)
-            appendUInt32LE(0, to: &out)
-            out.append(try! decodeLowerHex("823f81f306ff02694f935cf5021548e3ce2b86b529812af6a12148879e95a128"))
-            out.append(try! decodeLowerHex("67e20ac184b9e039a62667acc3f9c00f90f359a76738233379efa47604980ce8"))
         }
         return out
     }

@@ -4,13 +4,10 @@
 package org.hyperledger.iroha.sdk.privacy
 
 import java.math.BigInteger
-import java.nio.charset.StandardCharsets
 import java.util.Collections
 import java.util.LinkedHashMap
-import org.hyperledger.iroha.sdk.client.JsonParser
 
 private val U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
-private val U32_MAX = BigInteger.ONE.shiftLeft(32).subtract(BigInteger.ONE)
 private val POLICY_DELAY_BLOCKS_V1 = BigInteger.valueOf(300L)
 private val CONSENSUS_LIMIT_MAXIMA_V1 = linkedMapOf(
     "max_actions_per_transaction" to 1,
@@ -44,7 +41,7 @@ internal fun privacyProtocolLimitRulesV1(
         PrivacyProtocolLimitRuleV1("max_batch_size", 8),
         PrivacyProtocolLimitRuleV1("max_ring_size", 64, setOf(16, 32, 64)),
     )
-    PrivacyProtocolIdV1.IROHA_JINDO_POLYNOMIAL_COMMITMENT_V0 ->
+    PrivacyProtocolIdV1.IROHA_JINDO_POLYNOMIAL_COMMITMENT_V1 ->
         listOf(PrivacyProtocolLimitRuleV1("max_polynomial_count", 4))
     PrivacyProtocolIdV1.ORCHARD_HALO2_ACTIONS_V1 ->
         listOf(PrivacyProtocolLimitRuleV1("max_action_count", 2))
@@ -53,7 +50,7 @@ internal fun privacyProtocolLimitRulesV1(
         PrivacyProtocolLimitRuleV1("max_output_count", 4),
     )
     PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1,
-    PrivacyProtocolIdV1.PQ_MASP_STARK_V0,
+    PrivacyProtocolIdV1.PQ_MASP_STARK_V1,
     -> listOf(
         PrivacyProtocolLimitRuleV1("max_input_count", 2),
         PrivacyProtocolLimitRuleV1("max_output_count", 2),
@@ -310,16 +307,106 @@ sealed class PrivacyCompiledProfileResultV1 {
     }
 }
 
+/** Weakest security model in a complete first-release privacy protocol composition. */
+enum class PrivacySecurityModelV1(val canonicalLabel: String) {
+    POST_QUANTUM_QROM("pq-qrom"),
+    CLASSICAL_ROM("classical-rom"),
+    ;
+
+    companion object {
+        @JvmStatic
+        fun fromCanonicalLabel(label: String): PrivacySecurityModelV1 =
+            values().firstOrNull { it.canonicalLabel == label }
+                ?: throw IllegalArgumentException("unknown canonical privacy security model")
+    }
+}
+
+/** Pinned commitment to the sole first-release Exact12 catalog. */
+class PrivacyExact12CatalogCommitmentV1 internal constructor(bytes: ByteArray) {
+    private val value = bytes.copyOf()
+
+    init {
+        require(value.contentEquals(CANONICAL_BYTES)) {
+            "unknown first-release Exact12 catalog commitment"
+        }
+    }
+
+    fun bytes(): ByteArray = value.copyOf()
+
+    override fun equals(other: Any?): Boolean =
+        other is PrivacyExact12CatalogCommitmentV1 && value.contentEquals(other.value)
+
+    override fun hashCode(): Int = value.contentHashCode()
+
+    private companion object {
+        val CANONICAL_BYTES: ByteArray = byteArrayOf(
+            0xe0.toByte(), 0x37, 0xf1.toByte(), 0x39, 0x04, 0xa0.toByte(), 0x30, 0x7c,
+            0x00, 0xdb.toByte(), 0x15, 0xd8.toByte(), 0x5c, 0xfb.toByte(), 0x40, 0x6b,
+            0xd7.toByte(), 0x97.toByte(), 0x72, 0xd2.toByte(), 0x01, 0x44, 0xa9.toByte(), 0x49,
+            0xde.toByte(), 0xf0.toByte(), 0xf3.toByte(), 0xfd.toByte(), 0xa7.toByte(),
+            0x8e.toByte(), 0x34, 0x2e, 0x74, 0x7f, 0x65, 0x78, 0x7c, 0xbf.toByte(),
+            0xbf.toByte(), 0xfa.toByte(), 0xc9.toByte(), 0x4f, 0x11, 0xc3.toByte(), 0x69,
+            0xe2.toByte(), 0xbb.toByte(), 0xff.toByte(),
+        )
+    }
+}
+
+/** Final independently reviewable security claim for one retained protocol. */
+class PrivacySecurityClaimV1 internal constructor(
+    @JvmField val catalogCommitment: PrivacyExact12CatalogCommitmentV1,
+    @JvmField val protocolId: PrivacyProtocolIdV1,
+    @JvmField val securityModel: PrivacySecurityModelV1,
+    @JvmField val targetSecurityBits: Int,
+    @JvmField val achievedSecurityBits: Int,
+    @JvmField val parameterDigest: PrivacyFixed32V1,
+    @JvmField val verifierDigest: PrivacyFixed32V1,
+    @JvmField val reductionDigest: PrivacyFixed32V1,
+    @JvmField val auditBundleDigest: PrivacyFixed32V1,
+) {
+    init {
+        require(targetSecurityBits == MINIMUM_SECURITY_BITS) {
+            "privacy security target must be exactly $MINIMUM_SECURITY_BITS bits"
+        }
+        require(achievedSecurityBits in targetSecurityBits..U16_MAX) {
+            "privacy achieved security must meet the target and fit uint16"
+        }
+    }
+
+    override fun equals(other: Any?): Boolean =
+        other is PrivacySecurityClaimV1 &&
+            catalogCommitment == other.catalogCommitment &&
+            protocolId == other.protocolId &&
+            securityModel == other.securityModel &&
+            targetSecurityBits == other.targetSecurityBits &&
+            achievedSecurityBits == other.achievedSecurityBits &&
+            parameterDigest == other.parameterDigest &&
+            verifierDigest == other.verifierDigest &&
+            reductionDigest == other.reductionDigest &&
+            auditBundleDigest == other.auditBundleDigest
+
+    override fun hashCode(): Int {
+        var result = catalogCommitment.hashCode()
+        result = 31 * result + protocolId.hashCode()
+        result = 31 * result + securityModel.hashCode()
+        result = 31 * result + targetSecurityBits
+        result = 31 * result + achievedSecurityBits
+        result = 31 * result + parameterDigest.hashCode()
+        result = 31 * result + verifierDigest.hashCode()
+        result = 31 * result + reductionDigest.hashCode()
+        return 31 * result + auditBundleDigest.hashCode()
+    }
+
+    private companion object {
+        const val MINIMUM_SECURITY_BITS: Int = 128
+        const val U16_MAX: Int = 0xffff
+    }
+}
+
 enum class PrivacyProtocolLifecycleStateV1 {
     PROPOSED,
     ACTIVE,
     SUSPENDED,
     RETIRED,
-}
-
-/** Closed first-release assurance classification. */
-enum class PrivacyAssuranceV1 {
-    EXPERIMENTAL,
 }
 
 class PrivacyProtocolLifecycleV1(
@@ -443,12 +530,8 @@ class PrivacyProtocolActivationRecordV1(
     @JvmField val profileBindings: PrivacyCompiledProfileV1,
     @JvmField val lifecycle: PrivacyProtocolLifecycleV1,
     @JvmField val pendingProtocolLimitsTightening: PrivacyProtocolLimitsTighteningV1?,
-    @JvmField val assurance: PrivacyAssuranceV1,
 ) {
     init {
-        require(assurance == PrivacyAssuranceV1.EXPERIMENTAL) {
-            "privacy activation assurance must be experimental in the first release"
-        }
         pendingProtocolLimitsTightening?.let { pending ->
             require(pending.nextLimits.protocolId == profileBindings.protocolId) {
                 "privacy protocol-limit tightening does not match its activation protocol"
@@ -465,102 +548,12 @@ class PrivacyProtocolActivationRecordV1(
         other is PrivacyProtocolActivationRecordV1 &&
             profileBindings == other.profileBindings &&
             lifecycle == other.lifecycle &&
-            pendingProtocolLimitsTightening == other.pendingProtocolLimitsTightening &&
-            assurance == other.assurance
+            pendingProtocolLimitsTightening == other.pendingProtocolLimitsTightening
 
     override fun hashCode(): Int {
         var result = profileBindings.hashCode()
         result = 31 * result + lifecycle.hashCode()
-        result = 31 * result + (pendingProtocolLimitsTightening?.hashCode() ?: 0)
-        return 31 * result + assurance.hashCode()
-    }
-}
-
-class PrivacyCapabilityRowV1(
-    @JvmField val protocolId: PrivacyProtocolIdV1,
-    @JvmField val compiledProfile: PrivacyCompiledProfileResultV1,
-    @JvmField val activation: PrivacyProtocolActivationRecordV1?,
-) {
-    init {
-        val available = compiledProfile as? PrivacyCompiledProfileResultV1.Available
-        require(available == null || available.profile.protocolId == protocolId) {
-            "privacy capability row does not match its compiled-profile protocol"
-        }
-        require(activation == null || available != null) {
-            "unavailable privacy capability row cannot carry an activation"
-        }
-        activation?.let { governed ->
-            val compiled = requireNotNull(available).profile
-            require(governed.profileBindings.protocolId == protocolId) {
-                "privacy capability row does not match its activation protocol"
-            }
-            requirePrivacyProfileBindingsEqualV1(
-                governed.profileBindings,
-                compiled,
-                "privacy capability activation",
-            )
-            requireProtocolLimitsAtMostV1(
-                governed.profileBindings.protocolLimits,
-                compiled.protocolLimits,
-                "privacy capability activation limits",
-            )
-        }
-    }
-
-    override fun equals(other: Any?): Boolean =
-        other is PrivacyCapabilityRowV1 &&
-            protocolId == other.protocolId &&
-            compiledProfile == other.compiledProfile &&
-            activation == other.activation
-
-    override fun hashCode(): Int {
-        var result = protocolId.hashCode()
-        result = 31 * result + compiledProfile.hashCode()
-        return 31 * result + (activation?.hashCode() ?: 0)
-    }
-}
-
-/** Authoritative committed first-release privacy capability snapshot. */
-class PrivacyCapabilitySnapshotV1(
-    @JvmField val version: Int,
-    @JvmField val committedHeight: BigInteger,
-    @JvmField val consensusPolicy: PrivacyConsensusPolicyV1,
-    protocols: List<PrivacyCapabilityRowV1>,
-) {
-    @JvmField
-    val protocols: List<PrivacyCapabilityRowV1>
-
-    init {
-        require(version == PrivacyCapabilitySnapshotJsonV1.VERSION) {
-            "privacy capability snapshot version must be ${PrivacyCapabilitySnapshotJsonV1.VERSION}"
-        }
-        requirePrivacyHeightV1(committedHeight, "privacy committed height")
-        requirePrivacyConsensusPolicyAtHeightV1(consensusPolicy, committedHeight)
-        val expected = PrivacyProtocolIdV1.values()
-        require(protocols.size == expected.size) {
-            "privacy capability snapshot must contain exactly ${expected.size} rows"
-        }
-        protocols.forEachIndexed { index, row ->
-            require(row.protocolId == expected[index]) {
-                "privacy capability snapshot row $index is out of canonical protocol order"
-            }
-            requirePrivacyCapabilityRowAtHeightV1(row, committedHeight)
-        }
-        this.protocols = Collections.unmodifiableList(protocols.toList())
-    }
-
-    override fun equals(other: Any?): Boolean =
-        other is PrivacyCapabilitySnapshotV1 &&
-            version == other.version &&
-            committedHeight == other.committedHeight &&
-            consensusPolicy == other.consensusPolicy &&
-            protocols == other.protocols
-
-    override fun hashCode(): Int {
-        var result = version
-        result = 31 * result + committedHeight.hashCode()
-        result = 31 * result + consensusPolicy.hashCode()
-        return 31 * result + protocols.hashCode()
+        return 31 * result + (pendingProtocolLimitsTightening?.hashCode() ?: 0)
     }
 }
 
@@ -649,7 +642,7 @@ private fun requireValidPrivacyPolicyScheduleV1(
     }
 }
 
-private fun requireProtocolLimitsAtMostV1(
+internal fun requireProtocolLimitsAtMostV1(
     actual: PrivacyProtocolLimitsV1,
     ceiling: PrivacyProtocolLimitsV1,
     subject: String,
@@ -676,7 +669,7 @@ private fun requireStrictProtocolTighteningV1(
     require(next != current) { "$subject must be strict" }
 }
 
-private fun requirePrivacyProfileBindingsEqualV1(
+internal fun requirePrivacyProfileBindingsEqualV1(
     actual: PrivacyCompiledProfileV1,
     expected: PrivacyCompiledProfileV1,
     subject: String,
@@ -693,7 +686,7 @@ private fun requirePrivacyProfileBindingsEqualV1(
     ) { "$subject bindings do not match the compiled profile" }
 }
 
-private fun requirePrivacyConsensusPolicyAtHeightV1(
+internal fun requirePrivacyConsensusPolicyAtHeightV1(
     policy: PrivacyConsensusPolicyV1,
     committedHeight: BigInteger,
 ) {
@@ -707,612 +700,20 @@ private fun requirePrivacyConsensusPolicyAtHeightV1(
     }
 }
 
-private fun requirePrivacyCapabilityRowAtHeightV1(
-    row: PrivacyCapabilityRowV1,
-    committedHeight: BigInteger,
-) {
-    val activation = row.activation ?: return
-    val lifecycle = activation.lifecycle
-    require(lifecycle.proposedAtHeight <= committedHeight) {
-        "privacy proposal height is after the committed height"
+internal fun expectedSecurityModelV1(protocolId: PrivacyProtocolIdV1): PrivacySecurityModelV1 =
+    when (protocolId) {
+        PrivacyProtocolIdV1.ZK_ACE_PQ_AUTHORIZATION_V1,
+        PrivacyProtocolIdV1.IROHA_JINDO_POLYNOMIAL_COMMITMENT_V1,
+        PrivacyProtocolIdV1.IROHA_BOOTLE_LANTERN_ANONCRED_V1,
+        PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1,
+        PrivacyProtocolIdV1.PQ_MASP_STARK_V1,
+        -> PrivacySecurityModelV1.POST_QUANTUM_QROM
+        PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1,
+        PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1,
+        PrivacyProtocolIdV1.IROHA_ZK_AMS_V1,
+        PrivacyProtocolIdV1.VEGA_EXISTING_CREDENTIAL_ZK_V1,
+        PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1,
+        PrivacyProtocolIdV1.ORCHARD_HALO2_ACTIONS_V1,
+        PrivacyProtocolIdV1.MONERO_FCMP_PLUS_PLUS_V1,
+        -> PrivacySecurityModelV1.CLASSICAL_ROM
     }
-    when (lifecycle.state) {
-        PrivacyProtocolLifecycleStateV1.PROPOSED -> {
-            require(requireNotNull(lifecycle.activateAtHeight) > committedHeight) {
-                "due privacy proposal remained unpromoted at the committed height"
-            }
-        }
-        PrivacyProtocolLifecycleStateV1.ACTIVE,
-        PrivacyProtocolLifecycleStateV1.SUSPENDED,
-        PrivacyProtocolLifecycleStateV1.RETIRED,
-        -> {
-            lifecycle.activatedAtHeight?.let { activated ->
-                require(activated <= committedHeight) {
-                    "privacy activation height is after the committed height"
-                }
-            }
-            require(requireNotNull(lifecycle.stateSinceHeight) <= committedHeight) {
-                "privacy lifecycle state height is after the committed height"
-            }
-        }
-    }
-    activation.pendingProtocolLimitsTightening?.let { pending ->
-        require(pending.scheduledAtHeight <= committedHeight) {
-            "privacy protocol-limit tightening was scheduled after the committed height"
-        }
-        require(pending.effectiveAtHeight > committedHeight) {
-            "privacy protocol-limit tightening is already due at the committed height"
-        }
-    }
-}
-
-class PrivacyCapabilitySnapshotException(
-    @JvmField val path: String,
-    detail: String,
-    cause: Throwable? = null,
-) : IllegalArgumentException("$path: $detail", cause)
-
-/** Exact JSON decoder and semantic validator for `/v1/privacy/capabilities`. */
-object PrivacyCapabilitySnapshotJsonV1 {
-    const val VERSION: Int = 1
-    const val MAX_RESPONSE_BYTES: Long = 256L * 1024L
-
-    private val CONSENSUS_LIMIT_KEYS = CONSENSUS_LIMIT_MAXIMA_V1.keys
-    private val CONSENSUS_MAXIMA = CONSENSUS_LIMIT_MAXIMA_V1
-
-    @JvmStatic
-    fun parse(payload: ByteArray): PrivacyCapabilitySnapshotV1 {
-        require(payload.isNotEmpty()) { "privacy capability response must not be empty" }
-        require(payload.size.toLong() <= MAX_RESPONSE_BYTES) {
-            "privacy capability response exceeds $MAX_RESPONSE_BYTES bytes"
-        }
-        val json = String(payload, StandardCharsets.UTF_8)
-        requireCanonicalUnsignedIntegerTokens(json)
-        val decoded = try {
-            JsonParser.parse(json)
-        } catch (error: RuntimeException) {
-            throw PrivacyCapabilitySnapshotException(
-                "privacy capability snapshot",
-                "contains invalid JSON",
-                error,
-            )
-        }
-        return parseValue(decoded)
-    }
-
-    @JvmStatic
-    fun parse(json: String): PrivacyCapabilitySnapshotV1 =
-        parse(json.toByteArray(StandardCharsets.UTF_8))
-
-    private fun parseValue(value: Any?): PrivacyCapabilitySnapshotV1 {
-        val path = "privacy capability snapshot"
-        val root = exactObject(
-            value,
-            setOf("version", "committed_height", "consensus_policy", "protocols"),
-            path,
-        )
-        val version = u32(root["version"], "$path.version")
-        if (version != VERSION) fail("version must be exactly $VERSION", "$path.version")
-        val committedHeight = u64(root["committed_height"], "$path.committed_height")
-        val consensusPolicy = parseConsensusPolicy(root["consensus_policy"], committedHeight)
-        val rows = list(root["protocols"], "$path.protocols")
-        val expected = PrivacyProtocolIdV1.values()
-        if (rows.size != expected.size) {
-            fail("protocols must contain exactly ${expected.size} canonical rows", "$path.protocols")
-        }
-        val protocols = rows.mapIndexed { index, row ->
-            parseCapabilityRow(
-                row,
-                expected[index],
-                committedHeight,
-                "$path.protocols[$index]",
-            )
-        }
-        return PrivacyCapabilitySnapshotV1(version, committedHeight, consensusPolicy, protocols)
-    }
-
-    private fun parseConsensusPolicy(value: Any?, committedHeight: BigInteger): PrivacyConsensusPolicyV1 {
-        val path = "privacy capability snapshot.consensus_policy"
-        val policy = exactObject(value, setOf("current_limits", "pending_tightening"), path)
-        val current = parseConsensusLimits(policy["current_limits"], "$path.current_limits")
-        val pendingValue = policy["pending_tightening"]
-        val pending = if (pendingValue == null) {
-            null
-        } else {
-            val pendingPath = "$path.pending_tightening"
-            val tightening = exactObject(
-                pendingValue,
-                setOf("scheduled_at_height", "effective_at_height", "next_limits"),
-                pendingPath,
-            )
-            val scheduled = positiveU64(tightening["scheduled_at_height"], "$pendingPath.scheduled_at_height")
-            val effective = positiveU64(tightening["effective_at_height"], "$pendingPath.effective_at_height")
-            validateSchedule(scheduled, effective, committedHeight, pendingPath)
-            val next = parseConsensusLimits(tightening["next_limits"], "$pendingPath.next_limits")
-            assertConsensusTightening(current, next, pendingPath)
-            PrivacyConsensusPolicyTighteningV1(scheduled, effective, next)
-        }
-        return PrivacyConsensusPolicyV1(current, pending)
-    }
-
-    private fun parseConsensusLimits(value: Any?, path: String): PrivacyConsensusLimitsV1 {
-        val limits = exactObject(value, CONSENSUS_LIMIT_KEYS, path)
-        fun field(name: String): Int {
-            val result = positiveU32(limits[name], "$path.$name")
-            val maximum = CONSENSUS_MAXIMA.getValue(name)
-            if (result > maximum) fail("exceeds the first-release hard maximum", "$path.$name")
-            return result
-        }
-        val result = PrivacyConsensusLimitsV1(
-            field("max_actions_per_transaction"),
-            field("max_actions_per_block"),
-            field("max_proof_bytes_per_action"),
-            field("max_action_bytes"),
-            field("max_privacy_bytes_per_transaction"),
-            field("max_privacy_bytes_per_block"),
-            field("max_statement_and_encrypted_output_bytes_per_transaction"),
-            field("max_nullifiers_per_action"),
-            field("max_commitments_per_action"),
-            field("retained_root_count"),
-        )
-        if (
-            result.maxActionsPerTransaction > result.maxActionsPerBlock ||
-            result.maxProofBytesPerAction > result.maxActionBytes ||
-            result.maxActionBytes > result.maxPrivacyBytesPerTransaction ||
-            result.maxPrivacyBytesPerTransaction > result.maxPrivacyBytesPerBlock ||
-            result.maxStatementAndEncryptedOutputBytesPerTransaction > result.maxActionBytes
-        ) {
-            fail("violates consensus resource-limit ordering", path)
-        }
-        return result
-    }
-
-    private fun parseCapabilityRow(
-        value: Any?,
-        expected: PrivacyProtocolIdV1,
-        committedHeight: BigInteger,
-        path: String,
-    ): PrivacyCapabilityRowV1 {
-        val row = exactObject(value, setOf("protocol_id", "compiled_profile", "activation"), path)
-        val protocol = protocolTag(row["protocol_id"], "$path.protocol_id")
-        if (protocol != expected) fail("must be canonical protocol ${expected.canonicalLabel}", "$path.protocol_id")
-        val compiled = parseCompiledProfile(row["compiled_profile"], protocol, "$path.compiled_profile")
-        val activation = row["activation"]?.let {
-            parseActivation(it, protocol, compiled, committedHeight, "$path.activation")
-        }
-        if (activation != null && compiled !is PrivacyCompiledProfileResultV1.Available) {
-            fail("cannot activate an unavailable compiled profile", "$path.activation")
-        }
-        return PrivacyCapabilityRowV1(protocol, compiled, activation)
-    }
-
-    private fun parseCompiledProfile(
-        value: Any?,
-        protocol: PrivacyProtocolIdV1,
-        path: String,
-    ): PrivacyCompiledProfileResultV1 {
-        val result = exactObject(value, setOf("status", "value"), path)
-        return when (text(result["status"], "$path.status")) {
-            "available" -> PrivacyCompiledProfileResultV1.Available(
-                parseProfile(result["value"], protocol, "$path.value"),
-            )
-            "unavailable" -> parseUnavailable(result["value"], "$path.value")
-            else -> fail("status must be available or unavailable", "$path.status")
-        }
-    }
-
-    private fun parseUnavailable(value: Any?, path: String): PrivacyCompiledProfileResultV1.Unavailable {
-        val unavailable = exactObject(value, setOf("reason", "detail"), path)
-        return when (text(unavailable["reason"], "$path.reason")) {
-            "engine-unavailable" -> {
-                if (unavailable["detail"] != null) fail("unit reason detail must be null", "$path.detail")
-                PrivacyCompiledProfileResultV1.Unavailable(
-                    PrivacyCompiledProfileUnavailableReasonV1.ENGINE_UNAVAILABLE,
-                    null,
-                )
-            }
-            "profile-initialization-failed" -> {
-                if (unavailable["detail"] != null) fail("unit reason detail must be null", "$path.detail")
-                PrivacyCompiledProfileResultV1.Unavailable(
-                    PrivacyCompiledProfileUnavailableReasonV1.PROFILE_INITIALIZATION_FAILED,
-                    null,
-                )
-            }
-            "statement-schema-invalid" -> {
-                val tag = taggedUnit(
-                    unavailable["detail"],
-                    "schema_error",
-                    "detail",
-                    setOf("conflicting-stable-type-id", "missing-type-reference"),
-                    "$path.detail",
-                )
-                PrivacyCompiledProfileResultV1.Unavailable(
-                    PrivacyCompiledProfileUnavailableReasonV1.STATEMENT_SCHEMA_INVALID,
-                    if (tag == "conflicting-stable-type-id") {
-                        PrivacyCompiledStatementSchemaErrorV1.CONFLICTING_STABLE_TYPE_ID
-                    } else {
-                        PrivacyCompiledStatementSchemaErrorV1.MISSING_TYPE_REFERENCE
-                    },
-                )
-            }
-            else -> fail("unknown unavailable reason", "$path.reason")
-        }
-    }
-
-    private fun parseProfile(value: Any?, protocol: PrivacyProtocolIdV1, path: String): PrivacyCompiledProfileV1 {
-        val profile = exactObject(value, PROFILE_KEYS, path)
-        return bindings(
-            profile,
-            protocol,
-            parseProtocolLimits(profile["protocol_limits"], protocol, "$path.protocol_limits"),
-            path,
-        )
-    }
-
-    private fun parseActivation(
-        value: Any?,
-        protocol: PrivacyProtocolIdV1,
-        compiled: PrivacyCompiledProfileResultV1,
-        committedHeight: BigInteger,
-        path: String,
-    ): PrivacyProtocolActivationRecordV1 {
-        val record = exactObject(value, ACTIVATION_KEYS, path)
-        val limits = parseProtocolLimits(record["protocol_limits"], protocol, "$path.protocol_limits")
-        val activationProfile = bindings(record, protocol, limits, path)
-        val compiledProfile = (compiled as? PrivacyCompiledProfileResultV1.Available)?.profile
-        if (compiledProfile != null) {
-            assertProfileBindingsEqual(activationProfile, compiledProfile, path)
-            assertLimitsAtMost(limits, compiledProfile.protocolLimits, "$path.protocol_limits")
-        }
-        val lifecycle = parseLifecycle(record["lifecycle"], committedHeight, "$path.lifecycle")
-        val pending = parseProtocolTightening(
-            record["pending_protocol_limits_tightening"],
-            limits,
-            committedHeight,
-            "$path.pending_protocol_limits_tightening",
-        )
-        taggedUnit(record["assurance"], "assurance", "value", setOf("experimental"), "$path.assurance")
-        return PrivacyProtocolActivationRecordV1(
-            activationProfile,
-            lifecycle,
-            pending,
-            PrivacyAssuranceV1.EXPERIMENTAL,
-        )
-    }
-
-    private fun bindings(
-        value: Map<String, Any?>,
-        protocol: PrivacyProtocolIdV1,
-        protocolLimits: PrivacyProtocolLimitsV1,
-        path: String,
-    ): PrivacyCompiledProfileV1 {
-        val embeddedProtocol = protocolTag(value["protocol_id"], "$path.protocol_id")
-        if (embeddedProtocol != protocol) fail("does not match its row protocol", "$path.protocol_id")
-        val proofLabel = taggedUnit(
-            value["proof_system_id"],
-            "proof_system",
-            "value",
-            setOf(protocol.expectedProofSystem.canonicalLabel),
-            "$path.proof_system_id",
-        )
-        val engineLabel = taggedUnit(
-            value["engine_id"],
-            "engine",
-            "value",
-            setOf(protocol.expectedEngine.canonicalLabel),
-            "$path.engine_id",
-        )
-        return PrivacyCompiledProfileV1(
-            protocol,
-            PrivacyProofSystemIdV1.fromCanonicalLabel(proofLabel),
-            PrivacyEngineIdV1.fromCanonicalLabel(engineLabel),
-            fixed32(value["parameter_id"], "$path.parameter_id"),
-            fixed32(value["parameter_digest"], "$path.parameter_digest"),
-            fixed32(value["verifier_digest"], "$path.verifier_digest"),
-            fixed32(value["statement_schema_digest"], "$path.statement_schema_digest"),
-            fixed32(value["engine_manifest_digest"], "$path.engine_manifest_digest"),
-            protocolLimits,
-        )
-    }
-
-    private fun parseProtocolLimits(value: Any?, protocol: PrivacyProtocolIdV1, path: String): PrivacyProtocolLimitsV1 {
-        val tagged = exactObject(value, setOf("protocol", "limits"), path)
-        val tag = try {
-            PrivacyProtocolIdV1.fromCanonicalLabel(text(tagged["protocol"], "$path.protocol"))
-        } catch (error: IllegalArgumentException) {
-            fail("has an unknown or non-canonical protocol tag", "$path.protocol", error)
-        }
-        if (tag != protocol) fail("does not match the protocol binding", "$path.protocol")
-        val fields = privacyProtocolLimitRulesV1(protocol)
-        if (fields.isEmpty()) {
-            if (tagged["limits"] != null) fail("fixed protocol limits must be null", "$path.limits")
-            return PrivacyProtocolLimitsV1(protocol, null)
-        }
-        val limitObject = exactObject(tagged["limits"], fields.map { it.name }.toSet(), "$path.limits")
-        val normalized = LinkedHashMap<String, Int>()
-        for (field in fields) {
-            val number = positiveU32(limitObject[field.name], "$path.limits.${field.name}")
-            if (number > field.maximum || (field.permitted != null && number !in field.permitted)) {
-                fail("is outside the closed first-release limit set", "$path.limits.${field.name}")
-            }
-            normalized[field.name] = number
-        }
-        return PrivacyProtocolLimitsV1(protocol, normalized)
-    }
-
-    private fun parseLifecycle(value: Any?, committedHeight: BigInteger, path: String): PrivacyProtocolLifecycleV1 {
-        val lifecycle = exactObject(value, setOf("state", "record"), path)
-        val stateText = text(lifecycle["state"], "$path.state")
-        val state = when (stateText) {
-            "proposed" -> PrivacyProtocolLifecycleStateV1.PROPOSED
-            "active" -> PrivacyProtocolLifecycleStateV1.ACTIVE
-            "suspended" -> PrivacyProtocolLifecycleStateV1.SUSPENDED
-            "retired" -> PrivacyProtocolLifecycleStateV1.RETIRED
-            else -> fail("unknown lifecycle state", "$path.state")
-        }
-        val keys = if (state == PrivacyProtocolLifecycleStateV1.PROPOSED) {
-            setOf("proposed_at_height", "activate_at_height")
-        } else {
-            setOf("proposed_at_height", "activated_at_height", "state_since_height")
-        }
-        val record = exactObject(lifecycle["record"], keys, "$path.record")
-        val proposed = positiveU64(record["proposed_at_height"], "$path.record.proposed_at_height")
-        if (proposed > committedHeight) fail("claims proposal after committed height", path)
-        if (state == PrivacyProtocolLifecycleStateV1.PROPOSED) {
-            val activate = positiveU64(record["activate_at_height"], "$path.record.activate_at_height")
-            if (activate <= proposed || activate <= committedHeight) fail("has invalid proposed lifecycle heights", path)
-            return PrivacyProtocolLifecycleV1(state, proposed, activate, null, null)
-        }
-        val activated = if (state == PrivacyProtocolLifecycleStateV1.RETIRED && record["activated_at_height"] == null) {
-            null
-        } else {
-            positiveU64(record["activated_at_height"], "$path.record.activated_at_height")
-        }
-        val since = positiveU64(record["state_since_height"], "$path.record.state_since_height")
-        if (since > committedHeight || (activated != null && activated > committedHeight)) {
-            fail("claims a state after committed height", path)
-        }
-        val invalidOrder = if (activated == null) {
-            state != PrivacyProtocolLifecycleStateV1.RETIRED || since <= proposed
-        } else {
-            activated <= proposed ||
-                if (state == PrivacyProtocolLifecycleStateV1.ACTIVE) since < activated else since <= activated
-        }
-        if (invalidOrder) fail("has invalid lifecycle ordering", path)
-        return PrivacyProtocolLifecycleV1(state, proposed, null, activated, since)
-    }
-
-    private fun parseProtocolTightening(
-        value: Any?,
-        current: PrivacyProtocolLimitsV1,
-        committedHeight: BigInteger,
-        path: String,
-    ): PrivacyProtocolLimitsTighteningV1? {
-        if (value == null) return null
-        val tightening = exactObject(
-            value,
-            setOf("scheduled_at_height", "effective_at_height", "next_limits"),
-            path,
-        )
-        val scheduled = positiveU64(tightening["scheduled_at_height"], "$path.scheduled_at_height")
-        val effective = positiveU64(tightening["effective_at_height"], "$path.effective_at_height")
-        validateSchedule(scheduled, effective, committedHeight, path)
-        val next = parseProtocolLimits(tightening["next_limits"], current.protocolId, "$path.next_limits")
-        assertLimitsAtMost(next, current, "$path.next_limits")
-        if (next == current) fail("must be a strict tightening", path)
-        return PrivacyProtocolLimitsTighteningV1(scheduled, effective, next)
-    }
-
-    private fun validateSchedule(
-        scheduled: BigInteger,
-        effective: BigInteger,
-        committedHeight: BigInteger,
-        path: String,
-    ) {
-        if (
-            scheduled > U64_MAX.subtract(POLICY_DELAY_BLOCKS_V1) ||
-            effective <= scheduled ||
-            effective < scheduled.add(POLICY_DELAY_BLOCKS_V1) ||
-            scheduled > committedHeight ||
-            effective <= committedHeight
-        ) {
-            fail("has invalid committed-height schedule", path)
-        }
-    }
-
-    private fun assertProfileBindingsEqual(
-        actual: PrivacyCompiledProfileV1,
-        expected: PrivacyCompiledProfileV1,
-        path: String,
-    ) {
-        val equal = actual.protocolId == expected.protocolId &&
-            actual.proofSystemId == expected.proofSystemId &&
-            actual.engineId == expected.engineId &&
-            actual.parameterId == expected.parameterId &&
-            actual.parameterDigest == expected.parameterDigest &&
-            actual.verifierDigest == expected.verifierDigest &&
-            actual.statementSchemaDigest == expected.statementSchemaDigest &&
-            actual.engineManifestDigest == expected.engineManifestDigest
-        if (!equal) fail("does not match the compiled profile bindings", path)
-    }
-
-    private fun assertLimitsAtMost(actual: PrivacyProtocolLimitsV1, ceiling: PrivacyProtocolLimitsV1, path: String) {
-        if (actual.protocolId != ceiling.protocolId || (actual.values == null) != (ceiling.values == null)) {
-            fail("protocol-limit tag differs from compiled ceiling", path)
-        }
-        val actualValues = actual.values ?: return
-        val ceilingValues = ceiling.values ?: fail("compiled limit ceiling is absent", path)
-        for ((name, value) in actualValues) {
-            if (value > (ceilingValues[name] ?: -1)) fail("exceeds the compiled profile ceiling", "$path.$name")
-        }
-    }
-
-    private fun assertConsensusTightening(
-        current: PrivacyConsensusLimitsV1,
-        next: PrivacyConsensusLimitsV1,
-        path: String,
-    ) {
-        val currentValues = consensusValues(current)
-        val nextValues = consensusValues(next)
-        var changed = false
-        for (name in CONSENSUS_LIMIT_KEYS) {
-            if (nextValues.getValue(name) > currentValues.getValue(name)) {
-                fail("cannot increase a consensus limit", "$path.next_limits.$name")
-            }
-            changed = changed || nextValues.getValue(name) != currentValues.getValue(name)
-        }
-        if (!changed) fail("must be a strict tightening", path)
-    }
-
-    private fun consensusValues(value: PrivacyConsensusLimitsV1): Map<String, Int> = mapOf(
-        "max_actions_per_transaction" to value.maxActionsPerTransaction,
-        "max_actions_per_block" to value.maxActionsPerBlock,
-        "max_proof_bytes_per_action" to value.maxProofBytesPerAction,
-        "max_action_bytes" to value.maxActionBytes,
-        "max_privacy_bytes_per_transaction" to value.maxPrivacyBytesPerTransaction,
-        "max_privacy_bytes_per_block" to value.maxPrivacyBytesPerBlock,
-        "max_statement_and_encrypted_output_bytes_per_transaction" to value.maxStatementAndEncryptedOutputBytesPerTransaction,
-        "max_nullifiers_per_action" to value.maxNullifiersPerAction,
-        "max_commitments_per_action" to value.maxCommitmentsPerAction,
-        "retained_root_count" to value.retainedRootCount,
-    )
-
-    private fun protocolTag(value: Any?, path: String): PrivacyProtocolIdV1 {
-        val label = taggedUnit(
-            value,
-            "protocol",
-            "value",
-            PrivacyProtocolIdV1.values().map { it.canonicalLabel }.toSet(),
-            path,
-        )
-        return PrivacyProtocolIdV1.fromCanonicalLabel(label)
-    }
-
-    private fun taggedUnit(
-        value: Any?,
-        tagKey: String,
-        contentKey: String,
-        permitted: Set<String>,
-        path: String,
-    ): String {
-        val tagged = exactObject(value, setOf(tagKey, contentKey), path)
-        val label = text(tagged[tagKey], "$path.$tagKey")
-        if (label !in permitted) fail("has an unknown or non-canonical tag", "$path.$tagKey")
-        if (tagged[contentKey] != null) fail("unit enum content must be null", "$path.$contentKey")
-        return label
-    }
-
-    private fun fixed32(value: Any?, path: String): PrivacyFixed32V1 {
-        val bytes = list(value, path)
-        if (bytes.size != 32) fail("must be exactly 32 bytes", path)
-        return PrivacyFixed32V1(ByteArray(32) { index ->
-            val number = u32(bytes[index], "$path[$index]")
-            if (number > 255) fail("must contain only uint8 values", "$path[$index]")
-            number.toByte()
-        })
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private fun exactObject(value: Any?, keys: Set<String>, path: String): Map<String, Any?> {
-        val result = value as? Map<*, *> ?: fail("must be a JSON object", path)
-        if (result.keys.any { it !is String }) fail("contains a non-string field", path)
-        val actual = result.keys.map { it as String }.toSet()
-        if (actual != keys || result.size != keys.size) {
-            fail("must contain exactly: ${keys.sorted().joinToString(", ")}", path)
-        }
-        return result as Map<String, Any?>
-    }
-
-    private fun list(value: Any?, path: String): List<Any?> =
-        value as? List<Any?> ?: fail("must be a JSON array", path)
-
-    private fun text(value: Any?, path: String): String =
-        value as? String ?: fail("must be a JSON string", path)
-
-    private fun u32(value: Any?, path: String): Int {
-        val number = integer(value, path)
-        if (number.signum() < 0 || number > U32_MAX) fail("must be within the uint32 range", path)
-        if (number > BigInteger.valueOf(Int.MAX_VALUE.toLong())) {
-            fail("exceeds the supported first-release integer range", path)
-        }
-        return number.intValueExact()
-    }
-
-    private fun positiveU32(value: Any?, path: String): Int =
-        u32(value, path).also { if (it == 0) fail("must be non-zero", path) }
-
-    private fun u64(value: Any?, path: String): BigInteger {
-        val number = integer(value, path)
-        if (number.signum() < 0 || number > U64_MAX) fail("must be within the uint64 range", path)
-        return number
-    }
-
-    private fun positiveU64(value: Any?, path: String): BigInteger =
-        u64(value, path).also { if (it == BigInteger.ZERO) fail("must be non-zero", path) }
-
-    private fun integer(value: Any?, path: String): BigInteger = when (value) {
-        is Long -> BigInteger.valueOf(value)
-        is BigInteger -> value
-        else -> fail("must be one canonical integer", path)
-    }
-
-    private fun requireCanonicalUnsignedIntegerTokens(json: String) {
-        var index = 0
-        var inString = false
-        var escaped = false
-        while (index < json.length) {
-            val character = json[index]
-            if (inString) {
-                if (escaped) {
-                    escaped = false
-                } else if (character == '\\') {
-                    escaped = true
-                } else if (character == '"') {
-                    inString = false
-                }
-                index += 1
-                continue
-            }
-            if (character == '"') {
-                inString = true
-                index += 1
-                continue
-            }
-            if (character == '-') {
-                fail("negative integers are not canonical", "privacy capability snapshot")
-            }
-            if (character in '0'..'9') {
-                val start = index
-                while (index < json.length && json[index] in '0'..'9') index += 1
-                if (index - start > 1 && json[start] == '0') {
-                    fail("integer tokens must not contain leading zeroes", "privacy capability snapshot")
-                }
-                if (index < json.length && json[index] in ".eE+") {
-                    fail("numeric values must be canonical unsigned integers", "privacy capability snapshot")
-                }
-                continue
-            }
-            index += 1
-        }
-    }
-
-    private fun fail(message: String, path: String, cause: Throwable? = null): Nothing =
-        throw PrivacyCapabilitySnapshotException(path, message, cause)
-
-    private val PROFILE_KEYS = setOf(
-        "protocol_id",
-        "proof_system_id",
-        "engine_id",
-        "parameter_id",
-        "parameter_digest",
-        "verifier_digest",
-        "statement_schema_digest",
-        "engine_manifest_digest",
-        "protocol_limits",
-    )
-    private val ACTIVATION_KEYS = PROFILE_KEYS + setOf(
-        "lifecycle",
-        "pending_protocol_limits_tightening",
-        "assurance",
-    )
-}

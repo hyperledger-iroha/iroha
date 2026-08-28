@@ -31,7 +31,6 @@ import {
   normalizeKagemushaTopUpRequestV4,
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
-import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
 import {
   SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
@@ -43,7 +42,6 @@ import {
 
 const DEFAULT_SUCCESS_STATUSES = [200];
 const BOUNDED_RESPONSE_MAX_STREAM_CHUNKS = 16_384;
-const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
 const KAGEMUSHA_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
 const KAIGI_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500;
@@ -54,15 +52,6 @@ const EXPLORER_CURSOR_MAX_LIMIT = 100;
 const EXPLORER_CURSOR_MAX_LENGTH = 1_424;
 const EXPLORER_CURSOR_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const EXPLORER_CURSOR_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-const PRIVACY_CAPABILITIES_REQUEST_OPTION_KEYS = new Set([
-  "authAccountId",
-  "headers",
-  "nonce",
-  "signal",
-  "sign",
-  "successStatuses",
-  "timestampMs",
-]);
 const PIPELINE_SUCCESS_STATUS = "Applied";
 const PIPELINE_STATUS_VALUES = new Set([
   "Queued",
@@ -2220,26 +2209,6 @@ export class ToriiBrowserClient {
   getNodeCapabilities(options) {
     const opts = requireObject(options, "getNodeCapabilities options");
     return this._canonicalJson("GET", "/v1/node/capabilities", undefined, opts);
-  }
-
-  /** @internal Raw bounded transport for the optional privacy-capabilities API. */
-  async [privacyCapabilityTransportV1](options) {
-    const opts = requireSupportedOptions(
-      options,
-      "getPrivacyCapabilitiesV1 options",
-      PRIVACY_CAPABILITIES_REQUEST_OPTION_KEYS,
-    );
-    return this._canonicalJson("GET", "/v1/privacy/capabilities", undefined, opts, [200], {
-      maximumBodyBytes: PRIVACY_CAPABILITIES_JSON_MAX_BYTES,
-      jsonParser: (text) => parseStrictLosslessIntegerJson(
-        text,
-        "privacy capabilities response",
-      ),
-      responseObserver: (response) => requireExactJsonContentType(
-        response.headers?.get?.("content-type"),
-        "privacy capabilities response",
-      ),
-    });
   }
 
   /** Resolve a contract alias; caller-supplied canonical signing headers are preserved. */

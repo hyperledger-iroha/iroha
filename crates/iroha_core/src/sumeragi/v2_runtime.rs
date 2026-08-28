@@ -42,7 +42,7 @@ use super::v2_core::{
     check_production_body_service_effective_lock_transition,
     check_production_ingress_reservation_materialization_transition,
     check_production_ingress_transition, classify_exact_body_completion_ownership,
-    select_bounded_service_class,
+    select_bounded_service_class, timeout_vote_view_is_admissible,
 };
 use super::{
     FairV2IngressLeaderWirePhase, FairV2IngressLeaderWireSlot, FairV2IngressLeaderWireToken,
@@ -10070,7 +10070,7 @@ impl RuntimeDriver for SumeragiV2Adapter {
         matches!(
             command,
             AdapterCommand::Authenticated(authenticated)
-                if wire_payload_matches_current_strict_timeout_recovery_round(
+                if wire_payload_advances_or_supersedes_future_prepare_qc_fifo_block(
                     authenticated.payload(),
                     self.wire_context(),
                     self.current_tag(),

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use fastpq_isi::{
     params::{
-        CANONICAL_PARAMETER_SETS, GOLDILOCKS_BASE, POSEIDON_GOLDILOCKS_X7_BLAKE2B,
+        CANONICAL_PARAMETER_SETS, GOLDILOCKS_FP4_V1, POSEIDON_X7_GOLDILOCKS_DIGEST384_V1,
         StarkParameterSet,
     },
     poseidon::{FIELD_MODULUS, PoseidonSponge},
@@ -13,7 +13,7 @@ const PACKED_LIMB_BYTES: usize = 7;
 const GOLDILOCKS_TWO_ADICITY: u32 = 32;
 const FIELD_MODULUS_U128: u128 = FIELD_MODULUS as u128;
 const TWO_ADIC_COMPONENT: u128 = 1u128 << GOLDILOCKS_TWO_ADICITY;
-const CANONICAL_CONST_NAMES: [&str; 2] = ["FASTPQ_CANONICAL_BALANCED", "FASTPQ_CANONICAL_LATENCY"];
+const CANONICAL_CONST_NAMES: [&str; 1] = ["FASTPQ_FINAL_V1"];
 #[derive(Parser)]
 #[command(author, version, about = "FASTPQ Poseidon-derived constant generator")]
 struct Cli {
@@ -98,8 +98,8 @@ fn render_rust(
         writeln!(buffer, "    name: \"{}\",", set.name)?;
         writeln!(
             buffer,
-            "    target_security_bits: {},",
-            set.target_security_bits
+            "    required_security_bits: {},",
+            set.required_security_bits
         )?;
         writeln!(buffer, "    grinding_bits: {},", set.grinding_bits)?;
         writeln!(buffer, "    trace_log_size: {},", set.trace_log_size)?;
@@ -115,10 +115,7 @@ fn render_rust(
             "    permutation_size: {},",
             format_usize(set.permutation_size as usize)
         )?;
-        match set.lookup_log_size {
-            Some(value) => writeln!(buffer, "    lookup_log_size: Some({value}),")?,
-            None => writeln!(buffer, "    lookup_log_size: None,")?,
-        }
+        writeln!(buffer, "    lookup_log_size: {},", set.lookup_log_size)?;
         writeln!(
             buffer,
             "    omega_coset: {},",
@@ -183,22 +180,25 @@ fn should_emit(
     }
 }
 fn render_field_descriptor(set: &StarkParameterSet) -> String {
-    if set.field == GOLDILOCKS_BASE {
-        "GOLDILOCKS_BASE".to_string()
+    if set.field == GOLDILOCKS_FP4_V1 {
+        "GOLDILOCKS_FP4_V1".to_string()
     } else {
         format!(
-            "FieldDescriptor {{ name: \"{}\", modulus_decimal: \"{}\", extension_degree: {} }}",
-            set.field.name, set.field.modulus_decimal, set.field.extension_degree
+            "FieldDescriptor {{ name: \"{}\", modulus_decimal: \"{}\", extension_degree: {}, extension_polynomial: \"{}\" }}",
+            set.field.name,
+            set.field.modulus_decimal,
+            set.field.extension_degree,
+            set.field.extension_polynomial
         )
     }
 }
 fn render_hash_descriptor(set: &StarkParameterSet) -> String {
-    if set.hash == POSEIDON_GOLDILOCKS_X7_BLAKE2B {
-        "POSEIDON_GOLDILOCKS_X7_BLAKE2B".to_string()
+    if set.hash == POSEIDON_X7_GOLDILOCKS_DIGEST384_V1 {
+        "POSEIDON_X7_GOLDILOCKS_DIGEST384_V1".to_string()
     } else {
         format!(
-            "HashDescriptor {{ trace_commitment: \"{}\", transcript: \"{}\" }}",
-            set.hash.trace_commitment, set.hash.transcript
+            "HashDescriptor {{ trace_commitment: \"{}\", transcript: \"{}\", digest_bytes: {} }}",
+            set.hash.trace_commitment, set.hash.transcript, set.hash.digest_bytes
         )
     }
 }

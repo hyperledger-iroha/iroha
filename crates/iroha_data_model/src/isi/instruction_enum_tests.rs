@@ -26,7 +26,7 @@ fn outbound_sccp_context() -> crate::bridge::SccpOutboundMessageContextV1 {
     crate::bridge::SccpOutboundMessageContextV1::new(
         crate::bridge::SccpLaneIdV1 {
             source: crate::bridge::SccpNetworkV1::SoraTaira,
-            target: crate::bridge::SccpNetworkV1::BscTestnet,
+            target: crate::bridge::SccpNetworkV1::BscMainnet,
         },
         [0x44; 32],
         [0x45; 32],
@@ -133,7 +133,11 @@ fn record_sccp_message_registry_roundtrip_preserves_payload_bytes() {
     let registry = InstructionRegistry::new()
         .register_with_id_slice::<RecordSccpMessage>(RECORD_SCCP_MESSAGE_WIRE_ID);
     let _guard = RegistryGuard::set(registry);
-    let instruction = RecordSccpMessage::new(outbound_sccp_context(), vec![0xAA, 0xBB, 0xCC]);
+    let instruction = RecordSccpMessage::new(
+        outbound_sccp_context(),
+        vec![0xAA, 0xBB, 0xCC],
+        crate::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+    );
     let (bytes, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
     let framed = frame_instruction_payload(RECORD_SCCP_MESSAGE_WIRE_ID, &bytes)
         .expect("record sccp message must frame");
@@ -170,7 +174,11 @@ fn record_sccp_registry_decode_accepts_misaligned_framed_payload() {
     let registry = InstructionRegistry::new()
         .register_with_id_slice::<RecordSccpMessage>(RECORD_SCCP_MESSAGE_WIRE_ID);
     let name = std::any::type_name::<RecordSccpMessage>();
-    let instruction = RecordSccpMessage::new(outbound_sccp_context(), vec![0xAA, 0xBB, 0xCC, 0xDD]);
+    let instruction = RecordSccpMessage::new(
+        outbound_sccp_context(),
+        vec![0xAA, 0xBB, 0xCC, 0xDD],
+        crate::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+    );
     let payload = instruction.encode();
     let framed = frame_instruction_payload(RECORD_SCCP_MESSAGE_WIRE_ID, &payload)
         .expect("frame instruction payload");
@@ -189,7 +197,11 @@ fn instruction_box_embeds_instruction_payload_with_recorded_flags() {
     let registry = InstructionRegistry::new()
         .register_with_id_slice::<RecordSccpMessage>(RECORD_SCCP_MESSAGE_WIRE_ID);
     let _guard = RegistryGuard::set(registry);
-    let instruction = RecordSccpMessage::new(outbound_sccp_context(), vec![0xAA, 0xBB, 0xCC]);
+    let instruction = RecordSccpMessage::new(
+        outbound_sccp_context(),
+        vec![0xAA, 0xBB, 0xCC],
+        crate::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+    );
     let (_, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
     let boxed = InstructionBox::from(instruction);
     let (_, framed_payload) =

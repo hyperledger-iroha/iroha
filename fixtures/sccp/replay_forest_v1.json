@@ -1,0 +1,49 @@
+{
+  "schema": "sccp-replay-forest-golden-v1",
+  "algorithm": {
+    "hash": "sha256",
+    "magic_hex": "534343502d5245504c41592d534d542d5631",
+    "shards": 256,
+    "depth": 248,
+    "amount_scale": 9,
+    "amount_width_bytes": 16,
+    "bitmap_order": "big-endian-level-bitmap",
+    "sibling_order": "increasing-leaf-up-level"
+  },
+  "rejected_network_tags": [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 69, 255],
+  "domain": {
+    "source_network": "sora_taira",
+    "source_network_tag": 64,
+    "target_network": "ethereum_mainnet",
+    "target_network_tag": 65,
+    "operation_tag": 1,
+    "route_revision": 7,
+    "route_configuration_hash_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+    "actor_kind": "route",
+    "actor_bytes_hex": ""
+  },
+  "record": {
+    "replay_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+    "payload_sha256_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+    "amount_scale9": "9",
+    "principal_kind": "evm",
+    "principal_bytes_hex": "3333333333333333333333333333333333333333",
+    "auxiliary_identity_sha256_hex": "5555555555555555555555555555555555555555555555555555555555555555"
+  },
+  "empty_witness": {
+    "prior_record_digest_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "sibling_bitmap_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "siblings_hex": []
+  },
+  "expected": {
+    "domain_hash_hex": "de11cbd183f55063fe715fcf120773d799dfb1185e057f758c126306832fdc3d",
+    "replay_key_hex": "139f57881d055a13ecf390d7441dadfc065ded40181c42a7aa3ab0a27469f17b",
+    "shard": 19,
+    "record_digest_hex": "35ab8613a0be06397609861d3cb3383770948b24b1cf098f4006c232240a2c07",
+    "empty_leaf_hash_hex": "6841d062186b649a505eb694ebce936fe978c5530596882a70c6e04303c88d43",
+    "empty_shard_root_hex": "cefd4f39c0d2ba5c33835008c6c3e7bca47d6ea1c4da5bfc8a63f09dbc66651f",
+    "occupied_shard_root_hex": "7b47c79900f052fd4b73691e2fe2230fdf170225d54e9a248e176f30495ac918",
+    "leaf_count": 1,
+    "update_sequence": 1
+  }
+}

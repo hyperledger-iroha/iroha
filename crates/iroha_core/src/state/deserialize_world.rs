@@ -6522,37 +6522,34 @@ fn parse_world(
         take_required(&mut map, "sccp_registry")?;
     let sccp_route_liabilities: Storage<SccpRouteKeyV1, SccpRouteLiabilityV1> =
         take_required(&mut map, "sccp_route_liabilities")?;
+    let sccp_ton_breaker_observations: Storage<SccpRouteKeyV1, SccpTonBreakerObservationRecordV1> =
+        take_required(&mut map, "sccp_ton_breaker_observations")?;
+    let sccp_replay_forests: Storage<SccpReplayAccumulatorIdV1, SccpReplayForestV1> =
+        take_required(&mut map, "sccp_replay_forests")?;
     let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
     let sccp_outbound_pending_messages = take_required(&mut map, "sccp_outbound_pending_messages")?;
     let sccp_outbound_message_locator = take_required(&mut map, "sccp_outbound_message_locator")?;
     let sccp_outbound_message_index = take_required(&mut map, "sccp_outbound_message_index")?;
-    let sccp_outbound_proofs = take_required(&mut map, "sccp_outbound_proofs")?;
-    let sccp_inbound_messages = take_required(&mut map, "sccp_inbound_messages")?;
     let sccp_inbound_anchor_high_water: Storage<SccpInboundAnchorHighWaterKeyV1, u64> =
         take_required(&mut map, "sccp_inbound_anchor_high_water")?;
     validate_sccp_outbound_pending_messages(&sccp_outbound_pending_messages)?;
+    validate_sccp_replay_forests(&sccp_replay_forests)?;
     validate_sccp_outbound_pending_usage(
         &sccp_outbound_pending_messages,
         &sccp_outbound_pending_usage,
     )?;
     validate_sccp_outbound_indexes(
         &sccp_outbound_pending_messages,
-        &sccp_outbound_proofs,
         &sccp_outbound_message_locator,
         &sccp_outbound_message_index,
     )?;
-    validate_sccp_outbound_proofs(&sccp_outbound_proofs, &sccp_outbound_message_locator)?;
-    validate_sccp_inbound_messages(&sccp_inbound_messages)?;
-    let sccp_inbound_messages_view = sccp_inbound_messages.view();
     let sccp_inbound_anchor_high_water_view = sccp_inbound_anchor_high_water.view();
-    validate_sccp_inbound_anchor_high_water_index(
-        &sccp_inbound_messages_view,
-        &sccp_inbound_anchor_high_water_view,
-    )
-    .map_err(|message| json::Error::InvalidField {
-        field: "world.sccp_inbound_anchor_high_water".to_owned(),
-        message,
-    })?;
+    validate_sccp_inbound_anchor_high_water_index(&sccp_inbound_anchor_high_water_view).map_err(
+        |message| json::Error::InvalidField {
+            field: "world.sccp_inbound_anchor_high_water".to_owned(),
+            message,
+        },
+    )?;
     let tx_sequences: Storage<AccountId, u64> = take_required(&mut map, "tx_sequences")?;
     let triggers_value = map
         .remove("triggers")
@@ -6573,6 +6570,9 @@ fn parse_world(
     let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
     let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
         take_required(&mut map, "privacy_consensus_policy")?;
+    let privacy_exact12_qualification: Cell<
+        Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>,
+    > = take_required(&mut map, "privacy_exact12_qualification")?;
     let privacy_activations: Storage<
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
@@ -6615,6 +6615,14 @@ fn parse_world(
         field: "world.privacy_state".to_owned(),
         message,
     })?;
+    if let Some(qualification) = privacy_exact12_qualification.view().get() {
+        qualification
+            .validate()
+            .map_err(|error| json::Error::InvalidField {
+                field: "world.privacy_exact12_qualification".to_owned(),
+                message: error.to_string(),
+            })?;
+    }
     crate::privacy_state::validate_privacy_orchard_public_dependencies_v1(
         &privacy_commitments.view(),
         &accounts.view(),
@@ -6888,12 +6896,12 @@ fn parse_world(
         axt_handle_budget_ledger,
         sccp_registry,
         sccp_route_liabilities,
+        sccp_ton_breaker_observations,
+        sccp_replay_forests,
         sccp_outbound_pending_usage,
         sccp_outbound_pending_messages,
         sccp_outbound_message_locator,
         sccp_outbound_message_index,
-        sccp_outbound_proofs,
-        sccp_inbound_messages,
         sccp_inbound_anchor_high_water,
         tx_sequences,
         triggers,
@@ -6907,6 +6915,7 @@ fn parse_world(
         poseidon_params,
         runtime_upgrades,
         privacy_consensus_policy,
+        privacy_exact12_qualification,
         privacy_activations,
         privacy_pgc_accounts,
         privacy_pgc_pool_invariants,

@@ -56,6 +56,7 @@ fun TairaXorSccpBridge.sendSccpFinalizeFromTaira(
     publicSignals: cell,
     proof: cell,
     canonicalPayload: cell,
+    replayWitnesses: SccpMintReplayWitnessesV1,
     config: SendParams = {},
 ): SendResultList {
     val genericMsg = createMessage({
@@ -70,32 +71,89 @@ fun TairaXorSccpBridge.sendSccpFinalizeFromTaira(
             publicSignals,
             proof,
             canonicalPayload,
+            replayWitnesses: replayWitnesses.toCell(),
         },
     });
     return net.send(from, genericMsg);
 }
 
-fun TairaXorSccpBridge.sendTransferNotificationForRecipient(
+fun TairaXorSccpBridge.sendSccpFinalizeHashStep(
     self,
     from: address,
     queryId: uint64,
-    jettonAmount: coins,
-    transferInitiator: address?,
-    forwardPayload: PayloadInline | PayloadInRef,
+    version: uint16,
+    messageId: uint256,
+    nextBlock: uint8,
+    chainingState: SccpBlake2bStateV1,
+    material: SccpFinalizeMaterialV1,
     config: SendParams = {},
 ): SendResultList {
-    // build body cell manually, because some fields have @abi.clientType
-    val bodyB = beginCell()
-        .storeUint(0x7362d09c, 32)
-        .storeAny(queryId)
-        .storeAny(jettonAmount)
-        .storeAny(transferInitiator)
-        .storeAny(forwardPayload);
     val genericMsg = createMessage({
         bounce: config.bounce,
         value: config.value,
         dest: self.address,
-        body: TransferNotificationForRecipient.fromSlice(bodyB.toSlice()),
+        body: SccpFinalizeHashStep {
+            queryId,
+            version,
+            messageId,
+            nextBlock,
+            chainingState: chainingState.toCell(),
+            material: material.toCell(),
+        },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TairaXorSccpBridge.sendSccpFinalizeAdmission(
+    self,
+    from: address,
+    queryId: uint64,
+    version: uint16,
+    messageId: uint256,
+    payloadHash: uint256,
+    material: SccpFinalizeMaterialV1,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpFinalizeAdmission {
+            queryId,
+            version,
+            messageId,
+            payloadHash,
+            material: material.toCell(),
+        },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TairaXorSccpBridge.sendSccpBridgeBurnPrepare(
+    self,
+    from: address,
+    lockSequence: uint64,
+    attempt: uint32,
+    queryId: uint64,
+    outboundNonce: uint64,
+    ownerAddress: address,
+    jettonAmount: coins,
+    tail: SccpBridgeBurnPrepareTail,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpBridgeBurnPrepare {
+            lockSequence,
+            attempt,
+            queryId,
+            outboundNonce,
+            ownerAddress,
+            jettonAmount,
+            tail: tail.toCell(),
+        },
     });
     return net.send(from, genericMsg);
 }
@@ -122,11 +180,11 @@ fun TairaXorSccpBridge.sendSccpMasterMintAck(
 fun TairaXorSccpBridge.sendSccpMasterBurnAck(
     self,
     from: address,
+    lockSequence: uint64,
     queryId: uint64,
     messageId: uint256,
     jettonAmount: coins,
-    payloadHash: uint256,
-    sourceEventDigest: uint256,
+    tail: SccpMasterBurnAckTail,
     config: SendParams = {},
 ): SendResultList {
     val genericMsg = createMessage({
@@ -134,30 +192,12 @@ fun TairaXorSccpBridge.sendSccpMasterBurnAck(
         value: config.value,
         dest: self.address,
         body: SccpMasterBurnAck {
+            lockSequence,
             queryId,
             messageId,
             jettonAmount,
-            payloadHash,
-            sourceEventDigest,
+            tail: tail.toCell(),
         },
-    });
-    return net.send(from, genericMsg);
-}
-
-fun TairaXorSccpBridge.sendSccpWalletRefundAck(
-    self,
-    from: address,
-    queryId: uint64,
-    refundId: uint256,
-    recipientOwner: address,
-    jettonAmount: coins,
-    config: SendParams = {},
-): SendResultList {
-    val genericMsg = createMessage({
-        bounce: config.bounce,
-        value: config.value,
-        dest: self.address,
-        body: SccpWalletRefundAck { queryId, refundId, recipientOwner, jettonAmount },
     });
     return net.send(from, genericMsg);
 }
@@ -167,13 +207,39 @@ fun TairaXorSccpBridge.sendSccpRetry(
     from: address,
     queryId: uint64,
     messageId: uint256,
+    replayWitnesses: SccpReplayWitnessPairV1,
     config: SendParams = {},
 ): SendResultList {
     val genericMsg = createMessage({
         bounce: config.bounce,
         value: config.value,
         dest: self.address,
-        body: SccpRetry { queryId, messageId },
+        body: SccpRetry {
+            queryId,
+            messageId,
+            replayWitnesses: replayWitnesses.toCell(),
+        },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun TairaXorSccpBridge.sendSccpDisableMinting(
+    self,
+    from: address,
+    signature0: cell?,
+    signature1: cell?,
+    tail: SccpDisableMintingTail,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpDisableMinting {
+            signature0,
+            signature1,
+            tail: tail.toCell(),
+        },
     });
     return net.send(from, genericMsg);
 }
@@ -208,10 +274,95 @@ fun TairaXorSccpBridge.getSccpRouteConfigurationHash(self): uint256 {
     return net.runGetMethod(self.address, "get_sccp_route_configuration_hash");
 }
 
-fun TairaXorSccpBridge.getSccpNonce(self, owner: address): uint64 {
-    return net.runGetMethod(self.address, "get_sccp_nonce", [owner]);
+fun TairaXorSccpBridge.getSccpBridgeConfigCellHash(self): uint256 {
+    return net.runGetMethod(self.address, "get_sccp_bridge_config_cell_hash");
 }
 
-fun TairaXorSccpBridge.getSccpReplayStatus(self, messageId: uint256, inbound: bool): uint8? {
-    return net.runGetMethod(self.address, "get_sccp_replay_status", [messageId, inbound]);
+fun TairaXorSccpBridge.getSccpDestinationBindingHash(self): uint256 {
+    return net.runGetMethod(self.address, "get_sccp_destination_binding_hash");
+}
+
+fun TairaXorSccpBridge.getSccpDeploymentCodeHashes(self): (uint256, uint256, uint256) {
+    return net.runGetMethod(self.address, "get_sccp_deployment_code_hashes");
+}
+
+fun TairaXorSccpBridge.getSccpMasterAddress(self): address {
+    return net.runGetMethod(self.address, "get_sccp_master_address");
+}
+
+fun TairaXorSccpBridge.getSccpMasterInitialStateHashes(self): (uint256, uint256) {
+    return net.runGetMethod(self.address, "get_sccp_master_initial_state_hashes");
+}
+
+fun TairaXorSccpBridge.getSccpMintBreakerGuardians(self): (
+    uint256,
+    uint256,
+    uint256,
+    uint256,
+    uint256,
+) {
+    return net.runGetMethod(self.address, "get_sccp_mint_breaker_guardians");
+}
+
+fun TairaXorSccpBridge.getSccpReplayState(self, operation: uint8, shard: uint8): (
+    uint256,
+    uint256,
+    uint64,
+    uint64,
+) {
+    return net.runGetMethod(self.address, "get_sccp_replay_state", [operation, shard]);
+}
+
+fun TairaXorSccpBridge.getSccpVerifyReplayMembership(
+    self,
+    operation: uint8,
+    replayId: uint256,
+    payloadSha256: uint256,
+    amountScale9: uint128,
+    principal: address,
+    auxiliaryIdentitySha256: uint256,
+    witness: SccpReplayWitnessV1,
+): bool {
+    return net.runGetMethod(
+        self.address,
+        "get_sccp_verify_replay_membership",
+        [
+            operation,
+            replayId,
+            payloadSha256,
+            amountScale9,
+            principal,
+            auxiliaryIdentitySha256,
+            witness.toCell(),
+        ],
+    );
+}
+
+fun TairaXorSccpBridge.getSccpVerifyReplayNonMembership(
+    self,
+    operation: uint8,
+    replayId: uint256,
+    witness: SccpReplayWitnessV1,
+): bool {
+    return net.runGetMethod(
+        self.address,
+        "get_sccp_verify_replay_non_membership",
+        [operation, replayId, witness.toCell()],
+    );
+}
+
+fun TairaXorSccpBridge.getSccpMaxWrappedSupply(self): coins {
+    return net.runGetMethod(self.address, "get_sccp_max_wrapped_supply");
+}
+
+fun TairaXorSccpBridge.getSccpMintingDisabled(self): bool {
+    return net.runGetMethod(self.address, "get_sccp_minting_disabled");
+}
+
+fun TairaXorSccpBridge.getSccpPendingCounts(self): (uint16, uint16) {
+    return net.runGetMethod(self.address, "get_sccp_pending_counts");
+}
+
+fun TairaXorSccpBridge.getSccpFundingParameters(self): (coins, coins, coins) {
+    return net.runGetMethod(self.address, "get_sccp_funding_parameters");
 }

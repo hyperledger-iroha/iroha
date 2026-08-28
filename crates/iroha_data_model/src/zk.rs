@@ -3,17 +3,19 @@ use crate::{
     AssetDefinitionId, NetworkId,
     account::AccountId,
     privacy::{
-        PrivacyNullifierV1, ZkAcePqAuthorizationStatementV1, privacy_protocol_label_is_reserved_v1,
+        GoldilocksDigest384V1, PRIVACY_EXACT12_CATALOG_ID_V1, PrivacyProtocolIdV1,
+        PrivacyZkAceIdentityCommitmentV1, PrivacyZkAceReplayNullifierV1,
+        ZkAcePqAuthorizationStatementV1, privacy_protocol_label_is_exact12_v1,
     },
 };
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-/// Canonical ZK-ACE circuit identifier for post-quantum authorization v0.
-pub const ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID: &str = "zk_ace_pq_authorization_v0";
-/// Canonical verifier-registry label used by ZK-ACE authorization v0.
-pub const ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND: &str = "stark/fri/sha256-goldilocks";
-/// Canonical backend family identifier for native STARK/FRI verification.
-pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri";
+/// Canonical ZK-ACE circuit identifier for post-quantum authorization v1.
+pub const ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID: &str = "zk_ace_pq_authorization_v1";
+/// Canonical verifier-registry label used by ZK-ACE authorization v1.
+pub const ZK_ACE_PQ_AUTHORIZATION_V1_BACKEND: &str = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+/// Sole canonical native STARK/FRI verifier profile for the first release.
+pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
 /// Canonical empty root of the first-release depth-16 Pasta Poseidon
 /// confidential commitment tree.
 ///
@@ -41,34 +43,39 @@ pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1: &[&str] = &[
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-    "stark/fri",
-    "stark/fri/sha256-goldilocks",
-    "stark/fri/poseidon2-goldilocks",
-    "stark/fri/sha256_goldilocks.v1",
+    "stark/fri/poseidon-x7-goldilocks-6x64-v1",
 ];
-const STARK_FRI_V1_REGISTRY_PROFILES: &[&str] = &[
-    "sha256-goldilocks",
-    "poseidon2-goldilocks",
-    "sha256_goldilocks.v1",
-];
-/// Return true when a backend label names an admitted STARK/FRI v1 verifier profile.
+/// Return true only for the admitted STARK/FRI verifier profile.
 #[inline]
 #[must_use]
 pub fn is_stark_fri_v1_backend_label(backend: &str) -> bool {
     backend == ZK_BACKEND_STARK_FRI_V1
-        || backend
-            .strip_prefix("stark/fri/")
-            .is_some_and(|profile| STARK_FRI_V1_REGISTRY_PROFILES.contains(&profile))
 }
-/// Domain tag used when deriving ZK-ACE identity commitments and replay nullifiers.
-pub const ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG: &str = "iroha:zk-ace:pq-authorization:v0";
-/// Fixed action class of the disabled ZK-ACE candidate.
-pub const ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER: &str = "transparent_asset_transfer";
+/// Domain tag bound as a protocol field by ZK-ACE commitments and nullifiers.
+pub const ZK_ACE_PQ_AUTHORIZATION_V1_DOMAIN_TAG: &str = "iroha:zk-ace:pq-authorization:v1";
+/// Fixed action class of the first-release ZK-ACE relation.
+pub const ZK_ACE_PQ_AUTHORIZATION_V1_ACTION_TRANSFER: &str = "transparent_asset_transfer";
+/// Shared six-lane digest profile bound by every ZK-ACE hash invocation.
+pub const ZK_ACE_GOLDILOCKS_DIGEST384_PROFILE_V1: &[u8] = b"poseidon-x7-goldilocks-6x64-v1";
+/// Identity-commitment role in the typed six-lane hash domain.
+pub const ZK_ACE_IDENTITY_COMMITMENT_ROLE_V1: &[u8] = b"identity";
+/// Replay-nullifier role in the typed six-lane hash domain.
+pub const ZK_ACE_REPLAY_NULLIFIER_ROLE_V1: &[u8] = b"replay";
+/// Action-digest role in the typed six-lane hash domain.
+pub const ZK_ACE_ACTION_DIGEST_ROLE_V1: &[u8] = b"action";
+/// Authorization-projection role in the typed six-lane hash domain.
+pub const ZK_ACE_AUTHORIZATION_DIGEST_ROLE_V1: &[u8] = b"authorization";
+/// Public-transcript role in the typed six-lane hash domain.
+pub const ZK_ACE_PUBLIC_TRANSCRIPT_ROLE_V1: &[u8] = b"public-transcript";
+/// Identity-commitment phase in the typed six-lane hash domain.
+pub const ZK_ACE_IDENTITY_COMMITMENT_PHASE_V1: &[u8] = b"commitment";
+/// Replay-nullifier phase in the typed six-lane hash domain.
+pub const ZK_ACE_REPLAY_NULLIFIER_PHASE_V1: &[u8] = b"nullifier";
 /// Permanent Norito schema identity for the typed ZK-ACE public-input wrapper.
 pub const ZK_ACE_PRIVACY_PUBLIC_INPUTS_SCHEMA_NAME_V1: &str =
     "iroha.privacy.zk-ace.public-inputs.v1";
 /// Exact type-name-independent transfer-digest preimage schema.
-pub const ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1: &[u8] = b"framing=poseidon-domain-words:dense-mds-goldilocks-x7:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=source:account-canonical-hex-v1-utf8|part2=destination:account-canonical-hex-v1-utf8|part3=asset-definition-id:uuid-bytes16|part4=amount:u128be|part5=network-id:bytes32|part6=action-class:utf8|part7=policy-digest:bytes32";
+pub const ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1: &[u8] = b"framing=goldilocks-digest384-v1:typed-domain+ordered-length-delimited-7byte-le-fields|field0=this-schema|field1=source:account-canonical-hex-v1-utf8|field2=destination:account-canonical-hex-v1-utf8|field3=asset-definition-id:uuid-bytes16|field4=amount:u128be|field5=network-id:bytes32|field6=action-class:utf8|field7=policy-digest:bytes32";
 /// Maximum source accounts that one ZK-ACE identity commitment may authorize.
 pub const ZK_ACE_MAX_ALLOWED_ACCOUNTS: usize = 16;
 /// Number of bytes packed into each Goldilocks field limb for ZK-ACE hashes.
@@ -136,10 +143,7 @@ pub fn verifier_backend_registry_tag_v1(label: &str) -> Option<BackendTag> {
         | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4" => {
             Some(BackendTag::Halo2IpaPasta)
         }
-        "stark/fri"
-        | "stark/fri/sha256-goldilocks"
-        | "stark/fri/poseidon2-goldilocks"
-        | "stark/fri/sha256_goldilocks.v1" => Some(BackendTag::Stark),
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1" => Some(BackendTag::Stark),
         _ => None,
     }
 }
@@ -208,7 +212,7 @@ pub enum OpenVerifyEnvelopeValidationError {
     EmptyCircuitId,
     /// The circuit identifier contains unsupported characters or delimiters.
     InvalidCircuitId,
-    /// The circuit identifier reuses an active or retired privacy-protocol label.
+    /// The circuit identifier reuses an Exact12 privacy-protocol label.
     ReservedPrivacyProtocolCircuitId,
     /// The circuit identifier exceeds configured bounds.
     CircuitIdTooLarge {
@@ -389,7 +393,7 @@ impl OpenVerifyEnvelope {
         if !open_verify_circuit_id_is_portable(&self.circuit_id) {
             return Err(OpenVerifyEnvelopeValidationError::InvalidCircuitId);
         }
-        if open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(&self.circuit_id) {
+        if open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(&self.circuit_id) {
             return Err(OpenVerifyEnvelopeValidationError::ReservedPrivacyProtocolCircuitId);
         }
         if bounds.require_nonzero_vk_hash && self.vk_hash.iter().all(|byte| *byte == 0) {
@@ -458,16 +462,46 @@ pub fn open_verify_circuit_id_is_portable(circuit_id: &str) -> bool {
             || matches!(*byte, b'-' | b'_' | b'/' | b':' | b'.')
     })
 }
-/// Return whether an `OpenVerify` circuit identifier reuses a privacy label.
+fn privacy_protocol_namespace_component_is_reserved_v1(component: &str) -> bool {
+    if privacy_protocol_label_is_exact12_v1(component) {
+        return true;
+    }
+    PrivacyProtocolIdV1::ALL.into_iter().any(|protocol_id| {
+        let canonical = protocol_id.canonical_label();
+        let stem = canonical
+            .strip_suffix("-v1")
+            .expect("every Exact12 label has the final -v1 suffix");
+        let hyphen_version = component
+            .strip_prefix(stem)
+            .and_then(|suffix| suffix.strip_prefix("-v"));
+        if hyphen_version.is_some_and(|version| {
+            !version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())
+        }) {
+            return true;
+        }
+        let snake_stem = stem.replace('-', "_");
+        component
+            .strip_prefix(&snake_stem)
+            .and_then(|suffix| suffix.strip_prefix("_v"))
+            .is_some_and(|version| {
+                !version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())
+            })
+    })
+}
+
+/// Return whether an `OpenVerify` circuit identifier enters a privacy protocol namespace.
 ///
-/// Privacy labels are reserved as complete `:`- or `/`-delimited circuit
-/// namespace components. This closes bare, backend-qualified, and nested
-/// generic proof aliases without rejecting portable near-miss identifiers.
+/// Final Exact12 labels and every numeric version spelling of their hyphenated
+/// or snake-case namespaces are reserved as complete `:`- or `/`-delimited
+/// components. This makes retired labels fail without retaining aliases or a
+/// compatibility dispatch table, while portable near misses remain available.
 #[must_use]
-pub fn open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(circuit_id: &str) -> bool {
+pub fn open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
+    circuit_id: &str,
+) -> bool {
     circuit_id
         .split([':', '/'])
-        .any(privacy_protocol_label_is_reserved_v1)
+        .any(privacy_protocol_namespace_component_is_reserved_v1)
 }
 // Note: Norito serialization is derived via `Encode`/`Decode` (packed structs compatible)
 /// STARK/FRI proof payload embedded inside [`OpenVerifyEnvelope::proof_bytes`] when
@@ -552,12 +586,13 @@ impl ZkAcePrivacyPublicInputsV1 {
 /// canonically.
 pub fn derive_zk_ace_privacy_authorization_digest(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
-) -> Result<[u8; 32], norito::Error> {
+) -> Result<GoldilocksDigest384V1, norito::Error> {
     let mut normalized = public_inputs.statement.clone();
-    normalized.replay_nullifier = PrivacyNullifierV1::new([0; 32]);
+    normalized.replay_nullifier = Default::default();
     let statement_bytes = norito::encode_canonical(&normalized)?;
-    Ok(zk_ace_dense_mds_goldilocks_x7_domain_hash_v1(
-        b"zk-ace.privacy-authorization.v1",
+    Ok(zk_ace_digest384_v1(
+        ZK_ACE_AUTHORIZATION_DIGEST_ROLE_V1,
+        b"statement-projection",
         &[
             &public_inputs.version.to_be_bytes(),
             &public_inputs.genesis_hash,
@@ -582,70 +617,63 @@ pub fn zk_ace_pack_bytes_to_field_limbs(bytes: &[u8]) -> ZkAcePackedBytesV1 {
         limbs,
     }
 }
-/// Domain-separated dense-MDS Goldilocks Poseidon `x^7` hash over canonical byte parts.
-///
-/// Its four returned words are sequential outputs of one capacity-1 sponge and
-/// therefore provide only about 32 bits of generic collision resistance as a
-/// combined digest. ZK-ACE production activation remains disabled until four
-/// independent lane-domain hashes replace this candidate construction.
+/// Construct one exact typed domain for a ZK-ACE six-lane digest.
 #[must_use]
-pub fn zk_ace_dense_mds_goldilocks_x7_domain_hash_v1(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    let words = zk_ace_dense_mds_goldilocks_x7_domain_words_v1(domain, parts);
-    let mut sponge = fastpq_isi::poseidon::PoseidonSponge::new();
-    sponge.absorb_slice(&words);
-    let mut out = [0u8; 32];
-    for chunk in out.chunks_exact_mut(core::mem::size_of::<u64>()) {
-        chunk.copy_from_slice(&sponge.squeeze_element().to_le_bytes());
+pub const fn zk_ace_digest384_domain_v1<'a>(
+    role: &'a [u8],
+    phase: &'a [u8],
+) -> fastpq_isi::GoldilocksDigestDomainV1<'a> {
+    fastpq_isi::GoldilocksDigestDomainV1 {
+        catalog: PRIVACY_EXACT12_CATALOG_ID_V1,
+        protocol: ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID.as_bytes(),
+        profile: ZK_ACE_GOLDILOCKS_DIGEST384_PROFILE_V1,
+        role,
+        phase,
+        level: 0,
+        index: 0,
+        counter: 0,
     }
-    out
 }
-/// Canonical Goldilocks preimage used by ZK-ACE dense-MDS Poseidon `x^7` hashing.
-#[must_use]
-pub fn zk_ace_dense_mds_goldilocks_x7_domain_words_v1(domain: &[u8], parts: &[&[u8]]) -> Vec<u64> {
-    let mut words = Vec::new();
-    let domain = zk_ace_pack_bytes_to_field_limbs(domain);
-    words.push(domain.length);
-    words.extend_from_slice(&domain.limbs);
-    words.push(u64::try_from(parts.len()).unwrap_or(u64::MAX));
-    for part in parts {
-        let packed = zk_ace_pack_bytes_to_field_limbs(part);
-        words.push(packed.length);
-        words.extend_from_slice(&packed.limbs);
-    }
-    words
-}
-fn zk_ace_poseidon_bytes(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    zk_ace_dense_mds_goldilocks_x7_domain_hash_v1(domain, parts)
+
+fn zk_ace_digest384_v1(role: &[u8], phase: &[u8], fields: &[&[u8]]) -> GoldilocksDigest384V1 {
+    fastpq_isi::hash_bytes_384_v1(zk_ace_digest384_domain_v1(role, phase), fields)
+        .expect("bounded ZK-ACE fields fit the canonical digest frame")
+        .into()
 }
 /// Derive the ZK-ACE identity commitment from its private witness components.
 pub fn derive_zk_ace_identity_commitment(
     identity_root: &[u8; 32],
     identity_blinding: &[u8; 32],
     domain_tag: &str,
-) -> [u8; 32] {
-    zk_ace_poseidon_bytes(
-        b"zk-ace.identity-commitment.v1",
-        &[identity_root, identity_blinding, domain_tag.as_bytes()],
-    )
+) -> PrivacyZkAceIdentityCommitmentV1 {
+    let mut witness = [0_u8; 64];
+    witness[..32].copy_from_slice(identity_root);
+    witness[32..].copy_from_slice(identity_blinding);
+    PrivacyZkAceIdentityCommitmentV1::from_digest(zk_ace_digest384_v1(
+        ZK_ACE_IDENTITY_COMMITMENT_ROLE_V1,
+        ZK_ACE_IDENTITY_COMMITMENT_PHASE_V1,
+        &[domain_tag.as_bytes(), &witness],
+    ))
 }
 /// Derive the ZK-ACE replay nullifier for a specific action.
 pub fn derive_zk_ace_replay_nullifier(
     replay_secret: &[u8; 32],
-    authorization_digest: &[u8; 32],
+    authorization_digest: &GoldilocksDigest384V1,
     network_id: &NetworkId,
     action_class: &str,
     domain_tag: &str,
-) -> [u8; 32] {
-    zk_ace_poseidon_bytes(
-        b"zk-ace.replay-nullifier.v1",
+) -> PrivacyZkAceReplayNullifierV1 {
+    PrivacyZkAceReplayNullifierV1::from_digest(zk_ace_digest384_v1(
+        ZK_ACE_REPLAY_NULLIFIER_ROLE_V1,
+        ZK_ACE_REPLAY_NULLIFIER_PHASE_V1,
         &[
-            replay_secret,
-            authorization_digest,
+            authorization_digest.as_ref(),
             network_id.as_bytes(),
             action_class.as_bytes(),
             domain_tag.as_bytes(),
+            replay_secret,
         ],
-    )
+    ))
 }
 /// Derive the action digest for a ZK-ACE-authorized transparent asset transfer.
 ///
@@ -665,7 +693,7 @@ pub fn derive_zk_ace_transfer_digest(
     network_id: &NetworkId,
     action_class: &str,
     policy_hash: &[u8; 32],
-) -> Result<[u8; 32], ZkAceTransferDigestErrorV1> {
+) -> Result<GoldilocksDigest384V1, ZkAceTransferDigestErrorV1> {
     let from_literal = from
         .to_canonical_hex()
         .map_err(|_| ZkAceTransferDigestErrorV1::SourceAccountEncoding)?;
@@ -674,8 +702,9 @@ pub fn derive_zk_ace_transfer_digest(
         .map_err(|_| ZkAceTransferDigestErrorV1::DestinationAccountEncoding)?;
     let asset_bytes = asset.aid_bytes();
     let amount_bytes = amount.to_be_bytes();
-    Ok(zk_ace_poseidon_bytes(
-        b"zk-ace.transparent-transfer.v1",
+    Ok(zk_ace_digest384_v1(
+        ZK_ACE_ACTION_DIGEST_ROLE_V1,
+        b"transparent-transfer",
         &[
             ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1,
             from_literal.as_bytes(),
@@ -736,7 +765,7 @@ mod tests {
         let network_id = network_id(0x45);
         let policy_hash = [0x44; 32];
         let amount = 123u128;
-        let action_class = ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER;
+        let action_class = ZK_ACE_PQ_AUTHORIZATION_V1_ACTION_TRANSFER;
         let digest = derive_zk_ace_transfer_digest(
             &from,
             &to,
@@ -753,8 +782,9 @@ mod tests {
             .expect("canonical destination encoding");
         let asset_bytes = asset.aid_bytes();
         let amount_bytes = amount.to_be_bytes();
-        let expected = zk_ace_poseidon_bytes(
-            b"zk-ace.transparent-transfer.v1",
+        let expected = zk_ace_digest384_v1(
+            ZK_ACE_ACTION_DIGEST_ROLE_V1,
+            b"transparent-transfer",
             &[
                 ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1,
                 from_canonical.as_bytes(),
@@ -817,7 +847,7 @@ mod tests {
     fn valid_open_verify_admission_envelope() -> OpenVerifyEnvelope {
         OpenVerifyEnvelope::new(
             BackendTag::Stark,
-            "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1:generic_binding_v1",
             [0x55; 32],
             vec![0x01, 0x02],
             vec![0x03, 0x04, 0x05],
@@ -825,22 +855,15 @@ mod tests {
     }
     #[test]
     fn stark_fri_v1_backend_label_accepts_only_admitted_profiles() {
+        assert!(is_stark_fri_v1_backend_label(ZK_BACKEND_STARK_FRI_V1));
         for backend in [
             "stark/fri",
-            "stark/fri/sha256-goldilocks",
             "stark/fri/poseidon2-goldilocks",
             "stark/fri/sha256_goldilocks.v1",
-        ] {
-            assert!(
-                is_stark_fri_v1_backend_label(backend),
-                "{backend} must be accepted",
-            );
-        }
-        for backend in [
             "stark/fri/debug-proof",
             "stark/fri/mock",
             "stark/fri/latest",
-            "stark/fri/sha256-goldilocks ",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
             "stark/fri/ sha256-goldilocks",
             "stark/fri/sha512-goldilocks",
             "stark/fri/poseidon2-goldilocks/extra",
@@ -908,7 +931,7 @@ mod tests {
     }
     #[test]
     fn verifier_backend_registry_is_closed_exact_and_engine_typed() {
-        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 12);
+        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 9);
         let mut unique = std::collections::BTreeSet::new();
         for &label in ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
             assert!(unique.insert(label), "duplicate registry label: {label}");
@@ -942,11 +965,14 @@ mod tests {
             "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
             "halo2/pasta/tiny-add",
             "stark",
+            "stark/fri",
             "STARK/FRI",
             "stark/fri/",
             "stark/fri/latest",
-            "stark/fri/sha256-goldilocks/extra",
-            "stark/fri/sha256-goldilocks\u{200b}",
+            "stark/fri/poseidon2-goldilocks",
+            "stark/fri/sha256_goldilocks.v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1/extra",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1\u{200b}",
             "groth16",
             "groth16/bn254",
             "halo2/bn254",
@@ -1058,10 +1084,10 @@ mod tests {
     #[test]
     fn open_verify_envelope_admission_validation_accepts_portable_circuit_ids() {
         for circuit_id in [
-            "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1:generic_binding_v1",
             "halo2/ipa::transfer_v1",
             "halo2/pasta/ivm-execution-v1",
-            "stark/fri/sha256_goldilocks.v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1:public_relation_v1",
         ] {
             let mut envelope = valid_open_verify_admission_envelope();
             envelope.circuit_id = circuit_id.to_owned();
@@ -1071,42 +1097,55 @@ mod tests {
         }
     }
     #[test]
-    fn open_verify_admission_reserves_every_active_and_retired_privacy_label() {
-        use crate::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
+    fn open_verify_admission_reserves_every_exact12_privacy_namespace_and_retired_version() {
+        use crate::privacy::PrivacyProtocolIdV1;
         fn assert_reserved(label: &str) {
-            for circuit_id in [
+            let stem = label
+                .strip_suffix("-v1")
+                .expect("every final Exact12 label ends in -v1");
+            let snake_stem = stem.replace('-', "_");
+            for reserved_label in [
                 label.to_owned(),
-                format!("halo2/ipa::{label}"),
-                format!("halo2/pasta/{label}"),
-                format!("stark/fri:{label}"),
-                format!("stark/fri/sha256-goldilocks:{label}"),
-                format!("generic/namespace/{label}"),
+                format!("{snake_stem}_v1"),
+                format!("{stem}-v0"),
+                format!("{snake_stem}_v0"),
             ] {
-                assert!(
-                    open_verify_circuit_id_is_portable(&circuit_id),
-                    "reserved control {circuit_id:?} must otherwise be portable"
-                );
-                assert!(
-                    open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(&circuit_id),
-                    "privacy namespace component must be detected in {circuit_id:?}"
-                );
-                let mut envelope = valid_open_verify_admission_envelope();
-                envelope.circuit_id = circuit_id.clone();
-                assert_eq!(
-                    envelope.validate_for_admission().unwrap_err(),
-                    OpenVerifyEnvelopeValidationError::ReservedPrivacyProtocolCircuitId,
-                    "reserved generic circuit id {circuit_id:?}"
-                );
+                for circuit_id in [
+                    reserved_label.clone(),
+                    format!("halo2/ipa::{reserved_label}"),
+                    format!("halo2/pasta/{reserved_label}"),
+                    format!("stark/fri:{reserved_label}"),
+                    format!("stark/fri/poseidon-x7-goldilocks-6x64-v1:{reserved_label}"),
+                    format!("generic/namespace/{reserved_label}"),
+                ] {
+                    assert!(
+                        open_verify_circuit_id_is_portable(&circuit_id),
+                        "reserved control {circuit_id:?} must otherwise be portable"
+                    );
+                    assert!(
+                        open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
+                            &circuit_id
+                        ),
+                        "privacy namespace component must be detected in {circuit_id:?}"
+                    );
+                    let mut envelope = valid_open_verify_admission_envelope();
+                    envelope.circuit_id = circuit_id.clone();
+                    assert_eq!(
+                        envelope.validate_for_admission().unwrap_err(),
+                        OpenVerifyEnvelopeValidationError::ReservedPrivacyProtocolCircuitId,
+                        "reserved generic circuit id {circuit_id:?}"
+                    );
+                }
             }
             for near_miss in [
                 format!("generic-{label}"),
                 format!("{label}-generic"),
-                format!("stark/fri/sha256-goldilocks:generic-{label}"),
+                format!("stark/fri/poseidon-x7-goldilocks-6x64-v1:generic-{label}"),
                 format!("halo2/ipa::{label}-generic"),
             ] {
                 assert!(open_verify_circuit_id_is_portable(&near_miss));
                 assert!(
-                    !open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(&near_miss),
+                    !open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(&near_miss),
                     "portable near miss {near_miss:?} must remain outside the reservation"
                 );
                 let mut envelope = valid_open_verify_admission_envelope();
@@ -1119,33 +1158,48 @@ mod tests {
         for protocol in PrivacyProtocolIdV1::ALL {
             assert_reserved(protocol.canonical_label());
         }
-        for label in PRIVACY_RETIRED_PROTOCOL_LABELS_V1 {
-            assert_reserved(label);
-        }
     }
     #[test]
     fn open_verify_envelope_admission_validation_rejects_malformed_circuit_ids() {
         use OpenVerifyEnvelopeValidationError::{CircuitIdTooLarge, InvalidCircuitId};
         for (name, circuit_id) in [
             ("uppercase", "Stark/fri/sha256-goldilocks"),
-            ("control", "stark/fri/sha256-goldilocks\nforged"),
-            ("zero-width", "stark/fri/sha256-goldilocks\u{200B}"),
-            ("path-traversal", "stark/fri/../zk_ace_pq_authorization_v0"),
-            ("leading-delimiter", "/stark/fri/sha256-goldilocks"),
-            ("trailing-delimiter", "stark/fri/sha256-goldilocks/"),
+            (
+                "control",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1\nforged",
+            ),
+            (
+                "zero-width",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1\u{200B}",
+            ),
+            ("path-traversal", "stark/fri/../zk_ace_pq_authorization_v1"),
+            (
+                "leading-delimiter",
+                "/stark/fri/poseidon-x7-goldilocks-6x64-v1",
+            ),
+            (
+                "trailing-delimiter",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1/",
+            ),
             ("repeated-slash", "stark//fri/sha256-goldilocks"),
-            ("dot-segment", "stark/fri/./zk_ace_pq_authorization_v0"),
-            ("hidden-segment", "stark/fri/.zk_ace_pq_authorization_v0"),
+            ("dot-segment", "stark/fri/./zk_ace_pq_authorization_v1"),
+            ("hidden-segment", "stark/fri/.zk_ace_pq_authorization_v1"),
             (
                 "slash-colon-adjacent",
-                "stark/fri/sha256-goldilocks/:zk_ace",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1/:zk_ace",
             ),
             (
                 "colon-slash-adjacent",
-                "stark/fri/sha256-goldilocks:/zk_ace",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:/zk_ace",
             ),
-            ("dot-colon-adjacent", "stark/fri/sha256-goldilocks.:zk_ace"),
-            ("colon-dot-adjacent", "stark/fri/sha256-goldilocks:.zk_ace"),
+            (
+                "dot-colon-adjacent",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1.:zk_ace",
+            ),
+            (
+                "colon-dot-adjacent",
+                "stark/fri/poseidon-x7-goldilocks-6x64-v1:.zk_ace",
+            ),
             ("triple-colon", "halo2/ipa:::transfer_v1"),
             ("percent-escape", "stark/fri/%2e%2e/zk_ace"),
             ("backslash", "stark\\fri\\zk_ace"),
@@ -1346,7 +1400,7 @@ mod tests {
         let identity_commitment = derive_zk_ace_identity_commitment(
             &identity_root,
             &identity_blinding,
-            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+            ZK_ACE_PQ_AUTHORIZATION_V1_DOMAIN_TAG,
         );
         let tx_digest = derive_zk_ace_transfer_digest(
             &from,
@@ -1354,7 +1408,7 @@ mod tests {
             &asset,
             17,
             &network_id,
-            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+            ZK_ACE_PQ_AUTHORIZATION_V1_ACTION_TRANSFER,
             &policy_hash,
         )
         .expect("single-key fixture accounts have canonical encodings");
@@ -1362,20 +1416,52 @@ mod tests {
             &replay_secret,
             &tx_digest,
             &network_id,
-            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+            ZK_ACE_PQ_AUTHORIZATION_V1_ACTION_TRANSFER,
+            ZK_ACE_PQ_AUTHORIZATION_V1_DOMAIN_TAG,
         );
         assert_eq!(
-            hex::encode(identity_commitment),
-            "c6b2d67fbc837b72de0097e8e7d3b451ff09c76a9e99f6c42ef43ae1ec5777f5"
+            hex::encode(identity_commitment.as_bytes()),
+            "fc9da7cde370eb282f7228fca40060a889db5c210c1430c9d8c52292da5d888a79ed0d75afe426f1d5bcaf571379e680"
         );
         assert_eq!(
-            hex::encode(tx_digest),
+            hex::encode(tx_digest.to_le_bytes()),
             "71af728bb6110a1cca751e6fe253742d4c30d8f69e3be2ebf056447088aec13e"
         );
         assert_eq!(
-            hex::encode(replay_nullifier),
+            hex::encode(replay_nullifier.as_bytes()),
             "6496615988495f553fb17dc9dd01cb49c002e870c4e4987aabefe5bf104c732c"
+        );
+    }
+    #[test]
+    fn zk_ace_six_lane_domains_reject_cross_role_substitution() {
+        let fields: [&[u8]; 2] = [b"same", b"preimage"];
+        let identity = zk_ace_digest384_v1(
+            ZK_ACE_IDENTITY_COMMITMENT_ROLE_V1,
+            ZK_ACE_IDENTITY_COMMITMENT_PHASE_V1,
+            &fields,
+        );
+        let replay = zk_ace_digest384_v1(
+            ZK_ACE_REPLAY_NULLIFIER_ROLE_V1,
+            ZK_ACE_REPLAY_NULLIFIER_PHASE_V1,
+            &fields,
+        );
+        let phase_substitution = zk_ace_digest384_v1(
+            ZK_ACE_IDENTITY_COMMITMENT_ROLE_V1,
+            ZK_ACE_REPLAY_NULLIFIER_PHASE_V1,
+            &fields,
+        );
+        assert_ne!(identity, replay);
+        assert_ne!(identity, phase_substitution);
+        assert_ne!(replay, phase_substitution);
+        assert_eq!(
+            identity
+                .words()
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len(),
+            fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1,
+            "independently parameterized lanes must not collapse on the KAT input"
         );
     }
     #[cfg(feature = "json")]

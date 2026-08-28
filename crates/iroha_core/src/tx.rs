@@ -120,6 +120,9 @@ pub(crate) struct StatefulAdmission {
 
 const FAUCET_CLAIM_CONSUMED_STATE_PREFIX_V1: &str = "faucet_claim_consumed_v1/";
 const FAUCET_CLAIM_CONSUMED_KEY_DOMAIN_V1: &[u8] = b"iroha.faucet.claim.consumed.key.v1\0";
+const FAUCET_CLAIM_EXECUTABLE_SHAPE_ERROR: &str = "faucet claim marker requires exactly one \
+    non-zero authority-sourced asset transfer to a different account, optionally preceded by a \
+    plain registration of the same destination";
 
 #[derive(Debug, Clone, norito::codec::Decode, norito::codec::Encode)]
 struct FaucetClaimConsumptionRecordV1 {
@@ -127,6 +130,44 @@ struct FaucetClaimConsumptionRecordV1 {
     authority: AccountId,
     semantic_hash: [u8; 32],
     first_transaction_hash: HashOf<SignedTransaction>,
+}
+
+fn validate_faucet_claim_executable_shape(tx: &SignedTransaction) -> Result<(), ValidationFail> {
+    let reject = || ValidationFail::NotPermitted(FAUCET_CLAIM_EXECUTABLE_SHAPE_ERROR.to_owned());
+    let Executable::Instructions(instructions) = tx.instructions() else {
+        return Err(reject());
+    };
+    let (registration, transfer) = match instructions.as_ref() {
+        [transfer] => (None, transfer),
+        [registration, transfer] => (Some(registration), transfer),
+        _ => return Err(reject()),
+    };
+    let Some(TransferBox::Asset(transfer)) = transfer.as_any().downcast_ref::<TransferBox>() else {
+        return Err(reject());
+    };
+    if transfer.source().account() != tx.authority()
+        || transfer.destination() == tx.authority()
+        || transfer.object().is_zero()
+    {
+        return Err(reject());
+    }
+    if let Some(registration) = registration {
+        let Some(RegisterBox::Account(registration)) =
+            registration.as_any().downcast_ref::<RegisterBox>()
+        else {
+            return Err(reject());
+        };
+        let account = registration.object();
+        if account.id() != transfer.destination()
+            || !account.metadata.is_empty()
+            || account.label.is_some()
+            || account.uaid.is_some()
+            || !account.opaque_ids.is_empty()
+        {
+            return Err(reject());
+        }
+    }
+    Ok(())
 }
 
 /// Parse the signature-bound consensus faucet marker and derive its authority-scoped state key.
@@ -201,6 +242,7 @@ pub(crate) fn faucet_claim_consumption_marker(
         .map_err(|_| {
             ValidationFail::NotPermitted("faucet claim semantic hash is malformed".to_owned())
         })?;
+    validate_faucet_claim_executable_shape(tx)?;
     let authority = norito::codec::Encode::encode(tx.authority());
     let key_hash = Hash::new_from_chunks(&[
         FAUCET_CLAIM_CONSUMED_KEY_DOMAIN_V1,
@@ -12249,7 +12291,7 @@ pub mod tests {
         authority: AccountId,
         keypair: &KeyPair,
         semantic_hash: &str,
-        instruction: InstructionBox,
+        instructions: impl IntoIterator<Item = InstructionBox>,
     ) -> SignedTransaction {
         TransactionBuilder::new(
             test_network_id(),
@@ -12257,8 +12299,42 @@ pub mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_metadata(faucet_marker_metadata(semantic_hash))
-        .with_instructions([instruction])
+        .with_instructions(instructions)
         .sign(keypair.private_key())
+    }
+
+    fn faucet_test_asset_definition(
+        owner: &AccountId,
+    ) -> (Domain, AssetDefinitionId, AssetDefinition) {
+        let domain_id = DomainId::try_new("faucet", "universal").expect("faucet test domain");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "claim_coin".parse().expect("faucet test asset name"),
+        );
+        let domain = Domain::new(domain_id).build(owner);
+        let definition = AssetDefinition::new(
+            definition_id.clone(),
+            "Faucet claim coin".to_owned(),
+            NumericSpec::integer(),
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(owner);
+        (domain, definition_id, definition)
+    }
+
+    fn faucet_test_transfer(
+        definition: &AssetDefinitionId,
+        source: &AccountId,
+        destination: &AccountId,
+        amount: u32,
+    ) -> InstructionBox {
+        Transfer::asset_quantity(
+            AssetId::new(definition.clone(), source.clone()),
+            amount,
+            destination.clone(),
+        )
+        .into()
     }
 
     #[test]
@@ -12266,11 +12342,19 @@ pub mod tests {
         let chain: ChainId = "faucet-claim-consumed-once".parse().expect("chain id");
         let (faucet, faucet_keypair) = gen_account_in("faucet");
         let (other, other_keypair) = gen_account_in("other-faucet");
-        let world = World::with(
-            [],
+        let (recipient, _) = gen_account_in("faucet-recipient");
+        let (domain, definition_id, definition) = faucet_test_asset_definition(&faucet);
+        let world = World::with_assets(
+            [domain],
             [
                 Account::new(faucet.clone()).build(&faucet),
                 Account::new(other.clone()).build(&other),
+                Account::new(recipient.clone()).build(&recipient),
+            ],
+            [definition],
+            [
+                Asset::new(AssetId::new(definition_id.clone(), faucet.clone()), 10_u32),
+                Asset::new(AssetId::new(definition_id.clone(), other.clone()), 10_u32),
             ],
             [],
         );
@@ -12285,7 +12369,7 @@ pub mod tests {
             faucet.clone(),
             &faucet_keypair,
             &semantic_hash,
-            Log::new(Level::INFO, "first faucet transfer fixture".to_owned()).into(),
+            [faucet_test_transfer(&definition_id, &faucet, &recipient, 1)],
         );
         let marker_path = faucet_claim_consumption_marker(&first)
             .expect("valid marker")
@@ -12339,7 +12423,7 @@ pub mod tests {
             faucet.clone(),
             &faucet_keypair,
             &semantic_hash,
-            Log::new(Level::INFO, "different signed transaction".to_owned()).into(),
+            [faucet_test_transfer(&definition_id, &faucet, &recipient, 2)],
         );
         assert_ne!(duplicate.hash(), first_hash);
         let (_, duplicate_result) = replay_block.validate_transaction(
@@ -12357,10 +12441,10 @@ pub mod tests {
         );
 
         let other_tx = marked_test_transaction(
-            other,
+            other.clone(),
             &other_keypair,
             &semantic_hash,
-            Log::new(Level::INFO, "independent faucet authority".to_owned()).into(),
+            [faucet_test_transfer(&definition_id, &other, &recipient, 1)],
         );
         let other_path = faucet_claim_consumption_marker(&other_tx)
             .expect("valid other marker")
@@ -12378,7 +12462,21 @@ pub mod tests {
     fn failed_faucet_transaction_does_not_burn_claim_marker() {
         let chain: ChainId = "failed-faucet-claim-rolls-back".parse().expect("chain id");
         let (faucet, faucet_keypair) = gen_account_in("faucet");
-        let world = World::with([], [Account::new(faucet.clone()).build(&faucet)], []);
+        let (recipient, _) = gen_account_in("faucet-recipient");
+        let (domain, definition_id, definition) = faucet_test_asset_definition(&faucet);
+        let world = World::with_assets(
+            [domain],
+            [
+                Account::new(faucet.clone()).build(&faucet),
+                Account::new(recipient.clone()).build(&recipient),
+            ],
+            [definition],
+            [Asset::new(
+                AssetId::new(definition_id.clone(), faucet.clone()),
+                10_u32,
+            )],
+            [],
+        );
         let state = State::new_with_chain(
             world,
             Kura::blank_kura_for_testing(),
@@ -12390,7 +12488,12 @@ pub mod tests {
             faucet.clone(),
             &faucet_keypair,
             &semantic_hash,
-            CustomInstruction::new(Json::new(())).into(),
+            [faucet_test_transfer(
+                &definition_id,
+                &faucet,
+                &recipient,
+                11,
+            )],
         );
         let marker_path = faucet_claim_consumption_marker(&failing)
             .expect("valid marker")
@@ -12403,17 +12506,17 @@ pub mod tests {
             AcceptedTransaction::new_unchecked(Cow::Owned(failing)),
             &mut ivm_cache,
         );
-        assert!(failure.is_err(), "custom instruction fixture must fail");
+        assert!(failure.is_err(), "overdrawn faucet transfer must fail");
         assert!(
             block.world.smart_contract_state.get(&marker_path).is_none(),
             "failed execution must drop its staged marker"
         );
 
         let retry = marked_test_transaction(
-            faucet,
+            faucet.clone(),
             &faucet_keypair,
             &semantic_hash,
-            Log::new(Level::INFO, "corrected faucet transfer fixture".to_owned()).into(),
+            [faucet_test_transfer(&definition_id, &faucet, &recipient, 1)],
         );
         let (_, retry_result) = block.validate_transaction(
             AcceptedTransaction::new_unchecked(Cow::Owned(retry)),
@@ -12421,6 +12524,155 @@ pub mod tests {
         );
         retry_result.expect("corrected transaction consumes the unburned claim");
         assert!(block.world.smart_contract_state.get(&marker_path).is_some());
+    }
+
+    #[test]
+    fn faucet_claim_marker_requires_exact_executable_shape() {
+        let (authority, keypair) = gen_account_in("faucet");
+        let (foreign_source, _) = gen_account_in("foreign-source");
+        let (destination, _) = gen_account_in("destination");
+        let (other_destination, _) = gen_account_in("other-destination");
+        let (_, definition_id, _) = faucet_test_asset_definition(&authority);
+        let semantic_hash = "ef".repeat(Hash::LENGTH);
+        let transfer = || faucet_test_transfer(&definition_id, &authority, &destination, 1);
+        let registration =
+            || InstructionBox::from(Register::account(Account::new(destination.clone())));
+
+        let without_registration =
+            marked_test_transaction(authority.clone(), &keypair, &semantic_hash, [transfer()]);
+        assert!(
+            faucet_claim_consumption_marker(&without_registration)
+                .expect("one direct faucet transfer is valid")
+                .is_some()
+        );
+        let with_registration = marked_test_transaction(
+            authority.clone(),
+            &keypair,
+            &semantic_hash,
+            [registration(), transfer()],
+        );
+        assert!(
+            faucet_claim_consumption_marker(&with_registration)
+                .expect("plain destination registration and transfer are valid")
+                .is_some()
+        );
+
+        let mut annotated_metadata = Metadata::default();
+        annotated_metadata.insert(
+            "annotation".parse().expect("annotation metadata key"),
+            Json::new("not a plain registration".to_owned()),
+        );
+        let annotated_registration = InstructionBox::from(Register::account(
+            Account::new(destination.clone()).with_metadata(annotated_metadata),
+        ));
+        let identified_registration = InstructionBox::from(Register::account(
+            Account::new(destination.clone()).with_uaid(Some(
+                iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
+                    b"decorated-faucet-registration",
+                )),
+            )),
+        ));
+        let cases = [
+            (
+                "log-only",
+                vec![Log::new(Level::INFO, "not a faucet transfer".to_owned()).into()],
+            ),
+            (
+                "non-asset transfer",
+                vec![
+                    Transfer::asset_definition(
+                        authority.clone(),
+                        definition_id.clone(),
+                        destination.clone(),
+                    )
+                    .into(),
+                ],
+            ),
+            (
+                "zero asset transfer",
+                vec![faucet_test_transfer(
+                    &definition_id,
+                    &authority,
+                    &destination,
+                    0,
+                )],
+            ),
+            (
+                "foreign-source asset transfer",
+                vec![faucet_test_transfer(
+                    &definition_id,
+                    &foreign_source,
+                    &destination,
+                    1,
+                )],
+            ),
+            (
+                "authority self-transfer",
+                vec![faucet_test_transfer(
+                    &definition_id,
+                    &authority,
+                    &authority,
+                    1,
+                )],
+            ),
+            ("register-only", vec![registration()]),
+            (
+                "registration destination mismatch",
+                vec![
+                    Register::account(Account::new(other_destination.clone())).into(),
+                    transfer(),
+                ],
+            ),
+            (
+                "annotated registration",
+                vec![annotated_registration, transfer()],
+            ),
+            (
+                "identified registration",
+                vec![identified_registration, transfer()],
+            ),
+            (
+                "registration after transfer",
+                vec![transfer(), registration()],
+            ),
+            (
+                "duplicate registration",
+                vec![registration(), registration(), transfer()],
+            ),
+            (
+                "extra instruction",
+                vec![
+                    transfer(),
+                    Log::new(Level::INFO, "extra side effect".to_owned()).into(),
+                ],
+            ),
+        ];
+        for (case, instructions) in cases {
+            let tx =
+                marked_test_transaction(authority.clone(), &keypair, &semantic_hash, instructions);
+            assert!(
+                matches!(
+                    faucet_claim_consumption_marker(&tx),
+                    Err(ValidationFail::NotPermitted(message))
+                        if message == FAUCET_CLAIM_EXECUTABLE_SHAPE_ERROR
+                ),
+                "{case} must not allocate a consensus faucet marker"
+            );
+        }
+
+        let indirect = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(faucet_marker_metadata(&semantic_hash))
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
+        .sign(keypair.private_key());
+        assert!(matches!(
+            faucet_claim_consumption_marker(&indirect),
+            Err(ValidationFail::NotPermitted(message))
+                if message == FAUCET_CLAIM_EXECUTABLE_SHAPE_ERROR
+        ));
     }
 
     #[test]

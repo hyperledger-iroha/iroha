@@ -31,7 +31,7 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     AccountId::new(keypair.public_key().clone())
 }
 fn governance_batch() -> TransitionBatch {
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+    let mut batch = TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
     annotate_inputs(&mut batch, 7);
     batch.push(StateTransition::new(
         b"role/council@governance/permission/vote.sora".to_vec(),
@@ -56,7 +56,7 @@ fn remittance_batch() -> TransitionBatch {
     const REMIT_AMOUNT: u64 = 75_000;
     const ALICE_START: u64 = 500_000;
     const BOB_START: u64 = 120_000;
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+    let mut batch = TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
     annotate_inputs(&mut batch, 23);
     let domain = DomainId::try_new("remit", "universal").expect("domain id");
     let asset_definition = AssetDefinitionId::derive_from_components(
@@ -108,13 +108,13 @@ fn combined_batch() -> TransitionBatch {
 }
 fn prove_and_verify(mut batch: TransitionBatch) {
     batch.sort();
-    let prover = Prover::canonical("fastpq-lane-balanced").expect("canonical prover");
+    let prover = Prover::canonical("fastpq-state-transition-stark-v1").expect("canonical prover");
     let proof = prover.prove(&batch).expect("FASTPQ proof");
     verify(&batch, &proof).expect("FASTPQ verification");
 }
 fn assert_strict_state_profile_rejects(mut batch: TransitionBatch) {
     batch.sort();
-    let prover = Prover::canonical("fastpq-lane-balanced").expect("canonical prover");
+    let prover = Prover::canonical("fastpq-state-transition-stark-v1").expect("canonical prover");
     assert!(matches!(
         prover.prove(&batch),
         Err(Error::InvalidProofSemantics {

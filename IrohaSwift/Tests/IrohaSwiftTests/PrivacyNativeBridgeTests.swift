@@ -65,6 +65,37 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         }
     }
 
+    func testFirstReleaseIdentifiersMatchCanonicalV1Profiles() {
+        XCTAssertEqual(
+            PrivacyProtocolIdV1.zkAcePqAuthorizationV1.rawValue,
+            "zk-ace-pq-authorization-v1"
+        )
+        XCTAssertEqual(
+            PrivacyProtocolIdV1.vegaExistingCredentialZkV1.rawValue,
+            "vega-existing-credential-zk-v1"
+        )
+        XCTAssertEqual(
+            PrivacyProtocolIdV1.irohaZkX509StarkP256V1.rawValue,
+            "iroha-zk-x509-stark-p256-v1"
+        )
+        XCTAssertEqual(
+            PrivacyProtocolIdV1.irohaJindoPolynomialCommitmentV1.rawValue,
+            "iroha-jindo-polynomial-commitment-v1"
+        )
+        XCTAssertEqual(
+            PrivacyProtocolIdV1.pqMaspStarkV1.rawValue,
+            "pq-masp-stark-v1"
+        )
+        XCTAssertEqual(
+            PrivacyProtocolIdV1.zkAcePqAuthorizationV1.expectedProofSystem,
+            .starkFriPoseidonX7Goldilocks6x64V1
+        )
+        XCTAssertEqual(
+            PrivacyProtocolIdV1.zkAcePqAuthorizationV1.expectedEngine,
+            .nativeGoldilocksPoseidonX7StarkFri6x64V1
+        )
+    }
+
     func testSharedExact12MatrixBindsRoutesAndTypedEnvelopeDigests() {
         XCTAssertEqual(
             Set(Self.matrix.map { $0[0] }),

@@ -541,8 +541,8 @@ fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
     let mut stark_cfg = iroha_config::parameters::actual::Stark::default();
     stark_cfg.enabled = true;
     host.set_stark_config(&stark_cfg);
-    let backend = "stark/fri/sha256-goldilocks";
-    let circuit_id = "stark/fri/sha256-goldilocks:ivm-syscall";
+    let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+    let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-syscall";
     let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
         version: 1,
         circuit_id: circuit_id.to_string(),
@@ -551,7 +551,6 @@ fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
         fold_arity: 2,
         queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
-        hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
     };
     let vk_bytes = norito::encode_canonical(&vk_payload).expect("encode canonical STARK vk");
     let vk_box = VerifyingKeyBox::new(backend.into(), vk_bytes.clone());

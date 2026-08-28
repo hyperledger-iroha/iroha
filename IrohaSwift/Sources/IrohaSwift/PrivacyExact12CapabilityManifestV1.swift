@@ -16,7 +16,7 @@ public enum PrivacyExact12CapabilityManifestErrorV1: Error, LocalizedError, Equa
         case let .invalidArchive(reason):
             return "Exact12 capability manifest is invalid: \(reason)"
         case let .unavailableProtocol(protocolId):
-            return "Exact12 protocol \(protocolId.rawValue) is not active and ready in committed state."
+            return "Exact12 protocol \(protocolId.rawValue) is not production-qualified in committed state."
         case let .compiledTupleMismatch(protocolId):
             return "Exact12 protocol \(protocolId.rawValue) differs from this binary's compiled profile tuple."
         case .invalidAdmission:
@@ -111,22 +111,19 @@ public enum PrivacyCompiledProfileResultV1: Equatable, Sendable {
     case unavailable(PrivacyCompiledProfileUnavailableReasonV1)
 }
 
+public enum PrivacyCapabilityUnavailableReasonV1: Equatable, Sendable {
+    case compiledProfile(PrivacyCompiledProfileUnavailableReasonV1)
+    case notRegistered
+    case proposed
+    case suspended
+    case retired
+    case missingProductionQualification
+    case invalidProductionQualification
+}
+
 public enum PrivacyCapabilityReadinessV1: Equatable, Sendable {
-    case available
-    case availableExperimental
-    case unavailable(PrivacyCompiledProfileUnavailableReasonV1)
-}
-
-public enum PrivacyCapabilityActivationStateV1: UInt32, CaseIterable, Sendable {
-    case notRegistered = 0
-    case proposed = 1
-    case active = 2
-    case suspended = 3
-    case retired = 4
-}
-
-public enum PrivacyCapabilityLimitationV1: UInt32, Sendable {
-    case missingDistributionWideKnowledgeSoundnessEvidence = 0
+    case productionQualified
+    case unavailable(PrivacyCapabilityUnavailableReasonV1)
 }
 
 public struct PrivacyConsensusLimitsV1: Equatable, Sendable {
@@ -177,6 +174,83 @@ public struct PrivacyProtocolLimitsTighteningV1: Equatable, Sendable {
     public let nextLimits: PrivacyProtocolActivationLimitsV1
 }
 
+/// Weakest security model in the complete protocol composition.
+public enum PrivacySecurityModelV1: UInt32, CaseIterable, Sendable {
+    case postQuantumQrom = 0
+    case classicalRom = 1
+
+    public var canonicalLabel: String {
+        switch self {
+        case .postQuantumQrom: return "pq-qrom"
+        case .classicalRom: return "classical-rom"
+        }
+    }
+}
+
+/// Complete independently reviewable security claim bound to one activation.
+public struct PrivacySecurityClaimV1: Equatable, Sendable {
+    public let catalogCommitment: Data
+    public let protocolId: PrivacyProtocolIdV1
+    public let securityModel: PrivacySecurityModelV1
+    public let targetSecurityBits: UInt16
+    public let achievedSecurityBits: UInt16
+    public let parameterDigest: Data
+    public let verifierDigest: Data
+    public let reductionDigest: Data
+    public let auditBundleDigest: Data
+    /// Exact canonical nested value retained from Torii.
+    public let canonicalNorito: Data
+}
+
+/// Exact release tuple for one retained protocol.
+public struct PrivacyReleaseProtocolBindingV1: Equatable, Sendable {
+    public let protocolId: PrivacyProtocolIdV1
+    public let proofSystemId: PrivacyProofSystemIdV1
+    public let engineId: PrivacyEngineIdV1
+    public let parameterId: Data
+    public let parameterDigest: Data
+    public let verifierDigest: Data
+    public let statementSchemaDigest: Data
+    public let engineManifestDigest: Data
+    public let securityClaim: PrivacySecurityClaimV1
+    public let securityClaimDigest: Data
+    public let canonicalNorito: Data
+}
+
+/// Full portable release evidence retained from the native-validated archive.
+public struct PrivacyExact12ReleaseManifestV1: Equatable, Sendable {
+    public let version: UInt16
+    public let catalogCommitment: Data
+    public let abiVersion: UInt16
+    public let protocols: [PrivacyReleaseProtocolBindingV1]
+    public let auditBundleDigest: Data
+    public let manifestDigest: Data
+    public let canonicalNorito: Data
+}
+
+/// One protocol activation height bound by the target deployment.
+public struct PrivacyDeploymentActivationV1: Equatable, Sendable {
+    public let protocolId: PrivacyProtocolIdV1
+    public let activationHeight: UInt64
+}
+
+/// Full network-bound deployment evidence retained from the native-validated archive.
+public struct PrivacyExact12DeploymentQualificationV1: Equatable, Sendable {
+    public let version: UInt16
+    public let releaseManifestDigest: Data
+    public let activations: [PrivacyDeploymentActivationV1]
+    public let convergenceHeight: UInt64
+    public let qualificationDigest: Data
+    public let canonicalNorito: Data
+}
+
+/// Singleton release plus target-network evidence from committed state.
+public struct PrivacyExact12QualificationRecordV1: Equatable, Sendable {
+    public let releaseManifest: PrivacyExact12ReleaseManifestV1
+    public let deploymentQualification: PrivacyExact12DeploymentQualificationV1
+    public let canonicalNorito: Data
+}
+
 /// Full committed activation record, including all profile/schema bindings.
 public struct PrivacyProtocolActivationRecordV1: Equatable, Sendable {
     public let protocolId: PrivacyProtocolIdV1
@@ -190,8 +264,6 @@ public struct PrivacyProtocolActivationRecordV1: Equatable, Sendable {
     public let lifecycle: PrivacyProtocolLifecycleV1
     public let protocolLimits: PrivacyProtocolActivationLimitsV1
     public let pendingProtocolLimitsTightening: PrivacyProtocolLimitsTighteningV1?
-    /// V1 has exactly one testnet assurance variant: experimental.
-    public let assuranceExperimental: Bool
     /// Exact canonical nested value retained from Torii.
     public let canonicalNorito: Data
 }
@@ -203,19 +275,12 @@ public struct PrivacyExact12CapabilityRowV1: Equatable, Sendable {
     public let privacyFeatureMask: UInt8
     public let compiledProfile: PrivacyCompiledProfileResultV1
     public let readiness: PrivacyCapabilityReadinessV1
-    public let activationState: PrivacyCapabilityActivationStateV1
     public let activation: PrivacyProtocolActivationRecordV1?
-    public let limitation: PrivacyCapabilityLimitationV1?
     /// True only after byte-exact comparison with the ABI23-validated local catalog.
     public let localCompiledTupleMatches: Bool
 
     public var isNetworkAvailable: Bool {
-        switch readiness {
-        case .available, .availableExperimental:
-            return activationState == .active
-        case .unavailable:
-            return false
-        }
+        readiness == .productionQualified
     }
 
     let compiledProfileCanonicalNorito: Data
@@ -229,6 +294,7 @@ public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
     public let version: UInt32
     public let committedHeight: UInt64
     public let consensusPolicy: PrivacyConsensusPolicyV1
+    public let qualification: PrivacyExact12QualificationRecordV1?
     public let protocols: [PrivacyExact12CapabilityRowV1]
     public let manifestDigest: Data
     private let archive: Data
@@ -237,6 +303,7 @@ public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
         version: UInt32,
         committedHeight: UInt64,
         consensusPolicy: PrivacyConsensusPolicyV1,
+        qualification: PrivacyExact12QualificationRecordV1?,
         protocols: [PrivacyExact12CapabilityRowV1],
         manifestDigest: Data,
         canonicalArchive: Data
@@ -244,6 +311,7 @@ public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
         self.version = version
         self.committedHeight = committedHeight
         self.consensusPolicy = consensusPolicy
+        self.qualification = qualification
         self.protocols = protocols
         self.manifestDigest = Data(manifestDigest)
         archive = Data(canonicalArchive)
@@ -367,30 +435,44 @@ extension PrivacyProtocolIdV1 {
 
     fileprivate var expectedExecutionModeV1: PrivacyExecutionModeV1 {
         switch self {
-        case .zkAcePqAuthorizationV0: return .authorizationAction
+        case .zkAcePqAuthorizationV1: return .authorizationAction
         case .anonymousPgcKOutOfNV1, .moneroFcmpPlusPlusV1: return .paymentAction
-        case .veRangeTransparentRangeV1, .irohaJindoPolynomialCommitmentV0:
+        case .veRangeTransparentRangeV1, .irohaJindoPolynomialCommitmentV1:
             return .component
         case .irohaZkAmsV1: return .admissionAction
-        case .vegaExistingCredentialZkV0, .irohaZkX509StarkP256V0,
+        case .vegaExistingCredentialZkV1, .irohaZkX509StarkP256V1,
              .irohaBootleLanternAnoncredV1:
             return .presentationAction
-        case .orchardHalo2ActionsV1, .irohaIvmPrivateNoteStarkV1, .pqMaspStarkV0:
+        case .orchardHalo2ActionsV1, .irohaIvmPrivateNoteStarkV1, .pqMaspStarkV1:
             return .noteAction
         }
     }
 
     fileprivate var expectedPrivacyFeatureMaskV1: UInt8 {
         switch self {
-        case .zkAcePqAuthorizationV0, .irohaJindoPolynomialCommitmentV0: return 0
+        case .zkAcePqAuthorizationV1, .irohaJindoPolynomialCommitmentV1: return 0
         case .anonymousPgcKOutOfNV1: return 0b00110
         case .veRangeTransparentRangeV1: return 0b00001
-        case .irohaZkAmsV1, .vegaExistingCredentialZkV0,
-             .irohaZkX509StarkP256V0, .irohaBootleLanternAnoncredV1,
+        case .irohaZkAmsV1, .vegaExistingCredentialZkV1,
+             .irohaZkX509StarkP256V1, .irohaBootleLanternAnoncredV1,
              .moneroFcmpPlusPlusV1:
             return 0b00010
         case .orchardHalo2ActionsV1, .irohaIvmPrivateNoteStarkV1: return 0b00111
-        case .pqMaspStarkV0: return 0b11111
+        case .pqMaspStarkV1: return 0b11111
+        }
+    }
+
+    fileprivate var expectedSecurityModelV1: PrivacySecurityModelV1 {
+        switch self {
+        case .zkAcePqAuthorizationV1, .irohaJindoPolynomialCommitmentV1,
+             .irohaBootleLanternAnoncredV1, .irohaIvmPrivateNoteStarkV1,
+             .pqMaspStarkV1:
+            return .postQuantumQrom
+        case .anonymousPgcKOutOfNV1, .veRangeTransparentRangeV1,
+             .irohaZkAmsV1, .vegaExistingCredentialZkV1,
+             .irohaZkX509StarkP256V1, .orchardHalo2ActionsV1,
+             .moneroFcmpPlusPlusV1:
+            return .classicalRom
         }
     }
 }
@@ -401,9 +483,30 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
     private static let catalogSchema = "iroha.privacy.compiled-profile-catalog.v1"
     private static let submitProofSchema =
         "iroha_data_model::isi::privacy::SubmitPrivacyProofV1"
+    private static let securityClaimSchema =
+        "iroha_data_model::privacy::protocol::PrivacySecurityClaimV1"
     private static let manifestDigestDomain =
         Data("iroha:privacy:exact12-capability-manifest:v1".utf8)
+    private static let securityClaimDigestDomain =
+        Data("iroha:privacy:security-claim:v1".utf8)
+    private static let exact12CatalogCommitment: Data = {
+        let words: [UInt64] = [
+            0x7c30_a004_39f1_37e0,
+            0x6b40_fb5c_d815_db00,
+            0x49a9_4401_d272_97d7,
+            0x2e34_8ea7_fdf3_f0de,
+            0xfabf_bf7c_7865_7f74,
+            0xffbb_e269_c311_4fc9,
+        ]
+        var bytes = Data()
+        for var word in words {
+            word = word.littleEndian
+            bytes.append(Data(bytes: &word, count: MemoryLayout<UInt64>.size))
+        }
+        return bytes
+    }()
     private static let maximumFieldBytes = 128 * 1024
+    private static let maximumEvidenceBytes = 240 * 1024
     private static let maximumActionBytes = 9 * 1024 * 1024
     private static let noticeBlocks: UInt64 = 300
 
@@ -423,6 +526,10 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         let versionField = try reader.readField(maximum: 4, label: "version")
         let heightField = try reader.readField(maximum: 8, label: "committed height")
         let policyField = try reader.readField(maximum: maximumFieldBytes, label: "consensus policy")
+        let qualificationField = try reader.readField(
+            maximum: maximumEvidenceBytes,
+            label: "qualification"
+        )
         let protocolsField = try reader.readField(maximum: maximumFieldBytes, label: "protocols")
         let digestField = try reader.readField(maximum: 33, label: "manifest digest")
         try reader.requireFinished("manifest")
@@ -433,6 +540,11 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         }
         let committedHeight = try exactUInt64(heightField, "committed height")
         let policy = try decodeConsensusPolicy(policyField, committedHeight: committedHeight)
+        let qualification = try decodeOption(
+            qualificationField,
+            label: "qualification",
+            maximum: maximumEvidenceBytes
+        ).map { try decodeQualification($0) }
         let digest = try fixed32(digestField, label: "manifest digest", nonzero: true)
 
         var rowsReader = WireReader(protocolsField)
@@ -451,6 +563,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
                     rowBytes,
                     expected: protocolId,
                     committedHeight: committedHeight,
+                    qualification: qualification,
                     localCompiledProfile: localProfiles[index]
                 )
             )
@@ -458,7 +571,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         try rowsReader.requireFinished("protocols")
 
         var normalizedPayload = Data()
-        for field in [versionField, heightField, policyField, protocolsField] {
+        for field in [versionField, heightField, policyField, qualificationField, protocolsField] {
             appendField(field, to: &normalizedPayload)
         }
         appendField(array32(Data(repeating: 0, count: 32)), to: &normalizedPayload)
@@ -480,6 +593,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
             version: version,
             committedHeight: committedHeight,
             consensusPolicy: policy,
+            qualification: qualification,
             protocols: rows,
             manifestDigest: digest,
             canonicalArchive: archive
@@ -531,6 +645,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         _ bytes: Data,
         expected protocolId: PrivacyProtocolIdV1,
         committedHeight: UInt64,
+        qualification: PrivacyExact12QualificationRecordV1?,
         localCompiledProfile: Data
     ) throws -> PrivacyExact12CapabilityRowV1 {
         var row = WireReader(bytes)
@@ -567,11 +682,6 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         let readiness = try decodeReadiness(
             row.readField(maximum: maximumFieldBytes, label: "readiness")
         )
-        let activationState = try unitEnum(
-            row.readField(maximum: 4, label: "activation state"),
-            as: PrivacyCapabilityActivationStateV1.self,
-            label: "activation state"
-        )
         let activationBytes = try decodeOption(
             row.readField(maximum: maximumFieldBytes, label: "activation"),
             label: "activation"
@@ -584,47 +694,46 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
                 compiled: compiled
             )
         }
-        let limitationBytes = try decodeOption(
-            row.readField(maximum: 8, label: "limitation"),
-            label: "limitation"
-        )
-        let limitation: PrivacyCapabilityLimitationV1?
-        if let limitationBytes {
-            limitation = try unitEnum(
-                limitationBytes,
-                as: PrivacyCapabilityLimitationV1.self,
-                label: "limitation"
-            )
-        } else {
-            limitation = nil
-        }
         try row.requireFinished("capability row")
 
         let expectedReadiness: PrivacyCapabilityReadinessV1
         switch compiled {
-        case .available where protocolId == .irohaJindoPolynomialCommitmentV0:
-            expectedReadiness = .availableExperimental
-        case .available:
-            expectedReadiness = .available
         case let .unavailable(reason):
-            expectedReadiness = .unavailable(reason)
+            expectedReadiness = .unavailable(.compiledProfile(reason))
             guard activation == nil else {
                 throw invalid("an unavailable compiled profile cannot carry activation")
             }
+        case .available where activation == nil:
+            expectedReadiness = .unavailable(.notRegistered)
+        case .available:
+            guard let activation else {
+                preconditionFailure("the nil activation case was handled above")
+            }
+            switch activation.lifecycle {
+            case .proposed:
+                expectedReadiness = .unavailable(.proposed)
+            case .suspended:
+                expectedReadiness = .unavailable(.suspended)
+            case .retired:
+                expectedReadiness = .unavailable(.retired)
+            case .active:
+                if qualification == nil {
+                    expectedReadiness = .unavailable(.missingProductionQualification)
+                } else if qualificationMatches(
+                    qualification,
+                    protocolId: protocolId,
+                    compiled: compiled,
+                    activation: activation,
+                    committedHeight: committedHeight
+                ) {
+                    expectedReadiness = .productionQualified
+                } else {
+                    expectedReadiness = .unavailable(.invalidProductionQualification)
+                }
+            }
         }
         guard readiness == expectedReadiness else {
-            throw invalid("readiness was not derived from the compiled profile")
-        }
-        let projectedState = activation.map { projectActivationState(for: $0.lifecycle) }
-            ?? .notRegistered
-        guard activationState == projectedState else {
-            throw invalid("activation state differs from the full committed lifecycle")
-        }
-        let expectedLimitation: PrivacyCapabilityLimitationV1? =
-            protocolId == .irohaJindoPolynomialCommitmentV0
-                ? .missingDistributionWideKnowledgeSoundnessEvidence : nil
-        guard limitation == expectedLimitation else {
-            throw invalid("capability limitation differs from the closed protocol mapping")
+            throw invalid("readiness was not derived from compiled, lifecycle, and qualification evidence")
         }
 
         return PrivacyExact12CapabilityRowV1(
@@ -634,9 +743,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
             privacyFeatureMask: protocolId.expectedPrivacyFeatureMaskV1,
             compiledProfile: compiled,
             readiness: readiness,
-            activationState: activationState,
             activation: activation,
-            limitation: limitation,
             localCompiledTupleMatches: true,
             compiledProfileCanonicalNorito: compiledBytes
         )
@@ -742,15 +849,42 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
     private static func decodeReadiness(_ bytes: Data) throws -> PrivacyCapabilityReadinessV1 {
         let tagged = try taggedPayload(bytes, label: "readiness")
         switch tagged.tag {
-        case 0 where tagged.payload == nil: return .available
-        case 1 where tagged.payload == nil: return .availableExperimental
-        case 2:
+        case 0 where tagged.payload == nil:
+            return .productionQualified
+        case 1:
             guard let payload = tagged.payload else {
                 throw invalid("unavailable readiness has no typed reason")
             }
-            return .unavailable(try decodeUnavailableReason(payload))
+            return .unavailable(try decodeCapabilityUnavailableReason(payload))
         default:
             throw invalid("readiness has an unknown discriminant")
+        }
+    }
+
+    private static func decodeCapabilityUnavailableReason(
+        _ bytes: Data
+    ) throws -> PrivacyCapabilityUnavailableReasonV1 {
+        let tagged = try taggedPayload(bytes, label: "capability unavailable reason")
+        switch tagged.tag {
+        case 0:
+            guard let payload = tagged.payload else {
+                throw invalid("compiled-profile readiness reason has no typed detail")
+            }
+            return .compiledProfile(try decodeUnavailableReason(payload))
+        case 1 where tagged.payload == nil:
+            return .notRegistered
+        case 2 where tagged.payload == nil:
+            return .proposed
+        case 3 where tagged.payload == nil:
+            return .suspended
+        case 4 where tagged.payload == nil:
+            return .retired
+        case 5 where tagged.payload == nil:
+            return .missingProductionQualification
+        case 6 where tagged.payload == nil:
+            return .invalidProductionQualification
+        default:
+            throw invalid("readiness has an unknown unavailable reason")
         }
     }
 
@@ -905,11 +1039,6 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
                 nextLimits: next
             )
         }
-        guard try exactUInt32(
-            record.readField(maximum: 4, label: "assurance"), "assurance"
-        ) == 0 else {
-            throw invalid("activation assurance must be the sole experimental V1 variant")
-        }
         try record.requireFinished("activation record")
         return PrivacyProtocolActivationRecordV1(
             protocolId: protocolId, proofSystemId: proof, engineId: engine,
@@ -917,7 +1046,434 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
             verifierDigest: bindings[2], statementSchemaDigest: bindings[3],
             engineManifestDigest: bindings[4], lifecycle: lifecycle,
             protocolLimits: limits, pendingProtocolLimitsTightening: pending,
-            assuranceExperimental: true, canonicalNorito: bytes
+            canonicalNorito: bytes
+        )
+    }
+
+    private static func decodeQualification(
+        _ bytes: Data
+    ) throws -> PrivacyExact12QualificationRecordV1 {
+        var record = WireReader(bytes)
+        let releaseBytes = try record.readField(
+            maximum: maximumEvidenceBytes,
+            label: "qualification release manifest"
+        )
+        let deploymentBytes = try record.readField(
+            maximum: maximumEvidenceBytes,
+            label: "qualification deployment"
+        )
+        try record.requireFinished("qualification")
+        let release = try decodeReleaseManifest(releaseBytes)
+        let deployment = try decodeDeploymentQualification(deploymentBytes)
+        guard release.manifestDigest == deployment.releaseManifestDigest else {
+            throw invalid("deployment qualification names a different release manifest")
+        }
+        return PrivacyExact12QualificationRecordV1(
+            releaseManifest: release,
+            deploymentQualification: deployment,
+            canonicalNorito: bytes
+        )
+    }
+
+    private static func decodeReleaseManifest(
+        _ bytes: Data
+    ) throws -> PrivacyExact12ReleaseManifestV1 {
+        var release = WireReader(bytes)
+        let version = try exactUInt16(
+            release.readField(maximum: 2, label: "release version"),
+            "release version"
+        )
+        guard version == 1 else { throw invalid("release version must be exactly 1") }
+        let catalogId = try exactString(
+            release.readField(maximum: 64, label: "release catalog id"),
+            label: "release catalog id"
+        )
+        guard catalogId == "iroha-privacy-exact12-v1" else {
+            throw invalid("release uses an unknown catalog id")
+        }
+        let catalogCommitment = try release.readField(
+            maximum: 48,
+            label: "release catalog commitment"
+        )
+        guard catalogCommitment == exact12CatalogCommitment else {
+            throw invalid("release uses an unknown catalog commitment")
+        }
+        _ = try release.readField(maximum: maximumFieldBytes, label: "release source")
+        let abiVersion = try exactUInt16(
+            release.readField(maximum: 2, label: "release ABI version"),
+            "release ABI version"
+        )
+        guard abiVersion == 1 else { throw invalid("release ABI version must be exactly 1") }
+        _ = try fixed32(
+            release.readField(maximum: 33, label: "release ABI hash"),
+            label: "release ABI hash",
+            nonzero: true
+        )
+        _ = try fixed32(
+            release.readField(maximum: 33, label: "release syscall digest"),
+            label: "release syscall digest",
+            nonzero: true
+        )
+        _ = try release.readField(maximum: maximumFieldBytes, label: "release executables")
+        let protocolsBytes = try release.readField(
+            maximum: maximumFieldBytes,
+            label: "release protocol bindings"
+        )
+        _ = try release.readField(maximum: maximumFieldBytes, label: "release stage receipts")
+        _ = try release.readField(maximum: maximumFieldBytes, label: "release proof artifacts")
+        _ = try release.readField(maximum: maximumFieldBytes, label: "release SDK packages")
+        _ = try release.readField(maximum: maximumFieldBytes, label: "release hardware results")
+        _ = try fixed32(
+            release.readField(maximum: 33, label: "release artifact-set digest"),
+            label: "release artifact-set digest",
+            nonzero: true
+        )
+        _ = try release.readField(maximum: maximumFieldBytes, label: "release audits")
+        let auditBundleDigest = try fixed32(
+            release.readField(maximum: 33, label: "release audit-bundle digest"),
+            label: "release audit-bundle digest",
+            nonzero: true
+        )
+        _ = try release.readField(maximum: maximumFieldBytes, label: "release signatures")
+        let manifestDigest = try fixed32(
+            release.readField(maximum: 33, label: "release manifest digest"),
+            label: "release manifest digest",
+            nonzero: true
+        )
+        try release.requireFinished("release manifest")
+
+        var protocolsReader = WireReader(protocolsBytes)
+        guard try protocolsReader.readUInt64("release protocol count") == 12 else {
+            throw invalid("release must bind exactly 12 protocols")
+        }
+        var protocols: [PrivacyReleaseProtocolBindingV1] = []
+        protocols.reserveCapacity(12)
+        for (index, protocolId) in PrivacyProtocolIdV1.allCases.enumerated() {
+            let binding = try decodeReleaseBinding(
+                protocolsReader.readField(
+                    maximum: maximumFieldBytes,
+                    label: "release protocol binding \(index)"
+                ),
+                expected: protocolId
+            )
+            guard binding.securityClaim.catalogCommitment == catalogCommitment,
+                  binding.securityClaim.auditBundleDigest == auditBundleDigest else {
+                throw invalid("release security claim differs from global release evidence")
+            }
+            protocols.append(binding)
+        }
+        try protocolsReader.requireFinished("release protocol bindings")
+        return PrivacyExact12ReleaseManifestV1(
+            version: version,
+            catalogCommitment: catalogCommitment,
+            abiVersion: abiVersion,
+            protocols: protocols,
+            auditBundleDigest: auditBundleDigest,
+            manifestDigest: manifestDigest,
+            canonicalNorito: bytes
+        )
+    }
+
+    private static func decodeReleaseBinding(
+        _ bytes: Data,
+        expected protocolId: PrivacyProtocolIdV1
+    ) throws -> PrivacyReleaseProtocolBindingV1 {
+        var binding = WireReader(bytes)
+        guard try decodeProtocol(
+            binding.readField(maximum: 4, label: "release protocol"),
+            label: "release protocol"
+        ) == protocolId else {
+            throw invalid("release protocol bindings are reordered or substituted")
+        }
+        guard let proofSystemId = PrivacyProofSystemIdV1(rawValue: try exactUInt32(
+            binding.readField(maximum: 4, label: "release proof system"),
+            "release proof system"
+        )), proofSystemId == protocolId.expectedProofSystem else {
+            throw invalid("release proof system differs from the final Exact12 tuple")
+        }
+        guard let engineId = PrivacyEngineIdV1(rawValue: try exactUInt32(
+            binding.readField(maximum: 4, label: "release engine"),
+            "release engine"
+        )), engineId == protocolId.expectedEngine else {
+            throw invalid("release engine differs from the final Exact12 tuple")
+        }
+        let parameterId = try fixed32(
+            binding.readField(maximum: 33, label: "release parameter id"),
+            label: "release parameter id",
+            nonzero: true
+        )
+        let parameterDigest = try fixed32(
+            binding.readField(maximum: 33, label: "release parameter digest"),
+            label: "release parameter digest",
+            nonzero: true
+        )
+        let verifierDigest = try fixed32(
+            binding.readField(maximum: 33, label: "release verifier digest"),
+            label: "release verifier digest",
+            nonzero: true
+        )
+        let statementSchemaDigest = try fixed32(
+            binding.readField(maximum: 33, label: "release statement-schema digest"),
+            label: "release statement-schema digest",
+            nonzero: true
+        )
+        let engineManifestDigest = try fixed32(
+            binding.readField(maximum: 33, label: "release engine-manifest digest"),
+            label: "release engine-manifest digest",
+            nonzero: true
+        )
+        let claimBytes = try binding.readField(
+            maximum: maximumFieldBytes,
+            label: "release security claim"
+        )
+        let claim = try decodeSecurityClaim(
+            claimBytes,
+            expected: protocolId,
+            parameterDigest: parameterDigest,
+            verifierDigest: verifierDigest
+        )
+        let securityClaimDigest = try fixed32(
+            binding.readField(maximum: 33, label: "release security-claim digest"),
+            label: "release security-claim digest",
+            nonzero: true
+        )
+        try binding.requireFinished("release protocol binding")
+        let canonicalClaim = noritoEncode(
+            typeName: securityClaimSchema,
+            payload: claimBytes,
+            flags: NoritoHeader.compactLen,
+            payloadAlignment: 2
+        )
+        var digestPreimage = securityClaimDigestDomain
+        appendUInt64(UInt64(canonicalClaim.count), to: &digestPreimage)
+        digestPreimage.append(canonicalClaim)
+        guard securityClaimDigest == Data(SHA256.hash(data: digestPreimage)) else {
+            throw invalid("release security-claim digest does not bind its canonical claim")
+        }
+        return PrivacyReleaseProtocolBindingV1(
+            protocolId: protocolId,
+            proofSystemId: proofSystemId,
+            engineId: engineId,
+            parameterId: parameterId,
+            parameterDigest: parameterDigest,
+            verifierDigest: verifierDigest,
+            statementSchemaDigest: statementSchemaDigest,
+            engineManifestDigest: engineManifestDigest,
+            securityClaim: claim,
+            securityClaimDigest: securityClaimDigest,
+            canonicalNorito: bytes
+        )
+    }
+
+    private static func decodeDeploymentQualification(
+        _ bytes: Data
+    ) throws -> PrivacyExact12DeploymentQualificationV1 {
+        var deployment = WireReader(bytes)
+        let version = try exactUInt16(
+            deployment.readField(maximum: 2, label: "deployment version"),
+            "deployment version"
+        )
+        guard version == 1 else { throw invalid("deployment version must be exactly 1") }
+        _ = try deployment.readField(maximum: maximumFieldBytes, label: "deployment chain id")
+        _ = try deployment.readField(maximum: maximumFieldBytes, label: "deployment network id")
+        _ = try fixed32(
+            deployment.readField(maximum: 33, label: "deployment genesis hash"),
+            label: "deployment genesis hash",
+            nonzero: true
+        )
+        let releaseManifestDigest = try fixed32(
+            deployment.readField(maximum: 33, label: "deployed release digest"),
+            label: "deployed release digest",
+            nonzero: true
+        )
+        _ = try fixed32(
+            deployment.readField(maximum: 33, label: "activation transaction digest"),
+            label: "activation transaction digest",
+            nonzero: true
+        )
+        let activationsBytes = try deployment.readField(
+            maximum: maximumFieldBytes,
+            label: "deployment activations"
+        )
+        _ = try fixed32(
+            deployment.readField(maximum: 33, label: "validator roster digest"),
+            label: "validator roster digest",
+            nonzero: true
+        )
+        _ = try deployment.readField(maximum: maximumFieldBytes, label: "endpoint version")
+        let convergenceHeight = try exactUInt64(
+            deployment.readField(maximum: 8, label: "convergence height"),
+            "convergence height"
+        )
+        guard convergenceHeight > 0 else { throw invalid("convergence height must be nonzero") }
+        _ = try fixed32(
+            deployment.readField(maximum: 33, label: "converged state digest"),
+            label: "converged state digest",
+            nonzero: true
+        )
+        _ = try deployment.readField(maximum: maximumFieldBytes, label: "validator canaries")
+        _ = try deployment.readField(maximum: maximumFieldBytes, label: "validator signatures")
+        let qualificationDigest = try fixed32(
+            deployment.readField(maximum: 33, label: "qualification digest"),
+            label: "qualification digest",
+            nonzero: true
+        )
+        try deployment.requireFinished("deployment qualification")
+
+        var activationsReader = WireReader(activationsBytes)
+        guard try activationsReader.readUInt64("deployment activation count") == 12 else {
+            throw invalid("deployment must bind exactly 12 activation heights")
+        }
+        var activations: [PrivacyDeploymentActivationV1] = []
+        activations.reserveCapacity(12)
+        for (index, protocolId) in PrivacyProtocolIdV1.allCases.enumerated() {
+            var activation = WireReader(try activationsReader.readField(
+                maximum: 32,
+                label: "deployment activation \(index)"
+            ))
+            guard try decodeProtocol(
+                activation.readField(maximum: 4, label: "deployment activation protocol"),
+                label: "deployment activation protocol"
+            ) == protocolId else {
+                throw invalid("deployment activations are reordered or substituted")
+            }
+            let height = try exactUInt64(
+                activation.readField(maximum: 8, label: "deployment activation height"),
+                "deployment activation height"
+            )
+            guard height > 0, height < convergenceHeight else {
+                throw invalid("deployment activation height must precede convergence")
+            }
+            try activation.requireFinished("deployment activation")
+            activations.append(PrivacyDeploymentActivationV1(
+                protocolId: protocolId,
+                activationHeight: height
+            ))
+        }
+        try activationsReader.requireFinished("deployment activations")
+        return PrivacyExact12DeploymentQualificationV1(
+            version: version,
+            releaseManifestDigest: releaseManifestDigest,
+            activations: activations,
+            convergenceHeight: convergenceHeight,
+            qualificationDigest: qualificationDigest,
+            canonicalNorito: bytes
+        )
+    }
+
+    private static func qualificationMatches(
+        _ qualification: PrivacyExact12QualificationRecordV1?,
+        protocolId: PrivacyProtocolIdV1,
+        compiled: PrivacyCompiledProfileResultV1,
+        activation: PrivacyProtocolActivationRecordV1,
+        committedHeight: UInt64
+    ) -> Bool {
+        guard let qualification,
+              qualification.deploymentQualification.convergenceHeight <= committedHeight,
+              case let .available(profile) = compiled,
+              case let .active(_, activatedAtHeight, _) = activation.lifecycle else {
+            return false
+        }
+        let index = Int(protocolId.noritoDiscriminant)
+        let release = qualification.releaseManifest.protocols[index]
+        let deployment = qualification.deploymentQualification.activations[index]
+        return release.protocolId == protocolId
+            && deployment.protocolId == protocolId
+            && release.proofSystemId == profile.proofSystemId
+            && release.proofSystemId == activation.proofSystemId
+            && release.engineId == profile.engineId
+            && release.engineId == activation.engineId
+            && release.parameterId == profile.parameterId
+            && release.parameterId == activation.parameterId
+            && release.parameterDigest == profile.parameterDigest
+            && release.parameterDigest == activation.parameterDigest
+            && release.verifierDigest == profile.verifierDigest
+            && release.verifierDigest == activation.verifierDigest
+            && release.statementSchemaDigest == profile.statementSchemaDigest
+            && release.statementSchemaDigest == activation.statementSchemaDigest
+            && release.engineManifestDigest == profile.engineManifestDigest
+            && release.engineManifestDigest == activation.engineManifestDigest
+            && deployment.activationHeight == activatedAtHeight
+    }
+
+    private static func decodeSecurityClaim(
+        _ bytes: Data,
+        expected protocolId: PrivacyProtocolIdV1,
+        parameterDigest: Data,
+        verifierDigest: Data
+    ) throws -> PrivacySecurityClaimV1 {
+        var claim = WireReader(bytes)
+        let catalogCommitment = try claim.readField(
+            maximum: 48,
+            label: "security claim catalog commitment"
+        )
+        guard catalogCommitment == exact12CatalogCommitment else {
+            throw invalid("security claim has an unknown Exact12 catalog commitment")
+        }
+        guard try decodeProtocol(
+            claim.readField(maximum: 4, label: "security claim protocol"),
+            label: "security claim protocol"
+        ) == protocolId else {
+            throw invalid("security claim protocol differs from its activation")
+        }
+        let securityModel = try unitEnum(
+            claim.readField(maximum: 4, label: "security model"),
+            as: PrivacySecurityModelV1.self,
+            label: "security model"
+        )
+        guard securityModel == protocolId.expectedSecurityModelV1 else {
+            throw invalid("security claim uses the wrong complete-composition model")
+        }
+        let targetSecurityBits = try exactUInt16(
+            claim.readField(maximum: 2, label: "target security bits"),
+            "target security bits"
+        )
+        let achievedSecurityBits = try exactUInt16(
+            claim.readField(maximum: 2, label: "achieved security bits"),
+            "achieved security bits"
+        )
+        guard targetSecurityBits == 128,
+              achievedSecurityBits >= targetSecurityBits else {
+            throw invalid("security claim does not establish the required 128-bit target")
+        }
+        let claimedParameterDigest = try fixed32(
+            claim.readField(maximum: 33, label: "claimed parameter digest"),
+            label: "claimed parameter digest",
+            nonzero: true
+        )
+        guard claimedParameterDigest == parameterDigest else {
+            throw invalid("security claim parameter digest differs from its activation")
+        }
+        let claimedVerifierDigest = try fixed32(
+            claim.readField(maximum: 33, label: "claimed verifier digest"),
+            label: "claimed verifier digest",
+            nonzero: true
+        )
+        guard claimedVerifierDigest == verifierDigest else {
+            throw invalid("security claim verifier digest differs from its activation")
+        }
+        let reductionDigest = try fixed32(
+            claim.readField(maximum: 33, label: "security reduction digest"),
+            label: "security reduction digest",
+            nonzero: true
+        )
+        let auditBundleDigest = try fixed32(
+            claim.readField(maximum: 33, label: "audit bundle digest"),
+            label: "audit bundle digest",
+            nonzero: true
+        )
+        try claim.requireFinished("security claim")
+        return PrivacySecurityClaimV1(
+            catalogCommitment: catalogCommitment,
+            protocolId: protocolId,
+            securityModel: securityModel,
+            targetSecurityBits: targetSecurityBits,
+            achievedSecurityBits: achievedSecurityBits,
+            parameterDigest: claimedParameterDigest,
+            verifierDigest: claimedVerifierDigest,
+            reductionDigest: reductionDigest,
+            auditBundleDigest: auditBundleDigest,
+            canonicalNorito: bytes
         )
     }
 
@@ -1004,9 +1560,9 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         let expectedValueCount: Int
         switch protocolId {
         case .anonymousPgcKOutOfNV1, .irohaZkAmsV1, .moneroFcmpPlusPlusV1,
-             .irohaIvmPrivateNoteStarkV1, .pqMaspStarkV0:
+             .irohaIvmPrivateNoteStarkV1, .pqMaspStarkV1:
             expectedValueCount = 2
-        case .veRangeTransparentRangeV1, .irohaJindoPolynomialCommitmentV0,
+        case .veRangeTransparentRangeV1, .irohaJindoPolynomialCommitmentV1,
              .orchardHalo2ActionsV1:
             expectedValueCount = 1
         default:
@@ -1035,10 +1591,10 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         case .anonymousPgcKOutOfNV1: maxima = [64, 8]
         case .veRangeTransparentRangeV1: maxima = [8]
         case .irohaZkAmsV1: maxima = [8, 64]
-        case .irohaJindoPolynomialCommitmentV0: maxima = [4]
+        case .irohaJindoPolynomialCommitmentV1: maxima = [4]
         case .orchardHalo2ActionsV1: maxima = [2]
         case .moneroFcmpPlusPlusV1: maxima = [2, 4]
-        case .irohaIvmPrivateNoteStarkV1, .pqMaspStarkV0: maxima = [2, 2]
+        case .irohaIvmPrivateNoteStarkV1, .pqMaspStarkV1: maxima = [2, 2]
         default: maxima = []
         }
         for index in values.indices where values[index] == 0 || values[index] > maxima[index] {
@@ -1114,17 +1670,6 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
                   let payload = tagged.payload, !payload.isEmpty else {
                 throw invalid("submit-proof envelope \(label) differs from its admitted protocol")
             }
-        }
-    }
-
-    private static func projectActivationState(
-        for lifecycle: PrivacyProtocolLifecycleV1
-    ) -> PrivacyCapabilityActivationStateV1 {
-        switch lifecycle {
-        case .proposed: return .proposed
-        case .active: return .active
-        case .suspended: return .suspended
-        case .retired: return .retired
         }
     }
 
@@ -1216,14 +1761,18 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         return (tag, payload)
     }
 
-    private static func decodeOption(_ bytes: Data, label: String) throws -> Data? {
+    private static func decodeOption(
+        _ bytes: Data,
+        label: String,
+        maximum: Int = maximumFieldBytes
+    ) throws -> Data? {
         var reader = WireReader(bytes)
         switch try reader.readUInt8("\(label) tag") {
         case 0:
             try reader.requireFinished(label)
             return nil
         case 1:
-            let value = try reader.readField(maximum: maximumFieldBytes, label: "\(label) value")
+            let value = try reader.readField(maximum: maximum, label: "\(label) value")
             try reader.requireFinished(label)
             return value
         default:
@@ -1252,6 +1801,20 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         return value
     }
 
+    private static func exactString(_ bytes: Data, label: String) throws -> String {
+        var reader = WireReader(bytes)
+        let length = try reader.readCompactLength("\(label) width")
+        guard length <= UInt64(maximumFieldBytes), length <= UInt64(Int.max) else {
+            throw invalid("\(label) exceeds its byte ceiling")
+        }
+        let value = try reader.readBytes(Int(length), label: label)
+        try reader.requireFinished(label)
+        guard let text = String(data: value, encoding: .utf8) else {
+            throw invalid("\(label) is not UTF-8")
+        }
+        return text
+    }
+
     private static func byteNewtype(_ bytes: Data, label: String) throws -> UInt8 {
         var reader = WireReader(bytes)
         let value = try reader.readField(maximum: 1, label: "\(label) value")
@@ -1275,6 +1838,14 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
             throw invalid("\(label) must occupy exactly four bytes")
         }
         return value
+    }
+
+    private static func exactUInt16(_ bytes: Data, _ label: String) throws -> UInt16 {
+        guard bytes.count == 2 else {
+            throw invalid("\(label) must occupy exactly two bytes")
+        }
+        return UInt16(bytes[bytes.startIndex])
+            | UInt16(bytes[bytes.startIndex + 1]) << 8
     }
 
     private static func exactUInt64(_ bytes: Data, _ label: String) throws -> UInt64 {

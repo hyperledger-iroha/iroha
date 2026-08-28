@@ -1678,6 +1678,7 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_HELPER_CHAIN = (
     "pop_pacemaker_progress_with_ownership",
     "runtime_view_blocked_progress_authorization_projection_hash",
     "wire_payload_matches_current_strict_timeout_recovery_round",
+    "wire_payload_advances_or_supersedes_future_prepare_qc_fifo_block",
     "validates_retained_blocker",
     "runtime_queue_occurrence_owner_projection_hash",
     "runtime_queue_ownership_snapshot_projection_hash",
@@ -1724,6 +1725,9 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
     ),
     "wire_payload_matches_current_strict_timeout_recovery_round": (
         "68e1d7b8e1c16bca7c17b81a0cff0ef1709aa66d2a952d50c5b8d928835cd458"
+    ),
+    "wire_payload_advances_or_supersedes_future_prepare_qc_fifo_block": (
+        "46f58c62ecc82cea8aa67cc906a176cc38782b6e135bd5dbb62a60327cff5515"
     ),
     "validates_retained_blocker": (
         "e1b3b5823bf3c81749298d436f04c1bdf1d8d0b06b3f1d26693089aab119a05b"
@@ -1816,7 +1820,7 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "d667e1e855dd787defdaa559d4a3cfaef26f5b15cedf8e505184f7733db8495a"
     ),
     "runtime_driver_pacemaker_progress_releases_view_block": (
-        "0cdddcea836f909d53a45048fd38c97faf9e42f236fb234ad97a40550e376793"
+        "dabc25f07825611ec62cef6aeb5e46aa1a6ad1e52dac26d3672ae714f0a005bd"
     ),
     "adapter_pacemaker_escape_is_parked": (
         "5513bb3477396c268d3dc7ed75ded1d6c027bc5780c5f129b53920720c498d86"
@@ -1985,6 +1989,12 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
 _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
     "ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc": (
         "e3aad9aae8a82eb29d223230fa3f8b2cf26ba5dfa75b6859be40d0ce1cd45b71"
+    ),
+    "ordinary_step_skips_future_prepare_qc_to_install_ahead_tc": (
+        "97f478fc656843988e4fc1323a9ed957e67b98be13444d7e4de326b985763a67"
+    ),
+    "ordinary_step_skips_future_prepare_qc_for_higher_view_commit_qc": (
+        "74c014055d906b67924cec81d623a72c9ec9a1129b09941cad0c1b729b5dd9b3"
     ),
     "deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences": (
         "275408912512b0588a7fd1403629e9039115288b25d66aa707ddfb77a66d902e"
@@ -3177,6 +3187,8 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_effects::tests::split_round_commit_signing_is_rejected_before_service_dispatch",
     "sumeragi::v2_runner::tests::exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift",
     "sumeragi::v2_runner::tests::recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade",
+    "sumeragi::v2_worker::tests::production_exact_output_observes_finality_only_after_state_commit",
+    "sumeragi::v2_worker::tests::applied_height_finality_releases_only_ticketless_global_topology_target",
     "sumeragi::v2_worker::tests::closed_flush_on_delivery_active_unwritable_route_parks_without_cursor_advance",
     "sumeragi::v2_worker::tests::closed_flush_racing_final_receiver_retirement_is_nonfatal",
     "sumeragi::v2_worker::tests::unavailable_admission_racing_retirement_is_nonfatal",
@@ -3402,13 +3414,13 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
     "advance_after_attempt": (
         "e678eb75bf1e124b8c3ac7b196bc9abee8d5429a6f064a1aaf64851291bc0e07"
     ),
-    "drive_with_budget_ack": (
-        "675d0e99a923f9b8cc96d725458584f4ea762cd4fd69fd9f8e7e76b158c82d52"
+    "drive_with_budget_ack_and_durable_history": (
+        "334da253eab1b11913ae2f909d162c31f8e2022c4f11fa3aec141b3644a44d52"
     ),
     "drive_bounded_with_ack": (
-        "7e630c6be2466fe0980df81ea194e101b70e4abac9546a379ab9f24c8eb23861"
+        "3576ef1066ef4460f076423c8f360b0f7e232fb75d281965b4e94ccc68f37726"
     ),
-    "applied_height_reconstruction_covers": "503e17c81719e42318527609a2f91701b6feec3e9e96d735f9efd23d6aa9407d",
+    "applied_height_reconstruction_covers": "8077bb6f4a3806d952538f2d7f80ba2919523526e678bff8258f81eb6ec85515",
     "durable_exact_output_handoff_owner_pair": (
         "f848a53734e173e64122e3cf198d6e0adfea99909594e667c56a7e11ea271a84"
     ),
@@ -3417,6 +3429,135 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
     ),
     "handoff_applied_height_output_to_durable_reconstruction": (
         "7444ffcb40c52af925865f03520de3eac64f59d1c31ae6e549c5bf92e17aaf84"
+    ),
+}
+
+_APPLIED_HEIGHT_TICKETLESS_FINALITY_STRUCT_SHA256 = {
+    "PendingExactOutput": (
+        "cb82c98b833dc4d5fe13de6b481fbff930721aa248aef01c941b7f0d6ac16b9c"
+    ),
+}
+
+_APPLIED_HEIGHT_TICKETLESS_FINALITY_REGRESSION_TEST_SHA256 = {
+    "production_exact_output_observes_finality_only_after_state_commit": (
+        "fb1b0dbf139f30e926adf2508581e57c601d6b029a730c4fb6d4207bb5bb24b6"
+    ),
+    "applied_height_finality_releases_only_ticketless_global_topology_target": (
+        "5ea46404af59fe56dcb8c47e5ac672fc40f8ed1ee66f686c20cebae4f93e69c9"
+    ),
+    "applied_height_finality_releases_only_covered_ticketless_payload_chunks": (
+        "570503af2578b9f795edf23d86722b64a338d788a00e07e89b4440e0bbfb38ab"
+    ),
+}
+
+_RECOVERED_DECISION_FETCH_REFANOUT_ITEM_SHA256 = {
+    "rotating_current_archive_targets": (
+        "8f86e1b15df13eded32cf9d194c2511759806891c3acadb8617f2c1d33bdd78d"
+    ),
+    "ProductionV2Services::current_archive_targets_with_frozen_fallback": (
+        "f9f649ecdbd11566ca1f6ae219ad6263ae439cfff3fd6eb25711a7f6839a9a3f"
+    ),
+    "ProductionV2Services::recovered_decision_fetch_fanout": (
+        "a415ee3901c2a8e576157e8716e6b80953589252912117cbd1b1dbb3b7d19338"
+    ),
+    "NetworkBaseHandle::configured_peer_ids_bounded": (
+        "dcb60146ab97d3c71922b20b03f7a8e9a9884afed53ea8923c4bbb435f768aaf"
+    ),
+}
+
+_RECOVERED_DECISION_FETCH_REFANOUT_REGRESSION_TEST_SHA256 = {
+    "recovered_decision_fetch_refanout_reaches_live_peer_after_topology_ticket_cancellation": (
+        "17d64de7df3878996b2d18decd8bb1dbdbf934095bf3e3db3d7abadcb12ce117"
+    ),
+}
+
+_RECOVERED_DECISION_FETCH_REFANOUT_P2P_TEST_CAPABILITY_SHA256 = {
+    "NetworkActorAdmissionTicketTestFixture": (
+        "b880a256bc9dfdc4dc28cd5dfcaab6bebdd0d1a2d404861d6c898c809c9bf51b"
+    ),
+    "NetworkActorAdmissionTicketTestFixture::for_topology": (
+        "84f309e32cb1359903512b07ba6b523ef82889479b014fcd5f3e4a92300f177e"
+    ),
+    "NetworkActorAdmissionTicketTestFixture::cancel_topology_membership": (
+        "8f905cc135f577bde482844c2ee644748a113e3335af293cd8700b51f8361901"
+    ),
+    "ConfiguredPeerSnapshotTestFixture": (
+        "d5ef53a2a466b1fb802b4d4dd3ad3c2dc6c0b3259384b132df039e4a93b83979"
+    ),
+    "ConfiguredPeerSnapshotTestFixture::replace": (
+        "3cb38c9d29dabb11083c53e05fbe6219a739594fa07e231ec0e2b9742117b559"
+    ),
+    "NetworkBaseHandle::closed_for_tests_with_configured_peer_snapshot": (
+        "9531a182704338776b9e63d5bf6ccc534f370982cd0ac8d2944e6782a86b3168"
+    ),
+}
+
+_STABLE_LIVENESS_REPAIR_ITEM_SHA256 = {
+    "V2LaneWorkAdapter::retire_historical_recovery_request": (
+        "fb3647a2310d0d73307478c173431884f14d9dd7c67df9ec84b7b6beb0f65aca"
+    ),
+    "V2LaneWorkAdapter::schedule_historical_recovery_request": (
+        "9f93740ea85f6c7d320b25b97b182aa4fd19af763837dbe64473feed3ef89722"
+    ),
+    "V2LaneWorkAdapter::accept_historical_recovery_response": (
+        "56b8cb036dc038f74c2a6f92ad4ebd24016415182e3d26608cb6b4cf7bb02102"
+    ),
+    "V2LaneWorkAdapter::authenticates_certified_merge_sidecar_service_for_requester": (
+        "4121046358ab568ad4f9730de806534e17b48aeec63541f123b61b60c88116db"
+    ),
+    "CanonicalExecutedBlockRecovery::service_next_with_archive_targets": (
+        "fa2727f0283f2e6996d384c42684d79a1cf5d88bde42d4b8cf36945fa6af96e8"
+    ),
+    "runner::service_canonical_executed_block_recovery": (
+        "ae6d4f5f57a8d85547e33f2b13754a5a7cfe42472aa04624187ee8e568c24813"
+    ),
+    "PendingExactOutput::drive_with_budget_ack_and_durable_history": (
+        "334da253eab1b11913ae2f909d162c31f8e2022c4f11fa3aec141b3644a44d52"
+    ),
+    "ProductionV2Services::drive_pending_exact_output": (
+        "2e2cfd4ff54577ecd72c948271cc492865c1ad00bb7e9675885d2d151261f010"
+    ),
+    "ProductionV2Services::schedule_released_kura_replica_advert_heights": (
+        "befe1e00d8ae9784ca6932b9b416f67170c11b05cdde2f40e60cb4a49fb4504c"
+    ),
+    "ProductionV2Services::retry_pending_exact_output": (
+        "0f86ca2f246cd92b34ea9b7950815b2f18fdf0e9aa2e25379703ca51e97b72d6"
+    ),
+    "ProductionV2Services::enqueue_exact_fanout_while_guarded": (
+        "a76f7c05dfbafb57b0b58f4d714936eda47d16a17dbbc7be5d0db88ee399de9f"
+    ),
+    "ProductionV2Services::enqueue_exact_fanout_while_guarded_collecting_released_adverts": (
+        "a4175b7fa12a3b3725baaff7f93af2865208fd47976ae3a6476f78b7631e3ddc"
+    ),
+    "ProductionV2Services::service_kura_replica_advert_refresh_turn": (
+        "7a933f63c09158be70133d82ba63e5c877fb46a94f1ff4ce17e9e6b2f83349ab"
+    ),
+    "AutonomousLaneReservationSlotPlanError::is_retryable_after_state_or_kura_progress": (
+        "853209983b3c0f061ac16fec1d1b09f21474768e1b027d0c103d9057d1f326f5"
+    ),
+    "V2LaneWorkAdapter::schedule_autonomous_lane_production": (
+        "57901aca3a29127de1b1f156bf418eb22cef615682a9543c5a521d175d4d713c"
+    ),
+}
+
+_STABLE_LIVENESS_REPAIR_REGRESSION_SHA256 = {
+    "historical_canonical_body_retry_retains_prior_archive_across_rotation": (
+        "dca03c61d212c8cae11ba82c44c237bd3b0c2c631e51ae445be9d887cd62f204"
+    ),
+    "disjoint_current_roster_requester_receives_exact_historical_sidecar_chunk": (
+        "5a3b7fe6fc22bd1c889f9c0751913b74a7a32d93e2131e90a8f590b761548340"
+    ),
+    "canonical_executed_block_multichunk_pins_archive_and_refreshes_after_poison": (
+        "43632c34ffa281a86ad4a0de1afd7000031f4aa1d9b0e09eef024c588e9bcdeb"
+    ),
+    "terminal_retry_revalidates_only_ticketless_exact_kura_advert": (
+        "b0c6484436ecec1931eaa4ad8886fbb4cc0373fdcaf2e092fc33bd3a7ed72cd4"
+    ),
+    "terminal_retry_revalidates_only_ticketless_exact_kura_queue_plan_admission": (
+        "93437b335ed85342dd5de7e75d56b4641c36dca2f1963c85d2e430e2c1bd9bcf"
+    ),
+    "autonomous_reservation_retries_only_transient_planning_failures": (
+        "fabd75d09cf3453ffe731485ca2b06034d333ee084e4e73704242d8c75184a4f"
     ),
 }
 
@@ -3939,7 +4080,7 @@ _PRODUCTION_WORKER_ACK_SEAM_ITEM_SHA256 = {
     "DurableExactOutputHandoffReceipt::matches_predecessor_context": "7e6c407fea5b7393d085f3ae32a99832b5b9cf8906e64c5a168bacdd46ca1dcb",
     "DurableExactOutputHandoffReceipt::matches_finality_artifact": "2e0593d1f00ebd5f7fd0717ad6123cbb4c37a4c27e45b2b514e5dfbb5d37d4cc",
     "DurableExactOutputHandoffReceipt::authorizes_immediate_successor": "0d432476a9154613c9bcb9285a7d69a0dd8264e818dc993a12e77903d8d3e069",
-    "PendingExactOutput::new": "6cd75a458dde0df00216d0640bd60918cc37646842402d466c8f904d6599a0cc",
+    "PendingExactOutput::new": "896bc8e8ca1465d394a00339826cfc8c8a4ac1ed04f9b17e7e9d06f25fa8398f",
     "PendingExactOutput::is_pending": "6cd7ecb71f163b7b59e59abcce7f413a4eef60bfbd160950c4afd03a0ff73588",
     "PendingExactOutput::remove_fanouts_matching": "d0734534395316bdcbc632c4270a433fb016975e5a096f94b90b4c0f2ffa48c7",
     "PendingExactOutput::close_certified_sidecar_prefix": "e770e06e0b2c4b42a89e1a62bea7f5a34dae4fa8e276ee8bff58d5a80b35532b",
@@ -3958,13 +4099,13 @@ _PRODUCTION_WORKER_ACK_SEAM_ITEM_SHA256 = {
     "PendingExactOutput::retains_retryable_sidecar_responder_control_for": "8f2960dccb011be19e3cb0135ba26138f4020dbc91333bbcd1a73cdcae8d17c1",
     "PendingExactOutput::enqueue_validated": "ffacd5f5fb3424e183c23eb05f021e715d8c999d3a519f165badcf5c206c11e2",
     "PendingExactOutput::handoff_applied_height_to_durable_reconstruction": "e78d702c927524d363d59d1a098bfd6649d6d399e3f0252faac9d500c77b5a80",
-    "PendingExactOutput::drive_with_budget_ack": "675d0e99a923f9b8cc96d725458584f4ea762cd4fd69fd9f8e7e76b158c82d52",
-    "PendingExactOutput::drive_bounded_with_ack": "7e630c6be2466fe0980df81ea194e101b70e4abac9546a379ab9f24c8eb23861",
+    "PendingExactOutput::drive_with_budget_ack_and_durable_history": "334da253eab1b11913ae2f909d162c31f8e2022c4f11fa3aec141b3644a44d52",
+    "PendingExactOutput::drive_bounded_with_ack": "3576ef1066ef4460f076423c8f360b0f7e232fb75d281965b4e94ccc68f37726",
     "PendingExactOutput::park_unwritable_reply_target": "bae33ea7bcf13a905da400e913bed5bf2347f103d52be229e0d57fc6f24376d2",
     "ProductionV2Services::admit_network_exact_output": "8652c4a435eeba2522055d198d1bc997befa05615097688986be0d4cb0d1f460",
-    "ProductionV2Services::drive_pending_exact_output": "ff02d49d849445526f4f4571a0544f96ad113b257a49ba682a39c6f03e88b950",
+    "ProductionV2Services::drive_pending_exact_output": "2e2cfd4ff54577ecd72c948271cc492865c1ad00bb7e9675885d2d151261f010",
     "ProductionV2Services::enqueue_owned_exact_reply_routes_while_guarded": "e26271d8dee4d4a3edc25b6619ca182965b3f90b9b38f945aed1c4b0c632a3ff",
-    "ProductionV2Services::retry_pending_exact_output": "a826dc12f81db5e245b5a3eb1d94d89f43ecdf61b2e49f594d4f0c696594b31a",
+    "ProductionV2Services::retry_pending_exact_output": "0f86ca2f246cd92b34ea9b7950815b2f18fdf0e9aa2e25379703ca51e97b72d6",
     "ProductionV2Services::has_pending_exact_output": "107becdd3b504739250f12867eecdb459362f907957797ea3a0e31a71e360768",
     "ProductionV2Services::drain_certified_merge_sidecar_chunk_admissions": "d065d7b2b625852ed7ecd8458997c763b8c6d4d1ef445275150c16a62f1badf6",
     "ProductionV2Services::close_certified_merge_sidecar_prefix": "fb6879c8c325aedc7c19f093a9e5b2cb1b8c25c7bd89c7da1f2694e923cde3a2",
@@ -4037,7 +4178,7 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "ce27592a9a7e240a207c1b0ea26340edb7e7f25d11f15bdb7ef3d0698446ef49"
     ),
     "PendingExactOutput::new": (
-        "6cd75a458dde0df00216d0640bd60918cc37646842402d466c8f904d6599a0cc"
+        "896bc8e8ca1465d394a00339826cfc8c8a4ac1ed04f9b17e7e9d06f25fa8398f"
     ),
     "PendingExactOutput::ownership_addition_load": (
         "c566f3dc97560d01457335a290f876f96f5128236bf8cdbbeda6c0c6d14e50ef"
@@ -4127,13 +4268,16 @@ _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256 = {
         "b4e6d00e981ae28935489541d49c181941a4a38c1384a823ffc7d8ace27e9418"
     ),
     "enqueue_exact_fanout_while_guarded": (
-        "8f222f8dc1b6421990600f5a59d489fef0452793c2c9e4468296c092629d1d2d"
+        "a76f7c05dfbafb57b0b58f4d714936eda47d16a17dbbc7be5d0db88ee399de9f"
+    ),
+    "enqueue_exact_fanout_while_guarded_collecting_released_adverts": (
+        "a4175b7fa12a3b3725baaff7f93af2865208fd47976ae3a6476f78b7631e3ddc"
     ),
     "enqueue_owned_exact_reply_routes_while_guarded": (
         "e26271d8dee4d4a3edc25b6619ca182965b3f90b9b38f945aed1c4b0c632a3ff"
     ),
     "drive_pending_exact_output": (
-        "ff02d49d849445526f4f4571a0544f96ad113b257a49ba682a39c6f03e88b950"
+        "2e2cfd4ff54577ecd72c948271cc492865c1ad00bb7e9675885d2d151261f010"
     ),
     "exact_output_scope": (
         "2c322931cf99b7f7e6484c11c48b4bb570b48bc6a95f240e09fab88eea599be0"

@@ -249,7 +249,7 @@ pub(super) fn run_pq_masp_stage_v1(
 ) -> Result<StageMaterialV1, PrivacyReleaseEvidenceErrorClassV1> {
     const PQ_MASP_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0x50; 32];
     let maximum = case_kind == PrivacyReleaseCaseKindV1::MaximumShapeResource;
-    let protocol_id = PrivacyProtocolIdV1::PqMaspStarkV0;
+    let protocol_id = PrivacyProtocolIdV1::PqMaspStarkV1;
     let keygen_seed = stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-fixture-keygen")?;
     let fixture_seed =
         stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-fixture-encryption")?;
@@ -288,7 +288,7 @@ pub(super) fn run_pq_masp_stage_v1(
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     verify_pq_masp_v1(&statement, &consensus_binding, &consensus_limits, &proof)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
-    let original_typed = PrivacyStatementV1::PqMaspStarkV0(statement.clone());
+    let original_typed = PrivacyStatementV1::PqMaspStarkV1(statement.clone());
     let original_material = native_bound_statement_material_v1(
         b"iroha.privacy.release.pq-masp.bound-statement.v1",
         &original_typed,

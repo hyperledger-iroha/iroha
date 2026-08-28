@@ -33,7 +33,12 @@ fn tron_deployment_fixture() -> SccpTronDestinationDeploymentV1 {
         outbound_proof_policy: deployment.outbound_proof_policy,
         route_address: deployment.route_address,
         route_code_hash: deployment.route_code_hash,
+        replay_verifier_address: deployment.replay_verifier_address,
+        replay_verifier_code_hash: deployment.replay_verifier_code_hash,
+        mint_breaker_address: deployment.mint_breaker_address,
+        mint_breaker_code_hash: deployment.mint_breaker_code_hash,
         taira_to_token_multiplier: deployment.taira_to_token_multiplier,
+        max_wrapped_supply: deployment.max_wrapped_supply,
     }
 }
 

@@ -112,6 +112,25 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+#[cfg(feature = "zk-stark")]
+fn mutate_native_stark_digest(digest: &mut iroha_data_model::privacy::GoldilocksDigest384V1) {
+    let mut words = digest.words();
+    words[0] ^= 1;
+    *digest = iroha_data_model::privacy::GoldilocksDigest384V1::new(words)
+        .expect("mutated native STARK digest remains canonical");
+}
+#[cfg(feature = "zk-stark")]
+fn native_stark_test_digest(word: u64) -> iroha_data_model::privacy::GoldilocksDigest384V1 {
+    iroha_data_model::privacy::GoldilocksDigest384V1::new([word; 6])
+        .expect("test native STARK digest word is canonical")
+}
+#[cfg(feature = "zk-stark")]
+fn mutate_native_stark_fp4(value: &mut crate::zk_stark::GoldilocksFp4V1) {
+    let mut coefficients = value.coefficients();
+    coefficients[0] ^= 1;
+    *value = crate::zk_stark::GoldilocksFp4V1::new(coefficients)
+        .expect("mutated native STARK Fp4 element remains canonical");
+}
 fn sample_inrou_published_artifact() -> SoraPublishedInrouGuestImageArtifactV1 {
     SoraPublishedInrouGuestImageArtifactV1 {
         manifest_digest_hex: "31".repeat(32),
@@ -649,7 +668,7 @@ fn sample_oversized_fhe_payload(input: &[u8], seed: &[u8]) -> Vec<u8> {
         .resize(RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT + 1, slot);
     norito::encode_canonical(&envelope).expect("encode oversized FHE payload")
 }
-const FHE_INPUT_ADMISSION_BACKEND: &str = "stark/fri/sha256-goldilocks";
+const FHE_INPUT_ADMISSION_BACKEND: &str = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
 const FHE_INPUT_ADMISSION_CIRCUIT_ID: &str = SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1;
 fn encode_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
     let alternate_flags =
@@ -814,14 +833,13 @@ fn minimal_stark_verify_envelope() -> crate::zk_stark::StarkVerifyEnvelopeV1 {
             fold_arity: 2,
             queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
-            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
             domain_tag: "soracloud-canonicality-test".to_owned(),
         },
         proof: crate::zk_stark::StarkProofV1 {
             version: 1,
             commits: crate::zk_stark::StarkCommitmentsV1 {
                 version: 1,
-                roots: vec![[0x41; Hash::LENGTH]],
+                roots: vec![native_stark_test_digest(0x41)],
                 comp_root: None,
             },
             queries: Vec::new(),
@@ -907,7 +925,6 @@ fn canonical_stark_verifier_key_box(circuit_id: &str) -> iroha_data_model::proof
         fold_arity: 2,
         queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
-        hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
     };
     iroha_data_model::proof::VerifyingKeyBox::new(
         FHE_INPUT_ADMISSION_BACKEND.to_owned(),
@@ -1125,7 +1142,6 @@ fn governed_full_bootstrap_verifier_artifact_rejects_each_alternate_nested_layou
         fold_arity: 2,
         queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
-        hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
     })
     .expect("encode retired governed Core STARK verifier-key payload");
     let mut native_with_core_payload = native_material.clone();
@@ -1360,7 +1376,6 @@ fn sample_soracloud_fhe_reserved_binding_air_rejection_proof_box(
         fold_arity: vk_payload.fold_arity,
         queries: vk_payload.queries,
         merkle_arity: vk_payload.merkle_arity,
-        hash_fn: vk_payload.hash_fn,
         domain_tag,
     };
     let public_digest = crate::zk::stark_open_verify_air_public_digest_current(
@@ -1536,7 +1551,6 @@ fn sample_fhe_full_bootstrap_execution_vk_box() -> iroha_data_model::proof::Veri
         fold_arity: 2,
         queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
-        hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
     };
     iroha_data_model::proof::VerifyingKeyBox::new(
         FHE_INPUT_ADMISSION_BACKEND.into(),
@@ -1589,10 +1603,6 @@ fn sample_full_bootstrap_native_verifier_payload_for_vk(
     assert_eq!(
         payload.merkle_arity,
         iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1
-    );
-    assert_eq!(
-        payload.hash_fn,
-        iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1
     );
     iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
         &payload.circuit_id,
@@ -2467,7 +2477,6 @@ fn sample_full_bootstrap_execution_generic_binding_air_proof_box(
         fold_arity: vk_payload.fold_arity,
         queries: vk_payload.queries,
         merkle_arity: vk_payload.merkle_arity,
-        hash_fn: vk_payload.hash_fn,
         domain_tag,
     };
     let public_digest = crate::zk::stark_open_verify_air_public_digest_current(
@@ -2665,7 +2674,7 @@ fn apply_native_air_tamper(
                 .air
                 .as_mut()
                 .expect("generated proof carries native AIR")
-                .composition_root = [0xA6; Hash::LENGTH];
+                .composition_root = native_stark_test_digest(0xA6);
         }
         NativeAirTamper::PublicDigest => {
             native
@@ -2673,7 +2682,7 @@ fn apply_native_air_tamper(
                 .air
                 .as_mut()
                 .expect("generated proof carries native AIR")
-                .public_digest = [0xA7; Hash::LENGTH];
+                .public_digest = native_stark_test_digest(0xA7);
         }
     }
 }
@@ -2723,7 +2732,7 @@ fn apply_execution_native_air_replay_tamper(
                 .expect("generated proof carries row Merkle siblings");
         }
         ExecutionNativeAirReplayTamper::OpeningRowPathRoot => {
-            native
+            let sibling = native
                 .proof
                 .air
                 .as_mut()
@@ -2734,7 +2743,8 @@ fn apply_execution_native_air_replay_tamper(
                 .row_path
                 .siblings
                 .first_mut()
-                .expect("generated proof carries row Merkle siblings")[0] ^= 1;
+                .expect("generated proof carries row Merkle siblings");
+            mutate_native_stark_digest(sibling);
         }
         ExecutionNativeAirReplayTamper::OpeningFirstFriValue => {
             let first_opening_index = native
@@ -2751,17 +2761,9 @@ fn apply_execution_native_air_replay_tamper(
                 .and_then(|chain| chain.first_mut())
                 .expect("generated proof carries first FRI decommitment");
             if first_opening_index.is_multiple_of(2) {
-                first_decommit.y0 = if first_decommit.y0 == 0 {
-                    1
-                } else {
-                    first_decommit.y0 - 1
-                };
+                mutate_native_stark_fp4(&mut first_decommit.y0);
             } else {
-                first_decommit.y1 = if first_decommit.y1 == 0 {
-                    1
-                } else {
-                    first_decommit.y1 - 1
-                };
+                mutate_native_stark_fp4(&mut first_decommit.y1);
             }
         }
     }
@@ -2809,7 +2811,7 @@ fn sample_full_bootstrap_bfv_native_air_merkle_path(index: u32) -> crate::zk_sta
     }
     crate::zk_stark::MerklePath {
         dirs,
-        siblings: vec![[0; Hash::LENGTH]; depth],
+        siblings: vec![iroha_data_model::privacy::GoldilocksDigest384V1::default(); depth],
     }
 }
 #[cfg(feature = "zk-stark")]
@@ -2903,7 +2905,12 @@ fn try_sample_full_bootstrap_bfv_native_air_envelope(
     let (trace_rows, composition_values) =
         sample_full_bootstrap_bfv_native_air_material(statement_hash, params.n_log2);
     let transcript_label = soracloud_fhe_full_bootstrap_native_air_transcript_label_v1(0);
-    let public_digest = <[u8; Hash::LENGTH]>::from(statement_hash);
+    let statement_bytes: [u8; Hash::LENGTH] = statement_hash.into();
+    let public_digest = crate::zk_stark::stark_public_digest_v1(
+        &params,
+        iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        &statement_bytes,
+    )?;
     let expected_base_indices =
             iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
                 statement_hash,
@@ -3277,7 +3284,6 @@ fn sample_fhe_input_admission_vk_box_for_circuit(
         fold_arity: 2,
         queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
-        hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
     };
     iroha_data_model::proof::VerifyingKeyBox::new(
         FHE_INPUT_ADMISSION_BACKEND.into(),
@@ -4119,14 +4125,19 @@ fn full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows() {
         iroha_crypto::fhe_bfv::bfv_full_bootstrap_native_stark_air_domain_tag_v1(statement_hash,),
         "BFV-native AIR envelope must use the canonical crypto statement-bound domain tag"
     );
+    let statement_bytes: [u8; Hash::LENGTH] = statement_hash.into();
     assert_eq!(
-        air.public_digest,
-        <[u8; Hash::LENGTH]>::from(statement_hash)
+        Some(air.public_digest),
+        crate::zk_stark::stark_public_digest_v1(
+            &native.params,
+            iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            &statement_bytes,
+        )
     );
-    assert_eq!(
+    assert_ne!(
         native.proof.commits.roots.first().copied(),
         Some(air.composition_root),
-        "FRI base root must commit the AIR evaluation composition vector"
+        "Fp4 FRI and base-field AIR composition trees use distinct typed domains"
     );
     assert_eq!(
         air.trace_width,
@@ -4229,7 +4240,7 @@ fn full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows() {
         .air
         .as_mut()
         .expect("BFV-native AIR section")
-        .trace_root = [0xBA; Hash::LENGTH];
+        .trace_root = native_stark_test_digest(0xBA);
     let trace_root_drift_bytes =
         norito::to_bytes(&trace_root_drift).expect("encode execution trace-root drift");
     let err =
@@ -4241,14 +4252,7 @@ fn full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows() {
             .expect_err("BFV AIR builder replay must reject trace-root drift");
     assert_invalid_parameter_contains(err, "trace root does not match governed arithmetic trace");
     let mut composition_root_drift = native.clone();
-    let drifted_composition_root = [0xCB; Hash::LENGTH];
-    composition_root_drift
-        .proof
-        .commits
-        .roots
-        .first_mut()
-        .expect("BFV-native AIR carries FRI base roots")
-        .copy_from_slice(&drifted_composition_root);
+    let drifted_composition_root = native_stark_test_digest(0xCB);
     composition_root_drift
         .proof
         .air
@@ -4269,13 +4273,12 @@ fn full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows() {
         "composition root does not match governed AIR evaluation",
     );
     let mut base_root_mismatch = native.clone();
-    base_root_mismatch
+    *base_root_mismatch
         .proof
         .commits
         .roots
         .first_mut()
-        .expect("BFV-native AIR carries FRI base roots")
-        .copy_from_slice(&[0xCC; Hash::LENGTH]);
+        .expect("BFV-native AIR carries FRI base roots") = native_stark_test_digest(0xCC);
     let base_root_mismatch_bytes =
         norito::to_bytes(&base_root_mismatch).expect("encode execution base-root mismatch");
     let err =
@@ -4350,7 +4353,7 @@ fn full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows() {
         .expect_err("BFV AIR builder replay must reject opening row drift");
     assert_invalid_parameter_contains(err, "public padding row does not match canonical row");
     let mut stale_row_path_native = native.clone();
-    stale_row_path_native
+    let sibling = stale_row_path_native
         .proof
         .air
         .as_mut()
@@ -4361,7 +4364,8 @@ fn full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows() {
         .row_path
         .siblings
         .first_mut()
-        .expect("BFV-native AIR opening carries row Merkle siblings")[0] ^= 1;
+        .expect("BFV-native AIR opening carries row Merkle siblings");
+    mutate_native_stark_digest(sibling);
     let stale_row_path_envelope_bytes = norito::to_bytes(&stale_row_path_native)
         .expect("encode stale row-path BFV-native AIR envelope");
     let err =
@@ -4387,17 +4391,9 @@ fn full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows() {
         .and_then(|chain| chain.first_mut())
         .expect("BFV-native AIR proof carries first FRI decommitment");
     if first_opening_index.is_multiple_of(2) {
-        first_decommit.y0 = if first_decommit.y0 == 0 {
-            1
-        } else {
-            first_decommit.y0 - 1
-        };
+        mutate_native_stark_fp4(&mut first_decommit.y0);
     } else {
-        first_decommit.y1 = if first_decommit.y1 == 0 {
-            1
-        } else {
-            first_decommit.y1 - 1
-        };
+        mutate_native_stark_fp4(&mut first_decommit.y1);
     }
     let stale_first_fri_envelope_bytes = norito::to_bytes(&stale_first_fri_native)
         .expect("encode stale first-FRI BFV-native AIR envelope");
@@ -4872,7 +4868,7 @@ fn full_bootstrap_bfv_native_air_boundary_rejects_private_row_openings() {
         .air
         .as_mut()
         .expect("sample carries BFV AIR")
-        .public_digest = [0xA8; Hash::LENGTH];
+        .public_digest = native_stark_test_digest(0xA8);
     let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         label,
         statement_hash,
@@ -5078,7 +5074,7 @@ fn full_bootstrap_bfv_native_air_boundary_rejects_malformed_opening_shapes() {
     .expect_err("BFV AIR boundary must reject empty commitment root lists");
     assert_invalid_parameter_contains(err, "commitment root count mismatch");
     let mut zero_commitment_root = native.clone();
-    zero_commitment_root.proof.commits.roots[0] = [0; Hash::LENGTH];
+    zero_commitment_root.proof.commits.roots[0] = Default::default();
     let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         label,
         statement_hash,
@@ -5092,7 +5088,7 @@ fn full_bootstrap_bfv_native_air_boundary_rejects_malformed_opening_shapes() {
         .proof
         .commits
         .roots
-        .push([0xC8; Hash::LENGTH]);
+        .push(native_stark_test_digest(0xC8));
     let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         label,
         statement_hash,
@@ -5135,13 +5131,14 @@ fn full_bootstrap_bfv_native_air_boundary_rejects_malformed_opening_shapes() {
     .expect_err("BFV AIR boundary must reject stale FRI query path indices");
     assert_invalid_parameter_contains(err, "FRI query Merkle path index mismatch");
     let mut stale_fri_merkle = native.clone();
-    stale_fri_merkle
+    let sibling = stale_fri_merkle
         .proof
         .queries
         .first_mut()
         .and_then(|chain| chain.first_mut())
         .and_then(|decommit| decommit.path_y0.siblings.first_mut())
-        .expect("sample carries FRI y0 siblings")[0] ^= 1;
+        .expect("sample carries FRI y0 siblings");
+    mutate_native_stark_digest(sibling);
     let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         label,
         statement_hash,
@@ -5151,13 +5148,14 @@ fn full_bootstrap_bfv_native_air_boundary_rejects_malformed_opening_shapes() {
     .expect_err("BFV AIR boundary must reject stale FRI Merkle openings");
     assert_invalid_parameter_contains(err, "FRI query Merkle root mismatch");
     let mut stale_fri_folded_merkle = native.clone();
-    stale_fri_folded_merkle
+    let sibling = stale_fri_folded_merkle
         .proof
         .queries
         .first_mut()
         .and_then(|chain| chain.first_mut())
         .and_then(|decommit| decommit.path_z.siblings.first_mut())
-        .expect("sample carries FRI z siblings")[0] ^= 1;
+        .expect("sample carries FRI z siblings");
+    mutate_native_stark_digest(sibling);
     let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         label,
         statement_hash,
@@ -5167,14 +5165,14 @@ fn full_bootstrap_bfv_native_air_boundary_rejects_malformed_opening_shapes() {
     .expect_err("BFV AIR boundary must reject stale folded FRI Merkle openings");
     assert_invalid_parameter_contains(err, "FRI query folded Merkle root mismatch");
     let mut stale_fri_fold = native.clone();
-    let stale_fri_z = stale_fri_fold.proof.queries[0][0].z.saturating_add(1);
-    stale_fri_fold
+    let stale_fri_z = &mut stale_fri_fold
         .proof
         .queries
         .first_mut()
         .and_then(|chain| chain.first_mut())
         .expect("sample carries FRI query decommitments")
-        .z = stale_fri_z;
+        .z;
+    mutate_native_stark_fp4(stale_fri_z);
     let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         label,
         statement_hash,
@@ -5189,7 +5187,7 @@ fn full_bootstrap_bfv_native_air_boundary_rejects_malformed_opening_shapes() {
         .air
         .as_mut()
         .expect("sample carries BFV AIR")
-        .trace_root = [0; Hash::LENGTH];
+        .trace_root = Default::default();
     let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         label,
         statement_hash,
@@ -5204,7 +5202,7 @@ fn full_bootstrap_bfv_native_air_boundary_rejects_malformed_opening_shapes() {
         .air
         .as_mut()
         .expect("sample carries BFV AIR")
-        .composition_root = [0; Hash::LENGTH];
+        .composition_root = Default::default();
     let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         label,
         statement_hash,
@@ -5291,11 +5289,12 @@ fn full_bootstrap_bfv_native_air_boundary_rejects_malformed_opening_shapes() {
     assert_invalid_parameter_contains(err, "direction padding bits");
     let mut stale_row_path_sibling = native.clone();
     mutate_first_opening(&mut stale_row_path_sibling, |opening| {
-        opening
+        let sibling = opening
             .row_path
             .siblings
             .first_mut()
-            .expect("sample carries row siblings")[0] ^= 1;
+            .expect("sample carries row siblings");
+        mutate_native_stark_digest(sibling);
     });
     let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         label,
@@ -5307,11 +5306,12 @@ fn full_bootstrap_bfv_native_air_boundary_rejects_malformed_opening_shapes() {
     assert_invalid_parameter_contains(err, "row Merkle root mismatch");
     let mut stale_next_row_path_sibling = native.clone();
     mutate_first_opening(&mut stale_next_row_path_sibling, |opening| {
-        opening
+        let sibling = opening
             .next_row_path
             .siblings
             .first_mut()
-            .expect("sample carries next-row siblings")[0] ^= 1;
+            .expect("sample carries next-row siblings");
+        mutate_native_stark_digest(sibling);
     });
     let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         label,
@@ -5323,11 +5323,12 @@ fn full_bootstrap_bfv_native_air_boundary_rejects_malformed_opening_shapes() {
     assert_invalid_parameter_contains(err, "next-row Merkle root mismatch");
     let mut stale_composition_path_sibling = native.clone();
     mutate_first_opening(&mut stale_composition_path_sibling, |opening| {
-        opening
+        let sibling = opening
             .composition_path
             .siblings
             .first_mut()
-            .expect("sample carries composition siblings")[0] ^= 1;
+            .expect("sample carries composition siblings");
+        mutate_native_stark_digest(sibling);
     });
     let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         label,
@@ -9183,7 +9184,7 @@ fn governed_full_bootstrap_execution_verifier_key_rejects_below_floor_stark_payl
                 fold_arity: weak_payload.fold_arity,
                 queries: weak_payload.queries,
                 merkle_arity: weak_payload.merkle_arity,
-                hash_fn: weak_payload.hash_fn,
+                hash_fn: canonical_native_payload.hash_fn,
             };
     weak_vk.bytes =
         norito::to_bytes(&native_weak_payload).expect("encode below-floor native STARK VK");
@@ -10016,7 +10017,11 @@ fn soracloud_fhe_full_bootstrap_execution_prover_emits_valid_native_air_proof() 
             .as_ref()
             .expect("generated proof carries native AIR")
             .public_digest,
-        <[u8; Hash::LENGTH]>::from(proof.statement_hash)
+        crate::zk_stark::bfv_full_bootstrap_stark_public_digest_v1(
+            &native.params,
+            proof.statement_hash,
+        )
+        .expect("derive generated BFV proof public digest")
     );
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -11595,12 +11600,13 @@ fn run_full_bootstrap_release_verifier_case(
                 mutate_full_bootstrap_execution_native_stark_envelope(
                     &mut base_proofs[0],
                     |native| {
-                        native
+                        let trace_root = &mut native
                             .proof
                             .air
                             .as_mut()
                             .expect("generated proof carries native AIR")
-                            .trace_root[0] ^= 1;
+                            .trace_root;
+                        mutate_native_stark_digest(trace_root);
                     },
                 );
                 rejection_cases.push((
@@ -11611,17 +11617,10 @@ fn run_full_bootstrap_release_verifier_case(
             }
             FullBootstrapReleaseVerifierCase::RootDrift => {
                 let mut composition_root_drift = base_proofs.clone();
-                let drifted_composition_root = [0xCD; Hash::LENGTH];
+                let drifted_composition_root = native_stark_test_digest(0xCD);
                 mutate_full_bootstrap_execution_native_stark_envelope(
                     &mut composition_root_drift[0],
                     |native| {
-                        native
-                            .proof
-                            .commits
-                            .roots
-                            .first_mut()
-                            .expect("generated proof carries FRI base roots")
-                            .copy_from_slice(&drifted_composition_root);
                         native
                             .proof
                             .air
@@ -11633,13 +11632,13 @@ fn run_full_bootstrap_release_verifier_case(
                 mutate_full_bootstrap_execution_native_stark_envelope(
                     &mut base_proofs[0],
                     |native| {
-                        native
+                        *native
                             .proof
                             .commits
                             .roots
                             .first_mut()
-                            .expect("generated proof carries FRI base roots")
-                            .copy_from_slice(&[0xCE; Hash::LENGTH]);
+                            .expect("generated proof carries FRI base roots") =
+                            native_stark_test_digest(0xCE);
                     },
                 );
                 rejection_cases.push((
@@ -12067,17 +12066,10 @@ fn run_full_bootstrap_guarded_verifier_case(
         }
         FullBootstrapGuardedVerifierCase::ReleaseNativeAirRoot => {
             let mut composition_root_drift = base_proofs.clone();
-            let drifted_composition_root = [0xCF; Hash::LENGTH];
+            let drifted_composition_root = native_stark_test_digest(0xCF);
             mutate_full_bootstrap_execution_native_stark_envelope(
                 &mut composition_root_drift[0],
                 |native| {
-                    native
-                        .proof
-                        .commits
-                        .roots
-                        .first_mut()
-                        .expect("generated proof carries FRI base roots")
-                        .copy_from_slice(&drifted_composition_root);
                     native
                         .proof
                         .air
@@ -12090,13 +12082,13 @@ fn run_full_bootstrap_guarded_verifier_case(
             mutate_full_bootstrap_execution_native_stark_envelope(
                 &mut base_root_mismatch[0],
                 |native| {
-                    native
+                    *native
                         .proof
                         .commits
                         .roots
                         .first_mut()
-                        .expect("generated proof carries FRI base roots")
-                        .copy_from_slice(&[0xD0; Hash::LENGTH]);
+                        .expect("generated proof carries FRI base roots") =
+                        native_stark_test_digest(0xD0);
                 },
             );
             rejection_cases.push((

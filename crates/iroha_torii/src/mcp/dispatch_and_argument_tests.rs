@@ -1527,6 +1527,7 @@ fn connect_management_authorization_requires_canonical_token() {
         authorization.to_str().expect("ASCII authorization"),
         expected.as_str()
     );
+    assert!(authorization.is_sensitive());
     connect_management_authorization_value("management-token")
         .expect_err("noncanonical management tokens must be rejected");
 }

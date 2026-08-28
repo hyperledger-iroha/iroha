@@ -59,8 +59,10 @@ def _minimal_safe_tree(tmp_path: Path) -> Path:
                 "execution_mode",
                 "privacy_feature_mask",
                 "readiness",
-                "activation_state",
-                "MissingDistributionWideKnowledgeSoundnessEvidence",
+                "PrivacyCapabilityUnavailableReasonV1",
+                "qualification",
+                "PrivacyExact12QualificationRecordV1",
+                "InvalidProductionQualification",
             )
         ),
     )
@@ -286,8 +288,8 @@ def test_live_swift_cutover_satisfies_strict_source_contract() -> None:
         ),
         (
             MODULE._SWIFT_MODEL,
-            "assuranceExperimental",
-            "droppedActivationAssurance",
+            "public let qualification: PrivacyExact12QualificationRecordV1?",
+            "public let droppedQualification: PrivacyExact12QualificationRecordV1?",
             "canonical_manifest_model",
         ),
         (

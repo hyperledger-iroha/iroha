@@ -7798,7 +7798,7 @@ pub struct Network {
     /// Request QUIC transport (feature-gated).
     ///
     /// Runtime startup rejects `true` before binding while the lockfile resolves
-    /// vulnerable quinn-proto 0.11.15. TLS-over-TCP remains available.
+    /// `quinn 0.11.9` / vulnerable `quinn-proto 0.11.15`. TLS-over-TCP remains available.
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
     /// Request QUIC DATAGRAM support for best-effort topics (feature-gated by QUIC).
@@ -7971,7 +7971,8 @@ pub struct Network {
     pub low_priority_bytes_per_sec: Option<NonZeroU32>,
     /// Low-priority per-peer bytes burst.
     pub low_priority_bytes_burst: Option<NonZeroU32>,
-    /// Only allow peers explicitly listed in `allow_keys` and addresses in `allow_cidrs`.
+    /// Require peer keys to appear in `allow_keys`; a non-empty `allow_cidrs`
+    /// independently restricts inbound addresses in either mode.
     #[config(default)]
     pub allowlist_only: bool,
     /// Allowlist of peer public keys.
@@ -14004,6 +14005,9 @@ pub struct Torii {
     /// Authenticated native Bootle/Lantern blind-issuance service.
     #[config(nested)]
     pub privacy_bootle_lantern_issuer: ToriiBootleLanternIssuer,
+    /// Independently rebuilt SCCP replay archive service.
+    #[config(nested)]
+    pub sccp_replay_archive: ToriiSccpReplayArchive,
     /// Emit filter-match debug traces (developer diagnostics only).
     #[config(default = "defaults::torii::DEBUG_MATCH_FILTERS")]
     pub debug_match_filters: bool,
@@ -14268,6 +14272,7 @@ pub struct Torii {
 }
 include!("user/torii_peer_geo.rs");
 include!("user/torii_soranet_privacy_ingest.rs");
+include!("user/torii_sccp_replay_archive.rs");
 /// User configuration for authenticated native Bootle/Lantern blind issuance.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiBootleLanternIssuer {
@@ -15063,6 +15068,7 @@ impl Torii {
         let webhook_security = self.webhook_security.parse();
         let push = self.push.parse();
         let privacy_bootle_lantern_issuer = self.privacy_bootle_lantern_issuer.parse(emitter);
+        let sccp_replay_archive = self.sccp_replay_archive.parse(emitter);
         let (
             sorafs_storage,
             sorafs_discovery,
@@ -15180,6 +15186,7 @@ impl Torii {
             peer_geo: self.peer_geo.parse(),
             soranet_privacy_ingest: self.soranet_privacy_ingest.parse(),
             privacy_bootle_lantern_issuer,
+            sccp_replay_archive,
             debug_match_filters: self.debug_match_filters,
             operator_auth,
             operator_signatures: self.operator_signatures.parse(),

@@ -2130,6 +2130,11 @@ struct OutstandingHistoricalRecoveryRequest {
     request_hash: HashOf<LaneHistoricalRecoveryRequestV1>,
     request: LaneHistoricalRecoveryRequestV1,
     cadence: HistoricalRecoveryRequestCadence,
+    /// Exact authenticated archive destinations selected for every still-live
+    /// canonical-body retry of this immutable request, bounded by the adapter's
+    /// session capacity. Historical payload recovery retains its READY signer
+    /// authority instead and leaves this set empty.
+    canonical_body_destinations: BTreeSet<PeerId>,
 }
 #[derive(Clone, Copy, Debug)]
 struct HistoricalRecoveryRequestCadence {
@@ -4603,7 +4608,10 @@ impl V2LaneWorkAdapter {
             ) {
                 Ok(slot) if slot.author == self.local_peer => slot,
                 Ok(_) => continue,
-                Err(_) => {
+                Err(error) => {
+                    if error.is_retryable_after_state_or_kura_progress() {
+                        continue;
+                    }
                     self.autonomous_production_attempted_routes
                         .insert((lane_id, dataspace_id));
                     continue;
@@ -6817,14 +6825,38 @@ impl V2LaneWorkAdapter {
     /// bounded, payload-free stage observation. Invalid or conflicting durable
     /// evidence returns an error without retiring the owner, causing the
     /// process-wide output guard to fail closed.
+    #[cfg(test)]
     pub(crate) fn service_next_historical_recovery(
         &mut self,
     ) -> Result<HistoricalRecoveryServiceOutcome, V2LaneWorkError> {
-        self.service_next_historical_recovery_at(Instant::now())
+        self.service_next_historical_recovery_with_archive_targets(&[])
     }
+    /// Advance one earlier-height owner using a bounded current archive snapshot.
+    ///
+    /// Only finality-bound canonical-body recovery consumes this mutable
+    /// transport snapshot. Every request byte remains derived from immutable
+    /// historical authority, and an empty snapshot falls back to the exact
+    /// CommitQC signers retained by that authority.
+    pub(crate) fn service_next_historical_recovery_with_archive_targets(
+        &mut self,
+        current_archive_targets: &[PeerId],
+    ) -> Result<HistoricalRecoveryServiceOutcome, V2LaneWorkError> {
+        self.service_next_historical_recovery_at_with_archive_targets(
+            Instant::now(),
+            current_archive_targets,
+        )
+    }
+    #[cfg(test)]
     fn service_next_historical_recovery_at(
         &mut self,
         now: Instant,
+    ) -> Result<HistoricalRecoveryServiceOutcome, V2LaneWorkError> {
+        self.service_next_historical_recovery_at_with_archive_targets(now, &[])
+    }
+    fn service_next_historical_recovery_at_with_archive_targets(
+        &mut self,
+        now: Instant,
+        current_archive_targets: &[PeerId],
     ) -> Result<HistoricalRecoveryServiceOutcome, V2LaneWorkError> {
         let Some(session) = self.historical_recovery_sessions.pop_front() else {
             return Ok(HistoricalRecoveryServiceOutcome::Idle);
@@ -6855,9 +6887,13 @@ impl V2LaneWorkAdapter {
                 let observation = self
                     .historical_recovery_diagnostics
                     .observe(identity, reason);
-                if let Err(error) =
-                    self.schedule_historical_recovery_request(identity, &session, observation, now)
-                {
+                if let Err(error) = self.schedule_historical_recovery_request(
+                    identity,
+                    &session,
+                    observation,
+                    now,
+                    current_archive_targets,
+                ) {
                     self.historical_recovery_sessions.push_front(session);
                     return Err(error);
                 }
@@ -7347,6 +7383,7 @@ impl V2LaneWorkAdapter {
         session: &CommittedLaneBlockSession,
         observation: HistoricalRecoveryWait,
         now: Instant,
+        current_archive_targets: &[PeerId],
     ) -> Result<(), V2LaneWorkError> {
         let retry = observation.retry;
         let descriptor = &session.proposal.descriptor;
@@ -7373,7 +7410,7 @@ impl V2LaneWorkAdapter {
                     .to_owned(),
             ));
         }
-        let (kind, peers) = match retry {
+        let (kind, authority_peers, accepts_current_archive) = match retry {
             HistoricalRecoveryRetry::LocalState => {
                 self.retire_historical_recovery_request(identity);
                 return Ok(());
@@ -7424,6 +7461,7 @@ impl V2LaneWorkAdapter {
                         finality_artifact_hash: HashOf::new(&finality),
                     },
                     peers,
+                    true,
                 )
             }
             HistoricalRecoveryRetry::AuthenticatedLanePayload => {
@@ -7452,9 +7490,26 @@ impl V2LaneWorkAdapter {
                         commit_qc_hash: HashOf::new(&session.commit_qc),
                     },
                     peers,
+                    false,
                 )
             }
         };
+        let local_peer = self.local_peer.clone();
+        let mut peers = if accepts_current_archive {
+            current_archive_targets
+                .iter()
+                .filter(|peer| *peer != &local_peer)
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if peers.is_empty() {
+            peers = authority_peers;
+        }
+        peers.retain(|peer| peer != &local_peer);
+        peers.sort();
+        peers.dedup();
         let signer_pops = self
             .historical_recovery_signer_pops(session)
             .map_err(V2LaneWorkError::Persistence)?;
@@ -7508,6 +7563,7 @@ impl V2LaneWorkAdapter {
                     request_hash,
                     request,
                     cadence: HistoricalRecoveryRequestCadence::immediate(observation.reason, now),
+                    canonical_body_destinations: BTreeSet::new(),
                 },
             );
         }
@@ -7531,26 +7587,51 @@ impl V2LaneWorkAdapter {
                     "historical recovery retry deadline exceeds the monotonic clock".to_owned(),
                 )
             })?;
-        let local_peer = self.local_peer.clone();
-        let mut seen = BTreeSet::new();
-        let mut retained = false;
-        for peer in peers
-            .into_iter()
-            .filter(|peer| peer != &local_peer && seen.insert(peer.clone()))
-        {
+        if accepts_current_archive {
+            let owner = self
+                .historical_recovery_requests
+                .get(&identity)
+                .expect("historical recovery request was inserted above");
+            let retained_count = owner.canonical_body_destinations.len();
+            let added_count = peers
+                .iter()
+                .filter(|peer| !owner.canonical_body_destinations.contains(*peer))
+                .count();
+            let exceeds_capacity = retained_count
+                .checked_add(added_count)
+                .is_none_or(|count| count > self.limits.session_capacity.get());
+            if exceeds_capacity {
+                // Every previously scheduled identity can still return an
+                // authenticated response. Never evict one to make room for a
+                // new topology generation, and reject the complete batch
+                // before any corresponding effect becomes observable.
+                self.output_guard.close_admission_for_restart();
+                return Err(V2LaneWorkError::Persistence(
+                    "historical canonical-body response authority capacity exhausted".to_owned(),
+                ));
+            }
+        }
+        let mut scheduled_destinations = BTreeSet::new();
+        for peer in peers {
             if !self.push_effect(V2LaneWorkEffect::PostLaneBlock {
-                peer,
+                peer: peer.clone(),
                 message: message.clone(),
             }) {
                 break;
             }
-            retained = true;
+            scheduled_destinations.insert(peer);
         }
-        if retained {
-            self.historical_recovery_requests
+        if !scheduled_destinations.is_empty() {
+            let owner = self
+                .historical_recovery_requests
                 .get_mut(&identity)
-                .expect("serialized historical request owner changed during fanout")
-                .cadence = next_cadence;
+                .expect("serialized historical request owner changed during fanout");
+            owner.cadence = next_cadence;
+            if accepts_current_archive {
+                owner
+                    .canonical_body_destinations
+                    .extend(scheduled_destinations);
+            }
         }
         Ok(())
     }
@@ -9456,18 +9537,6 @@ impl V2LaneWorkAdapter {
                 .historical_recovery_response_frame_capacity
                 .get()
     }
-    fn peer_is_historical_global_finality_signer(
-        finality: &wire::finality::V2FinalityArtifact,
-        peer: &PeerId,
-    ) -> bool {
-        finality
-            .height_context
-            .roster
-            .iter()
-            .position(|entry| &entry.validator == peer)
-            .and_then(|index| u32::try_from(index).ok())
-            .is_some_and(|index| finality.commit_qc.signers.binary_search(&index).is_ok())
-    }
     fn peer_is_ready_signer(
         availability: &iroha_data_model::block::consensus::LanePayloadAvailabilityQcV1,
         peer: &PeerId,
@@ -9634,7 +9703,6 @@ impl V2LaneWorkAdapter {
                 self.state.as_ref(),
                 self.kura.as_ref(),
                 self.limits,
-                &self.local_peer,
                 &request,
                 sender,
             ) {
@@ -9671,9 +9739,6 @@ impl V2LaneWorkAdapter {
                     Ok(Some(finality)) => finality,
                     _ => return V2LaneIngressOutcome::Rejected,
                 };
-                if !Self::peer_is_historical_global_finality_signer(&finality, &self.local_peer) {
-                    return V2LaneIngressOutcome::Rejected;
-                }
                 let Some(height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
                     return V2LaneIngressOutcome::Rejected;
                 };
@@ -9881,12 +9946,14 @@ impl V2LaneWorkAdapter {
         {
             return V2LaneIngressOutcome::Rejected;
         }
-        // Authenticate the transport source from the request's frozen proof
-        // before consulting or mutating Kura. A canonical body may come only
-        // from a signer of the exact CommitQC named by the request; an
-        // autonomous payload may come only from a signer selected by its exact
-        // READY bitmap. This also rejects a payload-kind substitution before
-        // any persistence boundary is crossed.
+        // Authenticate the transport source before consulting or mutating
+        // Kura. A canonical body may come only from an archive destination
+        // retained by a still-live attempt of this exact immutable request;
+        // immutable finality below authenticates the body independently of the
+        // responder's historical validator role. Autonomous payload custody
+        // remains restricted to a signer selected by the exact READY bitmap.
+        // This also rejects a payload-kind substitution before any persistence
+        // boundary is crossed.
         match (&request.kind, &response.payload) {
             (
                 LaneHistoricalRecoveryKindV1::CanonicalBlock {
@@ -9896,7 +9963,7 @@ impl V2LaneWorkAdapter {
                     finality_artifact, ..
                 },
             ) if HashOf::new(finality_artifact) == *finality_artifact_hash
-                && Self::peer_is_historical_global_finality_signer(finality_artifact, sender) => {}
+                && outstanding.canonical_body_destinations.contains(sender) => {}
             (
                 LaneHistoricalRecoveryKindV1::AutonomousPayload { .. },
                 LaneHistoricalRecoveryPayloadV1::AutonomousPayload { .. },
@@ -9934,7 +10001,7 @@ impl V2LaneWorkAdapter {
                     || finality_artifact.block_hash != hint.proposal_block_hash
                     || block.header().view_change_index() != hint.proposal_view
                     || !self.historical_block_anchors_proposal(&block, &certificate.proposal)
-                    || !Self::peer_is_historical_global_finality_signer(&finality_artifact, sender)
+                    || !outstanding.canonical_body_destinations.contains(sender)
                     || self
                         .state
                         .committed_block_hash_at_height(hint.proposal_height)
@@ -11565,8 +11632,9 @@ impl V2LaneWorkAdapter {
     /// A current-height entry is still speculative and therefore uses the live
     /// frozen context. Once this adapter has advanced, only Kura's verified
     /// finality and immutable retained carrier witness may select the
-    /// historical context and compact reference; the requester contributes no
-    /// height or roster authority.
+    /// historical context and compact reference. The requester contributes no
+    /// height or carrier authority, but must belong to either the live serving
+    /// roster or that exact historical context.
     fn authenticates_certified_merge_sidecar_service_for_requester(
         &self,
         entry: &MergeLedgerEntry,
@@ -11603,7 +11671,7 @@ impl V2LaneWorkAdapter {
         // The requester independently checks the same reference and QC against
         // its own canonical carrier before accepting any bytes.
         let historical_context = &finality.height_context;
-        requester_belongs_to(historical_context)
+        (requester_belongs_to(&self.context) || requester_belongs_to(historical_context))
             && finality.height == historical_context.height
             && finality.height == header.height().get()
             && historical_context.network_id == self.context.network_id
@@ -26275,11 +26343,19 @@ pub(super) mod tests {
         assert_eq!(request.source_height(), 1);
         assert!(request.certificate.is_none());
         assert!(request.signer_pops.is_empty());
-        let outsider = PeerId::new(
+        let archive = PeerId::new(
             KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::BlsNormal)
-                .expect("derive outsider")
+                .expect("derive rotated archive")
                 .public_key()
                 .clone(),
+        );
+        assert!(
+            finality
+                .height_context
+                .roster
+                .iter()
+                .all(|entry| entry.validator != archive),
+            "the rotated archive is not an old validator"
         );
         assert!(
             build_canonical_executed_block_response(
@@ -26287,9 +26363,8 @@ pub(super) mod tests {
                 adapter.state.as_ref(),
                 adapter.kura.as_ref(),
                 adapter.limits,
-                &adapter.local_peer,
                 &request,
-                &outsider,
+                &archive,
             )
             .is_err(),
             "transport sender must be the exact authenticated requester"
@@ -26300,12 +26375,11 @@ pub(super) mod tests {
                 adapter.state.as_ref(),
                 adapter.kura.as_ref(),
                 adapter.limits,
-                &outsider,
                 &request,
                 &requester,
             )
-            .is_err(),
-            "a non-CommitQC responder cannot serve the canonical wire"
+            .is_ok(),
+            "a current archive need not be an old CommitQC signer"
         );
         let mut wrong_need = request.clone();
         let LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock { need, .. } =
@@ -26321,13 +26395,13 @@ pub(super) mod tests {
                 adapter.state.as_ref(),
                 adapter.kura.as_ref(),
                 adapter.limits,
-                &adapter.local_peer,
                 &wrong_need,
                 &requester,
             )
             .is_err(),
             "the source requires the requester's exact local finality identity"
         );
+        adapter.local_peer = archive;
         adapter.effects.clear();
         assert_eq!(
             adapter.serve_historical_recovery_request(request.clone(), Some(&requester)),
@@ -26373,7 +26447,7 @@ pub(super) mod tests {
     include!("v2_lane_work/canonical_executed_block_recovery_drift_test.rs");
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn canonical_executed_block_multichunk_restarts_whole_wire_after_byzantine_signer() {
+    fn canonical_executed_block_multichunk_pins_archive_and_refreshes_after_poison() {
         let (adapter, keys) = fixture_at_height_inner_with_kura(
             wire::ConsensusMode::Permissioned,
             2,
@@ -26466,21 +26540,23 @@ pub(super) mod tests {
                 .public_key()
                 .clone(),
         );
-        let responders = finality
-            .commit_qc
-            .signers
+        let archive_keys = [
+            KeyPair::try_from_seed(vec![0xE4; 32], Algorithm::BlsNormal)
+                .expect("derive first rotated archive"),
+            KeyPair::try_from_seed(vec![0xE5; 32], Algorithm::BlsNormal)
+                .expect("derive second rotated archive"),
+        ];
+        let responders = archive_keys
             .iter()
-            .filter_map(|index| {
-                usize::try_from(*index)
-                    .ok()
-                    .and_then(|index| finality.height_context.roster.get(index))
-                    .map(|entry| entry.validator.clone())
-            })
-            .filter(|peer| peer != &requester)
+            .map(|key| PeerId::new(key.public_key().clone()))
             .collect::<Vec<_>>();
         assert!(
-            responders.len() >= 2,
-            "the fixture requires two remote CommitQC signers"
+            responders.iter().all(|archive| finality
+                .height_context
+                .roster
+                .iter()
+                .all(|entry| &entry.validator != archive)),
+            "current archives must be disjoint from historical CommitQC signers"
         );
         let byzantine = responders[0].clone();
         let honest = responders[1].clone();
@@ -26491,41 +26567,37 @@ pub(super) mod tests {
             adapter.state.as_ref(),
             adapter.kura.as_ref(),
             adapter.limits,
-            &byzantine,
             &chunk_zero_request,
             &requester,
         )
-        .expect("first signer serves chunk zero before poisoning the suffix");
+        .expect("first archive serves chunk zero before poisoning the suffix");
         let mut byzantine_chunk_one = build_canonical_executed_block_response(
             &adapter.context,
             adapter.state.as_ref(),
             adapter.kura.as_ref(),
             adapter.limits,
-            &byzantine,
             &chunk_one_request,
             &requester,
         )
-        .expect("first signer serves a shape-valid final chunk");
+        .expect("first archive serves a shape-valid final chunk");
         let honest_chunk_zero = build_canonical_executed_block_response(
             &adapter.context,
             adapter.state.as_ref(),
             adapter.kura.as_ref(),
             adapter.limits,
-            &honest,
             &chunk_zero_request,
             &requester,
         )
-        .expect("second signer serves exact chunk zero");
+        .expect("second archive serves exact chunk zero");
         let honest_chunk_one = build_canonical_executed_block_response(
             &adapter.context,
             adapter.state.as_ref(),
             adapter.kura.as_ref(),
             adapter.limits,
-            &honest,
             &chunk_one_request,
             &requester,
         )
-        .expect("second signer serves exact chunk one");
+        .expect("second archive serves exact chunk one");
         let LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk { bytes, .. } =
             &mut byzantine_chunk_one.payload
         else {
@@ -26564,7 +26636,9 @@ pub(super) mod tests {
                 sender,
             ))
         };
-        recovery.service_next().expect("request first chunk");
+        recovery
+            .service_next_with_archive_targets(std::slice::from_ref(&byzantine))
+            .expect("request first chunk from the current archive");
         let (first_peer, first_request) = drain_canonical_executed_block_request(&mut recovery);
         assert_eq!(first_peer, byzantine);
         assert_eq!(first_request, chunk_zero_request);
@@ -26573,8 +26647,8 @@ pub(super) mod tests {
         assert_eq!(recovery.whole_wire_restarts, 0);
         assert!(recovery.effect_count() <= limits.effect_capacity.get());
         recovery
-            .service_next()
-            .expect("retry first chunk with the pinned signer");
+            .service_next_with_archive_targets(std::slice::from_ref(&honest))
+            .expect("retry first chunk with the pinned archive");
         assert!(
             recovery.is_current_request_effect(
                 recovery
@@ -26599,10 +26673,24 @@ pub(super) mod tests {
         );
         assert_eq!(recovery.front_attempts, 2);
         recovery.front_attempts = recovery_limit;
+        let spoofed = PeerId::new(
+            KeyPair::try_from_seed(vec![0xE6; 32], Algorithm::BlsNormal)
+                .expect("derive unconfigured spoofed responder")
+                .public_key()
+                .clone(),
+        );
+        for sender in [honest.clone(), spoofed] {
+            assert_eq!(
+                recovery
+                    .accept_with_ingress_ownership(admit(byzantine_chunk_zero.clone(), sender,))
+                    .expect("reject a response outside the exact scheduled archive owner"),
+                V2LaneIngressOutcome::Rejected
+            );
+        }
         assert_eq!(
             recovery
                 .accept_with_ingress_ownership(admit(byzantine_chunk_zero, byzantine.clone()))
-                .expect("accept the first signer's exact prefix"),
+                .expect("accept the first archive's exact prefix"),
             V2LaneIngressOutcome::Inserted
         );
         assert_eq!(
@@ -26624,7 +26712,7 @@ pub(super) mod tests {
         assert_eq!(
             retry_request.encode(),
             first_request.encode(),
-            "same-signer retries preserve the exact request bytes"
+            "same-archive retries preserve the exact request bytes"
         );
         assert_eq!(
             recovery.front_attempts, 0,
@@ -26636,7 +26724,9 @@ pub(super) mod tests {
             CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES
         );
         assert!(recovery.assembly.len() <= STRICT_INIT_MAX_BLOCK_BYTES as usize);
-        recovery.service_next().expect("request pinned suffix");
+        recovery
+            .service_next_with_archive_targets(std::slice::from_ref(&honest))
+            .expect("request the pinned suffix despite archive snapshot rotation");
         let (suffix_peer, suffix_request) = drain_canonical_executed_block_request(&mut recovery);
         assert_eq!(suffix_peer, byzantine);
         assert_eq!(suffix_request, chunk_one_request);
@@ -26693,7 +26783,7 @@ pub(super) mod tests {
         assert_eq!(
             recovery
                 .accept_with_ingress_ownership(admit(byzantine_chunk_one, byzantine.clone()))
-                .expect("reject the first signer's poisoned final chunk"),
+                .expect("reject the first archive's poisoned final chunk"),
             V2LaneIngressOutcome::Rejected
         );
         assert!(recovery.assembly.is_empty());
@@ -26702,8 +26792,8 @@ pub(super) mod tests {
         assert_eq!(recovery.front_attempts, 0);
         assert_eq!(recovery.whole_wire_restarts, 1);
         recovery
-            .service_next()
-            .expect("restart the whole wire with the next signer");
+            .service_next_with_archive_targets(std::slice::from_ref(&honest))
+            .expect("restart the whole wire from the refreshed archive snapshot");
         let (restart_peer, restart_request) = drain_canonical_executed_block_request(&mut recovery);
         assert_eq!(restart_peer, honest);
         assert_eq!(recovery.front_attempts, 1);
@@ -26722,14 +26812,16 @@ pub(super) mod tests {
             recovery.whole_wire_restarts, 1,
             "a valid prefix must not forgive an abandoned whole-wire assembly"
         );
-        recovery.service_next().expect("request honest suffix");
+        recovery
+            .service_next_with_archive_targets(std::slice::from_ref(&byzantine))
+            .expect("request honest suffix while remaining pinned across rotation");
         let (honest_suffix_peer, honest_suffix_request) =
             drain_canonical_executed_block_request(&mut recovery);
         assert_eq!(honest_suffix_peer, honest);
         assert_eq!(honest_suffix_request, chunk_one_request);
         assert_eq!(recovery.front_attempts, 1);
         recovery
-            .service_next()
+            .service_next_with_archive_targets(std::slice::from_ref(&byzantine))
             .expect("retry an honest suffix after exact prefix progress");
         let (honest_retry_peer, honest_retry_request) =
             drain_canonical_executed_block_request(&mut recovery);
@@ -26739,7 +26831,7 @@ pub(super) mod tests {
         assert_eq!(
             recovery
                 .accept_with_ingress_ownership(admit(honest_chunk_one, honest))
-                .expect("cache exact canonical wire from one honest signer"),
+                .expect("cache exact canonical wire from one honest archive"),
             V2LaneIngressOutcome::Inserted
         );
         assert!(!recovery.has_pending());
@@ -27043,6 +27135,9 @@ pub(super) mod tests {
                     HistoricalRecoveryWaitReason::CanonicalBlockPending,
                     Instant::now(),
                 ),
+                canonical_body_destinations: BTreeSet::from([PeerId::new(
+                    keys[0].public_key().clone(),
+                )]),
             },
         );
         let response = LaneHistoricalRecoveryResponseV1 {
@@ -27060,7 +27155,7 @@ pub(super) mod tests {
         assert_eq!(
             adapter.accept_historical_recovery_response(response.clone(), Some(&outsider)),
             V2LaneIngressOutcome::Rejected,
-            "only an exact CommitQC signer may source the canonical body"
+            "an unscheduled responder may not source the canonical body"
         );
         let mut conflicting = response.clone();
         let LaneHistoricalRecoveryPayloadV1::CanonicalBlock {

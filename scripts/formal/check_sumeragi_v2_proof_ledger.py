@@ -43301,8 +43301,8 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
             ),
             (
                 "pacemaker_progress_releases_view_block",
-                "wire_payload_matches_current_strict_timeout_recovery_round(",
-                "production authenticated current-round view-release classifier",
+                "wire_payload_advances_or_supersedes_future_prepare_qc_fifo_block(",
+                "production authenticated future-PrepareQC release classifier",
             ),
             (
                 "certified_progress_bypasses_signature_fence",
@@ -43421,14 +43421,14 @@ if target_view <= current_view {
 matches!(
     command,
     AdapterCommand::Authenticated(authenticated)
-        if wire_payload_matches_current_strict_timeout_recovery_round(
+        if wire_payload_advances_or_supersedes_future_prepare_qc_fifo_block(
             authenticated.payload(),
             self.wire_context(),
             self.current_tag(),
         )
 )
 """,
-            "ordinary view release accepts only authenticated strict current-round TimeoutVote, TC, or CommitQC",
+            "ordinary view release accepts only authenticated progress which advances or terminally supersedes the retained future PrepareQC",
             errors,
         )
 
@@ -43605,6 +43605,50 @@ round.context_id == context.id()
     && round.view == tag.view()
 """,
             "view release must match the exact current context, height, and view",
+            errors,
+        )
+        future_prepare_release = nonforgeable_helper_items.get(
+            "wire_payload_advances_or_supersedes_future_prepare_qc_fifo_block"
+        )
+        _require_rust_item_context(
+            runtime_path,
+            future_prepare_release,
+            (),
+            "future-PrepareQC progress-release classifier",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            future_prepare_release,
+            """
+wire::ConsensusMessageV2Payload::TimeoutVote(vote)
+    if timeout_vote_view_is_admissible(tag.view(), vote.round.view) =>
+{
+    vote.round
+}
+wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate)
+    if certificate.round.view >= tag.view() =>
+{
+    certificate.round
+}
+wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
+    if certificate.phase == wire::GlobalPhase::Commit =>
+{
+    certificate.round
+}
+""",
+            "future-PrepareQC release must admit only an adjacent TimeoutVote, at-or-ahead TC, or same-height terminal CommitQC shape",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            future_prepare_release,
+            """
+round.context_id == context.id()
+    && round.height == context.height
+    && round.height == tag.height()
+""",
+            "future-PrepareQC release must retain the exact context and height while allowing productive view advancement",
             errors,
         )
         _require_rust_item_context(
@@ -45289,6 +45333,44 @@ assert!(matches!(
                 description,
                 errors,
             )
+        _require_rust_token_sequence(
+            runtime_path,
+            causal_runtime_regressions.get(
+                "ordinary_step_skips_future_prepare_qc_to_install_ahead_tc"
+            ),
+            """
+assert!(scheduler.view_blocked_progress_authorization.is_some());
+let RuntimeSelectedCandidateOwnership::Exact(candidate) = &scheduler.candidate else {
+    panic!("ahead TC owns one exact authenticated candidate")
+};
+assert_eq!(
+    candidate.selection_seal.kind,
+    RuntimeQueueSelectionKind::OrdinaryViewProgress
+);
+assert_eq!(scheduler.validate_exact(), Ok(()));
+""",
+            "an at-or-ahead TC must release the future PrepareQC through one exact ordinary Progress owner",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            causal_runtime_regressions.get(
+                "ordinary_step_skips_future_prepare_qc_for_higher_view_commit_qc"
+            ),
+            """
+assert!(scheduler.view_blocked_progress_authorization.is_some());
+let RuntimeSelectedCandidateOwnership::Exact(candidate) = &scheduler.candidate else {
+    panic!("terminal CommitQC owns one exact authenticated candidate")
+};
+assert_eq!(
+    candidate.selection_seal.kind,
+    RuntimeQueueSelectionKind::OrdinaryViewProgress
+);
+assert_eq!(scheduler.validate_exact(), Ok(()));
+""",
+            "a same-height CommitQC must terminally supersede the future PrepareQC through one exact ordinary Progress owner",
+            errors,
+        )
         busy_alias_regression_name = (
             "pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_"
             "into_live_busy_producer"
@@ -58822,6 +58904,539 @@ def _autonomous_retirement_source_contract_errors(
     )
     return errors
 
+def _stable_liveness_repairs_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind the latest bounded recovery and retry liveness repairs."""
+
+    relative_paths = {
+        "lane": Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+        "history_tests": Path(
+            "crates/iroha_core/src/sumeragi/v2_lane_work/"
+            "historical_recovery_and_carrier_tests.rs"
+        ),
+        "canonical": Path(
+            "crates/iroha_core/src/sumeragi/v2_lane_work/"
+            "canonical_executed_block_application_repair.rs"
+        ),
+        "runner": Path(
+            "crates/iroha_core/src/sumeragi/v2_runner/canonical_recovery_ingress.rs"
+        ),
+        "worker": Path("crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs"),
+        "services": Path("crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs"),
+        "worker_tests": Path(
+            "crates/iroha_core/src/sumeragi/tests/"
+            "v2_worker_backpressure_retirement_cases.rs"
+        ),
+        "planner": Path("crates/iroha_core/src/sumeragi/lane_planner.rs"),
+        "planner_tests": Path(
+            "crates/iroha_core/src/sumeragi/lane_planner_tests.rs"
+        ),
+    }
+    paths = {name: repo_root / relative for name, relative in relative_paths.items()}
+    errors: list[str] = []
+    sources: dict[str, str] = {}
+    for name, path in paths.items():
+        if not path.is_file() or path.is_symlink():
+            errors.append(f"{path}: stable liveness repair source must be a regular file")
+            sources[name] = ""
+        else:
+            sources[name] = path.read_text(encoding="utf-8")
+
+    items: dict[str, RustItem | None] = {}
+
+    def bind(
+        key: str,
+        source_name: str,
+        item_name: str,
+        context: tuple[tuple[str, ...], ...],
+        attributes: tuple[str, ...] = (),
+    ) -> RustItem | None:
+        path = paths[source_name]
+        candidates = tuple(
+            item
+            for item in rust_items(sources[source_name], item_name)
+            if item.brace_context == context
+        )
+        item = candidates[0] if len(candidates) == 1 else None
+        if item is None:
+            errors.append(
+                f"{path}: require exactly one stable liveness repair item {key}; "
+                f"found {len(candidates)}"
+            )
+        _require_rust_item_context(
+            path,
+            item,
+            context,
+            f"stable liveness repair {key}",
+            errors,
+            expected_attributes=attributes,
+        )
+        _require_rust_item_token_sha256(
+            path,
+            item,
+            _STABLE_LIVENESS_REPAIR_ITEM_SHA256[key],
+            f"stable liveness repair {key}",
+            errors,
+        )
+        items[key] = item
+        return item
+
+    lane_context = (("impl", "V2LaneWorkAdapter"),)
+    bind(
+        "V2LaneWorkAdapter::retire_historical_recovery_request",
+        "lane",
+        "retire_historical_recovery_request",
+        lane_context,
+    )
+    bind(
+        "V2LaneWorkAdapter::schedule_historical_recovery_request",
+        "lane",
+        "schedule_historical_recovery_request",
+        lane_context,
+    )
+    bind(
+        "V2LaneWorkAdapter::accept_historical_recovery_response",
+        "lane",
+        "accept_historical_recovery_response",
+        lane_context,
+    )
+    bind(
+        "V2LaneWorkAdapter::authenticates_certified_merge_sidecar_service_for_requester",
+        "lane",
+        "authenticates_certified_merge_sidecar_service_for_requester",
+        lane_context,
+    )
+    canonical_context = (("impl", "CanonicalExecutedBlockRecovery"),)
+    bind(
+        "CanonicalExecutedBlockRecovery::service_next_with_archive_targets",
+        "canonical",
+        "service_next_with_archive_targets",
+        canonical_context,
+    )
+    bind(
+        "runner::service_canonical_executed_block_recovery",
+        "runner",
+        "service_canonical_executed_block_recovery",
+        (),
+    )
+    bind(
+        "PendingExactOutput::drive_with_budget_ack_and_durable_history",
+        "worker",
+        "drive_with_budget_ack_and_durable_history",
+        (("impl", "PendingExactOutput"),),
+    )
+    service_context = (("impl", "ProductionV2Services"),)
+    for item_name in (
+        "drive_pending_exact_output",
+        "schedule_released_kura_replica_advert_heights",
+        "retry_pending_exact_output",
+        "enqueue_exact_fanout_while_guarded",
+        "enqueue_exact_fanout_while_guarded_collecting_released_adverts",
+        "service_kura_replica_advert_refresh_turn",
+    ):
+        bind(
+            f"ProductionV2Services::{item_name}",
+            "services",
+            item_name,
+            service_context,
+        )
+    bind(
+        "AutonomousLaneReservationSlotPlanError::is_retryable_after_state_or_kura_progress",
+        "planner",
+        "is_retryable_after_state_or_kura_progress",
+        (("impl", "AutonomousLaneReservationSlotPlanError"),),
+    )
+    bind(
+        "V2LaneWorkAdapter::schedule_autonomous_lane_production",
+        "lane",
+        "schedule_autonomous_lane_production",
+        lane_context,
+    )
+
+    regression_specs = (
+        (
+            "historical_canonical_body_retry_retains_prior_archive_across_rotation",
+            "history_tests",
+            (),
+            ("#[test]",),
+        ),
+        (
+            "disjoint_current_roster_requester_receives_exact_historical_sidecar_chunk",
+            "history_tests",
+            (),
+            ("#[test]",),
+        ),
+        (
+            "canonical_executed_block_multichunk_pins_archive_and_refreshes_after_poison",
+            "lane",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            ("#[test]", "#[allow(clippy::too_many_lines)]"),
+        ),
+        (
+            "terminal_retry_revalidates_only_ticketless_exact_kura_advert",
+            "worker_tests",
+            (),
+            ("#[test]",),
+        ),
+        (
+            "terminal_retry_revalidates_only_ticketless_exact_kura_queue_plan_admission",
+            "worker_tests",
+            (),
+            ("#[test]",),
+        ),
+        (
+            "autonomous_reservation_retries_only_transient_planning_failures",
+            "planner_tests",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            ("#[test]",),
+        ),
+    )
+    regression_items: dict[str, RustItem | None] = {}
+    for test_name, source_name, context, attributes in regression_specs:
+        path = paths[source_name]
+        candidates = tuple(
+            item
+            for item in rust_items(sources[source_name], test_name)
+            if item.brace_context == context
+        )
+        item = candidates[0] if len(candidates) == 1 else None
+        regression_items[test_name] = item
+        if item is None:
+            errors.append(
+                f"{path}: require exactly one stable liveness regression {test_name}; "
+                f"found {len(candidates)}"
+            )
+        _require_rust_item_context(
+            path,
+            item,
+            context,
+            f"stable liveness regression {test_name}",
+            errors,
+            expected_attributes=attributes,
+        )
+        _require_rust_item_token_sha256(
+            path,
+            item,
+            _STABLE_LIVENESS_REPAIR_REGRESSION_SHA256[test_name],
+            f"stable liveness regression {test_name}",
+            errors,
+        )
+
+    semantic_contracts = (
+        (
+            "V2LaneWorkAdapter::schedule_historical_recovery_request",
+            """
+let mut peers = if accepts_current_archive {
+    current_archive_targets
+        .iter()
+        .filter(|peer| *peer != &local_peer)
+        .cloned()
+        .collect::<Vec<_>>()
+} else {
+    Vec::new()
+};
+if peers.is_empty() {
+    peers = authority_peers;
+}
+peers.retain(|peer| peer != &local_peer);
+peers.sort();
+peers.dedup();
+""",
+            "historical canonical-body retry must prefer a canonical current-archive snapshot and fall back only when it is empty",
+        ),
+        (
+            "V2LaneWorkAdapter::schedule_historical_recovery_request",
+            """
+if accepts_current_archive {
+    owner
+        .canonical_body_destinations
+        .extend(scheduled_destinations);
+}
+""",
+            "every actually scheduled canonical-body archive must remain in the live request's responder union",
+        ),
+        (
+            "V2LaneWorkAdapter::accept_historical_recovery_response",
+            "outstanding.canonical_body_destinations.contains(sender)",
+            "canonical-body acceptance must require the responder retained by the exact live request before and after local persistence validation",
+            2,
+        ),
+        (
+            "V2LaneWorkAdapter::retire_historical_recovery_request",
+            """
+if let Some(retired) = self.historical_recovery_requests.remove(&identity) {
+""",
+            "historical completion must remove the request owner carrying its responder union",
+        ),
+        (
+            "V2LaneWorkAdapter::authenticates_certified_merge_sidecar_service_for_requester",
+            """
+(requester_belongs_to(&self.context) || requester_belongs_to(historical_context))
+""",
+            "historical merge-sidecar service must accept an exact requester from either the live or immutable historical roster",
+        ),
+        (
+            "CanonicalExecutedBlockRecovery::service_next_with_archive_targets",
+            """
+if !responder_is_still_exact {
+    self.abandon_front_responder()?;
+} else if !outstanding.retry_sent {
+    let request = outstanding.request.clone();
+    let peer = outstanding.responder.peer.clone();
+""",
+            "canonical executed-block retry must remain byte-identical and pinned until explicit responder abandonment",
+        ),
+        (
+            "CanonicalExecutedBlockRecovery::service_next_with_archive_targets",
+            """
+let mut eligible_peers = current_archive_targets
+    .iter()
+    .filter(|peer| *peer != &self.local_peer && seen.insert((*peer).clone()))
+    .cloned()
+    .collect::<Vec<_>>();
+if eligible_peers.is_empty() {
+    eligible_peers = finality
+        .commit_qc
+        .signers
+""",
+            "a fresh canonical executed-block responder must prefer current archives before historical CommitQC fallback",
+        ),
+        (
+            "runner::service_canonical_executed_block_recovery",
+            """
+let current_archive_targets = services.current_archive_targets();
+recovery
+    .service_next_with_archive_targets(&current_archive_targets)
+""",
+            "the production runner must refresh canonical recovery from the current archive snapshot",
+        ),
+        (
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history",
+            """
+let claim_durable_history = if matches!(
+    &fanout.rollover_claim,
+    ExactOutputRolloverClaim::DurableKuraReplicaAdvert { .. }
+        | ExactOutputRolloverClaim::QueuePlanAdmission { .. }
+) {
+    durable_history
+} else {
+    None
+};
+""",
+            "ticketless Kura-backed retirement must revalidate only an exact advert or QueuePlan claim",
+        ),
+        (
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history",
+            "released_kura_replica_advert_heights.insert(*source_height);",
+            "advert retirement must retain its durable source height for rescheduling",
+        ),
+        (
+            "ProductionV2Services::drive_pending_exact_output",
+            """
+if pending.applied_height_finality.is_none()
+    && u64::try_from(self.state.committed_height())
+        .is_ok_and(|height| height >= self.context.height)
+""",
+            "exact-output retirement may acquire finality authority only after State commits the height",
+        ),
+        (
+            "ProductionV2Services::retry_pending_exact_output",
+            """
+self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+let pending_remains = pending_remains?;
+""",
+            "terminal retry must reschedule released adverts before propagating the drive result",
+        ),
+        (
+            "ProductionV2Services::enqueue_exact_fanout_while_guarded",
+            """
+let ownership = self.enqueue_exact_fanout_while_guarded_collecting_released_adverts(
+    messages,
+    peers,
+    rollover_claim,
+    permit,
+    &mut released_kura_replica_advert_heights,
+);
+self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+ownership
+""",
+            "immediate fanout admission must reschedule released adverts before returning its drive result",
+        ),
+        (
+            "ProductionV2Services::enqueue_exact_fanout_while_guarded_collecting_released_adverts",
+            """
+self.drive_pending_exact_output(&mut pending, released_kura_replica_advert_heights)
+    .map(|_| ownership)
+""",
+            "guarded fanout admission must surface every released advert height to its post-lock owner",
+        ),
+        (
+            "ProductionV2Services::service_kura_replica_advert_refresh_turn",
+            """
+self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?;
+let outcome = outcome?;
+""",
+            "advert refresh must reschedule released durable sources before propagating its drive result",
+        ),
+        (
+            "AutonomousLaneReservationSlotPlanError::is_retryable_after_state_or_kura_progress",
+            """
+matches!(
+    self,
+    Self::BlockedPredecessor { .. } | Self::PlanningSnapshotChanged
+)
+""",
+            "only predecessor blockage or a changed planning snapshot may retry after State or Kura progress",
+        ),
+        (
+            "V2LaneWorkAdapter::schedule_autonomous_lane_production",
+            """
+Err(error) => {
+    if error.is_retryable_after_state_or_kura_progress() {
+        continue;
+    }
+    self.autonomous_production_attempted_routes
+        .insert((lane_id, dataspace_id));
+    continue;
+}
+""",
+            "the autonomous planner must suppress only immutable failures and retry transient failures on a later producer tick",
+        ),
+    )
+    key_paths = {
+        key: paths[source_name]
+        for key, source_name in (
+            ("V2LaneWorkAdapter::retire_historical_recovery_request", "lane"),
+            ("V2LaneWorkAdapter::schedule_historical_recovery_request", "lane"),
+            ("V2LaneWorkAdapter::accept_historical_recovery_response", "lane"),
+            (
+                "V2LaneWorkAdapter::authenticates_certified_merge_sidecar_service_for_requester",
+                "lane",
+            ),
+            (
+                "CanonicalExecutedBlockRecovery::service_next_with_archive_targets",
+                "canonical",
+            ),
+            ("runner::service_canonical_executed_block_recovery", "runner"),
+            (
+                "PendingExactOutput::drive_with_budget_ack_and_durable_history",
+                "worker",
+            ),
+            ("ProductionV2Services::drive_pending_exact_output", "services"),
+            ("ProductionV2Services::retry_pending_exact_output", "services"),
+            (
+                "ProductionV2Services::enqueue_exact_fanout_while_guarded",
+                "services",
+            ),
+            (
+                "ProductionV2Services::enqueue_exact_fanout_while_guarded_collecting_released_adverts",
+                "services",
+            ),
+            (
+                "ProductionV2Services::service_kura_replica_advert_refresh_turn",
+                "services",
+            ),
+            (
+                "AutonomousLaneReservationSlotPlanError::is_retryable_after_state_or_kura_progress",
+                "planner",
+            ),
+            ("V2LaneWorkAdapter::schedule_autonomous_lane_production", "lane"),
+        )
+    }
+    for contract in semantic_contracts:
+        key, expected, description, *count_override = contract
+        _require_rust_token_sequence(
+            key_paths[key],
+            items.get(key),
+            expected,
+            description,
+            errors,
+            count=count_override[0] if count_override else 1,
+        )
+    queue_plan_regression = regression_items.get(
+        "terminal_retry_revalidates_only_ticketless_exact_kura_queue_plan_admission"
+    )
+    for expected, description in (
+        (
+            """
+assert!(
+    ticketless
+        .retry_pending_exact_output()
+        .expect("ticketless QueuePlan remains before State-applied finality")
+);
+""",
+            "QueuePlan output must remain owned before State applies the durable height",
+        ),
+        (
+            """
+ticketless
+    .kura
+    .remove_pending_queue_plan_admission_certificate(certificate_hash)
+    .expect("remove the exact QueuePlan source");
+assert!(
+    ticketless
+        .retry_pending_exact_output()
+        .expect("missing QueuePlan source retains ticketless output"),
+    "State-applied finality cannot replace absent Kura bytes"
+);
+""",
+            "QueuePlan output must remain owned when its exact Kura source is absent",
+        ),
+        (
+            """
+ticketless
+    .kura
+    .persist_pending_queue_plan_admission_certificate(b"different QueuePlan source")
+    .expect("persist non-matching QueuePlan source");
+assert!(
+    ticketless
+        .retry_pending_exact_output()
+        .expect("non-matching QueuePlan source retains ticketless output"),
+    "another hash-addressed certificate cannot replace the exact Kura bytes"
+);
+""",
+            "QueuePlan output must remain owned when Kura contains mismatched bytes",
+        ),
+        (
+            """
+assert!(
+    !ticketless
+        .retry_pending_exact_output()
+        .expect("terminal retry revalidates QueuePlan output from Kura")
+);
+""",
+            "ticketless QueuePlan output must release after State and exact Kura validation",
+        ),
+        (
+            """
+assert!(
+    ticketed
+        .retry_pending_exact_output()
+        .expect("live actor ticket retains QueuePlan output")
+);
+""",
+            "exact Kura history must not supersede QueuePlan output with a live actor ticket",
+        ),
+        (
+            """
+.urgent_heights
+.is_empty(),
+"QueuePlan release must not schedule a Kura advert refresh"
+""",
+            "QueuePlan release must not create an unrelated Kura advert refresh",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["worker_tests"],
+            queue_plan_regression,
+            expected,
+            description,
+            errors,
+        )
+    return errors
+
+
 def _exact_output_production_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -58911,6 +59526,7 @@ def _exact_output_production_source_fidelity_errors(
         / "sumeragi"
         / "v2_effects.rs"
     )
+    p2p_network_path = repo_root / "crates" / "iroha_p2p" / "src" / "network.rs"
     errors = _lifecycle_certified_serve_production_source_fidelity_errors(
         repo_root
     )
@@ -58960,6 +59576,10 @@ def _exact_output_production_source_fidelity_errors(
         ),
         (effects_path, "production ingress-owned effect source"),
         (
+            p2p_network_path,
+            "production configured-peer snapshot and refanout test-capability source",
+        ),
+        (
             ordinary_ingress_consumer_path,
             "production ordinary ingress post-dequeue owner",
         ),
@@ -58987,6 +59607,7 @@ def _exact_output_production_source_fidelity_errors(
     ingress_source = loaded_sources[ingress_path]
     leader_wire_store_source = loaded_sources[leader_wire_store_path]
     effects_source = loaded_sources[effects_path]
+    p2p_network_source = loaded_sources[p2p_network_path]
     ordinary_ingress_consumer_source = loaded_sources[ordinary_ingress_consumer_path]
 
     semantic_peer_capacity_tokens = rust_code_tokens(
@@ -60788,7 +61409,7 @@ if self.pending_server_closures.is_empty() {
                 "retains_retryable_sidecar_responder_control_for",
                 "enqueue_validated",
                 "handoff_applied_height_to_durable_reconstruction",
-                "drive_with_budget_ack",
+                "drive_with_budget_ack_and_durable_history",
                 "drive_bounded_with_ack",
                 "park_unwritable_reply_target",
             ),
@@ -60837,6 +61458,488 @@ if self.pending_server_closures.is_empty() {
                 errors,
                 f"exact-output writer-flush {qualified_name} production item",
             )
+
+    pending_exact_output_structs = rust_struct_items(
+        worker_source, "PendingExactOutput"
+    )
+    pending_exact_output_struct = (
+        pending_exact_output_structs[0]
+        if len(pending_exact_output_structs) == 1
+        else None
+    )
+    if pending_exact_output_struct is None:
+        errors.append(
+            f"{worker_path}: require exactly one applied-height exact-output "
+            f"carrier; found {len(pending_exact_output_structs)}"
+        )
+    else:
+        _require_rust_item_context(
+            worker_path,
+            pending_exact_output_struct,
+            (),
+            "applied-height exact-output carrier",
+            errors,
+            expected_attributes=("#[derive(Debug)]",),
+        )
+        _require_rust_item_token_sha256(
+            worker_path,
+            pending_exact_output_struct,
+            _APPLIED_HEIGHT_TICKETLESS_FINALITY_STRUCT_SHA256[
+                "PendingExactOutput"
+            ],
+            "applied-height exact-output carrier",
+            errors,
+        )
+
+    ticketless_finality_test_path = (
+        worker_path.parent
+        / "tests"
+        / "v2_worker_backpressure_retirement_cases.rs"
+    )
+    ticketless_finality_test_items: dict[str, RustItem | None] = {}
+    if (
+        not ticketless_finality_test_path.is_file()
+        or ticketless_finality_test_path.is_symlink()
+    ):
+        errors.append(
+            f"{ticketless_finality_test_path}: applied-height ticketless-finality "
+            "regressions must be a regular file"
+        )
+    else:
+        ticketless_finality_test_source = ticketless_finality_test_path.read_text(
+            encoding="utf-8"
+        )
+        for test_name, expected_sha256 in (
+            _APPLIED_HEIGHT_TICKETLESS_FINALITY_REGRESSION_TEST_SHA256.items()
+        ):
+            item = _require_rust_item(
+                ticketless_finality_test_path,
+                ticketless_finality_test_source,
+                test_name,
+                errors,
+            )
+            ticketless_finality_test_items[test_name] = item
+            _require_rust_item_context(
+                ticketless_finality_test_path,
+                item,
+                (),
+                f"applied-height ticketless-finality regression {test_name}",
+                errors,
+                expected_attributes=("#[test]",),
+            )
+            _require_rust_item_token_sha256(
+                ticketless_finality_test_path,
+                item,
+                expected_sha256,
+                f"applied-height ticketless-finality regression {test_name}",
+                errors,
+            )
+
+    recovered_fetch_refanout_items: dict[str, RustItem | None] = {}
+    rotating_archive_targets = _require_rust_item(
+        worker_path,
+        worker_source,
+        "rotating_current_archive_targets",
+        errors,
+    )
+    recovered_fetch_refanout_items["rotating_current_archive_targets"] = (
+        rotating_archive_targets
+    )
+    _require_rust_item_context(
+        worker_path,
+        rotating_archive_targets,
+        (),
+        "recovered Decision Fetch rotating live-archive selector",
+        errors,
+    )
+    for item_name in (
+        "current_archive_targets_with_frozen_fallback",
+        "recovered_decision_fetch_fanout",
+    ):
+        qualified_name = f"ProductionV2Services::{item_name}"
+        recovered_fetch_refanout_items[qualified_name] = _require_qualified_rust_item(
+            worker_path,
+            worker_source,
+            "ProductionV2Services",
+            item_name,
+            errors,
+            f"recovered Decision Fetch refanout {qualified_name}",
+        )
+
+    network_handle_context = (
+        (
+            "impl",
+            "<",
+            "T",
+            ":",
+            "Pload",
+            "+",
+            "message",
+            "::",
+            "ClassifyTopic",
+            "+",
+            "Sync",
+            ",",
+            "E",
+            ":",
+            "Enc",
+            "+",
+            "Sync",
+            ">",
+            "NetworkBaseHandle",
+            "<",
+            "T",
+            ",",
+            "E",
+            ">",
+        ),
+    )
+    configured_peer_ids_bounded = _require_rust_item(
+        p2p_network_path,
+        p2p_network_source,
+        "configured_peer_ids_bounded",
+        errors,
+    )
+    recovered_fetch_refanout_items[
+        "NetworkBaseHandle::configured_peer_ids_bounded"
+    ] = configured_peer_ids_bounded
+    _require_rust_item_context(
+        p2p_network_path,
+        configured_peer_ids_bounded,
+        network_handle_context,
+        "recovered Decision Fetch configured-peer snapshot dependency",
+        errors,
+    )
+    for qualified_name, expected_sha256 in (
+        _RECOVERED_DECISION_FETCH_REFANOUT_ITEM_SHA256.items()
+    ):
+        _require_rust_item_token_sha256(
+            p2p_network_path
+            if qualified_name.startswith("NetworkBaseHandle::")
+            else worker_path,
+            recovered_fetch_refanout_items.get(qualified_name),
+            expected_sha256,
+            f"recovered Decision Fetch refanout {qualified_name}",
+            errors,
+        )
+
+    recovered_fetch_refanout_test_path = (
+        worker_path.parent / "tests" / "v2_worker_main_01.rs"
+    )
+    recovered_fetch_refanout_test_items: dict[str, RustItem | None] = {}
+    if (
+        not recovered_fetch_refanout_test_path.is_file()
+        or recovered_fetch_refanout_test_path.is_symlink()
+    ):
+        errors.append(
+            f"{recovered_fetch_refanout_test_path}: recovered Decision Fetch "
+            "refanout regressions must be a regular file"
+        )
+    else:
+        recovered_fetch_refanout_test_source = (
+            recovered_fetch_refanout_test_path.read_text(encoding="utf-8")
+        )
+        for test_name, expected_sha256 in (
+            _RECOVERED_DECISION_FETCH_REFANOUT_REGRESSION_TEST_SHA256.items()
+        ):
+            item = _require_rust_item(
+                recovered_fetch_refanout_test_path,
+                recovered_fetch_refanout_test_source,
+                test_name,
+                errors,
+            )
+            recovered_fetch_refanout_test_items[test_name] = item
+            _require_rust_item_context(
+                recovered_fetch_refanout_test_path,
+                item,
+                (),
+                f"recovered Decision Fetch refanout regression {test_name}",
+                errors,
+                expected_attributes=("#[test]",),
+            )
+            _require_rust_item_token_sha256(
+                recovered_fetch_refanout_test_path,
+                item,
+                expected_sha256,
+                f"recovered Decision Fetch refanout regression {test_name}",
+                errors,
+            )
+
+    p2p_test_capability_items: dict[str, RustItem | None] = {}
+    for struct_name, expected_attributes in (
+        (
+            "NetworkActorAdmissionTicketTestFixture",
+            ("#[cfg(any(test, feature = \"test-fixtures\"))]", "#[derive(Clone, Debug)]"),
+        ),
+        (
+            "ConfiguredPeerSnapshotTestFixture",
+            ("#[cfg(any(test, feature = \"test-fixtures\"))]", "#[derive(Debug)]"),
+        ),
+    ):
+        structs = rust_struct_items(p2p_network_source, struct_name)
+        item = structs[0] if len(structs) == 1 else None
+        if item is None:
+            errors.append(
+                f"{p2p_network_path}: require exactly one refanout test-capability "
+                f"struct {struct_name}; found {len(structs)}"
+            )
+        p2p_test_capability_items[struct_name] = item
+        _require_rust_item_context(
+            p2p_network_path,
+            item,
+            (),
+            f"recovered Decision Fetch refanout test capability {struct_name}",
+            errors,
+            expected_attributes=expected_attributes,
+        )
+
+    cfg_test_fixture_impl = (
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "any",
+            "(",
+            "test",
+            ",",
+            "feature",
+            "=",
+            ")",
+            ")",
+            "]",
+            "impl",
+            "NetworkActorAdmissionTicketTestFixture",
+        ),
+    )
+    cfg_configured_snapshot_impl = (
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "any",
+            "(",
+            "test",
+            ",",
+            "feature",
+            "=",
+            ")",
+            ")",
+            "]",
+            "impl",
+            "ConfiguredPeerSnapshotTestFixture",
+        ),
+    )
+    for qualified_name, item_name, expected_context, expected_attributes in (
+        (
+            "NetworkActorAdmissionTicketTestFixture::for_topology",
+            "for_topology",
+            cfg_test_fixture_impl,
+            ("#[must_use]",),
+        ),
+        (
+            "NetworkActorAdmissionTicketTestFixture::cancel_topology_membership",
+            "cancel_topology_membership",
+            cfg_test_fixture_impl,
+            ("#[must_use]",),
+        ),
+        (
+            "ConfiguredPeerSnapshotTestFixture::replace",
+            "replace",
+            cfg_configured_snapshot_impl,
+            (),
+        ),
+        (
+            "NetworkBaseHandle::closed_for_tests_with_configured_peer_snapshot",
+            "closed_for_tests_with_configured_peer_snapshot",
+            network_handle_context,
+            ("#[cfg(any(test, feature = \"test-fixtures\"))]", "#[must_use]"),
+        ),
+    ):
+        candidates = [
+            item
+            for item in rust_items(p2p_network_source, item_name)
+            if item.brace_context == expected_context
+        ]
+        item = candidates[0] if len(candidates) == 1 else None
+        if item is None:
+            errors.append(
+                f"{p2p_network_path}: require exactly one refanout test-capability "
+                f"item {qualified_name}; found {len(candidates)}"
+            )
+        p2p_test_capability_items[qualified_name] = item
+        _require_rust_item_context(
+            p2p_network_path,
+            item,
+            expected_context,
+            f"recovered Decision Fetch refanout test capability {qualified_name}",
+            errors,
+            expected_attributes=expected_attributes,
+        )
+    for qualified_name, expected_sha256 in (
+        _RECOVERED_DECISION_FETCH_REFANOUT_P2P_TEST_CAPABILITY_SHA256.items()
+    ):
+        _require_rust_item_token_sha256(
+            p2p_network_path,
+            p2p_test_capability_items.get(qualified_name),
+            expected_sha256,
+            f"recovered Decision Fetch refanout test capability {qualified_name}",
+            errors,
+        )
+
+    _require_rust_token_sequence(
+        worker_path,
+        recovered_fetch_refanout_items.get(
+            "ProductionV2Services::current_archive_targets_with_frozen_fallback"
+        ),
+        """
+let limit = self.network.reply_route_source_capacity().max(1);
+let targets = rotating_current_archive_targets(
+    &self.local_peer,
+    &self.archive_peer_cursor,
+    limit,
+    |start, limit| self.network.configured_peer_ids_bounded(start, limit),
+);
+if !targets.is_empty() {
+    return targets;
+}
+""",
+        "historical archive target selection must prefer a non-empty live configured-peer snapshot before frozen fallback",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        recovered_fetch_refanout_items.get(
+            "ProductionV2Services::current_archive_targets_with_frozen_fallback"
+        ),
+        """
+let mut fallback = frozen_sources
+    .iter()
+    .filter(|peer| *peer != &self.local_peer)
+    .cloned()
+    .collect::<Vec<_>>();
+fallback.sort();
+fallback.dedup();
+fallback
+""",
+        "an empty live archive snapshot must fall back to the canonical remote subset of frozen authenticated sources",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        recovered_fetch_refanout_items.get(
+            "ProductionV2Services::recovered_decision_fetch_fanout"
+        ),
+        """
+let message =
+    wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::CertifiedBodyRequest(
+        owner.authenticated.request().clone(),
+    ));
+let encoded = Self::preencode_v2_network_message(message)?;
+let peers = self.current_archive_targets_with_frozen_fallback(&owner.sources);
+PendingExactFanout::claimed(
+    vec![encoded],
+    peers,
+    ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+)
+""",
+        "recovered Decision Fetch refanout must preserve the signed WAL request and exact output scope while refreshing only delivery targets",
+        errors,
+    )
+
+    _require_rust_token_sequence(
+        p2p_network_path,
+        p2p_test_capability_items.get(
+            "NetworkActorAdmissionTicketTestFixture::cancel_topology_membership"
+        ),
+        """
+membership.cancel();
+self.budget.cancel_membership(membership, false)
+""",
+        "the cfg-gated cancellation capability must deactivate the exact topology tenure before removing its waiter",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        p2p_test_capability_items.get("ConfiguredPeerSnapshotTestFixture::replace"),
+        """
+peer_ids.sort();
+peer_ids.dedup();
+let mut state = self
+    .state
+    .lock()
+    .unwrap_or_else(std::sync::PoisonError::into_inner);
+if state.peer_ids != peer_ids {
+    state.generation = state
+        .generation
+        .checked_add(1)
+        .expect("test configured-peer generation space exhausted");
+    state.peer_ids = peer_ids;
+}
+""",
+        "the cfg-gated configured-peer capability must publish one canonical generation only when the isolated snapshot changes",
+        errors,
+    )
+    recovered_fetch_refanout_regression = recovered_fetch_refanout_test_items.get(
+        "recovered_decision_fetch_refanout_reaches_live_peer_after_topology_ticket_cancellation"
+    )
+    for expected, description in (
+        (
+            """
+let (network, configured_peers) =
+    crate::IrohaNetwork::closed_for_tests_with_configured_peer_snapshot();
+service.network = network;
+configured_peers.replace(vec![frozen_source.clone()]);
+let first_fanout = service
+    .recovered_decision_fetch_fanout(&owner)
+    .expect("construct the initial recovered Fetch fanout")
+    .expect("the frozen archive is initially configured");
+assert_eq!(first_fanout.peers, vec![frozen_source.clone()]);
+""",
+            "the recovered Fetch regression must first route the unchanged request through the configured frozen archive",
+        ),
+        (
+            """
+configured_peers.replace(vec![rotated_peer.clone()]);
+assert_eq!(
+    fixture.cancel_topology_membership(),
+    1,
+    "removing the old topology tenure cancels its exact actor waiter"
+);
+assert_eq!(fixture.waiter_count(), 0);
+""",
+            "the recovered Fetch regression must rotate the configured archive and cancel exactly the old topology waiter",
+        ),
+        (
+            """
+let retry_fanout = service
+    .recovered_decision_fetch_fanout(&owner)
+    .expect("recreate the exact recovered Fetch after topology rotation")
+    .expect("the live rotated archive is configured");
+assert_eq!(retry_fanout.peers, vec![rotated_peer.clone()]);
+""",
+            "recovered Decision Fetch retry must refresh its delivery target from the rotated live archive",
+        ),
+        (
+            """
+assert!(admitted_rotated_peer.load(Ordering::Acquire));
+let observed = observed_requests
+    .lock()
+    .expect("inspect recovered Fetch request identity");
+assert_eq!(observed.len(), 3);
+assert!(observed.iter().all(|request| request == &exact_request));
+""",
+            "every initial, cancelled, and rotated delivery attempt must retain the exact signed recovered Fetch request",
+        ),
+    ):
+        _require_rust_token_sequence(
+            recovered_fetch_refanout_test_path,
+            recovered_fetch_refanout_regression,
+            expected,
+            description,
+            errors,
+        )
 
     lane_ack_items: dict[str, RustItem | None] = {
         "V2LaneWorkLimits::new": _require_qualified_rust_item(
@@ -64431,6 +65534,17 @@ struct PendingExactTarget {
         "each exact source attempt must isolate payload cursor, actor ticket, writer-flush ownership, and parked state",
         errors,
     )
+    _require_rust_token_sequence(
+        worker_path,
+        pending_exact_output_struct,
+        """
+fanouts: VecDeque<PendingExactFanout>,
+applied_height_finality: Option<wire::finality::V2FinalityArtifact>,
+admitted_sidecar_chunks: VecDeque<CertifiedMergeSidecarChunkAdmission>,
+""",
+        "the exact-output carrier must retain Kura-verified applied-height authority between its fanout and independent sidecar-receipt owners",
+        errors,
+    )
     _require_rust_source_token_sequence(
         worker_path,
         worker_source,
@@ -64512,12 +65626,251 @@ fn retains_retryable_sidecar_responder_control_for(
         worker_ack_items.get("PendingExactOutput::new"),
         """
 fanouts: VecDeque::new(),
+applied_height_finality: None,
 admitted_sidecar_chunks: VecDeque::new(),
 sidecar_admission_capacity,
 """,
-        "the exact-output corridor must initialize its independently bounded reliable sidecar-receipt queue while topology progress retains separate reservations",
+        "the exact-output corridor must start without applied-height authority and initialize its independently bounded reliable sidecar-receipt queue while topology progress retains separate reservations",
         errors,
     )
+    production_finality_regression = ticketless_finality_test_items.get(
+        "production_exact_output_observes_finality_only_after_state_commit"
+    )
+    for expected, description in (
+        (
+            """
+service
+    .kura
+    .store_v2_finality_artifact(&artifact)
+    .expect("persist exact Kura finality before State commit");
+""",
+            "the production regression must persist cryptographically checked Kura finality before State advances",
+        ),
+        (
+            """
+assert!(pending.is_pending());
+assert!(pending.applied_height_finality.is_none());
+            """,
+            "Kura finality without State commit must leave the exact output and authority cache untouched",
+        ),
+        (
+            """
+assert!(
+    service
+        .retry_pending_exact_output()
+        .expect("Kura finality alone cannot supersede exact output")
+);
+""",
+            "a pre-State retry must retain the ticketless GlobalV2 occurrence despite durable Kura finality",
+        ),
+        (
+            """
+let mut state_block = service.state.block(block.as_ref().header());
+let _events = state_block.apply_without_execution(&block, topology.as_ref().to_owned());
+state_block.commit().expect("commit synthetic State block");
+""",
+            "the production regression must cross the real State committed-height boundary",
+        ),
+        (
+            """
+assert!(
+    !service
+        .retry_pending_exact_output()
+        .expect("State commit unlocks exact durable-finality supersession")
+);
+let pending = service
+    .lock_pending_exact_output()
+    .expect("inspect post-State-commit exact output");
+assert!(!pending.is_pending());
+assert_eq!(pending.applied_height_finality.as_ref(), Some(&artifact));
+""",
+            "State commit must unlock one Kura-bound authority acquisition and drain the covered output",
+        ),
+    ):
+        _require_rust_token_sequence(
+            ticketless_finality_test_path,
+            production_finality_regression,
+            expected,
+            description,
+            errors,
+        )
+
+    ticketless_release_regression = ticketless_finality_test_items.get(
+        "applied_height_finality_releases_only_ticketless_global_topology_target"
+    )
+    for expected, description in (
+        (
+            """
+pending.applied_height_finality = Some(artifact.clone());
+assert_eq!(
+    pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, _timeout_attempt| {
+        assert_eq!(post.peer_id, stranded);
+        assert!(matches!(route, ExactTargetRoute::Topology));
+        assert!(ticket.is_none());
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket: None,
+            rank: 1,
+        })
+    }),
+    Ok(ExactOutputDriveOutcome::Drained)
+);
+assert!(!pending.is_pending());
+""",
+            "same-height finality must release the exact ticketless GlobalV2 topology target",
+        ),
+        (
+            """
+manual.applied_height_finality = Some(artifact.clone());
+manual
+    .enqueue(
+        PendingExactFanout::new(vec![message.clone()], vec![stranded.clone()]).expect("fanout"),
+    )
+    .expect("retain manual fanout");
+""",
+            "manual output must retain no applied-height rollover authority",
+        ),
+        (
+            """
+assert!(manual.is_pending(), "manual output retains exact authority");
+
+let mut ticketed =
+""",
+            "manual output must remain pending before the ticketed control case",
+        ),
+        (
+            """
+ticketed.applied_height_finality = Some(artifact);
+ticketed
+    .enqueue(
+        PendingExactFanout::claimed(
+            vec![message],
+            vec![stranded],
+            ExactOutputRolloverClaim::GlobalV2(service.exact_output_scope()),
+        )
+        .expect("valid ticketed GlobalV2 fanout")
+        .expect("non-empty ticketed GlobalV2 fanout"),
+    )
+    .expect("retain ticketed GlobalV2 fanout");
+""",
+            "the ticketed control must carry the same private GlobalV2 creation scope and finality",
+        ),
+        (
+            """
+Err(NetworkActorAdmissionError::Backpressured {
+    message: post,
+    ticket: Some(ticket),
+    rank: 1,
+})
+""",
+            "the ticketed control must return a genuine actor-owned admission rank",
+        ),
+        (
+            """
+assert!(ticketed.is_pending(), "ticketed GlobalV2 stays owned");
+assert_eq!(
+    ticket_fixture
+        .as_ref()
+        .expect("retain genuine actor ticket fixture")
+        .waiter_count(),
+    1
+);
+""",
+            "ticketed GlobalV2 output must remain owned with its exact waiter",
+        ),
+    ):
+        _require_rust_token_sequence(
+            ticketless_finality_test_path,
+            ticketless_release_regression,
+            expected,
+            description,
+            errors,
+        )
+    payload_chunk_release_regression = ticketless_finality_test_items.get(
+        "applied_height_finality_releases_only_covered_ticketless_payload_chunks"
+    )
+    for expected, description in (
+        (
+            """
+ticketless.applied_height_finality = Some(artifact.clone());
+ticketless
+    .enqueue(
+        PendingExactFanout::claimed(
+            messages.clone(),
+            vec![stranded.clone()],
+            ExactOutputRolloverClaim::PayloadChunks {
+                scope: service.exact_output_scope(),
+                manifest: manifest.clone(),
+            },
+        )
+        .expect("valid ticketless payload-chunk fanout")
+        .expect("non-empty ticketless payload-chunk fanout"),
+    )
+    .expect("retain ticketless payload chunks");
+""",
+            "the payload-chunk regression must bind signed chunks to their exact applied-height scope and manifest",
+        ),
+        (
+            """
+Ok(ExactOutputDriveOutcome::Drained)
+);
+assert_eq!(ticketless_attempts, chunk_count);
+assert!(!ticketless.is_pending());
+""",
+            "exact applied-height authority must release every ticketless signed payload chunk",
+        ),
+        (
+            """
+Err(NetworkActorAdmissionError::Backpressured {
+    message: post,
+    ticket: Some(ticket),
+    rank: 2,
+})
+""",
+            "the payload-chunk ticketed control must retain its genuine actor admission owner",
+        ),
+        (
+            """
+assert!(ticketed.is_pending(), "ticketed payload chunks stay owned");
+assert_eq!(
+    ticket_fixture
+        .as_ref()
+        .expect("retain genuine actor ticket fixture")
+        .waiter_count(),
+    1
+);
+""",
+            "ticketed payload chunks must remain owned with the exact topology waiter",
+        ),
+        (
+            """
+let mut unrelated_scope = service.exact_output_scope();
+unrelated_scope.height = unrelated_scope
+    .height
+    .checked_add(1)
+    .expect("fixture height has a successor");
+""",
+            "the payload-chunk negative control must move the claim outside the applied creation scope",
+        ),
+        (
+            """
+Ok(ExactOutputDriveOutcome::Backpressured { closest_rank: 3 })
+);
+assert!(
+    uncovered.is_pending(),
+    "an applied artifact cannot release another creation scope"
+);
+""",
+            "applied-height authority must retain ticketless payload chunks from another creation scope",
+        ),
+    ):
+        _require_rust_token_sequence(
+            ticketless_finality_test_path,
+            payload_chunk_release_regression,
+            expected,
+            description,
+            errors,
+        )
     _require_rust_token_sequence(
         worker_path,
         worker_ack_items.get("PendingExactOutput::is_pending"),
@@ -64746,7 +66099,9 @@ NetworkReplyFlushAckStatus::TimedOut | NetworkReplyFlushAckStatus::Closed => {
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_ack_items.get("PendingExactOutput::drive_with_budget_ack"),
+        worker_ack_items.get(
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history"
+        ),
         """
 let (post, ticket, route, reply_writer_timeout_attempt) = self
     .fanouts
@@ -64760,7 +66115,9 @@ let (post, ticket, route, reply_writer_timeout_attempt) = self
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_ack_items.get("PendingExactOutput::drive_with_budget_ack"),
+        worker_ack_items.get(
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history"
+        ),
         """
 match attempt(post, ticket, &route, reply_writer_timeout_attempt) {
 """,
@@ -64769,7 +66126,9 @@ match attempt(post, ticket, &route, reply_writer_timeout_attempt) {
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_ack_items.get("PendingExactOutput::drive_with_budget_ack"),
+        worker_ack_items.get(
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history"
+        ),
         """
 let sidecar_reply = match (&post.data, &route) {
     (
@@ -64795,7 +66154,9 @@ let sidecar_reply = match (&post.data, &route) {
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_ack_items.get("PendingExactOutput::drive_with_budget_ack"),
+        worker_ack_items.get(
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history"
+        ),
         """
 if sidecar_reply.is_some()
     && self.sidecar_control_units() >= self.sidecar_admission_capacity
@@ -64806,7 +66167,9 @@ if sidecar_reply.is_some()
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_ack_items.get("PendingExactOutput::drive_with_budget_ack"),
+        worker_ack_items.get(
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history"
+        ),
         """
 Ok(ExactOutputAttemptOutcome::ReplyFlush(flush_ack)) => {
     if sidecar_reply.is_some() {
@@ -64860,7 +66223,9 @@ Ok(ExactOutputAttemptOutcome::ReplyFlush(flush_ack)) => {
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_ack_items.get("PendingExactOutput::drive_with_budget_ack"),
+        worker_ack_items.get(
+            "PendingExactOutput::drive_with_budget_ack_and_durable_history"
+        ),
         """
 Ok(ExactOutputAttemptOutcome::SidecarFlush(flush_ack)) => {
     let (canonical_post, reply_route, message_cursor_before, message_cursor_after) =
@@ -64975,6 +66340,33 @@ Ok(())
         worker_path,
         worker_ack_items.get("ProductionV2Services::drive_pending_exact_output"),
         """
+if pending.applied_height_finality.is_none()
+    && u64::try_from(self.state.committed_height())
+        .is_ok_and(|height| height >= self.context.height)
+{
+    let artifact = self
+        .kura
+        .v2_finality_artifact(self.context.height)
+        .map_err(|error| error.to_string())?;
+    if let Some(artifact) = artifact {
+        if artifact.height_context != self.context {
+            return Err(
+                "Sumeragi v2 committed exact-output height differs from Kura finality"
+                    .to_owned(),
+            );
+        }
+        pending.applied_height_finality = Some(artifact);
+    }
+}
+pending.poll_reply_flushes()?;
+""",
+        "production exact output may acquire applied-height authority only after State commit and an exact cryptographically verified Kura context read",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        worker_ack_items.get("ProductionV2Services::drive_pending_exact_output"),
+        """
 pending.poll_reply_flushes()?;
 let outcome = {
 """,
@@ -64985,9 +66377,13 @@ let outcome = {
         worker_path,
         worker_ack_items.get("ProductionV2Services::drive_pending_exact_output"),
         """
-pending.drive_bounded_with_ack(|post, ticket, route, timeout_attempt| {
-    self.admit_network_exact_output(post, ticket, route, timeout_attempt)
-})?
+pending.drive_bounded_with_ack(
+    self.kura.as_ref(),
+    released_kura_replica_advert_heights,
+    |post, ticket, route, timeout_attempt| {
+        self.admit_network_exact_output(post, ticket, route, timeout_attempt)
+    },
+)?
 """,
         "production exact-output service must invoke the source-bound ACK admission kernel",
         errors,
@@ -66949,7 +68345,7 @@ loop {
         "target_is_global_head",
         "next_schedulable_target",
         "advance_after_attempt",
-        "drive_with_budget_ack",
+        "drive_with_budget_ack_and_durable_history",
         "drive_bounded_with_ack",
     }
     exact_output_items: dict[str, RustItem | None] = {}
@@ -67787,7 +69183,14 @@ max_peers_per_fanout,
     _require_rust_token_sequence(
         worker_path,
         worker_ack_items.get("PendingExactOutput::drive_bounded_with_ack"),
-        "self.drive_with_budget_ack(self.drive_attempt_budget, attempt)",
+        """
+self.drive_with_budget_ack_and_durable_history(
+    self.drive_attempt_budget,
+    Some(durable_history),
+    released_kura_replica_advert_heights,
+    attempt,
+)
+""",
         "the production exact-output driver must consume the checked atomic Proposal drive budget",
         errors,
     )
@@ -68513,7 +69916,7 @@ applied_height_reconstruction_covers(
     )
     _require_rust_token_sequence(
         worker_path,
-        exact_output_items.get("drive_with_budget_ack"),
+        exact_output_items.get("drive_with_budget_ack_and_durable_history"),
         """
 if message.peer_id != attempted_peer {
     self.fanouts
@@ -68524,21 +69927,89 @@ if message.peer_id != attempted_peer {
         "Sumeragi v2 network actor changed an exact output target".to_owned()
     );
 }
+""",
+        "actor backpressure must reject target substitution while restoring the exact returned payload and ticket",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get("drive_with_budget_ack_and_durable_history"),
+        """
+let ticketless_topology_target =
+    ticket.is_none() && matches!(&route, ExactTargetRoute::Topology);
+let release_to_reconstruction_source = ticketless_topology_target
+    && self
+        .fanouts
+        .get(fanout_index)
+        .is_some_and(PendingExactFanout::is_reconstructible_topology_fanout);
+let release_to_applied_height_finality = ticketless_topology_target
+    && self
+        .applied_height_finality
+        .as_ref()
+        .is_some_and(|artifact| {
+            self.fanouts.get(fanout_index).is_some_and(|fanout| {
+                let claim_durable_history = if matches!(
+                    &fanout.rollover_claim,
+                    ExactOutputRolloverClaim::DurableKuraReplicaAdvert { .. }
+                        | ExactOutputRolloverClaim::QueuePlanAdmission { .. }
+                ) {
+                    durable_history
+                } else {
+                    None
+                };
+                applied_height_reconstruction_covers(
+                    &fanout.messages,
+                    &fanout.semantic_peers(),
+                    &fanout.rollover_claim,
+                    artifact,
+                    None,
+                    claim_durable_history,
+                )
+                .is_ok()
+            })
+        });
+if release_to_reconstruction_source || release_to_applied_height_finality {
+    if let Some(ExactOutputRolloverClaim::DurableKuraReplicaAdvert {
+        source_height,
+        ..
+    }) = self
+        .fanouts
+        .get(fanout_index)
+        .map(|fanout| &fanout.rollover_claim)
+    {
+        released_kura_replica_advert_heights.insert(*source_height);
+    }
+    drop(message);
+    self.fanouts
+        .get_mut(fanout_index)
+        .expect("released reconstructible fanout must remain present")
+        .mark_admitted(target_index)?;
+    self.advance_after_attempt(
+        fanout_index,
+        target_index,
+        Some(&attempted_source),
+    )?;
+    continue;
+}
 self.fanouts
     .get_mut(fanout_index)
     .expect("backpressured exact fanout must remain present")
     .retain_returned(target_index, message, ticket)?;
 """,
-        "actor backpressure must preserve both exact target and payload ownership",
+        "ticketless release must require topology routing and either a pre-existing reconstruction source or exact same-height typed applied-finality coverage; every other backpressured occurrence remains owned",
         errors,
     )
     _require_rust_token_sequence(
         worker_path,
         exact_output_claim_items.get("drive_pending_exact_output"),
         """
-pending.drive_bounded_with_ack(|post, ticket, route, timeout_attempt| {
-    self.admit_network_exact_output(post, ticket, route, timeout_attempt)
-})?
+pending.drive_bounded_with_ack(
+    self.kura.as_ref(),
+    released_kura_replica_advert_heights,
+    |post, ticket, route, timeout_attempt| {
+        self.admit_network_exact_output(post, ticket, route, timeout_attempt)
+    },
+)?
 """,
         "the production driver preserves each exact route, tenure-bound ticket, and writer-flush witness through bounded actor admission",
         errors,
@@ -68560,7 +70031,9 @@ pending.drive_bounded_with_ack(|post, ticket, route, timeout_attempt| {
     )
     _require_rust_token_sequence(
         worker_path,
-        exact_output_claim_items.get("enqueue_exact_fanout_while_guarded"),
+        exact_output_claim_items.get(
+            "enqueue_exact_fanout_while_guarded_collecting_released_adverts"
+        ),
         """
 let Some(fanout) = PendingExactFanout::claimed(messages, peers, rollover_claim)? else {
     return Ok(ExactFanoutOwnership::Owned);
@@ -68796,6 +70269,30 @@ if source.proposal.descriptor.proposal_height != *proposal_height
 {
 """,
         "durable lane certificate must match its exact certified Kura source",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get("applied_height_reconstruction_covers"),
+        "rollover_claim.validate_fanout(messages, peers)?;",
+        "ticketless applied-height retirement must first validate the complete typed fanout",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get("applied_height_reconstruction_covers"),
+        """
+let scope = rollover_claim.scope().ok_or_else(|| {
+    "Sumeragi v2 exact output has no typed applied-height rollover claim".to_owned()
+})?;
+if !scope.covers(artifact) {
+    return Err("Sumeragi v2 output claim belongs to another creation scope".to_owned());
+}
+if let ExactOutputRolloverClaim::PayloadChunks { manifest, .. } = rollover_claim {
+    return payload_chunk_output_has_applied_height_authority(messages, manifest, artifact);
+}
+""",
+        "ticketless PayloadChunks retirement must validate the exact fanout and scope before authenticating every signed chunk against the applied manifest",
         errors,
     )
     _require_rust_token_sequence(
@@ -70865,6 +72362,7 @@ def validate_ledger(
         _queue_plan_semantic_request_production_source_fidelity_errors(ROOT_DIR)
     )
     errors.extend(_lifecycle_capacity_production_source_fidelity_errors(ROOT_DIR))
+    errors.extend(_stable_liveness_repairs_source_fidelity_errors(ROOT_DIR))
     errors.extend(_exact_output_production_source_fidelity_errors(ROOT_DIR))
     errors.extend(
         _kura_application_receipt_production_source_fidelity_errors(ROOT_DIR)

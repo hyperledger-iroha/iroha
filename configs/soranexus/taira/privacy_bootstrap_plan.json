@@ -14,17 +14,17 @@
     "notice_interval_blocks": 300,
     "observation_interval_blocks": 300,
     "rollout_plan_path": "configs/soranexus/taira/privacy_rollout_plan_v1.json",
-    "rollout_plan_sha256": "19654e999793036517f56eb61d8b0d4906c7c686504264ecb83bbb6e65b0f92f"
+    "rollout_plan_sha256": "3ee465268b21d40f50223d250d6653f441ab90d494a70e596b19a9a67a65e6fd"
   },
   "privacy_catalog": {
     "matrix_version": 1,
-    "matrix_file_sha256": "f75eeba824067aaf903fd8060c967190e37073dc07e487c81c265018a1c00f38",
-    "registry_sha256": "734eafb58f0c54f5319b9cc26557920e564453f689071931393dcdba91123e51",
+    "matrix_file_sha256": "5e6f7f5468f6834b5c9d0b1993a53a0c618a2aa12697b7703e853ba80071b386",
+    "registry_sha256": "7730a8f3d6b59735fd4f2dd7c611f4e5123e13e3fdc540686d92ffd2ab5cdfb5",
     "protocols": [
       {
         "index": 0,
-        "label": "zk-ace-pq-authorization-v0",
-        "statement_type": "ZkAcePqAuthorizationV0"
+        "label": "zk-ace-pq-authorization-v1",
+        "statement_type": "ZkAcePqAuthorizationV1"
       },
       {
         "index": 1,
@@ -43,18 +43,18 @@
       },
       {
         "index": 4,
-        "label": "vega-existing-credential-zk-v0",
-        "statement_type": "VegaExistingCredentialZkV0"
+        "label": "vega-existing-credential-zk-v1",
+        "statement_type": "VegaExistingCredentialZkV1"
       },
       {
         "index": 5,
-        "label": "iroha-zk-x509-stark-p256-v0",
-        "statement_type": "IrohaZkX509StarkP256V0"
+        "label": "iroha-zk-x509-stark-p256-v1",
+        "statement_type": "IrohaZkX509StarkP256V1"
       },
       {
         "index": 6,
-        "label": "iroha-jindo-polynomial-commitment-v0",
-        "statement_type": "IrohaJindoPolynomialCommitmentV0"
+        "label": "iroha-jindo-polynomial-commitment-v1",
+        "statement_type": "IrohaJindoPolynomialCommitmentV1"
       },
       {
         "index": 7,
@@ -78,21 +78,9 @@
       },
       {
         "index": 11,
-        "label": "pq-masp-stark-v0",
-        "statement_type": "PqMaspStarkV0"
+        "label": "pq-masp-stark-v1",
+        "statement_type": "PqMaspStarkV1"
       }
-    ],
-    "retired_labels": [
-      "zkat-policy-private-auth-v1",
-      "zk-ams-recursive-admission-v0",
-      "silent-threshold-anoncred-v0",
-      "zk-x509-onchain-identity-v0",
-      "jindo-lattice-pcs-zk-v0",
-      "sis-hints-anoncred-pq-v0",
-      "sis-with-hints",
-      "penumbra-masp-v1",
-      "miden-stark-note-v1",
-      "aztec-private-rollup-v1"
     ]
   },
   "bootle_lantern_issuer": {

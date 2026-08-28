@@ -1973,15 +1973,15 @@ fn sample_fhe_input_admission_proof() -> SoracloudFheInputAdmissionProofV1 {
             .expect("encode canonical FHE input admission STARK wrapper"),
     );
     let proof = crate::proof::ProofBox::new(
-        "stark/fri/sha256-goldilocks".into(),
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1".into(),
         norito::encode_canonical(&envelope)
             .expect("encode canonical FHE input admission OpenVerifyEnvelope"),
     );
     let mut attachment = ProofAttachment::new_ref(
-        "stark/fri/sha256-goldilocks".into(),
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1".into(),
         proof,
         crate::proof::VerifyingKeyId::new(
-            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
             SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
         ),
     );
@@ -2022,15 +2022,15 @@ fn sample_fhe_public_key_proof() -> SoracloudFhePublicKeyProofV1 {
             .expect("encode canonical FHE public-key STARK wrapper"),
     );
     let proof = crate::proof::ProofBox::new(
-        "stark/fri/sha256-goldilocks".into(),
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1".into(),
         norito::encode_canonical(&envelope)
             .expect("encode canonical FHE public-key OpenVerifyEnvelope"),
     );
     let mut attachment = ProofAttachment::new_ref(
-        "stark/fri/sha256-goldilocks".into(),
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1".into(),
         proof,
         crate::proof::VerifyingKeyId::new(
-            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
             SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
         ),
     );
@@ -2067,15 +2067,15 @@ fn sample_fhe_bootstrap_key_proof() -> SoracloudFheBootstrapKeyProofV1 {
             .expect("encode canonical FHE bootstrap-key STARK wrapper"),
     );
     let proof = crate::proof::ProofBox::new(
-        "stark/fri/sha256-goldilocks".into(),
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1".into(),
         norito::encode_canonical(&envelope)
             .expect("encode canonical FHE bootstrap-key OpenVerifyEnvelope"),
     );
     let mut attachment = ProofAttachment::new_ref(
-        "stark/fri/sha256-goldilocks".into(),
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1".into(),
         proof,
         crate::proof::VerifyingKeyId::new(
-            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
             SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
         ),
     );
@@ -2116,15 +2116,15 @@ fn sample_fhe_full_bootstrap_execution_proof_with_statement(
             .expect("encode canonical FHE full-bootstrap execution STARK wrapper"),
     );
     let proof = crate::proof::ProofBox::new(
-        "stark/fri/sha256-goldilocks".into(),
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1".into(),
         norito::encode_canonical(&envelope)
             .expect("encode canonical FHE full-bootstrap execution OpenVerifyEnvelope"),
     );
     let mut attachment = ProofAttachment::new_ref(
-        "stark/fri/sha256-goldilocks".into(),
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1".into(),
         proof,
         crate::proof::VerifyingKeyId::new(
-            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
         ),
     );

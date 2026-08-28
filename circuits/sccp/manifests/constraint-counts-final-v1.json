@@ -1,0 +1,72 @@
+{
+  "schema": "sccp-circuit-constraint-counts-final-v1",
+  "version": 1,
+  "toolchain": {
+    "go": "go1.25.7",
+    "gnark": "v0.16.3",
+    "builder": "frontend.Compile+r1cs.NewBuilder",
+    "module_mode": "vendor",
+    "network": "none"
+  },
+  "definition_state": "post-block-header-consensus-projection-root-binding",
+  "profiles": [
+    {
+      "profile": "sccp-final-v1-bsc-mainnet-epoch-anchor-update",
+      "role": "epoch-anchor-update",
+      "outer_curve": "bn254",
+      "constraints": 115576723,
+      "kat_sha256": "602def10b174dd298ed1f44bdbcb2ab9010b67ecb6f81ef832e9558a07f1d14d"
+    },
+    {
+      "profile": "sccp-final-v1-bsc-mainnet-message",
+      "role": "message",
+      "outer_curve": "bn254",
+      "constraints": 36473351,
+      "kat_sha256": "0cd6a39f110f0afa17fd0343b586feacd0e66902c1e5bb2e51cfe8753f0a761c"
+    },
+    {
+      "profile": "sccp-final-v1-ethereum-mainnet-epoch-anchor-update",
+      "role": "epoch-anchor-update",
+      "outer_curve": "bn254",
+      "constraints": 115576804,
+      "kat_sha256": "eec2fa96f1ec575e53aeaab74fcc80d99aad6a3425e27b41078cae6cf73cb878"
+    },
+    {
+      "profile": "sccp-final-v1-ethereum-mainnet-message",
+      "role": "message",
+      "outer_curve": "bn254",
+      "constraints": 36473349,
+      "kat_sha256": "d43a5d4b6f0c4f7adef5435fea98f914e491abf5aa449a6581fb7227ea53efb8"
+    },
+    {
+      "profile": "sccp-final-v1-ton-mainnet-epoch-anchor-update",
+      "role": "epoch-anchor-update",
+      "outer_curve": "bls12-381",
+      "constraints": 113226984,
+      "kat_sha256": "542b5d46a121aa144458be6666b109d8cb37e1b117895f237201c087b285af66"
+    },
+    {
+      "profile": "sccp-final-v1-ton-mainnet-message",
+      "role": "message",
+      "outer_curve": "bls12-381",
+      "constraints": 34718292,
+      "kat_sha256": "62ce4b0c4a6bb90eee73b655353b8866530a7ce288424f77e07ce6b0c65d5173"
+    },
+    {
+      "profile": "sccp-final-v1-tron-mainnet-epoch-anchor-update",
+      "role": "epoch-anchor-update",
+      "outer_curve": "bn254",
+      "constraints": 115576735,
+      "kat_sha256": "ed115b44ccfb5e1b19444021c03f1da604ad749c2f2aa656799004afeb368cf6"
+    },
+    {
+      "profile": "sccp-final-v1-tron-mainnet-message",
+      "role": "message",
+      "outer_curve": "bn254",
+      "constraints": 36474274,
+      "kat_sha256": "28be620f9ccefa56859717c04b9c2d4a70b25b743b7d060af449aafba2296a22"
+    }
+  ],
+  "production_admissible": false,
+  "note": "Counts and KAT hashes authenticate this source-level definition only. Ceremony-derived R1CS, PK, VK, verifier, and deployment digests remain mandatory release artifacts."
+}

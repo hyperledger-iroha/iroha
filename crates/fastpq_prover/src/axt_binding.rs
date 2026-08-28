@@ -59,7 +59,7 @@ pub const AXT_FASTPQ_BATCH_SEAL_METADATA_KEY: &str = "axt_fastpq_batch_seal_v1";
 /// this relation because its descriptor binding is not recoverable.
 pub const AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY: &str = "axt_fastpq_remote_spend_claims_v1";
 /// Canonical FASTPQ parameter name used by maintained AXT flows.
-pub const DEFAULT_PARAMETER: &str = "fastpq-lane-balanced";
+pub const DEFAULT_PARAMETER: &str = "fastpq-state-transition-stark-v1";
 /// Maximum encoded AXT `FastPQ` batch/proof payload accepted before decoding.
 const DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES: usize = 1024 * 1024;
 const AXT_STATEMENT_DOMAIN: &[u8] = b"fastpq:axt:statement:v1";

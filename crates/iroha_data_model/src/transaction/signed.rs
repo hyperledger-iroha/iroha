@@ -14,8 +14,8 @@ use crate::{
     name::Name,
     nexus::FeeSponsorProgramId,
     privacy::{
-        PrivacyNullifierV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-        PrivacyTransactionIntentDigestV1, PrivacyVegaDeviceAuthenticationDigestV1,
+        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyVegaDeviceAuthenticationDigestV1,
     },
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
@@ -1061,12 +1061,12 @@ fn normalize_privacy_submission_for_intent_v1(submission: &SubmitPrivacyProofV1)
         .statement
         .context_mut()
         .transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0; 32]);
-    if let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
+    if let PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) =
         &mut normalized.envelope.statement
     {
-        statement.replay_nullifier = PrivacyNullifierV1::new([0; 32]);
+        statement.replay_nullifier = Default::default();
     }
-    if let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) =
+    if let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) =
         &mut normalized.envelope.statement
     {
         statement.device_authentication_digest =

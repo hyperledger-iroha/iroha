@@ -44,9 +44,9 @@ public final class SccpClientExactTests {
       FeePaymentIntent.authority(Collections.emptyList());
   // These authenticate this fixture's semantic commitments and deployment code hashes.
   private static final String BSC_ROUTE_CONFIG_HASH =
-      "65ABF3081D137062860FD712B5414A17C3664FD42C7567373FF3302BA331EFDD";
+      "FDCE93E148D8A9BD3BE2E7051AF681A757CA273F409073F9402F5534D32C399B";
   private static final String TRON_ROUTE_CONFIG_HASH =
-      "1BB8C081AA96766CF63FFE063E5B506FF17005E033C7B47E9760214C4C8D5519";
+      "60544E93C2B5E96761C90DC96E7E24EC1D6EDD5BEE2E2A946D7ED9632535177D";
 
   private SccpClientExactTests() {}
 
@@ -864,9 +864,10 @@ public final class SccpClientExactTests {
 
   private static void registryValidatesSemanticPolicyAndExactFamilies() {
     final Map<String, Object> exactRegistry = registry();
-    assert sourceIdentity(firstRoute(exactRegistry))
-        .get("route_config_hash")
-        .equals(BSC_ROUTE_CONFIG_HASH);
+    final String bscRouteConfigurationHash =
+        (String) sourceIdentity(firstRoute(exactRegistry)).get("route_config_hash");
+    assert bscRouteConfigurationHash.equals(BSC_ROUTE_CONFIG_HASH)
+        : bscRouteConfigurationHash;
     final SccpModels.RegistryV1 parsed =
         SccpJsonParser.parseRegistry(jsonBytes(exactRegistry));
     assert parsed.version == 1 && parsed.lanes.size() == 1;
@@ -917,11 +918,74 @@ public final class SccpClientExactTests {
             Map.of("source", network("solana-mainnet-beta"), "target", network("sora-taira")));
     expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(retired)));
 
+    final Map<String, Object> noncanonicalWireName = registry();
+    object(object(firstLane(noncanonicalWireName).get("lane_id")).get("source"))
+        .put("network", "bsc-mainnet");
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(noncanonicalWireName)));
+
     final Map<String, Object> wrongSchema = registry();
     final Map<String, Object> policy = object(deployment(wrongSchema).get("outbound_proof_policy"));
     object(object(policy.get("semantic_profile")).get("commitments"))
         .put("public_signal_schema_hash", upper(0x2e, 32));
     expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(wrongSchema)));
+
+    final Map<String, Object> replayAddressAlias = registry();
+    deployment(replayAddressAlias)
+        .put("replay_verifier_address", deployment(replayAddressAlias).get("route_address"));
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(replayAddressAlias)));
+
+    final Map<String, Object> replayAddressSubstitution = registry();
+    deployment(replayAddressSubstitution).put("replay_verifier_address", upper(0x73, 20));
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(replayAddressSubstitution)));
+
+    final Map<String, Object> replayRuntimeSubstitution = registry();
+    deployment(replayRuntimeSubstitution).put("replay_verifier_code_hash", upper(0x44, 32));
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(replayRuntimeSubstitution)));
+
+    final Map<String, Object> breakerAddressSubstitution = registry();
+    deployment(breakerAddressSubstitution).put("mint_breaker_address", upper(0x74, 20));
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(breakerAddressSubstitution)));
+
+    final Map<String, Object> breakerRuntimeSubstitution = registry();
+    deployment(breakerRuntimeSubstitution).put("mint_breaker_code_hash", upper(0x45, 32));
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(breakerRuntimeSubstitution)));
+
+    final Map<String, Object> swappedRoles = registry();
+    final Map<String, Object> swappedDeployment = deployment(swappedRoles);
+    final Object replayAddress = swappedDeployment.get("replay_verifier_address");
+    final Object replayCodeHash = swappedDeployment.get("replay_verifier_code_hash");
+    swappedDeployment.put(
+        "replay_verifier_address", swappedDeployment.get("mint_breaker_address"));
+    swappedDeployment.put(
+        "replay_verifier_code_hash", swappedDeployment.get("mint_breaker_code_hash"));
+    swappedDeployment.put("mint_breaker_address", replayAddress);
+    swappedDeployment.put("mint_breaker_code_hash", replayCodeHash);
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(swappedRoles)));
+
+    final Map<String, Object> emptyRuntimeHash = registry();
+    deployment(emptyRuntimeHash)
+        .put(
+            "mint_breaker_code_hash",
+            "C5D2460186F7233C927E7DB2DCC703C0E500B653CA82273B7BFAD8045D85A470");
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(emptyRuntimeHash)));
+
+    final Map<String, Object> zeroCap = registry();
+    deployment(zeroCap).put("max_wrapped_supply", 0);
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(zeroCap)));
+
+    final Map<String, Object> missingExecutionPolicy = registry();
+    firstRoute(missingExecutionPolicy).remove("sora_outbound_execution_policy");
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(missingExecutionPolicy)));
+
+    final Map<String, Object> wrongExecutionSemantics = registry();
+    object(firstRoute(wrongExecutionSemantics).get("sora_outbound_execution_policy"))
+        .put("semantics", "unproved_record_sccp_message_v1");
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(wrongExecutionSemantics)));
+
+    final Map<String, Object> wrongLiabilityCap = registry();
+    object(firstRoute(wrongLiabilityCap).get("settlement"))
+        .put("max_outstanding_liability", 8);
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(wrongLiabilityCap)));
   }
 
   private static void registryRejectsMalformedAnchorHistories() {
@@ -1131,6 +1195,26 @@ public final class SccpClientExactTests {
     final Map<String, Object> uncompressedKey = tonRegistry();
     object(tonDeployment(uncompressedKey).get("verifying_key")).put("alpha1", upper(1, 48));
     expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(uncompressedKey)));
+
+    final Map<String, Object> unsortedGuardians = tonRegistry();
+    final Map<String, Object> unsorted =
+        object(tonDeployment(unsortedGuardians).get("mint_breaker_guardian_keys"));
+    unsorted.put("guardian_1", unsorted.get("guardian_0"));
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(unsortedGuardians)));
+
+    final Map<String, Object> zeroGuardian = tonRegistry();
+    object(tonDeployment(zeroGuardian).get("mint_breaker_guardian_keys"))
+        .put("guardian_0", upper(0, 32));
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(zeroGuardian)));
+
+    final Map<String, Object> zeroCap = tonRegistry();
+    tonDeployment(zeroCap).put("max_wrapped_supply", 0);
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(zeroCap)));
+
+    assert SccpModels.requireTonAmountWithinCapV1(BigInteger.valueOf(9), BigInteger.TEN)
+        .equals(BigInteger.valueOf(9));
+    expectFailure(
+        () -> SccpModels.requireTonAmountWithinCapV1(BigInteger.valueOf(11), BigInteger.TEN));
   }
 
   private static void tonProofRequestBindsExactBlsSignalsAndProfile() {
@@ -1187,9 +1271,10 @@ public final class SccpClientExactTests {
     SccpJsonParser.parseRegistry(jsonBytes(anchorBound));
 
     final Map<String, Object> tron = tronRegistry();
-    assert sourceIdentity(firstRoute(tron))
-        .get("route_config_hash")
-        .equals(TRON_ROUTE_CONFIG_HASH);
+    final String tronRouteConfigurationHash =
+        (String) sourceIdentity(firstRoute(tron)).get("route_config_hash");
+    assert tronRouteConfigurationHash.equals(TRON_ROUTE_CONFIG_HASH)
+        : tronRouteConfigurationHash;
     SccpJsonParser.parseRegistry(jsonBytes(tron));
     firstRoute(tron).put("route_id", "taira_bsc_xor");
     expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(tron)));
@@ -1234,7 +1319,7 @@ public final class SccpClientExactTests {
     assert request.soraFinalityAnchor.checkpointContextId.equals(upper(0xa2, 32));
     assert request.soraFinalityAnchor.checkpointFinalityArtifactHash.equals(upper(0xa3, 32));
     assert request.soraFinalityAnchor.anchorHash.equals(
-        "0x4410ee4ccfd06f2d0e3a658615d516ac8cf65255d8a8716ce511ea95e135c8c3");
+        "0xcdbec097fed4ad21e44a354fe09a3c43ad489f4ac78cff8944ba8bb5cc2fd577");
     assert request.soraFinalityAnchor.anchorHash.equals(
         "0x" + finalityAnchorHash().toLowerCase());
 
@@ -1752,6 +1837,21 @@ public final class SccpClientExactTests {
     return policy;
   }
 
+  private static Map<String, Object> soraOutboundExecutionPolicy() {
+    final Map<String, Object> reference = map();
+    reference.put("backend", "stark/fri/v1");
+    reference.put("name", "ivm-execution-v1");
+    reference.put("version", 1);
+    reference.put("commitment", upper(0xb2, 32));
+    final Map<String, Object> policy = map();
+    policy.put("version", 1);
+    policy.put("semantics", "ivm_proved_record_sccp_message_v1");
+    policy.put("contract_artifact_sha256", upper(0xb1, 32));
+    policy.put("vk_ref", reference);
+    policy.put("gas_limit", 50_000_000);
+    return policy;
+  }
+
   private static Map<String, Object> bls12381VerifyingKey() {
     final String g1 = "80" + "0".repeat(94);
     final String g2 = "80" + "0".repeat(190);
@@ -1866,6 +1966,9 @@ public final class SccpClientExactTests {
     final byte[] verifierCode = fill(32, 0x35);
     final byte[] circuit = hexBytes((String) object(semantic.get("commitments")).get("circuit_commitment"));
     final byte[] proofProfile = tonProofProfileCommitment();
+    final List<byte[]> guardians =
+        List.of(fill(32, 1), fill(32, 2), fill(32, 3), fill(32, 4), fill(32, 5));
+    final BigInteger maxWrappedSupply = BigInteger.valueOf(9_000_000_000L);
     final byte[] binding =
         tonDestinationBindingHash(
             masterCode,
@@ -1875,6 +1978,7 @@ public final class SccpClientExactTests {
             circuit,
             keyHash,
             proofProfile,
+            guardians,
             semanticHash,
             anchorHash);
     final byte[] configuration =
@@ -1886,10 +1990,12 @@ public final class SccpClientExactTests {
             circuit,
             keyHash,
             proofProfile,
+            guardians,
             semanticHash,
             anchorHash,
             binding,
-            1);
+            1,
+            maxWrappedSupply);
 
     final Map<String, Object> identity = map();
     identity.put("address", routeAddress);
@@ -1915,16 +2021,22 @@ public final class SccpClientExactTests {
     deployment.put("verifying_key", key);
     deployment.put("verifier_key_hash", upperHex(keyHash));
     deployment.put("proof_profile_commitment", upperHex(proofProfile));
+    final Map<String, Object> guardianObject = map();
+    for (int index = 0; index < guardians.size(); index++) {
+      guardianObject.put("guardian_" + index, upperHex(guardians.get(index)));
+    }
+    deployment.put("mint_breaker_guardian_keys", guardianObject);
     deployment.put("outbound_proof_policy", policy);
     deployment.put("taira_to_token_multiplier", 1);
+    deployment.put("max_wrapped_supply", maxWrappedSupply);
     final Map<String, Object> destination = map();
     destination.put("family", "ton");
     destination.put("deployment", deployment);
 
     final Map<String, Object> settlement = map();
     settlement.put("asset_definition_id", "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
-    settlement.put("custody_owner", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
     settlement.put("payload_amount_scale", 9);
+    settlement.put("max_outstanding_liability", maxWrappedSupply);
     final Map<String, Object> activation = map();
     activation.put("activation", "staged");
     activation.put("direction", null);
@@ -1937,6 +2049,7 @@ public final class SccpClientExactTests {
     route.put("inbound_finality_cutoff", null);
     route.put("source_identity", source);
     route.put("destination", destination);
+    route.put("sora_outbound_execution_policy", soraOutboundExecutionPolicy());
     route.put("settlement", settlement);
     final Map<String, Object> laneRecord = map();
     laneRecord.put("lane_id", tonLane());
@@ -1957,6 +2070,7 @@ public final class SccpClientExactTests {
       final byte[] circuit,
       final byte[] keyHash,
       final byte[] proofProfile,
+      final List<byte[]> guardians,
       final byte[] semanticHash,
       final byte[] anchorHash) {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -1975,11 +2089,12 @@ public final class SccpClientExactTests {
             verifierCode,
             circuit,
             keyHash,
-            proofProfile,
-            semanticHash,
-            anchorHash)) {
+            proofProfile)) {
       writeRaw(out, role);
     }
+    for (final byte[] guardian : guardians) writeRaw(out, guardian);
+    writeRaw(out, semanticHash);
+    writeRaw(out, anchorHash);
     return sha256(out.toByteArray());
   }
 
@@ -1991,10 +2106,12 @@ public final class SccpClientExactTests {
       final byte[] circuit,
       final byte[] keyHash,
       final byte[] proofProfile,
+      final List<byte[]> guardians,
       final byte[] semanticHash,
       final byte[] anchorHash,
       final byte[] binding,
-      final int revision) {
+      final int revision,
+      final BigInteger maxWrappedSupply) {
     final ByteArrayOutputStream deployment = new ByteArrayOutputStream();
     for (final byte[] role : List.of(masterCode, walletCode)) writeRaw(deployment, role);
     for (final byte[] role :
@@ -2003,17 +2120,19 @@ public final class SccpClientExactTests {
             verifierCode,
             circuit,
             keyHash,
-            proofProfile,
-            semanticHash,
-            anchorHash,
-            binding)) {
+            proofProfile)) {
       writeRaw(deployment, role);
     }
+    for (final byte[] guardian : guardians) writeRaw(deployment, guardian);
+    writeRaw(deployment, semanticHash);
+    writeRaw(deployment, anchorHash);
+    writeRaw(deployment, binding);
     final ByteArrayOutputStream assetRoute = new ByteArrayOutputStream();
     writeVector(assetRoute, "xor".getBytes(StandardCharsets.US_ASCII));
     writeVector(assetRoute, "taira_ton_xor".getBytes(StandardCharsets.US_ASCII));
     writeU32(assetRoute, revision);
     writeU64(assetRoute, 1);
+    writeU128(assetRoute, maxWrappedSupply);
     final SccpLaneIdV1 inbound =
         new SccpLaneIdV1(SccpNetworkV1.TON_MAINNET, SccpNetworkV1.SORA_TAIRA);
     final SccpLaneIdV1 outbound =
@@ -2182,14 +2301,19 @@ public final class SccpClientExactTests {
     deployment.put("outbound_proof_policy", outboundPolicy());
     deployment.put("route_address", routeAddress);
     deployment.put("route_code_hash", routeCodeHash);
+    deployment.put("replay_verifier_address", upper(0x71, 20));
+    deployment.put("replay_verifier_code_hash", upper(0x42, 32));
+    deployment.put("mint_breaker_address", upper(0x72, 20));
+    deployment.put("mint_breaker_code_hash", upper(0x43, 32));
     deployment.put("taira_to_token_multiplier", 1_000_000_000);
+    deployment.put("max_wrapped_supply", 9_000_000_000L);
     final Map<String, Object> destination = map();
     destination.put("family", "evm");
     destination.put("deployment", deployment);
     final Map<String, Object> settlement = map();
     settlement.put("asset_definition_id", "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
-    settlement.put("custody_owner", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
     settlement.put("payload_amount_scale", 9);
+    settlement.put("max_outstanding_liability", 9);
     final Map<String, Object> route = map();
     route.put("lane_id", lane());
     route.put("route_id", "taira_bsc_xor");
@@ -2202,6 +2326,7 @@ public final class SccpClientExactTests {
     route.put("inbound_finality_cutoff", null);
     route.put("source_identity", source);
     route.put("destination", destination);
+    route.put("sora_outbound_execution_policy", soraOutboundExecutionPolicy());
     route.put("settlement", settlement);
     refreshRouteConfiguration(route);
     final Map<String, Object> laneRecord = map();
@@ -2332,6 +2457,14 @@ public final class SccpClientExactTests {
     final byte[] routeAddress = hexBytes((String) deployment.get("route_address"));
     final byte[] verifierCodeHash = hexBytes((String) deployment.get("verifier_code_hash"));
     final byte[] verifierKeyHash = hexBytes((String) deployment.get("verifier_key_hash"));
+    final byte[] replayVerifierAddress =
+        hexBytes((String) deployment.get("replay_verifier_address"));
+    final byte[] replayVerifierCodeHash =
+        hexBytes((String) deployment.get("replay_verifier_code_hash"));
+    final byte[] mintBreakerAddress =
+        hexBytes((String) deployment.get("mint_breaker_address"));
+    final byte[] mintBreakerCodeHash =
+        hexBytes((String) deployment.get("mint_breaker_code_hash"));
     final byte[] destinationBinding =
         keccak(
             concatenate(
@@ -2351,7 +2484,11 @@ public final class SccpClientExactTests {
                 verifierCodeHash,
                 verifierKeyHash,
                 semanticHash,
-                anchorHash));
+                anchorHash,
+                abiAddress(replayVerifierAddress, tron),
+                replayVerifierCodeHash,
+                abiAddress(mintBreakerAddress, tron),
+                mintBreakerCodeHash));
 
     final byte[] sourceLaneHash = SccpV1.laneHash(inboundLane);
     final byte[] destinationLaneHash =
@@ -2365,6 +2502,10 @@ public final class SccpClientExactTests {
     deploymentWords.add(semanticHash);
     deploymentWords.add(anchorHash);
     if (tron) deploymentWords.add(destinationBinding);
+    deploymentWords.add(abiAddress(replayVerifierAddress, false));
+    deploymentWords.add(replayVerifierCodeHash);
+    deploymentWords.add(abiAddress(mintBreakerAddress, false));
+    deploymentWords.add(mintBreakerCodeHash);
     final byte[] deploymentHash =
         keccak(concatenate(deploymentWords.toArray(new byte[0][])));
     final byte[] assetRouteHash =
@@ -2373,7 +2514,8 @@ public final class SccpClientExactTests {
                 keccak("xor".getBytes(StandardCharsets.UTF_8)),
                 keccak(((String) route.get("route_id")).getBytes(StandardCharsets.UTF_8)),
                 abiWord(((Number) route.get("revision")).longValue()),
-                abiWord(((Number) deployment.get("taira_to_token_multiplier")).longValue())));
+                abiWord(((Number) deployment.get("taira_to_token_multiplier")).longValue()),
+                abiWord(((Number) deployment.get("max_wrapped_supply")).longValue())));
     return upperHex(
         keccak(
             concatenate(
@@ -2395,13 +2537,9 @@ public final class SccpClientExactTests {
   private static long chainOrNetworkId(final SccpNetworkV1 network) {
     return switch (network) {
       case ETHEREUM_MAINNET -> 1;
-      case ETHEREUM_SEPOLIA -> 11_155_111L;
       case BSC_MAINNET -> 56;
-      case BSC_TESTNET -> 97;
       case TRON_MAINNET -> 0x2b66_53dcL;
-      case TRON_NILE -> 0xcd86_90dcL;
-      case TRON_SHASTA -> 0x94a9_059eL;
-      case TON_MAINNET, TON_TESTNET, SORA_TAIRA ->
+      case TON_MAINNET, SORA_TAIRA ->
           throw new IllegalArgumentException("expected EVM or TRON network");
     };
   }
@@ -2709,6 +2847,12 @@ public final class SccpClientExactTests {
 
   private static void writeU64(final ByteArrayOutputStream out, final long value) {
     for (int shift = 0; shift < 8; shift++) out.write((int) ((value >>> (shift * 8)) & 0xff));
+  }
+
+  private static void writeU128(final ByteArrayOutputStream out, final BigInteger value) {
+    for (int shift = 0; shift < 16; shift++) {
+      out.write(value.shiftRight(shift * 8).and(BigInteger.valueOf(0xff)).intValue());
+    }
   }
 
   private static void writeU16(final ByteArrayOutputStream out, final int value) {

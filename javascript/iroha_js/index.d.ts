@@ -149,8 +149,7 @@ export type CryptoAlgorithm =
   | "sm2";
 
 export type {
-  PrivacyCapabilityRowV1,
-  PrivacyCapabilitySnapshotV1,
+  PrivacyCapabilityReadinessV1,
   PrivacyCompiledProfileBindingsV1,
   PrivacyCompiledProfileResultV1,
   PrivacyConsensusLimitsV1,
@@ -158,14 +157,29 @@ export type {
   PrivacyConsensusPolicyV1,
   PrivacyEngineIdV1,
   PrivacyEngineTagV1,
+  PrivacyExact12DeploymentQualificationV1,
+  PrivacyExact12CapabilityAdmissionV1,
+  PrivacyExact12CapabilityManifestNodeClientV1,
+  PrivacyExact12CapabilityManifestRequestOptions,
+  PrivacyExact12CapabilityRowV1,
+  PrivacyExact12QualificationRecordV1,
+  PrivacyExact12ReleaseManifestV1,
+  PrivacyExecutionModeV1,
   PrivacyFixed32BytesV1,
+  PrivacyFixed48BytesV1,
+  PrivacyOperationSchemaV1,
   PrivacyProofSystemIdV1,
   PrivacyProofSystemTagV1,
   PrivacyProtocolActivationRecordV1,
   PrivacyProtocolIdV1,
   PrivacyProtocolLifecycleV1,
   PrivacyProtocolLimitsV1,
+  PrivacyReleaseProtocolBindingV1,
   PrivacyProtocolTagV1,
+  PrivacyDeploymentActivationV1,
+  PrivacySecurityClaimV1,
+  PrivacySecurityModelTagV1,
+  PrivacySecurityModelV1,
   PrivacyTaggedUnitV1,
   PrivacyU64V1,
 } from "./privacy-capabilities.js";
@@ -696,23 +710,85 @@ export interface IsoBridgeAmount {
 export const SCCP_DOMAIN_SORA: 0;
 export const SCCP_DOMAIN_ETH: 1;
 export const SCCP_DOMAIN_BSC: 2;
-export const SCCP_DOMAIN_SOLANA: 3;
 export const SCCP_DOMAIN_TON: 4;
 export const SCCP_DOMAIN_TRON: 5;
-export type SccpDomain = 0 | 1 | 2 | 3 | 4 | 5;
+export type SccpDomain = 0 | 1 | 2 | 4 | 5;
 export const SCCP_CODEC_CANONICAL_TEXT: 1;
 export const SCCP_CODEC_EVM_ADDRESS20: 2;
 export const SCCP_CODEC_TRON_ADDRESS21: 5;
-export const SCCP_CODEC_SOLANA_PUBKEY32: 6;
 export const SCCP_CODEC_TON_ACCOUNT36: 7;
-export type SccpCodecTag = 1 | 2 | 5 | 6 | 7;
+export type SccpCodecTag = 1 | 2 | 5 | 7;
 export const SCCP_CODEC_KEYS: Readonly<Record<SccpCodecTag, string>>;
 export type SccpPayloadKind = "transfer";
 export const SCCP_PAYLOAD_KINDS: readonly SccpPayloadKind[];
-export const SCCP_SOLANA_TESTNET_GENESIS_HASH: "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY";
-export type SccpNetworkProfile = "sora-taira" | "ethereum-mainnet" | "ethereum-sepolia" | "bsc-mainnet" | "bsc-testnet" | "tron-mainnet" | "tron-nile" | "tron-shasta" | "solana-testnet" | "ton-mainnet" | "ton-testnet";
-export interface SccpNetworkDescriptor { readonly profile: SccpNetworkProfile; readonly tag: number; readonly domain: SccpDomain; readonly sora: boolean; readonly genesisHash?: string; readonly globalId?: number; }
-export const SCCP_NETWORK_PROFILES: Readonly<Record<SccpNetworkProfile, SccpNetworkDescriptor>>;
+export const SCCP_REPLAY_SMT_DEPTH_V1: 248;
+export const SCCP_REPLAY_BOUNDARIES_V1: Readonly<{
+  sora_outbound_lock: 0x01;
+  sora_inbound_release: 0x02;
+  evm_source_burn: 0x10;
+  evm_destination_mint: 0x11;
+  tron_source_burn: 0x20;
+  tron_destination_mint: 0x21;
+  ton_bridge_inbound_mint: 0x30;
+  ton_bridge_outbound_burn: 0x31;
+  ton_master_mint: 0x32;
+  ton_master_burn: 0x33;
+  ton_wallet_mint_credit: 0x34;
+  ton_wallet_burn_debit: 0x35;
+  ton_wallet_refund_debit: 0x36;
+  ton_wallet_refund_credit: 0x37;
+}>;
+export type SccpReplayBoundaryV1 =
+  (typeof SCCP_REPLAY_BOUNDARIES_V1)[keyof typeof SCCP_REPLAY_BOUNDARIES_V1];
+export type SccpReplayActorV1 =
+  | { readonly kind: "route" }
+  | { readonly kind: "evm" | "tron"; readonly address: string | BinaryLike }
+  | { readonly kind: "ton"; readonly workchain: number; readonly account: string | BinaryLike };
+export type SccpReplayPrincipalV1 =
+  | { readonly kind: "sora_account"; readonly canonicalBytes: BinaryLike }
+  | { readonly kind: "evm" | "tron"; readonly address: string | BinaryLike }
+  | { readonly kind: "ton"; readonly workchain: number; readonly account: string | BinaryLike };
+export interface SccpReplayDomainV1 {
+  readonly sourceProfile: "sora-taira" | "ethereum-mainnet" | "bsc-mainnet" | "tron-mainnet" | "ton-mainnet";
+  readonly targetProfile: "sora-taira" | "ethereum-mainnet" | "bsc-mainnet" | "tron-mainnet" | "ton-mainnet";
+  readonly boundary: SccpReplayBoundaryV1;
+  readonly routeRevision: number;
+  readonly routeConfigurationHash: string | BinaryLike;
+  readonly actor: SccpReplayActorV1;
+}
+export interface SccpReplayRecordV1 {
+  readonly operation: SccpReplayBoundaryV1;
+  readonly replayId: string | BinaryLike;
+  readonly payloadSha256: string | BinaryLike;
+  readonly amount: string | bigint | number;
+  readonly principal: SccpReplayPrincipalV1;
+  readonly auxiliaryIdentitySha256: string | BinaryLike;
+}
+export interface SccpSparseMerkleWitnessV1 {
+  readonly expectedShardRoot: string | BinaryLike;
+  readonly priorRecordDigest: string | BinaryLike;
+  readonly siblingBitmap: string | BinaryLike;
+  readonly siblings: readonly (string | BinaryLike)[];
+}
+export function sccpReplayDomainHashV1(domain: SccpReplayDomainV1): string;
+export function sccpReplayKeyV1(domainHash: string | BinaryLike, replayId: string | BinaryLike): string;
+export function sccpReplayRecordDigestV1(record: SccpReplayRecordV1): string;
+export function sccpReplayEmptyHashesV1(): readonly string[];
+export function sccpReplayRootFromWitnessV1(
+  key: string | BinaryLike,
+  recordDigest: string | BinaryLike | null,
+  witness: SccpSparseMerkleWitnessV1,
+): Readonly<{ root: string; expectedRoot: string; matchesExpectedRoot: boolean; shard: number }>;
+export type SccpNetworkProfile = "sora-taira" | "ethereum-mainnet" | "bsc-mainnet" | "tron-mainnet" | "ton-mainnet";
+export type SccpNetworkTag = 0x40 | 0x41 | 0x42 | 0x43 | 0x44;
+export interface SccpNetworkDescriptor<Profile extends SccpNetworkProfile = SccpNetworkProfile, Tag extends SccpNetworkTag = SccpNetworkTag, Domain extends SccpDomain = SccpDomain, Sora extends boolean = boolean> { readonly profile: Profile; readonly tag: Tag; readonly domain: Domain; readonly sora: Sora; readonly globalId?: -239; }
+export const SCCP_NETWORK_PROFILES: Readonly<{
+  readonly "sora-taira": SccpNetworkDescriptor<"sora-taira", 0x40, 0, true>;
+  readonly "ethereum-mainnet": SccpNetworkDescriptor<"ethereum-mainnet", 0x41, 1, false>;
+  readonly "bsc-mainnet": SccpNetworkDescriptor<"bsc-mainnet", 0x42, 2, false>;
+  readonly "tron-mainnet": SccpNetworkDescriptor<"tron-mainnet", 0x43, 5, false>;
+  readonly "ton-mainnet": SccpNetworkDescriptor<"ton-mainnet", 0x44, 4, false> & Readonly<{ globalId: -239 }>;
+}>;
 export function normalizeSccpCodecValue(codec: SccpCodecTag, value: string | BinaryLike): Uint8Array;
 export function sccpSourceEventDigest(laneHash: string | BinaryLike, messageId: string | BinaryLike, payloadHash: string | BinaryLike): string;
 export interface SccpRegistryLimits {
@@ -754,7 +830,7 @@ export interface SccpResourceLimits {
   readonly max_bls12_381_pairing_checks_per_block: number;
 }
 export interface SccpCapabilities { readonly version: 1; readonly registry_revision: string; readonly registry_path: "/v1/sccp/registry"; readonly message_bundle_path: "/v1/sccp/proofs/message/{message_id}"; readonly proof_request_path: "/v1/sccp/proof-requests/{message_id}"; readonly recent_messages_path: "/v1/sccp/messages/recent"; readonly sora_outbound_material_path: "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"; readonly registry_limits: SccpRegistryLimits; readonly resource_limits: SccpResourceLimits; readonly proof_submit_path: "/v1/bridge/proofs/submit" | null; readonly native_message_submit_path: "/v1/bridge/messages" | null; }
-export type SccpNetworkWireName = "sora_taira" | "ethereum_mainnet" | "ethereum_sepolia" | "bsc_mainnet" | "bsc_testnet" | "tron_mainnet" | "tron_nile" | "tron_shasta" | "solana_testnet" | "ton_mainnet" | "ton_testnet";
+export type SccpNetworkWireName = "sora_taira" | "ethereum_mainnet" | "bsc_mainnet" | "tron_mainnet" | "ton_mainnet";
 export interface SccpNetworkV1 { readonly network: SccpNetworkWireName; readonly profile: null; }
 export interface SccpLaneIdV1 { readonly source: SccpNetworkV1; readonly target: SccpNetworkV1; }
 export interface SccpTransferPayloadV1 {
@@ -939,31 +1015,25 @@ export interface SccpDestinationDeploymentFieldsV1 {
   readonly outbound_proof_policy: SccpOutboundProofPolicyV1;
   readonly route_address: string;
   readonly route_code_hash: string;
+  readonly replay_verifier_address: string;
+  readonly replay_verifier_code_hash: string;
+  readonly mint_breaker_address: string;
+  readonly mint_breaker_code_hash: string;
   readonly taira_to_token_multiplier: 1000000000;
+  readonly max_wrapped_supply: string;
 }
 export interface SccpEvmDestinationDeploymentV1 extends SccpDestinationDeploymentFieldsV1 {}
 export interface SccpTronDestinationDeploymentV1 extends SccpDestinationDeploymentFieldsV1 {}
-export interface SccpSolanaDestinationDeploymentV1 {
-  readonly token_mint_address: string;
-  readonly route_program_id: string;
-  readonly route_program_data_address: string;
-  readonly route_program_data_slot: number;
-  readonly route_state_account: string;
-  readonly route_program_code_hash: string;
-  readonly native_verifier_program_id: string;
-  readonly native_verifier_program_data_address: string;
-  readonly native_verifier_program_data_slot: number;
-  readonly native_verifier_material_account: string;
-  readonly native_verifier_program_code_hash: string;
-  readonly native_verifier_config_hash: string;
-  readonly verifying_key: SccpGroth16Bn254VerifyingKeyV1;
-  readonly verifier_key_hash: string;
-  readonly outbound_proof_policy: SccpOutboundProofPolicyV1;
-  readonly taira_to_token_multiplier: 1;
-}
 export interface SccpTonAddressV1 {
   readonly workchain: 0;
   readonly account: string;
+}
+export interface SccpTonMintBreakerGuardianKeysV1 {
+  readonly guardian_0: string;
+  readonly guardian_1: string;
+  readonly guardian_2: string;
+  readonly guardian_3: string;
+  readonly guardian_4: string;
 }
 export interface SccpTonDestinationDeploymentV1 {
   readonly jetton_master_address: SccpTonAddressV1;
@@ -978,25 +1048,18 @@ export interface SccpTonDestinationDeploymentV1 {
   readonly verifying_key: SccpGroth16Bls12381VerifyingKeyV1;
   readonly verifier_key_hash: string;
   readonly proof_profile_commitment: string;
+  readonly mint_breaker_guardian_keys: SccpTonMintBreakerGuardianKeysV1;
   readonly outbound_proof_policy: SccpOutboundProofPolicyV1;
   readonly taira_to_token_multiplier: 1;
+  readonly max_wrapped_supply: string;
 }
 export type SccpDestinationDeploymentV1 =
   | Readonly<{ family: "evm"; deployment: SccpEvmDestinationDeploymentV1 }>
   | Readonly<{ family: "tron"; deployment: SccpTronDestinationDeploymentV1 }>
-  | Readonly<{ family: "solana"; deployment: SccpSolanaDestinationDeploymentV1 }>
   | Readonly<{ family: "ton"; deployment: SccpTonDestinationDeploymentV1 }>;
 export interface SccpSourceEmitterIdentityV1 {
   readonly address: string;
   readonly runtime_code_hash: string;
-  readonly route_config_hash: string;
-}
-export interface SccpSolanaSourceEmitterIdentityV1 {
-  readonly program_id: string;
-  readonly program_data_address: string;
-  readonly program_data_slot: number;
-  readonly state_account: string;
-  readonly program_code_hash: string;
   readonly route_config_hash: string;
 }
 export interface SccpTonSourceEmitterIdentityV1 {
@@ -1007,35 +1070,21 @@ export interface SccpTonSourceEmitterIdentityV1 {
 export type SccpSourceEmitterV1 =
   | Readonly<{ emitter: "evm"; identity: SccpSourceEmitterIdentityV1 }>
   | Readonly<{ emitter: "tron"; identity: SccpSourceEmitterIdentityV1 }>
-  | Readonly<{ emitter: "solana"; identity: SccpSolanaSourceEmitterIdentityV1 }>
   | Readonly<{ emitter: "ton"; identity: SccpTonSourceEmitterIdentityV1 }>;
 export interface SccpSourceIdentityV1 { readonly lane: SccpLaneIdV1; readonly emitter: SccpSourceEmitterV1; }
-export interface SccpSolanaDestinationHashesV1 {
-  readonly destination_binding_hash: string;
-  readonly deployment_config_hash: string;
-  readonly route_configuration_hash: string;
-}
 export interface SccpTonDestinationHashesV1 {
   readonly destination_binding_hash: string;
   readonly deployment_config_hash: string;
   readonly route_configuration_hash: string;
 }
-export interface SccpSolanaSourceIdentityHashesV1 {
-  readonly source_emitter_identity_hash: string;
-  readonly source_identity_hash: string;
-}
-export function deriveSccpSolanaDestinationHashesV1(deployment: SccpSolanaDestinationDeploymentV1, sourceProgramId: string, routeRevision?: number): Readonly<SccpSolanaDestinationHashesV1>;
-export function deriveSccpTonDestinationHashesV1(deployment: SccpTonDestinationDeploymentV1, networkProfile?: "ton-mainnet" | "ton-testnet", routeRevision?: number): Readonly<SccpTonDestinationHashesV1>;
-/** Derive the one-way native-verifier material config before its config-addressed PDA is created. */
-export function deriveSccpSolanaNativeVerifierConfigHashV1(deployment: SccpSolanaDestinationDeploymentV1, sourceProgramId: string, routeRevision?: number): string;
-export function deriveSccpSolanaSourceIdentityHashesV1(identity: SccpSourceIdentityV1): Readonly<SccpSolanaSourceIdentityHashesV1>;
+export function deriveSccpTonDestinationHashesV1(deployment: SccpTonDestinationDeploymentV1, networkProfile?: "ton-mainnet", routeRevision?: number): Readonly<SccpTonDestinationHashesV1>;
 export type SccpRouteActivationKindV1 = "staged" | "bidirectional" | "inbound_only" | "paused" | "retired";
 export interface SccpRouteActivationV1 { readonly activation: SccpRouteActivationKindV1; readonly direction: null; }
 export interface SccpInboundFinalityCutoffV1 {
   readonly trust_anchor_hash: string;
   readonly max_anchor_interval_height: number;
 }
-export interface SccpSoraSettlementV1 { readonly asset_definition_id: string; readonly custody_owner: string; readonly payload_amount_scale: 9; }
+export interface SccpSoraSettlementV1 { readonly asset_definition_id: string; readonly payload_amount_scale: 9; readonly max_outstanding_liability: string; }
 export interface SccpGovernedRouteV1 {
   readonly lane_id: SccpLaneIdV1;
   readonly route_id: string;
@@ -1052,7 +1101,6 @@ export type SccpNativeProofBackendV1 =
   | "ethereum_beacon_v1"
   | "bsc_parlia_v1"
   | "tron_dpos_v1"
-  | "solana_agave_v1"
   | "ton_masterchain_v1";
 export interface SccpNativeTrustAnchorV1 {
   readonly backend: Readonly<{ backend: SccpNativeProofBackendV1; protocol: null }>;
@@ -1069,31 +1117,29 @@ export interface SccpRegistry { readonly version: 1; readonly lanes: readonly Sc
 export interface SccpCanonicalTextValueV1 { readonly CanonicalText: Readonly<{ value: string }>; }
 export interface SccpEvmAddressValueV1 { readonly EvmAddress20: Readonly<{ bytes: string }>; }
 export interface SccpTronAddressValueV1 { readonly TronAddress21: Readonly<{ bytes: string }>; }
-export interface SccpSolanaPubkeyValueV1 { readonly SolanaPubkey32: Readonly<{ bytes: string }>; }
 export interface SccpTonAccountValueV1 { readonly TonAccount36: Readonly<{ workchain: 0; account: string }>; }
 export interface SccpTransferProjectionV1 {
   readonly version: 1;
   readonly source_domain: 0;
-  readonly dest_domain: 1 | 2 | 3 | 4 | 5;
+  readonly dest_domain: 1 | 2 | 4 | 5;
   readonly nonce: string;
   readonly route_revision: number;
   readonly asset_home_domain: 0;
   readonly asset_id: SccpCanonicalTextValueV1;
   readonly amount: string;
   readonly sender: SccpCanonicalTextValueV1;
-  readonly recipient: SccpEvmAddressValueV1 | SccpTronAddressValueV1 | SccpSolanaPubkeyValueV1 | SccpTonAccountValueV1;
+  readonly recipient: SccpEvmAddressValueV1 | SccpTronAddressValueV1 | SccpTonAccountValueV1;
   readonly route_id: SccpCanonicalTextValueV1;
 }
 export interface SccpPayloadProjectionV1 { readonly Transfer: SccpTransferProjectionV1; }
-export interface SccpRecentMessage { readonly height: number; readonly commitment_index: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 3 | 4 | 5; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
+export interface SccpRecentMessage { readonly height: number; readonly commitment_index: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 4 | 5; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
 export interface SccpRecentCursor { readonly from: number; readonly after_index: number; }
 export interface SccpRecentMessages { readonly items: readonly SccpRecentMessage[]; readonly next: SccpRecentCursor | null; }
 export interface SccpMessageBundle { readonly version: 1; readonly commitment_root: string; readonly commitment: Readonly<Record<string, unknown>>; readonly merkle_proof: Readonly<Record<string, unknown>>; readonly payload: Readonly<{ Transfer: Readonly<Record<string, unknown>> }>; readonly finality_proof: string; }
-export interface SccpMessagePublicInputsV1 { readonly version: 1; readonly message_id: string; readonly payload_hash: string; readonly target_domain: 1 | 2 | 3 | 4 | 5; readonly commitment_root: string; readonly finality_height: string; readonly finality_block_hash: string; }
+export interface SccpMessagePublicInputsV1 { readonly version: 1; readonly message_id: string; readonly payload_hash: string; readonly target_domain: 1 | 2 | 4 | 5; readonly commitment_root: string; readonly finality_height: string; readonly finality_block_hash: string; }
 export type SccpDestinationProofBackendV1 =
   | Readonly<{ backend: "evm_groth16_bn254_v1"; family: null }>
   | Readonly<{ backend: "tron_groth16_bn254_v1"; family: null }>
-  | Readonly<{ backend: "solana_groth16_bn254_v1"; family: null }>
   | Readonly<{ backend: "ton_groth16_bls12381_v1"; family: null }>;
 export interface SccpBn254ProofRequest {
   readonly version: 1;
@@ -2374,10 +2420,7 @@ export type ToriiVerifierBackendLabelV1 =
   | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
-  | "stark/fri"
-  | "stark/fri/sha256-goldilocks"
-  | "stark/fri/poseidon2-goldilocks"
-  | "stark/fri/sha256_goldilocks.v1";
+  | "stark/fri/poseidon-x7-goldilocks-6x64-v1";
 
 export interface ToriiVerifyingKeyInline {
   backend: ToriiVerifierBackendLabelV1;
@@ -3891,7 +3934,10 @@ type ToriiRuntimeNamespaceExport =
   | "verifyIdentifierResolutionReceipt";
 
 type NoritoRuntimeNamespaceExport =
-    "decodeCancelAssetLockV1"
+    "CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1"
+  | "CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1"
+  | "CONFIDENTIAL_MEMO_WIRE_MAGIC_V1"
+  | "decodeCancelAssetLockV1"
   | "encodeAccountIdNoritoValue"
   | "encodeAssetDefinitionIdNoritoValue"
   | "encodeCancelAssetLockV1"
@@ -3900,12 +3946,15 @@ type NoritoRuntimeNamespaceExport =
   | "noritoDecodeBlockProofs"
   | "noritoDecodeInstruction"
   | "noritoDecodeInstructionBoxArchive"
+  | "noritoDecodeConfidentialMemoEnvelopeV1"
   | "noritoDecodeOpenVerifyEnvelope"
   | "noritoDecodePrivacyExact12FixtureBundleBase64V1"
   | "noritoDecodePrivacyExact12FixtureBundleV1"
   | "noritoEncodeInstruction"
   | "noritoEncodeInstructionBoxArchive"
+  | "noritoEncodeConfidentialMemoEnvelopeV1"
   | "noritoEncodeContractManifestSignaturePayload"
+  | "noritoEncodeFeePaymentIntentArchive"
   | "noritoEncodeMultisigContractCallApproveRequest"
   | "noritoEncodeMultisigContractCallProposeRequest"
   | "noritoEncodeMultisigProposeRequest"
@@ -3924,7 +3973,9 @@ type NoritoRuntimeNamespaceExport =
   | "verifyBlockProofs";
 
 type CryptoRuntimeNamespaceExport =
-    "CRYPTO_ALGORITHMS"
+    "CONFIDENTIAL_MEMO_SUITES_V1"
+  | "CRYPTO_ALGORITHMS"
+  | "ConfidentialMemoKeypairV1"
   | "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES"
   | "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1"
   | "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION"
@@ -3945,6 +3996,7 @@ type CryptoRuntimeNamespaceExport =
   | "deriveSm2KeyPairFromSeed"
   | "ed25519SeedToRecoveryPhrase"
   | "entropyToRecoveryPhrase"
+  | "generateConfidentialMemoKeypairV1"
   | "generateKeyPair"
   | "generateRecoveryPhrase"
   | "generateSm2KeyPair"
@@ -3953,11 +4005,13 @@ type CryptoRuntimeNamespaceExport =
   | "loadSm2KeyPair"
   | "normalizeCryptoAlgorithm"
   | "normalizeRecoveryPhrase"
+  | "openConfidentialMemoV1"
   | "privacyCompiledProfileCatalogV1"
   | "privateKeyMultihash"
   | "publicKeyFromPrivate"
   | "publicKeyMultihash"
   | "recoveryPhraseToEntropy"
+  | "sealConfidentialMemoV1"
   | "sign"
   | "signEd25519"
   | "signSm2"
@@ -7192,6 +7246,30 @@ export interface ConfidentialKeyset {
   ovkHex: string;
   fvkHex: string;
   asHex(): Record<string, string>;
+}
+
+export type ConfidentialMemoKemSuiteV1 =
+  | "ml-kem-768-xchacha20-poly1305-v1"
+  | "ml-kem-1024-xchacha20-poly1305-v1";
+
+export const CONFIDENTIAL_MEMO_SUITES_V1: Readonly<{
+  ML_KEM_768_XCHACHA20_POLY1305: "ml-kem-768-xchacha20-poly1305-v1";
+  ML_KEM_1024_XCHACHA20_POLY1305: "ml-kem-1024-xchacha20-poly1305-v1";
+}>;
+
+/** Local ML-KEM keypair whose secret bytes are never publicly exposed. */
+export class ConfidentialMemoKeypairV1 {
+  private constructor();
+  readonly suite: ConfidentialMemoKemSuiteV1;
+  readonly publicKey: Buffer;
+  readonly destroyed: boolean;
+  destroy(): void;
+  open(envelope: ArrayBufferView | ArrayBuffer | Buffer): Buffer;
+}
+
+export interface ConfidentialMemoPublicRecipientV1 {
+  suite: ConfidentialMemoKemSuiteV1;
+  publicKey: ArrayBufferView | ArrayBuffer | Buffer;
 }
 
 export interface ConfidentialReceiveAddressV2 {
@@ -12415,6 +12493,23 @@ export function deriveConfidentialKeysetFromHex(
   spendKeyHex: string,
 ): ConfidentialKeyset;
 
+export function generateConfidentialMemoKeypairV1(input: {
+  suite: ConfidentialMemoKemSuiteV1;
+}): ConfidentialMemoKeypairV1;
+
+export function sealConfidentialMemoV1(input: {
+  suite: ConfidentialMemoKemSuiteV1;
+  recipients: ReadonlyArray<
+    ConfidentialMemoKeypairV1 | Readonly<ConfidentialMemoPublicRecipientV1>
+  >;
+  plaintext: ArrayBufferView | ArrayBuffer | Buffer;
+}): Buffer;
+
+export function openConfidentialMemoV1(input: {
+  keypair: ConfidentialMemoKeypairV1;
+  envelope: ArrayBufferView | ArrayBuffer | Buffer;
+}): Buffer;
+
 export function deriveConfidentialOwnerTagV2(
   spendKey: ArrayBufferView | ArrayBuffer | Buffer,
   options: {
@@ -12466,8 +12561,8 @@ export const PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Readonly<{
 export function isPrivacyNativeAvailable(): boolean;
 /**
  * Return this native binary's local compiled-profile catalog. This is build
- * metadata only; network readiness requires `getPrivacyCapabilitiesV1` and a
- * fresh committed Torii response.
+ * metadata only; network readiness requires the native-validated Exact12
+ * capability manifest from authenticated Torii state.
  */
 export function privacyCompiledProfileCatalogV1(): Buffer;
 
@@ -12576,18 +12671,18 @@ export const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1:
   "iroha.privacy.exact12-typed-fixture-bundle.v1";
 export const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1: 2097152;
 export const PRIVACY_EXACT12_PROTOCOL_IDS_V1: readonly [
-  "zk-ace-pq-authorization-v0",
+  "zk-ace-pq-authorization-v1",
   "anonymous-pgc-k-out-of-n-v1",
   "verange-transparent-range-v1",
   "iroha-zk-ams-v1",
-  "vega-existing-credential-zk-v0",
-  "iroha-zk-x509-stark-p256-v0",
-  "iroha-jindo-polynomial-commitment-v0",
+  "vega-existing-credential-zk-v1",
+  "iroha-zk-x509-stark-p256-v1",
+  "iroha-jindo-polynomial-commitment-v1",
   "iroha-bootle-lantern-anoncred-v1",
   "orchard-halo2-actions-v1",
   "monero-fcmp-plus-plus-v1",
   "iroha-ivm-private-note-stark-v1",
-  "pq-masp-stark-v0",
+  "pq-masp-stark-v1",
 ];
 export type PrivacyExact12ProtocolIdV1 =
   (typeof PRIVACY_EXACT12_PROTOCOL_IDS_V1)[number];
@@ -12634,6 +12729,75 @@ export function noritoDecodePrivacyExact12FixtureBundleV1(
 /** Re-encode a complete Exact12 bundle with canonical outer Norito layout. */
 export function noritoEncodePrivacyExact12FixtureBundleV1(
   value: Readonly<PrivacyExact12FixtureBundleInputV1>,
+): Uint8Array;
+export const CONFIDENTIAL_MEMO_WIRE_MAGIC_V1: readonly [
+  73,
+  82,
+  72,
+  67,
+  77,
+  49,
+  165,
+  90,
+];
+export const CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1: 8;
+export const CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1: 65536;
+export type ConfidentialMemoSuiteV1 =
+  | "ml-kem-768-xchacha20-poly1305-v1"
+  | "ml-kem-1024-xchacha20-poly1305-v1";
+export interface ConfidentialMemoRecipientSlotV1Input {
+  suite: ConfidentialMemoSuiteV1;
+  encapsulation: BinaryLike;
+  wrap_nonce: BinaryLike;
+  wrapped_memo_key: BinaryLike;
+}
+export interface ConfidentialMemoRecipientSlotV1 {
+  suite: ConfidentialMemoSuiteV1;
+  /** Canonical standard-base64 ML-KEM encapsulation. */
+  encapsulation: string;
+  wrap_nonce: number[];
+  wrapped_memo_key: number[];
+}
+export interface ConfidentialMemoEnvelopeV1Input {
+  slots: readonly [
+    ConfidentialMemoRecipientSlotV1Input,
+    ConfidentialMemoRecipientSlotV1Input,
+    ConfidentialMemoRecipientSlotV1Input,
+    ConfidentialMemoRecipientSlotV1Input,
+    ConfidentialMemoRecipientSlotV1Input,
+    ConfidentialMemoRecipientSlotV1Input,
+    ConfidentialMemoRecipientSlotV1Input,
+    ConfidentialMemoRecipientSlotV1Input,
+  ];
+  payload_nonce: BinaryLike;
+  ciphertext: BinaryLike;
+}
+export interface ConfidentialMemoEnvelopeV1 {
+  slots: [
+    ConfidentialMemoRecipientSlotV1,
+    ConfidentialMemoRecipientSlotV1,
+    ConfidentialMemoRecipientSlotV1,
+    ConfidentialMemoRecipientSlotV1,
+    ConfidentialMemoRecipientSlotV1,
+    ConfidentialMemoRecipientSlotV1,
+    ConfidentialMemoRecipientSlotV1,
+    ConfidentialMemoRecipientSlotV1,
+  ];
+  payload_nonce: number[];
+  /** Canonical standard-base64 encrypted memo body. */
+  ciphertext: string;
+}
+/** Encode the exact-eight-slot first-release confidential memo bare wire. */
+export function noritoEncodeConfidentialMemoEnvelopeV1(
+  value: Readonly<ConfidentialMemoEnvelopeV1Input>,
+): Uint8Array;
+/** Decode one exact canonical confidential memo bare wire. */
+export function noritoDecodeConfidentialMemoEnvelopeV1(
+  bytes: BinaryLike,
+): ConfidentialMemoEnvelopeV1;
+/** Encode one exact compact-length fee-payment intent archive. */
+export function noritoEncodeFeePaymentIntentArchive(
+  intent: NoritoFeePaymentIntent,
 ): Uint8Array;
 export interface NoritoFrameValidationOptions {
   context?: string;

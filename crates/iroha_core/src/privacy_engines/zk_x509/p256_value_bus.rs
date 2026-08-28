@@ -30,7 +30,8 @@ use super::{
     p256_trace::{P256EcdsaTraceMaterialV1, compile_p256_ecdsa_topology_v1},
 };
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
+    TransparentTranscriptV1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use std::sync::Arc;
@@ -4967,9 +4968,13 @@ mod tests {
             ),
             Err(P256ValueBusErrorV1::Challenge)
         );
-        let mut transcript =
-            TransparentTranscriptV1::new(b"p256-value-bus-test", &[0x51; 32], &[0xa7; 32])
-                .expect("test transcript");
+        let mut transcript = TransparentTranscriptV1::new(
+            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            b"p256-value-bus-test",
+            &GoldilocksDigest384V1::new([0x51; 6]).expect("profile digest"),
+            &GoldilocksDigest384V1::new([0xa7; 6]).expect("public digest"),
+        )
+        .expect("test transcript");
         let derived = derive_zk_x509_p256_value_bus_challenges_v1(&mut transcript)
             .expect("derived challenges");
         derived.validate().expect("separated challenge lanes");

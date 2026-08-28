@@ -708,7 +708,7 @@ fn state_factory() -> State {
 }
 fn sccp_registry_for_snapshot_test() -> crate::state::SccpOnChainRegistryV1 {
     let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
-        iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+        iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
         iroha_data_model::bridge::SccpRouteActivationV1::Staged,
     );
     crate::state::SccpOnChainRegistryV1 {

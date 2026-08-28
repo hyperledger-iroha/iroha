@@ -8,6 +8,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -16,16 +17,15 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import sccp_phase_log_runner as phase_log_runner  # noqa: E402
 import sccp_release_bundle as builder  # noqa: E402
 import sccp_release_common as common  # noqa: E402
-import sccp_phase_log_runner as phase_log_runner  # noqa: E402
+import sccp_validator_builder as validator_builder  # noqa: E402
 import sccp_verify_release_bundle as verifier  # noqa: E402
-
 
 FIXTURE = ROOT / "fixtures" / "sccp" / "release_evidence_v1"
 FIXTURE_POLICY = FIXTURE / "test-trust-policy.json"
@@ -65,7 +65,10 @@ def test_release_evidence_requires_every_production_corridor_phase() -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    assert tuple(line.strip() for line in listed.stdout.splitlines()[1:]) == CORRIDOR_PHASES
+    assert (
+        tuple(line.strip() for line in listed.stdout.splitlines()[1:])
+        == CORRIDOR_PHASES
+    )
     assert common.REQUIRED_PHASES == CORRIDOR_PHASES
 
 
@@ -105,6 +108,223 @@ def test_legacy_three_lane_evidence_cannot_report_global_readiness() -> None:
     assert "ton-mainnet:missing:requires:present" in summary["blocking_capabilities"]
 
 
+def _freshness_test_context() -> tuple[
+    dict[str, object],
+    dict[str, object],
+    dict[str, tuple[bytes, bytes, int]],
+]:
+    keys = {
+        f"authority-{index}": _unit_v4_keypair(f"freshness:{index}")
+        for index in range(3)
+    }
+    policy: dict[str, object] = {
+        "environment": "production",
+        "policy_root_sha256_hex": _unit_v4_hash("freshness-policy-root"),
+        "freshness_authorities": [
+            {
+                "authority_id": authority_id,
+                "https_endpoint": f"https://fresh-{index}.example/readiness",
+                "public_key_hex": keys[authority_id][0].hex(),
+            }
+            for index, authority_id in enumerate(keys)
+        ],
+    }
+    request = common.freshness_request(
+        nonce=b"\x42" * 32,
+        policy_root_sha256_hex=policy["policy_root_sha256_hex"],
+        bundle_root_hash_hex=_unit_v4_hash("freshness-bundle-root"),
+    )
+    return policy, request, keys
+
+
+def _signed_freshness_head(
+    *,
+    authority_id: str,
+    keypair: tuple[bytes, bytes, int],
+    request: dict[str, object],
+    issued_at_unix_ms: int,
+    trusted_time_unix_ms: int,
+    revoked_release_ids: list[str] | None = None,
+) -> dict[str, object]:
+    head: dict[str, object] = {
+        "schema": common.FRESHNESS_HEAD_SCHEMA,
+        "authority_id": authority_id,
+        "nonce_hex": request["nonce_hex"],
+        "policy_root_sha256_hex": request["policy_root_sha256_hex"],
+        "bundle_root_hash_hex": request["bundle_root_hash_hex"],
+        "issued_at_unix_ms": issued_at_unix_ms,
+        "trusted_time_unix_ms": trusted_time_unix_ms,
+        "expires_at_unix_ms": issued_at_unix_ms + 5 * 60 * 1000,
+        "revocation_epoch": 7,
+        "revoked_release_ids": revoked_release_ids or [],
+    }
+    head["signature_b64"] = _unit_v4_sign(
+        keypair, common.freshness_head_signing_payload(head)
+    )
+    return head
+
+
+def test_freshness_heads_require_nonce_bound_matching_two_of_three() -> None:
+    policy, request, keys = _freshness_test_context()
+    now = 1_800_000_000_000
+    heads = [
+        _signed_freshness_head(
+            authority_id=authority_id,
+            keypair=keys[authority_id],
+            request=request,
+            issued_at_unix_ms=now + index * 1_000,
+            trusted_time_unix_ms=now + 10_000,
+        )
+        for index, authority_id in enumerate(tuple(keys)[:2])
+    ]
+    state = common.validate_freshness_heads(heads, policy=policy, request=request)
+    assert state == {
+        "trusted_time_unix_ms": now + 10_000,
+        "revocation_epoch": 7,
+        "revoked_release_ids": [],
+        "authority_ids": ["authority-0", "authority-1"],
+        "quorum": 2,
+    }
+
+
+def test_freshness_heads_reject_request_substitution_and_excess_spread() -> None:
+    policy, request, keys = _freshness_test_context()
+    now = 1_800_000_000_000
+    authority_ids = tuple(keys)[:2]
+    heads = [
+        _signed_freshness_head(
+            authority_id=authority_id,
+            keypair=keys[authority_id],
+            request=request,
+            issued_at_unix_ms=now + index * 31_000,
+            trusted_time_unix_ms=now + 40_000,
+        )
+        for index, authority_id in enumerate(authority_ids)
+    ]
+    with pytest.raises(common.SccpReleaseError, match="30-second"):
+        common.validate_freshness_heads(heads, policy=policy, request=request)
+
+    substituted = copy.deepcopy(heads)
+    substituted[0]["nonce_hex"] = "43" * 32
+    substituted[0]["signature_b64"] = _unit_v4_sign(
+        keys[authority_ids[0]],
+        common.freshness_head_signing_payload(substituted[0]),
+    )
+    with pytest.raises(common.SccpReleaseError, match="exact live request"):
+        common.validate_freshness_heads(substituted, policy=policy, request=request)
+
+
+def test_freshness_quorum_tolerates_one_malformed_authority_response() -> None:
+    policy, request, keys = _freshness_test_context()
+    now = 1_800_000_000_000
+    good = [
+        _signed_freshness_head(
+            authority_id=authority_id,
+            keypair=keys[authority_id],
+            request=request,
+            issued_at_unix_ms=now + index * 1_000,
+            trusted_time_unix_ms=now + 10_000,
+        )
+        for index, authority_id in enumerate(tuple(keys)[:2])
+    ]
+    malformed = copy.deepcopy(good[0])
+    malformed["authority_id"] = "authority-2"
+    malformed["signature_b64"] = "AA=="
+    state = common.select_valid_freshness_quorum(
+        [*good, malformed], policy=policy, request=request
+    )
+    assert state["authority_ids"] == ["authority-0", "authority-1"]
+    assert state["quorum"] == 2
+
+
+def test_freshness_request_rejects_zero_nonce() -> None:
+    with pytest.raises(common.SccpReleaseError, match="nonzero"):
+        common.freshness_request(
+            nonce=bytes(32),
+            policy_root_sha256_hex="11" * 32,
+            bundle_root_hash_hex="22" * 32,
+        )
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    (
+        "http://fresh.example/v1/head",
+        "https://fresh.example:8443/v1/head",
+        "https://user@fresh.example/v1/head",
+        "https://127.0.0.1/v1/head",
+    ),
+)
+def test_freshness_authority_endpoint_is_public_canonical_https(
+    endpoint: str,
+) -> None:
+    with pytest.raises(common.SccpReleaseError):
+        common._validate_https_authority_endpoint(endpoint)
+
+
+def test_historical_readiness_never_becomes_ready_and_live_uses_authority_time() -> (
+    None
+):
+    now = 1_800_000_000_000
+    evidence = {
+        "release_id": "unit-live-release",
+        "created_at_unix_ms": now - 1_000,
+        "validator_built_at_unix_ms": now - 2_000,
+        "contract_builds": [
+            {
+                "counterparty_profile": profile,
+                "built_at_unix_ms": now - 2_000,
+            }
+            for profile in common.PROFILE_ORDER
+        ],
+        "lanes": [
+            {
+                "counterparty_profile": profile,
+                "inbound_status": "verified",
+                "outbound_status": "verified",
+                "lane_evidence_at_unix_ms": now - 1_000,
+                "canary_at_unix_ms": now - 1_000,
+                "destination_readback_at_unix_ms": now - 1_000,
+            }
+            for profile in common.PROFILE_ORDER
+        ],
+    }
+    policy = {
+        "issued_at_unix_ms": now - 1_000,
+        "expires_at_unix_ms": now + 1_000,
+        "proof_systems": [
+            {
+                "counterparty_profile": profile,
+                "audit_attestations": [
+                    {"role": role, "completed_at_unix_ms": now - 1_000}
+                    for role in common.CIRCUIT_AUDITOR_ROLES
+                ],
+            }
+            for profile in common.PROFILE_ORDER
+        ],
+    }
+    historical = common.readiness_summary(evidence, bundle_root_hash="33" * 32)
+    assert historical["mode"] == "historical"
+    assert historical["ready"] is False
+
+    live = common.live_readiness_summary(
+        evidence,
+        bundle_root_hash="33" * 32,
+        policy=policy,
+        freshness_state={
+            "trusted_time_unix_ms": now,
+            "revocation_epoch": 7,
+            "revoked_release_ids": [],
+            "authority_ids": ["authority-0", "authority-1"],
+        },
+    )
+    assert live["mode"] == "live"
+    assert live["ready"] is False
+    assert live["blocking_capabilities"] == [
+        "anchor-kat:runtime-verification-unavailable"
+    ]
+
+
 def validator_path() -> Path:
     """Return the corridor-built production validator or skip integration checks."""
 
@@ -113,13 +333,19 @@ def validator_path() -> Path:
         candidate = Path(configured)
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate
-        pytest.skip("configured production sccp_release_evidence validator is unavailable")
+        pytest.skip(
+            "configured production sccp_release_evidence validator is unavailable"
+        )
 
-    expected_hash = json.loads(FIXTURE_EVIDENCE.read_text(encoding="utf-8"))["validator"][
-        "executable_sha256_hex"
-    ]
+    expected_hash = json.loads(FIXTURE_EVIDENCE.read_text(encoding="utf-8"))[
+        "validator"
+    ]["executable_sha256_hex"]
     candidates = (
-        ROOT / "target" / "sccp-production-corridor" / "debug" / "sccp_release_evidence",
+        ROOT
+        / "target"
+        / "sccp-production-corridor"
+        / "debug"
+        / "sccp_release_evidence",
         ROOT / "target" / "debug" / "sccp_release_evidence",
     )
     for candidate in candidates:
@@ -159,11 +385,15 @@ def _unit_v4_sign(keypair: tuple[bytes, bytes, int], message: bytes) -> str:
     """Sign one unit-test payload without persisting private material."""
 
     public, prefix, scalar = keypair
-    nonce = int.from_bytes(hashlib.sha512(prefix + message).digest(), "little") % common._ED_L
+    nonce = (
+        int.from_bytes(hashlib.sha512(prefix + message).digest(), "little")
+        % common._ED_L
+    )
     encoded_r = common._ed_encode(common._ed_scalar_multiply(common._ED_BASE, nonce))
-    challenge = int.from_bytes(
-        hashlib.sha512(encoded_r + public + message).digest(), "little"
-    ) % common._ED_L
+    challenge = (
+        int.from_bytes(hashlib.sha512(encoded_r + public + message).digest(), "little")
+        % common._ED_L
+    )
     encoded_s = ((nonce + challenge * scalar) % common._ED_L).to_bytes(32, "little")
     signature = encoded_r + encoded_s
     assert common.verify_ed25519(public, signature, message)
@@ -236,12 +466,38 @@ def unit_v4_policy() -> tuple[
             "route_artifact_sha256_hex",
             "route_interface_sha256_hex",
             "route_runtime_hash_hex",
+            "replay_verifier_artifact_sha256_hex",
+            "replay_verifier_interface_sha256_hex",
+            "replay_verifier_runtime_hash_hex",
+            "mint_breaker_artifact_sha256_hex",
+            "mint_breaker_interface_sha256_hex",
+            "mint_breaker_runtime_hash_hex",
+            "ton_builder_policy_sha256_hex",
+            "ton_source_closure_sha256_hex",
+            "ton_output_lock_sha256_hex",
+            "validator_builder_policy_sha256_hex",
+            "validator_source_archive_sha256_hex",
+            "validator_dependency_inventory_sha256_hex",
+            "validator_cargo_metadata_closure_sha256_hex",
+            "validator_sbom_sha256_hex",
+            "validator_toolchain_inventory_sha256_hex",
+            "validator_sysroot_inventory_sha256_hex",
+            "validator_linker_sha256_hex",
+            "validator_build_recipe_sha256_hex",
+            "validator_build_environment_sha256_hex",
+            "validator_container_manifest_sha256_hex",
+            "validator_builder_report_sha256_hex",
+            "validator_executable_sha256_hex",
+            "validator_complete_build_closure_sha256_hex",
+            "validator_output_lock_sha256_hex",
         )
         proof_systems: list[dict[str, object]] = []
         for index, profile in enumerate(common.PROFILE_ORDER):
             proof_curve = common.PROOF_CURVE_BY_PROFILE[profile]
             circuit_artifact = bytes.fromhex(_unit_v4_hash(profile, "circuit-artifact"))
-            witness_generator = bytes.fromhex(_unit_v4_hash(profile, "witness-generator"))
+            witness_generator = bytes.fromhex(
+                _unit_v4_hash(profile, "witness-generator")
+            )
             public_signal_schema = bytes.fromhex(
                 common.BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH_HEX
                 if proof_curve == "bls12-381"
@@ -254,7 +510,9 @@ def unit_v4_policy() -> tuple[
                 "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
                 "checkpoint_height": 10_000 + index,
                 "checkpoint_block_hash_hex": _unit_v4_hash(profile, "checkpoint-block"),
-                "checkpoint_context_id_hex": _unit_v4_hash(profile, "checkpoint-context"),
+                "checkpoint_context_id_hex": _unit_v4_hash(
+                    profile, "checkpoint-context"
+                ),
                 "checkpoint_finality_artifact_hash_hex": _unit_v4_hash(
                     profile, "checkpoint-finality-artifact"
                 ),
@@ -283,8 +541,7 @@ def unit_v4_policy() -> tuple[
                 "prover_build_sha256_hex": _unit_v4_hash(profile, "prover-build"),
                 "toolchain_lock_sha256_hex": _unit_v4_hash(profile, "toolchain-lock"),
                 "destination_build": {
-                    field: _unit_v4_hash(profile, field)
-                    for field in destination_fields
+                    field: _unit_v4_hash(profile, field) for field in destination_fields
                 },
                 "audit_attestations": [],
             }
@@ -314,6 +571,125 @@ def unit_v4_policy() -> tuple[
         _UNIT_V4_POLICY_CACHE = (validated, validated_bytes, signing_keys)
     policy, policy_bytes, signing_keys = _UNIT_V4_POLICY_CACHE
     return copy.deepcopy(policy), policy_bytes, signing_keys
+
+
+def unit_final_v1_production_policy() -> tuple[dict[str, object], bytes]:
+    """Build an in-memory fully signed final-V1 production policy."""
+
+    policy, _, signing_keys = unit_v4_policy()
+    policy["schema"] = common.TRUST_POLICY_SCHEMA
+    policy["environment"] = "production"
+    policy["policy_id"] = "sccp-final-v1-ephemeral-unit-policy"
+    policy["issued_at_unix_ms"] = 1_800_000_000_000
+    policy["expires_at_unix_ms"] = (
+        policy["issued_at_unix_ms"] + common.MAX_POLICY_LIFETIME_MS
+    )
+    extra_hash_fields = (
+        "source_archive_sha256_hex",
+        "vendor_inventory_sha256_hex",
+        "toolchain_inventory_sha256_hex",
+        "sbom_sha256_hex",
+        "proving_key_sha256_hex",
+        "anchor_circuit_artifact_sha256_hex",
+        "anchor_proving_key_sha256_hex",
+        "anchor_verifying_key_sha256_hex",
+        "phase1_transcript_sha256_hex",
+        "phase2_transcript_sha256_hex",
+        "anchor_phase2_transcript_sha256_hex",
+        "anchor_witness_compiler_sha256_hex",
+        "anchor_prover_sha256_hex",
+        "fixed_key_verifier_sha256_hex",
+        "anchor_fixed_key_verifier_sha256_hex",
+        "message_kat_sha256_hex",
+        "anchor_kat_sha256_hex",
+    )
+    validator_identity = current_synthetic_validator_identity()
+    common_validator_build_hashes = {
+        field: _unit_v4_hash("validator-build", field)
+        for field in common.VALIDATOR_BUILD_RECEIPT_HASH_FIELDS
+    }
+    common_validator_build_hashes["validator_executable_sha256_hex"] = (
+        validator_identity["executable_sha256_hex"]
+    )
+    for proof in policy["proof_systems"]:
+        profile = proof["counterparty_profile"]
+        proof["anchor_circuit_id"] = proof["circuit_id"].replace(
+            "-groth16-", "-anchor-update-groth16-"
+        )
+        for field in extra_hash_fields:
+            proof[field] = _unit_v4_hash(profile, "final-v1", field)
+        proof["destination_build"].update(common_validator_build_hashes)
+        for audit in proof["audit_attestations"]:
+            audit["completed_at_unix_ms"] = 1_799_000_000_000
+            audit["unresolved_findings"] = {
+                "critical": 0,
+                "high": 0,
+                "medium": 0,
+            }
+            audit["signature_b64"] = _unit_v4_sign(
+                signing_keys[audit["role"]],
+                common.circuit_policy_signing_payload(
+                    proof, audit["report_sha256_hex"]
+                ),
+            )
+
+    root_keys = {
+        f"unit-policy-root-{index}": _unit_v4_keypair(f"policy-root:{index}")
+        for index in range(3)
+    }
+    policy["offline_policy_root_signers"] = [
+        {"signer_id": signer_id, "public_key_hex": keypair[0].hex()}
+        for signer_id, keypair in root_keys.items()
+    ]
+    freshness_keys = {
+        f"unit-freshness-{index}": _unit_v4_keypair(f"policy-freshness:{index}")
+        for index in range(3)
+    }
+    policy["freshness_authorities"] = [
+        {
+            "authority_id": authority_id,
+            "https_endpoint": f"https://unit-freshness-{index}.example/v1/head",
+            "public_key_hex": keypair[0].hex(),
+        }
+        for index, (authority_id, keypair) in enumerate(freshness_keys.items())
+    ]
+    policy["offline_policy_root_signatures"] = []
+    policy["policy_root_sha256_hex"] = common.policy_root_hash_hex(policy)
+    root_payload = common.policy_root_signing_payload(policy["policy_root_sha256_hex"])
+    policy["offline_policy_root_signatures"] = [
+        {
+            "signer_id": signer_id,
+            "algorithm": "ed25519",
+            "public_key_hex": root_keys[signer_id][0].hex(),
+            "signature_b64": _unit_v4_sign(root_keys[signer_id], root_payload),
+        }
+        for signer_id in tuple(root_keys)[:2]
+    ]
+    policy_bytes = common.canonical_json_file_bytes(policy)
+    return policy, policy_bytes
+
+
+def test_final_v1_production_policy_requires_signed_root_and_bounded_lifetime() -> None:
+    policy, policy_bytes = unit_final_v1_production_policy()
+    validated, validated_bytes = common.validate_trust_policy_bytes(policy_bytes)
+    assert validated == policy
+    assert validated_bytes == policy_bytes
+    assert len(validated["offline_policy_root_signatures"]) == 2
+    assert len(validated["freshness_authorities"]) == 3
+
+    overlong = copy.deepcopy(policy)
+    overlong["expires_at_unix_ms"] += 1
+    with pytest.raises(common.SccpReleaseError, match="at most 30 days"):
+        common.validate_trust_policy_bytes(common.canonical_json_file_bytes(overlong))
+
+    below_threshold = copy.deepcopy(policy)
+    below_threshold["offline_policy_root_signatures"] = below_threshold[
+        "offline_policy_root_signatures"
+    ][:1]
+    with pytest.raises(common.SccpReleaseError, match="two or three signatures"):
+        common.validate_trust_policy_bytes(
+            common.canonical_json_file_bytes(below_threshold)
+        )
 
 
 def unit_v4_fixture(tmp_path: Path, name: str = "unit-v4-source") -> dict[str, object]:
@@ -347,7 +723,9 @@ def unit_v4_fixture(tmp_path: Path, name: str = "unit-v4-source") -> dict[str, o
         artifacts.append(
             {
                 "path": relative,
-                "kind": "lane-evidence" if "/lanes/" in relative else "phase-transcript",
+                "kind": "lane-evidence"
+                if "/lanes/" in relative
+                else "phase-transcript",
                 "sha256_hex": hashlib.sha256(data).hexdigest(),
                 "size_bytes": len(data),
             }
@@ -464,6 +842,299 @@ def current_synthetic_validator_identity() -> dict[str, object]:
     return common._validate_validator_identity(identity)
 
 
+def unit_validator_build_verification(
+    tmp_path: Path,
+    policy: dict[str, object],
+) -> tuple[dict[str, object], str]:
+    """Create an API-shaped verification value backed by a tmp executable."""
+
+    executable = tmp_path / "verified-sccp-release-validator"
+    executable.write_bytes(b"synthetic-sccp-release-validator")
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+    destination_build = policy["proof_systems"][0]["destination_build"]
+    hashes = {
+        receipt_field: destination_build[policy_field]
+        for receipt_field, policy_field in zip(
+            common.VALIDATOR_BUILD_VERIFICATION_HASH_FIELDS,
+            common.VALIDATOR_BUILD_RECEIPT_HASH_FIELDS,
+        )
+    }
+    verification: dict[str, object] = {
+        "schema": common.VALIDATOR_BUILD_VERIFICATION_SCHEMA,
+        "source_commit": "ab" * 20,
+        "validator_built_at_unix_ms": 1_700_000_000_000,
+        "validator_build_receipt_sha256": _unit_v4_hash("validator-build-receipt"),
+        "validator_executable_path": str(executable.resolve()),
+        "validator_executable_size_bytes": executable.stat().st_size,
+        "hashes": hashes,
+    }
+    return verification, hashes["validator_builder_policy_sha256"]
+
+
+def test_validator_build_verification_binds_all_profiles_and_executable(
+    tmp_path: Path,
+) -> None:
+    policy, policy_bytes = unit_final_v1_production_policy()
+    policy, _ = common.validate_trust_policy_bytes(policy_bytes)
+    verification, trusted_builder_policy = unit_validator_build_verification(
+        tmp_path, policy
+    )
+    executable, mapped_hashes, built_at = common.validate_validator_build_verification(
+        verification,
+        policy,
+        trusted_policy_sha256=trusted_builder_policy,
+    )
+    assert executable == Path(verification["validator_executable_path"])
+    assert built_at == verification["validator_built_at_unix_ms"]
+    assert tuple(mapped_hashes) == common.VALIDATOR_BUILD_RECEIPT_HASH_FIELDS
+    assert tuple(mapped_hashes.values()) == tuple(
+        policy["proof_systems"][0]["destination_build"][field]
+        for field in common.VALIDATOR_BUILD_RECEIPT_HASH_FIELDS
+    )
+
+
+def test_validator_build_receipt_role_order_matches_rust() -> None:
+    source = common.RUST_VALIDATOR_SOURCE.read_text(encoding="utf-8")
+    declaration = re.search(
+        r"const VALIDATOR_BUILD_HASH_ROLES: \[&str; 15\] = \[(.*?)\];",
+        source,
+        re.DOTALL,
+    )
+    assert declaration is not None
+    assert tuple(re.findall(r'"([a-z0-9_]+)"', declaration.group(1))) == (
+        common.VALIDATOR_BUILD_RECEIPT_HASH_FIELDS
+    )
+
+
+def test_validator_build_consumer_contract_matches_builder_module() -> None:
+    assert (
+        common.VALIDATOR_BUILD_VERIFICATION_SCHEMA
+        == validator_builder.VERIFICATION_SCHEMA
+    )
+    assert (
+        common.VALIDATOR_BUILD_VERIFICATION_HASH_FIELDS
+        == validator_builder.RECEIPT_HASH_FIELDS
+    )
+
+
+def test_validator_build_verification_rejects_substitution(
+    tmp_path: Path,
+) -> None:
+    policy, policy_bytes = unit_final_v1_production_policy()
+    policy, _ = common.validate_trust_policy_bytes(policy_bytes)
+    verification, trusted_builder_policy = unit_validator_build_verification(
+        tmp_path, policy
+    )
+
+    with pytest.raises(common.SccpReleaseError, match="trusted builder policy"):
+        common.validate_validator_build_verification(
+            verification,
+            policy,
+            trusted_policy_sha256="ef" * 32,
+        )
+
+    altered_profile = copy.deepcopy(policy)
+    altered_profile["proof_systems"][2]["destination_build"][
+        "validator_output_lock_sha256_hex"
+    ] = "ef" * 32
+    with pytest.raises(common.SccpReleaseError, match="production proof profile"):
+        common.validate_validator_build_verification(
+            verification,
+            altered_profile,
+            trusted_policy_sha256=trusted_builder_policy,
+        )
+
+    missing_hash = copy.deepcopy(verification)
+    del missing_hash["hashes"]["validator_sbom_sha256"]
+    with pytest.raises(common.SccpReleaseError, match="inexact field set"):
+        common.validate_validator_build_verification(
+            missing_hash,
+            policy,
+            trusted_policy_sha256=trusted_builder_policy,
+        )
+
+    aliased_role = copy.deepcopy(verification)
+    aliased_role["hashes"]["validator_output_lock_sha256"] = aliased_role["hashes"][
+        "validator_complete_build_closure_sha256"
+    ]
+    with pytest.raises(common.SccpReleaseError, match="distinct"):
+        common.validate_validator_build_verification(
+            aliased_role,
+            policy,
+            trusted_policy_sha256=trusted_builder_policy,
+        )
+
+    substituted = tmp_path / "substituted-validator"
+    substituted.write_bytes(b"substituted-sccp-release-validator")
+    substituted.chmod(substituted.stat().st_mode | stat.S_IXUSR)
+    wrong_executable = copy.deepcopy(verification)
+    wrong_executable["validator_executable_path"] = str(substituted.resolve())
+    wrong_executable["validator_executable_size_bytes"] = substituted.stat().st_size
+    with pytest.raises(common.SccpReleaseError, match="differs from its build receipt"):
+        common.validate_validator_build_verification(
+            wrong_executable,
+            policy,
+            trusted_policy_sha256=trusted_builder_policy,
+        )
+
+    wrong_size = copy.deepcopy(verification)
+    wrong_size["validator_executable_size_bytes"] += 1
+    with pytest.raises(common.SccpReleaseError, match="size differs"):
+        common.validate_validator_build_verification(
+            wrong_size,
+            policy,
+            trusted_policy_sha256=trusted_builder_policy,
+        )
+
+
+def test_validator_build_release_resolver_invokes_authenticated_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy, policy_bytes = unit_final_v1_production_policy()
+    policy, _ = common.validate_trust_policy_bytes(policy_bytes)
+    verification, trusted_builder_policy = unit_validator_build_verification(
+        tmp_path, policy
+    )
+    release_directory = tmp_path / "published-validator-release"
+    observed: list[tuple[Path, str]] = []
+
+    def fake_verify_release_directory(
+        path: Path, *, trusted_policy_sha256: str
+    ) -> dict[str, object]:
+        observed.append((path, trusted_policy_sha256))
+        return verification
+
+    monkeypatch.setattr(
+        validator_builder,
+        "verify_release_directory",
+        fake_verify_release_directory,
+    )
+    executable, mapped_hashes, built_at = common.verify_validator_build_release(
+        release_directory,
+        policy,
+        trusted_policy_sha256=trusted_builder_policy,
+    )
+    assert observed == [(release_directory, trusted_builder_policy)]
+    assert executable == Path(verification["validator_executable_path"])
+    assert built_at == verification["validator_built_at_unix_ms"]
+    assert (
+        mapped_hashes["validator_executable_sha256_hex"]
+        == verification["hashes"]["validator_executable_sha256"]
+    )
+
+
+def test_verified_validator_file_swap_is_rejected_before_execution(
+    tmp_path: Path,
+) -> None:
+    policy, policy_bytes = unit_final_v1_production_policy()
+    policy, _ = common.validate_trust_policy_bytes(policy_bytes)
+    verification, trusted_builder_policy = unit_validator_build_verification(
+        tmp_path, policy
+    )
+    executable, mapped_hashes, _ = common.validate_validator_build_verification(
+        verification,
+        policy,
+        trusted_policy_sha256=trusted_builder_policy,
+    )
+    marker = tmp_path / "substitute-executed"
+    executable.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+    with pytest.raises(common.SccpReleaseError, match="changed before execution"):
+        common._invoke_validator_command(
+            executable,
+            ("identity",),
+            mapped_hashes["validator_executable_sha256_hex"],
+        )
+    assert not marker.exists()
+
+
+def test_verified_validator_executes_private_copy_after_source_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validator = tmp_path / "verified-validator"
+    validator.write_text("#!/bin/sh\nprintf 'trusted\\n'\n", encoding="utf-8")
+    validator.chmod(validator.stat().st_mode | stat.S_IXUSR)
+    expected_hash = hashlib.sha256(validator.read_bytes()).hexdigest()
+    marker = tmp_path / "substitute-executed"
+    write_staged_validator = common._write_staged_validator
+
+    def stage_then_mutate_source(path: Path, executable: bytes) -> None:
+        write_staged_validator(path, executable)
+        validator.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+        validator.chmod(validator.stat().st_mode | stat.S_IXUSR)
+
+    monkeypatch.setattr(common, "_write_staged_validator", stage_then_mutate_source)
+    stdout, stderr, return_code, executed_hash = common._invoke_validator_command(
+        validator,
+        (),
+        expected_hash,
+    )
+    assert (stdout, stderr, return_code, executed_hash) == (
+        b"trusted\n",
+        b"",
+        0,
+        expected_hash,
+    )
+    assert not marker.exists()
+
+
+def test_validator_build_verification_failure_cannot_select_executable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy, policy_bytes = unit_final_v1_production_policy()
+    policy, _ = common.validate_trust_policy_bytes(policy_bytes)
+    marker = tmp_path / "untrusted-executed"
+    executable = tmp_path / "untrusted-validator"
+    executable.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+
+    def reject_release(*_args, **_kwargs):
+        raise validator_builder.ValidatorBuilderError("unit rejected release")
+
+    monkeypatch.setattr(
+        validator_builder,
+        "verify_release_directory",
+        reject_release,
+    )
+    with pytest.raises(common.SccpReleaseError, match="failed authentication"):
+        common.verify_validator_build_release(
+            tmp_path / "rejected-release",
+            policy,
+            trusted_policy_sha256=policy["proof_systems"][0]["destination_build"][
+                "validator_builder_policy_sha256_hex"
+            ],
+        )
+    assert not marker.exists()
+
+
+def test_production_bundle_apis_reject_raw_validator_path(tmp_path: Path) -> None:
+    policy, policy_bytes = unit_final_v1_production_policy()
+    policy, policy_bytes = common.validate_trust_policy_bytes(policy_bytes)
+    raw_validator = tmp_path / "ambient-validator"
+
+    with pytest.raises(common.SccpReleaseError, match="unauthenticated validator path"):
+        builder.build_bundle(
+            tmp_path / "missing-evidence.json",
+            tmp_path,
+            tmp_path / "new-bundle",
+            tmp_path / "policy.json",
+            policy,
+            policy_bytes,
+            raw_validator,
+        )
+    with pytest.raises(common.SccpReleaseError, match="unauthenticated validator path"):
+        verifier.verify_bundle(
+            tmp_path / "missing-bundle",
+            tmp_path / "policy.json",
+            policy,
+            policy_bytes,
+            raw_validator,
+        )
+
+
 def synthetic_bundle_evidence(
     *, production_semantics: bool
 ) -> tuple[dict[str, object], bytes, dict[str, object]]:
@@ -533,9 +1204,8 @@ def reseal_bundle_index(index: dict[str, object]) -> None:
         trust_policy_id=index["trust_policy_id"],
         trust_policy_sha256_hex=index["trust_policy_sha256_hex"],
         validator=index["validator"],
-        validator_executable_sha256_hex=index[
-            "validator_executable_sha256_hex"
-        ],
+        validator_executable_sha256_hex=index["validator_executable_sha256_hex"],
+        environment=index["environment"],
     )
 
 
@@ -627,7 +1297,7 @@ def invoke_release_validator(
 
 
 def test_retired_v3_fixture_is_rejected_by_the_policy_loader() -> None:
-    with pytest.raises(common.SccpReleaseError, match="protocol_version"):
+    with pytest.raises(common.SccpReleaseError, match="schema/environment"):
         common.load_trust_policy(FIXTURE_POLICY, allow_test_policy=True)
 
 
@@ -647,7 +1317,9 @@ def test_rust_independently_rejects_the_retired_v3_fixture() -> None:
     assert result.stdout == ""
 
 
-@pytest.mark.parametrize("case", ("release-replay", "audit-replay", "high-s", "small-order"))
+@pytest.mark.parametrize(
+    "case", ("release-replay", "audit-replay", "high-s", "small-order")
+)
 def test_rust_release_trust_rejects_malformed_and_cross_role_replay(
     tmp_path: Path, case: str
 ) -> None:
@@ -666,7 +1338,9 @@ def test_rust_release_trust_rejects_malformed_and_cross_role_replay(
             base64.b64decode(evidence["provenance"][0]["signature_b64"], validate=True)
         )
         signature[32:] = b"\xff" * 32
-        evidence["provenance"][0]["signature_b64"] = base64.b64encode(signature).decode()
+        evidence["provenance"][0]["signature_b64"] = base64.b64encode(
+            signature
+        ).decode()
     else:
         policy["roles"][0]["public_key_hex"] = "01" + "00" * 31
         evidence["provenance"][0]["public_key_hex"] = "01" + "00" * 31
@@ -721,9 +1395,7 @@ def test_rust_release_trust_rejects_semantic_policy_and_anchor_drift(
     elif case == "zero-witness":
         proof["witness_generator_sha256_hex"] = "00" * 32
     elif case == "aliased-witness":
-        proof["witness_generator_sha256_hex"] = proof[
-            "circuit_artifact_sha256_hex"
-        ]
+        proof["witness_generator_sha256_hex"] = proof["circuit_artifact_sha256_hex"]
     elif case == "signal-schema":
         proof["public_signal_schema_hash_hex"] = "51" * 32
     elif case == "profile-hash":
@@ -784,12 +1456,14 @@ def test_fixture_cli_proves_the_retired_v3_fixture_is_rejected() -> None:
         "release_id": "sccp-v1-typed-fixture-20260711",
         "rejected": True,
         "retired_protocol_version": 3,
-        "schema": "sccp-retired-v3-fixture-rejection-v1",
+        "schema": "sccp-retired-prefinal-fixture-rejection-final-v1",
     }
 
 
 @pytest.mark.parametrize("script", PRODUCTION_CLIS)
-def test_production_clis_cannot_accept_fixture_policy(script: Path, tmp_path: Path) -> None:
+def test_production_clis_cannot_accept_fixture_policy(
+    script: Path, tmp_path: Path
+) -> None:
     if script.name == "sccp_verify_release_bundle.py":
         source = tmp_path
     else:
@@ -800,8 +1474,10 @@ def test_production_clis_cannot_accept_fixture_policy(script: Path, tmp_path: Pa
         str(source),
         "--trust-policy",
         str(FIXTURE_POLICY),
-        "--rust-validator",
-        str(FIXTURE_RUNNER),
+        "--validator-build-release",
+        str(tmp_path / "validator-build-release"),
+        "--trusted-validator-builder-policy-sha256",
+        "11" * 32,
     ]
     if script.name == "sccp_release_bundle.py":
         command.extend(("--output-dir", str(tmp_path / "production-output")))
@@ -809,7 +1485,10 @@ def test_production_clis_cannot_accept_fixture_policy(script: Path, tmp_path: Pa
         command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
     assert result.returncode == 1
-    assert "schema/environment is not valid" in result.stderr
+    assert (
+        "schema/environment is not valid" in result.stderr
+        or "inexact field set" in result.stderr
+    )
 
 
 @pytest.mark.parametrize(
@@ -936,6 +1615,22 @@ def test_production_clis_cannot_accept_fixture_policy(script: Path, tmp_path: Pa
                 "route_artifact_sha256_hex"
             ]
         ),
+        lambda value: value["proof_systems"][0]["destination_build"].update(
+            ton_builder_policy_sha256_hex="00" * 32
+        ),
+        lambda value: value["proof_systems"][0]["destination_build"].update(
+            ton_source_closure_sha256_hex=value["proof_systems"][0][
+                "destination_build"
+            ]["ton_output_lock_sha256_hex"]
+        ),
+        lambda value: value["proof_systems"][0]["destination_build"].update(
+            validator_builder_policy_sha256_hex="00" * 32
+        ),
+        lambda value: value["proof_systems"][0]["destination_build"].update(
+            validator_output_lock_sha256_hex=value["proof_systems"][0][
+                "destination_build"
+            ]["validator_complete_build_closure_sha256_hex"]
+        ),
     ),
 )
 def test_external_trust_policy_rejects_substitution_and_semantic_drift(
@@ -1024,7 +1719,9 @@ def test_production_loader_rejects_test_policy_without_override() -> None:
         common.load_trust_policy(FIXTURE_POLICY)
 
 
-def test_production_loader_rejects_relabelled_public_fixture_keys(tmp_path: Path) -> None:
+def test_production_loader_rejects_relabelled_public_fixture_keys(
+    tmp_path: Path,
+) -> None:
     published_fixture = json.loads(FIXTURE_POLICY.read_text(encoding="utf-8"))
     policy, _, _ = unit_v4_policy()
     policy["schema"] = common.TRUST_POLICY_SCHEMA
@@ -1036,7 +1733,7 @@ def test_production_loader_rejects_relabelled_public_fixture_keys(tmp_path: Path
     ]
     path = tmp_path / "forged-production-policy.json"
     write_json(path, policy)
-    with pytest.raises(common.SccpReleaseError, match="fixture-only"):
+    with pytest.raises(common.SccpReleaseError, match="fixture-only|inexact field set"):
         common.load_trust_policy(path)
 
 
@@ -1046,10 +1743,12 @@ def test_policy_rejects_unknown_and_duplicate_json_keys(tmp_path: Path) -> None:
     unknown["allow_test_keys"] = True
     unknown_path = tmp_path / "unknown.json"
     write_json(unknown_path, unknown)
-    with pytest.raises(common.SccpReleaseError, match="inexact field set"):
+    with pytest.raises(
+        common.SccpReleaseError, match="schema/environment|inexact field set"
+    ):
         common.load_trust_policy(unknown_path, allow_test_policy=True)
     duplicate_path = tmp_path / "duplicate.json"
-    duplicate_path.write_text(raw.replace('{', '{"schema":"duplicate",', 1))
+    duplicate_path.write_text(raw.replace("{", '{"schema":"duplicate",', 1))
     with pytest.raises(common.SccpReleaseError):
         common.load_trust_policy(duplicate_path, allow_test_policy=True)
 
@@ -1074,7 +1773,9 @@ def test_policy_rejects_unknown_and_duplicate_json_keys(tmp_path: Path) -> None:
         lambda value: value["validator"].update(protocol_version=True),
         lambda value: value["validator"].update(crate_name="placeholder-validator"),
         lambda value: value["validator"].update(enabled_features=["test-fixtures"]),
-        lambda value: value["validator"].update(target_triple="unknown-target-placeholder"),
+        lambda value: value["validator"].update(
+            target_triple="unknown-target-placeholder"
+        ),
         lambda value: value["validator"].update(
             rustc_version="rustc 0.0.0 (000000000 1970-01-01)"
         ),
@@ -1194,26 +1895,21 @@ def test_bundle_index_accepts_exact_fixture_and_production_inventory(
     )
     assert common.validate_bundle_index(copy.deepcopy(index)) == index
     assert (
-        common.validate_bundle_index_against_evidence(
-            index, evidence, evidence_bytes
-        )
+        common.validate_bundle_index_against_evidence(index, evidence, evidence_bytes)
         == index
     )
     expected_artifacts = len(common.REQUIRED_PHASES) + len(common.PROFILE_ORDER)
     if production_semantics:
-        expected_artifacts += (
-            len(common.PROFILE_ORDER) * len(common.SEMANTIC_ARTIFACT_ROLES)
-            + len(common.PROFILE_ORDER) * len(common.CIRCUIT_AUDITOR_ROLES)
-        )
+        expected_artifacts += len(common.PROFILE_ORDER) * len(
+            common.SEMANTIC_ARTIFACT_ROLES
+        ) + len(common.PROFILE_ORDER) * len(common.CIRCUIT_AUDITOR_ROLES)
     assert len(index["entries"]) == expected_artifacts + 1
 
 
-def test_bundle_index_accepts_policy_shared_semantic_roles_but_distinct_proofs() -> None:
+def test_bundle_index_rejects_collapsed_message_and_anchor_artifact_roles() -> None:
     evidence, _, _ = synthetic_bundle_evidence(production_semantics=True)
     shared_kinds = {
-        kind
-        for _, kind, _ in common.SEMANTIC_ARTIFACT_ROLES
-        if kind != "honest-proof"
+        kind for _, kind, _ in common.SEMANTIC_ARTIFACT_ROLES if kind != "honest-proof"
     }
     retained_shared: set[str] = set()
     retained = []
@@ -1228,18 +1924,16 @@ def test_bundle_index_accepts_policy_shared_semantic_roles_but_distinct_proofs()
     evidence_bytes = common.canonical_json_file_bytes(evidence)
     policy = {"policy_id": "synthetic-bundle-policy-v1"}
     policy_bytes = common.canonical_json_file_bytes(policy)
-    index = common.make_bundle_index(
-        evidence,
-        evidence_bytes,
-        policy,
-        policy_bytes,
-        evidence["validator"]["executable_sha256_hex"],
-    )
-    assert sum(
-        entry["kind"] == "honest-proof" for entry in index["entries"]
-    ) == len(common.PROFILE_ORDER)
-    for kind in shared_kinds:
-        assert sum(entry["kind"] == kind for entry in index["entries"]) == 1
+    with pytest.raises(
+        common.SccpReleaseError, match="invalid .* entry count|distinct .* KAT"
+    ):
+        common.make_bundle_index(
+            evidence,
+            evidence_bytes,
+            policy,
+            policy_bytes,
+            evidence["validator"]["executable_sha256_hex"],
+        )
 
 
 @pytest.mark.parametrize(
@@ -1256,7 +1950,7 @@ def test_bundle_index_accepts_policy_shared_semantic_roles_but_distinct_proofs()
                     "size_bytes": 1,
                 }
             ),
-            "semantic-circuit",
+            "not part of",
         ),
         (
             lambda entries: entries.__setitem__(
@@ -1268,13 +1962,9 @@ def test_bundle_index_accepts_policy_shared_semantic_roles_but_distinct_proofs()
         (
             lambda entries: entries.__setitem__(
                 slice(None),
-                [
-                    entry
-                    for entry in entries
-                    if entry["kind"] != "witness-generator"
-                ],
+                [entry for entry in entries if entry["kind"] != "witness-compiler"],
             ),
-            "witness-generator",
+            "witness-compiler",
         ),
         (
             lambda entries: entries.append(
@@ -1287,7 +1977,7 @@ def test_bundle_index_accepts_policy_shared_semantic_roles_but_distinct_proofs()
                     "size_bytes": 1,
                 }
             ),
-            "honest-proof",
+            "not part of",
         ),
     ),
 )
@@ -1305,10 +1995,8 @@ def test_bundle_index_rejects_fixture_with_partial_semantic_inventory() -> None:
     _, _, index = synthetic_bundle_evidence(production_semantics=False)
     index["entries"].append(
         {
-            "path": "artifacts/semantic/circuit-artifact/"
-            + "93" * 32
-            + "-circuit.bin",
-            "kind": "semantic-circuit",
+            "path": "artifacts/semantic/message-r1cs/" + "93" * 32 + "-message.r1cs",
+            "kind": "r1cs",
             "sha256_hex": "93" * 32,
             "size_bytes": 1,
         }
@@ -1325,36 +2013,30 @@ def test_bundle_index_rejects_fixture_with_partial_semantic_inventory() -> None:
             next(
                 position
                 for position, entry in enumerate(index["entries"])
-                if entry["kind"] == "semantic-circuit"
+                if entry["kind"] == "r1cs"
             )
         ),
         lambda index: index["entries"].__setitem__(
             next(
                 position
                 for position, entry in enumerate(index["entries"])
-                if entry["kind"] == "semantic-circuit"
+                if entry["kind"] == "r1cs"
             ),
             {
-                **next(
-                    entry
-                    for entry in index["entries"]
-                    if entry["kind"] == "semantic-circuit"
-                ),
-                "path": "artifacts/semantic/circuit-artifact/"
+                **next(entry for entry in index["entries"] if entry["kind"] == "r1cs"),
+                "path": "artifacts/semantic/message-r1cs/"
                 + "94" * 32
-                + "-circuit.bin",
+                + "-message.r1cs",
                 "sha256_hex": "94" * 32,
             },
         ),
         lambda index: next(
-            entry for entry in index["entries"] if entry["kind"] == "semantic-circuit"
+            entry for entry in index["entries"] if entry["kind"] == "r1cs"
         ).update(size_bytes=2),
         lambda index: next(
-            entry for entry in index["entries"] if entry["kind"] == "semantic-circuit"
+            entry for entry in index["entries"] if entry["kind"] == "r1cs"
         ).update(sha256_hex="95" * 32),
-        lambda index: swap_first_bundle_entry_kinds(
-            index, "semantic-circuit", "witness-generator"
-        ),
+        lambda index: swap_first_bundle_entry_kinds(index, "r1cs", "witness-compiler"),
     ),
 )
 def test_bundle_index_must_exactly_match_signed_production_artifacts(mutation) -> None:
@@ -1365,9 +2047,7 @@ def test_bundle_index_must_exactly_match_signed_production_artifacts(mutation) -
     reseal_bundle_index(index)
     common.validate_bundle_index(index)
     with pytest.raises(common.SccpReleaseError, match="exactly equal"):
-        common.validate_bundle_index_against_evidence(
-            index, evidence, evidence_bytes
-        )
+        common.validate_bundle_index_against_evidence(index, evidence, evidence_bytes)
 
 
 def test_bundle_index_rejects_omission_plus_untrusted_extra_substitution() -> None:
@@ -1377,21 +2057,17 @@ def test_bundle_index_rejects_omission_plus_untrusted_extra_substitution() -> No
     position = next(
         position
         for position, entry in enumerate(index["entries"])
-        if entry["kind"] == "semantic-circuit"
+        if entry["kind"] == "r1cs"
     )
     index["entries"][position] = {
         **index["entries"][position],
-        "path": "artifacts/semantic/circuit-artifact/"
-        + "96" * 32
-        + "-circuit.bin",
+        "path": "artifacts/semantic/message-r1cs/" + "96" * 32 + "-message.r1cs",
         "sha256_hex": "96" * 32,
     }
     reseal_bundle_index(index)
     common.validate_bundle_index(index)
     with pytest.raises(common.SccpReleaseError, match="exactly equal"):
-        common.validate_bundle_index_against_evidence(
-            index, evidence, evidence_bytes
-        )
+        common.validate_bundle_index_against_evidence(index, evidence, evidence_bytes)
 
 
 def test_bundle_index_rejects_cross_entry_hash_alias() -> None:
@@ -1461,7 +2137,9 @@ def test_bundle_index_rejects_path_aliases_and_traversal(hostile_path: str) -> N
         ),
     ),
 )
-def test_bundle_index_rejects_core_kind_and_count_confusion(mutation, match: str) -> None:
+def test_bundle_index_rejects_core_kind_and_count_confusion(
+    mutation, match: str
+) -> None:
     _, _, index = synthetic_bundle_evidence(production_semantics=False)
     mutation(index["entries"])
     reseal_bundle_index(index)
@@ -1577,7 +2255,9 @@ def test_secret_scanner_rejects_plain_and_encoded_credentials(payload: bytes) ->
 def test_secret_scanner_rejects_deep_encoding_and_colon_credentials() -> None:
     encoded = b"private_key=abc"
     for _ in range(6):
-        encoded = encoded.replace(b"%", b"%25").replace(b"_", b"%5f").replace(b"=", b"%3d")
+        encoded = (
+            encoded.replace(b"%", b"%25").replace(b"_", b"%5f").replace(b"=", b"%3d")
+        )
     with pytest.raises(common.SccpReleaseError, match="credential material"):
         common.reject_secret_material(encoded, label="nested artifact")
     with pytest.raises(common.SccpReleaseError, match="credential material"):
@@ -1625,7 +2305,9 @@ def test_secret_scanner_allows_public_hashes_keys_signatures_and_safe_jwt() -> N
             "signed_claim": b".".join((header, payload, b"c2lnbmF0dXJl")).decode(),
         }
     )
-    common.reject_secret_material(public_material, label="public cryptographic material")
+    common.reject_secret_material(
+        public_material, label="public cryptographic material"
+    )
 
 
 def test_secret_scanner_errors_never_echo_untrusted_labels_or_values() -> None:
@@ -1698,6 +2380,40 @@ def test_phase_log_runner_publishes_private_hashed_manifest_and_exit_status(
     assert stat.S_IMODE(log_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
     assert stat.S_IMODE(manifest_path.stat().st_mode) == 0o600
+
+
+def test_phase_log_runner_rejects_in_place_mutation_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log_dir = tmp_path / "corridor-logs"
+    real_readback = phase_log_runner._readback
+
+    def mutate_then_readback(
+        directory_descriptor: int,
+        descriptor: int,
+        name: str,
+        expected_size: int,
+    ) -> tuple[bytes, str, tuple[int, int]]:
+        if name.endswith(".log"):
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            os.write(descriptor, b"X")
+            os.fsync(descriptor)
+        return real_readback(
+            directory_descriptor,
+            descriptor,
+            name,
+            expected_size,
+        )
+
+    monkeypatch.setattr(phase_log_runner, "_readback", mutate_then_readback)
+    with pytest.raises(phase_log_runner.PhaseLogError, match="captured command stream"):
+        phase_log_runner.run_phase(
+            str(log_dir),
+            "python-sdk",
+            (sys.executable, "-c", "print('safe')"),
+        )
+    assert not (log_dir / "python-sdk.log").exists()
+    assert not (log_dir / "python-sdk.manifest.json").exists()
 
 
 def test_phase_log_runner_never_overwrites_existing_publication(tmp_path: Path) -> None:
@@ -1837,7 +2553,11 @@ def test_rust_validator_rejects_opaque_booleans_as_proof(tmp_path: Path) -> None
             "profile": "ethereum-mainnet",
             "inbound": {
                 "status": "available",
-                "evidence": {"proof_valid": True, "finalized": True, "route_matches": True},
+                "evidence": {
+                    "proof_valid": True,
+                    "finalized": True,
+                    "route_matches": True,
+                },
             },
             "outbound": {
                 "status": "available",
@@ -1857,10 +2577,16 @@ def test_rust_validator_rejects_mutated_native_proof_bytes(tmp_path: Path) -> No
     marker = '"source_event_digest"'
     position = text.find(marker)
     assert position >= 0
-    nibble = next(index for index in range(position, len(text)) if text[index] in "123456789abcdef")
+    nibble = next(
+        index
+        for index in range(position, len(text))
+        if text[index] in "123456789abcdef"
+    )
     replacement = "0" if text[nibble] != "0" else "1"
     artifact = tmp_path / "mutated.json"
-    artifact.write_text(text[:nibble] + replacement + text[nibble + 1 :], encoding="utf-8")
+    artifact.write_text(
+        text[:nibble] + replacement + text[nibble + 1 :], encoding="utf-8"
+    )
     result = invoke_validator(artifact)
     assert result.returncode != 0
     assert result.stdout == ""
@@ -1874,7 +2600,9 @@ def test_rust_validator_rejects_noncanonical_lane_json(tmp_path: Path) -> None:
     assert invoke_validator(pretty).returncode != 0
     duplicate = tmp_path / "duplicate.json"
     raw = source.read_text(encoding="utf-8")
-    duplicate.write_text(raw.replace("{", '{"schema":"duplicate",', 1), encoding="utf-8")
+    duplicate.write_text(
+        raw.replace("{", '{"schema":"duplicate",', 1), encoding="utf-8"
+    )
     assert invoke_validator(duplicate).returncode != 0
 
 
@@ -1897,7 +2625,9 @@ def test_validator_substitution_is_rejected_before_execution(tmp_path: Path) -> 
     assert not marker.exists()
 
 
-def test_authenticated_validator_output_flood_is_bounded(tmp_path: Path, monkeypatch) -> None:
+def test_authenticated_validator_output_flood_is_bounded(
+    tmp_path: Path, monkeypatch
+) -> None:
     flood = tmp_path / "flood"
     flood.write_text("#!/bin/sh\nyes x\n", encoding="utf-8")
     flood.chmod(flood.stat().st_mode | stat.S_IXUSR)
@@ -1991,9 +2721,7 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
         ),
         lambda anchor: anchor.update(checkpoint_height=True),
         lambda anchor: anchor.update(checkpoint_context_id_hex="00" * 32),
-        lambda anchor: anchor.update(
-            checkpoint_finality_artifact_hash_hex="00" * 32
-        ),
+        lambda anchor: anchor.update(checkpoint_finality_artifact_hash_hex="00" * 32),
         lambda anchor: anchor.update(checkpoint_context_id_hex=True),
         lambda anchor: anchor.update(
             checkpoint_finality_artifact_hash_hex=bytes([0x75]) * 32
@@ -2005,19 +2733,13 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
             checkpoint_context_id_hex=anchor["checkpoint_block_hash_hex"]
         ),
         lambda anchor: anchor.update(
-            checkpoint_context_id_hex=anchor[
-                "checkpoint_finality_artifact_hash_hex"
-            ]
+            checkpoint_context_id_hex=anchor["checkpoint_finality_artifact_hash_hex"]
         ),
         lambda anchor: anchor.update(
-            checkpoint_finality_artifact_hash_hex=anchor[
-                "checkpoint_context_id_hex"
-            ]
+            checkpoint_finality_artifact_hash_hex=anchor["checkpoint_context_id_hex"]
         ),
         lambda anchor: anchor.update(
-            checkpoint_finality_artifact_hash_hex=anchor[
-                "checkpoint_block_hash_hex"
-            ]
+            checkpoint_finality_artifact_hash_hex=anchor["checkpoint_block_hash_hex"]
         ),
         lambda anchor: anchor.update(
             checkpoint_finality_artifact_hash_hex=anchor["chain_id_hash_hex"]
@@ -2078,7 +2800,7 @@ def test_validator_build_identity_matches_rust_golden() -> None:
         "build_identity_hex": "08" * 32,
     }
     assert common.validator_build_identity_hex(identity) == (
-        "8ed0a7bfbff79b302fe1193ca51a992b65b7ab136862ecc871efcce391449414"
+        "7984232f2642167733e7d4ad369d994f9d2b5721fe0a04819ffe854072c13f31"
     )
 
 
@@ -2103,7 +2825,9 @@ def test_validator_build_attestation_rejects_placeholders_aliases_and_drift() ->
         "workspace_manifest_sha256_hex": hashlib.sha256(
             common.WORKSPACE_MANIFEST.read_bytes()
         ).hexdigest(),
-        "cargo_lock_sha256_hex": hashlib.sha256(common.CARGO_LOCK.read_bytes()).hexdigest(),
+        "cargo_lock_sha256_hex": hashlib.sha256(
+            common.CARGO_LOCK.read_bytes()
+        ).hexdigest(),
         "toolchain_lock_sha256_hex": hashlib.sha256(
             common.RUST_TOOLCHAIN_LOCK.read_bytes()
         ).hexdigest(),
@@ -2116,15 +2840,11 @@ def test_validator_build_attestation_rejects_placeholders_aliases_and_drift() ->
     mutations = (
         lambda value: value.update(enabled_features=[]),
         lambda value: value.update(enabled_features=["test-fixtures"]),
-        lambda value: value.update(
-            enabled_features=["dev-tools", "test-fixtures"]
-        ),
+        lambda value: value.update(enabled_features=["dev-tools", "test-fixtures"]),
         lambda value: value.update(enabled_features=["dev-tools", "dev-tools"]),
         lambda value: value.update(build_profile=True),
         lambda value: value.update(target_triple="unknown-target-placeholder"),
-        lambda value: value.update(
-            rustc_version="rustc 0.0.0 (000000000 1970-01-01)"
-        ),
+        lambda value: value.update(rustc_version="rustc 0.0.0 (000000000 1970-01-01)"),
         lambda value: value.update(executable_sha256_hex="00" * 32),
         lambda value: value.update(
             toolchain_lock_sha256_hex=value["source_sha256_hex"]
@@ -2159,7 +2879,9 @@ def test_validator_build_attestation_rejects_historical_bls_feature() -> None:
         "workspace_manifest_sha256_hex": hashlib.sha256(
             common.WORKSPACE_MANIFEST.read_bytes()
         ).hexdigest(),
-        "cargo_lock_sha256_hex": hashlib.sha256(common.CARGO_LOCK.read_bytes()).hexdigest(),
+        "cargo_lock_sha256_hex": hashlib.sha256(
+            common.CARGO_LOCK.read_bytes()
+        ).hexdigest(),
         "toolchain_lock_sha256_hex": hashlib.sha256(
             common.RUST_TOOLCHAIN_LOCK.read_bytes()
         ).hexdigest(),
@@ -2226,6 +2948,7 @@ def synthetic_production_semantic_inventory() -> tuple[
     }
     contents: dict[str, bytes] = {}
     artifact_by_path: dict[str, dict[str, object]] = {}
+    completed_at_unix_ms = 1_800_000_000_000
     for profile_index, profile in enumerate(common.PROFILE_ORDER):
         proof_curve = common.PROOF_CURVE_BY_PROFILE[profile]
         public_signal_schema_hash = (
@@ -2245,6 +2968,7 @@ def synthetic_production_semantic_inventory() -> tuple[
                 "path": path,
                 "sha256_hex": digest,
                 "size_bytes": len(content),
+                "declared_max_bytes": len(content),
             }
             artifact_rows.append(row)
             role_digests[role] = digest
@@ -2254,11 +2978,13 @@ def synthetic_production_semantic_inventory() -> tuple[
                 "kind": kind,
                 "sha256_hex": digest,
                 "size_bytes": len(content),
+                "declared_max_bytes": len(content),
+                "created_at_unix_ms": completed_at_unix_ms,
             }
 
         semantic_profile_hash = common.semantic_proof_profile_hash(
-            bytes.fromhex(role_digests["circuit-artifact"]),
-            bytes.fromhex(role_digests["witness-generator"]),
+            bytes.fromhex(role_digests["message-r1cs"]),
+            bytes.fromhex(role_digests["message-witness-compiler"]),
             bytes.fromhex(public_signal_schema_hash),
             proof_curve,
         ).hex()
@@ -2268,12 +2994,8 @@ def synthetic_production_semantic_inventory() -> tuple[
             "protocol_version": common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION,
             "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
             "checkpoint_height": 100 + profile_index,
-            "checkpoint_block_hash_hex": _semantic_hash(
-                f"{profile}:anchor-block"
-            ),
-            "checkpoint_context_id_hex": _semantic_hash(
-                f"{profile}:height-context"
-            ),
+            "checkpoint_block_hash_hex": _semantic_hash(f"{profile}:anchor-block"),
+            "checkpoint_context_id_hex": _semantic_hash(f"{profile}:height-context"),
             "checkpoint_finality_artifact_hash_hex": _semantic_hash(
                 f"{profile}:finality-artifact"
             ),
@@ -2282,19 +3004,45 @@ def synthetic_production_semantic_inventory() -> tuple[
         proof_system: dict[str, object] = {
             "counterparty_profile": profile,
             "circuit_id": common.RELEASE_CIRCUIT_IDS[profile_index],
+            "anchor_circuit_id": common.RELEASE_CIRCUIT_IDS[profile_index].replace(
+                "-groth16-", "-anchor-update-groth16-"
+            ),
             "proof_curve": proof_curve,
             "semantics": list(common.REQUIRED_SEMANTICS),
-            "circuit_artifact_sha256_hex": role_digests["circuit-artifact"],
-            "witness_generator_sha256_hex": role_digests["witness-generator"],
+            "circuit_artifact_sha256_hex": role_digests["message-r1cs"],
+            "witness_generator_sha256_hex": role_digests["message-witness-compiler"],
             "public_signal_schema_hash_hex": public_signal_schema_hash,
             "semantic_proof_profile_hash_hex": semantic_profile_hash,
             "sora_finality_anchor": anchor,
             "sora_finality_anchor_hash_hex": anchor_hash,
             "verifier_key_hash_hex": _semantic_hash(f"{profile}:vk-keccak"),
             "route_revision": profile_index + 1,
-            "verifying_key_sha256_hex": role_digests["verifying-key"],
-            "prover_build_sha256_hex": role_digests["prover-build"],
-            "toolchain_lock_sha256_hex": role_digests["toolchain-lock"],
+            "verifying_key_sha256_hex": role_digests["message-verifying-key"],
+            "prover_build_sha256_hex": role_digests["message-prover"],
+            "toolchain_lock_sha256_hex": _semantic_hash(f"{profile}:toolchain-lock"),
+            "source_archive_sha256_hex": role_digests["source-archive"],
+            "vendor_inventory_sha256_hex": role_digests["vendor-inventory"],
+            "toolchain_inventory_sha256_hex": role_digests["toolchain-inventory"],
+            "sbom_sha256_hex": role_digests["sbom"],
+            "proving_key_sha256_hex": role_digests["message-proving-key"],
+            "anchor_circuit_artifact_sha256_hex": role_digests["anchor-r1cs"],
+            "anchor_proving_key_sha256_hex": role_digests["anchor-proving-key"],
+            "anchor_verifying_key_sha256_hex": role_digests["anchor-verifying-key"],
+            "phase1_transcript_sha256_hex": role_digests["phase1-transcript"],
+            "phase2_transcript_sha256_hex": role_digests["message-phase2-transcript"],
+            "anchor_phase2_transcript_sha256_hex": role_digests[
+                "anchor-phase2-transcript"
+            ],
+            "anchor_witness_compiler_sha256_hex": role_digests[
+                "anchor-witness-compiler"
+            ],
+            "anchor_prover_sha256_hex": role_digests["anchor-prover"],
+            "fixed_key_verifier_sha256_hex": role_digests["message-fixed-key-verifier"],
+            "anchor_fixed_key_verifier_sha256_hex": role_digests[
+                "anchor-fixed-key-verifier"
+            ],
+            "message_kat_sha256_hex": role_digests["message-kat"],
+            "anchor_kat_sha256_hex": role_digests["anchor-kat"],
             "audit_attestations": [],
         }
         claim = {
@@ -2322,13 +3070,15 @@ def synthetic_production_semantic_inventory() -> tuple[
         }
         for auditor_index, role in enumerate(common.CIRCUIT_AUDITOR_ROLES):
             report = {
-                "schema": "sccp-circuit-audit-report-v1",
+                "schema": "sccp-circuit-audit-report-final-v1",
                 "role": role,
                 "auditor_id": auditors[auditor_index]["auditor_id"],
                 "counterparty_profile": profile,
                 "circuit_id": proof_system["circuit_id"],
                 "proof_curve": proof_curve,
                 "semantics": list(common.REQUIRED_SEMANTICS),
+                "completed_at_unix_ms": completed_at_unix_ms,
+                "unresolved_findings": {"critical": 0, "high": 0, "medium": 0},
                 "artifacts": artifact_rows,
                 "honest_proof_claim": claim,
             }
@@ -2341,16 +3091,24 @@ def synthetic_production_semantic_inventory() -> tuple[
                 "kind": "circuit-audit-report",
                 "sha256_hex": report_hash,
                 "size_bytes": len(report_bytes),
+                "declared_max_bytes": len(report_bytes),
+                "created_at_unix_ms": completed_at_unix_ms,
             }
             proof_system["audit_attestations"].append(
-                {"report_sha256_hex": report_hash}
+                {
+                    "report_sha256_hex": report_hash,
+                    "completed_at_unix_ms": completed_at_unix_ms,
+                    "unresolved_findings": {"critical": 0, "high": 0, "medium": 0},
+                }
             )
         policy["proof_systems"].append(proof_system)
-    evidence["artifacts"] = sorted(artifact_by_path.values(), key=lambda row: row["path"])
+    evidence["artifacts"] = sorted(
+        artifact_by_path.values(), key=lambda row: row["path"]
+    )
     return policy, evidence, contents
 
 
-def test_production_semantic_inventory_closes_two_audits_and_four_honest_proofs() -> None:
+def test_production_semantic_inventory_closes_three_audits_and_eight_kats() -> None:
     policy, evidence, contents = synthetic_production_semantic_inventory()
     records = common.verify_production_semantic_artifacts(evidence, contents, policy)
     assert tuple(record[0] for record in records) == common.PROFILE_ORDER
@@ -2361,7 +3119,10 @@ def test_production_semantic_inventory_closes_two_audits_and_four_honest_proofs(
 @pytest.mark.parametrize(
     "mutation, message",
     (
-        (lambda report: report["honest_proof_claim"].update(finality_height="01"), "u64"),
+        (
+            lambda report: report["honest_proof_claim"].update(finality_height="01"),
+            "u64",
+        ),
         (
             lambda report: report["honest_proof_claim"].update(
                 public_signal_words_hex=report["honest_proof_claim"][
@@ -2371,9 +3132,9 @@ def test_production_semantic_inventory_closes_two_audits_and_four_honest_proofs(
             "exactly 11",
         ),
         (
-            lambda report: report["honest_proof_claim"]["public_signal_words_hex"].__setitem__(
-                3, "AA" * 32
-            ),
+            lambda report: report["honest_proof_claim"][
+                "public_signal_words_hex"
+            ].__setitem__(3, "AA" * 32),
             "lowercase",
         ),
         (
@@ -2399,6 +3160,7 @@ def test_circuit_audit_report_rejects_adversarial_claims_and_role_substitution(
             profile=common.PROFILE_ORDER[0],
             role=role,
             auditor_id=policy["circuit_auditors"][0]["auditor_id"],
+            audit_attestation=proof_system["audit_attestations"][0],
             proof_system=proof_system,
         )
 
@@ -2415,7 +3177,7 @@ def test_production_semantic_inventory_rejects_placeholder_artifact_bytes(
 ) -> None:
     policy, evidence, contents = synthetic_production_semantic_inventory()
     circuit_path = next(
-        row["path"] for row in evidence["artifacts"] if row["kind"] == "semantic-circuit"
+        row["path"] for row in evidence["artifacts"] if row["kind"] == "r1cs"
     )
     contents[circuit_path] = replacement
     with pytest.raises(common.SccpReleaseError, match=message):
@@ -2424,28 +3186,48 @@ def test_production_semantic_inventory_rejects_placeholder_artifact_bytes(
 
 def test_production_semantic_inventory_rejects_unattested_extra_artifact() -> None:
     policy, evidence, contents = synthetic_production_semantic_inventory()
-    content = b"unattested semantic witness"
+    content = b"unattested message KAT"
     digest = hashlib.sha256(content).hexdigest()
-    path = common._semantic_artifact_path(
-        "honest-witness", digest, "honest-witness.bin"
-    )
+    path = common._semantic_artifact_path("message-kat", digest, "message-kat.norito")
     evidence["artifacts"].append(
         {
             "path": path,
-            "kind": "honest-witness",
+            "kind": "message-kat",
             "sha256_hex": digest,
             "size_bytes": len(content),
+            "declared_max_bytes": len(content),
+            "created_at_unix_ms": 1_800_000_000_000,
         }
     )
     evidence["artifacts"].sort(key=lambda row: row["path"])
     contents[path] = content
-    with pytest.raises(common.SccpReleaseError, match="invalid honest-witness artifact cardinality"):
+    with pytest.raises(
+        common.SccpReleaseError, match="invalid message-kat artifact cardinality"
+    ):
         common.verify_production_semantic_artifacts(evidence, contents, policy)
 
 
-def test_honest_proof_artifact_uses_the_protocol_decode_bound() -> None:
-    assert common.artifact_limit("honest-proof") == 16 * 1024 * 1024 + 64 * 1024
-    assert common.artifact_limit("honest-proof") < common.artifact_limit("honest-witness")
+def test_message_kat_artifact_uses_the_protocol_decode_bound() -> None:
+    assert common.artifact_limit("message-kat") == 16 * 1024 * 1024 + 64 * 1024
+    assert common.artifact_limit("message-kat") < common.artifact_limit("r1cs")
+
+
+def test_streamed_large_artifact_preserves_all_zero_rejection_signal(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "opaque.bin"
+    data = bytes(32)
+    path.write_bytes(data)
+    marker = common.verify_relative_file_stream(
+        tmp_path,
+        path.name,
+        label="opaque artifact",
+        maximum=len(data),
+        expected_size=len(data),
+        expected_sha256_hex=hashlib.sha256(data).hexdigest(),
+        capture_maximum=1,
+    )
+    assert marker == b"\x00"
 
 
 def _mock_semantic_receipt(
@@ -2460,7 +3242,7 @@ def _mock_semantic_receipt(
 ) -> dict[str, object]:
     metadata = next(row for row in evidence["artifacts"] if row["path"] == proof_path)
     return {
-        "schema": "sccp-semantic-proof-validation-v1",
+        "schema": "sccp-semantic-proof-validation-final-v1",
         "environment": "production",
         "policy_id": policy["policy_id"],
         "release_id": evidence["release_id"],
@@ -2516,7 +3298,10 @@ def test_authenticated_rust_semantic_receipts_must_equal_both_auditors_claims(
         validator_path=validator,
         expected_executable_hash=executable_hash,
     )
-    assert tuple(row["claim"]["target_profile"] for row in receipts) == common.PROFILE_ORDER
+    assert (
+        tuple(row["claim"]["target_profile"] for row in receipts)
+        == common.PROFILE_ORDER
+    )
 
 
 @pytest.mark.parametrize(
@@ -2524,11 +3309,17 @@ def test_authenticated_rust_semantic_receipts_must_equal_both_auditors_claims(
     (
         lambda receipt: receipt.update(pairing_verified=False),
         lambda receipt: receipt.update(canonical_norito_verified=1),
-        lambda receipt: receipt.update(proof_curve="bn254" if receipt["proof_curve"] == "bls12-381" else "bls12-381"),
+        lambda receipt: receipt.update(
+            proof_curve="bn254"
+            if receipt["proof_curve"] == "bls12-381"
+            else "bls12-381"
+        ),
         lambda receipt: receipt["claim"]["public_signal_words_hex"].__setitem__(
             0, "ff" * 32
         ),
-        lambda receipt: receipt.update(proof_artifact_path="artifacts/semantic/substituted"),
+        lambda receipt: receipt.update(
+            proof_artifact_path="artifacts/semantic/substituted"
+        ),
     ),
 )
 def test_authenticated_rust_semantic_receipt_rejects_false_or_substituted_results(
@@ -2546,7 +3337,9 @@ def test_authenticated_rust_semantic_receipt_rejects_false_or_substituted_result
 
     def invoke(_validator, arguments, expected_hash):
         profile = arguments[4]
-        path, claim = next((path, claim) for item, path, claim in records if item == profile)
+        path, claim = next(
+            (path, claim) for item, path, claim in records if item == profile
+        )
         receipt = _mock_semantic_receipt(
             profile=profile,
             proof_path=path,
@@ -2577,7 +3370,9 @@ def test_authenticated_rust_semantic_receipt_rejects_false_or_substituted_result
         )
 
 
-def test_lane_validator_receives_complete_signed_context_not_trust_projections() -> None:
+def test_lane_validator_receives_complete_signed_context_not_trust_projections() -> (
+    None
+):
     source = (SCRIPTS / "sccp_release_common.py").read_text(encoding="utf-8")
     start = source.index("def _invoke_lane_validator(")
     end = source.index("\ndef verify_rust_release_signatures(", start)

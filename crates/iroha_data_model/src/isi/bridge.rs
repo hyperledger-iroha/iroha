@@ -300,13 +300,31 @@ isi! {
     pub struct SubmitBridgeProof {
         /// Typed bridge proof payload and its payload-owned verifier binding.
         pub proof: crate::bridge::BridgeProof,
+        /// Canonical sparse-Merkle non-membership witness for a native SCCP claim.
+        ///
+        /// Generic bridge proofs and destination acknowledgements must carry `None`;
+        /// native SCCP claims are rejected unless this is `Some`.
+        pub replay_witness: Option<crate::bridge::SccpSparseMerkleWitnessV1>,
     }
 }
 impl crate::seal::Instruction for SubmitBridgeProof {}
 impl SubmitBridgeProof {
     /// Construct a new submission wrapping the provided proof.
     pub fn new(proof: crate::bridge::BridgeProof) -> Self {
-        Self { proof }
+        Self {
+            proof,
+            replay_witness: None,
+        }
+    }
+
+    /// Attach the canonical replay witness required by a native SCCP claim.
+    #[must_use]
+    pub fn with_replay_witness(
+        mut self,
+        replay_witness: crate::bridge::SccpSparseMerkleWitnessV1,
+    ) -> Self {
+        self.replay_witness = Some(replay_witness);
+        self
     }
 }
 isi! {
@@ -350,6 +368,43 @@ impl ApplySccpRouteGovernance {
         Self { action }
     }
 }
+isi! {
+    /// Submit one canonical proof-authenticated TON breaker observation.
+    ///
+    /// The expected digest is zero only for the first observation of an exact
+    /// route revision. Every later submission must bind the complete prior
+    /// record digest, making observation updates an explicit compare-and-swap.
+    /// Submission is permissionless because every persisted bit is derived
+    /// from native finality and the exact governed dual-account openings.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct SubmitSccpTonBreakerObservationV1 {
+        /// Exact governed TonMainnet route revision being observed.
+        pub route_key: crate::bridge::SccpRouteKeyV1,
+        /// Zero for absence, otherwise the complete prior observation digest.
+        pub expected_prior_observation_digest: [u8; 32],
+        /// Canonical Norito encoding of the bounded native TON proof.
+        pub encoded_observation: Vec<u8>,
+    }
+}
+impl crate::seal::Instruction for SubmitSccpTonBreakerObservationV1 {}
+impl SubmitSccpTonBreakerObservationV1 {
+    /// Construct a route-keyed compare-and-swap observation submission.
+    pub fn new(
+        route_key: crate::bridge::SccpRouteKeyV1,
+        expected_prior_observation_digest: [u8; 32],
+        encoded_observation: Vec<u8>,
+    ) -> Self {
+        Self {
+            route_key,
+            expected_prior_observation_digest,
+            encoded_observation,
+        }
+    }
+}
 fn bridge_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
@@ -364,11 +419,20 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitBridgeProof {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let replay_witness = super::decode_aos_canonical_field::<
+            Option<crate::bridge::SccpSparseMerkleWitnessV1>,
+        >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
         norito::core::note_payload_access(bytes, offset);
-        Ok((Self { proof }, offset))
+        Ok((
+            Self {
+                proof,
+                replay_witness,
+            },
+            offset,
+        ))
     }
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for RecordBridgeReceipt {
@@ -407,6 +471,39 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ApplySccpRouteGovernance {
         Ok((Self { action }, offset))
     }
 }
+impl<'a> norito::core::DecodeFromSlice<'a> for SubmitSccpTonBreakerObservationV1 {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = bridge_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+        let mut offset = 0usize;
+        let route_key = super::decode_aos_canonical_field::<crate::bridge::SccpRouteKeyV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let expected_prior_observation_digest = super::decode_aos_canonical_field::<[u8; 32]>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let encoded_observation = super::decode_aos_slice_field::<Vec<u8>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                route_key,
+                expected_prior_observation_digest,
+                encoded_observation,
+            },
+            offset,
+        ))
+    }
+}
 isi! {
     /// Record an SCCP message payload for block-level commitment anchoring.
     #[cfg_attr(
@@ -419,6 +516,8 @@ isi! {
         pub context: crate::bridge::SccpOutboundMessageContextV1,
         /// Canonical SCCP payload bytes.
         pub payload_bytes: Vec<u8>,
+        /// Canonical sparse-Merkle non-membership witness for outbound admission.
+        pub replay_witness: crate::bridge::SccpSparseMerkleWitnessV1,
     }
 }
 impl crate::seal::Instruction for RecordSccpMessage {}
@@ -427,10 +526,12 @@ impl RecordSccpMessage {
     pub fn new(
         context: crate::bridge::SccpOutboundMessageContextV1,
         payload_bytes: Vec<u8>,
+        replay_witness: crate::bridge::SccpSparseMerkleWitnessV1,
     ) -> Self {
         Self {
             context,
             payload_bytes,
+            replay_witness,
         }
     }
 }
@@ -743,6 +844,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordSccpMessage {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let replay_witness = super::decode_aos_canonical_field::<
+            crate::bridge::SccpSparseMerkleWitnessV1,
+        >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -751,6 +855,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordSccpMessage {
             Self {
                 context,
                 payload_bytes,
+                replay_witness,
             },
             offset,
         ))
@@ -799,7 +904,7 @@ mod tests {
         SccpOutboundMessageContextV1::new(
             SccpLaneIdV1 {
                 source: SccpNetworkV1::SoraTaira,
-                target: SccpNetworkV1::BscTestnet,
+                target: SccpNetworkV1::BscMainnet,
             },
             [0x44; 32],
             [0x45; 32],
@@ -809,7 +914,7 @@ mod tests {
     fn route_governance_action() -> SccpRouteGovernanceActionV1 {
         SccpRouteGovernanceActionV1::Remove(crate::bridge::SccpRouteKeyV1 {
             lane_id: SccpLaneIdV1 {
-                source: SccpNetworkV1::BscTestnet,
+                source: SccpNetworkV1::BscMainnet,
                 target: SccpNetworkV1::SoraTaira,
             },
             route_id: "taira_bsc_xor".to_owned(),
@@ -817,12 +922,32 @@ mod tests {
             revision: 1,
         })
     }
+    fn ton_breaker_submission() -> SubmitSccpTonBreakerObservationV1 {
+        SubmitSccpTonBreakerObservationV1::new(
+            crate::bridge::SccpRouteKeyV1 {
+                lane_id: SccpLaneIdV1 {
+                    source: SccpNetworkV1::TonMainnet,
+                    target: SccpNetworkV1::SoraTaira,
+                },
+                route_id: "taira_ton_xor".to_owned(),
+                asset_key: "xor".to_owned(),
+                revision: 1,
+            },
+            [0xA5; 32],
+            vec![0x4E, 0x52, 0x54, 0x4F],
+        )
+    }
     #[test]
     fn bridge_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(SubmitBridgeProof::new(proof()));
         assert_slice_roundtrip(RecordBridgeReceipt::new(receipt()));
         assert_slice_roundtrip(ApplySccpRouteGovernance::new(route_governance_action()));
-        assert_slice_roundtrip(RecordSccpMessage::new(outbound_context(), vec![0xCA, 0xFE]));
+        assert_slice_roundtrip(ton_breaker_submission());
+        assert_slice_roundtrip(RecordSccpMessage::new(
+            outbound_context(),
+            vec![0xCA, 0xFE],
+            crate::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+        ));
     }
     #[test]
     fn bridge_registry_decodes_canonical_wire_ids() {
@@ -838,6 +963,9 @@ mod tests {
             )
             .register_with_id_slice::<RecordSccpMessage>(
                 "iroha.instruction.v1::bridge::RecordSccpMessage",
+            )
+            .register_with_id_slice::<SubmitSccpTonBreakerObservationV1>(
+                "iroha.instruction.v1::bridge::SubmitSccpTonBreakerObservationV1",
             );
         assert_registry_decodes(&registry, SubmitBridgeProof::new(proof()));
         assert_registry_decodes(&registry, RecordBridgeReceipt::new(receipt()));
@@ -845,9 +973,14 @@ mod tests {
             &registry,
             ApplySccpRouteGovernance::new(route_governance_action()),
         );
+        assert_registry_decodes(&registry, ton_breaker_submission());
         assert_registry_decodes(
             &registry,
-            RecordSccpMessage::new(outbound_context(), vec![0xCA, 0xFE]),
+            RecordSccpMessage::new(
+                outbound_context(),
+                vec![0xCA, 0xFE],
+                crate::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+            ),
         );
     }
     #[cfg(feature = "json")]
@@ -866,6 +999,24 @@ mod tests {
         assert!(
             norito::json::from_json::<RecordBridgeReceipt>(&hostile).is_err(),
             "signed receipt instruction JSON must reject unknown fields"
+        );
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn ton_breaker_submission_json_is_closed() {
+        let instruction = ton_breaker_submission();
+        let canonical = norito::json::to_json(&instruction)
+            .expect("serialize TON breaker observation instruction JSON");
+        assert_eq!(
+            norito::json::from_json::<SubmitSccpTonBreakerObservationV1>(&canonical)
+                .expect("canonical TON breaker observation instruction JSON decodes"),
+            instruction
+        );
+        let hostile = canonical.replacen('{', "{\"unbound_extension\":null,", 1);
+        assert_ne!(hostile, canonical);
+        assert!(
+            norito::json::from_json::<SubmitSccpTonBreakerObservationV1>(&hostile).is_err(),
+            "signed TON breaker observation JSON must reject unknown fields"
         );
     }
 }

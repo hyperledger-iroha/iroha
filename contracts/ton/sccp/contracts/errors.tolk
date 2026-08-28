@@ -28,5 +28,12 @@ enum SccpErrors {
     SupplyCapExceeded = 84
     InvalidBreakerAuthorization = 85
     ReserveInvariant = 86
+    InvalidReplayDomain = 87
+    InvalidReplayRecord = 88
+    NonCanonicalReplayWitness = 89
+    StaleReplayWitness = 90
+    InvalidReplayPath = 91
+    ReplayCounterExhausted = 92
+    InvalidReplayForest = 93
     WrongWorkchain = 333
 }

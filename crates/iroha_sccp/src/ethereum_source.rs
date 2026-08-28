@@ -936,10 +936,7 @@ fn update_from_wire(
     })
 }
 fn is_ethereum_network(network: SccpNetworkV1) -> bool {
-    matches!(
-        network,
-        SccpNetworkV1::EthereumMainnet | SccpNetworkV1::EthereumSepolia
-    )
+    network == SccpNetworkV1::EthereumMainnet
 }
 fn validate_trusted_anchor(
     anchor: &EthereumNativeTrustedAnchorV1,

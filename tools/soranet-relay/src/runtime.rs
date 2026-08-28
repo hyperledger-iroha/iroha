@@ -10,9 +10,9 @@ use iroha_crypto::{
         constant_rate::{
             CONSTANT_RATE_CELL_BYTES, CONSTANT_RATE_MAX_PAYLOAD_BYTES,
             CellClass as AuthenticatedCellClass, ConstantRateError, ConstantRateOpener,
-            ConstantRateSealer, FixedRateScheduler as AuthenticatedFixedRateScheduler, MuxChannel,
-            MuxFlags, MuxFrame, QueueDepths as AuthenticatedQueueDepths,
-            codec as constant_rate_codec,
+            ConstantRateReceivePacer, ConstantRateSealer,
+            FixedRateScheduler as AuthenticatedFixedRateScheduler, MuxChannel, MuxFlags, MuxFrame,
+            QueueDepths as AuthenticatedQueueDepths, codec as constant_rate_codec,
         },
         handshake::{
             ClientHelloMetadata, DEFAULT_TLS_SERVER_NAME, HandshakeSuite,
@@ -714,6 +714,10 @@ enum StrictConstantRateRuntimeError {
     Receive(#[from] quinn::ConnectionError),
     #[error("strict constant-rate receiver observed no cell within {deadline:?}")]
     ReceiveTickMissing { deadline: Duration },
+    #[error(
+        "strict constant-rate receiver observed a cell ahead of the negotiated pacing envelope"
+    )]
+    ReceiveRateExceeded,
     #[error("strict constant-rate sender missed a fixed-rate tick by {lateness:?}")]
     TickMissed { lateness: Duration },
 }
@@ -758,6 +762,7 @@ fn spawn_strict_constant_rate_transport(
             opener,
             inbound_tx,
             maximum_lanes,
+            tick_duration,
             receive_deadline,
         );
         tokio::pin!(send);
@@ -861,15 +866,24 @@ async fn run_strict_constant_rate_receiver(
     mut opener: ConstantRateOpener,
     inbound: mpsc::Sender<MuxFrame>,
     maximum_lanes: usize,
+    tick_duration: Duration,
     receive_deadline: Duration,
 ) -> Result<(), StrictConstantRateRuntimeError> {
     let mut lifecycle = iroha_crypto::soranet::constant_rate::MuxLifecycle::new(maximum_lanes);
+    let mut pacing =
+        ConstantRateReceivePacer::new(tick_duration).expect("strict profile tick is non-zero");
+    let mut first_cell_at = None;
     loop {
         let datagram = timeout(receive_deadline, connection.read_datagram())
             .await
             .map_err(|_| StrictConstantRateRuntimeError::ReceiveTickMissing {
                 deadline: receive_deadline,
             })??;
+        let arrived_at = Instant::now();
+        let first_cell_at = *first_cell_at.get_or_insert(arrived_at);
+        if !pacing.admit(arrived_at.saturating_duration_since(first_cell_at)) {
+            return Err(StrictConstantRateRuntimeError::ReceiveRateExceeded);
+        }
         let frame = opener.open(&datagram)?;
         lifecycle.accept(&frame)?;
         if frame.channel == MuxChannel::Cover {

@@ -41,6 +41,7 @@ fn app_with_indexed_sccp_message_for_test(
         context,
         iroha_sccp::canonical_sccp_payload_bytes(&payload)
             .expect("valid SCCP indexed-message fixture payload encodes"),
+        iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
     );
     let tx = checked_torii_test_transaction(
         TransactionBuilder::new(

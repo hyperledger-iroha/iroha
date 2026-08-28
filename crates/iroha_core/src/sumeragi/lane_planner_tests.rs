@@ -423,6 +423,36 @@ mod tests {
         );
     }
     #[test]
+    fn autonomous_reservation_retries_only_transient_planning_failures() {
+        let lane_id = LaneId::new(3);
+        let dataspace_id = DataSpaceId::new(33);
+        assert!(
+            AutonomousLaneReservationSlotPlanError::BlockedPredecessor {
+                lane_id,
+                dataspace_id,
+            }
+            .is_retryable_after_state_or_kura_progress()
+        );
+        assert!(
+            AutonomousLaneReservationSlotPlanError::PlanningSnapshotChanged
+                .is_retryable_after_state_or_kura_progress()
+        );
+        assert!(
+            !AutonomousLaneReservationSlotPlanError::ConflictingPredecessor {
+                lane_id,
+                dataspace_id,
+            }
+            .is_retryable_after_state_or_kura_progress()
+        );
+        assert!(
+            !AutonomousLaneReservationSlotPlanError::InactiveRoute {
+                lane_id,
+                dataspace_id,
+            }
+            .is_retryable_after_state_or_kura_progress()
+        );
+    }
+    #[test]
     fn autonomous_reservation_requires_exact_non_genesis_predecessor_hash() {
         let validators = vec![test_peer(1), test_peer(2), test_peer(3), test_peer(4)];
         let context = autonomous_reservation_height_context(&validators);

@@ -21,12 +21,8 @@ use iroha_data_model::bridge::sccp::{SccpNetworkV1, SccpSourceEmitterV1, SccpSou
 use tiny_keccak::{Hasher as _, Keccak};
 /// BNB Smart Chain mainnet EIP-155 chain identifier.
 pub const BSC_NATIVE_MAINNET_CHAIN_ID: u64 = 56;
-/// BNB Smart Chain Chapel testnet EIP-155 chain identifier.
-pub const BSC_NATIVE_TESTNET_CHAIN_ID: u64 = 97;
 /// Mainnet timestamp at which Osaka and Mendel activate together.
 pub const BSC_NATIVE_MAINNET_MENDEL_TIME: u64 = 1_777_343_400;
-/// Chapel timestamp at which Osaka and Mendel activate together.
-pub const BSC_NATIVE_TESTNET_MENDEL_TIME: u64 = 1_774_319_400;
 /// Post-Maxwell Parlia epoch length.
 pub const BSC_NATIVE_EPOCH_LENGTH: u64 = 1_000;
 /// Post-Fermi Parlia block interval in milliseconds.
@@ -426,7 +422,7 @@ pub struct ValidatedBscNativeSourceV1 {
 pub enum BscNativeFinalityError {
     /// Proof or anchor schema version is unsupported.
     UnsupportedVersion,
-    /// Network is not one of the two closed BSC profiles.
+    /// Network is not the closed BSC mainnet profile.
     WrongNetwork,
     /// The supplied governed anchor hash does not match its validated preimage.
     AnchorHashMismatch,
@@ -631,10 +627,6 @@ fn network_parameters(network: SccpNetworkV1) -> Option<NetworkParameters> {
         SccpNetworkV1::BscMainnet => Some(NetworkParameters {
             chain_id: BSC_NATIVE_MAINNET_CHAIN_ID,
             mendel_time: BSC_NATIVE_MAINNET_MENDEL_TIME,
-        }),
-        SccpNetworkV1::BscTestnet => Some(NetworkParameters {
-            chain_id: BSC_NATIVE_TESTNET_CHAIN_ID,
-            mendel_time: BSC_NATIVE_TESTNET_MENDEL_TIME,
         }),
         _ => None,
     }
@@ -2328,10 +2320,7 @@ pub fn verify_bsc_native_source(
     canonical_payload: &[u8],
 ) -> Result<ValidatedBscNativeSourceV1, BscNativeSourceError> {
     if !source_identity.is_well_formed()
-        || !matches!(
-            source_identity.lane.source,
-            SccpNetworkV1::BscMainnet | SccpNetworkV1::BscTestnet
-        )
+        || source_identity.lane.source != SccpNetworkV1::BscMainnet
         || !nonzero(&expected_message_id)
         || !nonzero(&expected_payload_hash)
         || canonical_payload.is_empty()
@@ -2655,17 +2644,14 @@ mod tests {
         list(&[uint(1), bytes(&signature), vote_data, bytes(&[])])
     }
     #[test]
-    fn fork_schedule_and_chain_ids_match_pinned_bsc_config() {
+    fn fork_schedule_and_chain_id_match_pinned_bsc_mainnet_config() {
         let mainnet = network_parameters(SccpNetworkV1::BscMainnet).unwrap();
         assert_eq!(mainnet.chain_id, 56);
         assert_eq!(mainnet.mendel_time, 1_777_343_400);
-        let testnet = network_parameters(SccpNetworkV1::BscTestnet).unwrap();
-        assert_eq!(testnet.chain_id, 97);
-        assert_eq!(testnet.mendel_time, 1_774_319_400);
         let post_mendel_future =
             signed_header([0x11; 32], 1_001, 1_900_000_000_u64 * 1_000, 2, &[]);
         let post_mendel_future = parse_header(&post_mendel_future).unwrap();
-        assert_eq!(verify_fork_window(&post_mendel_future, testnet), Ok(()));
+        assert_eq!(verify_fork_window(&post_mendel_future, mainnet), Ok(()));
         assert!(network_parameters(SccpNetworkV1::EthereumMainnet).is_none());
     }
     #[test]
@@ -2851,7 +2837,7 @@ mod tests {
         let hash = bsc_native_anchor_hash(&anchor).unwrap();
         assert!(nonzero(&hash));
         let mut replay = anchor.clone();
-        replay.network = SccpNetworkV1::BscTestnet;
+        replay.network = SccpNetworkV1::EthereumMainnet;
         assert!(bsc_native_anchor_hash(&replay).is_err());
         let mut turn = anchor.clone();
         turn.turn_length = 2;
@@ -3461,7 +3447,7 @@ mod tests {
             Err(BscNativeFinalityError::AnchorHashMismatch)
         );
         assert_eq!(
-            verify_bsc_native_finality(&proof, SccpNetworkV1::BscTestnet, anchor_hash),
+            verify_bsc_native_finality(&proof, SccpNetworkV1::EthereumMainnet, anchor_hash),
             Err(BscNativeFinalityError::WrongNetwork)
         );
     }

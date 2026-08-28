@@ -136,7 +136,7 @@ impl IrohaZkAmsProofV1 {
 )]
 pub enum PrivacyProofV1 {
     /// ZK-ACE post-quantum authorization proof.
-    ZkAcePqAuthorizationV0(PrivacyProofBytesV1),
+    ZkAcePqAuthorizationV1(PrivacyProofBytesV1),
     /// Anonymous PGC k-out-of-n payment proof.
     AnonymousPgcKOutOfNV1(PrivacyProofBytesV1),
     /// `VeRange` transparent range proof.
@@ -144,11 +144,11 @@ pub enum PrivacyProofV1 {
     /// Native Iroha ZK-AMS admission or provisioning proof.
     IrohaZkAmsV1(IrohaZkAmsProofV1),
     /// Vega existing-credential predicate proof.
-    VegaExistingCredentialZkV0(PrivacyProofBytesV1),
+    VegaExistingCredentialZkV1(PrivacyProofBytesV1),
     /// Native Iroha P-256 X.509 predicate STARK proof.
-    IrohaZkX509StarkP256V0(PrivacyProofBytesV1),
+    IrohaZkX509StarkP256V1(PrivacyProofBytesV1),
     /// Native Iroha Jindo batched univariate lattice polynomial-commitment proof.
-    IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1),
+    IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1),
     /// Native Bootle Lantern/LNP22 anonymous-credential proof.
     IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1),
     /// Orchard Halo2 action proof.
@@ -158,21 +158,21 @@ pub enum PrivacyProofV1 {
     /// Native IVM private-note STARK proof.
     IrohaIvmPrivateNoteStarkV1(PrivacyProofBytesV1),
     /// Post-quantum MASP STARK proof.
-    PqMaspStarkV0(PrivacyProofBytesV1),
+    PqMaspStarkV1(PrivacyProofBytesV1),
 }
 impl PrivacyProofV1 {
     /// Exact protocol carried by this proof variant.
     #[must_use]
     pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
         match self {
-            Self::ZkAcePqAuthorizationV0(_) => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            Self::ZkAcePqAuthorizationV1(_) => PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
             Self::AnonymousPgcKOutOfNV1(_) => PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             Self::VeRangeTransparentRangeV1(_) => PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
             Self::IrohaZkAmsV1(_) => PrivacyProtocolIdV1::IrohaZkAmsV1,
-            Self::VegaExistingCredentialZkV0(_) => PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
-            Self::IrohaZkX509StarkP256V0(_) => PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
-            Self::IrohaJindoPolynomialCommitmentV0(_) => {
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+            Self::VegaExistingCredentialZkV1(_) => PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+            Self::IrohaZkX509StarkP256V1(_) => PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            Self::IrohaJindoPolynomialCommitmentV1(_) => {
+                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
             }
             Self::IrohaBootleLanternAnoncredV1(_) => {
                 PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
@@ -180,24 +180,24 @@ impl PrivacyProofV1 {
             Self::OrchardHalo2ActionsV1(_) => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
             Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            Self::PqMaspStarkV0(_) => PrivacyProtocolIdV1::PqMaspStarkV0,
+            Self::PqMaspStarkV1(_) => PrivacyProtocolIdV1::PqMaspStarkV1,
         }
     }
     /// Borrow the protocol-specific native proof payload.
     #[must_use]
     pub const fn bytes(&self) -> &PrivacyProofBytesV1 {
         match self {
-            Self::ZkAcePqAuthorizationV0(bytes)
+            Self::ZkAcePqAuthorizationV1(bytes)
             | Self::AnonymousPgcKOutOfNV1(bytes)
             | Self::VeRangeTransparentRangeV1(bytes)
-            | Self::VegaExistingCredentialZkV0(bytes)
-            | Self::IrohaZkX509StarkP256V0(bytes)
-            | Self::IrohaJindoPolynomialCommitmentV0(bytes)
+            | Self::VegaExistingCredentialZkV1(bytes)
+            | Self::IrohaZkX509StarkP256V1(bytes)
+            | Self::IrohaJindoPolynomialCommitmentV1(bytes)
             | Self::IrohaBootleLanternAnoncredV1(bytes)
             | Self::OrchardHalo2ActionsV1(bytes)
             | Self::MoneroFcmpPlusPlusV1(bytes)
             | Self::IrohaIvmPrivateNoteStarkV1(bytes)
-            | Self::PqMaspStarkV0(bytes) => bytes,
+            | Self::PqMaspStarkV1(bytes) => bytes,
             Self::IrohaZkAmsV1(proof) => proof.bytes(),
         }
     }
@@ -208,17 +208,17 @@ impl PrivacyProofV1 {
     #[must_use]
     pub const fn bytes_mut(&mut self) -> &mut PrivacyProofBytesV1 {
         match self {
-            Self::ZkAcePqAuthorizationV0(bytes)
+            Self::ZkAcePqAuthorizationV1(bytes)
             | Self::AnonymousPgcKOutOfNV1(bytes)
             | Self::VeRangeTransparentRangeV1(bytes)
-            | Self::VegaExistingCredentialZkV0(bytes)
-            | Self::IrohaZkX509StarkP256V0(bytes)
-            | Self::IrohaJindoPolynomialCommitmentV0(bytes)
+            | Self::VegaExistingCredentialZkV1(bytes)
+            | Self::IrohaZkX509StarkP256V1(bytes)
+            | Self::IrohaJindoPolynomialCommitmentV1(bytes)
             | Self::IrohaBootleLanternAnoncredV1(bytes)
             | Self::OrchardHalo2ActionsV1(bytes)
             | Self::MoneroFcmpPlusPlusV1(bytes)
             | Self::IrohaIvmPrivateNoteStarkV1(bytes)
-            | Self::PqMaspStarkV0(bytes) => bytes,
+            | Self::PqMaspStarkV1(bytes) => bytes,
             Self::IrohaZkAmsV1(proof) => proof.bytes_mut(),
         }
     }
@@ -969,6 +969,10 @@ pub enum PrivacyProofValidationError {
 )]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyProofEnvelopeV1 {
+    /// Mandatory first-release wire marker; invalid markers fail decoding.
+    pub wire_magic: PrivacyProofWireMagicV1,
+    /// Commitment to the final ordered Exact12 catalog and security models.
+    pub catalog_commitment: PrivacyExact12CatalogCommitmentV1,
     /// Exact protocol identity.
     pub protocol_id: PrivacyProtocolIdV1,
     /// Exact proof-system profile.
@@ -1505,6 +1509,14 @@ mod exact12_fixture {
     pub(super) fn commitment(seed: u8) -> PrivacyCommitmentV1 {
         PrivacyCommitmentV1::new(raw(seed))
     }
+    pub(super) fn zk_ace_identity_commitment(seed: u8) -> PrivacyZkAceIdentityCommitmentV1 {
+        PrivacyZkAceIdentityCommitmentV1::new([u64::from(seed) + 1; 6])
+            .expect("small fixture words are canonical Goldilocks elements")
+    }
+    pub(super) fn zk_ace_replay_nullifier(seed: u8) -> PrivacyZkAceReplayNullifierV1 {
+        PrivacyZkAceReplayNullifierV1::new([u64::from(seed) + 1; 6])
+            .expect("small fixture words are canonical Goldilocks elements")
+    }
     #[cfg(test)]
     pub(super) fn zk_ace_allowlist() -> Vec<AccountId> {
         let mut allowlist = vec![account(13), account(14), account(15)];
@@ -1519,7 +1531,7 @@ mod exact12_fixture {
     ) -> PrivacyZkAcePolicyRecordV1 {
         PrivacyZkAcePolicyRecordV1::new(
             PrivacyPolicyIdV1::new(raw(10)),
-            commitment(identity_seed),
+            zk_ace_identity_commitment(identity_seed),
             PrivacyPolicyDigestV1::new(raw(12)),
             epoch,
             asset_definition_id(),
@@ -1763,9 +1775,9 @@ mod exact12_fixture {
     }
     fn sample_authorization_statements(asset: &AssetDefinitionId) -> [PrivacyStatementV1; 5] {
         [
-            PrivacyStatementV1::ZkAcePqAuthorizationV0(ZkAcePqAuthorizationStatementV1 {
+            PrivacyStatementV1::ZkAcePqAuthorizationV1(ZkAcePqAuthorizationStatementV1 {
                 context: context(),
-                identity_commitment: commitment(10),
+                identity_commitment: zk_ace_identity_commitment(10),
                 policy_id: PrivacyPolicyIdV1::new(raw(11)),
                 policy_digest: PrivacyPolicyDigestV1::new(raw(12)),
                 source: account(13),
@@ -1774,7 +1786,7 @@ mod exact12_fixture {
                 public_balance_scope: AssetBalanceScope::Global,
                 amount: 1_000,
                 authorization_epoch: 7,
-                replay_nullifier: nullifier(15),
+                replay_nullifier: zk_ace_replay_nullifier(15),
             }),
             PrivacyStatementV1::AnonymousPgcKOutOfNV1(AnonymousPgcKOutOfNStatementV1 {
                 context: context(),
@@ -1813,7 +1825,7 @@ mod exact12_fixture {
                     anchors: vec![zk_ams_anchor(44), zk_ams_anchor(45)],
                 }),
             }),
-            PrivacyStatementV1::VegaExistingCredentialZkV0(VegaExistingCredentialStatementV1 {
+            PrivacyStatementV1::VegaExistingCredentialZkV1(VegaExistingCredentialStatementV1 {
                 context: context(),
                 issuer_id: PrivacyIssuerIdV1::new(raw(49)),
                 issuer_record_epoch: 3,
@@ -1838,7 +1850,7 @@ mod exact12_fixture {
     }
     fn sample_identity_statements() -> [PrivacyStatementV1; 3] {
         [
-            PrivacyStatementV1::IrohaZkX509StarkP256V0(IrohaZkX509StarkP256StatementV1 {
+            PrivacyStatementV1::IrohaZkX509StarkP256V1(IrohaZkX509StarkP256StatementV1 {
                 context: context(),
                 trust_anchor_id: PrivacyIssuerIdV1::new(raw(61)),
                 certificate_policy_id: PrivacyPolicyIdV1::new(raw(62)),
@@ -1879,7 +1891,7 @@ mod exact12_fixture {
                 wallet_challenge: PrivacyChallengeV1::new(raw(67)),
                 certificate_nullifier: nullifier(68),
             }),
-            PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
+            PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(
                 IrohaJindoPolynomialCommitmentStatementV1 {
                     context: context(),
                     polynomial_commitments: (70..74).map(jindo_commitment).collect(),
@@ -1962,7 +1974,7 @@ mod exact12_fixture {
                     .expect("compute private-IVM fixture action digest");
                 statement
             }),
-            PrivacyStatementV1::PqMaspStarkV0(PqMaspStarkStatementV1 {
+            PrivacyStatementV1::PqMaspStarkV1(PqMaspStarkStatementV1 {
                 context: context(),
                 asset_definition_id: asset.clone(),
                 pool_id: PrivacyPoolIdV1::new(raw(101)),
@@ -1998,8 +2010,8 @@ mod exact12_fixture {
     pub(super) fn proof_for(protocol: PrivacyProtocolIdV1) -> PrivacyProofV1 {
         let bytes = PrivacyProofBytesV1::new(vec![0xA5, 0x5A, 1]);
         match protocol {
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
-                PrivacyProofV1::ZkAcePqAuthorizationV0(bytes)
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => {
+                PrivacyProofV1::ZkAcePqAuthorizationV1(bytes)
             }
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
                 PrivacyProofV1::AnonymousPgcKOutOfNV1(bytes)
@@ -2010,14 +2022,14 @@ mod exact12_fixture {
             PrivacyProtocolIdV1::IrohaZkAmsV1 => PrivacyProofV1::IrohaZkAmsV1(
                 IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(bytes),
             ),
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
-                PrivacyProofV1::VegaExistingCredentialZkV0(bytes)
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => {
+                PrivacyProofV1::VegaExistingCredentialZkV1(bytes)
             }
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
-                PrivacyProofV1::IrohaZkX509StarkP256V0(bytes)
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
+                PrivacyProofV1::IrohaZkX509StarkP256V1(bytes)
             }
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => {
-                PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(bytes)
+            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
+                PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(bytes)
             }
             PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
                 PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes)
@@ -2031,43 +2043,43 @@ mod exact12_fixture {
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
                 PrivacyProofV1::IrohaIvmPrivateNoteStarkV1(bytes)
             }
-            PrivacyProtocolIdV1::PqMaspStarkV0 => PrivacyProofV1::PqMaspStarkV0(bytes),
+            PrivacyProtocolIdV1::PqMaspStarkV1 => PrivacyProofV1::PqMaspStarkV1(bytes),
         }
     }
     pub(super) fn statement_variant_name(statement: &PrivacyStatementV1) -> &'static str {
         match statement {
-            PrivacyStatementV1::ZkAcePqAuthorizationV0(_) => "ZkAcePqAuthorizationV0",
+            PrivacyStatementV1::ZkAcePqAuthorizationV1(_) => "ZkAcePqAuthorizationV1",
             PrivacyStatementV1::AnonymousPgcKOutOfNV1(_) => "AnonymousPgcKOutOfNV1",
             PrivacyStatementV1::VeRangeTransparentRangeV1(_) => "VeRangeTransparentRangeV1",
             PrivacyStatementV1::IrohaZkAmsV1(_) => "IrohaZkAmsV1",
-            PrivacyStatementV1::VegaExistingCredentialZkV0(_) => "VegaExistingCredentialZkV0",
-            PrivacyStatementV1::IrohaZkX509StarkP256V0(_) => "IrohaZkX509StarkP256V0",
-            PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(_) => {
-                "IrohaJindoPolynomialCommitmentV0"
+            PrivacyStatementV1::VegaExistingCredentialZkV1(_) => "VegaExistingCredentialZkV1",
+            PrivacyStatementV1::IrohaZkX509StarkP256V1(_) => "IrohaZkX509StarkP256V1",
+            PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(_) => {
+                "IrohaJindoPolynomialCommitmentV1"
             }
             PrivacyStatementV1::IrohaBootleLanternAnoncredV1(_) => "IrohaBootleLanternAnoncredV1",
             PrivacyStatementV1::OrchardHalo2ActionsV1(_) => "OrchardHalo2ActionsV1",
             PrivacyStatementV1::MoneroFcmpPlusPlusV1(_) => "MoneroFcmpPlusPlusV1",
             PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(_) => "IrohaIvmPrivateNoteStarkV1",
-            PrivacyStatementV1::PqMaspStarkV0(_) => "PqMaspStarkV0",
+            PrivacyStatementV1::PqMaspStarkV1(_) => "PqMaspStarkV1",
         }
     }
     pub(super) fn proof_variant_name(proof: &PrivacyProofV1) -> &'static str {
         match proof {
-            PrivacyProofV1::ZkAcePqAuthorizationV0(_) => "ZkAcePqAuthorizationV0",
+            PrivacyProofV1::ZkAcePqAuthorizationV1(_) => "ZkAcePqAuthorizationV1",
             PrivacyProofV1::AnonymousPgcKOutOfNV1(_) => "AnonymousPgcKOutOfNV1",
             PrivacyProofV1::VeRangeTransparentRangeV1(_) => "VeRangeTransparentRangeV1",
             PrivacyProofV1::IrohaZkAmsV1(_) => "IrohaZkAmsV1",
-            PrivacyProofV1::VegaExistingCredentialZkV0(_) => "VegaExistingCredentialZkV0",
-            PrivacyProofV1::IrohaZkX509StarkP256V0(_) => "IrohaZkX509StarkP256V0",
-            PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(_) => {
-                "IrohaJindoPolynomialCommitmentV0"
+            PrivacyProofV1::VegaExistingCredentialZkV1(_) => "VegaExistingCredentialZkV1",
+            PrivacyProofV1::IrohaZkX509StarkP256V1(_) => "IrohaZkX509StarkP256V1",
+            PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(_) => {
+                "IrohaJindoPolynomialCommitmentV1"
             }
             PrivacyProofV1::IrohaBootleLanternAnoncredV1(_) => "IrohaBootleLanternAnoncredV1",
             PrivacyProofV1::OrchardHalo2ActionsV1(_) => "OrchardHalo2ActionsV1",
             PrivacyProofV1::MoneroFcmpPlusPlusV1(_) => "MoneroFcmpPlusPlusV1",
             PrivacyProofV1::IrohaIvmPrivateNoteStarkV1(_) => "IrohaIvmPrivateNoteStarkV1",
-            PrivacyProofV1::PqMaspStarkV0(_) => "PqMaspStarkV0",
+            PrivacyProofV1::PqMaspStarkV1(_) => "PqMaspStarkV1",
         }
     }
     fn try_envelope(
@@ -2088,6 +2100,8 @@ mod exact12_fixture {
             _ => proof_for(protocol_id),
         };
         Ok(PrivacyProofEnvelopeV1 {
+            wire_magic: Default::default(),
+            catalog_commitment: Default::default(),
             protocol_id,
             proof_system_id: protocol_id.expected_proof_system(),
             engine_id: protocol_id.expected_engine(),
@@ -2546,10 +2560,6 @@ mod exact12_fixture {
                 canonical_sha256_hex_v1(&semantic.envelope_sha256)
             )
             .expect("writing to String cannot fail");
-        }
-        for retired_label in PRIVACY_RETIRED_PROTOCOL_LABELS_V1 {
-            writeln!(&mut output, "retired\t{retired_label}")
-                .expect("writing to String cannot fail");
         }
         Ok(output.into_bytes())
     }

@@ -9076,6 +9076,26 @@ def test_effect_capacity_production_source_fidelity_rejects_semantic_mutants(
     source = effects_path.read_text(encoding="utf-8")
     items = module.rust_items(source, item_name)
     if item_name in {"plan_body_pipeline_candidate_terminal", "commit_body_pipeline_candidate_terminals"}: items = [item for item in items if item.brace_context == (("impl", "EffectRuntime", "for", "SerializedV2Runtime"),)]
+    if item_name == "can_admit_network_message_with_ingress_ownership":
+        items = [
+            item
+            for item in items
+            if item.brace_context
+            == (
+                (
+                    "impl",
+                    "<",
+                    "R",
+                    ":",
+                    "EffectRuntime",
+                    ">",
+                    "V2EffectExecutor",
+                    "<",
+                    "R",
+                    ">",
+                ),
+            )
+        ]
     assert len(items) == 1
     item = items[0]
     assert item.source.count(old) == 1, (item_name, old)
@@ -21972,6 +21992,75 @@ def test_production_causal_fifo_source_fidelity_is_current() -> None:
         )
         == []
     )
+
+
+def test_future_prepare_qc_release_preserves_strict_timeout_vote_cut(
+    tmp_path: Path,
+) -> None:
+    """Reject broad future-QC release and relaxed current-view timeout cuts."""
+
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
+    )
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_runtime/"
+        "network_ingress_classification.rs"
+    )
+    mutate_rust_item_source_in_context(
+        module,
+        path,
+        "wire_payload_advances_or_supersedes_future_prepare_qc_fifo_block",
+        (),
+        "if timeout_vote_view_is_admissible(tag.view(), vote.round.view) =>",
+        "if vote.round.view >= tag.view() =>",
+    )
+    mutate_rust_item_source_in_context(
+        module,
+        path,
+        "wire_payload_matches_current_strict_timeout_recovery_round",
+        (),
+        "&& round.view == tag.view()",
+        "&& round.view <= tag.view()",
+    )
+    original = ()
+    try:
+        original = rebind_reviewed_rust_item_digests(
+            module,
+            path,
+            "wire_payload_advances_or_supersedes_future_prepare_qc_fifo_block",
+            (),
+            (
+                (
+                    module._PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256,
+                    "wire_payload_advances_or_supersedes_future_prepare_qc_fifo_block",
+                ),
+            ),
+        ) + rebind_reviewed_rust_item_digests(
+            module,
+            path,
+            "wire_payload_matches_current_strict_timeout_recovery_round",
+            (),
+            (
+                (
+                    module._PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256,
+                    "wire_payload_matches_current_strict_timeout_recovery_round",
+                ),
+            ),
+        )
+        errors = module._production_causal_fifo_source_fidelity_errors(formal_dir)
+    finally:
+        restore_reviewed_rust_item_digests(original)
+
+    for expected in (
+        "future-PrepareQC release must admit only an adjacent TimeoutVote",
+        "view release must match the exact current context, height, and view",
+    ):
+        assert any(
+            expected in error and "exact reviewed token digest" not in error
+            for error in errors
+        ), (expected, errors)
 
 
 @pytest.mark.parametrize(

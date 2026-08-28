@@ -2301,6 +2301,134 @@ mod tests {
             12
         );
         assert_eq!(protocols["items"].as_bool(), Some(false));
+        let row_properties = schemas["PrivacyExact12CapabilityRowV1"]["properties"]
+            .as_object()
+            .expect("Exact12 row properties");
+        assert_eq!(
+            row_properties
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "activation",
+                "compiled_profile",
+                "execution_mode",
+                "operation_schema",
+                "privacy_feature_mask",
+                "protocol_id",
+                "readiness",
+            ])
+        );
+        let readiness_variants = schemas["PrivacyCapabilityReadinessV1"]["oneOf"]
+            .as_array()
+            .expect("Exact12 readiness variants");
+        assert_eq!(
+            readiness_variants
+                .iter()
+                .map(|variant| {
+                    variant["properties"]["readiness"]["const"]
+                        .as_str()
+                        .expect("Exact12 readiness tag")
+                })
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["production-qualified", "unavailable"])
+        );
+        let activation_properties = schemas["PrivacyProtocolActivationRecordV1"]["properties"]
+            .as_object()
+            .expect("privacy activation properties");
+        assert!(!activation_properties.contains_key("production_qualification"));
+        assert!(!activation_properties.contains_key("assurance"));
+        for retired in [
+            "PrivacyAssuranceV1",
+            "PrivacyCapabilityActivationStateV1",
+            "PrivacyCapabilityLimitationV1",
+        ] {
+            assert!(
+                !schemas.contains_key(retired),
+                "retired pre-release privacy schema remains: {retired}"
+            );
+        }
+        let unavailable_variants = schemas["PrivacyCapabilityUnavailableReasonV1"]["oneOf"]
+            .as_array()
+            .expect("Exact12 unavailable-reason variants");
+        assert_eq!(
+            unavailable_variants
+                .iter()
+                .map(|variant| {
+                    variant["properties"]["reason"]["const"]
+                        .as_str()
+                        .expect("Exact12 unavailable-reason tag")
+                })
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "compiled-profile",
+                "invalid-production-qualification",
+                "missing-production-qualification",
+                "not-registered",
+                "proposed",
+                "retired",
+                "suspended",
+            ])
+        );
+        let qualification = schemas["PrivacyExact12QualificationRecordV1"]["properties"]
+            .as_object()
+            .expect("production qualification properties");
+        assert_eq!(
+            qualification
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["deployment_qualification", "release_manifest",])
+        );
+        let manifest_properties = schemas["PrivacyExact12CapabilityManifestV1"]["properties"]
+            .as_object()
+            .expect("Exact12 manifest properties");
+        assert!(manifest_properties.contains_key("qualification"));
+        assert!(!schemas.contains_key("PrivacyProtocolProductionQualificationV1"));
+        let security_claim = schemas["PrivacySecurityClaimV1"]["properties"]
+            .as_object()
+            .expect("security claim properties");
+        assert_eq!(
+            security_claim
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "achieved_security_bits",
+                "audit_bundle_digest",
+                "catalog_commitment",
+                "parameter_digest",
+                "protocol_id",
+                "reduction_digest",
+                "security_model",
+                "target_security_bits",
+                "verifier_digest",
+            ])
+        );
+        assert_eq!(
+            schemas["PrivacySecurityModelV1"]["properties"]["security_model"]["enum"]
+                .as_array()
+                .expect("closed privacy security models")
+                .iter()
+                .map(|value| value.as_str().expect("security-model label"))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["classical-rom", "pq-qrom"])
+        );
+        let catalog_commitment = schemas["PrivacyExact12CatalogCommitmentV1"]["const"]
+            .as_array()
+            .expect("pinned Exact12 catalog commitment")
+            .iter()
+            .map(|byte| {
+                u8::try_from(byte.as_u64().expect("catalog commitment byte"))
+                    .expect("catalog commitment byte fits u8")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            catalog_commitment,
+            iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::canonical()
+                .digest()
+                .to_le_bytes()
+        );
         let details = openapi_operation(&document, "/v1/pipeline/transactions/details", "post");
         assert_eq!(
             operation_request_schema_ref(details, "transaction details"),

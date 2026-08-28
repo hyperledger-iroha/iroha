@@ -34,6 +34,15 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         "[" + Array(repeating: String(value), count: count).joined(separator: ",") + "]"
     }
 
+    private func byteArrayJSON(_ value: Data) -> String {
+        "[" + value.map(String.init).joined(separator: ",") + "]"
+    }
+
+    private func appendUInt32LE(_ value: UInt32, to output: inout Data) {
+        var little = value.littleEndian
+        withUnsafeBytes(of: &little) { output.append(contentsOf: $0) }
+    }
+
     private func proposalKindJSON(kind: String, payload: String) -> Data {
         Data("{\"kind\":\"\(kind)\",\"payload\":\(payload)}".utf8)
     }
@@ -67,18 +76,100 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         """
     }
 
+    private func sccpVerifyingKeyBytes() -> Data {
+        func repeated(_ value: UInt8) -> Data { Data(repeating: value, count: 32) }
+        func g1(_ value: UInt8) -> Data { repeated(value) + repeated(value &+ 1) }
+        func g2(_ value: UInt8) -> Data {
+            repeated(value) + repeated(value &+ 1) + repeated(value &+ 2) + repeated(value &+ 3)
+        }
+        var result = g1(14) + g2(16) + g2(20) + g2(24)
+        for value in UInt8(1)...UInt8(12) { result.append(g1(value)) }
+        return result
+    }
+
+    private func sccpBn254SchemaHash() -> Data {
+        let labels = [
+            "sccp:groth16-bn254:signal:message-id:v1",
+            "sccp:groth16-bn254:signal:payload-hash:v1",
+            "sccp:groth16-bn254:signal:target-domain:v1",
+            "sccp:groth16-bn254:signal:commitment-root:v1",
+            "sccp:groth16-bn254:signal:finality-height:v1",
+            "sccp:groth16-bn254:signal:finality-block-hash:v1",
+            "sccp:groth16-bn254:signal:source-domain:v1",
+            "sccp:groth16-bn254:signal:statement-hash:v1",
+            "sccp:groth16-bn254:signal:destination-binding-hash:v1",
+            "sccp:groth16-bn254:signal:route-configuration-hash:v1",
+            "sccp:groth16-bn254:signal:sora-finality-anchor-hash:v1",
+        ]
+        var canonical = Data([1])
+        appendUInt32LE(UInt32(labels.count), to: &canonical)
+        for label in labels {
+            let bytes = Data(label.utf8)
+            appendUInt32LE(UInt32(bytes.count), to: &canonical)
+            canonical.append(bytes)
+        }
+        return irohaKeccak256(
+            Data("sccp:groth16-bn254:public-signal-schema:v1".utf8) + canonical
+        )
+    }
+
+    private func sccpTairaChainIdHash() -> Data {
+        irohaKeccak256(Data([
+            0xfc, 0x56, 0x98, 0x4b, 0x2b, 0xe7, 0x43, 0x1d,
+            0x84, 0x0e, 0x21, 0x51, 0x4d, 0x18, 0x83, 0xf0,
+        ]))
+    }
+
     private func sccpOutboundProofPolicyJSON() -> String {
         """
-        {"version":1,"semantic_profile":{"profile":"sora_taira_finality_inclusion_groth16_bn254","commitments":{"version":1,"circuit_commitment":\(fixedBytes(28)),"witness_generator_commitment":\(fixedBytes(29)),"public_signal_schema_hash":\(fixedBytes(30))}},"sora_finality_anchor":{"version":1,"source_network":{"network":"sora_taira","profile":null},"protocol_version":4,"chain_id_hash":\(fixedBytes(31)),"checkpoint_height":1,"checkpoint_block_hash":\(fixedBytes(32)),"checkpoint_context_id":\(fixedBytes(33)),"checkpoint_finality_artifact_hash":\(fixedBytes(34))}}
+        {"version":1,"semantic_profile":{"profile":"sora_taira_finality_inclusion_groth16_bn254","commitments":{"version":1,"circuit_commitment":\(fixedBytes(28)),"witness_generator_commitment":\(fixedBytes(29)),"public_signal_schema_hash":\(byteArrayJSON(sccpBn254SchemaHash()))}},"sora_finality_anchor":{"version":1,"source_network":{"network":"sora_taira","profile":null},"protocol_version":4,"chain_id_hash":\(byteArrayJSON(sccpTairaChainIdHash())),"checkpoint_height":1,"checkpoint_block_hash":\(fixedBytes(32)),"checkpoint_context_id":\(fixedBytes(33)),"checkpoint_finality_artifact_hash":\(fixedBytes(34))}}
         """
     }
 
-    private func sccpEvmDestinationJSON(extraField: Bool = false) -> Data {
+    private func sccpEvmDestinationJSON(
+        extraField: Bool = false,
+        maxWrappedSupply: String = "9000000000"
+    ) -> Data {
         let extra = extraField ? ",\"legacy_deployment\":null" : ""
         return Data(
             """
-            {"family":"evm","deployment":{"token_address":\(fixedBytes(35, count: 20)),"token_code_hash":\(fixedBytes(36)),"verifier_address":\(fixedBytes(37, count: 20)),"verifier_code_hash":\(fixedBytes(38)),"verifying_key":\(sccpVerifyingKeyJSON()),"verifier_key_hash":\(fixedBytes(39)),"outbound_proof_policy":\(sccpOutboundProofPolicyJSON()),"route_address":\(fixedBytes(40, count: 20)),"route_code_hash":\(fixedBytes(41)),"taira_to_token_multiplier":1000000000\(extra)}}
+            {"family":"evm","deployment":{"token_address":\(fixedBytes(35, count: 20)),"token_code_hash":\(fixedBytes(36)),"verifier_address":\(fixedBytes(37, count: 20)),"verifier_code_hash":\(fixedBytes(38)),"verifying_key":\(sccpVerifyingKeyJSON()),"verifier_key_hash":\(byteArrayJSON(irohaKeccak256(sccpVerifyingKeyBytes()))),"outbound_proof_policy":\(sccpOutboundProofPolicyJSON()),"route_address":\(fixedBytes(40, count: 20)),"route_code_hash":\(fixedBytes(41)),"replay_verifier_address":\(fixedBytes(42, count: 20)),"replay_verifier_code_hash":\(fixedBytes(43)),"mint_breaker_address":\(fixedBytes(44, count: 20)),"mint_breaker_code_hash":\(fixedBytes(45)),"taira_to_token_multiplier":1000000000,"max_wrapped_supply":\(maxWrappedSupply)\(extra)}}
             """.utf8
+        )
+    }
+
+    private func sccpInboundEthereumLaneJSON() -> String {
+        """
+        {"source":{"network":"ethereum_mainnet","profile":null},"target":{"network":"sora_taira","profile":null}}
+        """
+    }
+
+    private func sccpGovernedRouteJSON(
+        routeConfigurationHash: Data,
+        routeId: String = "taira_eth_xor",
+        sourceAddress: String? = nil,
+        sourceRuntimeCodeHash: String? = nil,
+        maxWrappedSupply: String = "9000000000",
+        maxOutstandingLiability: String = "9"
+    ) -> Data {
+        let lane = sccpInboundEthereumLaneJSON()
+        let destination = String(
+            decoding: sccpEvmDestinationJSON(maxWrappedSupply: maxWrappedSupply),
+            as: UTF8.self
+        )
+        return Data(
+            """
+            {"lane_id":\(lane),"route_id":"\(routeId)","asset_key":"xor","revision":1,"activation":{"activation":"staged","direction":null},"inbound_finality_cutoff":null,"source_identity":{"lane":\(lane),"emitter":{"emitter":"evm","identity":{"address":\(sourceAddress ?? fixedBytes(40, count: 20)),"runtime_code_hash":\(sourceRuntimeCodeHash ?? fixedBytes(41)),"route_config_hash":\(byteArrayJSON(routeConfigurationHash))}}},"destination":\(destination),"sora_outbound_execution_policy":{"version":1,"semantics":"ivm_proved_record_sccp_message_v1","contract_artifact_sha256":\(fixedBytes(70)),"vk_ref":{"backend":"stark-fri-v1","name":"ivm-execution-v1","version":1,"commitment":\(fixedBytes(71))},"gas_limit":50000000},"settlement":{"asset_definition_id":"6TEAJqbb8oEPmLncoNiMRbLEK6tw","payload_amount_scale":9,"max_outstanding_liability":\(maxOutstandingLiability)}}
+            """.utf8
+        )
+    }
+
+    private func sccpRegisterProposalJSON(route: Data) -> Data {
+        proposalKindJSON(
+            kind: "SccpRouteGovernance",
+            payload: """
+            {"anchor":{"network_id":"\(TestNetworkIds.canonical.literal)","action":{"action":"Register","route":{"route":\(String(decoding: route, as: UTF8.self)),"native_trust_anchor":null}}}}
+            """
         )
     }
 
@@ -232,7 +323,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         XCTAssertEqual(runtimePayload.manifest.endHeight, 20)
 
         let removeRoute = """
-        {"network_id":"\(TestNetworkIds.canonical.literal)","action":{"action":"Remove","route":{"lane_id":{"source":{"network":"ethereum_sepolia","profile":null},"target":{"network":"sora_taira","profile":null}},"route_id":"taira_eth_xor","asset_key":"xor","revision":1}}}
+        {"network_id":"\(TestNetworkIds.canonical.literal)","action":{"action":"Remove","route":{"lane_id":{"source":{"network":"ethereum_mainnet","profile":null},"target":{"network":"sora_taira","profile":null}},"route_id":"taira_eth_xor","asset_key":"xor","revision":1}}}
         """
         let sccp = proposalKindJSON(
             kind: "SccpRouteGovernance",
@@ -306,6 +397,9 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
             return XCTFail("expected typed EVM destination")
         }
         XCTAssertEqual(deployment.tokenAddress, Data(repeating: 35, count: 20))
+        XCTAssertEqual(deployment.replayVerifierAddress, Data(repeating: 42, count: 20))
+        XCTAssertEqual(deployment.mintBreakerAddress, Data(repeating: 44, count: 20))
+        XCTAssertEqual(deployment.maxWrappedSupply, "9000000000")
         XCTAssertEqual(deployment.outboundProofPolicy.version, 1)
         XCTAssertThrowsError(
             try JSONDecoder().decode(
@@ -313,6 +407,186 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
                 from: sccpEvmDestinationJSON(extraField: true)
             )
         )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiGovernanceSccpDestination.self,
+                from: sccpEvmDestinationJSON(maxWrappedSupply: "1.5")
+            )
+        )
+    }
+
+    func testGovernanceSccpDestinationBindsKeySchemaAndTairaChain() throws {
+        let canonical = String(decoding: sccpEvmDestinationJSON(), as: UTF8.self)
+        let substitutions = [
+            (byteArrayJSON(irohaKeccak256(sccpVerifyingKeyBytes())), fixedBytes(39)),
+            (byteArrayJSON(sccpBn254SchemaHash()), fixedBytes(30)),
+            (byteArrayJSON(sccpTairaChainIdHash()), fixedBytes(31)),
+        ]
+        for (expected, invalid) in substitutions {
+            XCTAssertTrue(canonical.contains(expected))
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiGovernanceSccpDestination.self,
+                    from: Data(canonical.replacingOccurrences(of: expected, with: invalid).utf8)
+                )
+            )
+        }
+
+        let decoded = try JSONDecoder().decode(
+            ToriiGovernanceSccpDestination.self,
+            from: sccpEvmDestinationJSON()
+        )
+        guard case let .evm(deployment) = decoded else {
+            return XCTFail("expected typed EVM destination")
+        }
+        let semanticProfileHash = deployment.outboundProofPolicy.discoveryValue
+            .semanticProfile.profileHash
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiGovernanceSccpDestination.self,
+                from: Data(
+                    canonical.replacingOccurrences(
+                        of: fixedBytes(36),
+                        with: byteArrayJSON(semanticProfileHash)
+                    ).utf8
+                )
+            ),
+            "deployment hashes must remain distinct from derived proof-policy hashes"
+        )
+    }
+
+    func testGovernanceSccpRouteBindsEmitterAndConfigurationHash() throws {
+        let lane = try JSONDecoder().decode(
+            ToriiGovernanceSccpLane.self,
+            from: Data(sccpInboundEthereumLaneJSON().utf8)
+        )
+        let destination = try JSONDecoder().decode(
+            ToriiGovernanceSccpDestination.self,
+            from: sccpEvmDestinationJSON()
+        )
+        let discoveryLane = try lane.discoveryValue
+        let discoveryDestination = try destination.discoveryValue(for: discoveryLane)
+        let configuration = try SccpExactParser.routeConfigurationHash(
+            lane: discoveryLane,
+            routeId: "taira_eth_xor",
+            assetKey: "xor",
+            revision: 1,
+            destination: discoveryDestination
+        )
+        XCTAssertNoThrow(
+            try JSONDecoder().decode(
+                ToriiGovernanceSccpGovernedRoute.self,
+                from: sccpGovernedRouteJSON(routeConfigurationHash: configuration)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiGovernanceSccpGovernedRoute.self,
+                from: sccpGovernedRouteJSON(routeConfigurationHash: Data(repeating: 99, count: 32))
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiGovernanceSccpGovernedRoute.self,
+                from: sccpGovernedRouteJSON(
+                    routeConfigurationHash: configuration,
+                    sourceAddress: fixedBytes(99, count: 20)
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiGovernanceSccpGovernedRoute.self,
+                from: sccpGovernedRouteJSON(
+                    routeConfigurationHash: configuration,
+                    routeId: "taira_bsc_xor"
+                )
+            )
+        )
+
+        let canonicalRoute = String(
+            decoding: sccpGovernedRouteJSON(routeConfigurationHash: configuration),
+            as: UTF8.self
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiGovernanceSccpGovernedRoute.self,
+                from: Data(
+                    canonicalRoute.replacingOccurrences(
+                        of: fixedBytes(70),
+                        with: fixedBytes(36)
+                    ).utf8
+                )
+            ),
+            "execution-policy hashes must remain distinct from all deployment hashes"
+        )
+    }
+
+    func testGovernanceSccpCapsRemainLexemeExactThroughDraftEncoding() throws {
+        let liability = "18446744073709551616"
+        let wrappedSupply = "18446744073709551616000000000"
+        let destinationData = sccpEvmDestinationJSON(maxWrappedSupply: wrappedSupply)
+        let destinationDecoder = JSONDecoder()
+        destinationDecoder.userInfo[governanceExactIntegerLexemesUserInfoKey] =
+            try governanceExactJSONIntegerLexemes(destinationData)
+        let destination = try destinationDecoder.decode(
+            ToriiGovernanceSccpDestination.self,
+            from: destinationData
+        )
+        let lane = try JSONDecoder().decode(
+            ToriiGovernanceSccpLane.self,
+            from: Data(sccpInboundEthereumLaneJSON().utf8)
+        )
+        let discoveryLane = try lane.discoveryValue
+        let discoveryDestination = try destination.discoveryValue(for: discoveryLane)
+        let configuration = try SccpExactParser.routeConfigurationHash(
+            lane: discoveryLane,
+            routeId: "taira_eth_xor",
+            assetKey: "xor",
+            revision: 1,
+            destination: discoveryDestination
+        )
+        let route = sccpGovernedRouteJSON(
+            routeConfigurationHash: configuration,
+            maxWrappedSupply: wrappedSupply,
+            maxOutstandingLiability: liability
+        )
+        let proposalData = sccpRegisterProposalJSON(route: route)
+        let proposal = try ToriiParliamentProposalV1(validating: proposalData)
+        guard case let .sccpRouteGovernance(payload) = proposal.kind,
+              case let .register(register) = payload.anchor.action,
+              case let .evm(governedDestination) = register.route.destination else {
+            return XCTFail("expected SCCP route registration")
+        }
+        XCTAssertEqual(governedDestination.maxWrappedSupply, wrappedSupply)
+        XCTAssertEqual(register.route.settlement.maxOutstandingLiability, liability)
+
+        let draft = try ToriiParliamentAPIV1.attemptDraftRequestData(
+            proposal: proposal,
+            attemptSequence: 1
+        )
+        let draftText = String(decoding: draft, as: UTF8.self)
+        XCTAssertTrue(draftText.contains("\"max_wrapped_supply\":\(wrappedSupply)"))
+        XCTAssertTrue(draftText.contains("\"max_outstanding_liability\":\(liability)"))
+        XCTAssertFalse(draftText.contains("\"max_wrapped_supply\":\""))
+        XCTAssertThrowsError(try JSONEncoder().encode(proposal))
+
+        for invalidCap in [
+            "340282366920938463463374607431768211456",
+            "18446744073709551616000000000.0",
+            "018446744073709551616000000000",
+        ] {
+            let invalidRoute = sccpGovernedRouteJSON(
+                routeConfigurationHash: configuration,
+                maxWrappedSupply: invalidCap,
+                maxOutstandingLiability: liability
+            )
+            XCTAssertThrowsError(
+                try ToriiParliamentProposalV1(
+                    validating: sccpRegisterProposalJSON(route: invalidRoute)
+                )
+            )
+        }
     }
 
     func testGovernanceProposalKindRejectsUnknownAndRetiredShapes() {

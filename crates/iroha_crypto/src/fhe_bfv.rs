@@ -47,15 +47,19 @@
 //! artifact-bound corridors only. Public refresh APIs are mode-gated as `RefreshOnlyV1`, while
 //! governed `FullBootstrapV1` material is admitted and executed through explicit artifact-aware
 //! entry points so encrypted-zero refresh masks cannot be mixed into full-bootstrap jobs.
-use crate::{Algorithm, Hash, PrivateKey, PublicKey, SignatureOf, sha256};
+use crate::{Algorithm, Hash, PrivateKey, PublicKey, SignatureOf};
 use blake2::{Blake2b, digest::consts::U32};
+use digest::Digest as _;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use rand::{Rng as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
-use sha2::{Digest as _, Sha256};
+use sha3::{
+    Shake256,
+    digest::{ExtendableOutput as _, XofReader as _},
+};
 use std::{fmt, string::String, sync::OnceLock, vec::Vec};
 use thiserror::Error;
 type BfvBlake2b256 = Blake2b<U32>;
@@ -76,6 +80,532 @@ macro_rules! invalid_guards {
     ($($condition:expr => ($($arg:tt)*)),+ $(,)?) => {
         $(invalid_if!($condition, $($arg)*);)+
     };
+}
+
+/// Number of independent Poseidon-x7 lanes in the BFV native-STARK digest.
+pub const BFV_GOLDILOCKS_DIGEST384_LANES_V1: usize = 6;
+/// Canonical encoded size of one BFV native-STARK digest.
+pub const BFV_GOLDILOCKS_DIGEST384_BYTES_V1: usize = BFV_GOLDILOCKS_DIGEST384_LANES_V1 * 8;
+const BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1: usize = 3;
+const BFV_GOLDILOCKS_DIGEST384_RATE_V1: usize = 2;
+const BFV_GOLDILOCKS_DIGEST384_FULL_ROUNDS_HALF_V1: usize = 4;
+const BFV_GOLDILOCKS_DIGEST384_PARTIAL_ROUNDS_V1: usize = 57;
+const BFV_GOLDILOCKS_DIGEST384_TOTAL_ROUNDS_V1: usize =
+    BFV_GOLDILOCKS_DIGEST384_FULL_ROUNDS_HALF_V1 * 2 + BFV_GOLDILOCKS_DIGEST384_PARTIAL_ROUNDS_V1;
+const BFV_GOLDILOCKS_DIGEST384_MAX_FIELD_BYTES_V1: usize = u32::MAX as usize;
+const BFV_GOLDILOCKS_DIGEST384_PARAMETER_GENERATOR_V1: &[u8] =
+    b"shake256-rejection-sampling-u64le-below-goldilocks-v1";
+const BFV_GOLDILOCKS_DIGEST384_PARAMETER_SEED_V1: &[u8] =
+    b"iroha:first-release:native-stark:goldilocks-digest384:2026-08-28:v1";
+const BFV_GOLDILOCKS_DIGEST384_PARAMETER_DOMAIN_V1: &[u8] =
+    b"iroha:goldilocks-digest384:poseidon-x7:parameter-generator:v1";
+const BFV_GOLDILOCKS_DIGEST384_MESSAGE_FRAME_DOMAIN_V1: &[u8] =
+    b"iroha:goldilocks-digest384:message-frame:v1";
+const BFV_GOLDILOCKS_DIGEST384_CATALOG_V1: &[u8] = b"iroha-privacy-exact12-v1";
+const BFV_GOLDILOCKS_DIGEST384_PROTOCOL_V1: &[u8] = b"ram_lfe_bfv_v1";
+const BFV_GOLDILOCKS_DIGEST384_PROFILE_V1: &[u8] = b"stark-fri-poseidon-x7-goldilocks-6x64-v1";
+const BFV_GOLDILOCKS_DIGEST384_MDS_V1: [[u64; 3]; 3] = [
+    [
+        10_963_190_455_434_655_122,
+        11_750_275_951_116_524_688,
+        5_096_500_602_321_405_111,
+    ],
+    [
+        13_708_339_500_321_453_928,
+        18_089_393_393_422_782_879,
+        18_223_179_915_893_545_110,
+    ],
+    [
+        16_583_504_643_819_772_425,
+        15_141_694_648_858_373_060,
+        1_924_697_359_341_405_372,
+    ],
+];
+
+/// Canonical 384-bit BFV native-STARK digest.
+///
+/// The wire is exactly six canonical little-endian Goldilocks field elements.
+/// Construction and decoding reject non-canonical field words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+#[repr(transparent)]
+pub struct BfvGoldilocksDigest384V1([u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1]);
+
+impl Default for BfvGoldilocksDigest384V1 {
+    fn default() -> Self {
+        Self([0; BFV_GOLDILOCKS_DIGEST384_BYTES_V1])
+    }
+}
+
+impl BfvGoldilocksDigest384V1 {
+    /// Construct a digest from six canonical Goldilocks field elements.
+    #[must_use]
+    pub fn new(words: [u64; BFV_GOLDILOCKS_DIGEST384_LANES_V1]) -> Option<Self> {
+        if words
+            .iter()
+            .any(|word| *word >= BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1)
+        {
+            return None;
+        }
+        let mut bytes = [0_u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1];
+        for (index, word) in words.iter().enumerate() {
+            bytes[index * 8..index * 8 + 8].copy_from_slice(&word.to_le_bytes());
+        }
+        Some(Self(bytes))
+    }
+
+    /// Decode six canonical little-endian Goldilocks field elements.
+    #[must_use]
+    pub fn from_le_bytes(bytes: [u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1]) -> Option<Self> {
+        let words = core::array::from_fn(|index| {
+            u64::from_le_bytes(
+                bytes[index * 8..index * 8 + 8]
+                    .try_into()
+                    .expect("48-byte digest has six exact words"),
+            )
+        });
+        Self::new(words)
+    }
+
+    /// Return the six canonical Goldilocks words in lane order.
+    #[must_use]
+    pub fn words(self) -> [u64; BFV_GOLDILOCKS_DIGEST384_LANES_V1] {
+        core::array::from_fn(|index| {
+            u64::from_le_bytes(
+                self.0[index * 8..index * 8 + 8]
+                    .try_into()
+                    .expect("48-byte digest has six exact words"),
+            )
+        })
+    }
+
+    /// Return the canonical 48-byte little-endian wire.
+    #[must_use]
+    pub const fn to_le_bytes(self) -> [u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1] {
+        self.0
+    }
+
+    fn is_zero(self) -> bool {
+        self.0.iter().all(|byte| *byte == 0)
+    }
+}
+
+impl AsRef<[u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1]> for BfvGoldilocksDigest384V1 {
+    fn as_ref(&self) -> &[u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1] {
+        &self.0
+    }
+}
+
+impl norito::core::NoritoSerialize for BfvGoldilocksDigest384V1 {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        writer.write_all(&self.0)?;
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(BFV_GOLDILOCKS_DIGEST384_BYTES_V1)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(BFV_GOLDILOCKS_DIGEST384_BYTES_V1)
+    }
+}
+
+impl<'de> norito::core::NoritoDeserialize<'de> for BfvGoldilocksDigest384V1 {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("canonical BFV Goldilocks digest decode")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let bytes = <[u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1] as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
+        Self::from_le_bytes(bytes).ok_or_else(|| {
+            norito::core::Error::Message(
+                "non-canonical BFV GoldilocksDigest384V1 field element".into(),
+            )
+        })
+    }
+}
+
+impl<'de> norito::core::DecodeFromSlice<'de> for BfvGoldilocksDigest384V1 {
+    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let (encoded, used) = <[u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1] as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        Self::from_le_bytes(encoded)
+            .map(|digest| (digest, used))
+            .ok_or_else(|| {
+                norito::core::Error::Message(
+                    "non-canonical BFV GoldilocksDigest384V1 field element".into(),
+                )
+            })
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for BfvGoldilocksDigest384V1 {
+    fn write_json(&self, out: &mut String) {
+        norito::json::write_json_string(&hex::encode_upper(self.0), out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_upper_hex_json_string_to(&self.0, out)
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for BfvGoldilocksDigest384V1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let encoded = parser.parse_string()?;
+        let bytes = hex::decode(encoded)
+            .map_err(|err| norito::json::Error::Message(format!("invalid hex: {err}")))?;
+        let bytes: [u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1] = bytes.try_into().map_err(|_| {
+            norito::json::Error::Message("expected 48-byte BFV Goldilocks digest".into())
+        })?;
+        Self::from_le_bytes(bytes).ok_or_else(|| {
+            norito::json::Error::Message(
+                "non-canonical BFV GoldilocksDigest384V1 field element".into(),
+            )
+        })
+    }
+}
+
+#[derive(Clone)]
+struct BfvGoldilocksDigest384LaneParametersV1 {
+    initial_state: [u64; BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1],
+    round_constants:
+        [[u64; BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1]; BFV_GOLDILOCKS_DIGEST384_TOTAL_ROUNDS_V1],
+}
+
+static BFV_GOLDILOCKS_DIGEST384_LANE_PARAMETERS_V1: OnceLock<
+    [BfvGoldilocksDigest384LaneParametersV1; BFV_GOLDILOCKS_DIGEST384_LANES_V1],
+> = OnceLock::new();
+
+#[derive(Clone, Copy)]
+struct BfvGoldilocksDigest384DomainV1<'a> {
+    role: &'a [u8],
+    phase: &'a [u8],
+    level: u64,
+    index: u64,
+    counter: u64,
+}
+
+struct BfvGoldilocksDigest384LaneSpongeV1<'a> {
+    state: [u64; BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1],
+    pending: [u64; BFV_GOLDILOCKS_DIGEST384_RATE_V1],
+    pending_len: usize,
+    parameters: &'a BfvGoldilocksDigest384LaneParametersV1,
+}
+
+impl<'a> BfvGoldilocksDigest384LaneSpongeV1<'a> {
+    fn new(parameters: &'a BfvGoldilocksDigest384LaneParametersV1) -> Self {
+        Self {
+            state: parameters.initial_state,
+            pending: [0; BFV_GOLDILOCKS_DIGEST384_RATE_V1],
+            pending_len: 0,
+            parameters,
+        }
+    }
+
+    fn absorb(&mut self, value: u64) {
+        debug_assert!(value < BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1);
+        self.pending[self.pending_len] = value;
+        self.pending_len += 1;
+        if self.pending_len == BFV_GOLDILOCKS_DIGEST384_RATE_V1 {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        for (state, value) in self.state.iter_mut().zip(self.pending) {
+            *state = bfv_goldilocks_digest384_add_v1(*state, value);
+        }
+        bfv_goldilocks_digest384_permute_v1(&mut self.state, self.parameters);
+        self.pending = [0; BFV_GOLDILOCKS_DIGEST384_RATE_V1];
+        self.pending_len = 0;
+    }
+
+    fn finish(mut self) -> u64 {
+        self.absorb(1);
+        if self.pending_len != 0 {
+            self.flush();
+        }
+        self.state[0]
+    }
+}
+
+fn bfv_goldilocks_digest384_lane_parameters_v1()
+-> &'static [BfvGoldilocksDigest384LaneParametersV1; BFV_GOLDILOCKS_DIGEST384_LANES_V1] {
+    BFV_GOLDILOCKS_DIGEST384_LANE_PARAMETERS_V1.get_or_init(|| {
+        core::array::from_fn(|lane| {
+            let generator_length =
+                u64::try_from(BFV_GOLDILOCKS_DIGEST384_PARAMETER_GENERATOR_V1.len())
+                    .expect("fixed generator identifier length fits u64")
+                    .to_le_bytes();
+            let seed_length = u64::try_from(BFV_GOLDILOCKS_DIGEST384_PARAMETER_SEED_V1.len())
+                .expect("fixed parameter seed length fits u64")
+                .to_le_bytes();
+            let lane = u64::try_from(lane)
+                .expect("six-lane index fits u64")
+                .to_le_bytes();
+            let mut generator = Shake256::default();
+            for field in [
+                BFV_GOLDILOCKS_DIGEST384_PARAMETER_DOMAIN_V1,
+                generator_length.as_slice(),
+                BFV_GOLDILOCKS_DIGEST384_PARAMETER_GENERATOR_V1,
+                seed_length.as_slice(),
+                BFV_GOLDILOCKS_DIGEST384_PARAMETER_SEED_V1,
+                lane.as_slice(),
+            ] {
+                sha3::digest::Update::update(&mut generator, field);
+            }
+            let mut reader = generator.finalize_xof();
+            let mut next_field = || loop {
+                let mut bytes = [0_u8; 8];
+                reader.read(&mut bytes);
+                let candidate = u64::from_le_bytes(bytes);
+                if candidate < BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1 {
+                    break candidate;
+                }
+            };
+            BfvGoldilocksDigest384LaneParametersV1 {
+                initial_state: core::array::from_fn(|_| next_field()),
+                round_constants: core::array::from_fn(|_| core::array::from_fn(|_| next_field())),
+            }
+        })
+    })
+}
+
+#[inline]
+fn bfv_goldilocks_digest384_add_v1(left: u64, right: u64) -> u64 {
+    let modulus = BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1;
+    let sum = left.wrapping_add(right);
+    let mut reduced = sum;
+    if sum < left {
+        reduced = reduced.wrapping_sub(modulus);
+    }
+    if reduced >= modulus {
+        reduced - modulus
+    } else {
+        reduced
+    }
+}
+
+#[inline]
+fn bfv_goldilocks_digest384_reduce_wide_v1(value: u128) -> u64 {
+    let low = u64::try_from(value & u128::from(u64::MAX)).expect("masked low word fits u64");
+    let high = u64::try_from(value >> 64).expect("high word fits u64");
+    let high_low = i128::from(high & 0xffff_ffff);
+    let high_high = i128::from(high >> 32);
+    let mut accumulated = i128::from(low) + (high_low << 32) - high_low - high_high;
+    let modulus = i128::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1);
+    while accumulated < 0 {
+        accumulated += modulus;
+    }
+    while accumulated >= modulus {
+        accumulated -= modulus;
+    }
+    u64::try_from(accumulated).expect("Goldilocks reduction is canonical")
+}
+
+#[inline]
+fn bfv_goldilocks_digest384_mul_v1(left: u64, right: u64) -> u64 {
+    bfv_goldilocks_digest384_reduce_wide_v1(u128::from(left) * u128::from(right))
+}
+
+#[inline]
+fn bfv_goldilocks_digest384_pow7_v1(value: u64) -> u64 {
+    let square = bfv_goldilocks_digest384_mul_v1(value, value);
+    let fourth = bfv_goldilocks_digest384_mul_v1(square, square);
+    bfv_goldilocks_digest384_mul_v1(bfv_goldilocks_digest384_mul_v1(fourth, square), value)
+}
+
+fn bfv_goldilocks_digest384_permute_v1(
+    state: &mut [u64; BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1],
+    parameters: &BfvGoldilocksDigest384LaneParametersV1,
+) {
+    for round in 0..BFV_GOLDILOCKS_DIGEST384_TOTAL_ROUNDS_V1 {
+        for (word, constant) in state
+            .iter_mut()
+            .zip(parameters.round_constants[round].iter())
+        {
+            *word = bfv_goldilocks_digest384_add_v1(*word, *constant);
+        }
+        let is_full = !(BFV_GOLDILOCKS_DIGEST384_FULL_ROUNDS_HALF_V1
+            ..BFV_GOLDILOCKS_DIGEST384_FULL_ROUNDS_HALF_V1
+                + BFV_GOLDILOCKS_DIGEST384_PARTIAL_ROUNDS_V1)
+            .contains(&round);
+        if is_full {
+            for word in state.iter_mut() {
+                *word = bfv_goldilocks_digest384_pow7_v1(*word);
+            }
+        } else {
+            state[0] = bfv_goldilocks_digest384_pow7_v1(state[0]);
+        }
+        let prior = *state;
+        for row in 0..BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1 {
+            state[row] = prior
+                .iter()
+                .enumerate()
+                .fold(0_u64, |sum, (column, value)| {
+                    bfv_goldilocks_digest384_add_v1(
+                        sum,
+                        bfv_goldilocks_digest384_mul_v1(
+                            BFV_GOLDILOCKS_DIGEST384_MDS_V1[row][column],
+                            *value,
+                        ),
+                    )
+                });
+        }
+    }
+}
+
+fn bfv_goldilocks_digest384_absorb_byte_field_v1(
+    sponge: &mut BfvGoldilocksDigest384LaneSpongeV1<'_>,
+    tag: u64,
+    bytes: &[u8],
+) -> Option<()> {
+    if bytes.len() > BFV_GOLDILOCKS_DIGEST384_MAX_FIELD_BYTES_V1 {
+        return None;
+    }
+    sponge.absorb(tag);
+    sponge.absorb(u64::try_from(bytes.len()).ok()?);
+    let mut chunks = bytes.chunks_exact(7);
+    for chunk in &mut chunks {
+        let mut word = [0_u8; 8];
+        word[..7].copy_from_slice(chunk);
+        sponge.absorb(u64::from_le_bytes(word));
+    }
+    let remainder = chunks.remainder();
+    let mut terminal = [0_u8; 8];
+    terminal[..remainder.len()].copy_from_slice(remainder);
+    terminal[remainder.len()] = 1;
+    sponge.absorb(u64::from_le_bytes(terminal));
+    Some(())
+}
+
+fn bfv_goldilocks_digest384_v1(
+    domain: BfvGoldilocksDigest384DomainV1<'_>,
+    fields: &[&[u8]],
+) -> Result<BfvGoldilocksDigest384V1, BfvError> {
+    if fields.len() > BFV_GOLDILOCKS_DIGEST384_MAX_FIELD_BYTES_V1
+        || fields
+            .iter()
+            .chain([domain.role, domain.phase].iter())
+            .any(|field| field.len() > BFV_GOLDILOCKS_DIGEST384_MAX_FIELD_BYTES_V1)
+    {
+        return Err(invalid!("BFV native-STARK digest framing limit exceeded"));
+    }
+    let parameters = bfv_goldilocks_digest384_lane_parameters_v1();
+    let words = core::array::from_fn(|lane| {
+        let mut sponge = BfvGoldilocksDigest384LaneSpongeV1::new(&parameters[lane]);
+        let level = domain.level.to_le_bytes();
+        let index = domain.index.to_le_bytes();
+        let counter = domain.counter.to_le_bytes();
+        let lane = u64::try_from(lane)
+            .expect("six-lane index fits u64")
+            .to_le_bytes();
+        for (tag, field) in [
+            BFV_GOLDILOCKS_DIGEST384_MESSAGE_FRAME_DOMAIN_V1,
+            BFV_GOLDILOCKS_DIGEST384_CATALOG_V1,
+            BFV_GOLDILOCKS_DIGEST384_PROTOCOL_V1,
+            BFV_GOLDILOCKS_DIGEST384_PROFILE_V1,
+            domain.role,
+            domain.phase,
+            level.as_slice(),
+            index.as_slice(),
+            counter.as_slice(),
+            lane.as_slice(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            bfv_goldilocks_digest384_absorb_byte_field_v1(
+                &mut sponge,
+                u64::try_from(tag + 1).expect("typed domain tag fits u64"),
+                field,
+            )
+            .expect("typed domain lengths were bounded");
+        }
+        sponge.absorb(11);
+        sponge.absorb(u64::try_from(fields.len()).expect("field count was bounded"));
+        for (index, field) in fields.iter().enumerate() {
+            bfv_goldilocks_digest384_absorb_byte_field_v1(
+                &mut sponge,
+                12 + u64::try_from(index).expect("field index was bounded"),
+                field,
+            )
+            .expect("field lengths were bounded");
+        }
+        sponge.finish()
+    });
+    BfvGoldilocksDigest384V1::new(words)
+        .ok_or_else(|| invalid!("BFV native-STARK digest produced a non-canonical field word"))
+}
+
+fn bfv_native_stark_generated_circuit_body_digest_v1(
+    generated_circuit_body: &[u8],
+) -> Result<BfvGoldilocksDigest384V1, BfvError> {
+    bfv_goldilocks_digest384_v1(
+        BfvGoldilocksDigest384DomainV1 {
+            role: b"proof-key-commitment",
+            phase: b"generated-circuit-body",
+            level: 0,
+            index: 0,
+            counter: 0,
+        },
+        &[generated_circuit_body],
+    )
+}
+
+fn bfv_native_stark_payload_digest_v1(
+    role: BfvFullBootstrapCircuitArtifactRoleV1,
+    native_payload: &[u8],
+) -> Result<BfvGoldilocksDigest384V1, BfvError> {
+    let phase: &[u8] = match role {
+        BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => b"native-prover-payload",
+        BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => b"native-verifier-payload",
+        _ => {
+            return Err(invalid!(
+                "BFV native-STARK digest requires a proof-key role"
+            ));
+        }
+    };
+    bfv_goldilocks_digest384_v1(
+        BfvGoldilocksDigest384DomainV1 {
+            role: b"proof-key-commitment",
+            phase,
+            level: 0,
+            index: 0,
+            counter: 0,
+        },
+        &[native_payload],
+    )
+}
+
+fn bfv_native_stark_digest_binding_hash_v1(digest: BfvGoldilocksDigest384V1) -> Hash {
+    Hash::new(digest.as_ref())
+}
+
+fn bfv_native_stark_binding_hash_v1(
+    role: &'static [u8],
+    phase: &'static [u8],
+    fields: &[&[u8]],
+) -> Result<Hash, BfvError> {
+    let digest = bfv_goldilocks_digest384_v1(
+        BfvGoldilocksDigest384DomainV1 {
+            role,
+            phase,
+            level: 0,
+            index: 0,
+            counter: 0,
+        },
+        fields,
+    )?;
+    Ok(bfv_native_stark_digest_binding_hash_v1(digest))
 }
 macro_rules! define_release_audit_projection_v1 {
     (
@@ -298,7 +828,7 @@ pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_FIELD_COUNT_V1: u16 = 23;
 /// Version of the BFV full-bootstrap release audit proof-profile payload.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit proof-profile payload.
-pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_V1: u16 = 58;
+pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_V1: u16 = 57;
 /// Version of the BFV full-bootstrap release audit proof-key payload.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit proof-key payload.
@@ -463,114 +993,6 @@ const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SEPARATOR_SPELLED_BODY_SUFFIXES: &[(&[u8]
     (b"mock", b" external audit archive"),
 ];
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SEPARATOR_BYTES: &[u8] = b"-._";
-const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_INERT_DIGEST_ZERO_LENGTHS: &[usize] =
-    &[1, 2, 4, 8, 16, Hash::LENGTH, 64, 128, 256, 512];
-const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_PREIMAGES: &[&[u8]] = &[
-    b"placeholder BFV full-bootstrap native prover payload",
-    b"placeholder BFV full-bootstrap native verifier payload",
-    b"placeholder BFV full-bootstrap native proof key payload",
-    b"pending BFV full-bootstrap native proof key payload",
-    b"\x54\x4f\x44\x4f pending BFV full-bootstrap native proof key payload",
-    b"p-l-a-c-e-h-o-l-d-e-r BFV full-bootstrap native proof key payload",
-    b"t-o-d-o pending BFV full-bootstrap native proof key payload",
-    b"f-a-k-e BFV full-bootstrap native proof key payload",
-    b"s-t-u-b BFV full-bootstrap native proof key payload",
-    b"m-o-c-k BFV full-bootstrap native proof key payload",
-    b"d-r-a-f-t BFV full-bootstrap native proof key payload",
-    b"d-u-m-m-y BFV full-bootstrap native proof key payload",
-    b"f-i-x-t-u-r-e BFV full-bootstrap native proof key payload",
-    b"s-a-m-p-l-e BFV full-bootstrap native proof key payload",
-    b"t-e-m-p-l-a-t-e BFV full-bootstrap native proof key payload",
-    b"e-x-a-m-p-l-e BFV full-bootstrap native proof key payload",
-    b"p.e.n.d.i.n.g BFV full-bootstrap native proof key payload",
-    b"n-o-t p-r-o-d-u-c-t-i-o-n r-e-a-d-y",
-    b"replace-before-production",
-    b"replace before production",
-    b"replace_before_production",
-    b"replace.before.production",
-    b"replace-me",
-    b"replace me",
-    b"replace_me",
-    b"changeme",
-    b"change-me",
-    b"change me",
-    b"change_me",
-    b"change.me",
-    b"test-only",
-    b"test only",
-    b"test_only",
-    b"test/only",
-    b"your-audit",
-    b"your audit",
-    b"your_audit",
-    b"your.audit",
-    b"your-proof",
-    b"your proof",
-    b"your_proof",
-    b"your.proof",
-    b"not for production",
-    b"not-for-production",
-    b"not_for_production",
-    b"not production ready",
-    b"not-production-ready",
-    b"not_production_ready",
-    b"not.production.ready",
-    b"draft",
-    b"d-r-a-f-t",
-    b"draft-only",
-    b"draft only",
-    b"draft_only",
-    b"todo",
-    b"dummy",
-    b"d-u-m-m-y",
-    b"fake",
-    b"stub",
-    b"mock",
-    b"fixture",
-    b"f-i-x-t-u-r-e",
-    b"sample",
-    b"s-a-m-p-l-e",
-    b"template",
-    b"t-e-m-p-l-a-t-e",
-    b"example",
-    b"e-x-a-m-p-l-e",
-];
-const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_DELAY_PREFIXES: &[&[u8]] = &[
-    b"native proof material before placeholder: ",
-    b"native verifier payload before placeholder: ",
-];
-const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_SEPARATOR_SPELLED_PLACEHOLDER_TOKENS: &[&[u8]] = &[
-    b"placeholder",
-    b"pending",
-    b"todo",
-    b"fake",
-    b"stub",
-    b"mock",
-    b"draft",
-    b"dummy",
-    b"fixture",
-    b"sample",
-    b"template",
-    b"example",
-];
-const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_SEPARATOR_BYTES: &[u8] = b"-._";
-const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PROOF_KEY_SUFFIX: &[u8] =
-    b" BFV full-bootstrap native proof key payload";
-const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PENDING_PROOF_KEY_SUFFIX: &[u8] =
-    b" pending BFV full-bootstrap native proof key payload";
-const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES: usize =
-    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 1;
-const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_ZERO_PADDING: [u8;
-    BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES] =
-    [0_u8; BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES];
-const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_X_PADDING: [u8;
-    BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES] =
-    [b'x'; BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES];
-const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_SPACE_PADDING: [u8;
-    BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES] =
-    [b' '; BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES];
-static BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_INERT_DIGESTS_V1: OnceLock<Vec<[u8; Hash::LENGTH]>> =
-    OnceLock::new();
 const BFV_FULL_BOOTSTRAP_ARTIFACT_TEXT_PLACEHOLDER_MARKERS: &[&[u8]] = &[
     b"placeholder",
     b"pending",
@@ -1084,28 +1506,6 @@ fn bfv_full_bootstrap_release_audit_inert_body_digest_lengths_v1(
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 1,
     ]
 }
-fn sha256_chunks_with_optional_ascii_upper_body(
-    prefix_chunks: &[&[u8]],
-    body: &[u8],
-    uppercase_body: bool,
-    suffix_chunks: &[&[u8]],
-) -> [u8; Hash::LENGTH] {
-    let mut hasher = Sha256::new();
-    for chunk in prefix_chunks {
-        hasher.update(chunk);
-    }
-    if uppercase_body {
-        for byte in body {
-            hasher.update([byte.to_ascii_uppercase()]);
-        }
-    } else {
-        hasher.update(body);
-    }
-    for chunk in suffix_chunks {
-        hasher.update(chunk);
-    }
-    hasher.finalize().into()
-}
 fn hash_chunks_with_optional_ascii_upper_body(
     prefix_chunks: &[&[u8]],
     body: &[u8],
@@ -1128,96 +1528,6 @@ fn hash_chunks_with_optional_ascii_upper_body(
     }
     Hash::prehashed(hasher.finalize().into())
 }
-fn push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
-    digests: &mut Vec<[u8; Hash::LENGTH]>,
-    body: &[u8],
-    uppercase_body: bool,
-) {
-    digests.push(sha256_chunks_with_optional_ascii_upper_body(
-        &[],
-        body,
-        uppercase_body,
-        &[],
-    ));
-    let long_body_padding_len = BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES
-        .checked_sub(body.len())
-        .expect("BFV full-bootstrap native placeholder bodies fit padding sentinel length");
-    digests.push(sha256_chunks_with_optional_ascii_upper_body(
-        &[],
-        body,
-        uppercase_body,
-        &[&BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_X_PADDING[..long_body_padding_len]],
-    ));
-    let spaced_long_body_padding_len = BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES
-        .checked_sub(body.len() + 1)
-        .expect("BFV full-bootstrap native placeholder bodies fit spaced padding sentinel length");
-    digests.push(sha256_chunks_with_optional_ascii_upper_body(
-        &[],
-        body,
-        uppercase_body,
-        &[
-            b" ",
-            &BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_X_PADDING[..spaced_long_body_padding_len],
-        ],
-    ));
-    digests.push(sha256_chunks_with_optional_ascii_upper_body(
-        &[&BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_SPACE_PADDING],
-        body,
-        uppercase_body,
-        &[],
-    ));
-    for prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
-        digests.push(sha256_chunks_with_optional_ascii_upper_body(
-            &[*prefix],
-            body,
-            uppercase_body,
-            &[],
-        ));
-    }
-    for prefix in BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_DELAY_PREFIXES {
-        digests.push(sha256_chunks_with_optional_ascii_upper_body(
-            &[*prefix],
-            body,
-            uppercase_body,
-            &[],
-        ));
-        digests.push(sha256_chunks_with_optional_ascii_upper_body(
-            &[*prefix, &[0xff]],
-            body,
-            uppercase_body,
-            &[],
-        ));
-        digests.push(sha256_chunks_with_optional_ascii_upper_body(
-            &[
-                &BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_SPACE_PADDING,
-                *prefix,
-            ],
-            body,
-            uppercase_body,
-            &[],
-        ));
-        for leading_prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
-            digests.push(sha256_chunks_with_optional_ascii_upper_body(
-                &[*leading_prefix, *prefix],
-                body,
-                uppercase_body,
-                &[],
-            ));
-            digests.push(sha256_chunks_with_optional_ascii_upper_body(
-                &[*leading_prefix, *prefix, &[0xff]],
-                body,
-                uppercase_body,
-                &[],
-            ));
-        }
-    }
-    digests.push(sha256_chunks_with_optional_ascii_upper_body(
-        &[&[0xff]],
-        body,
-        uppercase_body,
-        &[],
-    ));
-}
 fn separator_spell_ascii_token(token: &[u8], separator: u8) -> Vec<u8> {
     let mut spelled = Vec::with_capacity(token.len().saturating_mul(2).saturating_sub(1));
     for (index, byte) in token.iter().copied().enumerate() {
@@ -1227,76 +1537,6 @@ fn separator_spell_ascii_token(token: &[u8], separator: u8) -> Vec<u8> {
         spelled.push(byte);
     }
     spelled
-}
-fn push_bfv_full_bootstrap_native_payload_separator_spelled_digests_v1(
-    digests: &mut Vec<[u8; Hash::LENGTH]>,
-) {
-    for token in BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_SEPARATOR_SPELLED_PLACEHOLDER_TOKENS {
-        for separator in BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_SEPARATOR_BYTES {
-            let body = separator_spell_ascii_token(token, *separator);
-            push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
-                digests, &body, false,
-            );
-            push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
-                digests, &body, true,
-            );
-            let mut suffixed = body;
-            suffixed.extend_from_slice(BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PROOF_KEY_SUFFIX);
-            push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
-                digests, &suffixed, false,
-            );
-            push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
-                digests, &suffixed, true,
-            );
-            if *token == b"todo" {
-                let mut pending_suffixed = separator_spell_ascii_token(token, *separator);
-                pending_suffixed
-                    .extend_from_slice(BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PENDING_PROOF_KEY_SUFFIX);
-                push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
-                    digests,
-                    &pending_suffixed,
-                    false,
-                );
-                push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
-                    digests,
-                    &pending_suffixed,
-                    true,
-                );
-            }
-        }
-    }
-}
-fn bfv_full_bootstrap_native_payload_inert_digests_v1() -> &'static [[u8; Hash::LENGTH]] {
-    BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_INERT_DIGESTS_V1
-        .get_or_init(|| {
-            let mut digests = Vec::new();
-            digests.push(sha256([]));
-            for len in BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_INERT_DIGEST_ZERO_LENGTHS {
-                digests.push(sha256(
-                    &BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_ZERO_PADDING[..*len],
-                ));
-            }
-            for body in BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_PREIMAGES {
-                push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
-                    &mut digests,
-                    body,
-                    false,
-                );
-                if body.iter().any(u8::is_ascii_lowercase) {
-                    push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
-                        &mut digests,
-                        body,
-                        true,
-                    );
-                }
-            }
-            push_bfv_full_bootstrap_native_payload_separator_spelled_digests_v1(&mut digests);
-            digests
-        })
-        .as_slice()
-}
-fn is_bfv_full_bootstrap_native_payload_inert_digest_v1(digest: &[u8; Hash::LENGTH]) -> bool {
-    bfv_full_bootstrap_native_payload_inert_digests_v1().contains(digest)
 }
 const BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_VERSION_V1: u16 = 1;
 const BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_FIELD_COUNT_V1: u16 = 17;
@@ -1388,41 +1628,40 @@ const BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES: usize = BFV_DETERMINISTIC_SEED_MAX_
 pub const BFV_BOOTSTRAP_KEY_ID_MAX_BYTES: usize = 128;
 const BFV_BOOTSTRAP_KEY_DEFAULT_MAX_REFRESH_ROUNDS: u16 = 1;
 /// Maximum public refresh rounds admitted in one BFV bootstrap key.
-pub const BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS: u16 = 1_024;
+pub const BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS: u16 = 1;
 /// Canonical circuit id for BFV full-bootstrap circuit material commitments.
 pub const BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1: &str = "iroha_bfv_full_bootstrap_v1";
 /// Maximum circuit depth advertised by BFV full-bootstrap material.
-pub const BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH: u16 = 1_024;
+pub const BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH: u16 = 16;
 /// Maximum bytes admitted for one BFV full-bootstrap circuit artifact.
 pub const BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum bytes admitted for one BFV full-bootstrap proof-profile artifact.
 pub const BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// Canonical proof backend for BFV full-bootstrap proof-profile artifacts.
-pub const BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1: &str = "stark/fri/sha256-goldilocks";
+pub const BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1: &str = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
 /// Canonical proof-key byte format for BFV full-bootstrap proof-profile artifacts.
 pub const BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1: &str =
-    "openverify:stark-fri-sha256-goldilocks:v1";
+    "openverify:stark-fri-poseidon-x7-goldilocks-6x64-v1:v1";
 /// Version of the native BFV full-bootstrap proof-key material payload.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the native BFV full-bootstrap proof-key material payload.
-pub const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_FIELD_COUNT_V1: u16 = 21;
+pub const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_FIELD_COUNT_V1: u16 = 20;
 const BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_VERSION_V1: u16 = 1;
-const BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_FIELD_COUNT_V1: u16 = 49;
+const BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_FIELD_COUNT_V1: u16 = 48;
 /// Version of the typed BFV full-bootstrap arithmetic AIR constraint-system material.
 pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap arithmetic AIR constraint-system material.
 pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1: u16 = 37;
-/// Number of digest bytes reduced into each BFV full-bootstrap arithmetic AIR composition
-/// challenge.
-pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1: u16 = 32;
+/// Number of six-lane digest bytes reduced into each BFV full-bootstrap arithmetic AIR
+/// composition challenge.
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1: u16 =
+    BFV_GOLDILOCKS_DIGEST384_BYTES_V1 as u16;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_VERSION_V1: u16 = 1;
-const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1: u16 = 48;
+const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1: u16 = 47;
 /// Canonical native proof system family for BFV full-bootstrap proof keys.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1: &str = "stark/fri";
 /// Canonical native STARK field for BFV full-bootstrap proof keys.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1: &str = "goldilocks";
-/// Canonical native STARK hash selector for BFV full-bootstrap proof keys.
-pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1: u8 = 1;
 /// Canonical transcript label for native BFV full-bootstrap STARK/AIR proofs.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1: &str =
     "IROHA-BFV-FULL-BOOTSTRAP-AIR-V1";
@@ -1432,8 +1671,15 @@ pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1: u8 = 10;
 pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1: u8 = 3;
 /// Canonical native STARK binary FRI fold arity for BFV full-bootstrap proof keys.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1: u8 = 2;
-/// Canonical native STARK query count for BFV full-bootstrap proof keys.
-pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1: u16 = 24;
+/// Canonical native STARK query count encoded by the current first-release profile.
+///
+/// This is the minimum multiple-of-eight floor, not a 128-bit security claim. Production
+/// qualification remains unavailable until a registered exact aggregate-qROM certificate proves
+/// that this is the least sufficient count (or the first-release profile is regenerated with the
+/// least larger certified count).
+pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1: u16 = 64;
+const _: () = assert!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 >= 64);
+const _: () = assert!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 % 8 == 0);
 /// Canonical native STARK binary Merkle arity for BFV full-bootstrap proof keys.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1: u8 = 2;
 /// Native payload kind for transparent BFV full-bootstrap STARK prover parameters.
@@ -1445,9 +1691,9 @@ pub const BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_KIND_V1: &str = "stark-fri-
 pub const BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap proof-key material envelope.
 pub const BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_FIELD_COUNT_V1: u16 = 45;
-const BFV_FULL_BOOTSTRAP_NATIVE_TRANSPARENT_PROVER_PAYLOAD_FIELD_COUNT_V1: u16 = 18;
+const BFV_FULL_BOOTSTRAP_NATIVE_TRANSPARENT_PROVER_PAYLOAD_FIELD_COUNT_V1: u16 = 17;
 /// Number of top-level fields in the canonical native STARK/FRI verifier payload.
-pub const BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_FIELD_COUNT_V1: u16 = 18;
+pub const BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_FIELD_COUNT_V1: u16 = 17;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_CIRCUIT_ID_MAX_BYTES: usize = 256;
 const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_STATEMENT_HASH_LIMB_COUNT_V1: u16 = 4;
 /// Maximum diagonal entries admitted in one BFV full-bootstrap linear transform.
@@ -1475,6 +1721,114 @@ pub const RAM_LFE_BFV_CIPHERTEXT_MODULUS: u64 = RAM_LFE_BFV_PLAINTEXT_MODULUS * 
 pub const RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT: usize = 64;
 /// Maximum raw UTF-8 bytes accepted by the registered RAM-LFE identifier envelope.
 pub const RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES: u16 = 63;
+/// Sole first-release packed BFV profile identifier.
+pub const RAM_LFE_BFV_PROFILE_ID_V1: &str = "ram_lfe_bfv_v1";
+/// Number of logical packed plaintext slots in the first-release profile.
+pub const RAM_LFE_BFV_LOGICAL_SLOT_COUNT_V1: u16 = 64;
+/// Number of encrypted VM registers in the first-release profile.
+pub const RAM_LFE_BFV_REGISTER_COUNT_V1: u16 = 4;
+/// Number of encrypted VM state lanes in the first-release profile.
+pub const RAM_LFE_BFV_STATE_LANE_COUNT_V1: u16 = 32;
+/// Maximum instructions in one first-release packed BFV job.
+pub const RAM_LFE_BFV_MAX_INSTRUCTION_COUNT_V1: u16 = 256;
+/// Maximum multiplicative depth in one first-release packed BFV job.
+pub const RAM_LFE_BFV_MAX_MULTIPLICATIVE_DEPTH_V1: u16 = 16;
+/// Maximum full bootstraps in one first-release packed BFV job.
+pub const RAM_LFE_BFV_MAX_FULL_BOOTSTRAPS_PER_JOB_V1: u8 = 1;
+
+/// Closed first-release RAM-LFE BFV profile descriptor.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
+pub struct RamLfeBfvProfileV1 {
+    /// Exact sole profile identifier.
+    pub profile_id: String,
+    /// Plaintext modulus.
+    pub plaintext_modulus: u64,
+    /// Maximum raw input bytes.
+    pub max_input_bytes: u16,
+    /// Number of logical packed slots.
+    pub logical_slot_count: u16,
+    /// Number of encrypted VM registers.
+    pub register_count: u16,
+    /// Number of encrypted VM state lanes.
+    pub state_lane_count: u16,
+    /// Maximum instructions in one job.
+    pub max_instruction_count: u16,
+    /// Maximum multiplicative depth in one job.
+    pub max_multiplicative_depth: u16,
+    /// Maximum full bootstraps in one job.
+    pub max_full_bootstraps_per_job: u8,
+}
+
+/// Return the sole first-release packed BFV profile descriptor.
+#[must_use]
+pub fn ram_lfe_bfv_profile_v1() -> RamLfeBfvProfileV1 {
+    RamLfeBfvProfileV1 {
+        profile_id: RAM_LFE_BFV_PROFILE_ID_V1.to_owned(),
+        plaintext_modulus: RAM_LFE_BFV_PLAINTEXT_MODULUS,
+        max_input_bytes: RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+        logical_slot_count: RAM_LFE_BFV_LOGICAL_SLOT_COUNT_V1,
+        register_count: RAM_LFE_BFV_REGISTER_COUNT_V1,
+        state_lane_count: RAM_LFE_BFV_STATE_LANE_COUNT_V1,
+        max_instruction_count: RAM_LFE_BFV_MAX_INSTRUCTION_COUNT_V1,
+        max_multiplicative_depth: RAM_LFE_BFV_MAX_MULTIPLICATIVE_DEPTH_V1,
+        max_full_bootstraps_per_job: RAM_LFE_BFV_MAX_FULL_BOOTSTRAPS_PER_JOB_V1,
+    }
+}
+
+/// Validate the exact first-release RAM-LFE BFV profile.
+///
+/// # Errors
+/// Returns [`BfvError`] for every alias, candidate, or altered profile.
+pub fn validate_ram_lfe_bfv_profile_v1(profile: &RamLfeBfvProfileV1) -> Result<(), BfvError> {
+    invalid_guards! {
+        profile.profile_id != RAM_LFE_BFV_PROFILE_ID_V1
+        => ("BFV profile id must be exactly `{RAM_LFE_BFV_PROFILE_ID_V1}`"),
+        profile.plaintext_modulus != RAM_LFE_BFV_PLAINTEXT_MODULUS
+        => ("BFV first-release plaintext modulus must be {RAM_LFE_BFV_PLAINTEXT_MODULUS}"),
+        profile.max_input_bytes != RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES
+        => ("BFV first-release input limit must be {RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES} bytes"),
+        profile.logical_slot_count != RAM_LFE_BFV_LOGICAL_SLOT_COUNT_V1
+        => ("BFV first-release profile must expose {RAM_LFE_BFV_LOGICAL_SLOT_COUNT_V1} logical slots"),
+        profile.register_count != RAM_LFE_BFV_REGISTER_COUNT_V1
+        => ("BFV first-release profile must expose {RAM_LFE_BFV_REGISTER_COUNT_V1} registers"),
+        profile.state_lane_count != RAM_LFE_BFV_STATE_LANE_COUNT_V1
+        => ("BFV first-release profile must expose {RAM_LFE_BFV_STATE_LANE_COUNT_V1} state lanes"),
+        profile.max_instruction_count != RAM_LFE_BFV_MAX_INSTRUCTION_COUNT_V1
+        => ("BFV first-release profile must admit at most {RAM_LFE_BFV_MAX_INSTRUCTION_COUNT_V1} instructions"),
+        profile.max_multiplicative_depth != RAM_LFE_BFV_MAX_MULTIPLICATIVE_DEPTH_V1
+        => ("BFV first-release multiplicative depth must be {RAM_LFE_BFV_MAX_MULTIPLICATIVE_DEPTH_V1}"),
+        profile.max_full_bootstraps_per_job != RAM_LFE_BFV_MAX_FULL_BOOTSTRAPS_PER_JOB_V1
+        => ("BFV first-release jobs must admit at most {RAM_LFE_BFV_MAX_FULL_BOOTSTRAPS_PER_JOB_V1} full bootstrap"),
+    }
+    Ok(())
+}
+
+/// Machine-readable reason that the BFV production gate remains closed.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(tag = "reason", content = "details", rename_all = "snake_case")]
+pub enum BfvProductionQualificationBlockerV1 {
+    /// Deterministic parameter search, HE.org Category-128Q cap validation, pinned lattice
+    /// estimates, exact circuit-derived noise analysis, and the aggregate-qROM query-count
+    /// certificate are not registered.
+    MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+}
+
+/// Require registered production qualification for the sole BFV profile.
+///
+/// No in-repository placeholder can satisfy this gate. A later evidence registry must replace the
+/// typed blocker with content-addressed, independently audited artifacts.
+///
+/// # Errors
+/// Always returns [`BfvError::ProductionQualificationUnavailable`] until the required real
+/// parameter-search, estimator, and noise evidence is registered.
+pub fn require_ram_lfe_bfv_production_qualification_v1() -> Result<(), BfvError> {
+    Err(BfvError::ProductionQualificationUnavailable(
+        BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+    ))
+}
 /// Registered RAM-LFE BFV RNS coefficient-modulus chain.
 ///
 /// The limbs are odd primes, strictly increasing, pairwise coprime, and congruent to `1 mod 2n` for
@@ -3334,8 +3688,6 @@ pub struct BfvFullBootstrapNativeProofKeyMaterialV1 {
     pub proof_system: String,
     /// Canonical native finite field label.
     pub field: String,
-    /// Native STARK hash selector.
-    pub hash_fn: u8,
     /// Native STARK evaluation-domain log2.
     pub n_log2: u8,
     /// Native STARK FRI blowup log2.
@@ -3358,8 +3710,8 @@ pub struct BfvFullBootstrapNativeProofKeyMaterialV1 {
     pub arithmetic_air_constraint_system_digest: Hash,
     /// Digest of the registered centered scale-round source chain bound by the native circuit.
     pub centered_scale_round_source_chain_digest: Hash,
-    /// Raw SHA-256 commitment bytes for `native_payload`.
-    pub native_payload_digest: [u8; Hash::LENGTH],
+    /// Canonical six-lane Poseidon-x7 commitment to `native_payload`.
+    pub native_payload_digest: BfvGoldilocksDigest384V1,
     /// Role-specific native payload bytes.
     pub native_payload: Vec<u8>,
 }
@@ -3379,7 +3731,6 @@ struct BfvFullBootstrapNativeGeneratedCircuitBodyV1 {
     centered_scale_round_source_chain_digest: Hash,
     proof_public_input_schema_payload_digest: Hash,
     release_prover_contract_digest: Hash,
-    hash_fn: u8,
     n_log2: u8,
     blowup_log2: u8,
     fold_arity: u8,
@@ -3428,9 +3779,8 @@ struct BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 {
     arithmetic_trace_profile_digest: Hash,
     arithmetic_air_constraint_system_digest: Hash,
     centered_scale_round_source_chain_digest: Hash,
-    generated_circuit_body_digest: [u8; Hash::LENGTH],
+    generated_circuit_body_digest: BfvGoldilocksDigest384V1,
     generated_circuit_body: Vec<u8>,
-    hash_fn: u8,
     n_log2: u8,
     blowup_log2: u8,
     fold_arity: u8,
@@ -3460,8 +3810,8 @@ pub struct BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 {
     pub arithmetic_air_constraint_system_digest: Hash,
     /// Digest of the registered centered scale-round source chain bound by this native payload.
     pub centered_scale_round_source_chain_digest: Hash,
-    /// Raw SHA-256 commitment bytes for the generated native circuit body.
-    pub generated_circuit_body_digest: [u8; Hash::LENGTH],
+    /// Canonical six-lane Poseidon-x7 commitment to the generated native circuit body.
+    pub generated_circuit_body_digest: BfvGoldilocksDigest384V1,
     /// Canonical generated native circuit body bytes.
     pub generated_circuit_body: Vec<u8>,
     /// Log2 of the STARK evaluation domain size.
@@ -3474,8 +3824,6 @@ pub struct BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 {
     pub queries: u16,
     /// Merkle tree arity.
     pub merkle_arity: u8,
-    /// Native STARK hash selector.
-    pub hash_fn: u8,
 }
 /// Typed envelope for backend-native BFV full-bootstrap proof-key bytes.
 ///
@@ -3800,8 +4148,6 @@ pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
     pub field: String,
     /// Digest of the registered centered scale-round source chain this profile audits.
     pub centered_scale_round_source_chain_digest: Hash,
-    /// Native STARK hash selector.
-    pub hash_fn: u8,
     /// Native STARK evaluation-domain log2.
     pub n_log2: u8,
     /// Native STARK FRI blowup log2.
@@ -3926,10 +4272,10 @@ pub struct BfvFullBootstrapReleaseAuditKeyEvidenceV1 {
     pub native_payload_circuit_id: String,
     /// Fingerprint of the native full-bootstrap proof circuit layout.
     pub native_circuit_fingerprint: Hash,
-    /// Raw SHA-256 commitment bytes for the native payload.
-    pub native_payload_digest: [u8; Hash::LENGTH],
-    /// Raw SHA-256 commitment bytes for the generated native circuit body.
-    pub generated_circuit_body_digest: [u8; Hash::LENGTH],
+    /// Canonical six-lane Poseidon-x7 commitment to the native payload.
+    pub native_payload_digest: BfvGoldilocksDigest384V1,
+    /// Canonical six-lane Poseidon-x7 commitment to the generated native circuit body.
+    pub generated_circuit_body_digest: BfvGoldilocksDigest384V1,
 }
 /// Typed release audit evidence for BFV full-bootstrap generated artifacts.
 ///
@@ -4018,9 +4364,9 @@ pub struct BfvFullBootstrapReleaseAuditSignoffPayloadV1 {
     pub prover_key_digest: Hash,
     /// Digest of the governed verifier-key artifact bytes.
     pub verifier_key_digest: Hash,
-    /// SHA-256 digest of the canonical native prover payload bytes.
+    /// Metadata binding hash of the canonical six-lane native prover payload commitment.
     pub prover_native_payload_digest: Hash,
-    /// SHA-256 digest of the canonical native verifier payload bytes.
+    /// Metadata binding hash of the canonical six-lane native verifier payload commitment.
     pub verifier_native_payload_digest: Hash,
     /// Fingerprint of the native full-bootstrap proof circuit layout.
     pub native_circuit_fingerprint: Hash,
@@ -4118,9 +4464,9 @@ pub struct BfvFullBootstrapReleaseAuditManifestV1 {
     pub prover_key_digest: Hash,
     /// Digest of the governed verifier-key artifact bytes.
     pub verifier_key_digest: Hash,
-    /// SHA-256 digest of the canonical native prover payload bytes.
+    /// Metadata binding hash of the canonical six-lane native prover payload commitment.
     pub prover_native_payload_digest: Hash,
-    /// SHA-256 digest of the canonical native verifier payload bytes.
+    /// Metadata binding hash of the canonical six-lane native verifier payload commitment.
     pub verifier_native_payload_digest: Hash,
     /// Fingerprint of the native full-bootstrap proof circuit layout.
     pub native_circuit_fingerprint: Hash,
@@ -4601,7 +4947,6 @@ struct BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
     key_format: String,
     proof_system: String,
     field: String,
-    hash_fn: u8,
     n_log2: u8,
     blowup_log2: u8,
     fold_arity: u8,
@@ -5745,11 +6090,8 @@ fn validate_identifier_public_parameter_metadata_parts(
 ) -> Result<(), BfvError> {
     validate_registered_bfv_parameters(params)?;
     invalid_guards! {
-        max_input_bytes == 0 => ("max_input_bytes must be at least 1"),
-        u64::from(max_input_bytes) >= params.plaintext_modulus
-        => ("max_input_bytes must fit into one plaintext slot"),
-        max_input_bytes > RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES => (
-            "max_input_bytes must be at most {RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES} for the registered RAM-LFE BFV identifier profile"
+        max_input_bytes != RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES => (
+            "max_input_bytes must be exactly {RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES} for the first-release RAM-LFE BFV profile"
         ),
     }
     Ok(())
@@ -7676,6 +8018,10 @@ impl BfvAffineCircuit {
 /// Errors raised by the deterministic BFV baseline.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum BfvError {
+    /// Required content-addressed security evidence is not registered for the sole production
+    /// profile.
+    #[error("BFV production qualification unavailable: {0:?}")]
+    ProductionQualificationUnavailable(BfvProductionQualificationBlockerV1),
     /// The parameter set is invalid.
     #[error("invalid BFV parameters: {0}")]
     InvalidParameters(String),
@@ -13190,7 +13536,8 @@ pub fn encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
     )?;
     let generated_circuit_body =
         bfv_full_bootstrap_native_generated_circuit_body_v1(native_payload_circuit_id)?;
-    let generated_circuit_body_digest = sha256(&generated_circuit_body);
+    let generated_circuit_body_digest =
+        bfv_native_stark_generated_circuit_body_digest_v1(&generated_circuit_body)?;
     let centered_scale_round_source_chain_digest =
         canonical_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1()?;
     let payload = BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 {
@@ -13206,7 +13553,6 @@ pub fn encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
         fold_arity: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1,
         queries: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1,
         merkle_arity: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1,
-        hash_fn: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
         arithmetic_trace_profile_digest:
             canonical_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(),
         arithmetic_air_constraint_system_digest:
@@ -13563,36 +13909,40 @@ pub fn bfv_full_bootstrap_proof_key_material_commitment_v1(
     let supports_bounded_noise = [u8::from(key.supports_bounded_noise)];
     let native_verifier_obligation_flags =
         bfv_full_bootstrap_proof_key_native_verifier_obligation_flags_v1(key);
-    Ok(Hash::new_from_chunks(&[
-        BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_COMMITMENT_DOMAIN,
-        role_label,
-        key.backend.as_bytes(),
-        key.key_format.as_bytes(),
-        key.circuit_id.as_bytes(),
-        parameter_digest.as_slice(),
-        rns_modulus_chain_digest.as_slice(),
-        key_switch_decomposition_chain_digest.as_slice(),
-        centered_scale_round_source_chain_digest.as_slice(),
-        max_bootstrap_depth.as_slice(),
-        schema_digest.as_slice(),
-        evaluator_artifact_set_digest.as_slice(),
-        proof_key_pair_commitment.as_slice(),
-        statement_material_version.as_slice(),
-        statement_material_field_count.as_slice(),
-        claim_version.as_slice(),
-        claim_field_count.as_slice(),
-        key.witness_digest_domain.as_slice(),
-        witness_digest_material_version.as_slice(),
-        witness_digest_material_field_count.as_slice(),
-        witness_trace_field_count.as_slice(),
-        witness_trace_bounds_field_count.as_slice(),
-        public_input_hash_count.as_slice(),
-        public_input_hash_bytes.as_slice(),
-        supports_exact_residual_multiple.as_slice(),
-        supports_bounded_noise.as_slice(),
-        native_verifier_obligation_flags.as_slice(),
-        key.key_material.as_slice(),
-    ]))
+    bfv_native_stark_binding_hash_v1(
+        b"proof-key-commitment",
+        b"material",
+        &[
+            BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_COMMITMENT_DOMAIN,
+            role_label,
+            key.backend.as_bytes(),
+            key.key_format.as_bytes(),
+            key.circuit_id.as_bytes(),
+            parameter_digest.as_slice(),
+            rns_modulus_chain_digest.as_slice(),
+            key_switch_decomposition_chain_digest.as_slice(),
+            centered_scale_round_source_chain_digest.as_slice(),
+            max_bootstrap_depth.as_slice(),
+            schema_digest.as_slice(),
+            evaluator_artifact_set_digest.as_slice(),
+            proof_key_pair_commitment.as_slice(),
+            statement_material_version.as_slice(),
+            statement_material_field_count.as_slice(),
+            claim_version.as_slice(),
+            claim_field_count.as_slice(),
+            key.witness_digest_domain.as_slice(),
+            witness_digest_material_version.as_slice(),
+            witness_digest_material_field_count.as_slice(),
+            witness_trace_field_count.as_slice(),
+            witness_trace_bounds_field_count.as_slice(),
+            public_input_hash_count.as_slice(),
+            public_input_hash_bytes.as_slice(),
+            supports_exact_residual_multiple.as_slice(),
+            supports_bounded_noise.as_slice(),
+            native_verifier_obligation_flags.as_slice(),
+            key.key_material.as_slice(),
+        ],
+    )
 }
 /// Return the generated-pair commitment for BFV full-bootstrap proof keys.
 ///
@@ -13637,37 +13987,41 @@ pub fn bfv_full_bootstrap_proof_key_pair_commitment_v1(
     let supports_bounded_noise = [u8::from(prover_key.supports_bounded_noise)];
     let native_verifier_obligation_flags =
         bfv_full_bootstrap_proof_key_native_verifier_obligation_flags_v1(prover_key);
-    Ok(Hash::new_from_chunks(&[
-        BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN,
-        prover_key.backend.as_bytes(),
-        prover_key.key_format.as_bytes(),
-        prover_key.circuit_id.as_bytes(),
-        parameter_digest.as_slice(),
-        rns_modulus_chain_digest.as_slice(),
-        key_switch_decomposition_chain_digest.as_slice(),
-        centered_scale_round_source_chain_digest.as_slice(),
-        max_bootstrap_depth.as_slice(),
-        schema_digest.as_slice(),
-        evaluator_artifact_set_digest.as_slice(),
-        statement_material_version.as_slice(),
-        statement_material_field_count.as_slice(),
-        claim_version.as_slice(),
-        claim_field_count.as_slice(),
-        prover_key.witness_digest_domain.as_slice(),
-        witness_digest_material_version.as_slice(),
-        witness_digest_material_field_count.as_slice(),
-        witness_trace_field_count.as_slice(),
-        witness_trace_bounds_field_count.as_slice(),
-        public_input_hash_count.as_slice(),
-        public_input_hash_bytes.as_slice(),
-        supports_exact_residual_multiple.as_slice(),
-        supports_bounded_noise.as_slice(),
-        native_verifier_obligation_flags.as_slice(),
-        b"prover-key",
-        prover_key.key_material.as_slice(),
-        b"verifier-key",
-        verifier_key.key_material.as_slice(),
-    ]))
+    bfv_native_stark_binding_hash_v1(
+        b"proof-key-commitment",
+        b"pair",
+        &[
+            BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN,
+            prover_key.backend.as_bytes(),
+            prover_key.key_format.as_bytes(),
+            prover_key.circuit_id.as_bytes(),
+            parameter_digest.as_slice(),
+            rns_modulus_chain_digest.as_slice(),
+            key_switch_decomposition_chain_digest.as_slice(),
+            centered_scale_round_source_chain_digest.as_slice(),
+            max_bootstrap_depth.as_slice(),
+            schema_digest.as_slice(),
+            evaluator_artifact_set_digest.as_slice(),
+            statement_material_version.as_slice(),
+            statement_material_field_count.as_slice(),
+            claim_version.as_slice(),
+            claim_field_count.as_slice(),
+            prover_key.witness_digest_domain.as_slice(),
+            witness_digest_material_version.as_slice(),
+            witness_digest_material_field_count.as_slice(),
+            witness_trace_field_count.as_slice(),
+            witness_trace_bounds_field_count.as_slice(),
+            public_input_hash_count.as_slice(),
+            public_input_hash_bytes.as_slice(),
+            supports_exact_residual_multiple.as_slice(),
+            supports_bounded_noise.as_slice(),
+            native_verifier_obligation_flags.as_slice(),
+            b"prover-key",
+            prover_key.key_material.as_slice(),
+            b"verifier-key",
+            verifier_key.key_material.as_slice(),
+        ],
+    )
 }
 /// Construct a matched BFV full-bootstrap prover/verifier proof-key pair.
 ///
@@ -14976,12 +15330,14 @@ pub fn bfv_full_bootstrap_release_audit_signoff_payload_v1(
         proof_key_pair_commitment: evidence.proof_key_pair_commitment,
         prover_key_digest: evidence.prover_key.key_digest,
         verifier_key_digest: evidence.verifier_key.key_digest,
-        prover_native_payload_digest: Hash::prehashed(evidence.prover_key.native_payload_digest),
-        verifier_native_payload_digest: Hash::prehashed(
+        prover_native_payload_digest: bfv_native_stark_digest_binding_hash_v1(
+            evidence.prover_key.native_payload_digest,
+        ),
+        verifier_native_payload_digest: bfv_native_stark_digest_binding_hash_v1(
             evidence.verifier_key.native_payload_digest,
         ),
         native_circuit_fingerprint: evidence.prover_key.native_circuit_fingerprint,
-        generated_circuit_body_digest: Hash::prehashed(
+        generated_circuit_body_digest: bfv_native_stark_digest_binding_hash_v1(
             evidence.prover_key.generated_circuit_body_digest,
         ),
         audit_report_digest,
@@ -16140,7 +16496,7 @@ pub fn bfv_full_bootstrap_release_audit_manifest_v1(
         prover_native_payload_digest: payload.prover_native_payload_digest,
         verifier_native_payload_digest: payload.verifier_native_payload_digest,
         native_circuit_fingerprint: payload.native_circuit_fingerprint,
-        generated_circuit_body_digest: Hash::prehashed(
+        generated_circuit_body_digest: bfv_native_stark_digest_binding_hash_v1(
             record.evidence.prover_key.generated_circuit_body_digest,
         ),
         audit_report_digest: payload.audit_report_digest,
@@ -16624,8 +16980,9 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_for_record_v1(
         manifest.native_circuit_fingerprint != payload.native_circuit_fingerprint
         => ("BFV full-bootstrap release audit manifest native circuit fingerprint mismatch"),
     }
-    let expected_generated_circuit_body_digest =
-        Hash::prehashed(record.evidence.prover_key.generated_circuit_body_digest);
+    let expected_generated_circuit_body_digest = bfv_native_stark_digest_binding_hash_v1(
+        record.evidence.prover_key.generated_circuit_body_digest,
+    );
     invalid_guards! {
         manifest.generated_circuit_body_digest != expected_generated_circuit_body_digest
         => ("BFV full-bootstrap release audit manifest generated circuit body digest mismatch"),
@@ -17136,8 +17493,8 @@ fn bfv_full_bootstrap_release_audit_archive_body_for_artifacts_v1(
     )?;
     bfv_full_bootstrap_release_audit_append_field(
         &mut archive_body,
-        "generated-circuit-body-sha256",
-        &hex::encode(evidence.prover_key.generated_circuit_body_digest),
+        "generated-circuit-body-digest384",
+        &hex::encode(evidence.prover_key.generated_circuit_body_digest.as_ref()),
     );
     bfv_full_bootstrap_release_audit_append_field(
         &mut archive_body,
@@ -17161,9 +17518,9 @@ fn bfv_full_bootstrap_release_audit_archive_body_for_artifacts_v1(
     bfv_full_bootstrap_release_audit_append_field(
         &mut archive_body,
         "prover-native-payload-digest",
-        &hex::encode(<[u8; Hash::LENGTH]>::from(Hash::prehashed(
-            evidence.prover_key.native_payload_digest,
-        ))),
+        &hex::encode(<[u8; Hash::LENGTH]>::from(
+            bfv_native_stark_digest_binding_hash_v1(evidence.prover_key.native_payload_digest),
+        )),
     );
     bfv_full_bootstrap_release_audit_append_field(
         &mut archive_body,
@@ -17173,9 +17530,9 @@ fn bfv_full_bootstrap_release_audit_archive_body_for_artifacts_v1(
     bfv_full_bootstrap_release_audit_append_field(
         &mut archive_body,
         "verifier-native-payload-digest",
-        &hex::encode(<[u8; Hash::LENGTH]>::from(Hash::prehashed(
-            evidence.verifier_key.native_payload_digest,
-        ))),
+        &hex::encode(<[u8; Hash::LENGTH]>::from(
+            bfv_native_stark_digest_binding_hash_v1(evidence.verifier_key.native_payload_digest),
+        )),
     );
     bfv_full_bootstrap_release_audit_append_field(
         &mut archive_body,
@@ -17279,15 +17636,16 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v
     let evidence_digest = bfv_full_bootstrap_release_audit_evidence_digest_v1(&evidence)?;
     let evidence_digest_hex = hex::encode(<[u8; Hash::LENGTH]>::from(evidence_digest));
     let generated_circuit_body_digest =
-        Hash::prehashed(evidence.prover_key.generated_circuit_body_digest);
+        bfv_native_stark_digest_binding_hash_v1(evidence.prover_key.generated_circuit_body_digest);
     let generated_circuit_body_digest_hex =
-        hex::encode(<[u8; Hash::LENGTH]>::from(generated_circuit_body_digest));
+        hex::encode(evidence.prover_key.generated_circuit_body_digest.as_ref());
     let proof_key_pair_commitment_hex = hex::encode(<[u8; Hash::LENGTH]>::from(
         evidence.proof_key_pair_commitment,
     ));
-    let prover_native_payload_digest = Hash::prehashed(evidence.prover_key.native_payload_digest);
+    let prover_native_payload_digest =
+        bfv_native_stark_digest_binding_hash_v1(evidence.prover_key.native_payload_digest);
     let verifier_native_payload_digest =
-        Hash::prehashed(evidence.verifier_key.native_payload_digest);
+        bfv_native_stark_digest_binding_hash_v1(evidence.verifier_key.native_payload_digest);
     let native_payload_circuit_id = &evidence.prover_key.native_payload_circuit_id;
     let generated_circuit_body =
         bfv_full_bootstrap_native_generated_circuit_body_v1(native_payload_circuit_id)?;
@@ -17300,7 +17658,7 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v
             native_payload_circuit_id,
         )?;
     let mut report_body = format!(
-        "machine-generated BFV full-bootstrap release audit report inventory v1; release-evidence-digest={evidence_digest_hex}; generated-circuit-body-sha256={generated_circuit_body_digest_hex}; proof-key-pair-commitment={proof_key_pair_commitment_hex}"
+        "machine-generated BFV full-bootstrap release audit report inventory v1; release-evidence-digest={evidence_digest_hex}; generated-circuit-body-digest384={generated_circuit_body_digest_hex}; proof-key-pair-commitment={proof_key_pair_commitment_hex}"
     );
     bfv_full_bootstrap_release_audit_append_proof_profile_fields_v1(
         &mut report_body,
@@ -18635,7 +18993,7 @@ fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_revie
         actual_package_digest != expected_package_digest,
         "BFV full-bootstrap release audit package digest mismatch"
     );
-    Ok(())
+    require_ram_lfe_bfv_production_qualification_v1()
 }
 fn validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_preflight_v1(
     expected_package_digest: &Hash,
@@ -19509,11 +19867,6 @@ fn bfv_full_bootstrap_release_audit_append_proof_profile_fields_v1(
     );
     bfv_full_bootstrap_release_audit_append_field(
         body,
-        "proof-profile-hash-fn",
-        &proof_profile.hash_fn.to_string(),
-    );
-    bfv_full_bootstrap_release_audit_append_field(
-        body,
         "proof-profile-n-log2",
         &proof_profile.n_log2.to_string(),
     );
@@ -19821,9 +20174,10 @@ fn validate_bfv_full_bootstrap_release_audit_report_binds_generated_artifact_com
     let report_fields = bfv_full_bootstrap_release_audit_field_index_v1(report_body);
     let signed_generated_digest_hex =
         hex::encode(<[u8; Hash::LENGTH]>::from(*generated_circuit_body_digest));
-    let raw_generated_digest_hex = hex::encode(sha256(
-        bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)?,
-    ));
+    let generated_circuit_body = bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)?;
+    let raw_generated_digest_hex = hex::encode(
+        bfv_native_stark_generated_circuit_body_digest_v1(&generated_circuit_body)?.as_ref(),
+    );
     invalid_if!(
         !bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
             &report_fields,
@@ -19897,7 +20251,7 @@ struct BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1<'a> {
 )]
 fn bfv_full_bootstrap_release_audit_proof_profile_scalar_obligations_v1(
     proof_profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
-) -> [BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1; 20] {
+) -> [BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1; 19] {
     [
         BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
             missing_label: "proof profile field count",
@@ -19917,11 +20271,6 @@ fn bfv_full_bootstrap_release_audit_proof_profile_scalar_obligations_v1(
             value: proof_profile
                 .public_opening_material_field_count
                 .to_string(),
-        },
-        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
-            missing_label: "proof-profile STARK hash selector",
-            aliases: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_HASH_FN_LABEL_ALIASES,
-            value: proof_profile.hash_fn.to_string(),
         },
         BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
             missing_label: "proof-profile STARK n_log2",
@@ -20500,9 +20849,10 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_
     generated_circuit_body_digest: &Hash,
 ) -> Result<(), BfvError> {
     let signed_digest_hex = hex::encode(<[u8; Hash::LENGTH]>::from(*generated_circuit_body_digest));
-    let raw_generated_digest_hex = hex::encode(sha256(
-        bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)?,
-    ));
+    let generated_circuit_body = bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)?;
+    let raw_generated_digest_hex = hex::encode(
+        bfv_native_stark_generated_circuit_body_digest_v1(&generated_circuit_body)?.as_ref(),
+    );
     if bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
         archive_fields,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_GENERATED_BODY_DIGEST_LABEL_ALIASES,
@@ -20744,11 +21094,8 @@ const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_RELEASE_EVIDENCE_LABEL_ALIASES: &[
     b"release evidence digest",
     b"release-audit-evidence-digest",
 ];
-const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_GENERATED_BODY_DIGEST_LABEL_ALIASES: &[&[u8]] = &[
-    b"generated-circuit-body-sha256",
-    b"generated-circuit-body-digest",
-    b"generated circuit body digest",
-];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_GENERATED_BODY_DIGEST_LABEL_ALIASES: &[&[u8]] =
+    &[b"generated-circuit-body-digest384"];
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_KEY_PAIR_LABEL_ALIASES: &[&[u8]] =
     &[b"proof-key-pair-commitment", b"proof key pair commitment"];
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_GENERATED_BODY_LENGTH_LABEL_ALIASES: &[&[u8]] = &[
@@ -20888,12 +21235,6 @@ const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PUBLIC_OPENING_FIELD_COUNT_
     &[&[u8]] = &[
     b"proof-profile-public-opening-material-field-count",
     b"proof profile public opening material field count",
-];
-const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_HASH_FN_LABEL_ALIASES: &[&[u8]] = &[
-    b"proof-profile-hash-fn",
-    b"proof profile hash fn",
-    b"proof-profile-hash-selector",
-    b"proof profile hash selector",
 ];
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_N_LOG2_LABEL_ALIASES: &[&[u8]] =
     &[b"proof-profile-n-log2", b"proof profile n log2"];
@@ -21471,7 +21812,7 @@ fn bfv_full_bootstrap_release_audit_key_evidence_from_key_v1(
 }
 fn bfv_full_bootstrap_native_generated_circuit_body_digest_from_material_v1(
     native: &BfvFullBootstrapNativeProofKeyMaterialV1,
-) -> Result<[u8; Hash::LENGTH], BfvError> {
+) -> Result<BfvGoldilocksDigest384V1, BfvError> {
     validate_bfv_full_bootstrap_native_proof_key_material_object_v1(native)?;
     match native.key_role {
         BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => {
@@ -21527,7 +21868,6 @@ fn bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
         proof_system: native.proof_system.clone(),
         field: native.field.clone(),
         centered_scale_round_source_chain_digest: key.centered_scale_round_source_chain_digest,
-        hash_fn: native.hash_fn,
         n_log2: native.n_log2,
         blowup_log2: native.blowup_log2,
         fold_arity: native.fold_arity,
@@ -21790,10 +22130,10 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_for_evidence_v1(
         payload.verifier_key_digest != evidence.verifier_key.key_digest
         => ("BFV full-bootstrap release audit signoff verifier-key digest mismatch"),
         payload.prover_native_payload_digest
-        != Hash::prehashed(evidence.prover_key.native_payload_digest)
+        != bfv_native_stark_digest_binding_hash_v1(evidence.prover_key.native_payload_digest)
         => ("BFV full-bootstrap release audit signoff prover native payload digest mismatch"),
         payload.verifier_native_payload_digest
-        != Hash::prehashed(evidence.verifier_key.native_payload_digest)
+        != bfv_native_stark_digest_binding_hash_v1(evidence.verifier_key.native_payload_digest)
         => ("BFV full-bootstrap release audit signoff verifier native payload digest mismatch"),
         payload.native_circuit_fingerprint != evidence.prover_key.native_circuit_fingerprint
         || payload.native_circuit_fingerprint
@@ -21801,11 +22141,13 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_for_evidence_v1(
         => ("BFV full-bootstrap release audit signoff native circuit fingerprint mismatch"),
     }
     let expected_generated_circuit_body_digest =
-        Hash::prehashed(evidence.prover_key.generated_circuit_body_digest);
+        bfv_native_stark_digest_binding_hash_v1(evidence.prover_key.generated_circuit_body_digest);
     invalid_if!(
         payload.generated_circuit_body_digest != expected_generated_circuit_body_digest
             || payload.generated_circuit_body_digest
-                != Hash::prehashed(evidence.verifier_key.generated_circuit_body_digest),
+                != bfv_native_stark_digest_binding_hash_v1(
+                    evidence.verifier_key.generated_circuit_body_digest,
+                ),
         "BFV full-bootstrap release audit signoff generated circuit body digest mismatch"
     );
     Ok(())
@@ -21828,14 +22170,12 @@ fn validate_bfv_full_bootstrap_release_audit_generated_circuit_body_digest_v1(
 ) -> Result<(), BfvError> {
     validate_nonzero_material_digest(label, digest)?;
     validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
-    validate_no_bfv_full_bootstrap_inert_generated_circuit_body_sha256_digest(
-        label,
-        &<[u8; Hash::LENGTH]>::from(*digest),
-    )?;
     let expected_generated_circuit_body =
         bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)
             .map_err(|err| invalid!("{label} mismatch: {err}"))?;
-    let expected_digest = Hash::prehashed(sha256(&expected_generated_circuit_body));
+    let expected_digest = bfv_native_stark_digest_binding_hash_v1(
+        bfv_native_stark_generated_circuit_body_digest_v1(&expected_generated_circuit_body)?,
+    );
     invalid_if!(*digest != expected_digest, "{label} mismatch");
     Ok(())
 }
@@ -21847,15 +22187,11 @@ fn validate_bfv_full_bootstrap_release_audit_native_payload_digest_v1(
 ) -> Result<(), BfvError> {
     validate_nonzero_material_digest(label, digest)?;
     validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
-    validate_no_bfv_full_bootstrap_inert_sha256_digest(
-        label,
-        &<[u8; Hash::LENGTH]>::from(*digest),
-    )?;
     let expected_digest = bfv_full_bootstrap_release_audit_expected_native_payload_digest_v1(
         label, role, circuit_id,
     )?;
     invalid_if!(
-        *digest != Hash::prehashed(expected_digest),
+        *digest != bfv_native_stark_digest_binding_hash_v1(expected_digest),
         "{label} mismatch"
     );
     Ok(())
@@ -22352,7 +22688,7 @@ fn validate_distinct_bfv_full_bootstrap_release_audit_evidence_digests(
 }
 fn bfv_full_bootstrap_release_audit_evidence_distinct_digest_entries(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
-) -> [(&'static str, [u8; 32]); 24] {
+) -> [(&'static str, [u8; 32]); 21] {
     [
         ("parameter digest", evidence.parameter_digest.into()),
         (
@@ -22427,24 +22763,12 @@ fn bfv_full_bootstrap_release_audit_evidence_distinct_digest_entries(
             evidence.prover_key.native_circuit_fingerprint.into(),
         ),
         (
-            "prover-key native payload digest",
-            evidence.prover_key.native_payload_digest,
-        ),
-        (
-            "generated circuit body digest",
-            evidence.prover_key.generated_circuit_body_digest,
-        ),
-        (
             "verifier-key digest",
             evidence.verifier_key.key_digest.into(),
         ),
         (
             "verifier-key material commitment",
             evidence.verifier_key.key_material_commitment.into(),
-        ),
-        (
-            "verifier-key native payload digest",
-            evidence.verifier_key.native_payload_digest,
         ),
     ]
 }
@@ -22564,7 +22888,6 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(
     )?;
     validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
         "BFV full-bootstrap release audit proof profile",
-        profile.hash_fn,
         profile.n_log2,
         profile.blowup_log2,
         profile.fold_arity,
@@ -22806,7 +23129,7 @@ fn bfv_full_bootstrap_release_audit_expected_native_payload_digest_v1(
     label: &str,
     expected_role: BfvFullBootstrapCircuitArtifactRoleV1,
     native_payload_circuit_id: &str,
-) -> Result<[u8; Hash::LENGTH], BfvError> {
+) -> Result<BfvGoldilocksDigest384V1, BfvError> {
     let payload = match expected_role {
         BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => {
             encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
@@ -22824,7 +23147,7 @@ fn bfv_full_bootstrap_release_audit_expected_native_payload_digest_v1(
             ));
         }
     };
-    Ok(sha256(&payload))
+    bfv_native_stark_payload_digest_v1(expected_role, &payload)
 }
 fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
     label: &str,
@@ -22870,19 +23193,11 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
         evidence.native_circuit_fingerprint != expected_native_circuit_fingerprint,
         "{label} release audit native circuit fingerprint mismatch"
     );
-    validate_nonzero_sha256_digest(
+    validate_nonzero_bfv_goldilocks_digest384_v1(
         &format!("{label} release audit native payload digest"),
         &evidence.native_payload_digest,
     )?;
-    validate_no_bfv_full_bootstrap_inert_sha256_digest(
-        &format!("{label} release audit native payload digest"),
-        &evidence.native_payload_digest,
-    )?;
-    validate_nonzero_sha256_digest(
-        &format!("{label} release audit generated circuit body digest"),
-        &evidence.generated_circuit_body_digest,
-    )?;
-    validate_no_bfv_full_bootstrap_inert_generated_circuit_body_sha256_digest(
+    validate_nonzero_bfv_goldilocks_digest384_v1(
         &format!("{label} release audit generated circuit body digest"),
         &evidence.generated_circuit_body_digest,
     )?;
@@ -22891,13 +23206,9 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
     )?;
     let expected_generated_circuit_body =
         bfv_full_bootstrap_native_generated_circuit_body_v1(&evidence.native_payload_circuit_id)?;
-    validate_bfv_full_bootstrap_release_audit_key_evidence_generated_body_digest_aliases_v1(
-        label,
-        evidence,
-        &expected_generated_circuit_body,
-    )?;
     invalid_if!(
-        evidence.generated_circuit_body_digest != sha256(&expected_generated_circuit_body),
+        evidence.generated_circuit_body_digest
+            != bfv_native_stark_generated_circuit_body_digest_v1(&expected_generated_circuit_body,)?,
         "{label} release audit generated circuit body digest mismatch"
     );
     let expected_payload_kind =
@@ -22918,40 +23229,6 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
         evidence.native_payload_digest != expected_native_payload_digest,
         "{label} release audit native payload digest mismatch"
     );
-    Ok(())
-}
-fn validate_bfv_full_bootstrap_release_audit_key_evidence_generated_body_digest_aliases_v1(
-    label: &str,
-    evidence: &BfvFullBootstrapReleaseAuditKeyEvidenceV1,
-    expected_generated_circuit_body: &[u8],
-) -> Result<(), BfvError> {
-    let body = norito::decode_canonical::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
-        expected_generated_circuit_body,
-    )
-    .map_err(|err| invalid!("{label} release audit generated circuit body is invalid: {err}"))?;
-    for (field_label, field_digest) in [
-        ("native payload digest", evidence.native_payload_digest),
-        (
-            "generated circuit body digest",
-            evidence.generated_circuit_body_digest,
-        ),
-    ] {
-        for (embedded_label, embedded_digest) in [
-            (
-                "proof public-input schema payload digest",
-                <[u8; Hash::LENGTH]>::from(body.proof_public_input_schema_payload_digest),
-            ),
-            (
-                "release-prover contract digest",
-                <[u8; Hash::LENGTH]>::from(body.release_prover_contract_digest),
-            ),
-        ] {
-            invalid_if!(
-                field_digest == embedded_digest,
-                "{label} release audit key evidence {field_label} must be distinct from {embedded_label}"
-            );
-        }
-    }
     Ok(())
 }
 fn validate_bfv_full_bootstrap_release_audit_key_evidence_digest_aliases_v1(
@@ -22978,36 +23255,10 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_distinct_digest_bytes_
     label: &str,
     evidence: &BfvFullBootstrapReleaseAuditKeyEvidenceV1,
 ) -> Result<(), BfvError> {
-    let digest_entries = [
-        ("key digest", evidence.key_digest.into()),
-        (
-            "key material commitment",
-            evidence.key_material_commitment.into(),
-        ),
-        (
-            "centered scale-round source-chain digest",
-            evidence.centered_scale_round_source_chain_digest.into(),
-        ),
-        (
-            "native circuit fingerprint",
-            evidence.native_circuit_fingerprint.into(),
-        ),
-        ("native payload digest", evidence.native_payload_digest),
-        (
-            "generated circuit body digest",
-            evidence.generated_circuit_body_digest,
-        ),
-    ];
-    for (index, (entry_label, digest)) in digest_entries.iter().enumerate() {
-        if let Some((prior_label, _)) = digest_entries[..index]
-            .iter()
-            .find(|(_, prior)| prior == digest)
-        {
-            return Err(invalid!(
-                "{label} release audit key evidence {entry_label} must be distinct from {prior_label}"
-            ));
-        }
-    }
+    invalid_if!(
+        evidence.native_payload_digest == evidence.generated_circuit_body_digest,
+        "{label} release audit key evidence native payload digest must be distinct from generated circuit body digest"
+    );
     Ok(())
 }
 fn hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
@@ -25546,23 +25797,28 @@ pub fn bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transc
         let query_index = u32::try_from(openings.len()).map_err(|_| {
             invalid!("BFV full-bootstrap arithmetic trace opening query index exceeds u32")
         })?;
-        let attempt_bytes = attempt.to_le_bytes();
-        let query_index_bytes = query_index.to_le_bytes();
-        let digest: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
-            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_OPENING_INDEX_DOMAIN,
-            statement_hash_bytes.as_slice(),
-            trace_material_digest_bytes.as_slice(),
-            query_count_bytes.as_slice(),
-            padded_row_count_bytes.as_slice(),
-            private_row_count_bytes.as_slice(),
-            query_index_bytes.as_slice(),
-            attempt_bytes.as_slice(),
-        ])
-        .into();
-        let mut word = [0_u8; 8];
-        word.copy_from_slice(&digest[..8]);
-        let offset = u32::try_from(u64::from_le_bytes(word) % u64::from(public_safe_opening_count))
-            .expect("opening index reduction is bounded by u32 public row count");
+        let digest = bfv_goldilocks_digest384_v1(
+            BfvGoldilocksDigest384DomainV1 {
+                role: b"air-transcript",
+                phase: b"query-index",
+                level: 0,
+                index: u64::from(query_index),
+                counter: u64::from(attempt),
+            },
+            &[
+                BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_OPENING_INDEX_DOMAIN,
+                statement_hash_bytes.as_slice(),
+                trace_material_digest_bytes.as_slice(),
+                query_count_bytes.as_slice(),
+                padded_row_count_bytes.as_slice(),
+                private_row_count_bytes.as_slice(),
+            ],
+        )?;
+        let offset = u32::try_from(
+            bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(digest.as_ref())
+                % u64::from(public_safe_opening_count),
+        )
+        .expect("opening index reduction is bounded by u32 public row count");
         attempt = attempt.checked_add(1).ok_or_else(|| {
             invalid!(
                 "BFV full-bootstrap arithmetic trace opening transcript attempt counter overflow"
@@ -26206,15 +26462,21 @@ fn bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
     let column_index = u64::try_from(column_index).map_err(|_| {
         invalid!("BFV full-bootstrap arithmetic AIR composition column index overflow")
     })?;
-    let challenge: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
-        BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN,
-        statement_hash_bytes.as_slice(),
-        trace_material_digest_bytes.as_slice(),
-        row_index.to_le_bytes().as_slice(),
-        column_index.to_le_bytes().as_slice(),
-    ])
-    .into();
-    let reduced = bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(&challenge);
+    let challenge = bfv_goldilocks_digest384_v1(
+        BfvGoldilocksDigest384DomainV1 {
+            role: b"air-transcript",
+            phase: b"composition-challenge",
+            level: 0,
+            index: row_index,
+            counter: column_index,
+        },
+        &[
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN,
+            statement_hash_bytes.as_slice(),
+            trace_material_digest_bytes.as_slice(),
+        ],
+    )?;
+    let reduced = bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(challenge.as_ref());
     Ok(if reduced == 0 { 1 } else { reduced })
 }
 fn bfv_full_bootstrap_arithmetic_air_composition_values_for_rows_v1(
@@ -27809,12 +28071,21 @@ fn bfv_full_bootstrap_hash_goldilocks_limbs_v1(hash: Hash) -> [u64; 4] {
 #[must_use]
 pub fn bfv_full_bootstrap_native_stark_air_domain_tag_v1(statement_hash: Hash) -> String {
     let statement_hash_bytes: [u8; Hash::LENGTH] = statement_hash.into();
-    let domain_tag_digest: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
-        BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_DOMAIN_TAG_DOMAIN,
-        &statement_hash_bytes,
-    ])
-    .into();
-    hex::encode(domain_tag_digest)
+    let domain_tag_digest = bfv_goldilocks_digest384_v1(
+        BfvGoldilocksDigest384DomainV1 {
+            role: b"air-transcript",
+            phase: b"domain-tag",
+            level: 0,
+            index: 0,
+            counter: 0,
+        },
+        &[
+            BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_DOMAIN_TAG_DOMAIN,
+            &statement_hash_bytes,
+        ],
+    )
+    .expect("fixed BFV native-STARK AIR domain-tag fields fit the digest frame");
+    hex::encode(domain_tag_digest.as_ref())
 }
 fn bfv_full_bootstrap_goldilocks_field_from_u128_v1(
     label: &str,
@@ -34279,33 +34550,13 @@ fn validate_no_full_bootstrap_placeholder_material_digest(
     );
     Ok(())
 }
-fn validate_nonzero_sha256_digest(
+fn validate_nonzero_bfv_goldilocks_digest384_v1(
     label: &str,
-    digest: &[u8; Hash::LENGTH],
+    digest: &BfvGoldilocksDigest384V1,
 ) -> Result<(), BfvError> {
     invalid_if!(
-        digest.iter().all(|&byte| byte == 0),
-        "{label} must not be the zero SHA-256 digest"
-    );
-    Ok(())
-}
-fn validate_no_bfv_full_bootstrap_inert_sha256_digest(
-    label: &str,
-    digest: &[u8; Hash::LENGTH],
-) -> Result<(), BfvError> {
-    invalid_if!(
-        is_bfv_full_bootstrap_native_payload_inert_digest_v1(digest),
-        "{label} must not be an inert native payload digest"
-    );
-    Ok(())
-}
-fn validate_no_bfv_full_bootstrap_inert_generated_circuit_body_sha256_digest(
-    label: &str,
-    digest: &[u8; Hash::LENGTH],
-) -> Result<(), BfvError> {
-    invalid_if!(
-        is_bfv_full_bootstrap_native_payload_inert_digest_v1(digest),
-        "{label} must not identify inert or placeholder generated circuit body material"
+        digest.is_zero(),
+        "{label} must not be the zero six-lane Goldilocks digest"
     );
     Ok(())
 }
@@ -34379,7 +34630,6 @@ fn bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1(
         centered_scale_round_source_chain_digest,
         proof_public_input_schema_payload_digest,
         release_prover_contract_digest,
-        hash_fn: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
         n_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1,
         blowup_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1,
         fold_arity: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1,
@@ -34456,7 +34706,6 @@ fn bfv_full_bootstrap_native_generated_circuit_body_v1(
         centered_scale_round_source_chain_digest,
         proof_public_input_schema_payload_digest,
         release_prover_contract_digest,
-        hash_fn: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
         n_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1,
         blowup_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1,
         fold_arity: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1,
@@ -34512,10 +34761,14 @@ fn bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(
             "BFV full-bootstrap native proof circuit fingerprint material encoding failed: {err}"
         )
     })?;
-    Ok(Hash::new_from_chunks(&[
-        BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN,
-        bytes.as_slice(),
-    ]))
+    bfv_native_stark_binding_hash_v1(
+        b"proof-key-commitment",
+        b"circuit-fingerprint",
+        &[
+            BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN,
+            bytes.as_slice(),
+        ],
+    )
 }
 fn encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
     native_payload_circuit_id: &str,
@@ -34526,7 +34779,8 @@ fn encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
     )?;
     let generated_circuit_body =
         bfv_full_bootstrap_native_generated_circuit_body_v1(native_payload_circuit_id)?;
-    let generated_circuit_body_digest = sha256(&generated_circuit_body);
+    let generated_circuit_body_digest =
+        bfv_native_stark_generated_circuit_body_digest_v1(&generated_circuit_body)?;
     let centered_scale_round_source_chain_digest =
         canonical_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1()?;
     let payload = BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 {
@@ -34544,7 +34798,6 @@ fn encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
         centered_scale_round_source_chain_digest,
         generated_circuit_body_digest,
         generated_circuit_body,
-        hash_fn: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
         n_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1,
         blowup_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1,
         fold_arity: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1,
@@ -34579,7 +34832,6 @@ fn encode_bfv_full_bootstrap_native_proof_key_material_v1(
         key_format: BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1.to_owned(),
         proof_system: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1.to_owned(),
         field: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1.to_owned(),
-        hash_fn: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
         n_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1,
         blowup_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1,
         fold_arity: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1,
@@ -34593,7 +34845,7 @@ fn encode_bfv_full_bootstrap_native_proof_key_material_v1(
         arithmetic_air_constraint_system_digest:
             canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(),
         centered_scale_round_source_chain_digest,
-        native_payload_digest: sha256(native_payload),
+        native_payload_digest: bfv_native_stark_payload_digest_v1(key_role, native_payload)?,
         native_payload: native_payload.to_vec(),
     };
     validate_bfv_full_bootstrap_native_proof_key_material_object_v1(&material)?;
@@ -34883,11 +35135,6 @@ fn validate_bfv_full_bootstrap_native_proof_key_payload_shape_v1(
         "BFV full-bootstrap native proof key payload",
         bytes,
     )?;
-    let digest = sha256(bytes);
-    invalid_if!(
-        is_bfv_full_bootstrap_native_payload_inert_digest_v1(&digest),
-        "BFV full-bootstrap native proof key payload must not be a placeholder or inert native payload"
-    );
     Ok(())
 }
 fn validate_bfv_full_bootstrap_canonical_circuit_id(
@@ -34958,7 +35205,6 @@ fn validate_bfv_full_bootstrap_native_payload_circuit_id(
 }
 fn validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
     label: &str,
-    hash_fn: u8,
     n_log2: u8,
     blowup_log2: u8,
     fold_arity: u8,
@@ -34966,8 +35212,6 @@ fn validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
     merkle_arity: u8,
 ) -> Result<(), BfvError> {
     invalid_guards! {
-        hash_fn != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1
-        => ("{label} must use SHA-256 STARK/FRI"),
         n_log2 != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1 => (
             "{label} n_log2 {n_log2} does not match canonical {BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1}"
         ),
@@ -34990,14 +35234,10 @@ fn validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
 fn validate_bfv_full_bootstrap_native_generated_circuit_body_v1(
     label: &str,
     native_payload_circuit_id: &str,
-    generated_circuit_body_digest: &[u8; Hash::LENGTH],
+    generated_circuit_body_digest: &BfvGoldilocksDigest384V1,
     generated_circuit_body: &[u8],
 ) -> Result<(), BfvError> {
-    validate_nonzero_sha256_digest(
-        &format!("{label} generated circuit body digest"),
-        generated_circuit_body_digest,
-    )?;
-    validate_no_bfv_full_bootstrap_inert_generated_circuit_body_sha256_digest(
+    validate_nonzero_bfv_goldilocks_digest384_v1(
         &format!("{label} generated circuit body digest"),
         generated_circuit_body_digest,
     )?;
@@ -35014,18 +35254,14 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_v1(
         &format!("{label} generated circuit body"),
         generated_circuit_body,
     )?;
-    let body = validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
+    validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
         label,
         native_payload_circuit_id,
         generated_circuit_body,
     )?;
-    validate_bfv_full_bootstrap_native_generated_circuit_body_sha256_digest_aliases_v1(
-        label,
-        generated_circuit_body_digest,
-        &body,
-    )?;
     invalid_if!(
-        *generated_circuit_body_digest != sha256(generated_circuit_body),
+        *generated_circuit_body_digest
+            != bfv_native_stark_generated_circuit_body_digest_v1(generated_circuit_body)?,
         "{label} generated circuit body digest mismatch"
     );
     let expected_body =
@@ -35089,49 +35325,6 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
     )?;
     Ok(body)
 }
-fn validate_bfv_full_bootstrap_native_generated_circuit_body_sha256_digest_aliases_v1(
-    label: &str,
-    generated_circuit_body_digest: &[u8; Hash::LENGTH],
-    body: &BfvFullBootstrapNativeGeneratedCircuitBodyV1,
-) -> Result<(), BfvError> {
-    let digest_entries = [
-        (
-            "arithmetic trace profile digest",
-            body.arithmetic_trace_profile_digest.into(),
-        ),
-        (
-            "arithmetic AIR constraint-system digest",
-            body.arithmetic_air_constraint_system_digest.into(),
-        ),
-        (
-            "centered scale-round source-chain digest",
-            body.centered_scale_round_source_chain_digest.into(),
-        ),
-        (
-            "proof public-input schema payload digest",
-            body.proof_public_input_schema_payload_digest.into(),
-        ),
-        (
-            "release-prover contract digest",
-            body.release_prover_contract_digest.into(),
-        ),
-        (
-            "generated circuit body digest",
-            *generated_circuit_body_digest,
-        ),
-    ];
-    for (index, (entry_label, digest)) in digest_entries.iter().enumerate() {
-        if let Some((prior_label, _)) = digest_entries[..index]
-            .iter()
-            .find(|(_, prior)| prior == digest)
-        {
-            return Err(invalid!(
-                "{label} {entry_label} must be distinct from {prior_label}"
-            ));
-        }
-    }
-    Ok(())
-}
 fn validate_bfv_full_bootstrap_native_generated_circuit_body_profile_v1(
     label: &str,
     body: &BfvFullBootstrapNativeGeneratedCircuitBodyV1,
@@ -35145,7 +35338,6 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_profile_v1(
     validate_bfv_full_bootstrap_native_generated_circuit_body_text_profile_v1(label, body)?;
     validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
         &format!("{label} generated circuit body"),
-        body.hash_fn,
         body.n_log2,
         body.blowup_log2,
         body.fold_arity,
@@ -35418,7 +35610,6 @@ fn validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
     )?;
     validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
         "BFV full-bootstrap native transparent prover payload",
-        payload.hash_fn,
         payload.n_log2,
         payload.blowup_log2,
         payload.fold_arity,
@@ -35459,51 +35650,7 @@ fn validate_bfv_full_bootstrap_native_stark_fri_prover_payload_digest_aliases_v1
                 &payload.centered_scale_round_source_chain_digest,
             ),
         ],
-    )?;
-    validate_bfv_full_bootstrap_native_stark_fri_payload_generated_body_digest_aliases_v1(
-        "BFV full-bootstrap native transparent prover payload",
-        &payload.arithmetic_trace_profile_digest,
-        &payload.arithmetic_air_constraint_system_digest,
-        &payload.centered_scale_round_source_chain_digest,
-        &payload.generated_circuit_body_digest,
     )
-}
-fn validate_bfv_full_bootstrap_native_stark_fri_payload_generated_body_digest_aliases_v1(
-    label: &str,
-    arithmetic_trace_profile_digest: &Hash,
-    arithmetic_air_constraint_system_digest: &Hash,
-    centered_scale_round_source_chain_digest: &Hash,
-    generated_circuit_body_digest: &[u8; Hash::LENGTH],
-) -> Result<(), BfvError> {
-    let digest_entries = [
-        (
-            "arithmetic trace profile digest",
-            (*arithmetic_trace_profile_digest).into(),
-        ),
-        (
-            "arithmetic AIR constraint-system digest",
-            (*arithmetic_air_constraint_system_digest).into(),
-        ),
-        (
-            "centered scale-round source-chain digest",
-            (*centered_scale_round_source_chain_digest).into(),
-        ),
-        (
-            "generated circuit body digest",
-            *generated_circuit_body_digest,
-        ),
-    ];
-    for (index, (entry_label, digest)) in digest_entries.iter().enumerate() {
-        if let Some((prior_label, _)) = digest_entries[..index]
-            .iter()
-            .find(|(_, prior)| prior == digest)
-        {
-            return Err(invalid!(
-                "{label} {entry_label} must be distinct from {prior_label}"
-            ));
-        }
-    }
-    Ok(())
 }
 /// Validate canonical native STARK/FRI verifier-key payload bytes for BFV full-bootstrap proofs.
 ///
@@ -35578,7 +35725,6 @@ pub fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
     )?;
     validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
         "BFV full-bootstrap native verifier payload",
-        payload.hash_fn,
         payload.n_log2,
         payload.blowup_log2,
         payload.fold_arity,
@@ -35619,13 +35765,6 @@ fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_digest_aliases_
                 &payload.centered_scale_round_source_chain_digest,
             ),
         ],
-    )?;
-    validate_bfv_full_bootstrap_native_stark_fri_payload_generated_body_digest_aliases_v1(
-        "BFV full-bootstrap native verifier payload",
-        &payload.arithmetic_trace_profile_digest,
-        &payload.arithmetic_air_constraint_system_digest,
-        &payload.centered_scale_round_source_chain_digest,
-        &payload.generated_circuit_body_digest,
     )
 }
 #[allow(clippy::too_many_lines)]
@@ -35698,18 +35837,13 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_object_v1(
     );
     validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
         "BFV full-bootstrap native proof key material",
-        material.hash_fn,
         material.n_log2,
         material.blowup_log2,
         material.fold_arity,
         material.queries,
         material.merkle_arity,
     )?;
-    validate_nonzero_sha256_digest(
-        "BFV full-bootstrap native proof key payload digest",
-        &material.native_payload_digest,
-    )?;
-    validate_no_bfv_full_bootstrap_inert_sha256_digest(
+    validate_nonzero_bfv_goldilocks_digest384_v1(
         "BFV full-bootstrap native proof key payload digest",
         &material.native_payload_digest,
     )?;
@@ -35718,7 +35852,8 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_object_v1(
         material,
     )?;
     invalid_if!(
-        material.native_payload_digest != sha256(&material.native_payload),
+        material.native_payload_digest
+            != bfv_native_stark_payload_digest_v1(material.key_role, &material.native_payload)?,
         "BFV full-bootstrap native proof key payload digest mismatch"
     );
     let expected_native_payload_kind = match material.key_role {
@@ -35782,8 +35917,7 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_digest_aliases_v1(
                 &material.centered_scale_round_source_chain_digest,
             ),
         ],
-    )?;
-    validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_v1(material)
+    )
 }
 fn validate_bfv_full_bootstrap_native_proof_key_material_embedded_payload_digest_aliases_v1(
     material: &BfvFullBootstrapNativeProofKeyMaterialV1,
@@ -35797,7 +35931,6 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_embedded_payload_digest
                 validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_from_generated_body_v1(
                     &material.native_payload_digest,
                     &payload.generated_circuit_body_digest,
-                    &payload.generated_circuit_body,
                 )?;
             }
         }
@@ -35809,7 +35942,6 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_embedded_payload_digest
                 validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_from_generated_body_v1(
                     &material.native_payload_digest,
                     &payload.generated_circuit_body_digest,
-                    &payload.generated_circuit_body,
                 )?;
             }
         }
@@ -35818,67 +35950,13 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_embedded_payload_digest
     Ok(())
 }
 fn validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_from_generated_body_v1(
-    native_payload_digest: &[u8; Hash::LENGTH],
-    generated_circuit_body_digest: &[u8; Hash::LENGTH],
-    generated_circuit_body: &[u8],
+    native_payload_digest: &BfvGoldilocksDigest384V1,
+    generated_circuit_body_digest: &BfvGoldilocksDigest384V1,
 ) -> Result<(), BfvError> {
     invalid_if!(
         native_payload_digest == generated_circuit_body_digest,
         "BFV full-bootstrap native proof key material native payload digest must be distinct from generated circuit body digest"
     );
-    if let Ok(body) = norito::decode_canonical::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
-        generated_circuit_body,
-    ) {
-        for (label, digest) in [
-            (
-                "proof public-input schema payload digest",
-                <[u8; Hash::LENGTH]>::from(body.proof_public_input_schema_payload_digest),
-            ),
-            (
-                "release-prover contract digest",
-                <[u8; Hash::LENGTH]>::from(body.release_prover_contract_digest),
-            ),
-        ] {
-            invalid_if!(
-                *native_payload_digest == digest,
-                "BFV full-bootstrap native proof key material native payload digest must be distinct from {label}"
-            );
-        }
-    }
-    Ok(())
-}
-fn validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_v1(
-    material: &BfvFullBootstrapNativeProofKeyMaterialV1,
-) -> Result<(), BfvError> {
-    let digest_entries = [
-        (
-            "native circuit fingerprint",
-            material.native_circuit_fingerprint.into(),
-        ),
-        (
-            "arithmetic trace profile digest",
-            material.arithmetic_trace_profile_digest.into(),
-        ),
-        (
-            "arithmetic AIR constraint-system digest",
-            material.arithmetic_air_constraint_system_digest.into(),
-        ),
-        (
-            "centered scale-round source-chain digest",
-            material.centered_scale_round_source_chain_digest.into(),
-        ),
-        ("native payload digest", material.native_payload_digest),
-    ];
-    for (index, (entry_label, digest)) in digest_entries.iter().enumerate() {
-        if let Some((prior_label, _)) = digest_entries[..index]
-            .iter()
-            .find(|(_, prior)| prior == digest)
-        {
-            return Err(invalid!(
-                "BFV full-bootstrap native proof key material {entry_label} must be distinct from {prior_label}"
-            ));
-        }
-    }
     Ok(())
 }
 fn validate_bfv_full_bootstrap_native_proof_key_material_v1(
@@ -38733,6 +38811,317 @@ fn rotation_steps_mod_slot_count(
     );
     usize::try_from(normalized)
         .map_err(|_| invalid!("normalized BFV rotation step exceeds platform usize"))
+}
+#[cfg(test)]
+mod first_release_hard_cut_tests {
+    use super::*;
+    use digest::Digest as _;
+    use sha3::Sha3_256;
+
+    #[derive(Encode)]
+    struct RetiredSha256VerifierPayloadV0 {
+        version: u16,
+        field_count: u16,
+        circuit_id: String,
+        backend: String,
+        key_format: String,
+        proof_system: String,
+        field: String,
+        arithmetic_trace_profile_digest: Hash,
+        arithmetic_air_constraint_system_digest: Hash,
+        centered_scale_round_source_chain_digest: Hash,
+        generated_circuit_body_digest: [u8; Hash::LENGTH],
+        generated_circuit_body: Vec<u8>,
+        n_log2: u8,
+        blowup_log2: u8,
+        fold_arity: u8,
+        queries: u16,
+        merkle_arity: u8,
+        retired_hash_selector: u8,
+    }
+
+    fn reference_add(left: u64, right: u64) -> u64 {
+        u64::try_from(
+            (u128::from(left) + u128::from(right))
+                % u128::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1),
+        )
+        .expect("reduced Goldilocks sum fits u64")
+    }
+
+    fn reference_mul(left: u64, right: u64) -> u64 {
+        u64::try_from(
+            (u128::from(left) * u128::from(right))
+                % u128::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1),
+        )
+        .expect("reduced Goldilocks product fits u64")
+    }
+
+    fn reference_pow7(value: u64) -> u64 {
+        let square = reference_mul(value, value);
+        let fourth = reference_mul(square, square);
+        reference_mul(reference_mul(fourth, square), value)
+    }
+
+    fn reference_permute(
+        state: &mut [u64; BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1],
+        parameters: &BfvGoldilocksDigest384LaneParametersV1,
+    ) {
+        for round in 0..BFV_GOLDILOCKS_DIGEST384_TOTAL_ROUNDS_V1 {
+            for (word, constant) in state.iter_mut().zip(parameters.round_constants[round]) {
+                *word = reference_add(*word, constant);
+            }
+            let full = !(BFV_GOLDILOCKS_DIGEST384_FULL_ROUNDS_HALF_V1
+                ..BFV_GOLDILOCKS_DIGEST384_FULL_ROUNDS_HALF_V1
+                    + BFV_GOLDILOCKS_DIGEST384_PARTIAL_ROUNDS_V1)
+                .contains(&round);
+            if full {
+                for word in state.iter_mut() {
+                    *word = reference_pow7(*word);
+                }
+            } else {
+                state[0] = reference_pow7(state[0]);
+            }
+            let prior = *state;
+            for row in 0..BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1 {
+                state[row] = prior.iter().enumerate().fold(0, |sum, (column, value)| {
+                    reference_add(
+                        sum,
+                        reference_mul(BFV_GOLDILOCKS_DIGEST384_MDS_V1[row][column], *value),
+                    )
+                });
+            }
+        }
+    }
+
+    fn reference_absorb_byte_field(stream: &mut Vec<u64>, tag: u64, bytes: &[u8]) {
+        stream.push(tag);
+        stream.push(u64::try_from(bytes.len()).expect("test field length fits u64"));
+        let mut chunks = bytes.chunks_exact(7);
+        for chunk in &mut chunks {
+            let mut word = [0_u8; 8];
+            word[..7].copy_from_slice(chunk);
+            stream.push(u64::from_le_bytes(word));
+        }
+        let remainder = chunks.remainder();
+        let mut terminal = [0_u8; 8];
+        terminal[..remainder.len()].copy_from_slice(remainder);
+        terminal[remainder.len()] = 1;
+        stream.push(u64::from_le_bytes(terminal));
+    }
+
+    fn reference_digest(
+        domain: BfvGoldilocksDigest384DomainV1<'_>,
+        fields: &[&[u8]],
+    ) -> BfvGoldilocksDigest384V1 {
+        let parameters = bfv_goldilocks_digest384_lane_parameters_v1();
+        let words = core::array::from_fn(|lane| {
+            let level = domain.level.to_le_bytes();
+            let index = domain.index.to_le_bytes();
+            let counter = domain.counter.to_le_bytes();
+            let lane_bytes = u64::try_from(lane).unwrap().to_le_bytes();
+            let mut stream = Vec::new();
+            for (tag, field) in [
+                BFV_GOLDILOCKS_DIGEST384_MESSAGE_FRAME_DOMAIN_V1,
+                BFV_GOLDILOCKS_DIGEST384_CATALOG_V1,
+                BFV_GOLDILOCKS_DIGEST384_PROTOCOL_V1,
+                BFV_GOLDILOCKS_DIGEST384_PROFILE_V1,
+                domain.role,
+                domain.phase,
+                level.as_slice(),
+                index.as_slice(),
+                counter.as_slice(),
+                lane_bytes.as_slice(),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                reference_absorb_byte_field(&mut stream, u64::try_from(tag + 1).unwrap(), field);
+            }
+            stream.push(11);
+            stream.push(u64::try_from(fields.len()).unwrap());
+            for (index, field) in fields.iter().enumerate() {
+                reference_absorb_byte_field(&mut stream, 12 + u64::try_from(index).unwrap(), field);
+            }
+            stream.push(1);
+
+            let mut state = parameters[lane].initial_state;
+            for block in stream.chunks(BFV_GOLDILOCKS_DIGEST384_RATE_V1) {
+                for (word, value) in state.iter_mut().zip(block) {
+                    *word = reference_add(*word, *value);
+                }
+                reference_permute(&mut state, &parameters[lane]);
+            }
+            state[0]
+        });
+        BfvGoldilocksDigest384V1::new(words).expect("reference digest is canonical")
+    }
+
+    #[test]
+    fn sole_first_release_profile_is_exact_and_fail_closed() {
+        let profile = ram_lfe_bfv_profile_v1();
+        validate_ram_lfe_bfv_profile_v1(&profile).expect("canonical profile");
+        assert_eq!(profile.profile_id, "ram_lfe_bfv_v1");
+        assert_eq!(profile.plaintext_modulus, 257);
+        assert_eq!(profile.max_input_bytes, 63);
+        assert_eq!(profile.logical_slot_count, 64);
+        assert_eq!(profile.register_count, 4);
+        assert_eq!(profile.state_lane_count, 32);
+        assert_eq!(profile.max_instruction_count, 256);
+        assert_eq!(profile.max_multiplicative_depth, 16);
+        assert_eq!(profile.max_full_bootstraps_per_job, 1);
+        assert!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 >= 64);
+        assert_eq!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 % 8, 0);
+
+        let mut altered = profile.clone();
+        altered.profile_id = "ram_lfe_bfv".to_owned();
+        assert!(validate_ram_lfe_bfv_profile_v1(&altered).is_err());
+        altered = profile.clone();
+        altered.max_input_bytes -= 1;
+        assert!(validate_ram_lfe_bfv_profile_v1(&altered).is_err());
+        altered = profile;
+        altered.max_full_bootstraps_per_job += 1;
+        assert!(validate_ram_lfe_bfv_profile_v1(&altered).is_err());
+
+        assert_eq!(
+            require_ram_lfe_bfv_production_qualification_v1(),
+            Err(BfvError::ProductionQualificationUnavailable(
+                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+            ))
+        );
+    }
+
+    #[test]
+    fn digest_wire_kat_is_six_canonical_little_endian_words() {
+        let words = [
+            0x0a08_4d27_65a9_990b,
+            0xd59f_602c_37b6_9e1b,
+            0xde9b_b335_7209_fa18,
+            0x3faf_16ba_65a6_7ba3,
+            0xe68c_cc7d_9933_b79d,
+            0xcad6_6b94_7931_4d52,
+        ];
+        let expected = [
+            0x0b, 0x99, 0xa9, 0x65, 0x27, 0x4d, 0x08, 0x0a, 0x1b, 0x9e, 0xb6, 0x37, 0x2c, 0x60,
+            0x9f, 0xd5, 0x18, 0xfa, 0x09, 0x72, 0x35, 0xb3, 0x9b, 0xde, 0xa3, 0x7b, 0xa6, 0x65,
+            0xba, 0x16, 0xaf, 0x3f, 0x9d, 0xb7, 0x33, 0x99, 0x7d, 0xcc, 0x8c, 0xe6, 0x52, 0x4d,
+            0x31, 0x79, 0x94, 0x6b, 0xd6, 0xca,
+        ];
+        let digest = BfvGoldilocksDigest384V1::new(words).expect("canonical words");
+        assert_eq!(digest.to_le_bytes(), expected);
+        assert_eq!(digest.encode(), expected);
+        assert_eq!(
+            BfvGoldilocksDigest384V1::decode(&mut expected.as_slice()).unwrap(),
+            digest
+        );
+
+        let mut noncanonical = expected;
+        noncanonical[16..24]
+            .copy_from_slice(&BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1.to_le_bytes());
+        assert!(BfvGoldilocksDigest384V1::from_le_bytes(noncanonical).is_none());
+        assert!(BfvGoldilocksDigest384V1::decode(&mut noncanonical.as_slice()).is_err());
+    }
+
+    #[test]
+    fn generated_poseidon_parameters_match_shared_kat() {
+        const EXPECTED: [u8; 32] = [
+            0x84, 0xc5, 0x05, 0x5b, 0x47, 0xcc, 0x72, 0x89, 0x83, 0x5e, 0x0a, 0x5f, 0x31, 0xd4,
+            0x56, 0x38, 0x49, 0x24, 0x4f, 0xfd, 0xdb, 0xf5, 0x1f, 0x5d, 0x67, 0xb1, 0xdb, 0x95,
+            0x22, 0x2c, 0xe3, 0xe6,
+        ];
+        let parameters = bfv_goldilocks_digest384_lane_parameters_v1();
+        let mut asset = Vec::new();
+        asset.extend_from_slice(b"iroha:goldilocks-digest384:parameter-asset:v1");
+        asset.extend_from_slice(BFV_GOLDILOCKS_DIGEST384_PARAMETER_GENERATOR_V1);
+        asset.extend_from_slice(BFV_GOLDILOCKS_DIGEST384_PARAMETER_SEED_V1);
+        for (lane, parameters) in parameters.iter().enumerate() {
+            asset.extend_from_slice(&u64::try_from(lane).unwrap().to_le_bytes());
+            for value in parameters
+                .initial_state
+                .iter()
+                .chain(parameters.round_constants.iter().flatten())
+            {
+                asset.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        for value in BFV_GOLDILOCKS_DIGEST384_MDS_V1.iter().flatten() {
+            asset.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(<[u8; 32]>::from(Sha3_256::digest(asset)), EXPECTED);
+    }
+
+    #[test]
+    fn optimized_digest_is_byte_identical_to_integer_reference() {
+        let domain = BfvGoldilocksDigest384DomainV1 {
+            role: b"fri-layer",
+            phase: b"terminal-opening",
+            level: 3,
+            index: 17,
+            counter: 9,
+        };
+        let fields: [&[u8]; 4] = [b"", b"1234567", b"12345678", b"BFV native STARK"];
+        let optimized = bfv_goldilocks_digest384_v1(domain, &fields).unwrap();
+        let reference = reference_digest(domain, &fields);
+        assert_eq!(optimized, reference);
+        assert_eq!(optimized.encode(), reference.to_le_bytes());
+
+        let changed_domain = BfvGoldilocksDigest384DomainV1 {
+            counter: domain.counter + 1,
+            ..domain
+        };
+        assert_ne!(
+            optimized,
+            bfv_goldilocks_digest384_v1(changed_domain, &fields).unwrap()
+        );
+    }
+
+    #[test]
+    fn retired_sha256_selector_wire_is_rejected() {
+        let current_bytes = encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        )
+        .expect("canonical current verifier payload");
+        let current =
+            norito::decode_canonical::<BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1>(
+                &current_bytes,
+            )
+            .expect("decode canonical current verifier payload");
+        let retired = RetiredSha256VerifierPayloadV0 {
+            version: current.version,
+            field_count: current.field_count + 1,
+            circuit_id: current.circuit_id,
+            backend: current.backend,
+            key_format: current.key_format,
+            proof_system: current.proof_system,
+            field: current.field,
+            arithmetic_trace_profile_digest: current.arithmetic_trace_profile_digest,
+            arithmetic_air_constraint_system_digest: current
+                .arithmetic_air_constraint_system_digest,
+            centered_scale_round_source_chain_digest: current
+                .centered_scale_round_source_chain_digest,
+            generated_circuit_body_digest: [0x42; Hash::LENGTH],
+            generated_circuit_body: current.generated_circuit_body,
+            n_log2: current.n_log2,
+            blowup_log2: current.blowup_log2,
+            fold_arity: current.fold_arity,
+            queries: 24,
+            merkle_arity: current.merkle_arity,
+            retired_hash_selector: 1,
+        };
+        let retired_bytes = norito::encode_canonical(&retired).expect("encode retired wire");
+        assert!(
+            norito::decode_canonical::<BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1>(
+                &retired_bytes,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                &retired_bytes,
+            )
+            .is_err()
+        );
+    }
 }
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]

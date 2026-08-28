@@ -8,10 +8,9 @@ import os
 import stat
 import subprocess
 import sys
-from typing import Sequence
+from collections.abc import Sequence
 
 import sccp_release_common as common
-
 
 MANIFEST_SCHEMA = "sccp-corridor-phase-log-v1"
 RUNNER_FAILURE_STATUS = 125
@@ -38,26 +37,28 @@ class PhaseLogError(RuntimeError):
 
 def _directory_flags() -> int:
     if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
-        raise PhaseLogError("required descriptor-relative filesystem controls are unavailable")
+        raise PhaseLogError(
+            "required descriptor-relative filesystem controls are unavailable"
+        )
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 
 
 def _file_flags() -> int:
     if not hasattr(os, "O_NOFOLLOW"):
-        raise PhaseLogError("required descriptor-relative filesystem controls are unavailable")
+        raise PhaseLogError(
+            "required descriptor-relative filesystem controls are unavailable"
+        )
     return (
-        os.O_RDWR
-        | os.O_CREAT
-        | os.O_EXCL
-        | os.O_NOFOLLOW
-        | getattr(os, "O_CLOEXEC", 0)
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     )
 
 
 def _require_openat_support() -> None:
     required = (os.open, os.mkdir, os.stat, os.unlink)
     if any(operation not in os.supports_dir_fd for operation in required):
-        raise PhaseLogError("required descriptor-relative filesystem controls are unavailable")
+        raise PhaseLogError(
+            "required descriptor-relative filesystem controls are unavailable"
+        )
 
 
 def _require_private_directory(descriptor: int) -> os.stat_result:
@@ -91,21 +92,31 @@ def open_private_log_directory(path: str) -> int:
                 child = os.open(component, _directory_flags(), dir_fd=descriptor)
             except FileNotFoundError:
                 if not last:
-                    raise PhaseLogError("a phase log directory parent is unavailable") from None
+                    raise PhaseLogError(
+                        "a phase log directory parent is unavailable"
+                    ) from None
                 try:
                     os.mkdir(component, mode=0o700, dir_fd=descriptor)
                 except FileExistsError:
-                    raise PhaseLogError("the phase log directory changed while opening") from None
+                    raise PhaseLogError(
+                        "the phase log directory changed while opening"
+                    ) from None
                 except OSError:
-                    raise PhaseLogError("the phase log directory could not be created safely") from None
+                    raise PhaseLogError(
+                        "the phase log directory could not be created safely"
+                    ) from None
                 try:
                     child = os.open(component, _directory_flags(), dir_fd=descriptor)
                 except OSError:
-                    raise PhaseLogError("the phase log directory could not be opened safely") from None
+                    raise PhaseLogError(
+                        "the phase log directory could not be opened safely"
+                    ) from None
                 os.fchmod(child, 0o700)
                 os.fsync(descriptor)
             except OSError:
-                raise PhaseLogError("the phase log directory could not be opened safely") from None
+                raise PhaseLogError(
+                    "the phase log directory could not be opened safely"
+                ) from None
             os.close(descriptor)
             descriptor = child
         _require_private_directory(descriptor)
@@ -119,7 +130,9 @@ def _open_new_private_file(directory_descriptor: int, name: str) -> int:
     try:
         descriptor = os.open(name, _file_flags(), 0o600, dir_fd=directory_descriptor)
     except FileExistsError:
-        raise PhaseLogError("phase log publication never overwrites existing output") from None
+        raise PhaseLogError(
+            "phase log publication never overwrites existing output"
+        ) from None
     except OSError:
         raise PhaseLogError("phase log output could not be created safely") from None
     opened = os.fstat(descriptor)
@@ -149,7 +162,9 @@ def _write_all(descriptor: int, data: bytes) -> None:
         except InterruptedError:
             continue
         except OSError:
-            raise PhaseLogError("phase log output could not be written safely") from None
+            raise PhaseLogError(
+                "phase log output could not be written safely"
+            ) from None
         if written <= 0:
             raise PhaseLogError("phase log output write made no progress")
         view = view[written:]
@@ -209,11 +224,12 @@ def _readback(
         chunks.append(chunk)
         digest.update(chunk)
     after = os.fstat(descriptor)
-    if (
-        observed != expected_size
-        or (after.st_dev, after.st_ino, after.st_size, after.st_nlink)
-        != (before.st_dev, before.st_ino, before.st_size, before.st_nlink)
-    ):
+    if observed != expected_size or (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_nlink,
+    ) != (before.st_dev, before.st_ino, before.st_size, before.st_nlink):
         raise PhaseLogError("phase log inode changed during readback")
     return b"".join(chunks), digest.hexdigest(), identity
 
@@ -303,6 +319,7 @@ def run_phase(
             raise PhaseLogError("the phase command output pipe is unavailable")
 
         observed = 0
+        streamed_digest = hashlib.sha256()
         overflow = False
         write_failed = False
         while True:
@@ -316,6 +333,7 @@ def run_phase(
             if not write_failed:
                 try:
                     _write_all(descriptor, chunk)
+                    streamed_digest.update(chunk)
                 except PhaseLogError:
                     # Drain the child without signalling or interrupting it;
                     # production phases can own long-running Cargo processes.
@@ -335,6 +353,10 @@ def run_phase(
             log_name,
             observed,
         )
+        if transcript_hash != streamed_digest.hexdigest():
+            raise PhaseLogError(
+                "phase transcript differs from the captured command stream"
+            )
         common.reject_secret_material(transcript, label="phase transcript")
         status, signal_number = _shell_status(return_code)
         manifest = {

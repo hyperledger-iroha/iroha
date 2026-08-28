@@ -2372,7 +2372,7 @@ mod tests {
         let transcript = sample_transfer_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
         let mut batch = TransitionBatch::new(
-            "fastpq-lane-balanced",
+            "fastpq-state-transition-stark-v1",
             PublicInputs {
                 old_root,
                 new_root,
@@ -2549,7 +2549,8 @@ mod tests {
             (OperationKind::Mint, 4_u64, 5_u64),
             (OperationKind::Burn, 5_u64, 4_u64),
         ] {
-            let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+            let mut batch =
+                TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
             batch.push(StateTransition::new(
                 b"asset/xor/alice".to_vec(),
                 before.to_le_bytes().to_vec(),
@@ -2565,7 +2566,8 @@ mod tests {
             (OperationKind::Burn, 4_u64, 5_u64, "burn"),
             (OperationKind::Burn, 5_u64, 5_u64, "burn"),
         ] {
-            let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+            let mut batch =
+                TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
             batch.push(StateTransition::new(
                 b"asset/xor/alice".to_vec(),
                 before.to_le_bytes().to_vec(),
@@ -2588,7 +2590,8 @@ mod tests {
             b"asset/xor/".as_slice(),
             b"asset/xor/account/alice".as_slice(),
         ] {
-            let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+            let mut batch =
+                TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
             batch.push(StateTransition::new(
                 key.to_vec(),
                 4_u64.to_le_bytes().to_vec(),
@@ -2602,8 +2605,10 @@ mod tests {
     fn build_trace_rejects_noncanonical_numeric_asset_value_lengths() {
         for length in [0_usize, 1, 7, 9] {
             for mutate_pre_value in [true, false] {
-                let mut batch =
-                    TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+                let mut batch = TransitionBatch::new(
+                    "fastpq-state-transition-stark-v1",
+                    PublicInputs::default(),
+                );
                 let (pre_value, post_value) = if mutate_pre_value {
                     (vec![0; length], 5_u64.to_le_bytes().to_vec())
                 } else {
@@ -2730,10 +2735,8 @@ mod tests {
                 .all(|column| column.name != "metadata_hash"),
             "the collision-prone single-field metadata projection must not remain in V1"
         );
-        let original_digests = column_hashes(&trace, &params).expect("original column hashes");
-        let original_commitment =
-            crate::digest::trace_commitment_from_digests(&params, &trace, &original_digests)
-                .expect("original trace commitment");
+        let original_commitment = crate::digest::trace_commitment_from_trace(&params, &trace)
+            .expect("original trace commitment");
 
         let mut mutated = trace.clone();
         let high_limb = mutated
@@ -2744,10 +2747,8 @@ mod tests {
         for value in &mut high_limb.values {
             *value ^= 1;
         }
-        let mutated_digests = column_hashes(&mutated, &params).expect("mutated column hashes");
-        let mutated_commitment =
-            crate::digest::trace_commitment_from_digests(&params, &mutated, &mutated_digests)
-                .expect("mutated trace commitment");
+        let mutated_commitment = crate::digest::trace_commitment_from_trace(&params, &mutated)
+            .expect("mutated trace commitment");
         assert_ne!(original_commitment, mutated_commitment);
     }
     #[test]
@@ -2755,7 +2756,7 @@ mod tests {
         let trace = build_trace(&sample_batch()).expect("build");
         let params = CANONICAL_PARAMETER_SETS
             .iter()
-            .find(|set| set.name == "fastpq-lane-balanced")
+            .find(|set| set.name == "fastpq-state-transition-stark-v1")
             .copied()
             .expect("canonical parameter set");
         let hashes = column_hashes(&trace, &params).expect("hashes");
@@ -2772,8 +2773,10 @@ mod tests {
     }
     #[test]
     fn public_trace_builder_rejects_oversized_schema_before_materialising_columns() {
-        let mut batch =
-            TransitionBatch::new("fastpq-lane-balanced", crate::PublicInputs::default());
+        let mut batch = TransitionBatch::new(
+            "fastpq-state-transition-stark-v1",
+            crate::PublicInputs::default(),
+        );
         batch.push(StateTransition::new(
             vec![0xA5; (DEFAULT_MAX_TRACE_COLUMNS + 1) * crate::LIMB_BYTES],
             Vec::new(),
@@ -3647,7 +3650,7 @@ mod tests {
         let transcript = sample_transfer_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
         let mut batch = TransitionBatch::new(
-            "fastpq-lane-balanced",
+            "fastpq-state-transition-stark-v1",
             PublicInputs {
                 old_root,
                 new_root,
@@ -3662,7 +3665,8 @@ mod tests {
     }
     #[test]
     fn meta_set_accepts_non_numeric_values() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
         batch.push(StateTransition::new(
             b"metadata/domain/wonderland".to_vec(),
             br#"{"key":"old","value":1}"#.to_vec(),
@@ -3702,7 +3706,7 @@ mod tests {
         let transcript = sample_transfer_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
         let mut batch = TransitionBatch::new(
-            "fastpq-lane-balanced",
+            "fastpq-state-transition-stark-v1",
             PublicInputs {
                 old_root,
                 new_root,

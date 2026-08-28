@@ -487,6 +487,10 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         let sz = u64::try_from(record.payload_bytes.len()).unwrap_or(u64::MAX);
         return BASE_CUSTOM + sz;
     }
+    if let Some(submit) = any.downcast_ref::<dm_isi::bridge::SubmitSccpTonBreakerObservationV1>() {
+        let proof_bytes = u64::try_from(submit.encoded_observation.len()).unwrap_or(u64::MAX);
+        return BASE_CUSTOM.saturating_add(proof_bytes);
+    }
     if let Some(create) = any.downcast_ref::<dm_isi::kaigi::CreateKaigi>() {
         let proof_gas = create
             .proof

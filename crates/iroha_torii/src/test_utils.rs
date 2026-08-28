@@ -855,6 +855,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             peer_geo: A::ToriiPeerGeo::default(),
             soranet_privacy_ingest: A::SoranetPrivacyIngest::default(),
             privacy_bootle_lantern_issuer: None,
+            sccp_replay_archive: None,
             debug_match_filters: false,
             operator_auth: A::ToriiOperatorAuth::default(),
             operator_signatures: A::ToriiOperatorSignatures::default(),

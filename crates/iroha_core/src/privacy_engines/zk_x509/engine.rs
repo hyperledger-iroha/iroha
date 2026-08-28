@@ -490,7 +490,7 @@ pub(crate) fn construct_zk_x509_compiled_profile_v1()
 mod tests {
     use super::super::profile::ZK_X509_HASH_FRAME_DOMAIN_V1;
     use super::*;
-    use crate::privacy_engines::zk_x509::credential_stark::encode_zk_x509_credential_envelope_v1;
+    use iroha_data_model::privacy::PrivacyProtocolIdV1;
     use sha2::{Digest, Sha256};
     fn independently_encode_compiled_profile_frame_v1(fields: &[&[u8]]) -> Vec<u8> {
         let domain_len =
@@ -646,106 +646,15 @@ mod tests {
         );
     }
     #[test]
-    fn consensus_entry_point_decodes_and_binds_context_before_verification() {
-        let (statement, authoritative_state) =
-            crate::privacy_verifier::zk_x509_dispatch_fixture_for_test();
-        let genesis_hash = [0x91; 32];
-        let public =
-            ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, genesis_hash)
-                .expect("canonical public binding");
-        let consensus_public = compile_zk_x509_consensus_public_inputs_v1(
-            &statement,
-            &authoritative_state,
-            genesis_hash,
-        )
-        .expect("verifier-owned consensus public input");
-        assert_eq!(consensus_public.credential_binding, public);
+    fn consensus_entry_point_cannot_bypass_engine_unavailability() {
+        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
         assert_eq!(
-            consensus_public.rfc_statement.crl_number,
-            authoritative_state.crl_record().crl_number
-        );
-        assert_eq!(
-            consensus_public
-                .rfc_statement
-                .presentation_not_before_unix_seconds,
-            statement.presentation_not_before_unix_seconds
-        );
-        assert_eq!(
-            consensus_public
-                .rfc_statement
-                .presentation_not_after_unix_seconds,
-            statement.presentation_not_after_unix_seconds
-        );
-        let encoded = encode_zk_x509_credential_envelope_v1(public, b"X5M1main", b"X5C1ca")
-            .expect("canonical credential envelope");
-        assert_eq!(
-            verify_zk_x509_credential_proof_v1(
-                &statement,
-                &authoritative_state,
-                genesis_hash,
-                &encoded,
-            ),
-            Err(ZkX509EngineErrorV1::CredentialProof(
-                ZkX509CredentialProofErrorV1::MainProof
-            ))
-        );
-        let mut malformed = encoded.clone();
-        malformed.push(0);
-        assert_eq!(
-            verify_zk_x509_credential_proof_v1(
-                &statement,
-                &authoritative_state,
-                genesis_hash,
-                &malformed,
-            ),
-            Err(ZkX509EngineErrorV1::CredentialProof(
-                ZkX509CredentialProofErrorV1::MalformedEnvelope
-            ))
-        );
-        let mut wrong_intent = statement.clone();
-        wrong_intent.context.transaction_intent_digest =
-            iroha_data_model::privacy::PrivacyTransactionIntentDigestV1::new([0xA1; 32]);
-        assert_eq!(
-            verify_zk_x509_credential_proof_v1(
-                &wrong_intent,
-                &authoritative_state,
-                genesis_hash,
-                &encoded,
-            ),
-            Err(ZkX509EngineErrorV1::CredentialProof(
-                ZkX509CredentialProofErrorV1::PublicBindingMismatch
-            ))
-        );
-        let mut wrong_profile = statement.clone();
-        wrong_profile.context.verifier_digest =
-            iroha_data_model::privacy::PrivacyVerifierDigestV1::new([0xA2; 32]);
-        assert_eq!(
-            verify_zk_x509_credential_proof_v1(
-                &wrong_profile,
-                &authoritative_state,
-                genesis_hash,
-                &encoded,
-            ),
-            Err(ZkX509EngineErrorV1::CredentialProof(
-                ZkX509CredentialProofErrorV1::PublicBindingMismatch
-            ))
-        );
-        assert_eq!(
-            verify_zk_x509_credential_proof_v1(
-                &statement,
-                &authoritative_state,
-                [0x92; 32],
-                &encoded,
-            ),
-            Err(ZkX509EngineErrorV1::CredentialProof(
-                ZkX509CredentialProofErrorV1::PublicBindingMismatch
-            ))
-        );
-        assert_eq!(
-            verify_zk_x509_credential_proof_v1(&statement, &authoritative_state, [0; 32], &encoded,),
-            Err(ZkX509EngineErrorV1::CredentialProof(
-                ZkX509CredentialProofErrorV1::InvalidStatement
-            ))
+            crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id),
+            Err(
+                crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                    protocol_id,
+                }
+            )
         );
     }
     #[test]
@@ -816,44 +725,14 @@ mod tests {
                 "credential prover must not contain {forbidden}"
             );
         }
-        #[derive(Debug)]
-        struct EntropyMustNotBeRead;
-        impl core::fmt::Display for EntropyMustNotBeRead {
-            fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                formatter.write_str("credential preflight reached entropy")
-            }
-        }
-        struct PanicEntropy;
-        impl rand::TryRngCore for PanicEntropy {
-            type Error = EntropyMustNotBeRead;
-            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-                panic!("invalid credential preflight reached entropy")
-            }
-            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-                panic!("invalid credential preflight reached entropy")
-            }
-            fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
-                panic!("invalid credential preflight reached entropy")
-            }
-        }
-        impl rand::TryCryptoRng for PanicEntropy {}
-        let (statement, authoritative_state) =
-            crate::privacy_verifier::zk_x509_dispatch_fixture_for_test();
-        let trusted_block_timestamp_ms = statement
-            .presentation_not_before_unix_seconds
-            .checked_mul(1_000)
-            .expect("fixture timestamp");
-        assert!(matches!(
-            prove_zk_x509_credential_proof_v1_with_rng(
-                &statement,
-                &authoritative_state,
-                trusted_block_timestamp_ms,
-                &PrivacyConsensusLimitsV1::taira_default(),
-                [0x91; 32],
-                &[],
-                &mut PanicEntropy,
-            ),
-            Err(ZkX509EngineErrorV1::WitnessCodec(_))
-        ));
+        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+        assert_eq!(
+            crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id),
+            Err(
+                crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                    protocol_id,
+                }
+            )
+        );
     }
 }

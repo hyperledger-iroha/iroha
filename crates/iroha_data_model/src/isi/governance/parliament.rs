@@ -11,6 +11,10 @@ use std::{cmp::Ordering, vec::Vec};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
+pub use crate::governance::types::{
+    PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1, parliament_timed_ovn_required_chunk_blocks_v1,
+};
+
 use crate::{
     governance::types::{
         AssignmentId, BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
@@ -26,26 +30,8 @@ use crate::{
 pub const PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1: usize = 3_624;
 /// Exact canonical width of one timed-OVN masked-ballot record.
 pub const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1: usize = 2_858;
-/// Maximum number of contiguous timed-OVN ballot records accepted by one lifecycle transition.
-///
-/// The complete survivor corpus may still contain up to the protocol-wide participant cap. Core
-/// derives the next survivor offset from committed lifecycle state and seals automatically after
-/// the final chunk, so callers cannot skip, overlap, or reorder records.
-pub const PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32;
 /// Number of distinct Parliament body roles and the maximum atomic sortition batch width.
 pub const MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1: usize = 10;
-
-/// Return the minimum number of blocks needed to admit a configured ballot corpus.
-///
-/// V1 charges enough gas that a block is only guaranteed to carry one maximum-sized chunk. A
-/// commitment window shorter than this ceiling would therefore make its configured maximum corpus
-/// objectively impossible to seal under the standard default-genesis block gas limit.
-#[must_use]
-pub fn parliament_timed_ovn_required_chunk_blocks_v1(max_corpus_entries: u32) -> u64 {
-    let chunk_records = u64::try_from(PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1)
-        .expect("the V1 Parliament ballot chunk bound fits u64");
-    u64::from(max_corpus_entries).div_ceil(chunk_records)
-}
 
 /// Create one retryable Parliament attempt for exact immutable proposal content.
 ///

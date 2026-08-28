@@ -29,7 +29,8 @@ use super::{
     der_limits::ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
 };
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
+    TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 use thiserror::Error;
 /// Stable identity of the fixed-capacity strict-DER numeric adapter.
@@ -4153,11 +4154,17 @@ mod tests {
     ) -> [F; ZK_X509_DER_STARK_AUX_WIDTH_V1] {
         try_low_degree_aux(base, fixed).expect("low-degree auxiliaries")
     }
-    fn transcript_with_base_root(root: [u8; 32]) -> TransparentTranscriptV1 {
+    fn transcript_with_base_root(root_word: u64) -> TransparentTranscriptV1 {
+        let profile = GoldilocksDigest384V1::new([0x41; 6]).expect("profile digest");
+        let public = GoldilocksDigest384V1::new([0x83; 6]).expect("public digest");
+        let root = GoldilocksDigest384V1::new([root_word; 6])
+            .expect("base root")
+            .to_le_bytes();
         let mut transcript = TransparentTranscriptV1::new(
+            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"zk-x509-der-challenge-test-suite-v1",
-            &[0x41; 32],
-            &[0x83; 32],
+            &profile,
+            &public,
         )
         .expect("transcript");
         transcript
@@ -4167,11 +4174,11 @@ mod tests {
     }
     #[test]
     fn transcript_challenge_schedule_is_lane_major_base_bound_and_pinned() {
-        let mut transcript = transcript_with_base_root([0x25; 32]);
+        let mut transcript = transcript_with_base_root(0x25);
         let derived =
             derive_zk_x509_der_stark_challenges_v1(&mut transcript).expect("DER challenges");
         derived.validate().expect("valid DER challenges");
-        let mut replay = transcript_with_base_root([0x25; 32]);
+        let mut replay = transcript_with_base_root(0x25);
         assert_eq!(
             derived,
             derive_zk_x509_der_stark_challenges_v1(&mut replay).expect("replayed challenges")
@@ -4194,7 +4201,7 @@ mod tests {
                 0x8e, 0xf2, 0x2f, 0x12,
             ]
         );
-        let mut changed_root = transcript_with_base_root([0x26; 32]);
+        let mut changed_root = transcript_with_base_root(0x26);
         let changed = derive_zk_x509_der_stark_challenges_v1(&mut changed_root)
             .expect("changed-root challenges");
         assert_ne!(derived, changed);
@@ -4204,7 +4211,7 @@ mod tests {
         }
         // A tuple-first schedule is consensus-significant: sampling the lookup
         // shift before the twelve coefficients must not reproduce a lane.
-        let mut wrong_order = transcript_with_base_root([0x25; 32]);
+        let mut wrong_order = transcript_with_base_root(0x25);
         let first_lookup = wrong_order
             .challenge_field(DER_BYTE_LOOKUP_CHALLENGE_LABEL_V1)
             .expect("wrong-order lookup");

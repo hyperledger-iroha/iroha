@@ -38,22 +38,161 @@ final class SccpV1Tests: XCTestCase {
 
     func testClosedFirstReleaseInventoryHasNoRetiredProfilesOrCodecs() {
         XCTAssertEqual(SccpNetworkV1.allCases.map(\.rawValue), [
-            "sora-taira", "ethereum-mainnet", "ethereum-sepolia",
-            "bsc-mainnet", "bsc-testnet", "tron-mainnet", "tron-nile", "tron-shasta",
-            "ton-mainnet", "ton-testnet",
+            "sora-taira", "ethereum-mainnet", "bsc-mainnet", "tron-mainnet", "ton-mainnet",
         ])
         XCTAssertNil(SccpNetworkV1.fromTag(0))
         XCTAssertNil(SccpNetworkV1(rawValue: "sora-nexus"))
         XCTAssertNil(SccpNetworkV1(rawValue: "sora_nexus"))
         XCTAssertEqual(SccpCodecV1.allCases.map(\.rawValue), [1, 2, 5, 7])
         XCTAssertNil(SccpNetworkV1(rawValue: "solana-mainnet-beta"))
-        XCTAssertEqual(SccpNetworkV1.tonMainnet.tag, 14)
-        XCTAssertEqual(SccpNetworkV1.tonTestnet.tag, 15)
+        XCTAssertEqual(SccpNetworkV1.allCases.map(\.tag), [0x40, 0x41, 0x42, 0x43, 0x44])
+        for tag in UInt8.min...UInt8.max where !(0x40...0x44).contains(tag) {
+            XCTAssertNil(SccpNetworkV1.fromTag(tag))
+        }
         XCTAssertEqual(SccpNetworkV1.tonMainnet.domainId, 4)
+        for retired in [
+            "ethereum-sepolia", "bsc-testnet", "tron-nile", "tron-shasta",
+            "ton-testnet", "solana-testnet",
+        ] {
+            XCTAssertNil(SccpNetworkV1(rawValue: retired))
+        }
         XCTAssertNil(SccpCodecV1(rawValue: 3))
         XCTAssertNil(SccpCodecV1(rawValue: 4))
         XCTAssertNil(SccpCodecV1(rawValue: 6))
         XCTAssertEqual(SccpPayloadKindV1.allCases, [.transfer])
+    }
+
+    func testReplayForestMatchesSharedGoldenAndRejectsMalleableWitnesses() throws {
+        // Keep in lockstep with fixtures/sccp/replay_forest_v1.json.
+        let domainHash = try SccpReplayV1.domainHash(
+            source: .soraTaira,
+            target: .ethereumMainnet,
+            boundary: .soraOutboundLock,
+            routeRevision: 7,
+            routeConfigurationHash: Data(repeating: 0x44, count: 32),
+            actor: .route
+        )
+        XCTAssertEqual(
+            SccpV1.encodeLowerHex(domainHash),
+            "de11cbd183f55063fe715fcf120773d799dfb1185e057f758c126306832fdc3d"
+        )
+
+        let replayID = Data(repeating: 0x11, count: 32)
+        let key = try SccpReplayV1.replayKey(domainHash: domainHash, replayId: replayID)
+        XCTAssertEqual(
+            SccpV1.encodeLowerHex(key),
+            "139f57881d055a13ecf390d7441dadfc065ded40181c42a7aa3ab0a27469f17b"
+        )
+        XCTAssertEqual(key.first, 19)
+
+        var amount = Data(repeating: 0, count: 16)
+        amount[15] = 9
+        let recordDigest = try SccpReplayV1.recordDigest(
+            operation: .soraOutboundLock,
+            replayId: replayID,
+            payloadSHA256: Data(repeating: 0x22, count: 32),
+            amountScale9BE: amount,
+            principal: try .evm(Data(repeating: 0x33, count: 20)),
+            auxiliaryIdentitySHA256: Data(repeating: 0x55, count: 32)
+        )
+        XCTAssertEqual(
+            SccpV1.encodeLowerHex(recordDigest),
+            "35ab8613a0be06397609861d3cb3383770948b24b1cf098f4006c232240a2c07"
+        )
+
+        let empty = SccpReplayV1.emptyHashes()
+        XCTAssertEqual(
+            SccpV1.encodeLowerHex(empty[0]),
+            "6841d062186b649a505eb694ebce936fe978c5530596882a70c6e04303c88d43"
+        )
+        XCTAssertEqual(
+            SccpV1.encodeLowerHex(empty[SccpReplayV1.depth]),
+            "cefd4f39c0d2ba5c33835008c6c3e7bca47d6ea1c4da5bfc8a63f09dbc66651f"
+        )
+
+        let emptyWitness = try SccpSparseMerkleWitnessV1(
+            expectedShardRoot: empty[SccpReplayV1.depth],
+            priorRecordDigest: Data(repeating: 0, count: 32),
+            siblingBitmap: Data(repeating: 0, count: 32),
+            siblings: []
+        )
+        let nonmembership = try SccpReplayV1.rootFromWitness(
+            key: key,
+            recordDigest: nil,
+            witness: emptyWitness
+        )
+        XCTAssertTrue(nonmembership.matchesExpectedRoot)
+
+        let occupiedExpected = try SccpV1.decodeLowerHex(
+            "7b47c79900f052fd4b73691e2fe2230fdf170225d54e9a248e176f30495ac918"
+        )
+        let occupiedWitness = try SccpSparseMerkleWitnessV1(
+            expectedShardRoot: occupiedExpected,
+            priorRecordDigest: recordDigest,
+            siblingBitmap: Data(repeating: 0, count: 32),
+            siblings: []
+        )
+        let membership = try SccpReplayV1.rootFromWitness(
+            key: key,
+            recordDigest: recordDigest,
+            witness: occupiedWitness
+        )
+        XCTAssertTrue(membership.matchesExpectedRoot)
+        XCTAssertEqual(SccpV1.encodeLowerHex(membership.root), SccpV1.encodeLowerHex(occupiedExpected))
+
+        var reservedBitmap = Data(repeating: 0, count: 32)
+        reservedBitmap[0] = 1
+        let reservedWitness = try SccpSparseMerkleWitnessV1(
+            expectedShardRoot: empty[SccpReplayV1.depth],
+            priorRecordDigest: Data(repeating: 0, count: 32),
+            siblingBitmap: reservedBitmap,
+            siblings: [Data(repeating: 0xaa, count: 32)]
+        )
+        XCTAssertThrowsError(try SccpReplayV1.rootFromWitness(
+            key: key,
+            recordDigest: nil,
+            witness: reservedWitness
+        ))
+
+        var explicitDefaultBitmap = Data(repeating: 0, count: 32)
+        explicitDefaultBitmap[31] = 1
+        let explicitDefaultWitness = try SccpSparseMerkleWitnessV1(
+            expectedShardRoot: empty[SccpReplayV1.depth],
+            priorRecordDigest: Data(repeating: 0, count: 32),
+            siblingBitmap: explicitDefaultBitmap,
+            siblings: [empty[0]]
+        )
+        XCTAssertThrowsError(try SccpReplayV1.rootFromWitness(
+            key: key,
+            recordDigest: nil,
+            witness: explicitDefaultWitness
+        ))
+    }
+
+    func testReplaySoraPrincipalRequiresExactCanonicalAccountIdPayload() throws {
+        let address = try AccountAddress.fromAccount(
+            publicKey: validEd25519PublicKey(seed: 0x61)
+        )
+        let canonical = try address.compactNoritoAccountControllerPayload()
+        XCTAssertNoThrow(try SccpReplayPrincipalV1.soraAccount(canonical))
+
+        let nonCompact = try address.noritoAccountControllerPayload()
+        XCTAssertNotEqual(nonCompact, canonical)
+        var wrongController = canonical
+        wrongController[0] = 2
+        var wrongAlgorithm = canonical
+        XCTAssertGreaterThan(wrongAlgorithm.count, 14)
+        wrongAlgorithm[14] = 0x7f
+        for invalid in [
+            Data(),
+            Data([0, 0, 0]),
+            nonCompact,
+            wrongController,
+            wrongAlgorithm,
+            canonical + Data([0]),
+        ] {
+            XCTAssertThrowsError(try SccpReplayPrincipalV1.soraAccount(invalid))
+        }
     }
 
     func testNativeTransferEventSharedVectors() throws {
@@ -144,14 +283,10 @@ final class SccpV1Tests: XCTestCase {
         ))
     }
 
-    func testTonCanonicalNetworkIdentitiesBindExactZeroStates() throws {
+    func testTonMainnetCanonicalNetworkIdentityBindsExactZeroState() throws {
         let mainnet = SccpV1.canonicalNetworkBytes(.tonMainnet)
-        let testnet = SccpV1.canonicalNetworkBytes(.tonTestnet)
         XCTAssertEqual(mainnet.count, 90)
-        XCTAssertEqual(testnet.count, 90)
-        XCTAssertEqual(Array(mainnet.prefix(10)), [1, 14, 4, 0, 0, 0, 17, 255, 255, 255])
-        XCTAssertEqual(Array(testnet.prefix(10)), [1, 15, 4, 0, 0, 0, 253, 255, 255, 255])
-        XCTAssertNotEqual(mainnet, testnet)
+        XCTAssertEqual(Array(mainnet.prefix(10)), [1, 0x44, 4, 0, 0, 0, 17, 255, 255, 255])
     }
 
     func testSubmitDTOContainsOnlyClosedArtifactFields() throws {
@@ -838,6 +973,11 @@ final class SccpV1Tests: XCTestCase {
         let registry = try SccpRegistryV1.parse(valid)
         XCTAssertEqual(registry.lanes.count, 1)
         XCTAssertEqual(registry.lanes[0].routes[0].routeId, "taira_bsc_xor")
+        XCTAssertEqual(registry.lanes[0].routes[0].maxOutstandingLiability, "9")
+        XCTAssertEqual(
+            registry.lanes[0].routes[0].soraOutboundExecutionPolicy.semantics,
+            "ivm_proved_record_sccp_message_v1"
+        )
         XCTAssertTrue(registry.lanes[0].nativeTrustAnchors.isEmpty)
         XCTAssertNil(registry.lanes[0].currentNativeTrustAnchorHash)
         let outboundProofPolicy = registry.lanes[0].routes[0].destination.outboundProofPolicy
@@ -904,6 +1044,105 @@ final class SccpV1Tests: XCTestCase {
             source: .tronMainnet,
             aliasTronBindingWithTokenCodeHash: true
         )))
+
+        var replayAddressAlias = try jsonObject(valid)
+        mutateDeployment(&replayAddressAlias) {
+            $0["replay_verifier_address"] = $0["route_address"]
+        }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(replayAddressAlias)))
+
+        var emptyReplayRuntime = try jsonObject(valid)
+        mutateDeployment(&emptyReplayRuntime) {
+            $0["replay_verifier_code_hash"] =
+                "C5D2460186F7233C927E7DB2DCC703C0E500B653CA82273B7BFAD8045D85A470"
+        }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(emptyReplayRuntime)))
+
+        for source in [SccpNetworkV1.bscMainnet, .tronMainnet] {
+            for (field, replacement) in [
+                ("replay_verifier_address", upper(0x73, bytes: 20)),
+                ("replay_verifier_code_hash", upper(0x44, bytes: 32)),
+                ("mint_breaker_address", upper(0x74, bytes: 20)),
+                ("mint_breaker_code_hash", upper(0x45, bytes: 32)),
+            ] {
+                var changedRole = try jsonObject(try registryJSON(source: source))
+                mutateDeployment(&changedRole) { $0[field] = replacement }
+                XCTAssertThrowsError(
+                    try SccpRegistryV1.parse(jsonData(changedRole)),
+                    "\(source.rawValue) must bind \(field)"
+                )
+            }
+
+            var swappedRoles = try jsonObject(try registryJSON(source: source))
+            mutateDeployment(&swappedRoles) { deployment in
+                let replayAddress = deployment["replay_verifier_address"]
+                let replayCodeHash = deployment["replay_verifier_code_hash"]
+                deployment["replay_verifier_address"] = deployment["mint_breaker_address"]
+                deployment["replay_verifier_code_hash"] = deployment["mint_breaker_code_hash"]
+                deployment["mint_breaker_address"] = replayAddress
+                deployment["mint_breaker_code_hash"] = replayCodeHash
+            }
+            XCTAssertThrowsError(
+                try SccpRegistryV1.parse(jsonData(swappedRoles)),
+                "\(source.rawValue) must not accept replay-verifier and mint-breaker role substitution"
+            )
+        }
+
+        var zeroCap = try jsonObject(valid)
+        mutateDeployment(&zeroCap) { $0["max_wrapped_supply"] = 0 }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(zeroCap)))
+
+        let validText = String(decoding: valid, as: UTF8.self)
+        let capNeedle = "\"max_wrapped_supply\":9000000000"
+        XCTAssertTrue(validText.contains(capNeedle))
+        XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
+            validText.replacingOccurrences(
+                of: capNeedle,
+                with: "\"max_wrapped_supply\":340282366920938463463374607431768211456"
+            ).utf8
+        )))
+
+        var missingExecutionPolicy = try jsonObject(valid)
+        mutateRoute(&missingExecutionPolicy) {
+            $0.removeValue(forKey: "sora_outbound_execution_policy")
+        }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(missingExecutionPolicy)))
+
+        var wrongExecutionSemantics = try jsonObject(valid)
+        mutateRoute(&wrongExecutionSemantics) { route in
+            var policy = route["sora_outbound_execution_policy"] as! [String: Any]
+            policy["semantics"] = "unproved_record_sccp_message_v1"
+            route["sora_outbound_execution_policy"] = policy
+        }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(wrongExecutionSemantics)))
+
+        var invalidExecutionKeyReference = try jsonObject(valid)
+        mutateRoute(&invalidExecutionKeyReference) { route in
+            var policy = route["sora_outbound_execution_policy"] as! [String: Any]
+            var reference = policy["vk_ref"] as! [String: Any]
+            reference["backend"] = "stark//fri"
+            policy["vk_ref"] = reference
+            route["sora_outbound_execution_policy"] = policy
+        }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(invalidExecutionKeyReference)))
+
+        var aliasedExecutionHashes = try jsonObject(valid)
+        mutateRoute(&aliasedExecutionHashes) { route in
+            var policy = route["sora_outbound_execution_policy"] as! [String: Any]
+            var reference = policy["vk_ref"] as! [String: Any]
+            reference["commitment"] = policy["contract_artifact_sha256"]
+            policy["vk_ref"] = reference
+            route["sora_outbound_execution_policy"] = policy
+        }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(aliasedExecutionHashes)))
+
+        var wrongLiabilityCap = try jsonObject(valid)
+        mutateRoute(&wrongLiabilityCap) { route in
+            var settlement = route["settlement"] as! [String: Any]
+            settlement["max_outstanding_liability"] = 8
+            route["settlement"] = settlement
+        }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(wrongLiabilityCap)))
 
         var retired = try jsonObject(valid)
         mutateLane(&retired) { $0["lane_id"] = lane("solana-mainnet-beta", "sora-taira") }
@@ -1020,19 +1259,19 @@ final class SccpV1Tests: XCTestCase {
         }
         XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(legacyAnchor)))
 
-        var defaultDiscriminantCustody = try jsonObject(valid)
+        var retiredCustodyOwner = try jsonObject(valid)
         let custodyKey = try Curve25519.Signing.PrivateKey(
             rawRepresentation: Data(repeating: 7, count: 32)
         )
         let custody753 = try AccountAddress.fromAccount(
             publicKey: custodyKey.publicKey.rawRepresentation
         ).toI105(networkPrefix: 753)
-        mutateRoute(&defaultDiscriminantCustody) { route in
+        mutateRoute(&retiredCustodyOwner) { route in
             var settlement = route["settlement"] as! [String: Any]
             settlement["custody_owner"] = custody753
             route["settlement"] = settlement
         }
-        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(defaultDiscriminantCustody)))
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(retiredCustodyOwner)))
 
         var duplicate = try jsonObject(valid)
         let duplicatedLane = laneObject(duplicate)
@@ -1076,6 +1315,7 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertEqual(parsed.lanes.count, 1)
         XCTAssertEqual(parsed.lanes[0].lane.source, .tonMainnet)
         XCTAssertEqual(parsed.lanes[0].routes[0].destination.family, .tonGroth16Bls12381)
+        XCTAssertEqual(parsed.lanes[0].routes[0].maxOutstandingLiability, "9000000000")
 
         let canonicalRoute = parsed.lanes[0].routes[0]
         var changedInitialData = try jsonObject(canonical)
@@ -1131,6 +1371,39 @@ final class SccpV1Tests: XCTestCase {
             deployment["verifying_key"] = key
         }
         XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(uncompressedKey)))
+
+        var unsortedGuardians = try jsonObject(canonical)
+        mutateDeployment(&unsortedGuardians) { deployment in
+            var guardians = deployment["mint_breaker_guardian_keys"] as! [String: Any]
+            guardians["guardian_1"] = guardians["guardian_0"]
+            deployment["mint_breaker_guardian_keys"] = guardians
+        }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(unsortedGuardians)))
+
+        var zeroGuardian = try jsonObject(canonical)
+        mutateDeployment(&zeroGuardian) { deployment in
+            var guardians = deployment["mint_breaker_guardian_keys"] as! [String: Any]
+            guardians["guardian_0"] = upper(0, bytes: 32)
+            deployment["mint_breaker_guardian_keys"] = guardians
+        }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(zeroGuardian)))
+
+        let canonicalText = String(decoding: canonical, as: UTF8.self)
+        let tonCapNeedle = "\"max_wrapped_supply\":9000000000"
+        XCTAssertTrue(canonicalText.contains(tonCapNeedle))
+        XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
+            canonicalText.replacingOccurrences(
+                of: tonCapNeedle,
+                with: "\"max_wrapped_supply\":1329227995784915872903807060280344576"
+            ).utf8
+        )))
+
+        guard case let .ton(ton) = canonicalRoute.destination else {
+            return XCTFail("expected TON deployment")
+        }
+        XCTAssertNoThrow(try ton.validateJettonAmount("9000000000"))
+        XCTAssertThrowsError(try ton.validateJettonAmount("9000000001"))
+        XCTAssertThrowsError(try ton.validateJettonAmount("0"))
     }
 
     func testProofRequestAndBundleAreClosedAndPolicyBound() throws {
@@ -1226,6 +1499,26 @@ final class SccpV1Tests: XCTestCase {
         let page = try SccpRecentMessages.parse(jsonData(["items": [first, second]]))
         XCTAssertEqual(page.items.map(\.height), [9, 8])
         XCTAssertNil(page.next)
+
+        let exactUInt128Amount = "18446744073709551616000000000"
+        var largeAmountItem = first
+        largeAmountItem["amount"] = exactUInt128Amount
+        let encodedLargeAmount = String(
+            decoding: jsonData(["items": [largeAmountItem]]),
+            as: UTF8.self
+        )
+        let largeAmountWire = Data(
+            encodedLargeAmount.replacingOccurrences(
+                of: "\"amount\":1000",
+                with: "\"amount\":\(exactUInt128Amount)"
+            ).utf8
+        )
+        let largeAmountPage = try SccpRecentMessages.parse(largeAmountWire)
+        XCTAssertEqual(largeAmountPage.items.first?.amount, exactUInt128Amount)
+        let exactProjection = try XCTUnwrap(largeAmountPage.items.first?.payloadProjectionJSON)
+        let exactProjectionText = String(decoding: exactProjection, as: UTF8.self)
+        XCTAssertTrue(exactProjectionText.contains("\"amount\":\(exactUInt128Amount)"))
+        XCTAssertFalse(exactProjectionText.contains("\"amount\":\""))
 
         let sameHeightFirst = recentItem(
             height: UInt64.max,
@@ -1682,9 +1975,6 @@ final class SccpV1Tests: XCTestCase {
     }
 
     private func tonRegistryJSON() throws -> Data {
-        let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 7, count: 32))
-        let custody = try AccountAddress.fromAccount(publicKey: privateKey.publicKey.rawRepresentation)
-            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let key = bls12381VerifyingKey()
         let keyHash = Data(SHA256.hash(data: bls12381VerifyingKeyBytes(key)))
         let policy = tonOutboundPolicy()
@@ -1702,6 +1992,8 @@ final class SccpV1Tests: XCTestCase {
         let commitments = semantic["commitments"] as! [String: Any]
         let circuit = Data(hexString: commitments["circuit_commitment"] as! String)!
         let proofProfile = tonProofProfileCommitment()
+        let guardians = (1...5).map { Data(repeating: UInt8($0), count: 32) }
+        let maxWrappedSupply: UInt64 = 9_000_000_000
         let binding = tonDestinationBinding(
             masterCode: masterCode,
             walletCode: walletCode,
@@ -1710,6 +2002,7 @@ final class SccpV1Tests: XCTestCase {
             circuit: circuit,
             keyHash: keyHash,
             proofProfile: proofProfile,
+            guardianKeys: guardians,
             semanticHash: semanticHash,
             anchorHash: anchorHash
         )
@@ -1722,11 +2015,13 @@ final class SccpV1Tests: XCTestCase {
             circuit: circuit,
             keyHash: keyHash,
             proofProfile: proofProfile,
+            guardianKeys: guardians,
             semanticHash: semanticHash,
             anchorHash: anchorHash,
             binding: binding,
             lane: inbound,
-            revision: 1
+            revision: 1,
+            maxWrappedSupply: maxWrappedSupply
         )
         let route: [String: Any] = [
             "lane_id": lane("ton-mainnet", "sora-taira"),
@@ -1761,14 +2056,23 @@ final class SccpV1Tests: XCTestCase {
                     "verifying_key": key,
                     "verifier_key_hash": keyHash.hexEncodedString().uppercased(),
                     "proof_profile_commitment": proofProfile.hexEncodedString().uppercased(),
+                    "mint_breaker_guardian_keys": [
+                        "guardian_0": guardians[0].hexEncodedString().uppercased(),
+                        "guardian_1": guardians[1].hexEncodedString().uppercased(),
+                        "guardian_2": guardians[2].hexEncodedString().uppercased(),
+                        "guardian_3": guardians[3].hexEncodedString().uppercased(),
+                        "guardian_4": guardians[4].hexEncodedString().uppercased(),
+                    ],
                     "outbound_proof_policy": policy,
                     "taira_to_token_multiplier": 1,
+                    "max_wrapped_supply": maxWrappedSupply,
                 ],
             ],
+            "sora_outbound_execution_policy": soraOutboundExecutionPolicy(),
             "settlement": [
                 "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                "custody_owner": custody,
                 "payload_amount_scale": 9,
+                "max_outstanding_liability": maxWrappedSupply,
             ],
         ]
         return jsonData([
@@ -1788,9 +2092,6 @@ final class SccpV1Tests: XCTestCase {
         aliasTronBindingWithTokenCodeHash: Bool = false
     ) throws -> Data {
         if empty { return jsonData(["version": 1, "lanes": []]) }
-        let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 7, count: 32))
-        let custody = try AccountAddress.fromAccount(publicKey: privateKey.publicKey.rawRepresentation)
-            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let key = verifyingKey()
         let policy = outboundPolicy()
         var destination = destinationValues(key: key, policy: policy)
@@ -1829,10 +2130,11 @@ final class SccpV1Tests: XCTestCase {
                 ],
             ],
             "destination": ["family": isTron ? "tron" : "evm", "deployment": destination],
+            "sora_outbound_execution_policy": soraOutboundExecutionPolicy(),
             "settlement": [
                 "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                "custody_owner": custody,
                 "payload_amount_scale": 9,
+                "max_outstanding_liability": 9,
             ],
         ]
         return jsonData([
@@ -1978,6 +2280,21 @@ final class SccpV1Tests: XCTestCase {
         ]
     }
 
+    private func soraOutboundExecutionPolicy() -> [String: Any] {
+        [
+            "version": 1,
+            "semantics": "ivm_proved_record_sccp_message_v1",
+            "contract_artifact_sha256": upper(0xb1, bytes: 32),
+            "vk_ref": [
+                "backend": "stark/fri/v1",
+                "name": "ivm-execution-v1",
+                "version": 1,
+                "commitment": upper(0xb2, bytes: 32),
+            ],
+            "gas_limit": 50_000_000,
+        ]
+    }
+
     private func destinationValues(key: [String: Any], policy: [String: Any]) -> [String: Any] {
         [
             "token_address": upper(0x11, bytes: 20),
@@ -1989,7 +2306,12 @@ final class SccpV1Tests: XCTestCase {
             "outbound_proof_policy": policy,
             "route_address": upper(0x31, bytes: 20),
             "route_code_hash": upper(0x41, bytes: 32),
+            "replay_verifier_address": upper(0x71, bytes: 20),
+            "replay_verifier_code_hash": upper(0x42, bytes: 32),
+            "mint_breaker_address": upper(0x72, bytes: 20),
+            "mint_breaker_code_hash": upper(0x43, bytes: 32),
             "taira_to_token_multiplier": 1_000_000_000,
+            "max_wrapped_supply": 9_000_000_000,
         ]
     }
 
@@ -2126,6 +2448,7 @@ final class SccpV1Tests: XCTestCase {
         circuit: Data,
         keyHash: Data,
         proofProfile: Data,
+        guardianKeys: [Data],
         semanticHash: Data,
         anchorHash: Data
     ) -> Data {
@@ -2137,8 +2460,11 @@ final class SccpV1Tests: XCTestCase {
         appendUInt32LE(4, to: &out)
         for value in [
             masterCode, walletCode, routeCode, verifierCode, circuit, keyHash,
-            proofProfile, semanticHash, anchorHash,
+            proofProfile,
         ] { out.append(value) }
+        guardianKeys.forEach { out.append($0) }
+        out.append(semanticHash)
+        out.append(anchorHash)
         return Data(SHA256.hash(data: out))
     }
 
@@ -2150,22 +2476,30 @@ final class SccpV1Tests: XCTestCase {
         circuit: Data,
         keyHash: Data,
         proofProfile: Data,
+        guardianKeys: [Data],
         semanticHash: Data,
         anchorHash: Data,
         binding: Data,
         lane: SccpLaneIdV1,
-        revision: UInt32
+        revision: UInt32,
+        maxWrappedSupply: UInt64
     ) -> Data {
         var deployment = masterCode + walletCode
         for value in [
-            routeCode, verifierCode, circuit, keyHash, proofProfile, semanticHash, anchorHash, binding,
+            routeCode, verifierCode, circuit, keyHash, proofProfile,
         ] { deployment.append(value) }
+        guardianKeys.forEach { deployment.append($0) }
+        deployment.append(semanticHash)
+        deployment.append(anchorHash)
+        deployment.append(binding)
         let deploymentHash = Data(SHA256.hash(data: deployment))
         var assetRoute = Data()
         appendVector(Data("xor".utf8), to: &assetRoute)
         appendVector(Data("taira_ton_xor".utf8), to: &assetRoute)
         appendUInt32LE(revision, to: &assetRoute)
         appendUInt64LE(1, to: &assetRoute)
+        appendUInt64LE(maxWrappedSupply, to: &assetRoute)
+        assetRoute.append(Data(repeating: 0, count: 8))
         let assetRouteHash = Data(SHA256.hash(data: assetRoute))
         var out = Data("sccp:concrete-route-config:v1".utf8) + Data([1])
         appendUInt32LE(4, to: &out)
@@ -2242,12 +2576,8 @@ final class SccpV1Tests: XCTestCase {
         let networkValue: UInt64
         switch source {
         case .ethereumMainnet: networkValue = 1
-        case .ethereumSepolia: networkValue = 11_155_111
         case .bscMainnet: networkValue = 56
-        case .bscTestnet: networkValue = 97
         case .tronMainnet: networkValue = 0x2b66_53dc
-        case .tronNile: networkValue = 0xcd86_90dc
-        case .tronShasta: networkValue = 0x94a9_059e
         default: fatalError("test destination must be external")
         }
         var payload = irohaKeccak256(Data((isTron
@@ -2269,6 +2599,14 @@ final class SccpV1Tests: XCTestCase {
         payload.append(Data(hexString: destination["verifier_key_hash"] as! String)!)
         payload.append(semanticHash)
         payload.append(anchorHash)
+        payload.append(isTron
+            ? abiTronAddress(destination["replay_verifier_address"] as! String)
+            : abiAddress(destination["replay_verifier_address"] as! String))
+        payload.append(Data(hexString: destination["replay_verifier_code_hash"] as! String)!)
+        payload.append(isTron
+            ? abiTronAddress(destination["mint_breaker_address"] as! String)
+            : abiAddress(destination["mint_breaker_address"] as! String))
+        payload.append(Data(hexString: destination["mint_breaker_code_hash"] as! String)!)
         return irohaKeccak256(payload)
     }
 
@@ -2282,22 +2620,24 @@ final class SccpV1Tests: XCTestCase {
             abiAddress(destination["verifier_address"] as! String) + Data(hexString: destination["verifier_code_hash"] as! String)! +
             Data(hexString: destination["verifier_key_hash"] as! String)! + semanticHash + anchorHash
         if lane.source.rawValue.hasPrefix("tron-") { deploymentBytes.append(binding) }
+        deploymentBytes.append(abiAddress(destination["replay_verifier_address"] as! String))
+        deploymentBytes.append(Data(hexString: destination["replay_verifier_code_hash"] as! String)!)
+        deploymentBytes.append(abiAddress(destination["mint_breaker_address"] as! String))
+        deploymentBytes.append(Data(hexString: destination["mint_breaker_code_hash"] as! String)!)
         let deployment = irohaKeccak256(deploymentBytes)
         let routeId = lane.source.rawValue.hasPrefix("ethereum-") ? "taira_eth_xor" :
             lane.source.rawValue.hasPrefix("tron-") ? "taira_tron_xor" : "taira_bsc_xor"
         let networkValue: UInt64
         switch lane.source {
         case .ethereumMainnet: networkValue = 1
-        case .ethereumSepolia: networkValue = 11_155_111
         case .bscMainnet: networkValue = 56
-        case .bscTestnet: networkValue = 97
         case .tronMainnet: networkValue = 0x2b66_53dc
-        case .tronNile: networkValue = 0xcd86_90dc
-        case .tronShasta: networkValue = 0x94a9_059e
         default: fatalError("test route must be external")
         }
         let asset = irohaKeccak256(
-            irohaKeccak256(Data("xor".utf8)) + irohaKeccak256(Data(routeId.utf8)) + abiWord(1) + abiWord(1_000_000_000)
+            irohaKeccak256(Data("xor".utf8)) + irohaKeccak256(Data(routeId.utf8)) + abiWord(1)
+                + abiWord(1_000_000_000)
+                + abiWord(UInt64(destination["max_wrapped_supply"] as! Int))
         )
         return irohaKeccak256(
             irohaKeccak256(Data("sccp:concrete-route-config:v1".utf8)) +

@@ -71,6 +71,9 @@ on:
       - "scripts/validate_norito_bridge_xcframework.py"
       - "scripts/ci/run_xcframework_smoke.sh"
       - "scripts/sccp_evm_contract_smoke.sh"
+      - "scripts/ton_sccp_builder.py"
+      - "scripts/tests/ton_sccp_builder_test.py"
+      - "docs/source/sccp_ton_release_builder.md"
       - "scripts/contract_artifact_corridor.py"
       - "scripts/contract_soljson_runner.js"
       - "scripts/contract_tvm_runner.sh"
@@ -124,14 +127,15 @@ jobs:
           cargo test -p iroha_sccp --lib --no-default-features
       - name: Rust SCCP verifier corridor
         run: |
-          set -o pipefail
-          mkdir -p dist/sccp-production-corridor
-          bash scripts/check_sccp_production_corridor.sh --phase rust-sccp 2>&1 | tee dist/sccp-production-corridor/rust-sccp.log
+          bash scripts/check_sccp_production_corridor.sh --phase rust-sccp \
+            --log-dir dist/sccp-production-corridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: sccp-production-corridor-rust-sccp
-          path: dist/sccp-production-corridor/rust-sccp.log
+          path: |
+            dist/sccp-production-corridor/rust-sccp.log
+            dist/sccp-production-corridor/rust-sccp.manifest.json
           if-no-files-found: error
 
   evidence-scripts:
@@ -156,14 +160,15 @@ jobs:
           python3 -m pip install -r scripts/requirements.txt
       - name: Operator evidence corridor
         run: |
-          set -o pipefail
-          mkdir -p dist/sccp-production-corridor
-          bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts 2>&1 | tee dist/sccp-production-corridor/evidence-scripts.log
+          bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts \
+            --log-dir dist/sccp-production-corridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: sccp-production-corridor-evidence-scripts
-          path: dist/sccp-production-corridor/evidence-scripts.log
+          path: |
+            dist/sccp-production-corridor/evidence-scripts.log
+            dist/sccp-production-corridor/evidence-scripts.manifest.json
           if-no-files-found: error
 
   js-sdk:
@@ -184,14 +189,15 @@ jobs:
         run: npm --prefix javascript/iroha_js run build:dist
       - name: JavaScript SCCP prover corridor
         run: |
-          set -o pipefail
-          mkdir -p dist/sccp-production-corridor
-          bash scripts/check_sccp_production_corridor.sh --phase js-sdk 2>&1 | tee dist/sccp-production-corridor/js-sdk.log
+          bash scripts/check_sccp_production_corridor.sh --phase js-sdk \
+            --log-dir dist/sccp-production-corridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: sccp-production-corridor-js-sdk
-          path: dist/sccp-production-corridor/js-sdk.log
+          path: |
+            dist/sccp-production-corridor/js-sdk.log
+            dist/sccp-production-corridor/js-sdk.manifest.json
           if-no-files-found: error
 
   python-sdk:
@@ -214,14 +220,15 @@ jobs:
           -r python/iroha_python/requirements-ci.lock
       - name: Python SCCP prover corridor
         run: |
-          set -o pipefail
-          mkdir -p dist/sccp-production-corridor
-          bash scripts/check_sccp_production_corridor.sh --phase python-sdk 2>&1 | tee dist/sccp-production-corridor/python-sdk.log
+          bash scripts/check_sccp_production_corridor.sh --phase python-sdk \
+            --log-dir dist/sccp-production-corridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: sccp-production-corridor-python-sdk
-          path: dist/sccp-production-corridor/python-sdk.log
+          path: |
+            dist/sccp-production-corridor/python-sdk.log
+            dist/sccp-production-corridor/python-sdk.manifest.json
           if-no-files-found: error
 
   swift-sdk:
@@ -280,14 +287,15 @@ jobs:
           echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
       - name: Swift SCCP prover corridor
         run: |
-          set -o pipefail
-          mkdir -p dist/sccp-production-corridor
-          bash scripts/check_sccp_production_corridor.sh --phase swift-sdk 2>&1 | tee dist/sccp-production-corridor/swift-sdk.log
+          bash scripts/check_sccp_production_corridor.sh --phase swift-sdk \
+            --log-dir dist/sccp-production-corridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: sccp-production-corridor-swift-sdk
-          path: dist/sccp-production-corridor/swift-sdk.log
+          path: |
+            dist/sccp-production-corridor/swift-sdk.log
+            dist/sccp-production-corridor/swift-sdk.manifest.json
           if-no-files-found: error
 
   kotlin-sdk:
@@ -303,14 +311,15 @@ jobs:
           java-version: "21"
       - name: Kotlin SCCP prover corridor
         run: |
-          set -o pipefail
-          mkdir -p dist/sccp-production-corridor
-          bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk 2>&1 | tee dist/sccp-production-corridor/kotlin-sdk.log
+          bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk \
+            --log-dir dist/sccp-production-corridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: sccp-production-corridor-kotlin-sdk
-          path: dist/sccp-production-corridor/kotlin-sdk.log
+          path: |
+            dist/sccp-production-corridor/kotlin-sdk.log
+            dist/sccp-production-corridor/kotlin-sdk.manifest.json
           if-no-files-found: error
 
   java-android:
@@ -326,14 +335,15 @@ jobs:
           java-version: "21"
       - name: Java Android SCCP prover corridor
         run: |
-          set -o pipefail
-          mkdir -p dist/sccp-production-corridor
-          bash scripts/check_sccp_production_corridor.sh --phase java-android 2>&1 | tee dist/sccp-production-corridor/java-android.log
+          bash scripts/check_sccp_production_corridor.sh --phase java-android \
+            --log-dir dist/sccp-production-corridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: sccp-production-corridor-java-android
-          path: dist/sccp-production-corridor/java-android.log
+          path: |
+            dist/sccp-production-corridor/java-android.log
+            dist/sccp-production-corridor/java-android.manifest.json
           if-no-files-found: error
 
   dotnet-sdk:
@@ -356,14 +366,15 @@ jobs:
       - name: .NET SCCP native facade corridor
         shell: bash
         run: |
-          set -o pipefail
-          mkdir -p dist/sccp-production-corridor
-          bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk 2>&1 | tee dist/sccp-production-corridor/dotnet-sdk.log
+          bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk \
+            --log-dir dist/sccp-production-corridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: sccp-production-corridor-dotnet-sdk
-          path: dist/sccp-production-corridor/dotnet-sdk.log
+          path: |
+            dist/sccp-production-corridor/dotnet-sdk.log
+            dist/sccp-production-corridor/dotnet-sdk.manifest.json
           if-no-files-found: error
 
   contract-smoke:
@@ -396,7 +407,7 @@ jobs:
           tar -xzf "$archive" -C "$install_dir"
           test -x "$install_dir/acton"
           "$install_dir/acton" --version | grep -Fx 'acton 1.1.0 (9cf4d1f 2026-05-22)'
-          printf '%s\n' "$install_dir" >> "$GITHUB_PATH"
+          printf 'SCCP_TON_DEVELOPMENT_ACTON_BIN=%s/acton\n' "$install_dir" >> "$GITHUB_ENV"
       - name: Install pinned contract test dependencies
         run: python3 -m pip install -r scripts/requirements.txt
       - name: Build authenticated EVM and TVM artifact manifest
@@ -409,14 +420,15 @@ jobs:
         env:
           SCCP_CONTRACT_ARTIFACT_DIR: ${{ runner.temp }}/sccp-contract-artifacts
         run: |
-          set -o pipefail
-          mkdir -p dist/sccp-production-corridor
-          bash scripts/check_sccp_production_corridor.sh --phase contract-smoke 2>&1 | tee dist/sccp-production-corridor/contract-smoke.log
+          bash scripts/check_sccp_production_corridor.sh --phase contract-smoke \
+            --log-dir dist/sccp-production-corridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: sccp-production-corridor-contract-smoke
-          path: dist/sccp-production-corridor/contract-smoke.log
+          path: |
+            dist/sccp-production-corridor/contract-smoke.log
+            dist/sccp-production-corridor/contract-smoke.manifest.json
           if-no-files-found: error
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
@@ -448,16 +460,19 @@ jobs:
           path: ${{ runner.temp }}/sccp-contract-artifacts
       - name: Execute locked TRON artifact on official TRE TVM
         run: |
-          set -o pipefail
-          mkdir -p dist/sccp-production-corridor
-          bash scripts/contract_tvm_runner.sh \
-            --manifest "$RUNNER_TEMP/sccp-contract-artifacts/sccp-contract-artifacts-v1.json" \
-            2>&1 | tee dist/sccp-production-corridor/tvm-contract-smoke.log
+          python3 scripts/sccp_phase_log_runner.py \
+            --log-dir dist/sccp-production-corridor \
+            --phase tvm-contract-smoke \
+            -- \
+            bash scripts/contract_tvm_runner.sh \
+              --manifest "$RUNNER_TEMP/sccp-contract-artifacts/sccp-contract-artifacts-v1.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: sccp-production-corridor-tvm-contract-smoke
-          path: dist/sccp-production-corridor/tvm-contract-smoke.log
+          path: |
+            dist/sccp-production-corridor/tvm-contract-smoke.log
+            dist/sccp-production-corridor/tvm-contract-smoke.manifest.json
           if-no-files-found: error
 
   core-admission:
@@ -474,14 +489,15 @@ jobs:
           cache-on-failure: "true"
       - name: Core SCCP governance, bridge-proof, and four-peer admission corridor
         run: |
-          set -o pipefail
-          mkdir -p dist/sccp-production-corridor
-          bash scripts/check_sccp_production_corridor.sh --phase core-admission 2>&1 | tee dist/sccp-production-corridor/core-admission.log
+          bash scripts/check_sccp_production_corridor.sh --phase core-admission \
+            --log-dir dist/sccp-production-corridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: sccp-production-corridor-core-admission
-          path: dist/sccp-production-corridor/core-admission.log
+          path: |
+            dist/sccp-production-corridor/core-admission.log
+            dist/sccp-production-corridor/core-admission.manifest.json
           if-no-files-found: error
 
   runtime-api:
@@ -498,14 +514,15 @@ jobs:
           cache-on-failure: "true"
       - name: SCCP runtime, API, finality, and generated-spec corridor
         run: |
-          set -o pipefail
-          mkdir -p dist/sccp-production-corridor
-          bash scripts/check_sccp_production_corridor.sh --phase runtime-api 2>&1 | tee dist/sccp-production-corridor/runtime-api.log
+          bash scripts/check_sccp_production_corridor.sh --phase runtime-api \
+            --log-dir dist/sccp-production-corridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: sccp-production-corridor-runtime-api
-          path: dist/sccp-production-corridor/runtime-api.log
+          path: |
+            dist/sccp-production-corridor/runtime-api.log
+            dist/sccp-production-corridor/runtime-api.manifest.json
           if-no-files-found: error
 
   sccp-production-corridor:

@@ -82,7 +82,7 @@ public sealed class VerifyingKeyBackendTagTests
             "stark ",
             "STARK",
             "stark/fri",
-            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
             "stark/fri/poseidon2-goldilocks",
             "halo2-ipa-orchard",
             "anonymous-pgc",
@@ -113,10 +113,7 @@ public sealed class VerifyingKeyBackendTagTests
     [InlineData("halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3")]
     [InlineData("halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3")]
     [InlineData("halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4")]
-    [InlineData("stark/fri")]
-    [InlineData("stark/fri/sha256-goldilocks")]
-    [InlineData("stark/fri/poseidon2-goldilocks")]
-    [InlineData("stark/fri/sha256_goldilocks.v1")]
+    [InlineData("stark/fri/poseidon-x7-goldilocks-6x64-v1")]
     public void VerifierRegistryAcceptsOnlyPinnedProfiles(string label)
     {
         Assert.True(VerifierBackendRegistryLabels.IsSupportedLabel(label));
@@ -155,8 +152,11 @@ public sealed class VerifyingKeyBackendTagTests
             "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
             "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
             "stark",
+            "stark/fri",
             "STARK/FRI",
             "stark/fri/",
+            "stark/fri/poseidon2-goldilocks",
+            "stark/fri/sha256_goldilocks.v1",
             "stark/fri/latest",
             "stark/fri/sha512-goldilocks",
             "halo2/bn254",
@@ -169,7 +169,7 @@ public sealed class VerifyingKeyBackendTagTests
             "silent-threshold-anoncred",
             "aztec-plonkish-private-kernel",
             "penumbra-masp",
-            "stark/fri/sha256-goldilocks\0",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1\0",
             "st\u0430rk/fri",
             "stark\uFF0Ffri",
             "stark/fri/\u200Bsha256-goldilocks",
@@ -216,7 +216,13 @@ public sealed class VerifyingKeyBackendTagTests
     [Fact]
     public void CatalogClassifierAcceptsOnlyExactProductionLabels()
     {
-        foreach (var label in new[] { "halo2-ipa-pasta", "stark", "halo2/ipa", "stark/fri" })
+        foreach (var label in new[]
+        {
+            "halo2-ipa-pasta",
+            "stark",
+            "halo2/ipa",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1",
+        })
         {
             Assert.Equal(
                 VerifyingKeyBackendCatalogTag.Production,

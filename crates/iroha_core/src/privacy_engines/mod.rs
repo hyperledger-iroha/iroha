@@ -72,7 +72,7 @@ pub fn validate_zk_x509_credential_proof_container_v1(
     canonical_genesis_hash: [u8; 32],
     encoded_proof: &[u8],
 ) -> Result<(), ZkX509CredentialProofContainerErrorV1> {
-    PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone())
+    PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ZkX509CredentialProofContainerErrorV1::InvalidStatement)?;
     let expected = ZkX509CredentialPublicBindingV1::from_consensus_context_v1(
@@ -144,7 +144,7 @@ pub(crate) fn proof_managed_pool_initial_root_v1(
                 source,
             })
         }
-        PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV0(note_bootstrap) => {
+        PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV1(note_bootstrap) => {
             build_proof_managed_frontier_v1(
                 bootstrap.namespace(),
                 &note_bootstrap.initial_note_commitments,

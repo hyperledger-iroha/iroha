@@ -456,13 +456,10 @@ fn rekey_account_id(
     if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
         state_transaction,
         old_account,
-    ) || crate::smartcontracts::isi::asset::isi::is_sccp_custody_owner(
-        state_transaction,
-        old_account,
     ) {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
-                "cannot rekey account {old_account}: it is deterministic SCCP route protocol escrow or an immutable route custody owner"
+                "cannot rekey account {old_account}: it is deterministic SCCP route protocol escrow"
             )
             .into(),
         ));

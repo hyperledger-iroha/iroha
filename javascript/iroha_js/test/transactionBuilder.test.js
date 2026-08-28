@@ -250,7 +250,7 @@ function buildSampleSccpRemoveAction() {
     action: "Remove",
     route: {
       lane_id: {
-        source: { network: "bsc_testnet", profile: null },
+        source: { network: "bsc_mainnet", profile: null },
         target: { network: "sora_taira", profile: null },
       },
       route_id: "taira_bsc_xor",

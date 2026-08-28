@@ -1150,6 +1150,34 @@ fn constant_rate_capability_rejects_strict_mode_without_silent_downgrade() {
     assert_eq!(best_effort.capability().mode, ConstantRateMode::BestEffort);
 }
 #[test]
+fn strict_constant_rate_requires_core_profile_before_dependency_requalification() {
+    for profile in [ConstantRateProfileName::Home, ConstantRateProfileName::Null] {
+        let json = format!(
+            r#"{{
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "pow": {{ "difficulty": 18 }},
+                "constant_rate_capability": {{ "enabled": true, "strict": true }},
+                "constant_rate_profile": "{}"
+            }}"#,
+            profile.as_str()
+        );
+        let error = RelayConfig::load(write_config(&json))
+            .expect_err("a non-Core strict profile must fail before dependency qualification");
+        match error {
+            ConfigError::ConstantRateCapability(message) => {
+                assert!(
+                    message.contains("constant_rate_profile `core`"),
+                    "{message}"
+                );
+                assert!(message.contains("5 ms"), "{message}");
+                assert!(message.contains(profile.as_str()), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+#[test]
 fn constant_rate_capability_returns_none_when_disabled() {
     let json = config_fixture!("disabled_constant_rate.json");
     let path = write_config(json);

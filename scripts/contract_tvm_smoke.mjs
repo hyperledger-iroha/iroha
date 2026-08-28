@@ -419,7 +419,17 @@ function tronAddressWord(client, address) {
   return word(BigInt(`0x${tronHexAddress(client, address)}`));
 }
 
-function exactDestinationBinding({ client, verifierAddress, bridgeAddress, verifierCodeHash, keyHash }) {
+function exactDestinationBinding({
+  client,
+  verifierAddress,
+  bridgeAddress,
+  verifierCodeHash,
+  keyHash,
+  replayVerifierAddress,
+  replayVerifierCodeHash,
+  mintBreakerAddress,
+  mintBreakerCodeHash,
+}) {
   return encodedHash(
     [
       "bytes32",
@@ -427,6 +437,10 @@ function exactDestinationBinding({ client, verifierAddress, bridgeAddress, verif
       "bytes32",
       "uint256",
       "uint256",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
       "bytes32",
       "bytes32",
       "bytes32",
@@ -446,6 +460,10 @@ function exactDestinationBinding({ client, verifierAddress, bridgeAddress, verif
       keyHash,
       SEMANTIC_PROOF_PROFILE_HASH,
       TAIRA_FINALITY_ANCHOR_HASH,
+      tronAddressWord(client, replayVerifierAddress),
+      replayVerifierCodeHash,
+      tronAddressWord(client, mintBreakerAddress),
+      mintBreakerCodeHash,
     ],
   );
 }
@@ -459,11 +477,29 @@ function exactRouteConfig({
   verifierCodeHash,
   keyHash,
   destinationBinding,
+  replayVerifierAddress,
+  replayVerifierCodeHash,
+  mintBreakerAddress,
+  mintBreakerCodeHash,
+  maxWrappedSupply,
   sourceLaneHash,
   destinationLaneHash,
 }) {
   const deploymentConfigHash = encodedHash(
-    ["bytes32", "bytes32", "bytes32", "bytes32", "bytes32", "bytes32", "bytes32", "bytes32"],
+    [
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+      "bytes32",
+    ],
     [
       solidityAddressWord(client, tokenAddress),
       tokenCodeHash,
@@ -473,11 +509,21 @@ function exactRouteConfig({
       SEMANTIC_PROOF_PROFILE_HASH,
       TAIRA_FINALITY_ANCHOR_HASH,
       destinationBinding,
+      solidityAddressWord(client, replayVerifierAddress),
+      replayVerifierCodeHash,
+      solidityAddressWord(client, mintBreakerAddress),
+      mintBreakerCodeHash,
     ],
   );
   const assetRouteConfigHash = encodedHash(
-    ["bytes32", "bytes32", "uint32", "uint256"],
-    [sha3Utf8("xor"), sha3Utf8("taira_tron_xor"), ROUTE_REVISION, String(SCALE)],
+    ["bytes32", "bytes32", "uint32", "uint256", "uint256"],
+    [
+      sha3Utf8("xor"),
+      sha3Utf8("taira_tron_xor"),
+      ROUTE_REVISION,
+      String(SCALE),
+      String(maxWrappedSupply),
+    ],
   );
   return encodedHash(
     ["bytes32", "uint32", "uint8", "bytes32", "bytes32", "bytes32", "bytes32", "bytes32"],
@@ -814,6 +860,15 @@ assert.equal(
 const tokenRuntimeCodeHash = await runtimeCodeHash(bridgeClient, tokenAddress);
 assert.equal(bytes32(await bridge.tokenCodeHash().call()), tokenRuntimeCodeHash);
 assert.equal(bytes32(await bridge.verifierCodeHash().call()), verifierCodeHash);
+const replayVerifierAddress = await bridge.replayVerifier().call();
+const replayVerifierCodeHash = await runtimeCodeHash(bridgeClient, replayVerifierAddress);
+assert.equal(
+  bytes32(await bridge.replayVerifierCodeHash().call()),
+  replayVerifierCodeHash,
+);
+const mintBreakerAddress = await bridge.mintBreaker().call();
+const mintBreakerCodeHash = await runtimeCodeHash(bridgeClient, mintBreakerAddress);
+const maxWrappedSupply = asInteger(await bridge.maxWrappedSupply().call());
 
 const canonicalTronMainnet = Buffer.concat([
   Buffer.from([1, TRON_MAINNET_PROFILE]),
@@ -867,6 +922,10 @@ const expectedDestinationBinding = exactDestinationBinding({
   bridgeAddress: bridge.address,
   verifierCodeHash,
   keyHash,
+  replayVerifierAddress,
+  replayVerifierCodeHash,
+  mintBreakerAddress,
+  mintBreakerCodeHash,
 });
 assert.equal(bytes32(await bridge.destinationBindingHash().call()), expectedDestinationBinding);
 const expectedRouteConfigHash = exactRouteConfig({
@@ -878,6 +937,11 @@ const expectedRouteConfigHash = exactRouteConfig({
   verifierCodeHash,
   keyHash,
   destinationBinding: expectedDestinationBinding,
+  replayVerifierAddress,
+  replayVerifierCodeHash,
+  mintBreakerAddress,
+  mintBreakerCodeHash,
+  maxWrappedSupply,
   sourceLaneHash: expectedSourceLaneHash,
   destinationLaneHash: expectedDestinationLaneHash,
 });

@@ -16,7 +16,10 @@ use fastpq_prover::{
 };
 use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::{BlockHeader, consensus::ExecWitness};
+use iroha_data_model::{
+    block::{BlockHeader, consensus::ExecWitness},
+    privacy::GoldilocksDigest384V1,
+};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, info, warn};
 use std::{
@@ -84,8 +87,8 @@ pub struct FastpqProofOutput {
     pub proof_bytes: Vec<u8>,
     /// Stable digest of `proof_bytes` for relay metadata and telemetry.
     pub proof_digest: Hash,
-    /// Batch trace commitment proven by the proof.
-    pub trace_commitment: Hash,
+    /// Canonical six-lane batch trace commitment proven by the proof.
+    pub trace_commitment: GoldilocksDigest384V1,
 }
 /// Trait abstracting over the FASTPQ prover backend so tests can inject mocks.
 pub trait FastpqProofEngine: Send + Sync + 'static {
@@ -1315,7 +1318,8 @@ mod tests {
             let proof_bytes = b"mock-fastpq-proof".to_vec();
             Ok(FastpqProofOutput {
                 proof_digest: Hash::new(&proof_bytes),
-                trace_commitment: Hash::new(b"mock-fastpq-trace-commitment"),
+                trace_commitment: GoldilocksDigest384V1::new([0x31; 6])
+                    .expect("canonical mock FASTPQ trace commitment"),
                 proof_bytes,
             })
         }
@@ -1332,7 +1336,8 @@ mod tests {
             let proof_bytes = b"proof-completed-after-shutdown".to_vec();
             Ok(FastpqProofOutput {
                 proof_digest: Hash::new(&proof_bytes),
-                trace_commitment: Hash::new(b"shutdown-trace-commitment"),
+                trace_commitment: GoldilocksDigest384V1::new([0x32; 6])
+                    .expect("canonical shutdown FASTPQ trace commitment"),
                 proof_bytes,
             })
         }

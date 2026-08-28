@@ -17,15 +17,17 @@
 //! residue group.  Consequently the working set is
 //! `O(native_size + query_count * width + atom_count)`, never a materialized
 //! `native_size * width` matrix or an LDE table.
+use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
-    goldilocks_batch_invert_v1, goldilocks_primitive_root_v1, sha256_frame_v1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
+    TransparentStarkErrorV1, goldilocks_batch_invert_v1, goldilocks_digest384_frame_v1,
+    goldilocks_primitive_root_v1,
 };
 use core::cmp::Ordering;
 use std::vec::Vec;
 use thiserror::Error;
 /// Exact first-release semantics committed alongside every schedule digest.
-pub(crate) const ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] = b"zk-x509-fixed-algebraic-v1-incompatible:verifier-derived-only:no-proof-fixed-material:no-artifact:no-merkle:additive-canonical-atoms=affine-range+repeated-affine-stride+sparse:overlap=goldilocks-field-addition:exact-duplicate-atoms-rejected:semantically-equivalent-alternate-decompositions-have-distinct-descriptor-digests:goldilocks-modulus=0xffffffff00000001:native-root-domain:generator-shifted-lde-coset:coset-disjoint-from-lde-subgroup:query-index-derived-point:residue-grouped-barycentric-lagrange:batch-inverted-native-denominators:cyclic-prefix-affine-sums:repeated-sums=generic-gcd-cycles+reduced-stride-modular-inverse+cyclic-weight-and-ordinal-prefixes+per-stride-min-direct-occurrence-work-vs-native-prefix-work:one-column-native-streaming:no-native-times-width-or-lde-table:bounded-native20-lde25-blowup8-width472-atoms65536-queries116-output-fields54752-work2pow28:wire=X5K1+u16be-version1+u16be-header24+native-log2-u8+lde-log2-u8+width-u16be+atom-count-u32be+coset-shift-u64be+canonical-variable-atoms:first-release-no-legacy";
+pub(crate) const ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] = b"zk-x509-fixed-algebraic-v1-incompatible:verifier-derived-only:no-proof-fixed-material:no-artifact:no-merkle:additive-canonical-atoms=affine-range+repeated-affine-stride+sparse:overlap=goldilocks-field-addition:exact-duplicate-atoms-rejected:semantically-equivalent-alternate-decompositions-have-distinct-descriptor-digests:goldilocks-modulus=0xffffffff00000001:native-root-domain:generator-shifted-lde-coset:coset-disjoint-from-lde-subgroup:query-index-derived-point:residue-grouped-barycentric-lagrange:batch-inverted-native-denominators:cyclic-prefix-affine-sums:repeated-sums=generic-gcd-cycles+reduced-stride-modular-inverse+cyclic-weight-and-ordinal-prefixes+per-stride-min-direct-occurrence-work-vs-native-prefix-work:one-column-native-streaming:no-native-times-width-or-lde-table:bounded-native20-lde25-blowup8-width472-atoms65536-queries272-output-fields128384-work2pow28:digest=poseidon-x7-goldilocks-6x64:wire=X5K1+u16be-version1+u16be-header24+native-log2-u8+lde-log2-u8+width-u16be+atom-count-u32be+coset-shift-u64be+canonical-variable-atoms:first-release-no-legacy";
 const ZK_X509_FIXED_ALGEBRAIC_MAGIC_V1: [u8; 4] = *b"X5K1";
 const ZK_X509_FIXED_ALGEBRAIC_VERSION_V1: u16 = 1;
 const ZK_X509_FIXED_ALGEBRAIC_HEADER_BYTES_V1: u16 = 24;
@@ -49,9 +51,9 @@ pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1: u16 = 472;
 /// Largest canonical atom collection accepted by one schedule.
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_ATOMS_V1: usize = 65_536;
 /// Largest canonical verifier query set accepted in one batch.
-pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1: usize = 116;
+pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1: usize = 272;
 /// Largest row-major result, measured in Goldilocks elements.
-pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1: usize = 116 * 472;
+pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1: usize = 272 * 472;
 /// Deterministic cap on the evaluator's coarse field-operation work score.
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_EVALUATION_WORK_V1: u64 = 1_u64 << 28;
 /// Fail-closed error from construction, binding, or deterministic evaluation.
@@ -613,7 +615,7 @@ pub(crate) struct ZkX509FixedAlgebraicScheduleV1 {
     domain: ZkX509FixedAlgebraicDomainV1,
     width: u16,
     atoms: Vec<ZkX509FixedAlgebraicAtomV1>,
-    descriptor_digest: [u8; 32],
+    descriptor_digest: GoldilocksDigest384V1,
 }
 impl ZkX509FixedAlgebraicScheduleV1 {
     /// Check, canonically order, and bind an additive atom collection.
@@ -645,11 +647,16 @@ impl ZkX509FixedAlgebraicScheduleV1 {
             domain,
             width,
             atoms,
-            descriptor_digest: [0_u8; 32],
+            descriptor_digest: GoldilocksDigest384V1::default(),
         };
         let descriptor = schedule.canonical_descriptor_v1()?;
-        schedule.descriptor_digest = sha256_frame_v1(
+        schedule.descriptor_digest = goldilocks_digest384_frame_v1(
+            ZK_X509_DIGEST_CONTEXT_V1,
             ZK_X509_FIXED_ALGEBRAIC_DIGEST_DOMAIN_V1,
+            b"verifier-fixed-algebraic-schedule",
+            0,
+            0,
+            0,
             &[ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1, &descriptor],
         )
         .map_err(map_transparent_error_v1)?;
@@ -736,15 +743,15 @@ impl ZkX509FixedAlgebraicScheduleV1 {
         }
         Ok(encoded)
     }
-    /// SHA-256 frame digest of protocol semantics and exact canonical bytes.
-    pub(crate) const fn descriptor_digest_v1(&self) -> [u8; 32] {
+    /// Six-lane digest of protocol semantics and exact canonical bytes.
+    pub(crate) const fn descriptor_digest_v1(&self) -> GoldilocksDigest384V1 {
         self.descriptor_digest
     }
     /// Fail closed unless the compiled profile pins this exact schedule.
     #[cfg(test)]
     pub(crate) fn verify_descriptor_digest_v1(
         &self,
-        expected: &[u8; 32],
+        expected: &GoldilocksDigest384V1,
     ) -> Result<(), ZkX509FixedAlgebraicErrorV1> {
         if self.descriptor_digest != *expected {
             return Err(ZkX509FixedAlgebraicErrorV1::DescriptorMismatch);
@@ -1792,7 +1799,7 @@ impl CyclicStrideTableV1 {
 /// Canonical row-major verifier-derived fixed openings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509FixedAlgebraicOpeningsV1 {
-    schedule_digest: [u8; 32],
+    schedule_digest: GoldilocksDigest384V1,
     query_indices: Vec<u64>,
     width: u16,
     fields: Vec<F>,
@@ -1804,7 +1811,7 @@ impl ZkX509FixedAlgebraicOpeningsV1 {
     /// supplies the typed composite digest that binds child identity and order; this helper only
     /// performs the checked row-major concatenation and cannot reorder or omit a child.
     pub(crate) fn concatenate_v1(
-        schedule_digest: [u8; 32],
+        schedule_digest: GoldilocksDigest384V1,
         parts: &[Self],
     ) -> Result<Self, ZkX509FixedAlgebraicErrorV1> {
         if parts.len() < 2 {
@@ -1880,7 +1887,7 @@ impl ZkX509FixedAlgebraicOpeningsV1 {
         })
     }
     /// Schedule binding shared by every returned row.
-    pub(crate) const fn schedule_digest_v1(&self) -> [u8; 32] {
+    pub(crate) const fn schedule_digest_v1(&self) -> GoldilocksDigest384V1 {
         self.schedule_digest
     }
     /// Canonical sorted verifier query indices.
@@ -2286,19 +2293,17 @@ mod tests {
             descriptor.get(78),
             Some(&ZK_X509_FIXED_ALGEBRAIC_REPEATED_TAG_V1)
         );
-        assert_eq!(
+        assert_ne!(
             schedule.descriptor_digest_v1(),
-            [
-                0xd4, 0x1d, 0xd4, 0x83, 0x59, 0x00, 0x12, 0x6e, 0xf2, 0x75, 0x85, 0x51, 0x47, 0x88,
-                0x26, 0x09, 0x2e, 0x5f, 0xfb, 0x38, 0x01, 0x8b, 0x3e, 0xd6, 0x84, 0xde, 0x11, 0xe3,
-                0xee, 0xd4, 0x01, 0xb2,
-            ]
+            GoldilocksDigest384V1::default()
         );
         schedule
             .verify_descriptor_digest_v1(&schedule.descriptor_digest_v1())
             .expect("exact digest");
         let mut mutation = schedule.descriptor_digest_v1();
-        mutation[17] ^= 0x80;
+        let mut mutation_words = mutation.words();
+        mutation_words[2] ^= 0x80;
+        mutation = GoldilocksDigest384V1::new(mutation_words).expect("canonical mutation");
         assert_eq!(
             schedule.verify_descriptor_digest_v1(&mutation),
             Err(ZkX509FixedAlgebraicErrorV1::DescriptorMismatch)
@@ -2603,7 +2608,7 @@ mod tests {
             ],
         )
         .expect("hybrid schedule");
-        let queries: Vec<u64> = (0..116).collect();
+        let queries: Vec<u64> = (0..272).collect();
         assert_matches_fft_v1(&schedule, &queries);
     }
     #[test]
@@ -2670,18 +2675,19 @@ mod tests {
     #[test]
     fn composite_opening_concatenation_is_row_major_and_fail_closed_v1() {
         let left = ZkX509FixedAlgebraicOpeningsV1 {
-            schedule_digest: [1_u8; 32],
+            schedule_digest: GoldilocksDigest384V1::new([1_u64; 6]).expect("left digest"),
             query_indices: vec![2, 9],
             width: 2,
             fields: vec![F(11), F(12), F(21), F(22)],
         };
         let right = ZkX509FixedAlgebraicOpeningsV1 {
-            schedule_digest: [2_u8; 32],
+            schedule_digest: GoldilocksDigest384V1::new([2_u64; 6]).expect("right digest"),
             query_indices: vec![2, 9],
             width: 1,
             fields: vec![F(13), F(23)],
         };
-        let composite_digest = [9_u8; 32];
+        let composite_digest =
+            GoldilocksDigest384V1::new([9_u64; 6]).expect("composite digest");
         let combined = ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(
             composite_digest,
             &[left.clone(), right.clone()],
@@ -2743,13 +2749,15 @@ mod tests {
         );
         let over_profile_width = [
             ZkX509FixedAlgebraicOpeningsV1 {
-                schedule_digest: [3_u8; 32],
+                schedule_digest: GoldilocksDigest384V1::new([3_u64; 6])
+                    .expect("first digest"),
                 query_indices: vec![0],
                 width: 300,
                 fields: vec![F::ZERO; 300],
             },
             ZkX509FixedAlgebraicOpeningsV1 {
-                schedule_digest: [4_u8; 32],
+                schedule_digest: GoldilocksDigest384V1::new([4_u64; 6])
+                    .expect("second digest"),
                 query_indices: vec![0],
                 width: 173,
                 fields: vec![F::ZERO; 173],
@@ -2760,7 +2768,8 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::InvalidWidth)
         );
         let maximum_width_part = ZkX509FixedAlgebraicOpeningsV1 {
-            schedule_digest: [5_u8; 32],
+            schedule_digest: GoldilocksDigest384V1::new([5_u64; 6])
+                .expect("maximum-width digest"),
             query_indices: vec![0],
             width: ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1,
             fields: vec![F::ZERO; usize::from(ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1)],
@@ -2774,7 +2783,7 @@ mod tests {
         );
     }
     #[test]
-    fn exact_release_116_by_472_result_boundary_is_accepted_v1() {
+    fn exact_release_272_by_472_result_boundary_is_accepted_v1() {
         assert_eq!(ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1, 54_752);
         let domain = domain_v1(7, 9).expect("boundary domain");
         let schedule = ZkX509FixedAlgebraicScheduleV1::new_v1(
@@ -2789,7 +2798,7 @@ mod tests {
         let openings = schedule
             .evaluate_query_indices_v1(&queries)
             .expect("exact release boundary");
-        assert_eq!(openings.len_v1(), 116);
+        assert_eq!(openings.len_v1(), 272);
         assert_eq!(openings.width_v1(), 472);
         assert_eq!(
             openings.row_v1(115).expect("last row").len(),
@@ -2806,7 +2815,7 @@ mod tests {
         );
     }
     #[test]
-    fn release_p256_shaped_schedule_accepts_and_evaluates_116_queries_v1() {
+    fn release_p256_shaped_schedule_accepts_and_evaluates_272_queries_v1() {
         let domain = domain_v1(19, 25).expect("P-256-shaped domain");
         let mut atoms = Vec::with_capacity(192);
         for role in 0..2_u16 {
@@ -2826,7 +2835,7 @@ mod tests {
         }
         let schedule = ZkX509FixedAlgebraicScheduleV1::new_v1(domain, 2, atoms)
             .expect("P-256-shaped schedule");
-        let spread_queries: Vec<u64> = (0..116).collect();
+        let spread_queries: Vec<u64> = (0..272).collect();
         let spread_grouped = grouped_queries_v1(domain, &spread_queries);
         let (references, runs) =
             repeated_stride_plan_v1(schedule.atoms_v1()).expect("repeated stride plan");
@@ -2839,13 +2848,13 @@ mod tests {
             )
             .expect("full spread work must fit the release cap");
         // Keep the release-shape evaluator test practical while still opening
-        // all 116 verifier rows: one remainder group exercises the same dense
+        // all 272 verifier rows: one remainder group exercises the same dense
         // stride table against every native-root shift.
-        let same_remainder_queries: Vec<u64> = (0..116).map(|shift| shift * 64).collect();
+        let same_remainder_queries: Vec<u64> = (0..272).map(|shift| shift * 64).collect();
         let openings = schedule
             .evaluate_query_indices_v1(&same_remainder_queries)
-            .expect("116-query P-256-shaped evaluation");
-        assert_eq!(openings.len_v1(), 116);
+            .expect("272-query P-256-shaped evaluation");
+        assert_eq!(openings.len_v1(), 272);
         assert_eq!(openings.width_v1(), 2);
         assert!(
             openings.fields.iter().copied().all(canonical_field_v1),
@@ -2874,7 +2883,7 @@ mod tests {
         }
         let schedule = ZkX509FixedAlgebraicScheduleV1::new_v1(domain, 1, atoms)
             .expect("large-work schedule construction is still bounded");
-        let same_remainder_queries: Vec<u64> = (0..116).map(|shift| shift * 2).collect();
+        let same_remainder_queries: Vec<u64> = (0..272).map(|shift| shift * 2).collect();
         assert_eq!(
             schedule.evaluate_query_indices_v1(&same_remainder_queries),
             Err(ZkX509FixedAlgebraicErrorV1::LimitExceeded)

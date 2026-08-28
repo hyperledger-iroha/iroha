@@ -94,10 +94,7 @@ fn parse_cidr(raw: &str) -> Result<IpNet, String> {
                 }
             }
             Ok(IpNet {
-                kind: IpKind::V6 {
-                    net,
-                    bits: prefix,
-                },
+                kind: IpKind::V6 { net, bits: prefix },
             })
         }
     }
@@ -115,8 +112,8 @@ pub(super) fn parse_acl_cidrs(
 ) -> Result<(Vec<IpNet>, Vec<IpNet>), String> {
     let allow_nets = parse_cidrs(allow_cidrs)
         .map_err(|error| format!("network.allow_cidrs contains {error}"))?;
-    let deny_nets = parse_cidrs(deny_cidrs)
-        .map_err(|error| format!("network.deny_cidrs contains {error}"))?;
+    let deny_nets =
+        parse_cidrs(deny_cidrs).map_err(|error| format!("network.deny_cidrs contains {error}"))?;
     Ok((allow_nets, deny_nets))
 }
 
@@ -270,6 +267,30 @@ impl AcceptThrottleParams {
             bucket_idle,
         }
     }
+
+    fn enabled_dimensions(self) -> usize {
+        usize::from(self.prefix_rate_per_sec.is_some())
+            + usize::from(self.ip_rate_per_sec.is_some())
+    }
+
+    fn has_valid_geometry(self) -> bool {
+        self.max_buckets >= self.enabled_dimensions()
+    }
+}
+
+/// Reject a cap that cannot retain one owner for every enabled throttle dimension.
+pub(super) fn validate_accept_throttle_geometry(
+    prefix_enabled: bool,
+    ip_enabled: bool,
+    max_buckets: usize,
+) -> Result<(), String> {
+    let required_buckets = usize::from(prefix_enabled) + usize::from(ip_enabled);
+    if max_buckets < required_buckets {
+        return Err(format!(
+            "network.max_accept_buckets={max_buckets} cannot retain the {required_buckets} enabled accept-throttle dimensions"
+        ));
+    }
+    Ok(())
 }
 
 fn oldest_bucket(
@@ -316,13 +337,20 @@ fn enforce_aggregate_bucket_cap(
 ) -> usize {
     let retained_limit = max_buckets.saturating_sub(usize::from(room_for_new_bucket));
     let mut evicted = 0;
-    while prefix_buckets.len() + ip_buckets.len() > retained_limit {
+    while retained_bucket_count(prefix_buckets, ip_buckets) > retained_limit {
         if !evict_oldest_accept_bucket(prefix_buckets, ip_buckets) {
             break;
         }
         evicted += 1;
     }
     evicted
+}
+
+fn retained_bucket_count(
+    prefix_buckets: &HashMap<IpBucketKey, AcceptBucket>,
+    ip_buckets: &HashMap<IpBucketKey, AcceptBucket>,
+) -> usize {
+    prefix_buckets.len().saturating_add(ip_buckets.len())
 }
 
 fn consume_accept_bucket(
@@ -345,7 +373,7 @@ fn update_accept_bucket_gauge(
     ip_buckets: &HashMap<IpBucketKey, AcceptBucket>,
 ) {
     ACCEPT_BUCKETS_CURRENT.store(
-        (prefix_buckets.len() + ip_buckets.len()) as u64,
+        u64::try_from(retained_bucket_count(prefix_buckets, ip_buckets)).unwrap_or(u64::MAX),
         Ordering::Relaxed,
     );
 }
@@ -371,12 +399,7 @@ pub(super) fn allow_ip_with_policy(
     let now = tokio::time::Instant::now();
     let evicted = prune_idle_accept_buckets(prefix_buckets, params.bucket_idle, now)
         + prune_idle_accept_buckets(ip_buckets, params.bucket_idle, now)
-        + enforce_aggregate_bucket_cap(
-            prefix_buckets,
-            ip_buckets,
-            params.max_buckets,
-            false,
-        );
+        + enforce_aggregate_bucket_cap(prefix_buckets, ip_buckets, params.max_buckets, false);
     if evicted > 0 {
         ACCEPT_BUCKET_EVICTIONS.fetch_add(evicted as u64, Ordering::Relaxed);
     }
@@ -384,16 +407,17 @@ pub(super) fn allow_ip_with_policy(
         update_accept_bucket_gauge(prefix_buckets, ip_buckets);
         return true;
     }
+    if !params.has_valid_geometry() {
+        ACCEPT_THROTTLED.fetch_add(1, Ordering::Relaxed);
+        update_accept_bucket_gauge(prefix_buckets, ip_buckets);
+        return false;
+    }
     if let Some(rate) = params.prefix_rate_per_sec {
         let burst = params.prefix_burst.unwrap_or_else(|| rate.max(1.0));
         let key = ip_bucket_key(ip, params.prefix_v4_bits, params.prefix_v6_bits);
         let existed = prefix_buckets.contains_key(&key);
-        let evicted = enforce_aggregate_bucket_cap(
-            prefix_buckets,
-            ip_buckets,
-            params.max_buckets,
-            !existed,
-        );
+        let evicted =
+            enforce_aggregate_bucket_cap(prefix_buckets, ip_buckets, params.max_buckets, !existed);
         if evicted > 0 {
             ACCEPT_BUCKET_EVICTIONS.fetch_add(evicted as u64, Ordering::Relaxed);
         }
@@ -420,12 +444,8 @@ pub(super) fn allow_ip_with_policy(
         let burst = params.ip_burst.unwrap_or_else(|| rate.max(1.0));
         let key = ip_bucket_key(ip, 32, 128);
         let existed = ip_buckets.contains_key(&key);
-        let evicted = enforce_aggregate_bucket_cap(
-            prefix_buckets,
-            ip_buckets,
-            params.max_buckets,
-            !existed,
-        );
+        let evicted =
+            enforce_aggregate_bucket_cap(prefix_buckets, ip_buckets, params.max_buckets, !existed);
         if evicted > 0 {
             ACCEPT_BUCKET_EVICTIONS.fetch_add(evicted as u64, Ordering::Relaxed);
         }
@@ -507,10 +527,7 @@ mod tests {
         let nets = parse_cidrs(&["::ffff:192.0.2.0/120".to_owned()])
             .expect("mapped /120 is canonical IPv4 /24");
         assert!(cidr_contains(&nets, "192.0.2.17".parse().unwrap()));
-        assert!(cidr_contains(
-            &nets,
-            "::ffff:192.0.2.17".parse().unwrap()
-        ));
+        assert!(cidr_contains(&nets, "::ffff:192.0.2.17".parse().unwrap()));
         assert!(!cidr_contains(&nets, "192.0.3.17".parse().unwrap()));
         assert!(parse_cidrs(&["::ffff:192.0.2.0/95".to_owned()]).is_err());
     }
@@ -550,9 +567,40 @@ mod tests {
                 IpAddr::from([10, subnet, 0, 1]),
             ));
             assert!(
-                prefix_buckets.len() + ip_buckets.len() <= MAX_BUCKETS,
+                retained_bucket_count(&prefix_buckets, &ip_buckets) <= MAX_BUCKETS,
                 "the documented combined cap must cover both ownership maps"
             );
         }
+    }
+
+    #[test]
+    fn insufficient_cap_for_enabled_dimensions_fails_closed() {
+        let params = AcceptThrottleParams::new(
+            Some(1_000.0),
+            Some(1_000.0),
+            24,
+            64,
+            Some(1_000.0),
+            Some(1_000.0),
+            1,
+            Duration::from_secs(60),
+        );
+        let mut prefix_buckets = HashMap::new();
+        let mut ip_buckets = HashMap::new();
+
+        assert!(validate_accept_throttle_geometry(true, true, 1).is_err());
+        for _ in 0..2 {
+            assert!(!allow_ip_with_policy(
+                &[],
+                &[],
+                false,
+                params,
+                &mut prefix_buckets,
+                &mut ip_buckets,
+                IpAddr::from([192, 0, 2, 1]),
+            ));
+        }
+        assert!(prefix_buckets.is_empty());
+        assert!(ip_buckets.is_empty());
     }
 }

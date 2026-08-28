@@ -61,8 +61,6 @@ fn release_network_id_from_genesis_hash(hash: [u8; 32]) -> iroha_data_model::Net
         hash,
     )))
 }
-#[cfg(test)]
-use crate::privacy_engines::vega::prepare_vega_release_candidate_privacy_action_with_rng_v1;
 use crate::privacy_engines::{
     anonymous_pgc::{
         AnonymousPgcParametersV1, AnonymousPgcPoolInvariantV1, TwistedElGamalCiphertextV1,
@@ -167,16 +165,12 @@ use crate::privacy_engines::{
     },
 };
 use crate::{
-    privacy_profiles::{
-        CompiledPrivacyProfileV1, compiled_privacy_profile_v1,
-        zk_x509_release_candidate_profile_material_v1,
-    },
+    privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
     privacy_state::{PrivacyZkX509AuthoritativeStateV1, compute_privacy_pgc_account_state_root_v1},
     privacy_verifier::{
         PrivacyVerificationContextV1, PrivacyVerificationErrorV1, PrivacyZkX509VerificationStateV1,
         VerifiedPrivacyLedgerEffectsV1, VerifiedZkX509CertificateEffectV1,
         validate_vega_authoritative_issuer_binding_v1, verify_privacy_envelope_v1,
-        verify_zk_x509_release_candidate_envelope_v1,
     },
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -441,22 +435,22 @@ pub const PRIVACY_RELEASE_STAGE_COORDINATES_V1: [PrivacyReleaseStageCoordinateV1
     PRIVACY_RELEASE_STAGE_COUNT_V1] = [
     privacy_release_stage_coordinate_v1(
         0,
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
         PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
     ),
     privacy_release_stage_coordinate_v1(
         1,
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
         PrivacyReleaseCaseKindV1::PublicStatementBindingMutation,
     ),
     privacy_release_stage_coordinate_v1(
         2,
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
         PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation,
     ),
     privacy_release_stage_coordinate_v1(
         3,
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
         PrivacyReleaseCaseKindV1::MaximumShapeResource,
     ),
     privacy_release_stage_coordinate_v1(
@@ -521,62 +515,62 @@ pub const PRIVACY_RELEASE_STAGE_COORDINATES_V1: [PrivacyReleaseStageCoordinateV1
     ),
     privacy_release_stage_coordinate_v1(
         16,
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
         PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
     ),
     privacy_release_stage_coordinate_v1(
         17,
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
         PrivacyReleaseCaseKindV1::PublicStatementBindingMutation,
     ),
     privacy_release_stage_coordinate_v1(
         18,
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
         PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation,
     ),
     privacy_release_stage_coordinate_v1(
         19,
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
         PrivacyReleaseCaseKindV1::MaximumShapeResource,
     ),
     privacy_release_stage_coordinate_v1(
         20,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
         PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
     ),
     privacy_release_stage_coordinate_v1(
         21,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
         PrivacyReleaseCaseKindV1::PublicStatementBindingMutation,
     ),
     privacy_release_stage_coordinate_v1(
         22,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
         PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation,
     ),
     privacy_release_stage_coordinate_v1(
         23,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
         PrivacyReleaseCaseKindV1::MaximumShapeResource,
     ),
     privacy_release_stage_coordinate_v1(
         24,
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
         PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
     ),
     privacy_release_stage_coordinate_v1(
         25,
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
         PrivacyReleaseCaseKindV1::PublicStatementBindingMutation,
     ),
     privacy_release_stage_coordinate_v1(
         26,
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
         PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation,
     ),
     privacy_release_stage_coordinate_v1(
         27,
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
         PrivacyReleaseCaseKindV1::MaximumShapeResource,
     ),
     privacy_release_stage_coordinate_v1(
@@ -661,22 +655,22 @@ pub const PRIVACY_RELEASE_STAGE_COORDINATES_V1: [PrivacyReleaseStageCoordinateV1
     ),
     privacy_release_stage_coordinate_v1(
         44,
-        PrivacyProtocolIdV1::PqMaspStarkV0,
+        PrivacyProtocolIdV1::PqMaspStarkV1,
         PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
     ),
     privacy_release_stage_coordinate_v1(
         45,
-        PrivacyProtocolIdV1::PqMaspStarkV0,
+        PrivacyProtocolIdV1::PqMaspStarkV1,
         PrivacyReleaseCaseKindV1::PublicStatementBindingMutation,
     ),
     privacy_release_stage_coordinate_v1(
         46,
-        PrivacyProtocolIdV1::PqMaspStarkV0,
+        PrivacyProtocolIdV1::PqMaspStarkV1,
         PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation,
     ),
     privacy_release_stage_coordinate_v1(
         47,
-        PrivacyProtocolIdV1::PqMaspStarkV0,
+        PrivacyProtocolIdV1::PqMaspStarkV1,
         PrivacyReleaseCaseKindV1::MaximumShapeResource,
     ),
 ];
@@ -774,7 +768,7 @@ pub fn privacy_release_resource_facts_v1(
 ) -> Option<PrivacyReleaseResourceFactsV1> {
     let maximum = case_kind == PrivacyReleaseCaseKindV1::MaximumShapeResource;
     let facts = match protocol_id {
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => PrivacyReleaseResourceFactsV1 {
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => PrivacyReleaseResourceFactsV1 {
             primary_units: ZK_ACE_RELEASE_TRACE_ROWS_V1,
             primary_ceiling: ZK_ACE_RELEASE_TRACE_ROWS_V1,
             secondary_units: ZK_ACE_RELEASE_QUERY_COUNT_V1,
@@ -819,7 +813,7 @@ pub fn privacy_release_resource_facts_v1(
                 relation_depth_ceiling: u64::try_from(ZK_AMS_MAX_RING_SIZE_V1).ok()?,
             }
         }
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => PrivacyReleaseResourceFactsV1 {
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => PrivacyReleaseResourceFactsV1 {
             primary_units: VEGA_RELEASE_MC_TOTAL_APP_CONSTRAINTS_V1,
             primary_ceiling: VEGA_RELEASE_MC_TOTAL_APP_CONSTRAINTS_V1,
             secondary_units: VEGA_RELEASE_MC_MAX_CIRCUIT_VARIABLES_V1,
@@ -827,7 +821,7 @@ pub fn privacy_release_resource_facts_v1(
             relation_depth: VEGA_RELEASE_MC_RELAXED_SUMCHECK_ROUNDS_V1,
             relation_depth_ceiling: VEGA_RELEASE_MC_RELAXED_SUMCHECK_ROUNDS_V1,
         },
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => PrivacyReleaseResourceFactsV1 {
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => PrivacyReleaseResourceFactsV1 {
             primary_units: if maximum {
                 u64::try_from(ZK_X509_MAX_CHAIN_DEPTH_V1).ok()?
             } else {
@@ -847,7 +841,7 @@ pub fn privacy_release_resource_facts_v1(
             },
             relation_depth_ceiling: u64::try_from(ZK_X509_MAX_CRL_ENTRIES_V1).ok()?,
         },
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => {
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
             let ring_degree = u64::try_from(JINDO_RING_DEGREE_V1).ok()?;
             PrivacyReleaseResourceFactsV1 {
                 primary_units: u64::try_from(JINDO_MAX_BATCH_SIZE_V1).ok()?,
@@ -925,7 +919,7 @@ pub fn privacy_release_resource_facts_v1(
                 relation_depth_ceiling: u64::try_from(PRIVATE_NOTE_TREE_DEPTH_V1).ok()?,
             }
         }
-        PrivacyProtocolIdV1::PqMaspStarkV0 => {
+        PrivacyProtocolIdV1::PqMaspStarkV1 => {
             let units = if maximum { 2 } else { 1 };
             PrivacyReleaseResourceFactsV1 {
                 primary_units: units,
@@ -1162,10 +1156,10 @@ pub fn privacy_release_proof_artifact_ceiling_v1(
         (PrivacyProtocolIdV1::IrohaZkAmsV1, _, 1) => {
             u64::try_from(MAX_ZK_AMS_LSAG_PROOF_BYTES_V1).ok()
         }
-        (PrivacyProtocolIdV1::VegaExistingCredentialZkV0, _, 0) => {
+        (PrivacyProtocolIdV1::VegaExistingCredentialZkV1, _, 0) => {
             u64::try_from(MAX_VEGA_PROOF_BYTES_V1).ok()
         }
-        (PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0, _, 0) => {
+        (PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1, _, 0) => {
             u64::try_from(JINDO_NATIVE_PROOF_BYTES_V1).ok()
         }
         (PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1, _, 0) => {
@@ -1177,17 +1171,17 @@ pub fn privacy_release_proof_artifact_ceiling_v1(
         (PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1, _, 0) => {
             u64::try_from(IVM_PRIVATE_NOTE_MAX_PROOF_BYTES_V1).ok()
         }
-        (PrivacyProtocolIdV1::PqMaspStarkV0, _, 0) => {
+        (PrivacyProtocolIdV1::PqMaspStarkV1, _, 0) => {
             u64::try_from(PQ_MASP_MAX_AUTHORIZATION_PROOF_BYTES_V1).ok()
         }
         (PrivacyProtocolIdV1::OrchardHalo2ActionsV1, _, 0) => {
             orchard_authorization_wire_size_v1(ORCHARD_MAX_ACTIONS_V1)
                 .and_then(|ceiling| u64::try_from(ceiling).ok())
         }
-        (PrivacyProtocolIdV1::ZkAcePqAuthorizationV0, _, 0) => {
+        (PrivacyProtocolIdV1::ZkAcePqAuthorizationV1, _, 0) => {
             Some(u64::from(ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1))
         }
-        (PrivacyProtocolIdV1::IrohaZkX509StarkP256V0, _, 0) => {
+        (PrivacyProtocolIdV1::IrohaZkX509StarkP256V1, _, 0) => {
             Some(u64::from(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1))
         }
         _ => None,
@@ -1269,7 +1263,7 @@ pub fn run_privacy_release_stage_v1(
                 class,
             })?
         }
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => run_jindo_stage_v1(case_kind)
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => run_jindo_stage_v1(case_kind)
             .map_err(|class| PrivacyReleaseEvidenceErrorV1 {
                 protocol_id,
                 case_kind,
@@ -1288,7 +1282,7 @@ pub fn run_privacy_release_stage_v1(
                 class,
             })?
         }
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => {
             run_zk_ace_stage_v1(case_kind).map_err(|class| PrivacyReleaseEvidenceErrorV1 {
                 protocol_id,
                 case_kind,
@@ -1307,21 +1301,21 @@ pub fn run_privacy_release_stage_v1(
                 case_kind,
                 class,
             })?,
-        PrivacyProtocolIdV1::PqMaspStarkV0 => {
+        PrivacyProtocolIdV1::PqMaspStarkV1 => {
             run_pq_masp_stage_v1(case_kind).map_err(|class| PrivacyReleaseEvidenceErrorV1 {
                 protocol_id,
                 case_kind,
                 class,
             })?
         }
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => {
             run_vega_stage_v1(case_kind).map_err(|class| PrivacyReleaseEvidenceErrorV1 {
                 protocol_id,
                 case_kind,
                 class,
             })?
         }
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
             run_zk_x509_stage_v1(case_kind).map_err(|class| PrivacyReleaseEvidenceErrorV1 {
                 protocol_id,
                 case_kind,
@@ -1494,7 +1488,7 @@ fn run_zk_ace_stage_v1(
 ) -> Result<StageMaterialV1, PrivacyReleaseEvidenceErrorClassV1> {
     let (public_inputs, witness) = zk_ace_fixture_v1()?;
     let mut rng = EvidenceRng09::new(stage_seed_v1(
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
         case_kind,
     ));
     let proof = prove_zk_ace_privacy_v1_with_rng(&public_inputs, &witness, &mut rng)
@@ -1637,7 +1631,7 @@ fn zk_ace_fixture_v1()
     let asset_name = "zkace"
         .parse()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
+    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV1)
         .map_err(|error| match error {
             crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
                 ..
@@ -1660,7 +1654,7 @@ fn zk_ace_fixture_v1()
         public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
         amount: 19,
         authorization_epoch: 7,
-        replay_nullifier: PrivacyNullifierV1::new([0; 32]),
+        replay_nullifier: Default::default(),
     };
     let mut public_inputs = ZkAcePrivacyPublicInputsV1::new(statement, [0x9E; 32]);
     let authorization_digest = derive_zk_ace_privacy_authorization_digest(&public_inputs)
@@ -3935,6 +3929,8 @@ fn verify_zk_ams_release_production_envelope_v1(
         }
     };
     let envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -4044,7 +4040,7 @@ fn run_jindo_stage_v1(
         metadata: Metadata::default(),
     };
     let mut rng = EvidenceRng06::new(stage_seed_v1(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
         case_kind,
     ));
     let prepared = prepare_jindo_privacy_action_with_rng_v1(
@@ -4063,11 +4059,11 @@ fn run_jindo_stage_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected);
     }
     let envelope = &observed.1.envelope;
-    let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &envelope.statement
+    let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) = &envelope.statement
     else {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     };
-    let PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(proof) = &envelope.proof else {
+    let PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(proof) = &envelope.proof else {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     };
     let statement = statement.clone();
@@ -4079,7 +4075,7 @@ fn run_jindo_stage_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let binding = TranscriptBindingV1 {
@@ -4112,7 +4108,7 @@ fn run_jindo_stage_v1(
         JINDO_RELEASE_GENESIS_HASH_V1,
         JINDO_RELEASE_ACTION_INDEX_V1,
     )?;
-    let original_typed = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement.clone());
+    let original_typed = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement.clone());
     let original_material = norito::encode_canonical(&original_typed)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let (public_statement_material, failure_class) = match case_kind {
@@ -4128,7 +4124,7 @@ fn run_jindo_stage_v1(
             mutated.context.transaction_intent_digest =
                 PrivacyTransactionIntentDigestV1::new(mutated_intent);
             let mutated_typed =
-                PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(mutated.clone());
+                PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(mutated.clone());
             let mutated_digest = mutated_typed
                 .digest()
                 .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
@@ -4266,7 +4262,7 @@ fn verify_jindo_release_production_envelope_v1(
     authoritative_action_index: u32,
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
     let profile =
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
         PrivacyActiveLifecycleV1 {
@@ -4275,11 +4271,13 @@ fn verify_jindo_release_production_envelope_v1(
             state_since_height: 2,
         },
     ));
-    let typed_statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement.clone());
+    let typed_statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement.clone());
     let statement_digest = typed_statement
         .digest()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -4290,7 +4288,7 @@ fn verify_jindo_release_production_envelope_v1(
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest,
         statement: typed_statement,
-        proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1::new(
+        proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(
             proof.to_vec(),
         )),
     };
@@ -4319,7 +4317,7 @@ fn verify_jindo_release_production_envelope_v1(
         }
         _ => PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected,
     })?;
-    if effects.protocol_id() != PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+    if effects.protocol_id() != PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
         || effects.statement_digest() != statement_digest
         || effects.action_index() != authoritative_action_index
         || effects.encoded_action_bytes() == 0
@@ -4460,6 +4458,8 @@ fn run_orchard_stage_v1(
     let mut statement = orchard_release_statement_v1(draft_context, prepared.public_draft())?;
     let draft_typed_statement = PrivacyStatementV1::OrchardHalo2ActionsV1(statement.clone());
     let draft_envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -4517,6 +4517,8 @@ fn run_orchard_stage_v1(
         .digest()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let final_envelope = PrivacyProofEnvelopeV1 {
+        wire_magic: Default::default(),
+        catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,

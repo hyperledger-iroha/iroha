@@ -1,6 +1,5 @@
 #![no_main]
 use arbitrary::{Arbitrary, Unstructured};
-use fastpq_isi::poseidon;
 use fastpq_prover::compute_lookup_grand_product;
 use libfuzzer_sys::fuzz_target;
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
@@ -55,17 +54,19 @@ fuzz_target!(|input: LookupInput| {
         .iter()
         .map(|entry| if entry.selector { 1 } else { 0 })
         .collect();
-    let witnesses: Vec<u64> = input.entries.iter().map(|entry| entry.witness).collect();
-    let result = compute_lookup_grand_product(&selectors, &witnesses, input.gamma)
+    let witnesses: Vec<u64> = input
+        .entries
+        .iter()
+        .map(|entry| entry.witness % GOLDILOCKS_MODULUS)
+        .collect();
+    let gamma = input.gamma % GOLDILOCKS_MODULUS;
+    let result = compute_lookup_grand_product(&selectors, &witnesses, gamma)
         .expect("fuzz input constructs equal-length lookup columns");
     let mut acc = 1u64;
-    let mut running = Vec::with_capacity(witnesses.len());
     for (&selector, &witness) in selectors.iter().zip(witnesses.iter()) {
         if selector != 0 {
-            acc = mul_mod(acc, add_mod(witness, input.gamma));
+            acc = mul_mod(acc, add_mod(witness, gamma));
         }
-        running.push(acc);
     }
-    let expected = poseidon::hash_field_elements(&running);
-    assert_eq!(result, expected, "lookup accumulator drift");
+    assert_eq!(result, acc, "lookup accumulator drift");
 });

@@ -17887,7 +17887,7 @@ test("streamEvents rejects unsupported production backend event filters before f
     "stark/fri/security-review-passed",
     "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
     "stark/fri/a-u-d-i-t-c-l-a-i-m",
-    "stark/fri/sha256-goldilocks ",
+    "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
     "halo2/ipa/orchard",
     "halo2/kzg",
     "halo2/ipa\0",

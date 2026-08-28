@@ -6815,6 +6815,7 @@ mod sccp_first_release_api_tests {
                 iroha_data_model::isi::bridge::RecordSccpMessage::new(
                     fixture.bundle.commitment.context,
                     payload_bytes.clone(),
+                    iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
                 ),
             )]
             .into(),
@@ -6941,71 +6942,102 @@ mod sccp_first_release_api_tests {
             )
             .expect("exact SCCP route registry"),
         );
+        let replay_accumulator_id = iroha_data_model::bridge::SccpReplayAccumulatorIdV1 {
+            route_key: fixture.route.key(),
+            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
+        };
+        let replay_domain = iroha_data_model::bridge::SccpReplayDomainV1 {
+            source_network: fixture.bundle.commitment.context.lane.source,
+            target_network: fixture.bundle.commitment.context.lane.target,
+            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
+            route_revision: fixture.route.revision,
+            route_configuration_hash: fixture.bundle.commitment.context.route_configuration_hash,
+            actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
+        };
+        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &fixture.bundle.payload;
+        let sender_literal =
+            core::str::from_utf8(&transfer.sender).expect("exact SCCP sender is canonical UTF-8");
+        let sender = iroha_data_model::account::AccountAddress::parse_encoded(
+            sender_literal,
+            Some(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1),
+        )
+        .expect("exact SCCP sender parses")
+        .to_account_id()
+        .expect("exact SCCP sender has a canonical controller");
+        let replay_record = iroha_data_model::bridge::SccpReplayRecordV1 {
+            operation: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraOutboundLock,
+            replay_id: fixture.bundle.commitment.message_id,
+            payload_sha256: Sha256::digest(&payload_bytes).into(),
+            amount: transfer.amount,
+            principal: iroha_data_model::bridge::SccpReplayPrincipalV1::SoraAccount(sender),
+            auxiliary_identity_sha256: Sha256::digest(
+                fixture.bundle.commitment.context.destination_binding_hash,
+            )
+            .into(),
+        };
+        let mut expected_replay_forest = iroha_data_model::bridge::SccpReplayForestV1::default();
+        let replay_delta = expected_replay_forest
+            .occupy(
+                &replay_domain,
+                &replay_record,
+                &iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+            )
+            .expect("exact SCCP archive fixture occupies its replay leaf");
+        state
+            .insert_sccp_replay_forest_for_testing(
+                replay_accumulator_id.clone(),
+                expected_replay_forest.clone(),
+            )
+            .expect("install exact SCCP archive replay forest");
         let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1 {
             lane: fixture.bundle.commitment.context.lane,
             message_id: fixture.bundle.commitment.message_id,
         };
+        let pending = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
+            destination_binding_hash: fixture
+                .bundle
+                .commitment
+                .context
+                .destination_binding_hash,
+            route_configuration_hash: fixture
+                .bundle
+                .commitment
+                .context
+                .route_configuration_hash,
+            payload_hash: fixture.bundle.commitment.payload_hash,
+            payload_bytes,
+            recorded_at_height: 2,
+            commitment_index: 0,
+        };
         state
-            .insert_sccp_outbound_message_for_testing(
-                key,
-                iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
-                    destination_binding_hash: fixture
-                        .bundle
-                        .commitment
-                        .context
-                        .destination_binding_hash,
-                    route_configuration_hash: fixture
-                        .bundle
-                        .commitment
-                        .context
-                        .route_configuration_hash,
-                    payload_hash: fixture.bundle.commitment.payload_hash,
-                    payload_bytes,
-                    recorded_at_height: 2,
-                    commitment_index: 0,
-                },
-            )
+            .insert_sccp_outbound_message_for_testing(key, pending.clone())
             .expect("insert exact SCCP outbox descriptor");
-        state
-            .transition_sccp_outbound_message_to_terminal_for_testing(
-                key,
-                iroha_data_model::bridge::SccpOutboundProofRecordV1 {
-                    payload_hash: fixture.bundle.commitment.payload_hash,
-                    destination_binding_hash: fixture
-                        .bundle
-                        .commitment
-                        .context
-                        .destination_binding_hash,
-                    route_configuration_hash: fixture
-                        .bundle
-                        .commitment
-                        .context
-                        .route_configuration_hash,
-                    finality_block_hash: <[u8; 32]>::from(Hash::from(
-                        finality.finality_artifact.block_hash,
-                    )),
-                    destination_proof_commitment: [0xE7; 32],
-                    finality_height: 2,
-                    commitment_index: 0,
-                    accepted_at_height: 3,
-                },
-            )
-            .expect("move exact SCCP message to terminal fixed replay state");
         let world = state.world_view();
-        assert!(world.sccp_outbound_pending_messages().get(&key).is_none());
-        let stored_proof = world
-            .sccp_outbound_proofs()
-            .get(&key)
-            .copied()
-            .expect("terminal SCCP proof record");
         assert_eq!(
-            stored_proof.finality_block_hash,
-            fixture.request.public_inputs.finality_block_hash
+            world.sccp_outbound_pending_messages().get(&key),
+            Some(&pending),
+            "proof-generation fixtures remain pending until destination validation"
         );
-        assert_eq!(stored_proof.finality_height, 2);
+        assert_eq!(
+            world.sccp_replay_forests().get(&replay_accumulator_id),
+            Some(&expected_replay_forest),
+            "pending API fixtures retain the admission replay authority"
+        );
+        let stored_forest = world
+            .sccp_replay_forests()
+            .get(&replay_accumulator_id)
+            .expect("admission SCCP replay forest");
+        assert_eq!(stored_forest.leaf_count, 1);
+        assert_eq!(stored_forest.update_sequence, 1);
+        assert_eq!(
+            stored_forest.shard_root(replay_delta.shard),
+            replay_delta.new_root
+        );
         assert_eq!(
             world.sccp_outbound_pending_usage(),
             iroha_data_model::bridge::SccpOutboundPendingUsageV1::default()
+                .checked_add_payload(pending.payload_bytes.len())
+                .expect("one bounded SCCP payload fits pending usage")
         );
         drop(world);
         let height = std::num::NonZeroUsize::new(2).expect("two is nonzero");
@@ -7245,7 +7277,7 @@ mod sccp_first_release_api_tests {
         const LIMIT: usize = 7;
         let lane = iroha_data_model::bridge::SccpLaneIdV1 {
             source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-            target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+            target: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
         };
         let mut history = BTreeSet::new();
         for height in 1..=HISTORY {
@@ -7292,7 +7324,7 @@ mod sccp_first_release_api_tests {
         const LIMIT: usize = 50;
         let lane = iroha_data_model::bridge::SccpLaneIdV1 {
             source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-            target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+            target: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
         };
         let mut history = BTreeSet::new();
         for commitment_index in 0..iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
@@ -7363,16 +7395,14 @@ mod sccp_first_release_api_tests {
         };
         let projection_for = |target| {
             let recipient = match target {
-                iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia => {
+                iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet
+                | iroha_data_model::bridge::SccpNetworkV1::BscMainnet => {
                     SccpNormalizedCodecValueV1::EvmAddress20 { bytes: [0x91; 20] }
                 }
-                iroha_data_model::bridge::SccpNetworkV1::TronNile => {
+                iroha_data_model::bridge::SccpNetworkV1::TronMainnet => {
                     let mut bytes = [0x92; 21];
                     bytes[0] = 0x41;
                     SccpNormalizedCodecValueV1::TronAddress21 { bytes }
-                }
-                iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet => {
-                    SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0x93; 32] }
                 }
                 iroha_data_model::bridge::SccpNetworkV1::TonMainnet => {
                     SccpNormalizedCodecValueV1::TonAccount36 {
@@ -7403,9 +7433,9 @@ mod sccp_first_release_api_tests {
             })
         };
         for target in [
-            iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
-            iroha_data_model::bridge::SccpNetworkV1::TronNile,
-            iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
+            iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+            iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
+            iroha_data_model::bridge::SccpNetworkV1::TronMainnet,
             iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
         ] {
             let context = context_for(target);
@@ -7454,8 +7484,8 @@ mod sccp_first_release_api_tests {
         assert!(
             sccp_sora_outbound_material_for_route(
                 &state,
-                "solana-testnet",
-                "taira_sol_xor",
+                "ethereum-mainnet",
+                "taira_eth_xor",
                 "xor",
                 1,
             )
@@ -7463,7 +7493,7 @@ mod sccp_first_release_api_tests {
             .is_none()
         );
         assert!(
-            sccp_sora_outbound_material_for_route(&state, "sora-taira", "taira_sol_xor", "xor", 1,)
+            sccp_sora_outbound_material_for_route(&state, "sora-taira", "taira_eth_xor", "xor", 1,)
                 .is_err(),
             "a SORA source profile must fail before route lookup"
         );
@@ -8411,24 +8441,15 @@ fn validate_recent_message_projection(
     let recipient_matches_target = match (context.lane.target, &transfer.recipient) {
         (
             iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet
-            | iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia
-            | iroha_data_model::bridge::SccpNetworkV1::BscMainnet
-            | iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
+            | iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
             SccpNormalizedCodecValueV1::EvmAddress20 { .. },
         )
         | (
-            iroha_data_model::bridge::SccpNetworkV1::TronMainnet
-            | iroha_data_model::bridge::SccpNetworkV1::TronNile
-            | iroha_data_model::bridge::SccpNetworkV1::TronShasta,
+            iroha_data_model::bridge::SccpNetworkV1::TronMainnet,
             SccpNormalizedCodecValueV1::TronAddress21 { .. },
         )
         | (
-            iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
-            SccpNormalizedCodecValueV1::SolanaPubkey32 { .. },
-        )
-        | (
-            iroha_data_model::bridge::SccpNetworkV1::TonMainnet
-            | iroha_data_model::bridge::SccpNetworkV1::TonTestnet,
+            iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
             SccpNormalizedCodecValueV1::TonAccount36 { .. },
         ) => true,
         _ => false,

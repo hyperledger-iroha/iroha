@@ -1,0 +1,14 @@
+{
+  "schema": "sccp-circuit-profiles-final-v1",
+  "version": 1,
+  "profiles": [
+    {"id":"sccp-final-v1-bsc-mainnet-epoch-anchor-update","lane":"bsc-mainnet","role":"epoch-anchor-update","curve":"bn254","source_network_tag":"0x40","target_network_tag":"0x42","phase1":"sccp-final-v1-bn254-phase1","phase2":"sccp-final-v1-bsc-mainnet-epoch-anchor-update-phase2","independent_key_id":"9535d5034dcd22c969dd152354cd1683ff81cf3ccf5374e87812c7472aefaf1e"},
+    {"id":"sccp-final-v1-bsc-mainnet-message","lane":"bsc-mainnet","role":"message","curve":"bn254","source_network_tag":"0x40","target_network_tag":"0x42","phase1":"sccp-final-v1-bn254-phase1","phase2":"sccp-final-v1-bsc-mainnet-message-phase2","independent_key_id":"25b43aef4ebca157bab83148e72187a87d3830748e234d25cd64c94e4eafb2ca"},
+    {"id":"sccp-final-v1-ethereum-mainnet-epoch-anchor-update","lane":"ethereum-mainnet","role":"epoch-anchor-update","curve":"bn254","source_network_tag":"0x40","target_network_tag":"0x41","phase1":"sccp-final-v1-bn254-phase1","phase2":"sccp-final-v1-ethereum-mainnet-epoch-anchor-update-phase2","independent_key_id":"3ade6c6f4b07aa1f54f0e8f4e371c446b8368f4843b1136fec2fd7bcc4042d6e"},
+    {"id":"sccp-final-v1-ethereum-mainnet-message","lane":"ethereum-mainnet","role":"message","curve":"bn254","source_network_tag":"0x40","target_network_tag":"0x41","phase1":"sccp-final-v1-bn254-phase1","phase2":"sccp-final-v1-ethereum-mainnet-message-phase2","independent_key_id":"8fbf5ba2f3642f126a2d2c186e396d269965a0576eef5b80b2d140fa398ba3fd"},
+    {"id":"sccp-final-v1-ton-mainnet-epoch-anchor-update","lane":"ton-mainnet","role":"epoch-anchor-update","curve":"bls12-381","source_network_tag":"0x40","target_network_tag":"0x44","phase1":"sccp-final-v1-bls12-381-phase1","phase2":"sccp-final-v1-ton-mainnet-epoch-anchor-update-phase2","independent_key_id":"9a4ac816008fb1b232a670226c833984095cdc8395e4d35f37b4dd5b4e3ed297"},
+    {"id":"sccp-final-v1-ton-mainnet-message","lane":"ton-mainnet","role":"message","curve":"bls12-381","source_network_tag":"0x40","target_network_tag":"0x44","phase1":"sccp-final-v1-bls12-381-phase1","phase2":"sccp-final-v1-ton-mainnet-message-phase2","independent_key_id":"caf9bd9833719e8ad8af90e3d1ed3ae753f8292b6ebe22624d8519b37a727c4f"},
+    {"id":"sccp-final-v1-tron-mainnet-epoch-anchor-update","lane":"tron-mainnet","role":"epoch-anchor-update","curve":"bn254","source_network_tag":"0x40","target_network_tag":"0x43","phase1":"sccp-final-v1-bn254-phase1","phase2":"sccp-final-v1-tron-mainnet-epoch-anchor-update-phase2","independent_key_id":"a1712b0d0bf9bef99b6998805e8ce1a76e9d8a41f40d2bb8cf0334a0a354f850"},
+    {"id":"sccp-final-v1-tron-mainnet-message","lane":"tron-mainnet","role":"message","curve":"bn254","source_network_tag":"0x40","target_network_tag":"0x43","phase1":"sccp-final-v1-bn254-phase1","phase2":"sccp-final-v1-tron-mainnet-message-phase2","independent_key_id":"6552ebfef9a4b734f1977d882f5d96fa802a5e738b9d5fb2721a03565f02173e"}
+  ]
+}

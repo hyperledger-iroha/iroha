@@ -309,7 +309,7 @@ fn logical_rows_v1(
 pub(crate) fn compile_zk_x509_main_io_declarations_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<ZkX509MainIoDeclarationsV1, ZkX509MainIoPlanErrorV1> {
-    PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone())
+    PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ZkX509MainIoPlanErrorV1::Statement)?;
     let disclosed_attributes = statement.disclosed_attributes.len();

@@ -5,20 +5,19 @@
 //! native DTO is decoded as its concrete Rust/Norito type before verifier dispatch.
 use super::{
     BscNativeSourceError, BscNativeSourceProofV1, EthereumNativeSourceErrorV1,
-    EthereumNativeSourceProofV1, H256, SccpPayloadV1, SccpSolanaAgaveSourceProofV1,
-    SolanaNativeSourceErrorV1, TonNativeSourceError, TonNativeSourceProofV1, TronNativeSourceError,
-    TronNativeSourceProofV1, bsc_native_anchor_block_number, canonical_sccp_payload_bytes,
-    payload_hash, sccp_lane_id_hash_v1, sccp_lane_source_event_digest_v1, sccp_message_id,
-    sccp_message_source_domain, sccp_message_target_domain, sccp_source_identity_hash_v1,
-    verify_bsc_native_source, verify_ethereum_native_source_proof_v1,
-    verify_sccp_payload_structure, verify_sccp_solana_agave_source_v1, verify_ton_native_source,
-    verify_tron_native_source,
+    EthereumNativeSourceProofV1, H256, SccpPayloadV1, TonNativeSourceError, TonNativeSourceProofV1,
+    TronNativeSourceError, TronNativeSourceProofV1, bsc_native_anchor_block_number,
+    canonical_sccp_payload_bytes, payload_hash, sccp_lane_id_hash_v1,
+    sccp_lane_source_event_digest_v1, sccp_message_id, sccp_message_source_domain,
+    sccp_message_target_domain, sccp_source_identity_hash_v1, verify_bsc_native_source,
+    verify_ethereum_native_source_proof_v1, verify_sccp_payload_structure,
+    verify_ton_native_source, verify_tron_native_source,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
 use iroha_data_model::bridge::{
-    BridgeNativeProofBackendV1, BridgeNativeProtocolProofV1, SccpInboundMessageKeyV1, SccpLaneIdV1,
-    SccpNativeTrustAnchorV1, SccpNetworkV1, SccpSourceIdentityV1,
+    BridgeNativeProofBackendV1, BridgeNativeProtocolProofV1, SccpLaneIdV1, SccpNativeTrustAnchorV1,
+    SccpNetworkV1, SccpSourceIdentityV1,
 };
 /// Maximum canonical Norito size of a native source envelope or inbound proof.
 ///
@@ -56,14 +55,16 @@ const NORITO_LENGTH_OFFSET: usize = NORITO_COMPRESSION_OFFSET + 1;
 #[norito(tag = "backend", content = "proof", rename_all = "snake_case")]
 pub enum SccpNativeSourceProofV1 {
     /// Ethereum beacon-light-client and execution-MPT proof.
+    #[codec(index = 0)]
     EthereumBeacon(Box<EthereumNativeSourceProofV1>),
     /// BNB Smart Chain Parlia finality and execution-MPT proof.
+    #[codec(index = 1)]
     BscParlia(Box<BscNativeSourceProofV1>),
-    /// Solana testnet recursive Agave rooted-bank and instruction proof.
-    SolanaAgave(Box<SccpSolanaAgaveSourceProofV1>),
     /// TRON `DPoS` replay and transaction-inclusion proof.
+    #[codec(index = 2)]
     TronDpos(Box<TronNativeSourceProofV1>),
     /// TON masterchain-finality, shard-state, and source-message proof.
+    #[codec(index = 4)]
     TonMasterchain(Box<TonNativeSourceProofV1>),
 }
 impl SccpNativeSourceProofV1 {
@@ -73,7 +74,6 @@ impl SccpNativeSourceProofV1 {
         match self {
             Self::EthereumBeacon(_) => BridgeNativeProofBackendV1::EthereumBeacon,
             Self::BscParlia(_) => BridgeNativeProofBackendV1::BscParlia,
-            Self::SolanaAgave(_) => BridgeNativeProofBackendV1::SolanaAgave,
             Self::TronDpos(_) => BridgeNativeProofBackendV1::TronDpos,
             Self::TonMasterchain(_) => BridgeNativeProofBackendV1::TonMasterchain,
         }
@@ -82,7 +82,6 @@ impl SccpNativeSourceProofV1 {
         match self {
             Self::EthereumBeacon(proof) => proof.source_identity.lane.source,
             Self::BscParlia(proof) => proof.finality.anchor.network,
-            Self::SolanaAgave(proof) => proof.anchor.network,
             Self::TronDpos(proof) => proof.finality.anchor.network,
             Self::TonMasterchain(proof) => proof.finality.anchor.network,
         }
@@ -181,8 +180,11 @@ pub struct SccpNativeFinalityPointV1 {
     norito::derive::JsonDeserialize,
 )]
 pub struct ValidatedSccpNativeInboundMessageV1 {
-    /// Exact-lane replay key.
-    pub message_key: SccpInboundMessageKeyV1,
+    /// Exact external-source to SORA-target lane authenticated by the proof.
+    pub lane: SccpLaneIdV1,
+    /// Canonical message identifier authenticated on that lane.
+    #[norito(with = "crate::json_utils::hex32")]
+    pub message_id: H256,
     /// Canonical exact-lane hash.
     #[norito(with = "crate::json_utils::hex32")]
     pub lane_hash: H256,
@@ -257,8 +259,6 @@ pub enum SccpNativeAdmissionErrorV1 {
     Ethereum(EthereumNativeSourceErrorV1),
     /// Native BNB Smart Chain verification failed.
     Bsc(BscNativeSourceError),
-    /// Native Solana testnet recursive verification failed.
-    Solana(SolanaNativeSourceErrorV1),
     /// Native TRON verification failed.
     Tron(TronNativeSourceError),
     /// Native TON verification failed.
@@ -311,7 +311,6 @@ impl fmt::Display for SccpNativeAdmissionErrorV1 {
             Self::HashRoleCollision => formatter.write_str("zero or colliding SCCP hash roles"),
             Self::Ethereum(error) => write!(formatter, "native Ethereum proof failed: {error}"),
             Self::Bsc(error) => write!(formatter, "native BSC proof failed: {error:?}"),
-            Self::Solana(error) => write!(formatter, "native Solana proof failed: {error}"),
             Self::Tron(error) => write!(formatter, "native TRON proof failed: {error:?}"),
             Self::Ton(error) => write!(formatter, "native TON proof failed: {error}"),
             Self::NormalizedResultMismatch(role) => {
@@ -331,25 +330,16 @@ pub const fn sccp_native_inbound_source_available_v1(network: SccpNetworkV1) -> 
 }
 /// Map one admitted external source profile to its only native backend.
 ///
-/// Networks outside the first-release Ethereum/BSC/TRON set return `None`.
+/// Networks outside the four first-release external mainnets return `None`.
 #[must_use]
 pub const fn sccp_native_backend_for_source_network_v1(
     network: SccpNetworkV1,
 ) -> Option<BridgeNativeProofBackendV1> {
     match network {
-        SccpNetworkV1::EthereumMainnet | SccpNetworkV1::EthereumSepolia => {
-            Some(BridgeNativeProofBackendV1::EthereumBeacon)
-        }
-        SccpNetworkV1::BscMainnet | SccpNetworkV1::BscTestnet => {
-            Some(BridgeNativeProofBackendV1::BscParlia)
-        }
-        SccpNetworkV1::SolanaTestnet => Some(BridgeNativeProofBackendV1::SolanaAgave),
-        SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta => {
-            Some(BridgeNativeProofBackendV1::TronDpos)
-        }
-        SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet => {
-            Some(BridgeNativeProofBackendV1::TonMasterchain)
-        }
+        SccpNetworkV1::EthereumMainnet => Some(BridgeNativeProofBackendV1::EthereumBeacon),
+        SccpNetworkV1::BscMainnet => Some(BridgeNativeProofBackendV1::BscParlia),
+        SccpNetworkV1::TronMainnet => Some(BridgeNativeProofBackendV1::TronDpos),
+        SccpNetworkV1::TonMainnet => Some(BridgeNativeProofBackendV1::TonMasterchain),
         SccpNetworkV1::SoraTaira => None,
     }
 }
@@ -414,18 +404,6 @@ fn validate_source_envelope_shape(
                 || proof.message_id != envelope.message_id
                 || proof.payload_hash != envelope.payload_hash
                 || proof.source_event_digest != envelope.source_event_digest
-            {
-                return Err(SccpNativeAdmissionErrorV1::BackendMismatch);
-            }
-        }
-        SccpNativeSourceProofV1::SolanaAgave(proof) => {
-            if proof.statement.source_identity_hash != envelope.source_identity_hash
-                || proof.statement.lane_hash != lane_hash
-                || proof.statement.message_id != envelope.message_id
-                || proof.statement.payload_hash != envelope.payload_hash
-                || proof.statement.source_event_digest != envelope.source_event_digest
-                || proof.statement.rooted_slot != envelope.source_finality.height
-                || proof.statement.rooted_bank_hash != envelope.source_finality.block_hash
             {
                 return Err(SccpNativeAdmissionErrorV1::BackendMismatch);
             }
@@ -712,10 +690,9 @@ fn normalized_result(
     {
         return Err(SccpNativeAdmissionErrorV1::HashRoleCollision);
     }
-    let message_key = SccpInboundMessageKeyV1::new(proof.source.lane, proof.source.message_id)
-        .ok_or(SccpNativeAdmissionErrorV1::InvalidLane)?;
     Ok(ValidatedSccpNativeInboundMessageV1 {
-        message_key,
+        lane: proof.source.lane,
+        message_id: proof.source.message_id,
         lane_hash,
         source_identity_hash: proof.source.source_identity_hash,
         trust_anchor: proof.source.trust_anchor,
@@ -893,41 +870,6 @@ fn verify_ton_native_admission_v1(
         anchor_interval_height: u64::from(validated.masterchain_seqno),
     })
 }
-fn verify_solana_native_admission_v1(
-    context: &GovernedNativeAdmissionContextV1<'_>,
-    native: &SccpSolanaAgaveSourceProofV1,
-) -> Result<VerifiedNativeFinalityV1, SccpNativeAdmissionErrorV1> {
-    if native.anchor.checkpoint_slot != context.trust_anchor.checkpoint_height {
-        return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
-    }
-    let proof = context.proof;
-    let validated = verify_sccp_solana_agave_source_v1(
-        native,
-        context.source_identity,
-        proof.source.source_identity_hash,
-        proof.source.trust_anchor.anchor_hash,
-        proof.source.message_id,
-        proof.source.payload_hash,
-        &proof.payload,
-    )
-    .map_err(SccpNativeAdmissionErrorV1::Solana)?;
-    if validated.source_identity_hash != proof.source.source_identity_hash
-        || validated.lane_hash != context.lane_hash
-        || validated.anchor_hash != proof.source.trust_anchor.anchor_hash
-        || validated.source_event_digest != proof.source.source_event_digest
-    {
-        return Err(SccpNativeAdmissionErrorV1::NormalizedResultMismatch(
-            "Solana statement",
-        ));
-    }
-    Ok(VerifiedNativeFinalityV1 {
-        source_finality: SccpNativeFinalityPointV1 {
-            height: validated.rooted_slot,
-            block_hash: validated.rooted_bank_hash,
-        },
-        anchor_interval_height: validated.rooted_slot,
-    })
-}
 /// Verify a complete native inbound proof against governed lane material.
 ///
 /// Every branch invokes its full protocol-native verifier. Success is returned
@@ -957,9 +899,6 @@ pub fn verify_sccp_native_inbound_message_proof_v1(
         }
         SccpNativeSourceProofV1::BscParlia(native) => {
             verify_bsc_native_admission_v1(&context, native)?
-        }
-        SccpNativeSourceProofV1::SolanaAgave(native) => {
-            verify_solana_native_admission_v1(&context, native)?
         }
         SccpNativeSourceProofV1::TronDpos(native) => {
             verify_tron_native_admission_v1(&context, native)?
@@ -1162,8 +1101,8 @@ mod tests {
         let validated =
             verify_sccp_native_inbound_message_proof_v1(&proof, &identity, trust_anchor)
                 .expect("complete native Ethereum proof verifies");
-        assert_eq!(validated.message_key.lane, identity.lane);
-        assert_eq!(validated.message_key.message_id, proof.source.message_id);
+        assert_eq!(validated.lane, identity.lane);
+        assert_eq!(validated.message_id, proof.source.message_id);
         assert_eq!(
             validated.lane_hash,
             sccp_lane_id_hash_v1(identity.lane).unwrap()
@@ -1197,8 +1136,8 @@ mod tests {
         let validated =
             verify_sccp_native_inbound_message_proof_v1(&proof, &identity, trust_anchor)
                 .expect("exported transfer fixture verifies through full native dispatch");
-        assert_eq!(validated.message_key.lane, identity.lane);
-        assert_eq!(validated.message_key.message_id, proof.source.message_id);
+        assert_eq!(validated.lane, identity.lane);
+        assert_eq!(validated.message_id, proof.source.message_id);
     }
     #[test]
     fn canonical_binary_json_and_bridge_container_roundtrip() {
@@ -1392,13 +1331,13 @@ mod tests {
             Err(SccpNativeAdmissionErrorV1::InvalidLane)
         );
         let mut cross_network = proof.clone();
-        cross_network.source.lane.source = SccpNetworkV1::EthereumSepolia;
+        cross_network.source.lane.source = SccpNetworkV1::BscMainnet;
         assert_eq!(
             verify_sccp_native_inbound_message_proof_v1(&cross_network, &identity, trust_anchor),
             Err(SccpNativeAdmissionErrorV1::BackendMismatch)
         );
         let mut cross_family = proof.clone();
-        cross_family.source.lane.source = SccpNetworkV1::BscTestnet;
+        cross_family.source.lane.source = SccpNetworkV1::BscMainnet;
         cross_family.source.trust_anchor.backend = BridgeNativeProofBackendV1::BscParlia;
         assert_eq!(
             verify_sccp_native_inbound_message_proof_v1(
@@ -1553,15 +1492,7 @@ mod tests {
                 BridgeNativeProofBackendV1::EthereumBeacon,
             ),
             (
-                SccpNetworkV1::EthereumSepolia,
-                BridgeNativeProofBackendV1::EthereumBeacon,
-            ),
-            (
                 SccpNetworkV1::BscMainnet,
-                BridgeNativeProofBackendV1::BscParlia,
-            ),
-            (
-                SccpNetworkV1::BscTestnet,
                 BridgeNativeProofBackendV1::BscParlia,
             ),
             (
@@ -1569,12 +1500,8 @@ mod tests {
                 BridgeNativeProofBackendV1::TronDpos,
             ),
             (
-                SccpNetworkV1::TronNile,
-                BridgeNativeProofBackendV1::TronDpos,
-            ),
-            (
-                SccpNetworkV1::TronShasta,
-                BridgeNativeProofBackendV1::TronDpos,
+                SccpNetworkV1::TonMainnet,
+                BridgeNativeProofBackendV1::TonMasterchain,
             ),
         ];
         for (network, backend) in mappings {

@@ -2018,12 +2018,13 @@ fn pending_kura_actor_backpressure_gates_rollover_through_closed_prefix() {
 
     let exact_output_drive = source_region(
         worker_source,
-        "fn drive_pending_exact_output(&self, pending: &mut PendingExactOutput)",
+        "fn drive_pending_exact_output(",
         "fn enqueue_exact_fanout_while_guarded(",
     );
     assert_source_tokens_in_order(
         exact_output_drive,
         &[
+            "released_kura_replica_advert_heights",
             "ExactOutputDriveOutcome::Backpressured",
             "Ok(pending.is_pending())",
         ],

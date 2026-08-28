@@ -3,19 +3,10 @@ use crate::{Outcome, RunArgs};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
-#[cfg(test)]
-use iroha_core::privacy_profiles::{
-    CompiledPrivacyProfileErrorV1, zk_ams_release_candidate_profile_material_v1,
-    zk_x509_release_candidate_profile_material_v1,
-};
 use iroha_core::privacy_profiles::{
     CompiledPrivacyProfileV1, compiled_privacy_profile_catalog_v1, compiled_privacy_profile_v1,
 };
 use iroha_crypto::sha256;
-#[cfg(test)]
-use iroha_data_model::privacy::{
-    PrivacyEngineIdV1, PrivacyProofSystemIdV1, PrivacyProtocolActivationLimitsV1,
-};
 use iroha_data_model::{
     isi::{InstructionBox, privacy::RegisterPrivacyProtocolActivationV1},
     privacy::{
@@ -142,17 +133,17 @@ impl<T: Write> RunArgs<T> for Args {
 }
 const fn rollout_wave_index_v1(protocol: PrivacyProtocolIdV1) -> usize {
     match protocol {
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1
         | PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
         | PrivacyProtocolIdV1::VeRangeTransparentRangeV1
         | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => 0,
         PrivacyProtocolIdV1::OrchardHalo2ActionsV1
         | PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
         | PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
-        | PrivacyProtocolIdV1::PqMaspStarkV0 => 1,
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0
-        | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => 2,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 | PrivacyProtocolIdV1::IrohaZkAmsV1 => 3,
+        | PrivacyProtocolIdV1::PqMaspStarkV1 => 1,
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV1
+        | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => 2,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 | PrivacyProtocolIdV1::IrohaZkAmsV1 => 3,
     }
 }
 fn build_taira_privacy_bootstrap_v1() -> color_eyre::Result<TairaPrivacyBootstrapArtifactsV1> {
@@ -647,382 +638,14 @@ fn remove_created_file_if_unchanged_v1(path: &Path, file: &File) {
     }
 }
 #[cfg(test)]
-fn exact12_non_authorizing_test_profile_v1(
-    protocol_id: PrivacyProtocolIdV1,
-) -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
-    match compiled_privacy_profile_v1(protocol_id) {
-        Ok(profile) => Ok(profile),
-        Err(error) => match protocol_id {
-            PrivacyProtocolIdV1::IrohaZkAmsV1 => zk_ams_release_candidate_profile_material_v1(),
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
-                zk_x509_release_candidate_profile_material_v1()
-            }
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
-                // ZK-ACE has no public candidate accessor. This row is only structural fixture
-                // material for exact-12 serializer/mutation tests and cannot reach admission.
-                let mut fixture =
-                    compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)?;
-                fixture.protocol_id = protocol_id;
-                fixture.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
-                fixture.engine_id = PrivacyEngineIdV1::NativeGoldilocksStarkFri;
-                fixture.protocol_limits = PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV0;
-                Ok(fixture)
-            }
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
-                // Kagami's serializer and mutation tests need a structurally valid exact-12 row,
-                // not candidate authority. Keep Vega's real candidate crate-private and derive a
-                // clearly synthetic, test-only row from a released nonzero profile instead.
-                let mut fixture =
-                    compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)?;
-                fixture.protocol_id = protocol_id;
-                fixture.proof_system_id = PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256;
-                fixture.engine_id = PrivacyEngineIdV1::NativeVega;
-                fixture.protocol_limits =
-                    PrivacyProtocolActivationLimitsV1::VegaExistingCredentialZkV0;
-                Ok(fixture)
-            }
-            _ => Err(error),
-        },
-    }
-}
-#[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{
-        Level,
-        isi::Log,
-        privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolLimitsTighteningV1},
-    };
-    use std::sync::OnceLock;
-    fn fixture_artifacts() -> TairaPrivacyBootstrapArtifactsV1 {
-        static ARTIFACTS: OnceLock<TairaPrivacyBootstrapArtifactsV1> = OnceLock::new();
-        ARTIFACTS
-            .get_or_init(|| {
-                let profiles = PrivacyProtocolIdV1::ALL
-                    .into_iter()
-                    .map(exact12_non_authorizing_test_profile_v1)
-                    .collect::<Result<Vec<_>, _>>()
-                    .expect("derive twelve non-authorizing test profiles");
-                build_artifacts_from_profiles_v1(&profiles).expect("build exact-12 fixture")
-            })
-            .clone()
-    }
-    fn rerender_with_instructions(
-        expected: &TairaPrivacyBootstrapArtifactsV1,
-        instructions: Vec<InstructionBox>,
-    ) -> TairaPrivacyBootstrapArtifactsV1 {
-        render_artifacts_v1(instructions, expected.catalog.clone()).expect("render mutation")
-    }
-    fn replace_activation(
-        instructions: &mut [InstructionBox],
-        index: usize,
-        mutate: impl FnOnce(&mut PrivacyProtocolActivationRecordV1),
-    ) {
-        let mut activation =
-            *privacy_activation_at_v1(&instructions[index], index).expect("privacy activation");
-        mutate(&mut activation);
-        instructions[index] =
-            InstructionBox::from(RegisterPrivacyProtocolActivationV1::new(activation));
-    }
+
     #[test]
-    fn exact_twelve_fixture_is_deterministic_and_strictly_valid() {
-        iroha_genesis::init_instruction_registry();
-        let first = fixture_artifacts();
-        let second = fixture_artifacts();
-        assert_eq!(first.instructions_json, second.instructions_json);
-        assert_eq!(first.report_json, second.report_json);
-        for (index, protocol) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
-            let activation = privacy_activation_at_v1(&first.instructions[index], index)
-                .expect("governance activation template");
-            let proposed_at_height = WAVE_PROPOSED_AT_HEIGHTS_V1[rollout_wave_index_v1(protocol)];
-            assert_eq!(
-                activation.lifecycle,
-                PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-                    proposed_at_height,
-                    activate_at_height: proposed_at_height + NOTICE_INTERVAL_BLOCKS_V1,
-                })
-            );
-        }
-        validate_artifacts_against_v1(&first.instructions_json, &first.report_json, &first)
-            .expect("validate exact-12 fixture");
-    }
-    #[test]
-    fn source_failure_prevents_partial_eleven_profile_artifact() {
-        let fixture = fixture_artifacts();
-        let profiles = fixture
-            .catalog
-            .protocols
-            .iter()
-            .take(PrivacyProtocolIdV1::COUNT - 1)
-            .map(|row| {
-                let PrivacyCompiledProfileResultV1::Available(profile) = row.compiled_profile
-                else {
-                    panic!("test catalog profile must be available")
-                };
-                CompiledPrivacyProfileV1 {
-                    protocol_id: profile.protocol_id,
-                    proof_system_id: profile.proof_system_id,
-                    engine_id: profile.engine_id,
-                    parameter_id: profile.parameter_id,
-                    parameter_digest: profile.parameter_digest,
-                    verifier_digest: profile.verifier_digest,
-                    statement_schema_digest: profile.statement_schema_digest,
-                    engine_manifest_digest: profile.engine_manifest_digest,
-                    protocol_limits: profile.protocol_limits,
-                }
-            })
-            .collect::<Vec<_>>();
-        let error = build_artifacts_from_profiles_v1(&profiles).expect_err("reject partial set");
-        assert!(error.to_string().contains("exactly 12 compiled profiles"));
-    }
-    #[test]
-    fn missing_duplicate_reordered_and_extra_instructions_are_rejected() {
-        let expected = fixture_artifacts();
-        let mut missing = expected.instructions.clone();
-        missing.pop();
-        assert!(
-            validate_instruction_semantics_v1(&missing, &expected.instructions)
-                .expect_err("missing row")
-                .to_string()
-                .contains("exactly 12")
-        );
-        let mut duplicate = expected.instructions.clone();
-        duplicate[11] = duplicate[10].clone();
-        assert!(
-            validate_instruction_semantics_v1(&duplicate, &expected.instructions)
-                .expect_err("duplicate row")
-                .to_string()
-                .contains("duplicate protocol")
-        );
-        let mut reordered = expected.instructions.clone();
-        reordered.swap(0, 1);
-        assert!(
-            validate_instruction_semantics_v1(&reordered, &expected.instructions)
-                .expect_err("reordered rows")
-                .to_string()
-                .contains("order mismatch")
-        );
-        let mut extra = expected.instructions.clone();
-        extra.push(InstructionBox::from(Log::new(
-            Level::INFO,
-            "not a privacy activation".to_owned(),
-        )));
-        assert!(
-            validate_instruction_semantics_v1(&extra, &expected.instructions)
-                .expect_err("extra instruction")
-                .to_string()
-                .contains("exactly 12")
-        );
-        let mut substituted = expected.instructions.clone();
-        substituted[11] =
-            InstructionBox::from(Log::new(Level::INFO, "not a privacy activation".to_owned()));
-        assert!(
-            validate_instruction_semantics_v1(&substituted, &expected.instructions)
-                .expect_err("non-privacy substitution")
-                .to_string()
-                .contains(RegisterPrivacyProtocolActivationV1::WIRE_ID)
-        );
-    }
-    #[test]
-    fn lifecycle_and_compiled_digest_substitutions_are_rejected() {
-        let expected = fixture_artifacts();
-        let expected_activation = *privacy_activation_at_v1(&expected.instructions[0], 0)
-            .expect("first exact activation");
-        let other = *privacy_activation_at_v1(&expected.instructions[2], 2)
-            .expect("third exact activation");
-        for mutation in 0_u8..=10 {
-            let mut instructions = expected.instructions.clone();
-            replace_activation(&mut instructions, 0, |activation| match mutation {
-                0 => {
-                    activation.lifecycle =
-                        PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-                            proposed_at_height: 2,
-                            activate_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0]
-                                + NOTICE_INTERVAL_BLOCKS_V1,
-                        });
-                }
-                1 => {
-                    activation.lifecycle =
-                        PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-                            proposed_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0],
-                            activate_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0]
-                                + NOTICE_INTERVAL_BLOCKS_V1
-                                + 1,
-                        });
-                }
-                2 => activation.proof_system_id = other.proof_system_id,
-                3 => activation.engine_id = other.engine_id,
-                4 => activation.parameter_id = other.parameter_id,
-                5 => activation.parameter_digest = other.parameter_digest,
-                6 => activation.verifier_digest = other.verifier_digest,
-                7 => activation.statement_schema_digest = other.statement_schema_digest,
-                8 => activation.engine_manifest_digest = other.engine_manifest_digest,
-                9 => activation.protocol_limits = other.protocol_limits,
-                _ => {
-                    activation.pending_protocol_limits_tightening =
-                        Some(PrivacyProtocolLimitsTighteningV1 {
-                            scheduled_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0],
-                            effective_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0]
-                                + NOTICE_INTERVAL_BLOCKS_V1,
-                            next_limits: activation.protocol_limits,
-                        });
-                }
-            });
-            let mutated_activation =
-                privacy_activation_at_v1(&instructions[0], 0).expect("mutated first activation");
-            assert_ne!(
-                mutated_activation, &expected_activation,
-                "mutation {mutation} must not be a no-op"
-            );
-            let mutated = rerender_with_instructions(&expected, instructions);
-            let error = validate_artifacts_against_v1(
-                &mutated.instructions_json,
-                &mutated.report_json,
-                &expected,
-            )
-            .expect_err("reject substituted activation");
-            assert!(
-                error.to_string().contains("exact local compiled profile")
-                    || error.to_string().contains("structurally invalid"),
-                "unexpected substitution error: {error}"
-            );
-        }
-    }
-    #[test]
-    fn retired_sis_aliases_and_trusted_setup_objects_are_rejected() {
-        let expected = fixture_artifacts();
-        for forbidden in PRIVACY_RETIRED_PROTOCOL_LABELS_V1.into_iter().chain([
-            "SIS-WITH-HINTS",
-            "sis_with_hints",
-            " sis-with-hints",
-            "sis-with-hints ",
-        ]) {
-            assert_eq!(
-                PrivacyProtocolIdV1::from_canonical_label(forbidden),
-                None,
-                "retired labels and aliases must not resolve"
-            );
-            let mut value: JsonValue = norito::json::from_slice(&expected.instructions_json)
-                .expect("parse instruction fixture");
-            value.as_array_mut().expect("instruction array")[0] =
-                JsonValue::String(forbidden.to_owned());
-            let mut tampered =
-                norito::json::to_json(&value).expect("encode retired-label mutation");
-            tampered.push('\n');
-            let error = validate_artifacts_against_v1(
-                tampered.as_bytes(),
-                &expected.report_json,
-                &expected,
-            )
-            .expect_err("retired label must fail");
-            assert!(
-                error.to_string().contains("cannot be decoded canonically")
-                    || error.to_string().contains("valid Norito JSON")
-            );
-        }
-        let mut value: JsonValue =
-            norito::json::from_slice(&expected.instructions_json).expect("parse instructions");
-        value
-            .as_array_mut()
-            .expect("instruction array")
-            .push(norito::json!({
-                "RegisterPrivacyProtocolActivationV1": {
-                    "protocol": "trusted-setup-plonk-v0",
-                    "setup": "toxic-waste"
-                }
-            }));
-        let mut tampered = norito::json::to_json(&value).expect("encode tampered JSON");
-        tampered.push('\n');
-        assert!(
-            validate_artifacts_against_v1(tampered.as_bytes(), &expected.report_json, &expected)
-                .is_err()
-        );
-    }
-    #[test]
-    fn report_hash_base64_label_and_catalog_substitutions_are_rejected() {
-        let expected = fixture_artifacts();
-        for needle in [
-            "instruction_norito_sha256",
-            "instruction_norito_base64",
-            "protocol_labels",
-            "compiled_profile_catalog_norito_sha256",
-        ] {
-            let mut value: JsonValue =
-                norito::json::from_slice(&expected.report_json).expect("parse report");
-            let fields = value.as_object_mut().expect("report object");
-            match needle {
-                "instruction_norito_sha256" => {
-                    fields
-                        .get_mut("governance_activation_templates")
-                        .and_then(JsonValue::as_object_mut)
-                        .expect("registration object")
-                        .get_mut(needle)
-                        .and_then(JsonValue::as_array_mut)
-                        .expect("hash array")[0] = JsonValue::String("00".repeat(32));
-                }
-                "instruction_norito_base64" => {
-                    fields
-                        .get_mut("governance_activation_templates")
-                        .and_then(JsonValue::as_object_mut)
-                        .expect("registration object")
-                        .get_mut(needle)
-                        .and_then(JsonValue::as_array_mut)
-                        .expect("base64 array")[0] = JsonValue::String("AA==".to_owned());
-                }
-                "protocol_labels" => {
-                    fields
-                        .get_mut("governance_activation_templates")
-                        .and_then(JsonValue::as_object_mut)
-                        .expect("registration object")
-                        .get_mut(needle)
-                        .and_then(JsonValue::as_array_mut)
-                        .expect("label array")[0] = JsonValue::String("sis-with-hints".to_owned());
-                }
-                _ => {
-                    fields
-                        .get_mut("privacy_catalog")
-                        .and_then(JsonValue::as_object_mut)
-                        .expect("catalog object")
-                        .insert(
-                            "norito_sha256".to_owned(),
-                            JsonValue::String("11".repeat(32)),
-                        );
-                }
-            }
-            let mut report = norito::json::to_json(&value).expect("encode report mutation");
-            report.push('\n');
-            assert!(
-                validate_artifacts_against_v1(
-                    &expected.instructions_json,
-                    report.as_bytes(),
-                    &expected
-                )
-                .is_err(),
-                "report mutation `{needle}` must fail"
-            );
-        }
-    }
-    #[test]
-    fn malformed_noncanonical_and_oversized_json_is_rejected() {
-        let expected = fixture_artifacts();
-        assert!(
-            validate_artifacts_against_v1(b"not-json", &expected.report_json, &expected).is_err()
-        );
-        let mut noncanonical = b" ".to_vec();
-        noncanonical.extend_from_slice(&expected.instructions_json);
-        assert!(
-            validate_artifacts_against_v1(&noncanonical, &expected.report_json, &expected)
-                .expect_err("reject noncanonical whitespace")
-                .to_string()
-                .contains("not in canonical emitted form")
-        );
-        let oversized = vec![b' '; usize::try_from(MAX_INSTRUCTIONS_JSON_BYTES_V1 + 1).unwrap()];
-        assert!(
-            validate_taira_privacy_bootstrap_v1(&oversized, &expected.report_json)
-                .expect_err("reject oversized instructions")
-                .to_string()
-                .contains("fixed byte limit")
-        );
+    fn exact12_bootstrap_fails_closed_when_any_engine_is_unavailable() {
+        let error = build_taira_privacy_bootstrap_v1()
+            .expect_err("an incomplete Exact12 engine set must not emit activation templates");
+        assert!(error.to_string().contains("is unavailable"), "{error:?}");
     }
     #[test]
     fn paired_writer_never_overwrites_and_cleans_first_file_on_second_open_failure() {

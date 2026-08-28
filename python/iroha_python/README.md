@@ -167,13 +167,13 @@ local `privacy_capabilities_v1()` alias, generic request/build/verify
 dispatcher, or legacy algorithm alias.
 
 `PRIVACY_PROTOCOL_IDS_V1` contains exactly twelve identities in wire order:
-`zk-ace-pq-authorization-v0`, `anonymous-pgc-k-out-of-n-v1`,
+`zk-ace-pq-authorization-v1`, `anonymous-pgc-k-out-of-n-v1`,
 `verange-transparent-range-v1`, `iroha-zk-ams-v1`,
-`vega-existing-credential-zk-v0`, `iroha-zk-x509-stark-p256-v0`,
-`iroha-jindo-polynomial-commitment-v0`,
+`vega-existing-credential-zk-v1`, `iroha-zk-x509-stark-p256-v1`,
+`iroha-jindo-polynomial-commitment-v1`,
 `iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
 `monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
-`pq-masp-stark-v0`. The parser rejects unknown fields, duplicate JSON keys,
+`pq-masp-stark-v1`. The parser rejects unknown fields, duplicate JSON keys,
 non-finite numbers, aliases, reordered or duplicate rows, normalized labels,
 and malformed nested policy or profile data.
 

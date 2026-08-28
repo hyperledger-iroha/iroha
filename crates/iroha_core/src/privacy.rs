@@ -620,9 +620,7 @@ pub enum PrivacyBudgetError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy_profiles::{
-        compiled_privacy_profile_v1, zk_x509_release_candidate_profile_material_v1,
-    };
+    use crate::privacy_profiles::{CompiledPrivacyProfileErrorV1, compiled_privacy_profile_v1};
     use iroha_data_model::privacy::{
         PrivacyProofSystemIdV1, PrivacyProposedLifecycleV1, PrivacyRetiredLifecycleV1,
         PrivacySuspendedLifecycleV1,
@@ -822,34 +820,13 @@ mod tests {
         ));
     }
     #[test]
-    fn unavailable_compiled_engine_cannot_resume_through_lifecycle_transition() {
-        let suspended_at_height = ACTIVATION_HEIGHT + 1;
-        let transition_height = suspended_at_height + 1;
-        let record = zk_x509_release_candidate_profile_material_v1()
-            .expect("release-candidate X509 profile material")
-            .activation_record(PrivacyProtocolLifecycleV1::Suspended(
-                PrivacySuspendedLifecycleV1 {
-                    proposed_at_height: PROPOSAL_HEIGHT,
-                    activated_at_height: ACTIVATION_HEIGHT,
-                    state_since_height: suspended_at_height,
-                },
-            ));
-        let resume = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: PROPOSAL_HEIGHT,
-            activated_at_height: ACTIVATION_HEIGHT,
-            state_since_height: transition_height,
-        });
-        assert!(matches!(
-            validate_privacy_lifecycle_transition_v1(&record, resume, transition_height),
-            Err(PrivacyRegistryError::CompiledProfile(_))
-        ));
-        let retire = PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
-            proposed_at_height: PROPOSAL_HEIGHT,
-            activated_at_height: Some(ACTIVATION_HEIGHT),
-            state_since_height: transition_height,
-        });
-        validate_privacy_lifecycle_transition_v1(&record, retire, transition_height)
-            .expect("fail-closed retirement remains available for an unavailable engine");
+    fn unavailable_compiled_engine_has_no_candidate_activation_path() {
+        assert_eq!(
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1),
+            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            })
+        );
     }
     #[test]
     fn rejected_transition_does_not_mutate_due_proposal() {

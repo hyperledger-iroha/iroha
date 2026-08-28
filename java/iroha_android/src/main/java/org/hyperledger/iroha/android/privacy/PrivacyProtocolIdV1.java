@@ -5,10 +5,10 @@ package org.hyperledger.iroha.android.privacy;
 
 /** Closed first-release protocol identity in canonical Norito discriminant order. */
 public enum PrivacyProtocolIdV1 {
-  ZK_ACE_PQ_AUTHORIZATION_V0(
-      "zk-ace-pq-authorization-v0",
-      PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
-      PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI),
+  ZK_ACE_PQ_AUTHORIZATION_V1(
+      "zk-ace-pq-authorization-v1",
+      PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1,
+      PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1),
   ANONYMOUS_PGC_K_OUT_OF_N_V1(
       "anonymous-pgc-k-out-of-n-v1",
       PrivacyProofSystemIdV1.ANONYMOUS_PGC_P256,
@@ -21,16 +21,16 @@ public enum PrivacyProtocolIdV1 {
       "iroha-zk-ams-v1",
       PrivacyProofSystemIdV1.ZK_AMS_MASKED_RELAXED_SPARTAN_T256_RISTRETTO255_SHA3_512,
       PrivacyEngineIdV1.NATIVE_ZK_AMS_MASKED_RELAXED_SPARTAN_T256_RISTRETTO255),
-  VEGA_EXISTING_CREDENTIAL_ZK_V0(
-      "vega-existing-credential-zk-v0",
+  VEGA_EXISTING_CREDENTIAL_ZK_V1(
+      "vega-existing-credential-zk-v1",
       PrivacyProofSystemIdV1.VEGA_NEUTRON_NOVA_SPARTAN_HYRAX_T256,
       PrivacyEngineIdV1.NATIVE_VEGA),
-  IROHA_ZK_X509_STARK_P256_V0(
-      "iroha-zk-x509-stark-p256-v0",
-      PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
-      PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI),
-  IROHA_JINDO_POLYNOMIAL_COMMITMENT_V0(
-      "iroha-jindo-polynomial-commitment-v0",
+  IROHA_ZK_X509_STARK_P256_V1(
+      "iroha-zk-x509-stark-p256-v1",
+      PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1,
+      PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1),
+  IROHA_JINDO_POLYNOMIAL_COMMITMENT_V1(
+      "iroha-jindo-polynomial-commitment-v1",
       PrivacyProofSystemIdV1.JINDO_POLYNOMIAL_COMMITMENT,
       PrivacyEngineIdV1.NATIVE_JINDO),
   IROHA_BOOTLE_LANTERN_ANONCRED_V1(
@@ -47,12 +47,12 @@ public enum PrivacyProtocolIdV1 {
       PrivacyEngineIdV1.NATIVE_FCMP_PLUS_PLUS),
   IROHA_IVM_PRIVATE_NOTE_STARK_V1(
       "iroha-ivm-private-note-stark-v1",
-      PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
-      PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI),
-  PQ_MASP_STARK_V0(
-      "pq-masp-stark-v0",
-      PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
-      PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI);
+      PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1,
+      PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1),
+  PQ_MASP_STARK_V1(
+      "pq-masp-stark-v1",
+      PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1,
+      PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1);
 
   private final String canonicalLabel;
   private final PrivacyProofSystemIdV1 expectedProofSystem;
