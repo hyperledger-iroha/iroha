@@ -491,8 +491,14 @@ def extract_apk_signing_certificate_sha256(apk_path: Path) -> str:
         raise ValueError("configured Java/apksigner.jar changed during verification")
     if verified.returncode != 0:
         raise ValueError("apksigner cryptographic verification failed")
+    # Older apksigner releases number current signers, while newer releases
+    # describe v3/v3.1 signers by their exact SDK range. Source-stamp and
+    # lineage certificates intentionally match neither form.
     verifier_digests = re.findall(
-        r"^Signer #[0-9]+ certificate SHA-256 digest: ([0-9A-Fa-f:]{64,95})$",
+        r"^Signer (?:#[1-9][0-9]*|"
+        r"\(minSdkVersion=[0-9]+(?: \(dev release=true\))?, "
+        r"maxSdkVersion=[0-9]+\)) certificate SHA-256 digest: "
+        r"([0-9A-Fa-f:]{64,95})$",
         verified.stdout,
         flags=re.MULTILINE,
     )

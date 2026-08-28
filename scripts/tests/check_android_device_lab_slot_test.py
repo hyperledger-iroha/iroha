@@ -1979,49 +1979,66 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
         assert authority is not None
-        with tempfile.TemporaryDirectory() as temporary:
-            apk = Path(temporary) / "candidate.apk"
-            apk.write_bytes(main_apk)
-            completed = subprocess.CompletedProcess(
-                args=[],
-                returncode=0,
-                stdout=(
-                    "Signer #1 certificate SHA-256 digest: "
-                    f"{certificate_sha256}\n"
-                ),
-                stderr="",
-            )
-            with (
-                mock.patch.object(
-                    device_lab.subprocess,
-                    "run",
-                    return_value=completed,
-                ) as run,
-                mock.patch.object(
-                    device_lab,
-                    "_read_pinned_authority_file",
-                    wraps=device_lab._read_pinned_authority_file,
-                ) as authenticate,
-            ):
-                measured = device_lab.extract_apk_signing_certificate_sha256(apk)
+        signer_labels = (
+            "Signer #1",
+            "Signer (minSdkVersion=28, maxSdkVersion=2147483647)",
+            "Signer (minSdkVersion=35 (dev release=true), "
+            "maxSdkVersion=2147483647)",
+        )
+        for signer_label in signer_labels:
+            with self.subTest(signer_label=signer_label):
+                with tempfile.TemporaryDirectory() as temporary:
+                    apk = Path(temporary) / "candidate.apk"
+                    apk.write_bytes(main_apk)
+                    completed = subprocess.CompletedProcess(
+                        args=[],
+                        returncode=0,
+                        stdout=(
+                            f"{signer_label} certificate SHA-256 digest: "
+                            f"{certificate_sha256}\n"
+                        ),
+                        stderr="",
+                    )
+                    with (
+                        mock.patch.object(
+                            device_lab.subprocess,
+                            "run",
+                            return_value=completed,
+                        ) as run,
+                        mock.patch.object(
+                            device_lab,
+                            "_read_pinned_authority_file",
+                            wraps=device_lab._read_pinned_authority_file,
+                        ) as authenticate,
+                    ):
+                        measured = device_lab.extract_apk_signing_certificate_sha256(
+                            apk
+                        )
 
-        self.assertEqual(measured, certificate_sha256)
-        command = run.call_args.args[0]
-        self.assertEqual(
-            command[:3],
-            [
-                os.fspath(authority["java"]["path"]),
-                "-jar",
-                os.fspath(authority["apksigner_jar"]["path"]),
-            ],
-        )
-        self.assertEqual(
-            run.call_args.kwargs["env"],
-            {"HOME": "/var/empty", "LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
-        )
-        labels = [call.kwargs["label"] for call in authenticate.call_args_list]
-        self.assertEqual(labels.count("configured Java executable"), 2)
-        self.assertEqual(labels.count("configured apksigner.jar"), 2)
+                self.assertEqual(measured, certificate_sha256)
+                command = run.call_args.args[0]
+                self.assertEqual(
+                    command[:3],
+                    [
+                        os.fspath(authority["java"]["path"]),
+                        "-jar",
+                        os.fspath(authority["apksigner_jar"]["path"]),
+                    ],
+                )
+                self.assertEqual(
+                    run.call_args.kwargs["env"],
+                    {
+                        "HOME": "/var/empty",
+                        "LANG": "C",
+                        "LC_ALL": "C",
+                        "PATH": "/usr/bin:/bin",
+                    },
+                )
+                labels = [
+                    call.kwargs["label"] for call in authenticate.call_args_list
+                ]
+                self.assertEqual(labels.count("configured Java executable"), 2)
+                self.assertEqual(labels.count("configured apksigner.jar"), 2)
 
     def test_candidate_bound_v2_slot_passes_exact_inventory_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
