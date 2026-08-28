@@ -46784,6 +46784,7 @@ mod validation_fee_torii_ingress_tests {
             GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
             ProposalContentId, RiskTierV1, SortitionRequestV1, parliament_candidate_root_v1,
         };
+        use iroha_data_model::isi::governance::ParliamentSortitionRequestRegistrationV1;
         let proposal_operator = match proposal_kind {
             iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(proposal) => {
                 proposal.proposal_operator.clone()
@@ -46825,6 +46826,7 @@ mod validation_fee_torii_ingress_tests {
         let candidate_count = u32::try_from(candidates.len()).expect("candidate count fits u32");
         let sortition_session = BeaconSessionId::new(parliament_test_root(0xB0));
         let mut request_ids = Vec::with_capacity(requirements.len());
+        let mut registrations = Vec::with_capacity(requirements.len());
         for requirement in &requirements {
             let election_attempt_id =
                 BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0);
@@ -46842,10 +46844,14 @@ mod validation_fee_torii_ingress_tests {
             )
             .expect("construct deterministic sortition request");
             request_ids.push(request.id);
-            attempt
-                .register_sortition_request(governance_attempt_id, 0, request, candidates.clone())
-                .expect("register deterministic sortition request");
+            registrations.push(ParliamentSortitionRequestRegistrationV1 {
+                sequence: 0,
+                request,
+            });
         }
+        attempt
+            .register_sortition_request_batch(governance_attempt_id, registrations, candidates)
+            .expect("register deterministic sortition request batch");
         request_ids.sort_unstable();
         let sortition_pulse_id = BeaconPulseId::new(parliament_test_root(0xB1));
         attempt
