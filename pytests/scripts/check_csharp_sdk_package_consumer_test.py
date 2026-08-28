@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -30,6 +31,16 @@ WORKFLOW_CONSUMER = "run: ../ci/check_csharp_sdk_package_consumer.sh"
 def _replace_once(text: str, old: str, new: str) -> str:
     assert old in text
     return text.replace(old, new, 1)
+
+
+def _bash_function_source(name: str) -> str:
+    script = SCRIPT.read_text(encoding="utf-8")
+    match = re.search(
+        rf"(?ms)^{re.escape(name)}\(\) \{{\n.*?^\}}\n",
+        script,
+    )
+    assert match is not None, f"missing Bash function: {name}"
+    return match.group(0)
 
 
 def _validate_pr_csharp_package_consumer_workflow(workflow: str) -> list[str]:
@@ -103,6 +114,12 @@ def test_csharp_sdk_package_consumer_script_pins_real_package_consumption() -> N
         "Hyperledger.Iroha.Sdk.${package_version}.symbols.nupkg",
         "DOTNET_NOLOGO=\"${DOTNET_NOLOGO:-1}\"",
         "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=\"${DOTNET_SKIP_FIRST_TIME_EXPERIENCE:-1}\"",
+        "DOTNET_GLOBAL_JSON=\"${CSHARP_SDK_PACKAGE_CONSUMER_GLOBAL_JSON:-${ROOT_DIR}/csharp/global.json}\"",
+        "stage_pinned_dotnet_global_json()",
+        'run_dotnet "${app_dir}" new console --framework net8.0 --output . --no-restore',
+        'run_dotnet "${app_dir}" add package Hyperledger.Iroha.Sdk',
+        'run_dotnet "${app_dir}" build "${project_file}"',
+        'run_dotnet "${app_dir}" run --project "${project_file}"',
         "NUGET_PACKAGES=\"${NUGET_PACKAGES:-${WORK_DIR}/nuget-packages}\"",
         "<add key=\"iroha-local\" value=\"${package_dir}\" />",
         "<add key=\"nuget.org\" value=\"https://api.nuget.org/v3/index.json\" />",
@@ -124,6 +141,88 @@ def test_csharp_sdk_package_consumer_script_pins_real_package_consumption() -> N
     )
     for marker in required_markers:
         assert marker in script
+
+
+def test_csharp_sdk_package_consumer_stages_and_uses_pinned_dotnet_sdk(
+    tmp_path: Path,
+) -> None:
+    """The temporary consumer must select .NET 8 even when .NET 10 is newer."""
+
+    app_dir = tmp_path / "consumer"
+    app_dir.mkdir()
+    pinned_global_json = tmp_path / "pinned-global.json"
+    pinned_global_json.write_text(
+        '{"sdk":{"version":"8.0.419","rollForward":"latestFeature"}}\n',
+        encoding="utf-8",
+    )
+    fake_dotnet = tmp_path / "dotnet"
+    fake_dotnet.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  --version)
+    if [[ -f "${PWD}/global.json" ]]; then
+      printf '8.0.419\\n'
+    else
+      printf '10.0.400\\n'
+    fi
+    ;;
+  --info)
+    [[ -f "${PWD}/global.json" ]]
+    printf 'fake dotnet info from pinned directory\\n'
+    ;;
+  *)
+    printf 'unexpected fake dotnet arguments: %s\\n' "$*" >&2
+    exit 64
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+
+    bash_source = "\n".join(
+        (
+            "set -euo pipefail",
+            'DOTNET_BIN="$1"',
+            'DOTNET_GLOBAL_JSON="$2"',
+            'app_dir="$3"',
+            _bash_function_source("run_dotnet"),
+            _bash_function_source("stage_pinned_dotnet_global_json"),
+            _bash_function_source("require_dotnet"),
+            'if require_dotnet "${app_dir}"; then',
+            "  echo 'error: unpinned .NET 10 unexpectedly accepted' >&2",
+            "  exit 1",
+            "fi",
+            'stage_pinned_dotnet_global_json "${app_dir}"',
+            'require_dotnet "${app_dir}"',
+            'if run_dotnet "${app_dir}/missing" --version; then',
+            "  echo 'error: dotnet ran after its pinned SDK directory vanished' >&2",
+            "  exit 1",
+            "fi",
+        )
+    )
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            bash_source,
+            "bash",
+            str(fake_dotnet),
+            str(pinned_global_json),
+            str(app_dir),
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert "dotnet version: 10.0.400" in completed.stdout
+    assert "got 10.0.400" in completed.stderr
+    assert "dotnet version: 8.0.419" in completed.stdout
+    assert "fake dotnet info from pinned directory" in completed.stdout
+    assert (app_dir / "global.json").read_bytes() == pinned_global_json.read_bytes()
 
 
 def test_pr_csharp_workflow_runs_package_consumer_guard() -> None:
