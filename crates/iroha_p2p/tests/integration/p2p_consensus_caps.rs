@@ -4,9 +4,7 @@
     clippy::redundant_closure_for_method_calls,
     clippy::too_many_lines
 )]
-use iroha_config::parameters::actual::{
-    Network as Config, SoranetHandshake as ActualSoranetHandshake,
-};
+use iroha_config::parameters::actual::Network as Config;
 use iroha_config::parameters::defaults::network::TRUST_GOSSIP;
 use iroha_data_model::{block::consensus_v2::ConsensusMode, prelude::PeerId};
 use iroha_futures::supervisor::ShutdownSignal;
@@ -50,12 +48,9 @@ fn consensus_config_caps_wire_roundtrip_preserves_admission_digests() {
     assert_eq!(decoded.ivm_gas_schedule_hash, [0xE7; 32]);
 }
 fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
-    // Consensus-capability tests use the minimum valid admission puzzle;
-    // dedicated puzzle tests cover resource-policy behavior.
-    let soranet_handshake = ActualSoranetHandshake {
-        pow: super::test_soranet_pow(),
-        ..ActualSoranetHandshake::default()
-    };
+    // Keep admission inexpensive so these tests continue to measure consensus
+    // capability matching. `test_network_config` isolates replay state.
+    let soranet_handshake = super::low_cost_test_soranet_handshake();
     Config {
         happy_eyeballs_stagger: Duration::from_millis(10),
         p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),

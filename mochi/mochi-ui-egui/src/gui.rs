@@ -39,34 +39,32 @@ use iroha_data_model::{
     block::consensus::{SumeragiDiagnosticsStatus, SumeragiLaneGovernance},
     block::consensus_v2::SumeragiV2Status,
     da::commitment::DaProofScheme,
-    domain::Domain,
     events::{
         EventBox,
         pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
-    isi::Register,
     nexus::{
         DataSpaceId, LaneConfig as LaneMetadata, LaneId, LaneLifecyclePlan, LaneRelayEnvelope,
         LaneStorageProfile, LaneVisibility,
     },
     parameter::system::SumeragiConsensusMode,
-    prelude::{AccountId, ChainId, Name, Quantity},
+    prelude::{AccountId, ChainId, Quantity},
     role::RoleId,
 };
 use iroha_executor_data_model::isi::multisig::MultisigSpec;
 use mochi_core::{
     BlockDecodeStage, BlockStreamDecodeError, BlockStreamEvent, BlockSummary, BootstrapBundle,
     BootstrapInputs, BootstrapWriteError, ChaosPreset, ChaosReport, ChaosRunRequest,
-    DashboardSnapshot, EventCategory, EventDecodeStage, EventStreamDecodeError, EventStreamEvent,
-    EventSummary, ExposedPrivateKey, GenesisProfile, InstructionDraft, InstructionPermission,
-    KeyPair, LifecycleEvent, LogStreamKind, ManagedBlockStream, ManagedEventStream,
-    ManagedStatusStream, NetworkProfile, PeerLogEvent, PeerState, PrivateKey, ProfilePreset,
-    SelectedPeerStoragePaths, SigningAuthority, StateCursor, StateEntry, StatePage, StateQueryKind,
-    StatusStreamEvent, Supervisor, SupervisorBuilder, SupervisorError, ToriiClient,
-    TransactionComposeOptions, TransactionPreview, compose_preview_with_options,
-    development_signing_authorities, drafts_from_json_str, drafts_to_pretty_json,
-    fetch_dashboard_snapshot, infer_workspace_root_from_sandbox_root,
+    DashboardAccountInput, DashboardSnapshot, EventCategory, EventDecodeStage,
+    EventStreamDecodeError, EventStreamEvent, EventSummary, ExposedPrivateKey, GenesisProfile,
+    InstructionDraft, InstructionPermission, KeyPair, LifecycleEvent, LogStreamKind,
+    ManagedBlockStream, ManagedEventStream, ManagedStatusStream, NetworkProfile, PeerLogEvent,
+    PeerState, PrivateKey, ProfilePreset, SecretString, SelectedPeerStoragePaths, SigningAuthority,
+    StateCursor, StateEntry, StatePage, StateQueryKind, StatusStreamEvent, Supervisor,
+    SupervisorBuilder, SupervisorError, ToriiClient, TransactionComposeOptions, TransactionPreview,
+    compose_preview_with_options, development_signing_authorities, drafts_from_json_str,
+    drafts_to_pretty_json, fetch_dashboard_snapshot, infer_workspace_root_from_sandbox_root,
     resolve_selected_peer_storage_paths, run_chaos_preset, run_state_query,
     sample_cabbage_definition_id, sample_rose_definition_id, sandbox_root_for_workspace,
     supervisor::RestartPolicy,
@@ -188,11 +186,11 @@ impl CliOverrides {
         if let Some(port) = self.p2p_start {
             builder = builder.p2p_base_port(port);
         }
-        if let Some(chain_id) = &self.chain_id {
-            builder = builder.chain_id(chain_id.clone());
-        }
         if let Some(profile) = self.genesis_profile {
             builder = builder.genesis_profile(profile);
+        }
+        if let Some(chain_id) = &self.chain_id {
+            builder = builder.chain_id(chain_id.clone());
         }
         if let Some(seed) = &self.vrf_seed_hex {
             builder = builder.vrf_seed_hex(seed.clone());
@@ -341,10 +339,7 @@ where
             }
             "--vrf-seed-hex" => {
                 let value = next_value_string(&mut iter, "--vrf-seed-hex")?;
-                overrides.vrf_seed_hex = Some(parse_vrf_seed_override(
-                    &value,
-                    "--vrf-seed-hex",
-                )?);
+                overrides.vrf_seed_hex = Some(parse_vrf_seed_override(&value, "--vrf-seed-hex")?);
             }
             "--nexus-config" => {
                 let value = next_value_string(&mut iter, "--nexus-config")?;
@@ -612,10 +607,12 @@ fn parse_profile_override(value: &str) -> Result<ParsedProfileOverride, CliParse
     parse_profile_table_override(table)
 }
 fn parse_profile_table_override(table: &TomlTable) -> Result<ParsedProfileOverride, CliParseError> {
-    if let Some(field) = table
-        .keys()
-        .find(|field| !matches!(field.as_str(), "peer_count" | "consensus_mode" | "genesis_profile"))
-    {
+    if let Some(field) = table.keys().find(|field| {
+        !matches!(
+            field.as_str(),
+            "peer_count" | "consensus_mode" | "genesis_profile"
+        )
+    }) {
         return Err(CliParseError::new(format!(
             "profile override contains unknown field `{field}`"
         )));
@@ -701,21 +698,18 @@ fn parse_nexus_config_file(path: &str) -> Result<toml::Table, CliParseError> {
     let value: toml::Value = toml::from_str(&contents).map_err(|err| {
         CliParseError::new(format!("--nexus-config failed to parse {path}: {err}"))
     })?;
-    let Some(table) = value.as_table() else {
-        return Err(CliParseError::new(format!(
-            "--nexus-config {path} must contain a TOML table"
-        )));
+    let invalid_root = || {
+        CliParseError::new(format!(
+            "--nexus-config {path} must contain exactly one `[nexus]` TOML table"
+        ))
     };
-    if let Some(nexus) = table.get("nexus") {
-        let Some(nexus_table) = nexus.as_table() else {
-            return Err(CliParseError::new(format!(
-                "--nexus-config {path} expects `nexus` to be a TOML table"
-            )));
-        };
-        Ok(nexus_table.clone())
-    } else {
-        Ok(table.clone())
+    let Some(table) = value.as_table() else {
+        return Err(invalid_root());
+    };
+    if table.len() != 1 || !table.contains_key("nexus") {
+        return Err(invalid_root());
     }
+    table["nexus"].as_table().cloned().ok_or_else(invalid_root)
 }
 fn parse_port_flag(value: &str, flag: &str) -> Result<u16, CliParseError> {
     let port: u16 = value.parse().map_err(|_| {
@@ -864,7 +858,7 @@ fn print_cli_usage() {
     println!("  --torii-start <port>         Override the base Torii port.");
     println!("  --p2p-start <port>           Override the base P2P port.");
     println!("  --chain-id <string>          Override the generated chain id.");
-    println!("  --genesis-profile <iroha3-dev|iroha3-testus|iroha3-nexus>");
+    println!("  --genesis-profile <iroha3-dev|iroha3-taira>");
     println!("                               Use a Kagami genesis preset.");
     println!("  --vrf-seed-hex <hex>         VRF seed (32-byte hex) for genesis profile.");
     println!("  --nexus-config <path>        Load Nexus lane/dataspace config from TOML.");
@@ -986,7 +980,7 @@ impl ActiveView {
         }
     }
     fn from_storage_value(raw: &str) -> Option<Self> {
-        match raw.trim() {
+        match raw {
             "dashboard" => Some(Self::Dashboard),
             "network" => Some(Self::Network),
             "activity" => Some(Self::Activity),
@@ -1805,11 +1799,10 @@ enum ChaosUpdate {
         error: Option<String>,
     },
 }
-#[derive(Clone)]
 struct SignerEntryState {
     label: String,
     account: String,
-    private_key: String,
+    private_key: SecretString,
     permissions: BTreeSet<InstructionPermission>,
     roles: String,
 }
@@ -1825,17 +1818,16 @@ impl SignerEntryState {
         Self {
             label: signer.label().to_owned(),
             account: account_literal(signer.account_id()),
-            private_key,
+            private_key: private_key.into(),
             permissions,
             roles,
         }
     }
 }
-#[derive(Clone)]
 struct SignerEntryForm {
     label: String,
     account: String,
-    private_key: String,
+    private_key: SecretString,
     permissions: BTreeSet<InstructionPermission>,
     roles: String,
 }
@@ -1844,7 +1836,7 @@ impl Default for SignerEntryForm {
         Self {
             label: String::new(),
             account: String::new(),
-            private_key: String::new(),
+            private_key: SecretString::default(),
             permissions: InstructionPermission::all()
                 .into_iter()
                 .collect::<BTreeSet<_>>(),
@@ -2038,6 +2030,8 @@ struct MochiApp {
     chaos_cancel: Option<Arc<AtomicBool>>,
     chaos_rx: UnboundedReceiver<ChaosUpdate>,
     chaos_tx: UnboundedSender<ChaosUpdate>,
+    #[cfg(test)]
+    _test_data_root: Option<tempfile::TempDir>,
 }
 #[derive(Debug)]
 struct PendingSettingsApply {
@@ -2062,12 +2056,20 @@ impl Default for FirstRunWizardState {
         }
     }
 }
-fn prepare_supervisor() -> (
-    Option<Supervisor>,
-    Option<SupervisorError>,
-    Option<ResolvedBundleConfig>,
-) {
-    prepare_supervisor_with_overrides(&cli_overrides())
+#[cfg(test)]
+fn isolate_default_test_data_root(
+    mut overrides: CliOverrides,
+) -> (CliOverrides, Option<tempfile::TempDir>) {
+    if overrides.workspace_root.is_some()
+        || overrides.data_root.is_some()
+        || overrides.config_path.is_some()
+    {
+        return (overrides, None);
+    }
+    let root = tempfile::tempdir().expect("create isolated Mochi test data root");
+    overrides.data_root = Some(root.path().join("sandbox"));
+    overrides.build_binaries = Some(false);
+    (overrides, Some(root))
 }
 fn prepare_supervisor_with_overrides(
     overrides: &CliOverrides,
@@ -2080,15 +2082,25 @@ fn prepare_supervisor_with_overrides(
         Some(path) => match load_bundle_config_at(path) {
             Ok(cfg) => Some(cfg),
             Err(err) => {
-                eprintln!("MOCHI: {err}");
-                None
+                return (
+                    None,
+                    Some(SupervisorError::Config(format!(
+                        "failed to load Mochi config: {err}"
+                    ))),
+                    None,
+                );
             }
         },
         None => match load_bundle_config() {
             Ok(config) => config,
             Err(err) => {
-                eprintln!("MOCHI: {err}");
-                None
+                return (
+                    None,
+                    Some(SupervisorError::Config(format!(
+                        "failed to load Mochi config: {err}"
+                    ))),
+                    None,
+                );
             }
         },
     };
@@ -2102,10 +2114,10 @@ fn prepare_supervisor_with_overrides(
     }
     builder = overrides.clone().apply_to(builder);
     builder = builder.auto_build_binaries(resolved_build_binaries(overrides, config.as_ref()));
-    if should_default_workspace_root(overrides, config.as_ref()) {
-        if let Ok(workspace_root) = env::current_dir() {
-            builder = builder.data_root(sandbox_root_for_workspace(workspace_root));
-        }
+    if should_default_workspace_root(overrides, config.as_ref())
+        && let Ok(workspace_root) = env::current_dir()
+    {
+        builder = builder.data_root(sandbox_root_for_workspace(workspace_root));
     }
     match builder.build() {
         Ok(supervisor) => (Some(supervisor), None, config),
@@ -2136,12 +2148,19 @@ impl MochiApp {
         let (readiness_tx, readiness_rx) = mpsc::unbounded_channel();
         let (dashboard_tx, dashboard_rx) = mpsc::unbounded_channel();
         let (chaos_tx, chaos_rx) = mpsc::unbounded_channel();
-        let (supervisor, supervisor_error, bundle_config) = prepare_supervisor();
+        let app_overrides = cli_overrides();
+        #[cfg(test)]
+        let (prepare_overrides, test_data_root) =
+            isolate_default_test_data_root(app_overrides.clone());
+        #[cfg(not(test))]
+        let prepare_overrides = app_overrides.clone();
+        let (supervisor, supervisor_error, bundle_config) =
+            prepare_supervisor_with_overrides(&prepare_overrides);
         let mut app = Self {
             supervisor,
             supervisor_error,
             bundle_config,
-            cli_overrides: cli_overrides(),
+            cli_overrides: app_overrides,
             last_error: None,
             last_info: None,
             theme_applied: false,
@@ -2283,6 +2302,8 @@ impl MochiApp {
             chaos_cancel: None,
             chaos_rx,
             chaos_tx,
+            #[cfg(test)]
+            _test_data_root: test_data_root,
         };
         app.sync_raw_editor_from_drafts();
         app.initialize_settings_from_supervisor();
@@ -2709,8 +2730,9 @@ impl MochiApp {
         let peer = Self::recipe_peer(peer_rows)?;
         let signer = supervisor.signers().first();
         let account_id = signer.map(|entry| account_literal(entry.account_id()));
-        let private_key = signer
-            .map(|entry| ExposedPrivateKey(entry.key_pair().private_key().clone()).to_string());
+        let private_key = signer.map(|entry| {
+            SecretString::new(ExposedPrivateKey(entry.key_pair().private_key().clone()).to_string())
+        });
         Some(compose_app_env_recipe(
             &Self::peer_api_base(peer),
             &peer.torii,
@@ -2721,8 +2743,27 @@ impl MochiApp {
                 .as_deref(),
             &self.effective_chain_id_recipe(supervisor),
             account_id.as_deref(),
-            private_key.as_deref(),
+            private_key.as_ref().map(SecretString::expose),
         ))
+    }
+    fn copy_app_env_recipe(
+        &mut self,
+        ui: &mut egui::Ui,
+        supervisor: &Supervisor,
+        peer_rows: &[PeerRow],
+    ) {
+        match self.app_env_recipe(supervisor, peer_rows) {
+            Some(recipe) => {
+                Self::copy_text(ui, recipe);
+                self.last_info = Some("Copied a local app bootstrap snippet.".to_owned());
+                self.last_error = None;
+            }
+            None => {
+                self.last_info = None;
+                self.last_error =
+                    Some("No peer available to render app bootstrap data.".to_owned());
+            }
+        }
     }
     fn start_block_stream_for(
         &mut self,
@@ -4710,13 +4751,13 @@ impl MochiApp {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        if let Some(old) = previous.as_mut() {
-            if let Err(primary) = old.stop_all() {
-                let restore = Self::start_requested_peer_aliases(old, &previously_running);
-                let error = Self::combine_with_running_set_restore(primary, restore);
-                self.supervisor = previous;
-                return Err(error);
-            }
+        if let Some(old) = previous.as_mut()
+            && let Err(primary) = old.stop_all()
+        {
+            let restore = Self::start_requested_peer_aliases(old, &previously_running);
+            let error = Self::combine_with_running_set_restore(primary, restore);
+            self.supervisor = previous;
+            return Err(error);
         }
         self.reset_runtime_state_after_maintenance();
         let build_result = match previous {
@@ -5460,7 +5501,7 @@ impl MochiApp {
         let chain_id = self.effective_chain_id_recipe(supervisor);
         let workspace = self.effective_workspace_recipe(supervisor);
         let launch_recipe = self.launch_recipe(supervisor);
-        let app_env_recipe = self.app_env_recipe(supervisor, peer_rows);
+        let app_env_available = Self::recipe_peer(peer_rows).is_some();
         let status_recipe = self.status_probe_recipe(peer_rows);
         let peers_value = metrics.peers_label();
         let latest_value = metrics.latest_height_text();
@@ -5538,13 +5579,8 @@ impl MochiApp {
                             app.last_info = Some("Copied the current launch recipe.".to_owned());
                             app.last_error = None;
                         }
-                        if let Some(env_recipe) = app_env_recipe.as_ref()
-                            && ui.button("Copy app env").clicked()
-                        {
-                            Self::copy_text(ui, env_recipe.clone());
-                            app.last_info =
-                                Some("Copied a local app bootstrap snippet.".to_owned());
-                            app.last_error = None;
+                        if app_env_available && ui.button("Copy app env").clicked() {
+                            app.copy_app_env_recipe(ui, supervisor, peer_rows);
                         }
                         if let Some(status_recipe) = status_recipe.as_ref()
                             && ui.button("Copy /status curl").clicked()
@@ -5771,14 +5807,13 @@ impl MochiApp {
                                 parse_profile_preset(&self.settings_profile_input)
                                     .unwrap_or(ProfilePreset::FourPeerBft)
                             };
-                            for preset in [ProfilePreset::FourPeerBft] {
-                                let selected = selected_profile == preset;
-                                if ui
-                                    .add(Button::selectable(selected, preset.label()))
-                                    .clicked()
-                                {
-                                    self.set_quickstart_preset(preset);
-                                }
+                            let preset = ProfilePreset::FourPeerBft;
+                            let selected = selected_profile == preset;
+                            if ui
+                                .add(Button::selectable(selected, preset.label()))
+                                .clicked()
+                            {
+                                self.set_quickstart_preset(preset);
                             }
                         });
                         ui.add_space(8.0);
@@ -6402,26 +6437,25 @@ impl MochiApp {
                 ui.add_space(10.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Preset").small().color(palette.text_muted));
-                    for preset in [ProfilePreset::FourPeerBft] {
-                        let selected = selected_preset == preset;
-                        let button = Button::selectable(selected, preset.label())
-                            .fill(if selected {
-                                palette.accent_soft
+                    let preset = ProfilePreset::FourPeerBft;
+                    let selected = selected_preset == preset;
+                    let button = Button::selectable(selected, preset.label())
+                        .fill(if selected {
+                            palette.accent_soft
+                        } else {
+                            palette.surface
+                        })
+                        .stroke(Stroke::new(
+                            1.0,
+                            if selected {
+                                palette.accent
                             } else {
-                                palette.surface
-                            })
-                            .stroke(Stroke::new(
-                                1.0,
-                                if selected {
-                                    palette.accent
-                                } else {
-                                    palette.border
-                                },
-                            ))
-                            .corner_radius(CornerRadius::same(8));
-                        if ui.add(button).clicked() {
-                            self.set_quickstart_preset(preset);
-                        }
+                                palette.border
+                            },
+                        ))
+                        .corner_radius(CornerRadius::same(8));
+                    if ui.add(button).clicked() {
+                        self.set_quickstart_preset(preset);
                     }
                 });
                 ui.add_space(8.0);
@@ -6557,7 +6591,7 @@ impl MochiApp {
         let palette = Self::palette();
         let signers = supervisor.signers();
         let launch_recipe = self.launch_recipe(supervisor);
-        let app_env_recipe = self.app_env_recipe(supervisor, peer_rows);
+        let app_env_available = Self::recipe_peer(peer_rows).is_some();
         let status_recipe = self.status_probe_recipe(peer_rows);
         Frame::new()
             .fill(palette.panel_alt)
@@ -6587,13 +6621,8 @@ impl MochiApp {
                                 self.last_info = Some("Copied the current launch recipe.".to_owned());
                                 self.last_error = None;
                             }
-                            if let Some(env_recipe) = app_env_recipe.as_ref()
-                                && ui.button("Copy app env").clicked()
-                            {
-                                Self::copy_text(ui, env_recipe.clone());
-                                self.last_info =
-                                    Some("Copied a local app bootstrap snippet.".to_owned());
-                                self.last_error = None;
+                            if app_env_available && ui.button("Copy app env").clicked() {
+                                self.copy_app_env_recipe(ui, supervisor, peer_rows);
                             }
                             if let Some(status_recipe) = status_recipe.as_ref()
                                 && ui.button("Copy /status curl").clicked()
@@ -6603,14 +6632,10 @@ impl MochiApp {
                                 self.last_error = None;
                             }
                         });
-                        if let Some(env_recipe) = app_env_recipe.as_ref() {
-                            ui.add_space(6.0);
-                            ui.label(
-                                RichText::new(truncate(env_recipe, 140))
-                                    .monospace()
-                                    .color(palette.text),
-                            );
-                        }
+                        ui.add_space(6.0);
+                        ui.small(
+                            "The app bootstrap snippet includes the selected disposable account and private key.",
+                        );
                     });
                 ui.add_space(10.0);
                 ui.label(RichText::new("Endpoints").strong());
@@ -6658,7 +6683,8 @@ impl MochiApp {
                     ui.small("No signing authorities are currently available.");
                 } else {
                     for signer in signers.iter().take(4) {
-                        let entry = SignerEntryState::from_signer(signer);
+                        let label = signer.label();
+                        let account = account_literal(signer.account_id());
                         let permissions = signer
                             .permissions()
                             .map(|permission| permission.label())
@@ -6666,22 +6692,24 @@ impl MochiApp {
                             .join(", ");
                         ui.group(|ui| {
                             ui.horizontal_wrapped(|ui| {
-                                ui.label(RichText::new(entry.label.clone()).strong());
-                                ui.small(entry.account.clone());
+                                ui.label(RichText::new(label).strong());
+                                ui.small(&account);
                                 if ui.button("Copy account").clicked() {
-                                    Self::copy_text(ui, entry.account.clone());
-                                    self.last_info = Some(format!(
-                                        "Copied account id for {}.",
-                                        entry.label
-                                    ));
+                                    Self::copy_text(ui, account.clone());
+                                    self.last_info =
+                                        Some(format!("Copied account id for {label}."));
                                     self.last_error = None;
                                 }
                                 if ui.button("Copy private key").clicked() {
-                                    Self::copy_text(ui, entry.private_key.clone());
-                                    self.last_info = Some(format!(
-                                        "Copied private key for {}.",
-                                        entry.label
-                                    ));
+                                    Self::copy_text(
+                                        ui,
+                                        ExposedPrivateKey(
+                                            signer.key_pair().private_key().clone(),
+                                        )
+                                        .to_string(),
+                                    );
+                                    self.last_info =
+                                        Some(format!("Copied private key for {label}."));
                                     self.last_error = None;
                                 }
                             });
@@ -8833,7 +8861,7 @@ impl MochiApp {
                                     ui.horizontal(|ui| {
                                         ui.label("Stored key");
                                         ui.small(Self::summarize_private_key(
-                                            &entry.private_key,
+                                            entry.private_key.expose(),
                                         ));
                                     });
                                     ui.with_layout(Layout::right_to_left(egui::Align::Min), |ui| {
@@ -8872,7 +8900,7 @@ impl MochiApp {
                 ui.horizontal(|ui| {
                     ui.label("Private key");
                     ui.add(
-                        egui::TextEdit::singleline(&mut dialog.new_entry.private_key)
+                        egui::TextEdit::singleline(&mut *dialog.new_entry.private_key)
                             .password(true)
                             .hint_text("multihash hex"),
                     );
@@ -8981,7 +9009,7 @@ impl MochiApp {
         Ok(SignerEntryState {
             label: label.to_owned(),
             account: account.to_owned(),
-            private_key: private_key.to_owned(),
+            private_key: private_key.to_owned().into(),
             permissions: form.permissions.clone(),
             roles: form.roles.trim().to_owned(),
         })
@@ -10513,56 +10541,43 @@ impl EventFilterState {
     }
     fn from_json_value(value: &Value) -> Option<Self> {
         let map = value.as_object()?;
-        let mut filter = EventFilterState::default();
-        if let Some(text) = map.get("search").and_then(Value::as_str) {
-            filter.search = text.to_owned();
+        const FIELDS: [&str; 11] = [
+            "search",
+            "show_pipeline",
+            "show_data",
+            "show_time",
+            "show_execute_trigger",
+            "show_trigger_completed",
+            "show_text",
+            "show_decode_errors",
+            "show_lagged",
+            "show_closed",
+            "alias_filters",
+        ];
+        if map.len() != FIELDS.len() || map.keys().any(|field| !FIELDS.contains(&field.as_str())) {
+            return None;
         }
-        filter.show_pipeline = map
-            .get("show_pipeline")
-            .and_then(Value::as_bool)
-            .unwrap_or(filter.show_pipeline);
-        filter.show_data = map
-            .get("show_data")
-            .and_then(Value::as_bool)
-            .unwrap_or(filter.show_data);
-        filter.show_time = map
-            .get("show_time")
-            .and_then(Value::as_bool)
-            .unwrap_or(filter.show_time);
-        filter.show_execute_trigger = map
-            .get("show_execute_trigger")
-            .and_then(Value::as_bool)
-            .unwrap_or(filter.show_execute_trigger);
-        filter.show_trigger_completed = map
-            .get("show_trigger_completed")
-            .and_then(Value::as_bool)
-            .unwrap_or(filter.show_trigger_completed);
-        filter.show_text = map
-            .get("show_text")
-            .and_then(Value::as_bool)
-            .unwrap_or(filter.show_text);
-        filter.show_decode_errors = map
-            .get("show_decode_errors")
-            .and_then(Value::as_bool)
-            .unwrap_or(filter.show_decode_errors);
-        filter.show_lagged = map
-            .get("show_lagged")
-            .and_then(Value::as_bool)
-            .unwrap_or(filter.show_lagged);
-        filter.show_closed = map
-            .get("show_closed")
-            .and_then(Value::as_bool)
-            .unwrap_or(filter.show_closed);
-        if let Some(array) = map.get("alias_filters").and_then(Value::as_array) {
-            let mut aliases = BTreeSet::new();
-            for entry in array {
-                if let Some(alias) = entry.as_str() {
-                    aliases.insert(alias.to_ascii_lowercase());
-                }
+        let boolean = |field: &str| map.get(field)?.as_bool();
+        let mut alias_filters = BTreeSet::new();
+        for entry in map.get("alias_filters")?.as_array()? {
+            let alias = entry.as_str()?;
+            if alias.to_ascii_lowercase() != alias || !alias_filters.insert(alias.to_owned()) {
+                return None;
             }
-            filter.alias_filters = aliases;
         }
-        Some(filter)
+        Some(Self {
+            search: map.get("search")?.as_str()?.to_owned(),
+            show_pipeline: boolean("show_pipeline")?,
+            show_data: boolean("show_data")?,
+            show_time: boolean("show_time")?,
+            show_execute_trigger: boolean("show_execute_trigger")?,
+            show_trigger_completed: boolean("show_trigger_completed")?,
+            show_text: boolean("show_text")?,
+            show_decode_errors: boolean("show_decode_errors")?,
+            show_lagged: boolean("show_lagged")?,
+            show_closed: boolean("show_closed")?,
+            alias_filters,
+        })
     }
 }
 #[derive(Debug, Clone, Default)]
@@ -10986,8 +11001,11 @@ fn load_first_run_completed(storage: Option<&dyn Storage>) -> bool {
     };
     storage
         .get_string(FIRST_RUN_COMPLETED_STORAGE_KEY)
-        .map(|value| value.trim().eq_ignore_ascii_case("true"))
+        .map(|value| parse_first_run_completed(&value))
         .unwrap_or(false)
+}
+fn parse_first_run_completed(value: &str) -> bool {
+    value == "true"
 }
 fn load_event_filter(storage: Option<&dyn Storage>) -> EventFilterState {
     let Some(storage) = storage else {
@@ -11450,7 +11468,7 @@ fn lane_catalog_snapshot(nexus: Option<&TomlTable>) -> LaneCatalogSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RelayIngestState {
     Waiting,
-    MissingQc,
+    MissingFinality,
     MissingDa,
     MissingManifest,
     Ready,
@@ -11459,7 +11477,7 @@ impl RelayIngestState {
     fn label(self) -> &'static str {
         match self {
             RelayIngestState::Waiting => "waiting",
-            RelayIngestState::MissingQc => "qc pending",
+            RelayIngestState::MissingFinality => "finality pending",
             RelayIngestState::MissingDa => "da pending",
             RelayIngestState::MissingManifest => "manifest pending",
             RelayIngestState::Ready => "ready",
@@ -11469,7 +11487,7 @@ impl RelayIngestState {
         match self {
             RelayIngestState::Ready => Color32::from_rgb(80, 160, 80),
             RelayIngestState::Waiting => Color32::from_gray(150),
-            RelayIngestState::MissingQc
+            RelayIngestState::MissingFinality
             | RelayIngestState::MissingDa
             | RelayIngestState::MissingManifest => Color32::from_rgb(200, 160, 64),
         }
@@ -11789,8 +11807,8 @@ impl PeerStatusView {
         governance: Option<&&SumeragiLaneGovernance>,
     ) -> RelayIngestState {
         if let Some(relay) = relay {
-            if relay.qc.is_none() {
-                return RelayIngestState::MissingQc;
+            if relay.finality_authority.is_none() {
+                return RelayIngestState::MissingFinality;
             }
             if relay.da_commitment_hash.is_none() {
                 return RelayIngestState::MissingDa;

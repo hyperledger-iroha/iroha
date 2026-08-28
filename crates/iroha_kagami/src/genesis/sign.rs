@@ -1,7 +1,7 @@
 use super::{ensure_npos_parameters, require_v2_wire_protocol_only};
 use crate::{
     Outcome, RunArgs,
-    genesis::{PUBLIC_XOR_ALIAS, public_xor_profile_for_chain_id},
+    genesis::{PUBLIC_XOR_ALIAS, public_xor_profile_for_chain_id, reject_retired_public_chain_id},
     tui,
 };
 use clap::Parser;
@@ -40,11 +40,11 @@ use iroha_primitives::time::TimeSource;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::{BufWriter, Read, Write},
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
-use zeroize::Zeroize as _;
+use zeroize::{Zeroize as _, Zeroizing};
 /// Sign the genesis block
 #[derive(Parser)]
 pub struct Args {
@@ -99,6 +99,159 @@ const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME: &str = "xor";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT: u64 = 10_000;
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 const MAX_GENESIS_NETWORK_IDENTITY_BYTES: u64 = 4 * 1024;
+struct ResolvedArtifactPaths {
+    genesis_input: PathBuf,
+    signed_output: Option<PathBuf>,
+    bound_manifest_output: Option<PathBuf>,
+    expected_hash_output: Option<PathBuf>,
+}
+
+#[cfg(unix)]
+fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(unix)]
+fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    same_file_identity(left, right)
+        && left.mode() == right.mode()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+        && left.nlink() == right.nlink()
+        && left.size() == right.size()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(windows)]
+fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_file_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+
+fn artifact_paths_alias(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    matches!(
+        (fs::metadata(left), fs::metadata(right)),
+        (Ok(left), Ok(right)) if same_file_identity(&left, &right)
+    )
+}
+
+fn reject_artifact_alias(
+    left_label: &str,
+    left: Option<&Path>,
+    right_label: &str,
+    right: Option<&Path>,
+) -> Result<(), color_eyre::eyre::Error> {
+    if let (Some(left), Some(right)) = (left, right)
+        && artifact_paths_alias(left, right)
+    {
+        return Err(eyre!(
+            "{left_label} and {right_label} must use different paths"
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_artifact_paths(args: &Args) -> Result<ResolvedArtifactPaths, color_eyre::eyre::Error> {
+    let genesis_input = fs::canonicalize(&args.genesis_file).wrap_err_with(|| {
+        format!(
+            "resolve input genesis manifest {}",
+            args.genesis_file.display()
+        )
+    })?;
+    let signed_output = args
+        .out_file
+        .as_deref()
+        .map(crate::atomic_output::resolve_output_file)
+        .transpose()
+        .wrap_err("resolve signed genesis output")?;
+    let bound_manifest_output = args
+        .bound_manifest_out
+        .as_deref()
+        .map(crate::atomic_output::resolve_output_file)
+        .transpose()
+        .wrap_err("resolve config-bound genesis manifest output")?;
+    let expected_hash_output = args
+        .expected_hash_out
+        .as_deref()
+        .map(crate::atomic_output::resolve_output_file)
+        .transpose()
+        .wrap_err("resolve genesis expected-hash output")?;
+
+    reject_artifact_alias(
+        "signed genesis output",
+        signed_output.as_deref(),
+        "input genesis manifest",
+        Some(&genesis_input),
+    )?;
+    reject_artifact_alias(
+        "genesis expected-hash output",
+        expected_hash_output.as_deref(),
+        "input genesis manifest",
+        Some(&genesis_input),
+    )?;
+    reject_artifact_alias(
+        "signed genesis output",
+        signed_output.as_deref(),
+        "bound manifest output",
+        bound_manifest_output.as_deref(),
+    )?;
+    reject_artifact_alias(
+        "signed genesis output",
+        signed_output.as_deref(),
+        "genesis expected-hash output",
+        expected_hash_output.as_deref(),
+    )?;
+    reject_artifact_alias(
+        "bound manifest output",
+        bound_manifest_output.as_deref(),
+        "genesis expected-hash output",
+        expected_hash_output.as_deref(),
+    )?;
+
+    for (label, input) in [
+        ("genesis signing key", Some(args.private_key_file.as_path())),
+        ("peer configuration", args.config.as_deref()),
+    ] {
+        let Some(input) = input else {
+            continue;
+        };
+        let input = fs::canonicalize(input)
+            .wrap_err_with(|| format!("resolve protected {label} input {}", input.display()))?;
+        for (output_label, output) in [
+            ("signed genesis output", signed_output.as_deref()),
+            ("bound manifest output", bound_manifest_output.as_deref()),
+            (
+                "genesis expected-hash output",
+                expected_hash_output.as_deref(),
+            ),
+        ] {
+            reject_artifact_alias(output_label, output, label, Some(&input))?;
+        }
+    }
+
+    Ok(ResolvedArtifactPaths {
+        genesis_input,
+        signed_output,
+        bound_manifest_output,
+        expected_hash_output,
+    })
+}
 struct StagedGenesisExecution {
     nexus_amx_context_hash: Hash,
     execution_policy_hash: Hash,
@@ -112,6 +265,86 @@ enum GenesisNetworkIdentityTarget {
 fn genesis_network_identity_body(network_id: NetworkId) -> String {
     format!("{network_id}\n")
 }
+fn read_existing_genesis_network_identity(
+    path: &Path,
+) -> Result<Option<Vec<u8>>, color_eyre::eyre::Error> {
+    let lexical = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).wrap_err_with(|| {
+                format!("inspect genesis network identity output {}", path.display())
+            });
+        }
+    };
+    #[cfg(not(unix))]
+    return Err(eyre!(
+        "existing genesis network identity {} requires owner-held file custody, which Kagami cannot verify on this platform",
+        path.display()
+    ));
+    #[cfg(unix)]
+    {
+        use std::io::Read as _;
+        use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+        let mut options = fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        let mut file = options.open(path).wrap_err_with(|| {
+            format!("open existing genesis network identity {}", path.display())
+        })?;
+        let before = file.metadata().wrap_err_with(|| {
+            format!("inspect opened genesis network identity {}", path.display())
+        })?;
+        if lexical.file_type().is_symlink()
+            || !before.is_file()
+            || !same_file_snapshot(&lexical, &before)
+        {
+            return Err(eyre!(
+                "genesis network identity output changed while opening or is not a regular file: {}",
+                path.display()
+            ));
+        }
+        if before.uid() != rustix::process::geteuid().as_raw()
+            || before.nlink() != 1
+            || before.mode() & 0o022 != 0
+        {
+            return Err(eyre!(
+                "genesis network identity output must be owner-held, single-link, and not group/world writable: {}",
+                path.display()
+            ));
+        }
+        if before.len() > MAX_GENESIS_NETWORK_IDENTITY_BYTES {
+            return Err(eyre!(
+                "existing genesis network identity exceeds the {MAX_GENESIS_NETWORK_IDENTITY_BYTES}-byte limit: {}",
+                path.display()
+            ));
+        }
+        let mut existing = Vec::with_capacity(
+            usize::try_from(before.len())
+                .map_err(|_| eyre!("genesis network identity length is not addressable"))?,
+        );
+        std::io::Read::by_ref(&mut file)
+            .take(MAX_GENESIS_NETWORK_IDENTITY_BYTES + 1)
+            .read_to_end(&mut existing)
+            .wrap_err_with(|| {
+                format!("read existing genesis network identity {}", path.display())
+            })?;
+        let after = file
+            .metadata()
+            .wrap_err_with(|| format!("reinspect genesis network identity {}", path.display()))?;
+        if !same_file_snapshot(&before, &after)
+            || u64::try_from(existing.len()).ok() != Some(before.len())
+        {
+            return Err(eyre!(
+                "genesis network identity output changed while being read: {}",
+                path.display()
+            ));
+        }
+        Ok(Some(existing))
+    }
+}
 fn preflight_genesis_network_identity(
     path: &Path,
     network_id: NetworkId,
@@ -122,35 +355,10 @@ fn preflight_genesis_network_identity(
             "generated genesis network identity exceeds the {MAX_GENESIS_NETWORK_IDENTITY_BYTES}-byte limit"
         ));
     }
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(GenesisNetworkIdentityTarget::Missing);
-        }
-        Err(error) => {
-            return Err(error).wrap_err_with(|| {
-                format!("inspect genesis network identity output {}", path.display())
-            });
-        }
+    let Some(existing) = read_existing_genesis_network_identity(path)? else {
+        return Ok(GenesisNetworkIdentityTarget::Missing);
     };
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(eyre!(
-            "genesis network identity output must be a regular file: {}",
-            path.display()
-        ));
-    }
-    if metadata.len() > MAX_GENESIS_NETWORK_IDENTITY_BYTES {
-        return Err(eyre!(
-            "existing genesis network identity exceeds the {MAX_GENESIS_NETWORK_IDENTITY_BYTES}-byte limit: {}",
-            path.display()
-        ));
-    }
-    let mut existing = String::new();
-    File::open(path)?
-        .take(MAX_GENESIS_NETWORK_IDENTITY_BYTES + 1)
-        .read_to_string(&mut existing)
-        .wrap_err_with(|| format!("read existing genesis network identity {}", path.display()))?;
-    if existing != body {
+    if existing != body.as_bytes() {
         return Err(eyre!(
             "refusing to replace a different genesis network identity: {}",
             path.display()
@@ -190,26 +398,13 @@ fn publish_genesis_network_identity(path: &Path, network_id: NetworkId) -> Outco
     match temporary.persist_noclobber(path) {
         Ok(_) => {}
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
-                format!("inspect raced genesis network identity {}", path.display())
-            })?;
-            if !metadata.is_file()
-                || metadata.file_type().is_symlink()
-                || metadata.len() > MAX_GENESIS_NETWORK_IDENTITY_BYTES
-            {
+            let Some(existing) = read_existing_genesis_network_identity(path)? else {
                 return Err(eyre!(
-                    "raced genesis network identity is not the expected regular bounded file: {}",
+                    "raced genesis network identity disappeared: {}",
                     path.display()
                 ));
-            }
-            let mut existing = String::new();
-            File::open(path)?
-                .take(MAX_GENESIS_NETWORK_IDENTITY_BYTES + 1)
-                .read_to_string(&mut existing)
-                .wrap_err_with(|| {
-                    format!("read raced genesis network identity {}", path.display())
-                })?;
-            if existing != body {
+            };
+            if existing != body.as_bytes() {
                 return Err(eyre!(
                     "refusing raced genesis network identity with different contents: {}",
                     path.display()
@@ -543,13 +738,11 @@ fn append_npos_bootstrap(
 pub(super) fn load_peer_config(
     config_path: &Path,
 ) -> Result<actual::Root, color_eyre::eyre::Error> {
-    let source = TomlSource::from_file(config_path).map_err(|err| {
-        eyre!(
-            "failed to read peer config at {}: {err}",
-            config_path.display()
-        )
-    })?;
-    load_peer_config_source(config_path, source)
+    let config_bytes = Zeroizing::new(
+        crate::secure_fs::read_private_file(config_path)
+            .wrap_err_with(|| format!("read owner-only peer config {}", config_path.display()))?,
+    );
+    load_peer_config_bytes(config_path, &config_bytes)
 }
 
 /// Parse a peer config from the exact bytes already hashed by an admission caller.
@@ -563,15 +756,15 @@ pub(super) fn load_peer_config_bytes(
             config_path.display()
         )
     })?;
-    let table = source_text.parse::<toml::Table>().map_err(|error| {
-        eyre!(
-            "failed to parse peer config TOML at {}: {error}",
-            config_path.display()
-        )
-    })?;
+    let description = format!("peer config {}", config_path.display());
+    let table = crate::secret_toml::parse_table(source_text, &description)?;
     load_peer_config_source(
         config_path,
-        TomlSource::new(config_path.to_path_buf(), table),
+        TomlSource::new_sensitive(
+            config_path.to_path_buf(),
+            table,
+            crate::secret_toml::zeroize_table,
+        ),
     )
 }
 
@@ -596,12 +789,8 @@ fn load_peer_config_source(
                 .to_ascii_uppercase();
         *expected_hash = toml::Value::String(norito::literal::format("hash", hash_body.as_str()));
     }
-    actual::Root::from_toml_source(source).map_err(|err| {
-        eyre!(
-            "failed to parse peer config at {}: {err:?}",
-            config_path.display()
-        )
-    })
+    actual::Root::from_toml_source(source)
+        .map_err(|_| eyre!("peer config {} is invalid", config_path.display()))
 }
 pub(super) fn ensure_peer_config_matches_manifest(
     config: &actual::Root,
@@ -1084,28 +1273,9 @@ impl<T: Write> RunArgs<T> for Args {
     #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Signing genesis manifest");
-        if let (Some(signed), Some(bound)) =
-            (self.out_file.as_deref(), self.bound_manifest_out.as_deref())
-            && signed == bound
-        {
-            return Err(eyre!(
-                "signed genesis output and bound manifest output must use different paths"
-            ));
-        }
-        if let Some(expected_hash) = self.expected_hash_out.as_deref() {
-            for (label, path) in [
-                ("signed genesis output", self.out_file.as_deref()),
-                ("bound manifest output", self.bound_manifest_out.as_deref()),
-                ("input genesis manifest", Some(self.genesis_file.as_path())),
-            ] {
-                if path == Some(expected_hash) {
-                    return Err(eyre!(
-                        "genesis expected-hash output and {label} must use different paths"
-                    ));
-                }
-            }
-        }
-        let mut genesis = RawGenesisTransaction::from_path(&self.genesis_file)?;
+        let artifact_paths = resolve_artifact_paths(&self)?;
+        let mut genesis = RawGenesisTransaction::from_path(&artifact_paths.genesis_input)?;
+        reject_retired_public_chain_id(genesis.chain_id().as_str())?;
         // Keep every same-thread rebuild, config parse, and bound-manifest
         // serialization on the manifest's network. Staged execution re-enters
         // this discriminant on its worker thread.
@@ -1249,16 +1419,16 @@ impl<T: Write> RunArgs<T> for Args {
                 SIGNED_GENESIS_MAX_BYTES_V1
             ));
         }
-        if let Some(path) = self.expected_hash_out.as_deref() {
+        if let Some(path) = artifact_paths.expected_hash_output.as_deref() {
             preflight_genesis_network_identity(path, network_id)?;
         }
-        let staged_signed_output = self
-            .out_file
+        let staged_signed_output = artifact_paths
+            .signed_output
             .as_deref()
             .map(|path| stage_genesis_output(path, &framed, "signed genesis output"))
             .transpose()?;
         let staged_bound_manifest = match (
-            self.bound_manifest_out.as_deref(),
+            artifact_paths.bound_manifest_output.as_deref(),
             bound_manifest_json.as_deref(),
         ) {
             (Some(path), Some(json)) => Some(stage_genesis_output(
@@ -1269,7 +1439,7 @@ impl<T: Write> RunArgs<T> for Args {
             (None, None) => None,
             _ => unreachable!("bound manifest bytes exist exactly when an output path was set"),
         };
-        if let Some(path) = self.expected_hash_out.as_deref() {
+        if let Some(path) = artifact_paths.expected_hash_output.as_deref() {
             // Publish the shared trust root before any requested signed or manifest output. The
             // explicit preflight above rejects a stale identity before staging, while this second
             // checked publication closes the race window before the remaining outputs commit.
@@ -1277,7 +1447,10 @@ impl<T: Write> RunArgs<T> for Args {
         }
         eprintln!("Genesis public key: {}", genesis_key_pair.public_key());
         eprintln!("Genesis network identity: {network_id}");
-        match (self.out_file.as_deref(), staged_signed_output) {
+        match (
+            artifact_paths.signed_output.as_deref(),
+            staged_signed_output,
+        ) {
             (Some(path), Some(temporary)) => {
                 publish_staged_genesis_output(temporary, path, "signed genesis output")?;
             }
@@ -1287,7 +1460,10 @@ impl<T: Write> RunArgs<T> for Args {
             }
             _ => unreachable!("signed output staging follows the requested output path"),
         }
-        match (self.bound_manifest_out.as_deref(), staged_bound_manifest) {
+        match (
+            artifact_paths.bound_manifest_output.as_deref(),
+            staged_bound_manifest,
+        ) {
             (Some(path), Some(temporary)) => {
                 publish_staged_genesis_output(temporary, path, "config-bound genesis manifest")?
             }
@@ -1449,7 +1625,8 @@ mod tests {
         str::FromStr,
     };
     fn checked_in_config(path: &std::path::Path) -> actual::Root {
-        if let Ok(config) = load_peer_config(path) {
+        let source_bytes = fs::read(path).expect("read checked-in config");
+        if let Ok(config) = load_peer_config_bytes(path, &source_bytes) {
             return config;
         }
         // Some deployment templates deliberately contain unresolved
@@ -1458,7 +1635,7 @@ mod tests {
         // while retaining the source chain/discriminant, through the
         // production config parser. No Nexus or Pipeline value is synthesized
         // or decoded by this test helper.
-        let source = fs::read_to_string(path).expect("read checked-in config");
+        let source = String::from_utf8(source_bytes).expect("checked-in config is UTF-8");
         let header = || {
             source
                 .lines()
@@ -1572,70 +1749,76 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     ) -> ConsensusHandshakeMetaTest {
         sign_checked_in_profile_with_optional_config(root, genesis_path, Some(config_path))
     }
-    fn locally_loadable_profile_config(path: &Path) -> (Option<tempfile::TempDir>, PathBuf) {
-        if load_peer_config(path).is_ok() {
-            return (None, path.to_path_buf());
-        }
-
+    fn locally_loadable_profile_config(path: &Path) -> (tempfile::TempDir, PathBuf) {
+        let source = fs::read_to_string(path).expect("read checked-in profile config");
+        let source_is_loadable = load_peer_config_bytes(path, source.as_bytes()).is_ok();
         // Published profile configs intentionally resolve node identities from
         // container secret files. Replacing only those identities with matching
         // deterministic test pairs keeps every consensus-policy field intact
         // while making the production signing path locally testable.
-        let source = fs::read_to_string(path).expect("read checked-in profile config");
         let mut table = toml::Table::from_str(&source).expect("parse checked-in profile config");
-        table.insert(
-            "public_key".into(),
-            toml::Value::String(
-                "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                    .to_owned(),
-            ),
-        );
-        table.remove("private_key_file");
-        table.insert(
-            "private_key".into(),
-            toml::Value::String(
-                "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F".to_owned(),
-            ),
-        );
-        table.insert(
-            "soranet_transport_public_key".into(),
-            toml::Value::String(
-                "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B".to_owned(),
-            ),
-        );
-        table.remove("soranet_transport_private_key_file");
-        table.insert(
-            "soranet_transport_private_key".into(),
-            toml::Value::String(
-                "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89".to_owned(),
-            ),
-        );
-        let streaming = table
-            .get_mut("streaming")
-            .and_then(toml::Value::as_table_mut)
-            .expect("checked-in profile config has streaming identity");
-        streaming.insert(
-            "identity_public_key".into(),
-            toml::Value::String(
-                "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB".to_owned(),
-            ),
-        );
-        streaming.remove("identity_private_key_file");
-        streaming.insert(
-            "identity_private_key".into(),
-            toml::Value::String(
-                "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F".to_owned(),
-            ),
-        );
+        if !source_is_loadable {
+            table.insert(
+                "public_key".into(),
+                toml::Value::String(
+                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+                        .to_owned(),
+                ),
+            );
+            table.remove("private_key_file");
+            table.insert(
+                "private_key".into(),
+                toml::Value::String(
+                    "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+                        .to_owned(),
+                ),
+            );
+            table.insert(
+                "soranet_transport_public_key".into(),
+                toml::Value::String(
+                    "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
+                        .to_owned(),
+                ),
+            );
+            table.remove("soranet_transport_private_key_file");
+            table.insert(
+                "soranet_transport_private_key".into(),
+                toml::Value::String(
+                    "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
+                        .to_owned(),
+                ),
+            );
+            let streaming = table
+                .get_mut("streaming")
+                .and_then(toml::Value::as_table_mut)
+                .expect("checked-in profile config has streaming identity");
+            streaming.insert(
+                "identity_public_key".into(),
+                toml::Value::String(
+                    "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+                        .to_owned(),
+                ),
+            );
+            streaming.remove("identity_private_key_file");
+            streaming.insert(
+                "identity_private_key".into(),
+                toml::Value::String(
+                    "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+                        .to_owned(),
+                ),
+            );
+        }
 
         let directory = tempfile::tempdir().expect("create local profile signing config");
         let rendered = directory.path().join("config.toml");
-        fs::write(
+        crate::secure_fs::write_private_file_atomic(
             &rendered,
-            toml::to_string(&table).expect("serialize local profile signing config"),
+            toml::to_string(&table)
+                .expect("serialize local profile signing config")
+                .as_bytes(),
         )
         .expect("write local profile signing config");
-        (Some(directory), rendered)
+        (directory, rendered)
     }
 
     fn sign_checked_in_profile_with_optional_config(
@@ -1648,11 +1831,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         const NEXUS_GENESIS_SEED: &str =
             "ac74a176f589853d5a7488ae8c04caee8b99b408a98c1d2971b3d525e9f0e91c";
         let key_file_from_seed = |seed: &str| {
-            let key_pair = KeyPair::try_from_seed(
-                crate::crypto::parse_keygen_seed_hex(seed).expect("decode checked-in fixture seed"),
-                Algorithm::Ed25519,
-            )
-            .expect("derive checked-in fixture key");
+            let mut seed =
+                crate::crypto::parse_keygen_seed_hex(seed).expect("decode checked-in fixture seed");
+            let key_pair = KeyPair::try_from_seed(std::mem::take(&mut *seed), Algorithm::Ed25519)
+                .expect("derive checked-in fixture key");
             test_private_key_file_for(&key_pair)
         };
         let private_key_file = match genesis_path {
@@ -1797,7 +1979,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             );
         }
         assert!(
-            load_peer_config(&path).is_err(),
+            load_peer_config_bytes(&path, source.as_bytes()).is_err(),
             "unrendered Taira production template must not be runnable"
         );
     }
@@ -1810,8 +1992,36 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             actual::Root::from_toml_source(runtime_source).is_err(),
             "the unresolved signing profile must not normalize as a runnable node config"
         );
-        load_peer_config(&path)
+        let source = fs::read(&path).expect("read signing profile bytes");
+        load_peer_config_bytes(&path, &source)
             .expect("the genesis signer may project policy through the explicit placeholder");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn signing_peer_config_requires_exact_owner_only_custody() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = fs::read(root.join("defaults/kagami/iroha3-dev/peer0.toml"))
+            .expect("read signing profile fixture");
+        let directory = tempfile::tempdir().expect("create signing config custody fixture");
+        let canonical_directory = fs::canonicalize(directory.path())
+            .expect("canonicalize signing config custody directory");
+        fs::copy(
+            root.join("defaults/kagami/iroha3-dev/genesis.expected_hash"),
+            canonical_directory.join("genesis.expected_hash"),
+        )
+        .expect("copy signing config network identity");
+        let path = canonical_directory.join("peer0.toml");
+        fs::write(&path, source).expect("write signing config custody fixture");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("make signing config permissive");
+        let error = load_peer_config(&path).expect_err("permissive signing config must fail");
+        assert!(format!("{error:#}").contains("mode 0600"));
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("make signing config owner-only");
+        load_peer_config(&path).expect("owner-only signing config must load");
     }
     fn assert_checked_in_profile_commitment_matches_production_signing(
         root: &Path,
@@ -2297,9 +2507,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             );
         let (topology, peer_pops) = valid_test_topology(4);
         let config_path = temp.path().join("peer0.toml");
-        fs::write(
+        crate::secure_fs::write_private_file_atomic(
             &config_path,
-            toml::to_string_pretty(&config_table).expect("render peer config"),
+            toml::to_string_pretty(&config_table)
+                .expect("render peer config")
+                .as_bytes(),
         )
         .expect("write peer config");
         load_peer_config(&config_path).expect("load peer config");
@@ -2455,6 +2667,85 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
     #[test]
+    fn signed_output_must_not_replace_the_input_manifest() {
+        let genesis_file = minimal_genesis_file();
+        let before = fs::read(&genesis_file).expect("read input manifest fixture");
+        let args = Args {
+            genesis_file: genesis_file.clone(),
+            out_file: Some(genesis_file.clone()),
+            bound_manifest_out: None,
+            expected_hash_out: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key_file: test_private_key_file(),
+            expected_public_key: None,
+            creation_time_ms: None,
+            config: None,
+        };
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("signed output must not replace its input manifest");
+        assert!(format!("{error:#}").contains("input genesis manifest"));
+        assert_eq!(
+            fs::read(genesis_file).expect("reread input manifest"),
+            before
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn output_alias_checks_resolve_parent_symlinks_and_hard_links() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("resolved alias temp dir");
+        let canonical_parent = temp.path().join("canonical");
+        fs::create_dir(&canonical_parent).expect("create canonical output parent");
+        let parent_alias = temp.path().join("alias");
+        symlink(&canonical_parent, &parent_alias).expect("create output parent alias");
+        let args = Args {
+            genesis_file: minimal_genesis_file(),
+            out_file: Some(canonical_parent.join("same-output")),
+            bound_manifest_out: Some(parent_alias.join("same-output")),
+            expected_hash_out: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key_file: test_private_key_file(),
+            expected_public_key: None,
+            creation_time_ms: None,
+            config: None,
+        };
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("parent aliases must resolve before output publication");
+        assert!(error.to_string().contains("must use different paths"));
+        assert!(!canonical_parent.join("same-output").exists());
+
+        let signed = canonical_parent.join("signed");
+        let manifest = canonical_parent.join("manifest");
+        fs::write(&signed, b"sentinel").expect("write hard-link source");
+        fs::hard_link(&signed, &manifest).expect("create hard-link output alias");
+        let args = Args {
+            genesis_file: minimal_genesis_file(),
+            out_file: Some(signed.clone()),
+            bound_manifest_out: Some(manifest.clone()),
+            expected_hash_out: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key_file: test_private_key_file(),
+            expected_public_key: None,
+            creation_time_ms: None,
+            config: None,
+        };
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("hard-linked outputs must not alias");
+        assert!(error.to_string().contains("must use different paths"));
+        assert_eq!(fs::read(signed).expect("read signed sentinel"), b"sentinel");
+        assert_eq!(
+            fs::read(manifest).expect("read manifest sentinel"),
+            b"sentinel"
+        );
+    }
+    #[test]
     fn identity_drift_leaves_every_requested_output_unchanged() {
         let temp = tempfile::tempdir().expect("identity drift output temp dir");
         let signed_path = temp.path().join("genesis.signed.nrt");
@@ -2580,6 +2871,41 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                         .starts_with(".genesis-identity-")
                 }),
             "atomic publication must not retain temporary files"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn existing_network_identity_requires_safe_single_link_custody() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::tempdir().expect("network identity custody temp dir");
+        let identity_path = temp.path().join("genesis.expected_hash");
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"custody identity")),
+        );
+        publish_genesis_network_identity(&identity_path, network_id)
+            .expect("publish network identity");
+
+        fs::set_permissions(&identity_path, fs::Permissions::from_mode(0o620))
+            .expect("make identity group-writable");
+        let writable_error = publish_genesis_network_identity(&identity_path, network_id)
+            .expect_err("group-writable trust roots must be rejected");
+        assert!(
+            writable_error
+                .to_string()
+                .contains("not group/world writable"),
+            "unexpected custody diagnostic: {writable_error:#}"
+        );
+
+        fs::set_permissions(&identity_path, fs::Permissions::from_mode(0o600))
+            .expect("restore safe identity mode");
+        let alias = temp.path().join("identity-alias");
+        fs::hard_link(&identity_path, &alias).expect("create identity hard link");
+        let linked_error = publish_genesis_network_identity(&identity_path, network_id)
+            .expect_err("multiply-linked trust roots must be rejected");
+        assert!(
+            linked_error.to_string().contains("single-link"),
+            "unexpected hard-link diagnostic: {linked_error:#}"
         );
     }
     #[test]
@@ -3688,15 +4014,17 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .prefix("kagami-public-nexus-npos-genesis-")
             .tempfile()
             .expect("create temp genesis file");
-        let manifest =
-            GenesisBuilder::new_without_executor(ChainId::from("iroha3-nexus"), PathBuf::from("."))
-                .append_parameter(Parameter::Custom(
-                    SumeragiNposParameters::default().into_custom_parameter(),
-                ))
-                .build_raw()
-                .with_consensus_mode(SumeragiConsensusMode::Npos)
-                .with_chain_discriminant(crate::genesis::profile::NEXUS_CHAIN_DISCRIMINANT)
-                .with_consensus_meta();
+        let manifest = GenesisBuilder::new_without_executor(
+            crate::genesis::profile_defaults(crate::genesis::GenesisProfile::Iroha3Nexus).chain_id,
+            PathBuf::from("."),
+        )
+        .append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Npos)
+        .with_chain_discriminant(crate::genesis::profile::NEXUS_CHAIN_DISCRIMINANT)
+        .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");

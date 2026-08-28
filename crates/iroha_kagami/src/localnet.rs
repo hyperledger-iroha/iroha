@@ -2,7 +2,11 @@
 use crate::{
     Outcome, RunArgs,
     genesis::{
-        ConsensusPolicy, generate_default, profile::known_chain_discriminant_for_chain_id,
+        ConsensusPolicy, generate_default,
+        profile::{
+            PUBLIC_TAIRA_CHAIN_ID, known_chain_discriminant_for_chain_id,
+            reject_retired_public_chain_id,
+        },
         validate_consensus_mode,
     },
     tui,
@@ -157,6 +161,9 @@ impl CanonicalHost {
         if trimmed.is_empty() {
             return Err(eyre!("`{field}` must not be empty"));
         }
+        if trimmed != raw {
+            return Err(eyre!("`{field}` must not contain surrounding whitespace"));
+        }
         let has_prefix = trimmed.starts_with('[');
         let has_suffix = trimmed.ends_with(']');
         if has_prefix != has_suffix {
@@ -169,6 +176,20 @@ impl CanonicalHost {
         };
         if unbracketed.is_empty() {
             return Err(eyre!("`{field}` must not be empty"));
+        }
+        if has_prefix {
+            return unbracketed.parse::<Ipv6Addr>().map_or_else(
+                |_| {
+                    Err(eyre!(
+                        "`{field}` brackets are only valid around an IPv6 literal"
+                    ))
+                },
+                |ipv6| {
+                    Ok(Self {
+                        kind: HostKind::Ipv6(ipv6),
+                    })
+                },
+            );
         }
         if let Ok(ipv4) = unbracketed.parse::<Ipv4Addr>() {
             return Ok(Self {
@@ -183,6 +204,27 @@ impl CanonicalHost {
         if unbracketed.contains(':') {
             return Err(eyre!(
                 "`{field}` must be a host name or IP literal without a port: `{raw}`"
+            ));
+        }
+        if unbracketed.len() > 253
+            || !unbracketed.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && label
+                        .as_bytes()
+                        .first()
+                        .is_some_and(u8::is_ascii_alphanumeric)
+                    && label
+                        .as_bytes()
+                        .last()
+                        .is_some_and(u8::is_ascii_alphanumeric)
+                    && label
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            })
+        {
+            return Err(eyre!(
+                "`{field}` must be an ASCII DNS name or IP literal without a port: `{raw}`"
             ));
         }
         Ok(Self {
@@ -210,6 +252,17 @@ impl CanonicalHost {
     fn torii_url(&self, port: u16) -> String {
         format!("http://{}:{port}/", self.url_host())
     }
+}
+
+/// Validate and canonicalize a host name or IP literal for another Kagami command.
+pub(crate) fn canonical_host(raw: &str, field: &str) -> Result<String> {
+    Ok(CanonicalHost::parse(raw, field)?.url_host())
+}
+
+/// Validate a non-zero endpoint and render its canonical socket-address literal.
+pub(crate) fn canonical_endpoint_literal(raw: &str, field: &str, port: u16) -> Result<String> {
+    ensure!(port != 0, "`{field}` port must be greater than zero");
+    Ok(CanonicalHost::parse(raw, field)?.addr_literal(port))
 }
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConsensusModeArg {
@@ -341,8 +394,6 @@ pub(crate) fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str 
     }
 }
 const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
-const TAIRA_TESTNET_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
-const RETIRED_TAIRA_CHAIN_ID_ALIAS: &str = "iroha3-taira";
 const TAIRA_TESTNET_PEERS: u16 = 4;
 const TAIRA_SORACLOUD_HYDRATION_CONCURRENCY: i64 = 4;
 const TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY: i64 = 4;
@@ -1026,6 +1077,9 @@ impl<T: Write> RunArgs<T> for Args {
             block_cadence_ms,
             consensus_mode,
         } = self;
+        // Own the CLI seed in a zeroizing guard before any fallible request
+        // validation. Once validation succeeds, `LocalnetOptions` takes over
+        // the same custody obligation through its `Drop` implementation.
         let mut seed = seed.map(Zeroizing::new);
         let sora_profile = resolve_sora_profile(sora_profile, private_dataspace)?;
         let perf_profile = perf_profile.map(LocalnetPerfProfile::from);
@@ -1245,7 +1299,7 @@ fn generate_localnet_inner<T: Write>(
     let hosts = validate_localnet_options(opts)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
     let chain_id = resolve_localnet_chain_id(chain_id)?;
-    let taira = chain_id == TAIRA_TESTNET_CHAIN_ID;
+    let taira = chain_id == PUBLIC_TAIRA_CHAIN_ID;
     if taira
         && (opts.peers.get() != TAIRA_TESTNET_PEERS
             || opts.consensus_mode != SumeragiConsensusMode::Npos
@@ -1255,16 +1309,14 @@ fn generate_localnet_inner<T: Write>(
             "the canonical Taira chain requires exactly four NPoS validators and the Nexus Sora profile"
         ));
     }
+    crate::shell::quote_path(&opts.out_dir)
+        .wrap_err("validate requested localnet output path for shell handoff commands")?;
     // No output path is created until every request-level invariant has been
     // checked. This keeps an invalid invocation retryable with the same path.
-    crate::secure_fs::prepare_empty_private_directory(&opts.out_dir)
+    let out_dir = crate::secure_fs::prepare_empty_private_directory(&opts.out_dir)
         .wrap_err("prepare fresh localnet private output directory")?;
-    let out_dir = fs::canonicalize(&opts.out_dir).wrap_err_with(|| {
-        format!(
-            "failed to canonicalize output directory for localnet: {}",
-            opts.out_dir.display()
-        )
-    })?;
+    let shell_out_dir = crate::shell::absolute_quote_path(&out_dir)
+        .wrap_err("validate localnet output path for shell handoff commands")?;
     write_localnet_gitignore(&out_dir)?;
     tui::status("Copying rANS tables");
     let rans_tables_path = copy_rans_tables(&out_dir)?;
@@ -1616,6 +1668,7 @@ fn generate_localnet_inner<T: Write>(
         &onboarding_identity.account_id.to_string(),
         &runtime_bundle,
         &alias_setup_intent_path,
+        &shell_out_dir,
     )?;
     crate::secure_fs::harden_private_tree_with_owner_executables(
         &out_dir,
@@ -1676,14 +1729,14 @@ fn generate_localnet_inner<T: Write>(
     writeln!(
         writer,
         "next_start: cd {} && {}",
-        out_dir.display(),
+        shell_out_dir,
         localnet_script_command("start.sh")
     )?;
     writeln!(writer, "next_health: curl -sf {}health", primary_torii_url)?;
     writeln!(
         writer,
         "next_stop: cd {} && {}",
-        out_dir.display(),
+        shell_out_dir,
         localnet_script_command("stop.sh")
     )?;
     Ok(())
@@ -2200,11 +2253,7 @@ fn resolve_localnet_chain_id(configured: Option<&str>) -> Result<String> {
             "`--chain-id` must not contain leading or trailing whitespace"
         ));
     }
-    if chain_id == RETIRED_TAIRA_CHAIN_ID_ALIAS {
-        return Err(eyre!(
-            "retired Taira chain alias is forbidden; use canonical chain id {TAIRA_TESTNET_CHAIN_ID}"
-        ));
-    }
+    reject_retired_public_chain_id(chain_id)?;
     chain_id
         .parse::<ChainId>()
         .wrap_err("`--chain-id` must be canonical")?;
@@ -2221,6 +2270,7 @@ struct RenderPeerFeatures<'a> {
     onboarding_private_key_file: &'a Path,
     onboarding_token_hash: &'a [u8; 32],
 }
+#[derive(Clone, Copy)]
 enum LocalnetGenesisIdentitySource {
     BootstrapInline(HashOf<BlockHeader>),
     PublishedFile,
@@ -2250,7 +2300,7 @@ fn render_peer_config(
     runtime_block_max_transactions: Option<usize>,
     queue_capacity: usize,
     sumeragi_body_bytes: usize,
-) -> String {
+) -> Zeroizing<String> {
     use iroha_config::parameters::defaults::streaming::codec as codec_defaults;
     use toml::{Table, Value};
     let (bind_host, public_host) = hosts;
@@ -2286,7 +2336,7 @@ fn render_peer_config(
             Value::Table(t)
         })
         .collect::<Vec<_>>();
-    let mut root = Table::new();
+    let mut root = crate::secret_toml::Table::new(Table::new());
     root.insert("chain".into(), Value::String(chain_id.to_owned()));
     if let Some(chain_discriminant) = chain_discriminant {
         root.insert(
@@ -3227,7 +3277,7 @@ fn render_peer_config(
     transport.insert("norito_rpc".into(), Value::Table(norito_rpc));
     torii.insert("transport".into(), Value::Table(transport));
     root.insert("torii".into(), Value::Table(torii));
-    toml::to_string(&Value::Table(root)).expect("serializing peer config to TOML")
+    Zeroizing::new(toml::to_string(&*root).expect("serializing peer config to TOML"))
 }
 fn generate_raw_genesis(
     genesis_public_key: &iroha_crypto::PublicKey,
@@ -4385,24 +4435,27 @@ fn parse_localnet_peer_config(
     rendered_config: &str,
     config_path: Option<&Path>,
 ) -> Result<actual::Root> {
-    let table = rendered_config.parse::<toml::Table>().map_err(|err| {
-        eyre!(
-            "failed to parse rendered peer config as TOML while deriving consensus policies: {err}"
-        )
-    })?;
+    let description = config_path.map_or_else(
+        || "generated localnet bootstrap config".to_owned(),
+        |path| format!("generated peer config {}", path.display()),
+    );
+    let table = crate::secret_toml::parse_table(rendered_config, &description)?;
     // Scope validation to the chain used to render account-typed fields.
     let chain_discriminant = table
         .get("chain_discriminant")
         .and_then(toml::Value::as_integer)
         .and_then(|value| u16::try_from(value).ok());
     let _chain_discriminant = chain_discriminant.map(ChainDiscriminantGuard::enter);
-    let source = match config_path {
-        Some(path) => TomlSource::new(path.to_path_buf(), table),
-        None => TomlSource::inline(table),
-    };
-    actual::Root::from_toml_source(source).map_err(|err| {
-        eyre!("failed to parse generated peer config while deriving consensus policies: {err:?}")
-    })
+    let source = TomlSource::new_sensitive(
+        config_path.map_or_else(
+            || PathBuf::from("generated:localnet-bootstrap-config"),
+            Path::to_path_buf,
+        ),
+        table,
+        crate::secret_toml::zeroize_table,
+    );
+    actual::Root::from_toml_source(source)
+        .map_err(|_| eyre!("generated peer config is invalid while deriving consensus policies"))
 }
 fn resolve_localnet_da_proof_policies(config: &actual::Root) -> DaProofPolicyBundle {
     iroha_core::da::proof_policy_bundle(&config.nexus.lane_config)
@@ -4526,18 +4579,6 @@ fn default_irohad_bin_paths(taira: bool) -> (PathBuf, PathBuf) {
         target_dir.join("release").join(binary),
     )
 }
-fn shell_single_quote(value: &str) -> Result<String> {
-    if value.contains(['\0', '\n', '\r']) {
-        return Err(eyre!("shell assignment value contains a control character"));
-    }
-    Ok(format!("'{}'", value.replace('\'', "'\"'\"'")))
-}
-fn shell_quote_path(path: &Path) -> Result<String> {
-    let value = path
-        .to_str()
-        .ok_or_else(|| eyre!("shell script path is not valid UTF-8: {}", path.display()))?;
-    shell_single_quote(value)
-}
 fn write_scripts(
     out_dir: &Path,
     peers: u16,
@@ -4579,12 +4620,12 @@ fn write_start_script(
     let (default_irohad_debug, default_irohad_release) = default_irohad_bin_paths(taira);
     let default_iroha_debug = default_irohad_debug.with_file_name("iroha");
     let default_iroha_release = default_irohad_release.with_file_name("iroha");
-    let default_irohad_debug = shell_quote_path(&default_irohad_debug)?;
-    let default_irohad_release = shell_quote_path(&default_irohad_release)?;
-    let default_iroha_debug = shell_quote_path(&default_iroha_debug)?;
-    let default_iroha_release = shell_quote_path(&default_iroha_release)?;
-    let client_account_literal = shell_single_quote(client_account_literal)?;
-    let fee_asset_definition_id = shell_single_quote(fee_asset_definition_id)?;
+    let default_irohad_debug = crate::shell::quote_path(&default_irohad_debug)?;
+    let default_irohad_release = crate::shell::quote_path(&default_irohad_release)?;
+    let default_iroha_debug = crate::shell::quote_path(&default_iroha_debug)?;
+    let default_iroha_release = crate::shell::quote_path(&default_iroha_release)?;
+    let client_account_literal = crate::shell::single_quote(client_account_literal)?;
+    let fee_asset_definition_id = crate::shell::single_quote(fee_asset_definition_id)?;
     let mut start_file = BufWriter::new(File::create(start)?);
     let sora_flag = if sora_profile_enabled { "--sora " } else { "" };
     let sora_mode_env = if sora_profile_enabled { "1" } else { "0" };
@@ -4865,7 +4906,7 @@ fn write_start_script(
     )?;
     writeln!(
         start_file,
-        "    if asset_json=\"$($IROHA_CLI --machine -c \"$DIR/client.toml\" --output-format json ledger asset get --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" 2>/dev/null)\"; then"
+        "    if asset_json=\"$(\"$IROHA_CLI\" --machine -c \"$DIR/client.toml\" --output-format json ledger asset get --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" 2>/dev/null)\"; then"
     )?;
     writeln!(
         start_file,
@@ -4888,7 +4929,7 @@ fn write_start_script(
     )?;
     writeln!(
         start_file,
-        "      $IROHA_CLI --machine -c \"$DIR/client.toml\" --fee-payer authority --output-format json ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" --quantity \"$mint_amount\" > \"$DIR/faucet-topup.last.json\""
+        "      \"$IROHA_CLI\" --machine -c \"$DIR/client.toml\" --fee-payer authority --output-format json ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" --quantity \"$mint_amount\" > \"$DIR/faucet-topup.last.json\""
     )?;
     writeln!(start_file, "      return 0")?;
     writeln!(start_file, "    fi")?;
@@ -5089,7 +5130,7 @@ fn write_localnet_runtime_bundle(
     onboarding: &LocalnetClientIdentity,
 ) -> Result<LocalnetRuntimeBundle> {
     let runtime_dir = out_dir.join(LOCALNET_RUNTIME_DIRECTORY);
-    crate::secure_fs::prepare_empty_private_directory(&runtime_dir)
+    let runtime_dir = crate::secure_fs::prepare_empty_private_directory(&runtime_dir)
         .wrap_err("prepare localnet runtime credential directory")?;
     let operator_signer_key = runtime_dir.join(LOCALNET_OPERATOR_SIGNER_KEY_FILE);
     let onboarding_signer_key = runtime_dir.join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE);
@@ -5112,15 +5153,12 @@ fn write_localnet_runtime_bundle(
         onboarding_token_hash,
     })
 }
-fn taira_runtime_signer_key_path(out_dir: &Path, peer_index: usize) -> PathBuf {
-    out_dir
-        .join("runtime")
-        .join(TAIRA_RUNTIME_SIGNER_DIRECTORY)
-        .join(format!("peer{peer_index}.private_key"))
+fn taira_runtime_signer_key_path(directory: &Path, peer_index: usize) -> PathBuf {
+    directory.join(format!("peer{peer_index}.private_key"))
 }
 fn write_taira_runtime_signer_keys(out_dir: &Path, peers: &[Peer]) -> Result<()> {
     let directory = out_dir.join("runtime").join(TAIRA_RUNTIME_SIGNER_DIRECTORY);
-    crate::secure_fs::prepare_empty_private_directory(&directory)
+    let directory = crate::secure_fs::prepare_empty_private_directory(&directory)
         .wrap_err("prepare Taira runtime signer directory")?;
     for (peer_index, peer) in peers.iter().enumerate() {
         let literal = Zeroizing::new(
@@ -5129,7 +5167,7 @@ fn write_taira_runtime_signer_keys(out_dir: &Path, peers: &[Peer]) -> Result<()>
                 .wrap_err("encode canonical Taira runtime signer key")?,
         );
         write_private_key_sidecar(
-            &taira_runtime_signer_key_path(out_dir, peer_index),
+            &taira_runtime_signer_key_path(&directory, peer_index),
             literal.as_str(),
         )?;
     }
@@ -5159,30 +5197,8 @@ fn localnet_client_account_id() -> AccountId {
     AccountId::new(public_key)
 }
 fn write_owner_only_localnet_file(path: &Path, contents: &[u8]) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true).mode(0o600);
-        let mut file = options
-            .open(path)
-            .wrap_err_with(|| format!("create owner-only file {}", path.display()))?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .wrap_err_with(|| format!("protect owner-only file {}", path.display()))?;
-        file.write_all(contents)
-            .wrap_err_with(|| format!("write owner-only file {}", path.display()))?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .wrap_err_with(|| format!("create localnet file {}", path.display()))?;
-        file.write_all(contents)
-            .wrap_err_with(|| format!("write localnet file {}", path.display()))
-    }
+    crate::secure_fs::write_private_file_atomic(path, contents)
+        .wrap_err_with(|| format!("write owner-only localnet file {}", path.display()))
 }
 fn write_client_config(
     out_dir: &Path,
@@ -5198,7 +5214,7 @@ fn write_client_config(
     let chain_discriminant_line = chain_discriminant.map_or_else(String::new, |value| {
         format!("chain_discriminant = {value}\n")
     });
-    let rendered = format!(
+    let rendered = Zeroizing::new(format!(
         concat!(
             "chain = \"{chain}\"\n",
             "network_id_file = \"{network_id_file}\"\n",
@@ -5229,7 +5245,7 @@ fn write_client_config(
         chain_discriminant_line = chain_discriminant_line,
         private_key = client.private_key.as_str(),
         public_key = client.public_key,
-    );
+    ));
     write_owner_only_localnet_file(&path, rendered.as_bytes())
         .wrap_err_with(|| format!("write operator client config {}", path.display()))?;
     Ok(())
@@ -5254,6 +5270,7 @@ fn write_localnet_readme(
     onboarding_account_id: &str,
     runtime_bundle: &LocalnetRuntimeBundle,
     alias_setup_intent_path: &Path,
+    shell_out_dir: &str,
 ) -> Result<()> {
     let readme_path = out_dir.join("README.md");
     let start_command = localnet_script_command("start.sh");
@@ -5329,7 +5346,7 @@ fn write_localnet_readme(
         alias_setup_intent = alias_setup_intent_path.display(),
         start_script = start_path.display(),
         stop_script = stop_path.display(),
-        out_dir = out_dir.display(),
+        out_dir = shell_out_dir,
         start_command = start_command,
         stop_command = stop_command,
     );
@@ -5372,6 +5389,10 @@ mod tests {
     include!("localnet/runtime_artifact_tests.rs");
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "this end-to-end fixture keeps each generated signer, validator registration, config, custody file, and launch-script assertion in one canonical consistency check"
+    )]
     fn canonical_taira_generation_binds_four_runtime_signers_to_validator_peers() {
         let temp = tempfile::tempdir().expect("temporary Taira directory");
         let opts = LocalnetOptions {
@@ -5390,7 +5411,7 @@ mod tests {
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         let mut output = BufWriter::new(Vec::new());
-        generate_localnet_inner(&opts, &mut output, Some(TAIRA_TESTNET_CHAIN_ID))
+        generate_localnet_inner(&opts, &mut output, Some(PUBLIC_TAIRA_CHAIN_ID))
             .expect("generate canonical Taira localnet");
         let peers = build_peers(
             TAIRA_TESTNET_PEERS,
@@ -5526,7 +5547,13 @@ mod tests {
             assert!(inrou.portable_vm_uid.is_none());
             assert!(inrou.portable_vm_gid.is_none());
 
-            let key_path = taira_runtime_signer_key_path(temp.path(), peer_index);
+            let key_path = taira_runtime_signer_key_path(
+                &temp
+                    .path()
+                    .join("runtime")
+                    .join(TAIRA_RUNTIME_SIGNER_DIRECTORY),
+                peer_index,
+            );
             let key_record = fs::read_to_string(&key_path).expect("read Taira runtime signer key");
             assert_eq!(key_record.len(), 71);
             assert_eq!(key_record.lines().count(), 1);
@@ -7791,21 +7818,23 @@ mod tests {
             "--out-dir",
             "/tmp/kagami-localnet-test",
             "--chain-id",
-            TAIRA_TESTNET_CHAIN_ID,
+            PUBLIC_TAIRA_CHAIN_ID,
         ])
         .expect("parse explicit localnet chain id");
         assert_eq!(
             resolve_localnet_chain_id(Some(&parsed.localnet.chain_id))
                 .expect("resolve explicit localnet chain id"),
-            TAIRA_TESTNET_CHAIN_ID
+            PUBLIC_TAIRA_CHAIN_ID
         );
         assert!(resolve_localnet_chain_id(Some("   ")).is_err());
-        assert!(resolve_localnet_chain_id(Some(RETIRED_TAIRA_CHAIN_ID_ALIAS)).is_err());
+        assert!(resolve_localnet_chain_id(Some("iroha3-taira")).is_err());
+        assert!(resolve_localnet_chain_id(Some("iroha3-nexus")).is_err());
+        assert!(resolve_localnet_chain_id(Some("cbdc16")).is_err());
         for padded in [
-            format!(" {TAIRA_TESTNET_CHAIN_ID}"),
-            format!("{TAIRA_TESTNET_CHAIN_ID} "),
-            format!("{TAIRA_TESTNET_CHAIN_ID}\n"),
-            format!("\t{TAIRA_TESTNET_CHAIN_ID}"),
+            format!(" {PUBLIC_TAIRA_CHAIN_ID}"),
+            format!("{PUBLIC_TAIRA_CHAIN_ID} "),
+            format!("{PUBLIC_TAIRA_CHAIN_ID}\n"),
+            format!("\t{PUBLIC_TAIRA_CHAIN_ID}"),
         ] {
             assert!(
                 resolve_localnet_chain_id(Some(&padded)).is_err(),
@@ -7849,7 +7878,7 @@ mod tests {
         let _error = generate_localnet_inner(
             &invalid_taira,
             &mut BufWriter::new(Vec::new()),
-            Some(TAIRA_TESTNET_CHAIN_ID),
+            Some(PUBLIC_TAIRA_CHAIN_ID),
         )
         .expect_err("Taira profile mismatch must fail");
         assert!(
@@ -9074,6 +9103,27 @@ mod tests {
         assert!(err.to_string().contains("unmatched"));
     }
     #[test]
+    fn canonical_host_rejects_non_dns_names_and_injection_characters() {
+        for raw in [
+            " example.test",
+            "example.test ",
+            "example.test/path",
+            "example.test\nnext",
+            "example\".test",
+            "$(command)",
+            "-leading.example",
+            "trailing-.example",
+            "two..labels",
+            "[localhost]",
+        ] {
+            let _error = CanonicalHost::parse(raw, "--public-host")
+                .expect_err("noncanonical or injectable host must fail");
+        }
+        let host = CanonicalHost::parse("Node-1.Example.Test", "--public-host")
+            .expect("canonical DNS host");
+        assert_eq!(host.url_host(), "node-1.example.test");
+    }
+    #[test]
     fn client_config_renders_ipv6_torii_url() {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
@@ -9093,6 +9143,7 @@ mod tests {
     #[test]
     fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
         let tmp = tempfile::tempdir().expect("tmp dir");
+        let shell_out_dir = crate::shell::quote_path(tmp.path()).expect("quote temp path");
         let runtime_bundle = LocalnetRuntimeBundle {
             operator_signer_key: tmp.path().join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
             onboarding_signer_key: tmp.path().join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE),
@@ -9118,6 +9169,7 @@ mod tests {
             &localnet_client_account_literal(None),
             &runtime_bundle,
             &tmp.path().join(LOCALNET_ALIAS_SETUP_INTENT_FILE),
+            &shell_out_dir,
         )
         .expect("write readme");
         let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
@@ -9143,6 +9195,7 @@ mod tests {
     #[test]
     fn private_custody_readme_invokes_lifecycle_scripts_through_bash() {
         let tmp = tempfile::tempdir().expect("tmp dir");
+        let shell_out_dir = crate::shell::quote_path(tmp.path()).expect("quote temp path");
         let runtime_bundle = LocalnetRuntimeBundle {
             operator_signer_key: tmp.path().join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
             onboarding_signer_key: tmp.path().join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE),
@@ -9168,6 +9221,7 @@ mod tests {
             &localnet_client_account_literal(None),
             &runtime_bundle,
             &tmp.path().join(LOCALNET_ALIAS_SETUP_INTENT_FILE),
+            &shell_out_dir,
         )
         .expect("write private-custody readme");
         let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
@@ -9196,6 +9250,8 @@ mod tests {
     #[test]
     fn localnet_refuses_to_mix_with_existing_output() {
         let output = tempfile::tempdir().expect("localnet output");
+        fs::set_permissions(output.path(), fs::Permissions::from_mode(0o700))
+            .expect("harden localnet output directory");
         let sentinel = output.path().join("keep.txt");
         fs::write(&sentinel, b"do not overwrite").expect("write sentinel");
         let opts = LocalnetOptions {
@@ -9215,7 +9271,7 @@ mod tests {
         };
         let error = generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
             .expect_err("non-empty output must be rejected");
-        assert!(error.to_string().contains("must be empty"));
+        assert!(format!("{error:#}").contains("must be empty"));
         assert_eq!(
             fs::read(sentinel).expect("read sentinel"),
             b"do not overwrite"

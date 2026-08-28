@@ -165,11 +165,10 @@ fn stream_endpoints_and_default_event_filters_match_torii_contract() {
         norito::decode_from_bytes(&encoded).expect("decode event subscription");
     assert_eq!(decoded.filters, filters);
 }
-use std::iter;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
-    sync::{Mutex as AsyncMutex, Notify, broadcast, oneshot},
+    sync::{Notify, broadcast},
     time::{sleep, timeout},
 };
 use tokio_tungstenite::tungstenite::{
@@ -426,26 +425,30 @@ fn reject_code_and_message_helpers_extract_values() {
     );
 }
 #[test]
-fn builder_applies_basic_auth_header() {
-    let client = ToriiClient::builder("http://localhost:8080")
-        .expect("builder")
-        .with_basic_auth("demo", "secret")
-        .expect("basic auth header")
-        .build()
-        .expect("client");
-    let header = client
-        .default_headers
-        .get("authorization")
-        .expect("authorization header");
-    assert_eq!(header.to_str().unwrap(), "Basic ZGVtbzpzZWNyZXQ=");
-}
-#[test]
 fn rejects_unsupported_base_scheme() {
     let err =
         ToriiClient::new("ftp://localhost:8080").expect_err("unsupported scheme should error");
     match err {
         ToriiError::UnsupportedScheme { scheme } => assert_eq!(scheme, "ftp"),
         other => panic!("expected UnsupportedScheme, got {other:?}"),
+    }
+}
+#[test]
+fn rejects_noncanonical_or_credential_bearing_base_urls() {
+    for (url, expected) in [
+        (
+            "http://operator:secret@localhost:8080/api/",
+            "embedded URL credentials",
+        ),
+        ("http://localhost:8080/api/?legacy=1", "query and fragment"),
+        ("http://localhost:8080/api/#legacy", "query and fragment"),
+    ] {
+        let error = ToriiClient::new(url).expect_err("noncanonical base URL must fail");
+        assert!(error.to_string().contains(expected));
+        assert!(
+            !format!("{error:?}").contains("secret"),
+            "credential values must not enter diagnostics"
+        );
     }
 }
 #[test]
@@ -854,27 +857,49 @@ async fn sumeragi_operator_reads_require_context_before_dispatch() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn sumeragi_operator_read_rejects_announced_oversize_before_buffering() {
-    let Some(server) = try_start_mock_server() else {
-        return;
+    let listener = match handle_bind_result(
+        TcpListener::bind("127.0.0.1:0").await,
+        "bind oversized Sumeragi response listener",
+    ) {
+        Some(listener) => listener,
+        None => return,
     };
-    let oversized = (MAX_SUMERAGI_OPERATOR_RESPONSE_BYTES + 1).to_string();
-    let status_mock = server.mock(|when, then| {
-        when.method(GET).path("/v1/sumeragi/status");
-        then.status(200).header("content-length", oversized);
+    let address = listener.local_addr().expect("oversized response address");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept operator request");
+        let mut request = Vec::new();
+        loop {
+            let byte = socket.read_u8().await.expect("read operator request");
+            request.push(byte);
+            if request.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: {NORITO_MIME_TYPE}\r\nConnection: close\r\n\r\n",
+            MAX_SUMERAGI_OPERATOR_RESPONSE_BYTES + 1
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("write oversized response header");
     });
-    let client = operator_test_client(server.url("/"));
+    let client = operator_test_client(format!("http://{address}"));
     let error = client
         .fetch_sumeragi_status()
         .await
         .expect_err("oversize response must be rejected before buffering");
-    assert!(matches!(
-        &error,
-        ToriiError::ResponseResourceLimit {
-            context: "Sumeragi operator",
-            maximum: MAX_SUMERAGI_OPERATOR_RESPONSE_BYTES,
-        }
-    ));
-    assert_eq!(status_mock.calls(), 1);
+    assert!(
+        matches!(
+            &error,
+            ToriiError::ResponseResourceLimit {
+                context: "Sumeragi operator",
+                maximum: MAX_SUMERAGI_OPERATOR_RESPONSE_BYTES,
+            }
+        ),
+        "unexpected error: {error:?}"
+    );
+    server.await.expect("oversized response server");
 }
 #[tokio::test(flavor = "current_thread")]
 async fn sumeragi_operator_read_does_not_retry_transient_response() {
@@ -1009,30 +1034,6 @@ async fn submit_query_does_not_follow_redirects() {
     }
 }
 #[tokio::test(flavor = "current_thread")]
-async fn builder_applies_api_token_to_http_requests() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let status = TelemetryStatus::default();
-    let body = encode_status_payload(&status);
-    let mock = server.mock(|when, then| {
-        when.method(GET)
-            .path("/status")
-            .header("x-api-token", "secret-token");
-        then.status(200).body(body.clone());
-    });
-    let client = ToriiClient::builder(server.url("/"))
-        .expect("builder")
-        .with_api_token("secret-token")
-        .expect("token builder")
-        .build()
-        .expect("client");
-    let fetched = client.fetch_status().await.expect("status");
-    mock.assert();
-    assert_eq!(fetched.queue_size, status.queue_size);
-    assert_eq!(fetched.txs_approved, status.txs_approved);
-}
-#[tokio::test(flavor = "current_thread")]
 async fn submit_query_returns_unexpected_status_on_non_success() {
     let Some(server) = try_start_mock_server() else {
         return;
@@ -1053,65 +1054,6 @@ async fn submit_query_returns_unexpected_status_on_non_success() {
         }
         other => panic!("expected UnexpectedStatus, got {other:?}"),
     }
-}
-#[test]
-fn builder_rejects_invalid_api_token_value() {
-    let err = ToriiClient::builder("http://127.0.0.1:8080")
-        .and_then(|builder| builder.with_api_token("invalid\r\ntoken"))
-        .expect_err("invalid header should error");
-    matches!(err, ToriiError::InvalidHeader { .. });
-}
-#[tokio::test(flavor = "current_thread")]
-async fn builder_applies_api_token_to_websocket_requests() {
-    let listener =
-        match handle_bind_result(TcpListener::bind("127.0.0.1:0").await, "bind ws listener") {
-            Some(listener) => listener,
-            None => return,
-        };
-    let addr = listener.local_addr().expect("listener addr");
-    let (header_tx, header_rx) = oneshot::channel();
-    let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("accept ws stream");
-        let mut tx = Some(header_tx);
-        let callback = move |req: &WsHandshakeRequest, mut response: WsHandshakeResponse| {
-            if let Some(sender) = tx.take() {
-                let value = req
-                    .headers()
-                    .get("x-api-token")
-                    .and_then(|header| header.to_str().ok())
-                    .map(str::to_owned);
-                let _ = sender.send(value);
-            }
-            assert_eq!(
-                req.headers()
-                    .get(SEC_WEBSOCKET_PROTOCOL)
-                    .and_then(|value| value.to_str().ok()),
-                Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL)
-            );
-            response.headers_mut().insert(
-                SEC_WEBSOCKET_PROTOCOL,
-                HeaderValue::from_static(NORITO_V1_WEBSOCKET_SUBPROTOCOL),
-            );
-            Ok(response)
-        };
-        let mut ws = tokio_tungstenite::accept_hdr_async(stream, callback)
-            .await
-            .expect("handshake");
-        ws.close(None).await.expect("server close");
-    });
-    let mut ws = ToriiClient::builder(format!("http://{addr}"))
-        .expect("builder")
-        .with_api_token("secret-token")
-        .expect("token builder")
-        .build()
-        .expect("client")
-        .connect_block_stream()
-        .await
-        .expect("connect block stream with header");
-    ws.close(None).await.expect("client close");
-    let header = header_rx.await.expect("header observed");
-    assert_eq!(header.as_deref(), Some("secret-token"));
-    server.await.expect("server join");
 }
 #[tokio::test(flavor = "current_thread")]
 async fn websocket_rejects_missing_selected_norito_subprotocol() {
@@ -1345,6 +1287,84 @@ fn block_hash_presence_without_aligned_result_is_not_smoke_success() {
     assert!(smoke_transaction_result_in_block(&block, &tx_hash).is_none());
 }
 #[tokio::test(flavor = "current_thread")]
+async fn submit_and_wait_for_commit_bounds_websocket_handshake_with_absolute_deadline() {
+    let listener = match handle_bind_result(
+        TcpListener::bind("127.0.0.1:0").await,
+        "bind stalled smoke websocket listener",
+    ) {
+        Some(listener) => listener,
+        None => return,
+    };
+    let address = listener.local_addr().expect("stalled listener address");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept stalled websocket");
+        let mut first_request_byte = [0_u8; 1];
+        socket
+            .read_exact(&mut first_request_byte)
+            .await
+            .expect("read websocket request byte");
+        std::future::pending::<()>().await;
+        drop(socket);
+    });
+    let block = sample_block();
+    let transaction = block
+        .external_transactions()
+        .next()
+        .expect("sample block transaction")
+        .clone();
+    let client = ToriiClient::new(format!("http://{address}"))
+        .expect("client targeting stalled websocket");
+    let started = Instant::now();
+
+    let error = timeout(
+        Duration::from_secs(1),
+        client.submit_and_wait_for_commit(
+            &transaction,
+            SmokeCommitOptions::new(Duration::from_millis(50)),
+        ),
+    )
+    .await
+    .expect("configured smoke deadline must bound the websocket handshake")
+    .expect_err("stalled websocket handshake must time out");
+
+    assert!(matches!(error, ToriiError::Timeout { .. }));
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "the 50 ms smoke deadline must not inherit the outer one-second test guard"
+    );
+    server.abort();
+}
+#[tokio::test(flavor = "current_thread")]
+async fn submit_and_wait_for_commit_bounds_initial_submission_with_absolute_deadline() {
+    let block = sample_block();
+    let tx_hash = block
+        .external_transactions()
+        .next()
+        .expect("sample block tx")
+        .hash();
+    let (_block_tx, block_rx) = broadcast::channel(8);
+    let (_event_tx, event_rx) = broadcast::channel(8);
+
+    let error = timeout(
+        Duration::from_secs(1),
+        submit_and_wait_for_commit_with_receivers(
+            tx_hash,
+            SmokeCommitOptions::new(Duration::from_millis(25)),
+            std::future::pending::<ToriiResult<()>>(),
+            block_rx,
+            event_rx,
+        ),
+    )
+    .await
+    .expect("configured smoke deadline must bound initial submission")
+    .expect_err("stalled initial submission must time out");
+
+    assert!(matches!(
+        error,
+        ToriiError::SmokeAdmissionOutcomeUnknown { .. }
+    ));
+}
+#[tokio::test(flavor = "current_thread")]
 async fn submit_and_wait_for_commit_reports_block_height() {
     let block = sample_block_with_result(Ok(
         iroha_data_model::transaction::DataTriggerSequence::default(),
@@ -1554,8 +1574,7 @@ fn time_event_fixture_message() -> EventMessage {
     decode_norito(EVENT_MESSAGE_FIXTURE).expect("decode event fixture")
 }
 fn pipeline_event_fixture_message() -> EventMessage {
-    decode_norito(PIPELINE_EVENT_MESSAGE_FIXTURE)
-        .expect("decode pipeline event fixture")
+    decode_norito(PIPELINE_EVENT_MESSAGE_FIXTURE).expect("decode pipeline event fixture")
 }
 fn data_event_fixture_message() -> EventMessage {
     decode_norito(DATA_EVENT_MESSAGE_FIXTURE).expect("decode data event fixture")
@@ -2041,28 +2060,25 @@ async fn event_stream_decodes_data_events() {
 #[test]
 fn time_event_message_matches_fixture() {
     let message = time_event_fixture_message();
-    let decoded_again: EventBox =
-        decode_norito::<EventMessage>(EVENT_MESSAGE_FIXTURE)
-            .expect("decode fixture message")
-            .into();
+    let decoded_again: EventBox = decode_norito::<EventMessage>(EVENT_MESSAGE_FIXTURE)
+        .expect("decode fixture message")
+        .into();
     assert_eq!(EventBox::from(message), decoded_again);
 }
 #[test]
 fn pipeline_event_message_matches_fixture() {
     let message = pipeline_event_fixture_message();
-    let decoded_again: EventBox =
-        decode_norito::<EventMessage>(PIPELINE_EVENT_MESSAGE_FIXTURE)
-            .expect("decode pipeline fixture")
-            .into();
+    let decoded_again: EventBox = decode_norito::<EventMessage>(PIPELINE_EVENT_MESSAGE_FIXTURE)
+        .expect("decode pipeline fixture")
+        .into();
     assert_eq!(EventBox::from(message), decoded_again);
 }
 #[test]
 fn data_event_message_matches_fixture() {
     let message = data_event_fixture_message();
-    let decoded_again: EventBox =
-        decode_norito::<EventMessage>(DATA_EVENT_MESSAGE_FIXTURE)
-            .expect("decode data fixture")
-            .into();
+    let decoded_again: EventBox = decode_norito::<EventMessage>(DATA_EVENT_MESSAGE_FIXTURE)
+        .expect("decode data fixture")
+        .into();
     assert_eq!(EventBox::from(message), decoded_again);
 }
 #[tokio::test(flavor = "current_thread")]

@@ -34,12 +34,19 @@ impl MochiApp {
                 Some("Torii client unavailable for dashboard refresh.".to_owned());
             return;
         };
-        let signers = supervisor.signers().to_vec();
+        let accounts = supervisor
+            .signers()
+            .iter()
+            .map(|signer| DashboardAccountInput {
+                label: signer.label().to_owned(),
+                account_id: signer.account_id().to_string(),
+            })
+            .collect();
         let peer = row.alias.clone();
         let tx = self.dashboard_tx.clone();
         self.dashboard_inflight = true;
         self.runtime.spawn(async move {
-            let result = fetch_dashboard_snapshot(peer.clone(), &client, &signers)
+            let result = fetch_dashboard_snapshot(peer.clone(), &client, accounts)
                 .await
                 .map_err(|err| match err.detail {
                     Some(detail) => format!("{} ({detail})", err.message),
@@ -61,22 +68,20 @@ impl MochiApp {
         Some(BootstrapInputs {
             api_base: Self::peer_api_base(peer),
             torii_url: peer.torii.clone(),
-            mcp_url: ToriiClient::new(&peer.torii)
-                .ok()
-                .and_then(|client| client.mcp_endpoint().ok())
-                .map(|url| url.to_string()),
+            mcp_url: Self::peer_mcp_url(peer),
             chain_id: self.effective_chain_id_recipe(supervisor),
             account_id,
             private_key,
         })
     }
-    fn local_mcp_add_command(
-        &self,
-        supervisor: &Supervisor,
-        peer_rows: &[PeerRow],
-    ) -> Option<String> {
-        let inputs = self.bootstrap_inputs(supervisor, peer_rows)?;
-        let mcp_url = inputs.mcp_url?;
+    fn peer_mcp_url(peer: &PeerRow) -> Option<String> {
+        ToriiClient::new(&peer.torii)
+            .ok()
+            .and_then(|client| client.mcp_endpoint().ok())
+            .map(|url| url.to_string())
+    }
+    fn local_mcp_add_command(&self, peer_rows: &[PeerRow]) -> Option<String> {
+        let mcp_url = Self::recipe_peer(peer_rows).and_then(Self::peer_mcp_url)?;
         Some(format!(
             "codex mcp add mochi-local --url {}",
             shell_quote(&mcp_url)
@@ -126,9 +131,7 @@ impl MochiApp {
         let workspace_root = self.effective_workspace_recipe(supervisor);
         let sandbox_root = self.effective_sandbox_recipe(supervisor);
         let snapshot = self.dashboard_snapshot.clone();
-        let mcp_url = self
-            .bootstrap_inputs(supervisor, peer_rows)
-            .and_then(|inputs| inputs.mcp_url);
+        let mcp_url = Self::recipe_peer(peer_rows).and_then(Self::peer_mcp_url);
         Frame::new()
             .fill(Color32::from_rgb(31, 37, 51))
             .stroke(Stroke::new(1.0, Color32::from_rgb(76, 95, 126)))
@@ -180,18 +183,30 @@ impl MochiApp {
                 });
                 ui.add_space(12.0);
                 ui.horizontal_wrapped(|ui| {
-                    if let Some(inputs) = self.bootstrap_inputs(supervisor, peer_rows)
-                        && ui.button("Copy shell env").clicked()
-                    {
-                        Self::copy_text(ui, inputs.render_shell_exports());
-                        self.last_info = Some("Copied local app bootstrap exports.".to_owned());
+                    if ui.button("Copy shell env").clicked() {
+                        match self.bootstrap_inputs(supervisor, peer_rows) {
+                            Some(inputs) => {
+                                Self::copy_text(ui, inputs.render_shell_exports());
+                                self.last_info =
+                                    Some("Copied local app bootstrap exports.".to_owned());
+                                self.last_error = None;
+                            }
+                            None => {
+                                self.last_info = None;
+                                self.last_error = Some(
+                                    "No peer available to render local app exports.".to_owned(),
+                                );
+                            }
+                        }
                     }
-                    if let Some(command) = self.local_mcp_add_command(supervisor, peer_rows)
+                    if mcp_url.is_some()
                         && ui.button("Copy MCP add command").clicked()
+                        && let Some(command) = self.local_mcp_add_command(peer_rows)
                     {
                         Self::copy_text(ui, command);
                         self.last_info =
                             Some("Copied the Codex MCP add command for this sandbox.".to_owned());
+                        self.last_error = None;
                     }
                     if ui.button("Write bootstrap files").clicked() {
                         self.write_bootstrap_files(supervisor, peer_rows);

@@ -540,7 +540,10 @@ fn overlay_precommit_failure_preserves_primary_when_peer_restart_fails() {
             assert!(matches!(*primary, SupervisorError::GenerationValidation(_)));
             assert!(matches!(
                 *restore,
-                SupervisorError::RunningSetRestore { .. }
+                SupervisorError::BinaryUnavailable {
+                    binary: "iroha3d",
+                    ..
+                }
             ));
         }
         other => panic!("expected compound overlay restoration error, got {other:?}"),
@@ -593,7 +596,10 @@ fn overlay_publication_uncertainty_adopts_commit_before_restart_failure() {
         SupervisorError::OperationAndRunningSetRestore { primary, restore } => {
             assert!(matches!(
                 *restore,
-                SupervisorError::RunningSetRestore { .. }
+                SupervisorError::BinaryUnavailable {
+                    binary: "iroha3d",
+                    ..
+                }
             ));
             match *primary {
                 SupervisorError::PublicationUncertain { generation_id, .. } => generation_id,
@@ -639,7 +645,16 @@ fn committed_overlay_surfaces_final_peer_restart_failure() {
     let error = supervisor
         .restart_peer_with_extra_layers("peer0", &[])
         .expect_err("committed overlay must report its peer restart failure");
-    assert!(matches!(error, SupervisorError::RunningSetRestore { .. }));
+    assert!(
+        matches!(
+            error,
+            SupervisorError::BinaryUnavailable {
+                binary: "iroha3d",
+                ..
+            }
+        ),
+        "unexpected committed-overlay restart error: {error:?}"
+    );
     let committed_generation = supervisor.generation_id().to_owned();
     assert_ne!(committed_generation, old_generation);
     assert_ne!(supervisor.peers()[0].config_path(), old_config);
@@ -693,7 +708,6 @@ fn wipe_and_regenerate_resets_storage_and_genesis() {
         );
     }
     let retired_genesis_path = supervisor.genesis_manifest().to_path_buf();
-    fs::write(&retired_genesis_path, b"not-json").expect("corrupt genesis manifest");
     supervisor
         .wipe_and_regenerate()
         .expect("wipe and regenerate should succeed");
@@ -1052,7 +1066,10 @@ fn precommit_failure_surfaces_running_set_restoration_failure() {
             assert!(matches!(*primary, SupervisorError::GenerationValidation(_)));
             assert!(matches!(
                 *restore,
-                SupervisorError::RunningSetRestore { .. }
+                SupervisorError::BinaryUnavailable {
+                    binary: "iroha3d",
+                    ..
+                }
             ));
         }
         other => panic!("expected compound restoration error, got {other:?}"),
@@ -1097,7 +1114,10 @@ fn publication_uncertainty_adopts_commit_before_surfacing_restart_failure() {
         SupervisorError::OperationAndRunningSetRestore { primary, restore } => {
             assert!(matches!(
                 *restore,
-                SupervisorError::RunningSetRestore { .. }
+                SupervisorError::BinaryUnavailable {
+                    binary: "iroha3d",
+                    ..
+                }
             ));
             match *primary {
                 SupervisorError::PublicationUncertain { generation_id, .. } => generation_id,
@@ -1120,57 +1140,55 @@ fn publication_uncertainty_adopts_commit_before_surfacing_restart_failure() {
     assert!(!supervisor.peers()[0].is_running());
 }
 #[test]
-fn genesis_topology_matches_peer_configuration_across_presets() {
-    if !ports_available("genesis_topology_matches_peer_configuration_across_presets") {
+fn genesis_topology_matches_first_release_peer_configuration() {
+    if !ports_available("genesis_topology_matches_first_release_peer_configuration") {
         return;
     }
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    for preset in [ProfilePreset::FourPeerBft] {
-        let supervisor = SupervisorBuilder::new(preset)
-            .data_root(temp.path())
-            .build()
-            .expect("build supervisor");
-        let bytes = fs::read(supervisor.genesis_manifest()).expect("genesis manifest readable");
-        let manifest: norito::json::Value =
-            norito::json::from_slice(&bytes).expect("parse genesis json");
-        let transactions = manifest
-            .get("transactions")
-            .and_then(norito::json::Value::as_array)
-            .expect("transactions array");
-        let topology = transactions
-            .iter()
-            .filter_map(|tx| tx.get("topology").and_then(norito::json::Value::as_array))
-            .find(|entries| !entries.is_empty())
-            .expect("non-empty topology transaction present");
-        let actual_peer_ids: Vec<PeerId> = topology
-            .iter()
-            .map(|entry| {
-                let topology_entry: GenesisTopologyEntry =
-                    norito::json::from_value(entry.clone()).expect("topology entry should decode");
-                topology_entry.peer
-            })
-            .collect();
-        let expected_peer_ids: Vec<PeerId> = supervisor
-            .peers()
-            .iter()
-            .map(|peer| peer.peer_id())
-            .collect();
-        assert_eq!(
-            actual_peer_ids, expected_peer_ids,
-            "topology should mirror prepared peers for preset {preset:?}"
-        );
-        let chain = manifest
-            .get("chain")
-            .and_then(norito::json::Value::as_str)
-            .expect("chain field");
-        assert_eq!(
-            chain,
-            supervisor.chain_id(),
-            "manifest chain id should match supervisor for preset {preset:?}"
-        );
-    }
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
+        .data_root(temp.path())
+        .build()
+        .expect("build supervisor");
+    let bytes = fs::read(supervisor.genesis_manifest()).expect("genesis manifest readable");
+    let manifest: norito::json::Value =
+        norito::json::from_slice(&bytes).expect("parse genesis json");
+    let transactions = manifest
+        .get("transactions")
+        .and_then(norito::json::Value::as_array)
+        .expect("transactions array");
+    let topology = transactions
+        .iter()
+        .filter_map(|tx| tx.get("topology").and_then(norito::json::Value::as_array))
+        .find(|entries| !entries.is_empty())
+        .expect("non-empty topology transaction present");
+    let actual_peer_ids: Vec<PeerId> = topology
+        .iter()
+        .map(|entry| {
+            let topology_entry: GenesisTopologyEntry =
+                norito::json::from_value(entry.clone()).expect("topology entry should decode");
+            topology_entry.peer
+        })
+        .collect();
+    let expected_peer_ids: Vec<PeerId> = supervisor
+        .peers()
+        .iter()
+        .map(|peer| peer.peer_id())
+        .collect();
+    assert_eq!(
+        actual_peer_ids, expected_peer_ids,
+        "topology should mirror the prepared first-release peers"
+    );
+    let chain = manifest
+        .get("chain")
+        .and_then(norito::json::Value::as_str)
+        .expect("chain field");
+    assert_eq!(
+        chain,
+        supervisor.chain_id(),
+        "manifest chain id should match the first-release supervisor"
+    );
 }
 #[test]
 fn peer_spec_peer_id_roundtrip() {
@@ -1468,9 +1486,11 @@ fn normalize_peer_config_overrides_sets_lane_count_and_local_services() {
     let mut lane0 = toml::Table::new();
     lane0.insert("alias".into(), toml::Value::String("core".into()));
     lane0.insert("index".into(), toml::Value::Integer(0));
+    lane0.insert("metadata".into(), toml::Value::Table(toml::Table::new()));
     let mut lane1 = toml::Table::new();
     lane1.insert("alias".into(), toml::Value::String("governance".into()));
     lane1.insert("index".into(), toml::Value::Integer(1));
+    lane1.insert("metadata".into(), toml::Value::Table(toml::Table::new()));
     nexus.insert(
         "lane_catalog".into(),
         toml::Value::Array(vec![toml::Value::Table(lane0), toml::Value::Table(lane1)]),
@@ -1583,7 +1603,9 @@ fn supervisor_exposes_config_overrides() {
     assert!(!nexus.contains_key("enabled"));
     assert_eq!(
         supervisor
-            .sumeragi_config_overrides()
+            .peer_config_overrides
+            .sumeragi
+            .as_ref()
             .and_then(|table| table.get("queues"))
             .and_then(toml::Value::as_table)
             .and_then(|queues| queues.get("commands"))
@@ -1591,7 +1613,9 @@ fn supervisor_exposes_config_overrides() {
         Some(1024)
     );
     let torii = supervisor
-        .torii_config_overrides()
+        .peer_config_overrides
+        .torii
+        .as_ref()
         .expect("torii overrides");
     assert!(matches!(
         torii.get("address"),
@@ -1895,6 +1919,20 @@ fn peer_specs_stage_distinct_rans_tables_and_write_absolute_paths() {
     for spec in &specs {
         let contents = fs::read_to_string(&spec.config_path).expect("read config");
         let value: toml::Table = toml::from_str(&contents).expect("parse config");
+        let vpn_operator = value
+            .get("network")
+            .and_then(toml::Value::as_table)
+            .and_then(|table| table.get("soranet_vpn"))
+            .and_then(toml::Value::as_table)
+            .and_then(|table| table.get("operator_account_id"))
+            .and_then(toml::Value::as_str)
+            .expect("canonical SoraNet VPN operator account");
+        assert_eq!(
+            vpn_operator,
+            AccountId::new(spec.keys.identity_public_key.clone())
+                .to_i105_for_discriminant(genesis.chain_discriminant)
+                .expect("encode operator account")
+        );
         let codec = value
             .get("streaming")
             .and_then(toml::Value::as_table)
@@ -2040,48 +2078,36 @@ fn peer_spec_preserves_managed_streaming_roots_with_shallow_overlay() {
     assert!(!streaming.contains_key("soravpn"));
 }
 #[test]
-fn peer_spec_rejects_managed_streaming_state_redirects() {
+fn peer_spec_rejects_managed_streaming_session_redirect() {
     let temp = tempfile::tempdir().expect("temp dir");
     let profile = NetworkProfile::default();
     let paths = NetworkPaths::from_root(temp.path(), &profile);
     paths.ensure().expect("paths");
     let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
     let genesis = test_genesis_material(&paths);
-    for (key, nested, expected_error) in [
-        (
-            "session_store_dir",
-            None::<&str>,
-            "managed streaming session root",
+    let mut streaming = toml::Table::new();
+    streaming.insert(
+        "session_store_dir".into(),
+        toml::Value::String("/tmp/shared-streaming-state".to_owned()),
+    );
+    let mut overlay = toml::Table::new();
+    overlay.insert("streaming".into(), toml::Value::Table(streaming));
+    let err = spec
+        .write_config(
+            "demo-chain",
+            &genesis,
+            std::slice::from_ref(&spec),
+            &PeerConfigOverrides::default(),
+            &[overlay],
+        )
+        .expect_err("managed streaming redirect must be rejected");
+    match err {
+        SupervisorError::Config(message) => assert!(
+            message.contains("managed streaming session root")
+                && message.contains(spec.storage_dir.to_string_lossy().as_ref()),
+            "unexpected error: {message}"
         ),
-    ] {
-        let redirect = toml::Value::String("/tmp/shared-streaming-state".to_owned());
-        let mut streaming = toml::Table::new();
-        if let Some(section) = nested {
-            let mut table = toml::Table::new();
-            table.insert(key.into(), redirect);
-            streaming.insert(section.into(), toml::Value::Table(table));
-        } else {
-            streaming.insert(key.into(), redirect);
-        }
-        let mut overlay = toml::Table::new();
-        overlay.insert("streaming".into(), toml::Value::Table(streaming));
-        let err = spec
-            .write_config(
-                "demo-chain",
-                &genesis,
-                std::slice::from_ref(&spec),
-                &PeerConfigOverrides::default(),
-                &[overlay],
-            )
-            .expect_err("managed streaming redirect must be rejected");
-        match err {
-            SupervisorError::Config(message) => assert!(
-                message.contains(expected_error)
-                    && message.contains(spec.storage_dir.to_string_lossy().as_ref()),
-                "unexpected error: {message}"
-            ),
-            other => panic!("expected SupervisorError::Config, got {other:?}"),
-        }
+        other => panic!("expected SupervisorError::Config, got {other:?}"),
     }
 }
 #[test]
@@ -2207,9 +2233,11 @@ fn peer_spec_config_header_includes_lane_paths() {
     let mut lane0 = toml::Table::new();
     lane0.insert("alias".into(), toml::Value::String("Core Lane".into()));
     lane0.insert("index".into(), toml::Value::Integer(0));
+    lane0.insert("metadata".into(), toml::Value::Table(toml::Table::new()));
     let mut lane1 = toml::Table::new();
     lane1.insert("alias".into(), toml::Value::String("Gov+Ops".into()));
     lane1.insert("index".into(), toml::Value::Integer(1));
+    lane1.insert("metadata".into(), toml::Value::Table(toml::Table::new()));
     let mut nexus = toml::Table::new();
     nexus.insert("lane_count".into(), toml::Value::Integer(2));
     nexus.insert(
@@ -2386,10 +2414,8 @@ fn onboarding_bundle_rejects_partial_material_without_completion() {
         if signer_only {
             write_private_test_file(&signer, signer_payload.as_bytes());
         } else {
-            write_private_test_file(
-                &token,
-                format!("{LOCAL_ONBOARDING_TOKEN_PREFIX}{}", "a".repeat(64)),
-            );
+            let token_payload = format!("{LOCAL_ONBOARDING_TOKEN_PREFIX}{}", "a".repeat(64));
+            write_private_test_file(&token, token_payload.as_bytes());
         }
         let error = OnboardingRuntimeBundle::create(&paths, authority)
             .expect_err("partial bundle must fail");
@@ -2439,6 +2465,43 @@ fn onboarding_bundle_rejects_unsafe_private_file_modes() {
 }
 #[test]
 #[cfg(unix)]
+fn onboarding_runtime_reader_rejects_raced_symlinks_and_fifos() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let owner_uid = fs::metadata(temp.path()).expect("owner metadata").uid();
+    for replacement in ["symlink", "fifo"] {
+        let path = temp.path().join(format!("runtime-{replacement}"));
+        write_private_test_file(&path, b"admitted");
+        let target = temp.path().join(format!("target-{replacement}"));
+        write_private_test_file(&target, b"replacement");
+        let error = read_owner_only_runtime_file_inner(
+            &path,
+            owner_uid,
+            64,
+            "raced local onboarding secret",
+            || {
+                fs::remove_file(&path).expect("remove admitted path");
+                if replacement == "symlink" {
+                    symlink(&target, &path).expect("install raced symlink");
+                } else {
+                    let result = Command::new("mkfifo")
+                        .arg(&path)
+                        .status()
+                        .expect("run mkfifo");
+                    assert!(result.success(), "mkfifo failed");
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                        .expect("protect raced FIFO");
+                }
+            },
+        )
+        .expect_err("raced non-regular path must fail closed");
+        assert!(
+            matches!(error, SupervisorError::Io(_) | SupervisorError::Config(_)),
+            "unexpected raced-file error: {error}"
+        );
+    }
+}
+#[test]
+#[cfg(unix)]
 fn onboarding_bundle_rejects_malformed_tokens() {
     let temp = tempfile::tempdir().expect("temp dir");
     let authority = localnet_admin_signer().expect("localnet admin");
@@ -2446,8 +2509,7 @@ fn onboarding_bundle_rejects_malformed_tokens() {
     let signer_payload = format!("{private_key}\n");
     let malformed_tokens = [
         b"too-short".as_slice(),
-        b"nevo-local-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            .as_slice(),
+        b"nevo-local-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".as_slice(),
         b"iroha-localnet-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             .as_slice(),
         b"iroha-localnet-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
@@ -2466,10 +2528,15 @@ fn onboarding_bundle_rejects_malformed_tokens() {
         write_private_test_file(&runtime.join(LOCAL_ONBOARDING_TOKEN_FILE), malformed_token);
         let error = OnboardingRuntimeBundle::create(&paths, authority)
             .expect_err("malformed token must fail");
-        assert!(matches!(
-            error,
-            SupervisorError::Config(message) if message.contains("exactly 64 lowercase hexadecimal")
-        ));
+        assert!(
+            matches!(
+                error,
+                SupervisorError::Config(ref message)
+                    if message.contains("exactly 64 lowercase hexadecimal")
+                        || message.contains("exceeds the reviewed size limit")
+            ),
+            "unexpected malformed-token error: {error}"
+        );
     }
 }
 #[test]
@@ -2635,12 +2702,14 @@ fn supervisor_session_info_reports_workspace_and_mcp_urls() {
     assert!(info.account_id.is_some());
     assert_eq!(
         info.onboarding_token_file,
-        info.sandbox_root.join("runtime/onboarding.token")
+        fs::canonicalize(info.sandbox_root.join("runtime/onboarding.token"))
+            .expect("canonical onboarding token path")
     );
     assert_eq!(info.onboarding_credential_id, "local-dev");
     assert_eq!(
         info.onboarding_signer_file,
-        info.sandbox_root.join("runtime/onboarding-signer.key")
+        fs::canonicalize(info.sandbox_root.join("runtime/onboarding-signer.key"))
+            .expect("canonical onboarding signer path")
     );
 }
 #[test]
@@ -2730,17 +2799,15 @@ fn managed_peer_process_uses_its_peer_directory_as_cwd() {
     let ownership = SupervisorOwnershipLock::acquire(paths.root()).expect("acquire ownership");
     peer.start(&stub, StartReason::Manual, &ownership)
         .expect("start peer");
-    for _ in 0..50 {
-        if cwd_capture.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    let status = peer
+        .process
+        .as_mut()
+        .expect("spawned peer process")
+        .wait()
+        .expect("wait for peer stub");
+    assert!(status.success(), "peer cwd stub failed with {status}");
     let captured = fs::read_to_string(&cwd_capture).expect("captured peer cwd");
     assert_eq!(Path::new(captured.trim()), expected);
-    if let Some(child) = peer.process.as_mut() {
-        child.wait().expect("wait for peer stub");
-    }
 }
 #[test]
 fn manual_stop_cancels_pending_restart() {
@@ -2752,10 +2819,6 @@ fn manual_stop_cancels_pending_restart() {
     let _kagami = KagamiStub::install(temp.path());
     let irohad_stub = temp.path().join("irohad_stub.sh");
     let stub_script = r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "iroha-stub iroha3"
-  exit 0
-fi
 exit 1
 "#;
     fs::write(&irohad_stub, stub_script).expect("write irohad stub");

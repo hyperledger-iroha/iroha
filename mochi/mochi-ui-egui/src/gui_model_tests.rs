@@ -214,7 +214,9 @@ fn entry_form_to_state_accepts_valid_inputs() {
     let form = SignerEntryForm {
         label: "Test signer".to_owned(),
         account: account_literal(&ALICE_ID),
-        private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()).to_string(),
+        private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone())
+            .to_string()
+            .into(),
         permissions: [InstructionPermission::MintAsset].into_iter().collect(),
         roles: String::new(),
     };
@@ -232,11 +234,13 @@ fn entry_form_to_state_accepts_valid_inputs() {
 fn entry_form_to_state_rejects_missing_fields() {
     let form = SignerEntryForm {
         label: "Missing account".to_owned(),
-        private_key: "deadbeef".to_owned(),
+        private_key: "deadbeef".to_owned().into(),
         ..Default::default()
     };
-    let err = MochiApp::entry_form_to_state(&form)
-        .expect_err("missing account should produce validation error");
+    let err = match MochiApp::entry_form_to_state(&form) {
+        Ok(_) => panic!("missing account should produce validation error"),
+        Err(err) => err,
+    };
     assert!(
         err.contains("Account identifier is required"),
         "unexpected error: {err}"
@@ -248,7 +252,7 @@ fn signer_entries_to_signers_converts_entries() {
     let entry = SignerEntryState {
         label: "Alice real".to_owned(),
         account: account_literal(&ALICE_ID),
-        private_key,
+        private_key: private_key.into(),
         permissions: InstructionPermission::all().into_iter().collect(),
         roles: String::new(),
     };
@@ -264,7 +268,9 @@ fn signer_entries_to_signers_rejects_empty_permissions() {
     let entry = SignerEntryState {
         label: "No perms".to_owned(),
         account: account_literal(&ALICE_ID),
-        private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()).to_string(),
+        private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone())
+            .to_string()
+            .into(),
         permissions: Default::default(),
         roles: String::new(),
     };
@@ -318,11 +324,11 @@ fn parse_lane_count_input_accepts_numbers() {
     );
 }
 #[test]
-fn toml_helpers_extract_strings_and_numbers() {
+fn toml_helpers_require_exact_toml_types() {
     let value = TomlValue::String("alpha".to_owned());
     assert_eq!(toml_string(&value).as_deref(), Some("alpha"));
     assert_eq!(toml_u32(&TomlValue::Integer(7)), Some(7));
-    assert_eq!(toml_u32(&TomlValue::String("12".to_owned())), Some(12));
+    assert_eq!(toml_u32(&TomlValue::String("12".to_owned())), None);
 }
 include!("gui/tests/lane_and_admission.rs");
 #[test]
@@ -1281,6 +1287,45 @@ fn event_filter_serializes_and_restores_state() {
         !restored.alias_selected("alpha"),
         "alias selection should persist with lowercasing"
     );
+
+    for mutation in ["missing", "unknown", "wrong_type", "noncanonical_alias"] {
+        let mut invalid = parsed.clone();
+        let map = invalid.as_object_mut().expect("filter object");
+        match mutation {
+            "missing" => {
+                map.remove("show_data");
+            }
+            "unknown" => {
+                map.insert("legacy".to_owned(), Value::Bool(true));
+            }
+            "wrong_type" => {
+                map.insert("show_data".to_owned(), Value::String("true".to_owned()));
+            }
+            "noncanonical_alias" => {
+                map.insert(
+                    "alias_filters".to_owned(),
+                    Value::Array(vec![Value::String("Alpha".to_owned())]),
+                );
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            EventFilterState::from_json_value(&invalid).is_none(),
+            "mutation {mutation} must be rejected"
+        );
+    }
+}
+#[test]
+fn persisted_scalar_values_require_exact_first_release_spelling() {
+    assert_eq!(
+        ActiveView::from_storage_value(ActiveView::Activity.storage_value()),
+        Some(ActiveView::Activity)
+    );
+    assert!(ActiveView::from_storage_value(" activity ").is_none());
+    assert!(parse_first_run_completed("true"));
+    for invalid in [" true ", "TRUE", "1", "false"] {
+        assert!(!parse_first_run_completed(invalid));
+    }
 }
 #[test]
 fn collect_dashboard_metrics_counts_resources() {
@@ -1455,7 +1500,6 @@ fn peer_status_view_captures_metrics_and_errors() {
     let delta = view.delta_summary().expect("delta summary");
     assert!(delta.contains("tx +4 / -2"));
     assert!(delta.contains("queue +5"));
-    assert!(delta.contains("resched +3"));
     assert!(delta.contains("view +1"));
     let (label, color) = view.status_label();
     assert!(label.contains("peers=3"));
@@ -1572,7 +1616,7 @@ fn lane_status_rows_surface_relay_lag_and_cursor() {
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let envelope = LaneRelayEnvelope::new(header, None, None, settlement, 256).expect("envelope");
+    let envelope = LaneRelayEnvelope::new(header, None, settlement, 256).expect("envelope");
     diagnostics.lane_relay_envelopes = vec![envelope];
     view.record_snapshot(snapshot, Some(sumeragi), Some(diagnostics), None, None, now);
     let rows = view.lane_status_rows(&lane_catalog_snapshot(None));
@@ -1583,7 +1627,7 @@ fn lane_status_rows_surface_relay_lag_and_cursor() {
     assert_eq!(row.relay_lag, Some(1));
     assert_eq!(row.rbc_bytes, Some(384));
     assert_eq!(row.da_cursor_label(), "e2 s7");
-    assert!(matches!(row.relay_state, RelayIngestState::MissingQc));
+    assert!(matches!(row.relay_state, RelayIngestState::MissingFinality));
 }
 #[test]
 fn composer_update_success_records_message() {

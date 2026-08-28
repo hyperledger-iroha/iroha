@@ -29,7 +29,9 @@ pub mod localnet;
 mod localnet_tui;
 mod privacy_bootstrap;
 mod schema;
+mod secret_toml;
 mod secure_fs;
+mod shell;
 mod swarm;
 mod tui;
 mod verify;
@@ -47,7 +49,7 @@ const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
 const TOP_LEVEL_HELP: &str = concat!(
     "Common tasks:\n",
     "  kagami localnet-wizard\n",
-    "  kagami wizard --profile nexus\n",
+    "  kagami wizard\n",
     "  kagami localnet --out-dir ./localnet\n",
     "  kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml\n",
     "  kagami keys --out-dir ./key-custody\n",
@@ -135,7 +137,7 @@ struct Cli {
 /// devnets, plus advanced low-level helpers.
 #[derive(Subcommand)]
 enum Command {
-    /// Guided node/bootstrap flow for configuring a peer against an existing network profile
+    /// Guided onboarding flow for staging a Sora Nexus observer configuration
     Wizard(wizard::Args),
     /// Guided disposable local devnet flow for generating peers, configs, genesis, and scripts
     LocalnetWizard(localnet_tui::LocalnetWizardArgs),

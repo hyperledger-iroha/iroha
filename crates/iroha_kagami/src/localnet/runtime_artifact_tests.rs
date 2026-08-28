@@ -21,7 +21,7 @@ fn owner_only_localnet_writer_sets_mode_before_write_and_refuses_overwrite() {
     assert_eq!(mode, 0o600);
     let error = write_owner_only_localnet_file(&path, b"private_key = 'replacement'\n")
         .expect_err("owner-only writer must not overwrite an existing config");
-    assert!(error.to_string().contains("create owner-only file"));
+    assert!(error.to_string().contains("write owner-only localnet file"));
     assert_eq!(
         fs::read_to_string(path).expect("read preserved owner-only config"),
         "private_key = 'secret'\n"
@@ -30,8 +30,11 @@ fn owner_only_localnet_writer_sets_mode_before_write_and_refuses_overwrite() {
 #[test]
 fn genesis_key_files_are_canonical_consistent_and_non_overwriting() {
     let temp = tempfile::tempdir().expect("make genesis key temp dir");
-    let public_path = temp.path().join(GENESIS_PUBLIC_KEY_FILE);
-    let private_path = temp.path().join(GENESIS_PRIVATE_KEY_FILE);
+    let custody =
+        crate::secure_fs::prepare_empty_private_directory(&temp.path().join("genesis-custody"))
+            .expect("prepare genesis key custody directory");
+    let public_path = custody.join(GENESIS_PUBLIC_KEY_FILE);
+    let private_path = custody.join(GENESIS_PRIVATE_KEY_FILE);
     let (public_key, private_key) =
         KeyPair::try_from_seed(vec![41_u8; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("derive fixture genesis key")

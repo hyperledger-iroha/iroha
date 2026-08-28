@@ -26,7 +26,7 @@ New to our project? [Make your first contribution](#your-first-code-contribution
   - Note: generated IVM executor fixtures are checked in and missing fixtures fail closed. Verify or atomically refresh every generator-owned fixture with:
     - `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --check`
     - `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --write`
-  - The separate codec-sample command does not generate executor bytecode: `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`.
+  - The separate codec-sample test does not generate executor bytecode: `cargo test --locked -p iroha_kagami --test codec regenerate_codec_samples -- --ignored --exact`.
 - If you change derive/proc-macro crates, run the trybuild UI suites via
   `make check-proc-macro-ui` (or
   `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) and refresh

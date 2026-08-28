@@ -147,9 +147,10 @@ where
     T: Debug + Encode + DecodeAll + JsonSerialize + JsonDeserializeOwned,
     T: Send + Sync + 'static,
 {
-    fn norito_to_rust(&self, mut input: &[u8]) -> Result<String> {
-        let object =
-            norito::with_decode_limits_scope(CODEC_DECODE_LIMITS_V1, || T::decode_all(&mut input))?;
+    fn norito_to_rust(&self, input: &[u8]) -> Result<String> {
+        let object = norito::with_decode_limits_scope(CODEC_DECODE_LIMITS_V1, || {
+            norito::decode_from_bytes::<T>(input)
+        })?;
         // Reserve one byte for the typed decoder's canonical line terminator.
         let mut output = BoundedDebugString::new(MAX_CODEC_OUTPUT_BYTES_V1 - 1);
         write!(&mut output, "{object:#?}").map_err(|_| {
@@ -254,6 +255,7 @@ impl<T: Write> RunArgs<T> for Args {
     }
 }
 
+#[derive(Clone, Copy)]
 enum JsonConversion {
     NoritoToJson,
     JsonToNorito,
@@ -332,13 +334,14 @@ fn run_json_conversion<T: Write>(
         JsonConversion::NoritoToJson => decoder.norito_to_json()?,
         JsonConversion::JsonToNorito => decoder.json_to_norito()?,
     };
-    if let Some(path) = output_path {
-        crate::atomic_output::write_file(&path, ".kagami-codec-", |writer| {
-            writer.write_all(&rendered).map_err(Into::into)
-        })
-    } else {
-        writer.write_all(&rendered).map_err(Into::into)
-    }
+    output_path.map_or_else(
+        || writer.write_all(&rendered).map_err(Into::into),
+        |path| {
+            crate::atomic_output::write_file(&path, ".kagami-codec-", |writer| {
+                writer.write_all(&rendered).map_err(Into::into)
+            })
+        },
+    )
 }
 
 fn read_codec_input_bounded<R: Read + ?Sized>(
@@ -773,6 +776,21 @@ mod tests {
         normalize_roundtrip_json(&mut expected);
         normalize_roundtrip_json(&mut actual);
         assert_eq!(expected, actual);
+    }
+    #[test]
+    fn norito_to_rust_decodes_checked_in_framed_sample() {
+        iroha_genesis::init_instruction_registry();
+        let input = fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/samples/codec/account.bin"
+        ))
+        .expect("read framed account sample");
+        assert!(input.starts_with(&norito::core::MAGIC));
+
+        let output = ConverterImpl::<NewAccount>::boxed()
+            .norito_to_rust(&input)
+            .expect("decode framed sample to Rust debug output");
+        assert!(output.contains("NewAccount"));
     }
     #[test]
     fn generate_map_covers_schema_types() {

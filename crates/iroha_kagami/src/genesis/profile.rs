@@ -16,9 +16,11 @@ pub const TAIRA_XOR_SCALE: u32 = 9;
 pub const PUBLIC_XOR_ALIAS: &str = "xor#universal";
 /// Public XOR domain registered in public-profile genesis manifests.
 pub const PUBLIC_XOR_DOMAIN: &str = "universal.universal";
-const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
-const PUBLIC_NEXUS_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000753";
-const PK2_NEXUS_CHAIN_ID: &str = "cbdc16";
+/// Canonical first-release public Taira chain identity.
+pub const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+/// Canonical first-release public Minamoto/Nexus chain identity.
+pub const PUBLIC_NEXUS_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000753";
+const RETIRED_PUBLIC_CHAIN_ID_ALIASES: &[&str] = &["iroha3-taira", "iroha3-nexus", "cbdc16"];
 /// Profile presets for `kagami genesis`/`kagami verify`.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)] // Keep network names explicit.
@@ -71,7 +73,7 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
             seed_policy: SeedPolicy::RequireExplicit,
         },
         GenesisProfile::Iroha3Nexus => ProfileDefaults {
-            chain_id: ChainId::from("iroha3-nexus"),
+            chain_id: ChainId::from(PUBLIC_NEXUS_CHAIN_ID),
             chain_discriminant: Some(NEXUS_CHAIN_DISCRIMINANT),
             block_cadence_ms: NonZeroU64::new(100).unwrap(),
             min_peers: 4,
@@ -100,11 +102,23 @@ pub fn profile_uses_public_xor(profile: GenesisProfile) -> bool {
 pub fn public_xor_profile_for_chain_id(chain_id: &str) -> Option<GenesisProfile> {
     match chain_id {
         PUBLIC_TAIRA_CHAIN_ID => Some(GenesisProfile::Iroha3Taira),
-        "iroha3-nexus" | PUBLIC_NEXUS_CHAIN_ID | PK2_NEXUS_CHAIN_ID => {
-            Some(GenesisProfile::Iroha3Nexus)
-        }
+        PUBLIC_NEXUS_CHAIN_ID => Some(GenesisProfile::Iroha3Nexus),
         _ => None,
     }
+}
+/// Reject pre-release aliases for public network chain identities.
+///
+/// # Errors
+///
+/// Returns an error when `chain_id` is a retired Taira or Nexus alias instead of the canonical
+/// first-release UUID.
+pub fn reject_retired_public_chain_id(chain_id: &str) -> Result<()> {
+    if RETIRED_PUBLIC_CHAIN_ID_ALIASES.contains(&chain_id) {
+        return Err(eyre!(
+            "retired public chain id alias `{chain_id}` is forbidden; select the canonical first-release network UUID"
+        ));
+    }
+    Ok(())
 }
 /// Default canonical XOR asset id for public profiles where it is known.
 ///
@@ -184,9 +198,7 @@ pub fn resolve_public_xor_asset_definition_id(
 pub fn known_chain_discriminant_for_chain_id(chain_id: &str) -> Option<u16> {
     match chain_id {
         PUBLIC_TAIRA_CHAIN_ID => Some(TAIRA_CHAIN_DISCRIMINANT),
-        "iroha3-nexus" | PUBLIC_NEXUS_CHAIN_ID | PK2_NEXUS_CHAIN_ID => {
-            Some(NEXUS_CHAIN_DISCRIMINANT)
-        }
+        PUBLIC_NEXUS_CHAIN_ID => Some(NEXUS_CHAIN_DISCRIMINANT),
         _ => None,
     }
 }
@@ -242,7 +254,7 @@ mod tests {
         assert_eq!(taira.block_cadence_ms.get(), 4_000);
         assert_eq!(taira.min_peers, 4);
         let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
-        assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
+        assert_eq!(nexus.chain_id, ChainId::from(PUBLIC_NEXUS_CHAIN_ID));
         assert_eq!(nexus.chain_discriminant, Some(NEXUS_CHAIN_DISCRIMINANT));
         assert_eq!(nexus.block_cadence_ms.get(), 100);
         assert_eq!(nexus.min_peers, 4);
@@ -257,7 +269,7 @@ mod tests {
     fn require_explicit_seed_errors_without_override() {
         let err = resolve_vrf_seed(
             GenesisProfile::Iroha3Nexus,
-            &ChainId::from("iroha3-nexus"),
+            &ChainId::from(PUBLIC_NEXUS_CHAIN_ID),
             None,
         )
         .expect_err("explicit seed should be required for nexus");
@@ -292,6 +304,12 @@ mod tests {
             public_xor_profile_for_chain_id(PUBLIC_TAIRA_CHAIN_ID),
             Some(GenesisProfile::Iroha3Taira)
         );
+        assert_eq!(
+            public_xor_profile_for_chain_id(PUBLIC_NEXUS_CHAIN_ID),
+            Some(GenesisProfile::Iroha3Nexus)
+        );
+        assert_eq!(public_xor_profile_for_chain_id("iroha3-nexus"), None);
+        assert_eq!(public_xor_profile_for_chain_id("cbdc16"), None);
     }
     #[test]
     fn public_xor_resolver_defaults_taira_and_requires_nexus() {
@@ -343,17 +361,20 @@ mod tests {
         );
         assert_eq!(known_chain_discriminant_for_chain_id("iroha3-taira"), None);
         assert_eq!(
-            known_chain_discriminant_for_chain_id("00000000-0000-0000-0000-000000000753"),
+            known_chain_discriminant_for_chain_id(PUBLIC_NEXUS_CHAIN_ID),
             Some(NEXUS_CHAIN_DISCRIMINANT)
         );
-        assert_eq!(
-            known_chain_discriminant_for_chain_id("iroha3-nexus"),
-            Some(NEXUS_CHAIN_DISCRIMINANT)
-        );
-        assert_eq!(
-            known_chain_discriminant_for_chain_id("cbdc16"),
-            Some(NEXUS_CHAIN_DISCRIMINANT)
-        );
+        assert_eq!(known_chain_discriminant_for_chain_id("iroha3-nexus"), None);
+        assert_eq!(known_chain_discriminant_for_chain_id("cbdc16"), None);
         assert_eq!(known_chain_discriminant_for_chain_id("unknown"), None);
+    }
+    #[test]
+    fn retired_public_chain_aliases_are_rejected() {
+        for alias in RETIRED_PUBLIC_CHAIN_ID_ALIASES {
+            let error = reject_retired_public_chain_id(alias).expect_err("alias must be retired");
+            assert!(error.to_string().contains("forbidden"));
+        }
+        reject_retired_public_chain_id(PUBLIC_TAIRA_CHAIN_ID).expect("canonical Taira id");
+        reject_retired_public_chain_id(PUBLIC_NEXUS_CHAIN_ID).expect("canonical Nexus id");
     }
 }

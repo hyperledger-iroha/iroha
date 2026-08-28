@@ -544,16 +544,6 @@ pub struct StateCursor {
     inner: ForwardCursor,
 }
 impl StateCursor {
-    /// Identifier of the server-side cursor.
-    #[must_use]
-    pub fn query_id(&self) -> &str {
-        self.inner.query()
-    }
-    /// Position (1-based) of the next batch in the cursor stream.
-    #[must_use]
-    pub fn position(&self) -> u64 {
-        self.inner.cursor().get()
-    }
     pub(crate) fn clone_inner(&self) -> ForwardCursor {
         self.inner.clone()
     }
@@ -823,7 +813,7 @@ mod tests {
         );
         let encoded = to_bytes(&output).expect("encode query output");
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(200).body(encoded.clone());
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
@@ -853,7 +843,7 @@ mod tests {
         );
         let encoded = to_bytes(&output).expect("encode query output");
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(200).body(encoded.clone());
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
@@ -877,7 +867,7 @@ mod tests {
         );
         let encoded = to_bytes(&output).expect("encode query output");
         server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(200).body(encoded.clone());
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
@@ -885,7 +875,7 @@ mod tests {
         let err = run_state_query(client, StateQueryKind::Accounts, None, None)
             .await
             .expect_err("unexpected batch kind should error");
-        matches!(err, StateQueryError::UnexpectedBatch { .. });
+        assert!(matches!(err, StateQueryError::UnexpectedBatch { .. }));
     }
     #[test]
     fn state_entry_account_exposes_norito_payload() {

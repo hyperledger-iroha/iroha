@@ -14263,7 +14263,7 @@ mod tests {
             "recovery_outcome": "Prepared",
             "applied_block_height": null,
             "evidence": null,
-            "execution_expires_at_unix_ms": admitted.authorization.claims.execution_expires_at_unix_ms,
+            "execution_expires_at_unix_ms": (admitted.authorization.claims.execution_expires_at_unix_ms),
         });
         if kind == "write_canary" {
             let object = report.as_object_mut().expect("write report object");
@@ -14296,7 +14296,7 @@ mod tests {
             "recovery_outcome": "Prepared",
             "applied_block_height": null,
             "evidence": null,
-            "execution_expires_at_unix_ms": admitted.authorization.claims.execution_expires_at_unix_ms,
+            "execution_expires_at_unix_ms": (admitted.authorization.claims.execution_expires_at_unix_ms),
             "fee_payment": {},
             "fee_quote": {},
             "mutation_mode": "deploy",
@@ -14838,11 +14838,11 @@ mod tests {
             "operation": "onboarding",
             "recovery_outcome": "Applied",
             "prepared_envelope_sha256": (prepared.prepared_sha256.clone()),
-            "prepared_envelope_size": u64::try_from(envelope.len()).expect("bounded envelope"),
+            "prepared_envelope_size": (u64::try_from(envelope.len()).expect("bounded envelope")),
             "transaction_hash_hex": null,
             "applied_block_height": null,
             "evidence": (result.semantic_hash_hex),
-            "execution_expires_at_unix_ms": admitted.authorization.claims.execution_expires_at_unix_ms,
+            "execution_expires_at_unix_ms": (admitted.authorization.claims.execution_expires_at_unix_ms),
         });
         let mut bytes = json::to_json(&report)
             .expect("canonical proof-required evidence")
@@ -14882,11 +14882,11 @@ mod tests {
                 "operation": "onboarding",
                 "transaction_hash_hex": null,
                 "prepared_envelope_sha256": (prepared.prepared_sha256.clone()),
-                "prepared_envelope_size": u64::try_from(bytes.len()).expect("bounded envelope"),
+                "prepared_envelope_size": (u64::try_from(bytes.len()).expect("bounded envelope")),
                 "recovery_outcome": "Pending",
                 "applied_block_height": null,
                 "evidence": evidence,
-                "execution_expires_at_unix_ms": admitted.authorization.claims.execution_expires_at_unix_ms,
+                "execution_expires_at_unix_ms": (admitted.authorization.claims.execution_expires_at_unix_ms),
             });
             validate_prepared_write_report(
                 &report,

@@ -2,8 +2,8 @@
 //! Configuration retrieval and mutation integration tests.
 use integration_tests::sandbox;
 use iroha_config::client_api::{
-    ConfigUpdateDTO, Logger, NetworkUpdate, ResumeHashDirective, SoranetHandshakePowSummary,
-    SoranetHandshakePowUpdate, SoranetHandshakePuzzleUpdate, SoranetHandshakeUpdate,
+    ConfigUpdateDTO, Logger, SoranetHandshakePowSummary, SoranetHandshakePowUpdate,
+    SoranetHandshakePuzzleUpdate, SoranetHandshakeUpdate,
 };
 use iroha_data_model::Level;
 use iroha_test_network::NetworkBuilder;
@@ -22,6 +22,7 @@ const UPDATED_POW_LANES: u32 = 2;
 const TEST_POW_MEMORY_KIB: u32 = 12 * 1024;
 const TEST_POW_TIME_COST: u32 = 3;
 const TEST_POW_LANES: u32 = 3;
+const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const CONFIG_APPLY_RETRY_ATTEMPTS: usize = 180;
 const CONFIG_APPLY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const CONFIG_PROPAGATION_RETRY_ATTEMPTS: usize = 600;
@@ -32,6 +33,10 @@ fn config_scenarios() -> eyre::Result<()> {
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|c| {
+            let c = c.write(
+                ["nexus", "storage", "local_budget_bytes"],
+                TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+            );
             c.write(["network", "block_gossip_size"], 100)
                 .write(["queue", "capacity"], 100_000)
                 .write(["network", "soranet_handshake", "pow", "difficulty"], 6_i64)
@@ -114,28 +119,42 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
     assert_eq!(config.queue.capacity, nonzero!(100_000_usize));
     assert_eq!(config.logger.level, new_level);
     assert_eq!(config.logger.filter, new_filter);
-    // Now override SoraNet handshake settings.
-    let descriptor_hex =
-        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f".to_string();
-    let resume_hex = "aabbccddeeff00112233445566778899".to_string();
+    let baseline_handshake_identity = (
+        config
+            .network
+            .soranet_handshake
+            .descriptor_commit_hex
+            .clone(),
+        config
+            .network
+            .soranet_handshake
+            .client_capabilities_hex
+            .clone(),
+        config
+            .network
+            .soranet_handshake
+            .relay_capabilities_hex
+            .clone(),
+        config.network.soranet_handshake.kem_id,
+        config.network.soranet_handshake.sig_id,
+        config.network.soranet_handshake.resume_hash_hex.clone(),
+    );
+    // Now override SoraNet proof-of-work settings without changing the live
+    // peer handshake identity or negotiated suite.
     let handshake_update = ConfigUpdateDTO {
         logger: Logger {
             level: new_level,
             filter: new_filter.clone(),
         },
         network_acl: None,
-        network: Some(NetworkUpdate {
-            require_sm_handshake_match: Some(false),
-            require_sm_openssl_preview_match: Some(false),
-            lane_profile: None,
-        }),
+        network: None,
         soranet_handshake: Some(SoranetHandshakeUpdate {
-            descriptor_commit_hex: Some(descriptor_hex.clone()),
-            client_capabilities_hex: Some("010203".to_owned()),
+            descriptor_commit_hex: None,
+            client_capabilities_hex: None,
             relay_capabilities_hex: None,
-            kem_id: Some(2),
-            sig_id: Some(3),
-            resume_hash_hex: Some(ResumeHashDirective::Set(resume_hex.clone())),
+            kem_id: None,
+            sig_id: None,
+            resume_hash_hex: None,
             pow: Some(SoranetHandshakePowUpdate {
                 difficulty: Some(5),
                 max_future_skew_secs: Some(900),
@@ -165,18 +184,24 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
         config = client.get_config()?;
     }
     let handshake = &config.network.soranet_handshake;
-    assert_eq!(handshake.descriptor_commit_hex, descriptor_hex);
     assert_eq!(
-        handshake.resume_hash_hex.as_deref(),
-        Some(resume_hex.as_str())
+        (
+            handshake.descriptor_commit_hex.clone(),
+            handshake.client_capabilities_hex.clone(),
+            handshake.relay_capabilities_hex.clone(),
+            handshake.kem_id,
+            handshake.sig_id,
+            handshake.resume_hash_hex.clone(),
+        ),
+        baseline_handshake_identity
     );
     assert_eq!(handshake.pow.difficulty, 5);
     let puzzle = handshake.pow.puzzle;
     assert_eq!(puzzle.memory_kib, UPDATED_POW_MEMORY_KIB);
     assert_eq!(puzzle.time_cost, UPDATED_POW_TIME_COST);
     assert_eq!(puzzle.lanes, UPDATED_POW_LANES);
-    assert!(!config.network.require_sm_handshake_match);
-    assert!(!config.network.require_sm_openssl_preview_match);
+    assert!(config.network.require_sm_handshake_match);
+    assert!(config.network.require_sm_openssl_preview_match);
     Ok(())
 }
 fn soranet_pow_puzzle_config_roundtrips_scenario(

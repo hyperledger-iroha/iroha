@@ -1,14 +1,19 @@
 //! Dashboard data aggregation for the Mochi desktop shell.
-use crate::{
-    SigningAuthority,
-    torii::{
-        ExplorerAssetsQuery, ExplorerBlockRecord, ExplorerBlocksQuery, ToriiClient, ToriiErrorInfo,
-    },
+use crate::torii::{
+    ExplorerAssetsQuery, ExplorerBlockRecord, ExplorerBlocksQuery, ToriiClient, ToriiErrorInfo,
 };
 use futures::{StreamExt, TryStreamExt, stream};
 const DASHBOARD_BLOCK_LIMIT: u64 = 6;
 const DASHBOARD_ASSET_LIMIT: u32 = 4;
 const DASHBOARD_ASSET_FETCH_CONCURRENCY: usize = 8;
+/// Non-secret account identity used to populate a dashboard card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardAccountInput {
+    /// Friendly signer label.
+    pub label: String,
+    /// Canonical account identifier.
+    pub account_id: String,
+}
 /// An individual balance displayed under a dev account card.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardAssetBalance {
@@ -55,7 +60,7 @@ pub struct DashboardSnapshot {
 pub async fn fetch_dashboard_snapshot(
     peer_alias: impl Into<String>,
     client: &ToriiClient,
-    signers: &[SigningAuthority],
+    accounts: Vec<DashboardAccountInput>,
 ) -> Result<DashboardSnapshot, ToriiErrorInfo> {
     let peer_alias = peer_alias.into();
     let blocks = client
@@ -65,10 +70,8 @@ pub async fn fetch_dashboard_snapshot(
         })
         .await
         .map_err(|err| err.summarize())?;
-    let cards = stream::iter(signers.iter().map(|signer| {
-        let label = signer.label().to_owned();
-        let account_id = signer.account_id().to_string();
-        async move { fetch_account_card(client, label, account_id).await }
+    let cards = stream::iter(accounts.into_iter().map(|account| async move {
+        fetch_account_card(client, account.label, account.account_id).await
     }))
     .buffered(DASHBOARD_ASSET_FETCH_CONCURRENCY)
     .try_collect::<Vec<_>>()
@@ -117,18 +120,24 @@ fn map_recent_block(block: ExplorerBlockRecord) -> DashboardRecentBlock {
 }
 #[cfg(test)]
 mod tests {
-    use super::fetch_dashboard_snapshot;
-    use crate::{SigningAuthority, torii::ToriiClient};
+    use super::{DashboardAccountInput, fetch_dashboard_snapshot};
+    use crate::torii::ToriiClient;
     use httpmock::prelude::*;
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::json;
     use std::time::Duration;
     const EXPLORER_DEFINITION: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-    fn signer() -> SigningAuthority {
-        SigningAuthority::new("Alice", ALICE_ID.clone(), ALICE_KEYPAIR.clone())
+    fn signer() -> DashboardAccountInput {
+        DashboardAccountInput {
+            label: "Alice".to_owned(),
+            account_id: ALICE_ID.to_string(),
+        }
     }
-    fn bob_signer() -> SigningAuthority {
-        SigningAuthority::new("Bob", BOB_ID.clone(), BOB_KEYPAIR.clone())
+    fn bob_signer() -> DashboardAccountInput {
+        DashboardAccountInput {
+            label: "Bob".to_owned(),
+            account_id: BOB_ID.to_string(),
+        }
     }
     #[tokio::test]
     async fn fetch_dashboard_snapshot_aggregates_signers_assets_and_blocks() {
@@ -175,7 +184,7 @@ mod tests {
                 );
         });
         let client = ToriiClient::new(server.url("/")).expect("client");
-        let snapshot = fetch_dashboard_snapshot("peer0", &client, &[signer()])
+        let snapshot = fetch_dashboard_snapshot("peer0", &client, vec![signer()])
             .await
             .expect("snapshot");
         assert_eq!(snapshot.peer_alias, "peer0");
@@ -254,7 +263,7 @@ mod tests {
             );
         });
         let client = ToriiClient::new(server.url("/")).expect("client");
-        let snapshot = fetch_dashboard_snapshot("peer0", &client, &[signer(), bob_signer()])
+        let snapshot = fetch_dashboard_snapshot("peer0", &client, vec![signer(), bob_signer()])
             .await
             .expect("snapshot");
         let labels = snapshot
@@ -307,7 +316,7 @@ mod tests {
             );
         });
         let client = ToriiClient::new(server.url("/")).expect("client");
-        let error = fetch_dashboard_snapshot("peer0", &client, &[signer()])
+        let error = fetch_dashboard_snapshot("peer0", &client, vec![signer()])
             .await
             .expect_err("a filtered response must not cross account cards");
         assert_eq!(error.kind, crate::torii::ToriiErrorKind::Decode);

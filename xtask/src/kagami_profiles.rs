@@ -1367,7 +1367,7 @@ const PROFILES: &[ProfileSpec] = &[
     ProfileSpec {
         slug: "iroha3-nexus",
         profile_flag: "iroha3-nexus",
-        chain_id: "iroha3-nexus",
+        chain_id: "00000000-0000-0000-0000-000000000753",
         chain_discriminant: Some(753),
         min_peers: 4,
         requires_seed: true,

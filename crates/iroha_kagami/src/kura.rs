@@ -143,7 +143,8 @@ fn print_blockchain(
         return Err(eyre!("block count must be at least one"));
     }
     let block_store_path = resolve_block_store_dir(block_store_path)?;
-    let mut block_store = BlockStore::new(&block_store_path);
+    let mut block_store = BlockStore::open_read_only(&block_store_path)
+        .wrap_err("failed to open canonical Kura journals read-only")?;
     let index_count = block_store
         .read_index_count()
         .wrap_err("failed to read index count from block store {block_store_path:?}.")?;
@@ -234,7 +235,8 @@ fn print_blockchain(
 fn print_sidecar(writer: &mut dyn Write, block_store_path: &Path, height: u64) -> Outcome {
     // Resolve the concrete lane directory when multilane layout is in use.
     let block_store_path = resolve_block_store_dir(block_store_path)?;
-    let mut block_store = BlockStore::new(&block_store_path);
+    let mut block_store = BlockStore::open_read_only(&block_store_path)
+        .wrap_err("failed to open canonical Kura journals read-only")?;
     if let Some(sidecar) = block_store
         .read_pipeline_metadata(height)
         .wrap_err("failed to read canonical pipeline sidecar")?
@@ -262,7 +264,7 @@ mod tests {
     };
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use std::{borrow::Cow, fs, sync::Arc};
-    fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
+    fn fixture_block(prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
         let network_id =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
                 b"kagami-kura-fixture-network",
@@ -286,8 +288,12 @@ mod tests {
             .expect("sign Kagami Kura fixture block")
             .unpack(|_| {})
             .into();
-        store.append_block_to_chain(&sb).expect("append");
         Arc::new(sb)
+    }
+    fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
+        let block = fixture_block(prev);
+        store.append_block_to_chain(&block).expect("append");
+        block
     }
     #[test]
     fn appended_block_uses_verifiable_checked_signature() {
@@ -326,6 +332,39 @@ mod tests {
         assert!(s.contains("Index file says there are 2 blocks."));
         assert!(s.contains("Printing blocks 2-2"));
         assert!(s.contains("Block#2 starts at byte offset"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn print_accepts_an_immutable_read_only_snapshot() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = BlockStore::new(temp.path());
+        store.create_files_if_they_do_not_exist().unwrap();
+        append_block(&mut store, None);
+        drop(store);
+        for file_name in ["blocks.index", "blocks.data", "blocks.hashes"] {
+            fs::set_permissions(
+                temp.path().join(file_name),
+                fs::Permissions::from_mode(0o444),
+            )
+            .expect("protect Kura journal snapshot");
+        }
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o555))
+            .expect("protect Kura snapshot directory");
+
+        let mut output = Vec::new();
+        print_blockchain(&mut output, temp.path(), 0, 1).expect("inspect read-only Kura snapshot");
+        assert!(String::from_utf8(output).unwrap().contains("Block#1"));
+        assert_eq!(
+            fs::metadata(temp.path().join("blocks.index"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o444,
+            "inspection must not rewrite journal permissions"
+        );
     }
     #[test]
     fn print_writes_to_output_file() {
@@ -367,6 +406,8 @@ mod tests {
         use iroha_core::kura::{Kura, PipelineRecoverySidecar};
         // Prepare a temp store and write metadata for a canonical block.
         let temp = tempfile::tempdir().unwrap();
+        let lane_config = LaneConfig::default();
+        let block_store_path = lane_config.primary().blocks_dir(temp.path());
         let (kura, _count) = Kura::new_fresh_single_lane(
             &KuraConfig {
                 init_mode: iroha_config::kura::InitMode::Strict,
@@ -382,11 +423,12 @@ mod tests {
                     iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
                 replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
-            &LaneConfig::default(),
+            &lane_config,
         )
         .unwrap();
-        let mut store = BlockStore::new(temp.path());
-        let block = append_block(&mut store, None);
+        let block = fixture_block(None);
+        kura.store_block(block.clone())
+            .expect("store sidecar fixture block through authorized Kura mutation");
         let mut fingerprint = [0u8; 32];
         fingerprint[..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
         let sidecar = PipelineRecoverySidecar::new(
@@ -403,7 +445,7 @@ mod tests {
         let out_path = output.path().join("sidecar.json");
         let args = Args {
             from: None,
-            path_to_block_store: temp.path().to_owned(),
+            path_to_block_store: block_store_path,
             command: Command::Sidecar {
                 height: 1,
                 output: Some(out_path.clone()),

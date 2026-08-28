@@ -22,8 +22,8 @@ roadmap item “Documentation & rollout” by turning the supervisor behaviours 
    UI, and integration crates before you begin modifying configs.
 3. Note the preset (`four-peer-bft`, or a custom exact 3f+1 committee). The
    generated topology determines how many peer folders/logs you should expect
-   under the sandbox root. Historical configs named `single-peer` also launch
-   four validators.
+   under the sandbox root. Preset names are exact; `four-peer-bft` is the only
+   built-in preset.
 4. If you are using the shell helper, capture:
    - `scripts/mochi_local_sandbox.sh status`
    - `<workspace>/.mochi/sandbox/<profile>/serve.log`
@@ -95,10 +95,11 @@ Follow these steps before making changes:
   log exists.
 - Export a snapshot via **Maintenance → Export snapshot** (or call
   `Supervisor::export_snapshot`). The snapshot bundles storage, configs, and
-  logs into `snapshots/<timestamp>-<label>/`. Digesting walks canonical UTF-8
-  paths through one 4,096-entry lexical window at a time, streams every file,
-  and rejects directory nesting beyond 64 levels; it does not materialize the
-  full file inventory or any file-sized comparison buffer.
+  logs into `snapshots/<timestamp>-<label>/`. Copying and digesting reject more
+  than 65,536 entries in one directory, 262,144 entries in one tree, or 64
+  directory levels. Digesting sorts each bounded directory once and streams
+  every file; it does not materialize the full tree inventory or a file-sized
+  comparison buffer.
 - If the issue involves stream widgets, copy the `ManagedBlockStream`,
   `ManagedEventStream`, and `ManagedStatusStream` health indicators from the
   Dashboard. The UI surfaces the last reconnect attempt and error reason; grab
@@ -110,19 +111,18 @@ Most peer launch failures fall into three buckets:
 
 ### Missing binaries or bad overrides
 
-`SupervisorBuilder` shells out to `iroha3d`, `kagami`, and `iroha`.
+`SupervisorBuilder` invokes `iroha3d` and `kagami`.
 If the UI reports “failed to spawn process” or “permission denied”, point MOCHI
 at known-good binaries:
 
 ```bash
 cargo run -p mochi-ui --features gui --bin mochi -- \
   --irohad /path/to/iroha3d \
-  --kagami /path/to/kagami \
-  --iroha-cli /path/to/iroha_cli
+  --kagami /path/to/kagami
 ```
 
-You can set `MOCHI_IROHAD`, `MOCHI_KAGAMI`, and `MOCHI_IROHA_CLI` to avoid
-typing the flags repeatedly. When debugging bundle builds, compare the
+You can set `MOCHI_IROHAD` and `MOCHI_KAGAMI` to avoid typing the flags
+repeatedly. When debugging bundle builds, compare the
 `BundleConfig` in `mochi/mochi-ui-egui/src/config.rs` against the paths in
 `target/mochi-bundle`.
 
@@ -254,10 +254,17 @@ under `snapshots/`. The supervisor will:
 2. verify that the snapshot’s `metadata.json` matches the current `chain_id` and peer count;
 3. verify byte-for-byte that its manifest, signed genesis, and every peer config match the
    validated selected immutable generation;
-4. verify every copied storage tree against its recorded integrity hash; and
-5. capture and stop exactly the currently running peer aliases, replace only selected mutable
-   storage and logs, then restore that exact set on success or failure. Immutable config/genesis
-   artifacts are never overwritten.
+4. copy under the V1 depth and entry budgets and verify every staged storage tree against its
+   recorded integrity hash;
+5. durably journal the operation, capture and stop exactly the currently running peer aliases,
+   then replace only selected mutable storage and logs; and
+6. require the restored peers to survive a bounded post-spawn check before committing. Any failure
+   stops the restored processes, rolls storage and logs back, and restarts the original set.
+   Immutable config/genesis artifacts are never overwritten.
+
+The journal and original backups remain authoritative until commit. If Mochi exits during the
+swap, its next launch validates every journal path and direct directory ancestor before mutation,
+then rolls back a pending restore or completes cleanup for a committed restore.
 
 If the snapshot was created for a different preset or chain identifier the restore call returns a
 `SupervisorError::Config` so you can grab a matching bundle instead of silently mixing artefacts.

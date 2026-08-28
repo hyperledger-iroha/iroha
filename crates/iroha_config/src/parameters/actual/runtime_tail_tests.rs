@@ -50,9 +50,11 @@ fn soranet_pow_defaults_are_const_initializable() {
         CONST_POW.revocation_store_path,
         runtime.revocation_store_path
     );
-    assert_eq!(CONST_PUZZLE.memory_kib, runtime.puzzle.memory_kib);
-    assert_eq!(CONST_PUZZLE.time_cost, runtime.puzzle.time_cost);
-    assert_eq!(CONST_PUZZLE.lanes, runtime.puzzle.lanes);
+    assert_eq!(CONST_POW.puzzle, runtime.puzzle);
+    let runtime_puzzle = runtime.puzzle;
+    assert_eq!(CONST_PUZZLE.memory_kib, runtime_puzzle.memory_kib);
+    assert_eq!(CONST_PUZZLE.time_cost, runtime_puzzle.time_cost);
+    assert_eq!(CONST_PUZZLE.lanes, runtime_puzzle.lanes);
 }
 #[test]
 fn no_trusted_peers() {

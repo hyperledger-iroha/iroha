@@ -1,8 +1,5 @@
 use iroha_config::parameters::{
-    actual::{
-        LaneProfile, Network, RelayMode, SoranetHandshake, SoranetPow, SoranetPrivacy,
-        SoranetPuzzle, SoranetVpn,
-    },
+    actual::{LaneProfile, Network, RelayMode, SoranetHandshake, SoranetPrivacy, SoranetVpn},
     defaults::network as network_defaults,
 };
 use iroha_config_base::WithOrigin;
@@ -20,6 +17,18 @@ use std::{
     },
     time::Duration,
 };
+
+/// Build a low-cost fixture for the mandatory SoraNet admission handshake.
+fn low_cost_test_soranet_handshake() -> SoranetHandshake {
+    let mut handshake = SoranetHandshake::default();
+    handshake.pow.difficulty = 1;
+    handshake.pow.puzzle.memory_kib =
+        NonZeroU32::new(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB)
+            .expect("minimum puzzle memory is non-zero");
+    handshake.pow.puzzle.time_cost = NonZeroU32::new(1).unwrap();
+    handshake.pow.puzzle.lanes = NonZeroU32::new(1).unwrap();
+    handshake
+}
 
 /// Build the exact fully populated baseline shared by P2P integration cases.
 ///
@@ -152,17 +161,6 @@ fn test_network_config(
         max_frame_bytes_other: 262_144,
         quic_max_idle_timeout: None,
     }
-}
-
-fn test_soranet_pow() -> SoranetPow {
-    let mut pow = SoranetPow::default();
-    pow.difficulty = 1;
-    pow.puzzle = SoranetPuzzle {
-        memory_kib: NonZeroU32::new(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB).unwrap(),
-        time_cost: NonZeroU32::new(1).unwrap(),
-        lanes: NonZeroU32::new(1).unwrap(),
-    };
-    pow
 }
 
 fn test_network_id(seed: &str) -> NetworkId {

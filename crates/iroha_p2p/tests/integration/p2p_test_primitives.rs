@@ -9,18 +9,9 @@ fn setup_logger() {
     test_logger();
 }
 fn default_soranet_handshake() -> ActualSoranetHandshake {
-    // Admission-puzzle behavior has dedicated integration coverage. General
-    // network timing tests use the minimum valid first-release puzzle.
-    ActualSoranetHandshake {
-        descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
-        client_capabilities: WithOrigin::inline(DEFAULT_CLIENT_CAPABILITIES.to_vec()),
-        relay_capabilities: WithOrigin::inline(DEFAULT_RELAY_CAPABILITIES.to_vec()),
-        trust_gossip: true,
-        kem_id: 1,
-        sig_id: 1,
-        resume_hash: None,
-        pow: super::test_soranet_pow(),
-    }
+    // Keep admission inexpensive so general timing tests continue to measure
+    // the behavior they name. `test_network_config` isolates replay state.
+    super::low_cost_test_soranet_handshake()
 }
 #[test]
 fn test_encryption() {

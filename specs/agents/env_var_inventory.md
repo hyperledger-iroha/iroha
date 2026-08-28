@@ -2,16 +2,15 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **790** · Unique variables: **189**
+Total references: **786** · Unique variables: **188**
 
-## CARGO (prod: 3, test: 3)
+## CARGO (prod: 2, test: 3)
 
 - test: crates/iroha_test_network/src/lib.rs:2626 — `let running_under_cargo = std::env::var_os("CARGO").is_some();`
 - test: crates/norito_derive/tests/ui.rs:31 — `let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());`
 - test: integration_tests/src/kagami.rs:141 — `let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());`
-- prod: mochi/mochi-core/src/supervisor.rs:1395 — `let cargo = env::var_os("CARGO")`
-- prod: mochi/mochi-core/src/supervisor.rs:1444 — `let cargo = env::var_os("CARGO")`
-- prod: mochi/mochi-core/src/supervisor.rs:1490 — `let cargo = env::var_os("CARGO")`
+- prod: mochi/mochi-core/src/supervisor.rs:1065 — `let cargo = env::var_os("CARGO")`
+- prod: mochi/mochi-core/src/supervisor.rs:1114 — `let cargo = env::var_os("CARGO")`
 
 ## CARGO_BIN_EXE_attachment_sanitizer (test: 9)
 
@@ -429,24 +428,24 @@ Total references: **790** · Unique variables: **189**
 - test: integration_tests/tests/privacy_exact12_zk_x509_network.rs:149 — `let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(RESOURCE_CERTIFICATE_RELATIVE_PATH);`
 - test: integration_tests/tests/repo.rs:32 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: integration_tests/tests/streaming/mod.rs:404 — `let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));`
-- test: mochi/mochi-core/src/compose.rs:1453 — `env!("CARGO_MANIFEST_DIR"),`
-- test: mochi/mochi-core/src/compose.rs:1457 — `env!("CARGO_MANIFEST_DIR"),`
-- test: mochi/mochi-core/src/compose.rs:1461 — `env!("CARGO_MANIFEST_DIR"),`
-- test: mochi/mochi-core/src/compose.rs:1465 — `env!("CARGO_MANIFEST_DIR"),`
-- test: mochi/mochi-core/src/compose.rs:1469 — `env!("CARGO_MANIFEST_DIR"),`
-- test: mochi/mochi-core/src/supervisor.rs:117 — `env!("CARGO_MANIFEST_DIR"),`
-- prod: mochi/mochi-core/src/supervisor.rs:966 — `let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));`
-- prod: mochi/mochi-core/src/supervisor.rs:1387 — `let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));`
+- test: mochi/mochi-core/src/compose.rs:1621 — `env!("CARGO_MANIFEST_DIR"),`
+- test: mochi/mochi-core/src/compose.rs:1625 — `env!("CARGO_MANIFEST_DIR"),`
+- test: mochi/mochi-core/src/compose.rs:1629 — `env!("CARGO_MANIFEST_DIR"),`
+- test: mochi/mochi-core/src/compose.rs:1633 — `env!("CARGO_MANIFEST_DIR"),`
+- test: mochi/mochi-core/src/compose.rs:1637 — `env!("CARGO_MANIFEST_DIR"),`
+- test: mochi/mochi-core/src/supervisor.rs:128 — `env!("CARGO_MANIFEST_DIR"),`
+- prod: mochi/mochi-core/src/supervisor.rs:871 — `let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));`
+- prod: mochi/mochi-core/src/supervisor.rs:1057 — `let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));`
 - test: mochi/mochi-core/src/torii/tests/canonical_fixture_owner.rs:9 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: mochi/mochi-core/src/torii/tests/canonical_fixture_owner.rs:16 — `let checked = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: mochi/mochi-integration/src/mock_torii/tests/replay_fixture_owner.rs:10 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: mochi/mochi-integration/src/mock_torii/tests/replay_fixture_owner.rs:17 — `let checked = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: mochi/mochi-integration/tests/supervisor.rs:146 — `let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/torii_replay");`
-- prod: mochi/mochi-ui-egui/src/gui.rs:121 — `env!("CARGO_MANIFEST_DIR"),`
-- prod: mochi/mochi-ui-egui/src/gui.rs:125 — `env!("CARGO_MANIFEST_DIR"),`
-- prod: mochi/mochi-ui-egui/src/gui.rs:129 — `env!("CARGO_MANIFEST_DIR"),`
-- prod: mochi/mochi-ui-egui/src/gui.rs:133 — `env!("CARGO_MANIFEST_DIR"),`
-- prod: mochi/mochi-ui-egui/src/gui.rs:137 — `env!("CARGO_MANIFEST_DIR"),`
+- prod: mochi/mochi-ui-egui/src/gui.rs:118 — `env!("CARGO_MANIFEST_DIR"),`
+- prod: mochi/mochi-ui-egui/src/gui.rs:122 — `env!("CARGO_MANIFEST_DIR"),`
+- prod: mochi/mochi-ui-egui/src/gui.rs:126 — `env!("CARGO_MANIFEST_DIR"),`
+- prod: mochi/mochi-ui-egui/src/gui.rs:130 — `env!("CARGO_MANIFEST_DIR"),`
+- prod: mochi/mochi-ui-egui/src/gui.rs:134 — `env!("CARGO_MANIFEST_DIR"),`
 - test: tools/kotlin-fixture-gen/src/bin/swift_kagemusha_peer_payment_v4.rs:692 — `let request_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(`
 - tool: tools/norito_codegen_exporter/src/norito_rpc.rs:92 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: tools/soranet-handshake-harness/tests/fixtures_verify.rs:16 — `let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));`
@@ -514,7 +513,7 @@ Total references: **790** · Unique variables: **189**
 - tool: tools/sora-vpn-helper/src/main.rs:85 — `const VERSION: &str = env!("CARGO_PKG_VERSION");`
 - tool: tools/telemetry-schema-diff/src/main.rs:221 — `tool_version: format!("telemetry_schema_diff {}", env!("CARGO_PKG_VERSION")),`
 
-## CARGO_TARGET_DIR (prod: 5, test: 6, tool: 2)
+## CARGO_TARGET_DIR (prod: 3, test: 6, tool: 2)
 
 - prod: crates/iroha_kagami/src/localnet.rs:4535 — `let target_dir = resolve_target_dir(&repo_root, env::var("CARGO_TARGET_DIR").ok().as_deref());`
 - test: crates/iroha_test_network/src/lib.rs:1095 — `if let Ok(path) = std::env::var("CARGO_TARGET_DIR") {`
@@ -523,10 +522,8 @@ Total references: **790** · Unique variables: **189**
 - test: integration_tests/src/binary_resolver.rs:205 — `if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {`
 - test: integration_tests/src/kagami.rs:96 — `if let Ok(path) = env::var("CARGO_TARGET_DIR") {`
 - test: integration_tests/src/kagami.rs:120 — `if let Ok(path) = env::var("CARGO_TARGET_DIR") {`
-- prod: mochi/mochi-core/src/supervisor.rs:1001 — `let target_root = env::var_os("CARGO_TARGET_DIR")`
-- prod: mochi/mochi-core/src/supervisor.rs:1421 — `let target_root = env::var_os("CARGO_TARGET_DIR")`
-- prod: mochi/mochi-core/src/supervisor.rs:1467 — `let target_root = env::var_os("CARGO_TARGET_DIR")`
-- prod: mochi/mochi-core/src/supervisor.rs:1513 — `let target_root = env::var_os("CARGO_TARGET_DIR")`
+- prod: mochi/mochi-core/src/supervisor.rs:1091 — `let target_root = env::var_os("CARGO_TARGET_DIR")`
+- prod: mochi/mochi-core/src/supervisor.rs:1137 — `let target_root = env::var_os("CARGO_TARGET_DIR")`
 - tool: xtask/src/kagami_profiles.rs:1334 — `if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {`
 - tool: xtask/src/mochi.rs:381 — `if let Ok(dir) = env::var("CARGO_TARGET_DIR") {`
 
@@ -643,7 +640,7 @@ Total references: **790** · Unique variables: **189**
 
 ## IROHA_ACCOUNT_ID (prod: 1)
 
-- prod: mochi/mochi-core/src/bootstrap.rs:251 — `account_id: std::env::var("IROHA_ACCOUNT_ID").ok(),`
+- prod: mochi/mochi-core/src/bootstrap.rs:435 — `account_id: std::env::var("IROHA_ACCOUNT_ID").ok(),`
 
 ## IROHA_ALLOW_NET (test: 1)
 
@@ -651,11 +648,11 @@ Total references: **790** · Unique variables: **189**
 
 ## IROHA_API_BASE (prod: 1)
 
-- prod: mochi/mochi-core/src/bootstrap.rs:244 — `api_base: std::env::var("IROHA_API_BASE")`
+- prod: mochi/mochi-core/src/bootstrap.rs:428 — `api_base: std::env::var("IROHA_API_BASE")`
 
 ## IROHA_CHAIN_ID (prod: 1)
 
-- prod: mochi/mochi-core/src/bootstrap.rs:249 — `chain_id: std::env::var("IROHA_CHAIN_ID")`
+- prod: mochi/mochi-core/src/bootstrap.rs:433 — `chain_id: std::env::var("IROHA_CHAIN_ID")`
 
 ## IROHA_CONF_GAS_SEED (test: 1)
 
@@ -721,7 +718,7 @@ Total references: **790** · Unique variables: **189**
 
 ## IROHA_MCP_URL (prod: 1)
 
-- prod: mochi/mochi-core/src/bootstrap.rs:248 — `mcp_url: std::env::var("IROHA_MCP_URL").ok().or_else(|| {mcp_url}),`
+- prod: mochi/mochi-core/src/bootstrap.rs:432 — `mcp_url: std::env::var("IROHA_MCP_URL").ok().or_else(|| {mcp_url}),`
 
 ## IROHA_METRICS_PANIC_ON_DUPLICATE (test: 2)
 
@@ -742,7 +739,7 @@ Total references: **790** · Unique variables: **189**
 
 ## IROHA_PRIVATE_KEY (prod: 1)
 
-- prod: mochi/mochi-core/src/bootstrap.rs:252 — `private_key: std::env::var("IROHA_PRIVATE_KEY").ok(),`
+- prod: mochi/mochi-core/src/bootstrap.rs:436 — `private_key: std::env::var("IROHA_PRIVATE_KEY").ok(),`
 
 ## IROHA_REALISTIC_30TPS_LOAD_KIND (test: 1)
 
@@ -900,7 +897,7 @@ Total references: **790** · Unique variables: **189**
 
 ## IROHA_TORII_URL (prod: 1)
 
-- prod: mochi/mochi-core/src/bootstrap.rs:246 — `torii_url: std::env::var("IROHA_TORII_URL")`
+- prod: mochi/mochi-core/src/bootstrap.rs:430 — `torii_url: std::env::var("IROHA_TORII_URL")`
 
 ## IVM_BIN (test: 2)
 
@@ -1081,19 +1078,15 @@ Total references: **790** · Unique variables: **189**
 
 ## MOCHI_CONFIG (prod: 1)
 
-- prod: mochi/mochi-ui-egui/src/config.rs:447 — `if let Some(value) = env::var_os("MOCHI_CONFIG").filter(|value| !value.is_empty()) {`
+- prod: mochi/mochi-ui-egui/src/config.rs:417 — `if let Some(value) = env::var_os("MOCHI_CONFIG").filter(|value| !value.is_empty()) {`
 
 ## MOCHI_DATA_ROOT (prod: 1)
 
-- prod: mochi/mochi-core/src/supervisor.rs:5263 — `std::env::var_os("MOCHI_DATA_ROOT")`
+- prod: mochi/mochi-core/src/supervisor.rs:4938 — `std::env::var_os("MOCHI_DATA_ROOT")`
 
 ## MOCHI_DETACHED (prod: 1)
 
-- prod: mochi/mochi-ui-egui/src/sandbox_cli.rs:538 — `if env::var_os("MOCHI_DETACHED").is_some() {`
-
-## MOCHI_TEST_USE_INTERNAL_GENESIS (prod: 1)
-
-- prod: mochi/mochi-core/src/supervisor.rs:5013 — `if std::env::var_os("MOCHI_TEST_USE_INTERNAL_GENESIS").is_some() {`
+- prod: mochi/mochi-ui-egui/src/sandbox_cli.rs:588 — `if env::var_os("MOCHI_DETACHED").is_some() {`
 
 ## NORITO_CHECK_BINDINGS_SYNC (build: 1)
 
@@ -1179,7 +1172,7 @@ Total references: **790** · Unique variables: **189**
 - prod: crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller.rs:1353 — `if env::var_os("PATH").as_deref() != Some(OsStr::new("/usr/bin:/bin")) {`
 - prod: crates/irohad/src/soracloud_runtime.rs:18374 — `if let Some(path) = std::env::var_os("PATH") {`
 - test: integration_tests/tests/kotodama_examples.rs:18 — `let path = env::var_os("PATH")?;`
-- prod: mochi/mochi-core/src/supervisor.rs:1364 — `let path_var = env::var_os("PATH")?;`
+- prod: mochi/mochi-core/src/supervisor.rs:1034 — `let path_var = env::var_os("PATH")?;`
 
 ## PRINT_SORACLES_FIXTURES (test: 1)
 

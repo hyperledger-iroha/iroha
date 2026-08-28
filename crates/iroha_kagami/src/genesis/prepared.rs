@@ -20,6 +20,7 @@ use std::{
     io::{BufWriter, Read as _, Write},
     path::{Path, PathBuf},
 };
+use zeroize::Zeroizing;
 
 const TAIRA_VALIDATOR_COUNT: usize = 4;
 // Effective configs contain policy settings and paths, while large runtime artifacts remain
@@ -87,7 +88,11 @@ struct ValidatorBinding {
     pop_hex: String,
 }
 
-type LoadedValidatorConfigs = (Vec<Vec<u8>>, Vec<actual::Root>, Vec<ValidatorBinding>);
+type LoadedValidatorConfigs = (
+    Vec<Zeroizing<Vec<u8>>>,
+    Vec<actual::Root>,
+    Vec<ValidatorBinding>,
+);
 
 #[cfg(unix)]
 fn same_prepared_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
@@ -114,11 +119,39 @@ fn same_prepared_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> boo
         && left.modified().ok() == right.modified().ok()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreparedFileCustody {
+    Public,
+    OwnerOnly,
+}
+
 fn read_prepared_file_bounded(
     path: &Path,
     max_bytes: usize,
     label: &str,
 ) -> color_eyre::Result<Vec<u8>> {
+    read_prepared_file_bounded_with_custody(path, max_bytes, label, PreparedFileCustody::Public)
+}
+
+fn read_owner_only_prepared_file_bounded(
+    path: &Path,
+    max_bytes: usize,
+    label: &str,
+) -> color_eyre::Result<Vec<u8>> {
+    read_prepared_file_bounded_with_custody(path, max_bytes, label, PreparedFileCustody::OwnerOnly)
+}
+
+fn read_prepared_file_bounded_with_custody(
+    path: &Path,
+    max_bytes: usize,
+    label: &str,
+    custody: PreparedFileCustody,
+) -> color_eyre::Result<Vec<u8>> {
+    #[cfg(not(unix))]
+    ensure!(
+        custody == PreparedFileCustody::Public,
+        "{label} requires owner-only file custody, which Kagami cannot verify on this platform"
+    );
     let max_bytes_u64 = u64::try_from(max_bytes)
         .map_err(|_| eyre!("{label} byte limit is not representable on this platform"))?;
     let lexical = fs::symlink_metadata(path)
@@ -146,6 +179,28 @@ fn read_prepared_file_bounded(
         "{label} changed while opening or is not a regular file: {}",
         path.display()
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        ensure!(
+            before.uid() == rustix::process::geteuid().as_raw() && before.nlink() == 1,
+            "{label} must be owner-held and single-link: {}",
+            path.display()
+        );
+        match custody {
+            PreparedFileCustody::Public => ensure!(
+                before.mode() & 0o022 == 0,
+                "{label} must not be group/world writable: {}",
+                path.display()
+            ),
+            PreparedFileCustody::OwnerOnly => ensure!(
+                before.mode() & 0o777 == 0o600,
+                "{label} must have exact owner-only mode 0600: {}",
+                path.display()
+            ),
+        }
+    }
     ensure!(
         before.len() <= max_bytes_u64,
         "{label} exceeds the first-release {max_bytes}-byte limit: {}",
@@ -206,9 +261,14 @@ fn load_validator_configs(
     let mut local_keys = BTreeSet::new();
     for (index, path) in paths.iter().enumerate() {
         let slug = config_slug(path, index)?;
-        let config_bytes =
-            read_prepared_file_bounded(path, MAX_VALIDATOR_CONFIG_BYTES_V1, "validator config")
-                .wrap_err_with(|| format!("read effective validator config {}", path.display()))?;
+        let config_bytes = Zeroizing::new(
+            read_owner_only_prepared_file_bounded(
+                path,
+                MAX_VALIDATOR_CONFIG_BYTES_V1,
+                "validator config",
+            )
+            .wrap_err_with(|| format!("read effective validator config {}", path.display()))?,
+        );
         let config = super::sign::load_peer_config_bytes(path, &config_bytes)?;
         super::sign::ensure_peer_config_matches_manifest(&config, manifest)?;
         ensure!(
@@ -646,6 +706,28 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn prepared_validator_configs_require_exact_owner_only_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let file = tempfile::NamedTempFile::new().expect("create validator config input");
+        std::fs::write(file.path(), b"private_key = \"secret\"\n")
+            .expect("write validator config input");
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644))
+            .expect("set public-readable mode");
+        read_prepared_file_bounded(file.path(), 64, "public fixture")
+            .expect("public input may be world-readable");
+        let error = read_owner_only_prepared_file_bounded(file.path(), 64, "validator config")
+            .expect_err("public-readable validator config must fail");
+        assert!(error.to_string().contains("exact owner-only mode 0600"));
+
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o600))
+            .expect("set owner-only mode");
+        read_owner_only_prepared_file_bounded(file.path(), 64, "validator config")
+            .expect("owner-only validator config");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn bounded_prepared_reader_rejects_symlinks_and_special_files_without_blocking() {
         use std::os::unix::fs::symlink;
 
@@ -718,13 +800,21 @@ mod tests {
                 toml::to_string_pretty(&table).expect("render prepared-verifier config"),
             )
             .expect("write prepared-verifier config");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                    .expect("protect prepared-verifier config");
+            }
             config_tables.push(table);
             config_paths.push(path);
         }
         let configs = config_paths
             .iter()
             .map(|path| {
-                super::super::sign::load_peer_config(path).expect("load prepared-verifier config")
+                let bytes = std::fs::read(path).expect("read prepared-verifier config");
+                super::super::sign::load_peer_config_bytes(path, &bytes)
+                    .expect("load prepared-verifier config")
             })
             .collect::<Vec<_>>();
         let _chain_discriminant =

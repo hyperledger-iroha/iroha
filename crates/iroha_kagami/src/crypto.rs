@@ -104,7 +104,7 @@ fn write_key_custody<T: Write>(
     private_key: &ExposedPrivateKey,
     pop_hex: Option<&str>,
 ) -> Outcome {
-    crate::secure_fs::prepare_empty_private_directory(out_dir)
+    let out_dir = crate::secure_fs::prepare_empty_private_directory(out_dir)
         .wrap_err("prepare key custody directory")?;
     let public_path = out_dir.join(PUBLIC_KEY_FILE);
     let mut public_record = public_key.to_string();
@@ -145,22 +145,22 @@ fn key_pair_from_source(algorithm: Algorithm, seed: Option<String>) -> color_eyr
         None => KeyPair::try_random_with_algorithm(algorithm)
             .wrap_err("Failed to generate random key pair")?,
         Some(seed) => {
-            let mut seed = Zeroizing::new(parse_keygen_seed_hex(seed.as_str())?);
+            let mut seed = parse_keygen_seed_hex(seed.as_str())?;
             KeyPair::try_from_seed(std::mem::take(&mut *seed), algorithm)
                 .wrap_err("Failed to derive seeded key pair")?
         }
     };
     Ok(key_pair)
 }
-pub fn parse_keygen_seed_hex(seed: &str) -> color_eyre::Result<Vec<u8>> {
+pub fn parse_keygen_seed_hex(seed: &str) -> color_eyre::Result<Zeroizing<Vec<u8>>> {
     let seed = seed.strip_prefix("0x").unwrap_or(seed);
     if seed.len() != 64 {
         color_eyre::eyre::bail!(
             "key-generation seed must be exactly 32 bytes encoded as 64 hexadecimal characters"
         );
     }
-    let mut decoded = vec![0u8; 32];
-    hex::decode_to_slice(seed, &mut decoded)
+    let mut decoded = Zeroizing::new(vec![0u8; 32]);
+    hex::decode_to_slice(seed, decoded.as_mut_slice())
         .wrap_err("key-generation seed must contain exactly 64 hexadecimal characters")?;
     Ok(decoded)
 }
@@ -286,6 +286,9 @@ mod tests {
         let err = parse_keygen_seed_hex("human password")
             .expect_err("human-readable seed must be rejected");
         assert!(err.to_string().contains("exactly 32 bytes"));
+        let err = parse_keygen_seed_hex(&format!("{}zz", "a5".repeat(31)))
+            .expect_err("invalid exact-length hex must be rejected after partial decoding");
+        assert!(err.to_string().contains("hexadecimal characters"));
         assert_eq!(
             parse_keygen_seed_hex(&"a5".repeat(32))
                 .expect("32-byte hex seed")

@@ -58,7 +58,12 @@ pub fn resolve_selected_peer_storage_paths(
     network_root: &Path,
     alias: &str,
 ) -> Result<Option<SelectedPeerStoragePaths>> {
-    resolve_selected_peer_storage_paths_inner(network_root, alias, || {})
+    resolve_selected_peer_storage_paths_inner(
+        network_root,
+        alias,
+        #[cfg(test)]
+        || {},
+    )
 }
 #[cfg(test)]
 pub(super) fn resolve_selected_peer_storage_paths_with_hook<F>(
@@ -71,18 +76,16 @@ where
 {
     resolve_selected_peer_storage_paths_inner(network_root, alias, after_initial_selection)
 }
-fn resolve_selected_peer_storage_paths_inner<F>(
+fn resolve_selected_peer_storage_paths_inner(
     network_root: &Path,
     alias: &str,
-    after_initial_selection: F,
-) -> Result<Option<SelectedPeerStoragePaths>>
-where
-    F: FnOnce(),
-{
+    #[cfg(test)] after_initial_selection: impl FnOnce(),
+) -> Result<Option<SelectedPeerStoragePaths>> {
     validate_peer_alias(alias)?;
     let Some(observed_generation_id) = current_generation_id(network_root)? else {
         return Ok(None);
     };
+    #[cfg(test)]
     after_initial_selection();
     let selection_lock = Arc::new(try_lock_generation_selection(network_root)?);
     let selected_after_lock = current_generation_id(network_root)?;

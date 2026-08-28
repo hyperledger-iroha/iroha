@@ -29,7 +29,6 @@ const LOCAL_MCP_STARTUP_MAX_BACKOFF: Duration = Duration::from_secs(1);
 const REHEARSAL_PEER_COUNT: usize = 4;
 const REHEARSAL_EVIDENCE_SCHEMA: u64 = 1;
 const REHEARSAL_EVIDENCE_MAX_BYTES: usize = 2_048;
-const INTERNAL_GENESIS_TEST_OVERRIDE: &str = "MOCHI_TEST_USE_INTERNAL_GENESIS";
 #[derive(Clone, Copy)]
 struct ReadinessRequirements {
     all_peers_genesis: bool,
@@ -219,7 +218,6 @@ pub(super) fn run_serve(overrides: CliOverrides) -> Result<(), String> {
 /// Run a bounded, one-shot rehearsal of live four-peer wipe and re-genesis.
 pub(super) fn run_wipe_rehearsal(overrides: CliOverrides) -> Result<(), String> {
     require_disposable_data_root(&overrides)?;
-    reject_test_genesis_override()?;
     if overrides.readiness_smoke == Some(false) {
         return Err("wipe rehearsal requires readiness smoke; remove `--disable-smoke`".to_owned());
     }
@@ -510,14 +508,6 @@ fn require_disposable_data_root(overrides: &CliOverrides) -> Result<PathBuf, Str
         }
     }
     Ok(root)
-}
-fn reject_test_genesis_override() -> Result<(), String> {
-    if env::var_os(INTERNAL_GENESIS_TEST_OVERRIDE).is_some() {
-        return Err(format!(
-            "wipe rehearsal requires real Kagami; unset `{INTERNAL_GENESIS_TEST_OVERRIDE}`"
-        ));
-    }
-    Ok(())
 }
 async fn validate_local_mcp_for_startup(
     client: &ToriiClient,

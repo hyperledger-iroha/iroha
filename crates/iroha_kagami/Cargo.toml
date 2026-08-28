@@ -62,7 +62,3 @@ path = "src/main.rs"
 name = "iroha_authenticated_tool_controller"
 path = "src/bin/iroha_authenticated_tool_controller.rs"
 required-features = ["dev-tools"]
-
-[[example]]
-name = "codec_samples"
-path = "samples/codec/generate.rs"

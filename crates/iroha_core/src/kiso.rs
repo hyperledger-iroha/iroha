@@ -796,15 +796,23 @@ mod tests {
             assert_eq!(pow.puzzle, original_puzzle);
         }
         let mut pow = SoranetPow::default();
+        let original_outbound_mint_capacity = pow.outbound_mint_capacity.get();
         let mut update = update(None, None, None, None);
-        update.outbound_mint_capacity = Some(2);
+        update.outbound_mint_capacity = Some(if original_outbound_mint_capacity == 1 {
+            2
+        } else {
+            1
+        });
         let error = Actor::apply_pow_update(&mut pow, &update)
             .expect_err("live puzzle-work capacity change must require restart");
         assert!(
             error.contains("restart required"),
             "unexpected error: {error}"
         );
-        assert_eq!(pow.outbound_mint_capacity.get(), 1);
+        assert_eq!(
+            pow.outbound_mint_capacity.get(),
+            original_outbound_mint_capacity
+        );
     }
     #[allow(clippy::too_many_lines)]
     fn test_config() -> Root {

@@ -142,7 +142,7 @@ def test_stage_snapshot_rejects_missing_extra_symlink_and_hardlink(tmp_path: Pat
 
     peer = root / "defaults" / "kagami" / "iroha3-dev" / "peer0.toml"
     peer.unlink()
-    os.link(root / "defaults" / "kagami" / "iroha3-dev" / "config.toml", peer)
+    os.link(root / "defaults" / "kagami" / "iroha3-dev" / "README.md", peer)
     with pytest.raises(MODULE.OwnerError, match="single-link regular"):
         MODULE._snapshot(root, "iroha3-dev", closed_stage=True)
 

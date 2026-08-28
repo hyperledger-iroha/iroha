@@ -4,7 +4,7 @@ use crate::{
         GenesisProfile, PUBLIC_XOR_ALIAS, PUBLIC_XOR_DOMAIN, ProfileDefaults,
         TAIRA_XOR_ASSET_DEFINITION_ID, TAIRA_XOR_SCALE, known_chain_discriminant_for_chain_id,
         parse_vrf_seed_hex, profile_defaults, profile_requires_npos,
-        resolve_public_xor_asset_definition_id, resolve_vrf_seed,
+        reject_retired_public_chain_id, resolve_public_xor_asset_definition_id, resolve_vrf_seed,
     },
     tui,
 };
@@ -278,6 +278,7 @@ fn resolve_profile_settings(
         public_xor_asset_definition_id =
             resolve_public_xor_asset_definition_id(profile, xor_asset_definition_id, wants_npos)?;
     }
+    reject_retired_public_chain_id(chain.as_str())?;
     Ok(ResolvedGenesisSettings {
         chain,
         consensus_mode,

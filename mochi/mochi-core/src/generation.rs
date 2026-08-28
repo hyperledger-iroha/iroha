@@ -1636,7 +1636,7 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
-    use iroha_data_model::{ChainId, peer::PeerId};
+    use iroha_data_model::{AccountId, ChainId, peer::PeerId};
     use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
     const FIXTURE_CONFIGURED_HASH: &str =
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
@@ -1727,6 +1727,9 @@ mod tests {
         )
         .expect("write signed rANS tables fixture");
         let rans_tables_literal = rans_tables_path.to_string_lossy().replace('\\', "\\\\");
+        let vpn_operator_account = AccountId::new(genesis_public_key.clone())
+            .to_i105_for_discriminant(chain_discriminant)
+            .expect("encode fixture VPN operator account for its chain");
         let mut config =
             include_str!("../../../crates/iroha_config/iroha_test_config.toml").to_owned();
         config = config.replacen(
@@ -1769,13 +1772,34 @@ manifest_store_dir = "managed/torii/da-manifests"
 data_dir = "managed/sorafs"
 
 [streaming.codec]
+cabac_mode = "disabled"
+trellis_blocks = []
 rans_tables_path = "__RANS_TABLES_PATH__"
+entropy_mode = "rans_bundled"
+bundle_width = 2
+bundle_accel = "none"
 
 [network.soranet_handshake.pow]
 revocation_store_path = "managed/soranet/revocations.norito"
+
+[network.soranet_vpn]
+operator_account_id = "__VPN_OPERATOR_ACCOUNT__"
+
+[gov]
+citizenship_escrow_account = "__CHAIN_ACCOUNT__"
+bond_escrow_account = "__CHAIN_ACCOUNT__"
+slash_receiver_account = "__CHAIN_ACCOUNT__"
+viral_incentive_pool_account = "__CHAIN_ACCOUNT__"
+viral_escrow_account = "__CHAIN_ACCOUNT__"
+sorafs_pin_fee_treasury_account = "__CHAIN_ACCOUNT__"
+
+[nexus.fees]
+sponsor_vault_custody_account_id = "__CHAIN_ACCOUNT__"
 "#,
         );
         config = config.replacen("__RANS_TABLES_PATH__", &rans_tables_literal, 1);
+        config = config.replacen("__VPN_OPERATOR_ACCOUNT__", &vpn_operator_account, 1);
+        config = config.replace("__CHAIN_ACCOUNT__", &vpn_operator_account);
         config = config.replacen(
             "session_store_dir = \"./storage/streaming\"",
             "session_store_dir = \"managed/streaming\"",
@@ -1838,9 +1862,13 @@ revocation_store_path = "managed/soranet/revocations.norito"
         assert!(block.has_results());
         assert_eq!(block.results().len(), block.entrypoint_hashes().len());
         assert!(block.results().all(|result| result.as_ref().is_ok()));
-        assert_eq!(
-            block.committed_fragment_count(),
-            Some(u64::try_from(block.results().len()).expect("fixture result count fits u64"))
+        let result_count =
+            u64::try_from(block.results().len()).expect("fixture result count fits u64");
+        assert!(
+            block
+                .committed_fragment_count()
+                .is_some_and(|count| count >= result_count),
+            "genesis may commit internal fragments in addition to its transaction results"
         );
         block
             .validate_entrypoint_merkle_cache()

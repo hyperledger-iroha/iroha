@@ -87,11 +87,11 @@ impl BundleConfig {
         if let Some(port) = self.p2p_start {
             builder = builder.p2p_base_port(port);
         }
-        if let Some(chain_id) = self.chain_id.as_ref() {
-            builder = builder.chain_id(chain_id.clone());
-        }
         if let Some(profile) = self.genesis_profile {
             builder = builder.genesis_profile(profile);
+        }
+        if let Some(chain_id) = self.chain_id.as_ref() {
+            builder = builder.chain_id(chain_id.clone());
         }
         if let Some(seed) = self.vrf_seed_hex.as_ref() {
             builder = builder.vrf_seed_hex(seed.clone());
@@ -397,22 +397,13 @@ pub fn load_bundle_config() -> Result<Option<ResolvedBundleConfig>, ConfigError>
     }
     Ok(None)
 }
-/// Load configuration from an explicit path, returning defaults if the file is absent.
+/// Load configuration from an explicit path.
 pub fn load_bundle_config_at(path: PathBuf) -> Result<ResolvedBundleConfig, ConfigError> {
-    match fs::read_to_string(&path) {
-        Ok(contents) => {
-            let config = parse_bundle_config(&path, &contents)?;
-            Ok(ResolvedBundleConfig { config, path })
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(ResolvedBundleConfig {
-            config: BundleConfig::default(),
-            path,
-        }),
-        Err(err) => Err(ConfigError::new(format!(
-            "failed to read config {}: {err}",
-            path.display()
-        ))),
-    }
+    let contents = fs::read_to_string(&path).map_err(|err| {
+        ConfigError::new(format!("failed to read config {}: {err}", path.display()))
+    })?;
+    let config = parse_bundle_config(&path, &contents)?;
+    Ok(ResolvedBundleConfig { config, path })
 }
 pub fn default_config_path() -> PathBuf {
     candidate_paths()
@@ -539,20 +530,18 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
             ],
         )?;
         let mut profile_genesis = None;
-        if let Some(workspace_root) =
-            optional_string(path, supervisor, "supervisor.workspace_root")?
-        {
-            let workspace_root = workspace_root.trim();
-            if !workspace_root.is_empty() {
-                config.workspace_root = Some(resolve_path(base, workspace_root));
-            }
-        }
-        if let Some(data_root) = optional_string(path, supervisor, "supervisor.data_root")? {
-            let data_root = data_root.trim();
-            if !data_root.is_empty() {
-                config.data_root = Some(resolve_path(base, data_root));
-            }
-        }
+        config.workspace_root = parse_path_override(
+            base,
+            path,
+            "supervisor.workspace_root",
+            supervisor.get("workspace_root"),
+        )?;
+        config.data_root = parse_path_override(
+            base,
+            path,
+            "supervisor.data_root",
+            supervisor.get("data_root"),
+        )?;
         if let Some(build_binaries) = supervisor.get("build_binaries") {
             config.build_binaries = Some(parse_bool(
                 path,
@@ -570,16 +559,14 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
         if let Some(profile_value) = supervisor.get("profile") {
             match profile_value {
                 Value::String(profile) => {
-                    if !profile.is_empty() {
-                        config.profile = Some(NetworkProfile::from_preset(
-                            parse_profile(profile).map_err(|value| {
-                                ConfigError::new(format!(
-                                    "invalid profile `{value}` in {}",
-                                    path.display()
-                                ))
-                            })?,
-                        ));
-                    }
+                    config.profile = Some(NetworkProfile::from_preset(
+                        parse_profile(profile).map_err(|value| {
+                            ConfigError::new(format!(
+                                "invalid profile `{value}` in {}",
+                                path.display()
+                            ))
+                        })?,
+                    ));
                 }
                 Value::Table(table) => {
                     let parsed = parse_profile_table(path, table)?;
@@ -608,20 +595,18 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
             );
         }
         if let Some(profile) = optional_string(path, supervisor, "supervisor.genesis_profile")? {
-            if !profile.is_empty() {
-                if profile_genesis.is_some() {
-                    return Err(ConfigError::new(format!(
-                        "config {} sets genesis_profile in both `supervisor.profile` and `supervisor.genesis_profile`",
-                        path.display()
-                    )));
-                }
-                config.genesis_profile = Some(profile.parse().map_err(|err: String| {
-                    ConfigError::new(format!(
-                        "invalid genesis_profile `{profile}` in {}: {err}",
-                        path.display()
-                    ))
-                })?);
+            if profile_genesis.is_some() {
+                return Err(ConfigError::new(format!(
+                    "config {} sets genesis_profile in both `supervisor.profile` and `supervisor.genesis_profile`",
+                    path.display()
+                )));
             }
+            config.genesis_profile = Some(profile.parse().map_err(|err: String| {
+                ConfigError::new(format!(
+                    "invalid genesis_profile `{profile}` in {}: {err}",
+                    path.display()
+                ))
+            })?);
         }
         if config.genesis_profile.is_none() {
             config.genesis_profile = profile_genesis;
@@ -724,7 +709,6 @@ fn parse_profile_table(
     let consensus_mode =
         parse_consensus_mode(path, "supervisor.profile.consensus_mode", consensus_value)?;
     let genesis_profile = optional_string(path, table, "supervisor.profile.genesis_profile")?
-        .filter(|value| !value.is_empty())
         .map(|value| {
             value.parse().map_err(|err: String| {
                 ConfigError::new(format!(
@@ -831,9 +815,11 @@ fn parse_path_override(
             )));
         }
     };
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Ok(None);
+    if raw.is_empty() || raw.trim() != raw {
+        return Err(ConfigError::new(format!(
+            "config {} requires `{key}` to be a non-empty path without surrounding whitespace",
+            path.display()
+        )));
     }
     let resolved = resolve_path(base, raw);
     if resolved.is_relative() {
@@ -1361,6 +1347,18 @@ iroha_cli = "/tmp/iroha"
                 "[supervisor]\nvrf_seed_hex = \" gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg \"\n",
                 "supervisor.vrf_seed_hex",
             ),
+            ("[supervisor]\nprofile = \"\"\n", "profile"),
+            ("[supervisor]\ngenesis_profile = \"\"\n", "genesis_profile"),
+            (
+                "[supervisor]\nworkspace_root = \"\"\n",
+                "supervisor.workspace_root",
+            ),
+            (
+                "[supervisor]\ndata_root = \" ./data \"\n",
+                "supervisor.data_root",
+            ),
+            ("[binaries]\nirohad = \"\"\n", "binaries.irohad"),
+            ("[binaries]\nkagami = \" ./kagami \"\n", "binaries.kagami"),
         ] {
             let (_dir, path) = temp_file(contents);
             let error = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
@@ -1387,13 +1385,13 @@ da_ingest = "nope"
         );
     }
     #[test]
-    fn load_bundle_config_at_returns_default_for_missing_file() {
+    fn load_bundle_config_at_rejects_missing_explicit_file() {
         let temp = tempfile::tempdir().expect("temp dir");
         let path = temp.path().join("custom-config.toml");
-        let resolved =
-            load_bundle_config_at(path.clone()).expect("explicit config load should succeed");
-        assert!(resolved.config.data_root.is_none());
-        assert_eq!(resolved.path, path);
+        let error = load_bundle_config_at(path.clone())
+            .expect_err("a missing explicit config must fail closed");
+        assert!(error.to_string().contains("failed to read config"));
+        assert!(error.to_string().contains(&path.display().to_string()));
     }
     #[test]
     fn load_bundle_config_at_parses_existing_file() {
@@ -1461,6 +1459,7 @@ data_root = "./env-data"
         let mut lane = Map::new();
         lane.insert("alias".into(), Value::String("core".into()));
         lane.insert("index".into(), Value::Integer(0));
+        lane.insert("metadata".into(), Value::Table(Map::new()));
         nexus.insert(
             "lane_catalog".into(),
             Value::Array(vec![Value::Table(lane)]),
@@ -1541,7 +1540,7 @@ data_root = "./env-data"
             .expect("profile table");
         assert_eq!(
             profile_table.get("peer_count").and_then(Value::as_integer),
-            Some(3)
+            Some(7)
         );
         assert_eq!(
             profile_table.get("consensus_mode").and_then(Value::as_str),

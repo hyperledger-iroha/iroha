@@ -2000,6 +2000,52 @@ fn sidecar_reader_rejects_oversized_payloads() {
     );
     assert!(kura.read_pipeline_metadata(1).is_none());
 }
+#[cfg(unix)]
+#[test]
+fn read_only_sidecar_reader_rejects_symlinks_and_fifos() {
+    use std::os::unix::fs::symlink;
+
+    let dir = TempDir::new().expect("sidecar path fixtures");
+    let data_path = dir.path().join("pipeline.data");
+    let index_path = dir.path().join("pipeline.index");
+    let target_path = dir.path().join("pipeline.target");
+    std::fs::write(&target_path, []).expect("write symlink target");
+    std::fs::write(&index_path, []).expect("write regular sidecar index");
+    symlink(&target_path, &data_path).expect("create sidecar data symlink");
+    assert!(
+        Kura::read_indexed_sidecar_from_paths_with_recovery_and_limit::<(), _>(
+            1,
+            &data_path,
+            &index_path,
+            |_| panic!("symlink payload must not be decoded"),
+            "pipeline sidecar",
+            false,
+            1024,
+        )
+        .is_none()
+    );
+
+    std::fs::remove_file(&data_path).expect("remove sidecar data symlink");
+    std::fs::write(&data_path, []).expect("write regular sidecar data");
+    std::fs::remove_file(&index_path).expect("remove regular sidecar index");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&index_path)
+        .status()
+        .expect("invoke mkfifo for sidecar regression");
+    assert!(status.success(), "mkfifo must create the sidecar fixture");
+    assert!(
+        Kura::read_indexed_sidecar_from_paths_with_recovery_and_limit::<(), _>(
+            1,
+            &data_path,
+            &index_path,
+            |_| panic!("FIFO payload must not be decoded"),
+            "pipeline sidecar",
+            false,
+            1024,
+        )
+        .is_none()
+    );
+}
 #[test]
 fn pipeline_sidecar_ignores_invalid_prev_entry() {
     let (_temp_dir, _config, kura) = unwrapped_kura_fixture();

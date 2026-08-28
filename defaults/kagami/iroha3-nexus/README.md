@@ -1,6 +1,6 @@
 # iroha3-nexus sample bundle
 
-- chain id: iroha3-nexus
+- chain id: 00000000-0000-0000-0000-000000000753
 - VRF seed (hex): 3E448A9DBA73125E26B0178E036E291374CE17CD39AC321D7BC605963577332D
 - genesis public key: ed012065D3D00819052AB4D41FD6D168D1F59BE9CE384591383F7762F99C5F9C7A9B11
 - topology: 3 logical lanes (`core`, `governance`, `zk`) in the single physical `universal` dataspace

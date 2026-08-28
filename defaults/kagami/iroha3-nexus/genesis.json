@@ -1,5 +1,5 @@
 {
-  "chain": "iroha3-nexus",
+  "chain": "00000000-0000-0000-0000-000000000753",
   "chain_discriminant": 753,
   "consensus_fingerprint": "0x33b78ecd58757d3ec796f1d20ab23093efec4035f8228d4a65143e123adea858",
   "consensus_mode": "Npos",

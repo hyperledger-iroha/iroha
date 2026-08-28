@@ -10,6 +10,8 @@ pub mod dashboard;
 mod generation;
 mod genesis;
 pub mod logs;
+mod path_safety;
+mod secret;
 pub mod state;
 pub mod supervisor;
 pub mod torii;
@@ -33,20 +35,20 @@ pub use config::{
     infer_workspace_root_from_sandbox_root, sandbox_root_for_workspace,
 };
 pub use dashboard::{
-    DashboardAccountCard, DashboardAssetBalance, DashboardRecentBlock, DashboardSnapshot,
-    fetch_dashboard_snapshot,
+    DashboardAccountCard, DashboardAccountInput, DashboardAssetBalance, DashboardRecentBlock,
+    DashboardSnapshot, fetch_dashboard_snapshot,
 };
-pub use genesis::{default_manifest, sample_cabbage_definition_id, sample_rose_definition_id};
+pub use genesis::{sample_cabbage_definition_id, sample_rose_definition_id};
 pub use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
 pub use iroha_telemetry::metrics::{Status as TelemetryStatus, TxGossipSnapshot};
 pub use logs::{LifecycleEvent, LogStreamKind, PeerLogEvent, PeerLogStream};
+pub use secret::SecretString;
 pub use state::{
     StateCursor, StateEntry, StatePage, StateQueryError, StateQueryKind, run_state_query,
 };
 pub use supervisor::{
-    BinaryPaths, PeerHandle, PeerState, Result as SupervisorResult, SelectedPeerStoragePaths,
-    Supervisor, SupervisorBuilder, SupervisorError, SupervisorSessionInfo,
-    resolve_selected_peer_storage_paths,
+    BinaryPaths, PeerHandle, PeerState, SelectedPeerStoragePaths, Supervisor, SupervisorBuilder,
+    SupervisorError, SupervisorSessionInfo, resolve_selected_peer_storage_paths,
 };
 #[cfg(any(test, feature = "test"))]
 pub use supervisor::{

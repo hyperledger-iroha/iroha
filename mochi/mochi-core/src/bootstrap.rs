@@ -1,12 +1,15 @@
 //! Helpers for rendering and writing local application bootstrap files.
+use crate::path_safety::ensure_directory_path;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::{
+    collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{self, Write as _},
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
+use zeroize::Zeroize as _;
 /// Relative path for the generated environment file.
 pub const ENV_LOCAL_FILE: &str = ".env.local";
 /// Relative path for the generated TypeScript sample.
@@ -16,7 +19,7 @@ pub const RUST_SAMPLE_FILE: &str = ".mochi/generated/rust/connect.rs";
 /// Relative path for the generated Kotlin sample.
 pub const KOTLIN_SAMPLE_FILE: &str = ".mochi/generated/kotlin/MochiConnect.kt";
 /// Inputs shared across generated bootstrap artifacts.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct BootstrapInputs {
     /// Base HTTP address used by explorer-style API requests.
     pub api_base: String,
@@ -30,6 +33,13 @@ pub struct BootstrapInputs {
     pub account_id: Option<String>,
     /// Optional private key for the preferred dev signer.
     pub private_key: Option<String>,
+}
+impl Drop for BootstrapInputs {
+    fn drop(&mut self) {
+        if let Some(private_key) = &mut self.private_key {
+            private_key.zeroize();
+        }
+    }
 }
 impl std::fmt::Debug for BootstrapInputs {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -104,12 +114,17 @@ impl BootstrapInputs {
     }
 }
 /// A generated bootstrap file and its relative destination.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct BootstrapArtifact {
     /// Relative path from the selected workspace root.
     pub relative_path: PathBuf,
     /// File contents ready to write.
     pub contents: String,
+}
+impl Drop for BootstrapArtifact {
+    fn drop(&mut self) {
+        self.contents.zeroize();
+    }
 }
 impl std::fmt::Debug for BootstrapArtifact {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -128,7 +143,7 @@ impl BootstrapArtifact {
     }
 }
 /// The full bootstrap bundle Mochi can write into a workspace.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct BootstrapBundle {
     /// Generated artifacts in write order.
     pub artifacts: Vec<BootstrapArtifact>,
@@ -168,6 +183,9 @@ pub enum BootstrapWriteError {
     /// One of the target files already exists and overwrite was not requested.
     #[error("bootstrap file already exists: {path}")]
     AlreadyExists { path: PathBuf },
+    /// Two artifacts selected the same destination.
+    #[error("bootstrap bundle contains duplicate path: {path}")]
+    DuplicatePath { path: PathBuf },
     /// Filesystem operation failed.
     #[error(transparent)]
     Io(#[from] io::Error),
@@ -178,7 +196,7 @@ pub fn write_bootstrap_bundle(
     bundle: &BootstrapBundle,
     replace_existing: bool,
 ) -> Result<Vec<PathBuf>, BootstrapWriteError> {
-    let mut destinations = Vec::with_capacity(bundle.artifacts.len());
+    let mut unique_paths = BTreeSet::new();
     for artifact in &bundle.artifacts {
         if artifact.relative_path.as_os_str().is_empty()
             || !artifact
@@ -190,7 +208,26 @@ pub fn write_bootstrap_bundle(
                 path: artifact.relative_path.clone(),
             });
         }
-        let destination = artifact.path_in(workspace_root);
+        if !unique_paths.insert(artifact.relative_path.as_path()) {
+            return Err(BootstrapWriteError::DuplicatePath {
+                path: artifact.relative_path.clone(),
+            });
+        }
+    }
+    if bundle.artifacts.is_empty() {
+        return Ok(Vec::new());
+    }
+    if bundle
+        .artifacts
+        .iter()
+        .any(|artifact| artifact.relative_path == Path::new(ENV_LOCAL_FILE))
+    {
+        require_private_file_custody()?;
+    }
+    let workspace_root = ensure_directory_path(workspace_root, "bootstrap workspace root")?;
+    let mut destinations = Vec::with_capacity(bundle.artifacts.len());
+    for artifact in &bundle.artifacts {
+        let destination = artifact.path_in(&workspace_root);
         if !replace_existing {
             match fs::symlink_metadata(&destination) {
                 Ok(_) => return Err(BootstrapWriteError::AlreadyExists { path: destination }),
@@ -203,7 +240,7 @@ pub fn write_bootstrap_bundle(
 
     let mut written = Vec::with_capacity(bundle.artifacts.len());
     for (artifact, destination) in bundle.artifacts.iter().zip(destinations) {
-        let parent = ensure_artifact_parent(workspace_root, &artifact.relative_path)?;
+        let parent = ensure_artifact_parent(&workspace_root, &artifact.relative_path)?;
         let private = artifact.relative_path == Path::new(ENV_LOCAL_FILE);
         let (tmp_path, mut file) = create_artifact_temp(&parent, &destination, private)?;
         let write_result = (|| -> io::Result<()> {
@@ -235,8 +272,17 @@ pub fn write_bootstrap_bundle(
     }
     Ok(written)
 }
+fn require_private_file_custody() -> io::Result<()> {
+    if cfg!(unix) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Mochi private bootstrap files require Unix owner-only mode and directory durability",
+        ))
+    }
+}
 fn ensure_artifact_parent(workspace_root: &Path, relative_path: &Path) -> io::Result<PathBuf> {
-    fs::create_dir_all(workspace_root)?;
     let mut current = workspace_root.to_path_buf();
     let parent = relative_path.parent().unwrap_or_else(|| Path::new(""));
     for component in parent.components() {
@@ -450,10 +496,11 @@ fn render_ts_optional(value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BootstrapBundle, BootstrapInputs, BootstrapWriteError, ENV_LOCAL_FILE, KOTLIN_SAMPLE_FILE,
-        RUST_SAMPLE_FILE, TYPESCRIPT_SAMPLE_FILE, ensure_http_base, shell_quote,
-        write_bootstrap_bundle,
+        BootstrapArtifact, BootstrapBundle, BootstrapInputs, BootstrapWriteError, ENV_LOCAL_FILE,
+        KOTLIN_SAMPLE_FILE, RUST_SAMPLE_FILE, TYPESCRIPT_SAMPLE_FILE, ensure_http_base,
+        require_private_file_custody, shell_quote, write_bootstrap_bundle,
     };
+    use std::{fs, path::PathBuf};
     use tempfile::TempDir;
     fn sample_inputs() -> BootstrapInputs {
         BootstrapInputs {
@@ -464,6 +511,10 @@ mod tests {
             account_id: Some("alice@wonderland".to_owned()),
             private_key: Some("private key value".to_owned()),
         }
+    }
+    #[test]
+    fn private_file_custody_fails_closed_on_unsupported_hosts() {
+        assert_eq!(require_private_file_custody().is_ok(), cfg!(unix));
     }
     #[test]
     fn shell_quote_handles_spaces_and_single_quotes() {
@@ -518,6 +569,7 @@ mod tests {
             "generated source must not embed signer secrets"
         );
     }
+    #[cfg(unix)]
     #[test]
     fn write_bootstrap_bundle_creates_files() {
         let temp = TempDir::new().expect("temp dir");
@@ -541,6 +593,7 @@ mod tests {
             assert_eq!(mode & 0o077, 0, ".env.local must be owner-only");
         }
     }
+    #[cfg(unix)]
     #[test]
     fn write_bootstrap_bundle_rejects_existing_files_without_replace() {
         let temp = TempDir::new().expect("temp dir");
@@ -549,15 +602,15 @@ mod tests {
         let err = write_bootstrap_bundle(temp.path(), &bundle, false).expect_err("should fail");
         assert!(matches!(err, BootstrapWriteError::AlreadyExists { .. }));
     }
+    #[cfg(unix)]
     #[test]
     fn write_bootstrap_bundle_replaces_existing_files_when_requested() {
         let temp = TempDir::new().expect("temp dir");
         let bundle = BootstrapBundle::render(&sample_inputs());
         write_bootstrap_bundle(temp.path(), &bundle, false).expect("first write");
-        let updated = BootstrapBundle::render(&BootstrapInputs {
-            chain_id: "updated-chain".to_owned(),
-            ..sample_inputs()
-        });
+        let mut updated_inputs = sample_inputs();
+        updated_inputs.chain_id = "updated-chain".to_owned();
+        let updated = BootstrapBundle::render(&updated_inputs);
         write_bootstrap_bundle(temp.path(), &updated, true).expect("second write");
         let contents =
             std::fs::read_to_string(temp.path().join(ENV_LOCAL_FILE)).expect("read env file");
@@ -575,6 +628,41 @@ mod tests {
         let error = write_bootstrap_bundle(temp.path(), &bundle, false)
             .expect_err("parent traversal must be rejected");
         assert!(matches!(error, BootstrapWriteError::InvalidPath { .. }));
+    }
+    #[test]
+    fn write_bootstrap_bundle_rejects_duplicate_paths_before_writing() {
+        for replace_existing in [false, true] {
+            let temp = TempDir::new().expect("temp dir");
+            let relative_path = PathBuf::from("generated/duplicate.txt");
+            let bundle = BootstrapBundle {
+                artifacts: vec![
+                    BootstrapArtifact {
+                        relative_path: relative_path.clone(),
+                        contents: "first".to_owned(),
+                    },
+                    BootstrapArtifact {
+                        relative_path: relative_path.clone(),
+                        contents: "second".to_owned(),
+                    },
+                ],
+            };
+            let error = write_bootstrap_bundle(temp.path(), &bundle, replace_existing)
+                .expect_err("duplicate destinations must fail before filesystem mutation");
+            assert!(matches!(error, BootstrapWriteError::DuplicatePath { .. }));
+            assert!(!temp.path().join(relative_path).exists());
+        }
+    }
+    #[cfg(not(unix))]
+    #[test]
+    fn private_bootstrap_bundle_write_fails_closed() {
+        let temp = TempDir::new().expect("temp dir");
+        let bundle = BootstrapBundle::render(&sample_inputs());
+        let error = write_bootstrap_bundle(temp.path(), &bundle, false)
+            .expect_err("private bootstrap custody must be unavailable");
+        assert!(
+            matches!(error, BootstrapWriteError::Io(ref error) if error.kind() == std::io::ErrorKind::Unsupported)
+        );
+        assert!(!temp.path().join(ENV_LOCAL_FILE).exists());
     }
     #[cfg(unix)]
     #[test]
@@ -594,5 +682,31 @@ mod tests {
         .expect_err("symlinked artifact parent must be rejected");
         assert!(matches!(error, BootstrapWriteError::Io(_)));
         assert!(!outside.path().join("typescript/connect.ts").exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn write_bootstrap_bundle_rejects_symlinked_workspace_root_or_ancestor() {
+        use std::os::unix::fs::symlink;
+
+        let root = TempDir::new().expect("workspace parent");
+        let outside = TempDir::new().expect("outside target");
+        let linked_root = root.path().join("linked-root");
+        symlink(outside.path(), &linked_root).expect("link workspace root");
+        let bundle = BootstrapBundle::render(&sample_inputs());
+        let error = write_bootstrap_bundle(&linked_root, &bundle, false)
+            .expect_err("a symlink workspace root must fail closed");
+        assert!(matches!(error, BootstrapWriteError::Io(_)));
+        assert!(!outside.path().join(ENV_LOCAL_FILE).exists());
+
+        let trusted = root.path().join("trusted");
+        let outside_child = outside.path().join("real-child");
+        fs::create_dir(&trusted).expect("create trusted parent");
+        fs::create_dir(&outside_child).expect("create outside child");
+        symlink(outside.path(), trusted.join("redirect")).expect("link workspace ancestor");
+        let escaped_root = trusted.join("redirect").join("real-child");
+        let error = write_bootstrap_bundle(&escaped_root, &bundle, false)
+            .expect_err("a symlink workspace ancestor must fail closed");
+        assert!(matches!(error, BootstrapWriteError::Io(_)));
+        assert!(!outside_child.join(ENV_LOCAL_FILE).exists());
     }
 }

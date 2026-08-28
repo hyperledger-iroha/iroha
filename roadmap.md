@@ -1,19 +1,58 @@
 # Roadmap
 
-Last updated: 2026-08-27
+Last updated: 2026-08-28
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Mochi first-release closure
+
+- Add a production-source reachability and dependency guard for Mochi exports,
+  commands, routes, environment inputs, and helper binaries so compatibility
+  aliases, test-only release branches, and unowned wrappers cannot return.
+- Qualify owner-only vault/bootstrap custody and atomic publication on every
+  shipping host platform. Keep platforms without equivalent no-follow,
+  ownership/ACL, single-link, and directory-durability guarantees fail closed.
+  Replace pathname revalidation/publication with descriptor-relative no-follow
+  traversal before claiming resistance to concurrent ancestor replacement.
+- Benchmark dashboard refresh, bounded Explorer decoding, one-pass snapshot
+  inventory/copy/rehash, restore recovery, readiness smoke, and supervisor
+  startup. Preserve deterministic output and add explicit allocation/latency
+  budgets before introducing caches or wider concurrency.
+
+## Iroha configuration first-release closure
+
+- Convert the remaining ordinary-input unwind surfaces in Governance and its
+  SoraFS policy leaves, SoraCloud submission/posture, SoraNet VPN, content,
+  Torii push/history/RAM-LFE, and DA/SoraFS parsing to the existing aggregated
+  `Emitter<ParseError>` contract. Reject invalid bounds exactly instead of
+  silently clamping or treating zero as a compatibility default.
+- Split the large user/actual parameter modules along existing ownership and
+  validation boundaries. Keep a single definition of each first-release
+  label, default, and constraint, and add production-source reachability guards
+  so aliases, duplicate serializers, ambient-environment reads, and unowned
+  config/DTO/metric fields cannot return.
+- Benchmark bounded TOML loading (including `extends`), typed TOML-to-Norito
+  conversion, complete-config parsing, and public config projection. Add
+  allocation and source-graph ceilings before introducing caches or changing
+  merge order, and preserve byte-identical results across hardware.
+- After the current shared-tree integration edits and unrelated SoraCloud/Nexus
+  golden failures are resolved, run the complete `iroha_config_base`,
+  `iroha_config`, generator, SDK, daemon, strict Clippy, and workspace test
+  matrices from one settled release candidate.
+
 ## Kagami first-release closure
 
-- Re-run the complete Kagami unit/integration suite, checked-in generated-help
-  equality test, and strict Clippy target after the concurrently edited config
-  and core dependency tree compiles. Follow with the multi-hour workspace suite
-  on the settled release candidate.
+- Re-run the complete Kagami unit/integration suite after the concurrently
+  edited instruction registry/genesis state, consensus/profile commitments, and
+  config fixtures settle. Follow with the multi-hour workspace suite on the
+  release candidate; strict Kagami Clippy and checked-in generated-help equality
+  already pass.
 - Add a production-source reachability check for Kagami commands, binaries,
   features, and direct dependencies so empty switches, unowned helper binaries,
   compatibility aliases, and duplicate serializers cannot accumulate again.
+  Apply proven direct-dependency removals in a dedicated lockfile-owned change
+  so `Cargo.toml` and `Cargo.lock` remain atomic.
 - Split the large localnet, Swarm, and Kagemusha implementations along their
   existing validation, rendering, custody, and publication boundaries. Reuse
   the canonical bounded-read and atomic-publication primitives without adding

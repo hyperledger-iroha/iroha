@@ -11,19 +11,17 @@ quickstart, maintenance controls, and live activity surfaces for day-to-day deve
   - macOS: Xcode Command Line Tools (`xcode-select --install`).
   - Linux: GCC, pkg-config, OpenSSL headers (`sudo apt install build-essential pkg-config libssl-dev`).
 - Iroha workspace dependencies:
-  - `cargo xtask mochi-bundle` requires built `iroha3d`, `kagami`, and `iroha`. Build them once via
-    `cargo build -p irohad --bin iroha3d`, `cargo build -p iroha_kagami --bin kagami`, and
-    `cargo build -p iroha_cli --bin iroha`.
+  - A source-tree devnet needs `iroha3d` and `kagami`. Build them once via
+    `cargo build -p irohad --bin iroha3d` and `cargo build -p iroha_kagami --bin kagami`.
 - Optional: `direnv` or `cargo binstall` for managing local cargo binaries.
 
-MOCHI shells out to the CLI binaries. Ensure they are discoverable via the environment variables
+MOCHI invokes the node and genesis binaries. Ensure they are discoverable via the environment variables
 below or available on the PATH:
 
-| Binary   | Environment override | Notes                                   |
-|----------|----------------------|-----------------------------------------|
-| `iroha3d` | `MOCHI_IROHAD`      | Supervises peers                        |
-| `kagami` | `MOCHI_KAGAMI`       | Generates genesis manifests/snapshots   |
-| `iroha`   | `MOCHI_IROHA_CLI`   | Optional for upcoming helper features   |
+| Binary    | Environment override | Notes                                 |
+|-----------|----------------------|---------------------------------------|
+| `iroha3d` | `MOCHI_IROHAD`       | Runs supervised peers                 |
+| `kagami`  | `MOCHI_KAGAMI`       | Generates, signs, and verifies genesis |
 
 ## Building MOCHI
 
@@ -73,7 +71,7 @@ Environment variables mirror the same overrides when CLI flags are omitted: set
 `MOCHI_WORKSPACE_ROOT`, `MOCHI_DATA_ROOT`, `MOCHI_PROFILE`, `MOCHI_CHAIN_ID`,
 `MOCHI_TORII_START`, `MOCHI_P2P_START`, `MOCHI_RESTART_MODE`, `MOCHI_RESTART_MAX`, or
 `MOCHI_RESTART_BACKOFF_MS` to preseed the supervisor builder; binary paths continue to respect
-`MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI`, and `MOCHI_CONFIG` points at an explicit
+`MOCHI_IROHAD`/`MOCHI_KAGAMI`, and `MOCHI_CONFIG` points at an explicit
 `config/local.toml`.
 
 When only a workspace root is provided, Mochi writes app bootstrap files there and keeps runtime
@@ -166,7 +164,10 @@ The **Maintenance** controls expose the reset flows you use when iterating on a 
   It refuses snapshots from another generation and never overwrites published config or genesis
   artifacts. `Supervisor::restore_snapshot` accepts either an absolute path or the sanitised
   `snapshots/<label>` folder name; the UI mirrors this flow so Maintenance → Restore can replay
-  evidence bundles without touching files manually.
+  evidence bundles without touching files manually. Storage is copied under fixed depth and entry
+  budgets before peers stop. A durable restore journal retains the original storage until every
+  captured peer survives restart; launch-time recovery rolls back an interrupted swap or finishes
+  cleanup after a committed one.
 - **Reset lane** — submits a signed retire/add lifecycle replacement for a configured Nexus lane;
   Kura owns the authenticated storage-incarnation transition.
 - **Wipe & re-genesis** — prepares and validates a complete immutable config/genesis generation and

@@ -465,7 +465,7 @@ fn supervisor_builder_preserves_unmanaged_storage_and_selects_fresh_generation()
             assert_eq!(selected.snapshot_dir(), peer.snapshot_dir());
             assert_ne!(selected.storage_dir(), unmanaged_storage);
             let storage_dir = selected.storage_dir();
-            let mut names: Vec<String> = fs::read_dir(&storage_dir)?
+            let mut names: Vec<String> = fs::read_dir(storage_dir)?
                 .map(|entry| entry.map(|e| e.file_name().to_string_lossy().into_owned()))
                 .collect::<std::io::Result<Vec<_>>>()?;
             names.sort();
@@ -475,7 +475,7 @@ fn supervisor_builder_preserves_unmanaged_storage_and_selects_fresh_generation()
                 "storage dir should only contain snapshot for {alias}"
             );
             let snapshot_dir = selected.snapshot_dir();
-            let snapshot_entries = fs::read_dir(&snapshot_dir)?
+            let snapshot_entries = fs::read_dir(snapshot_dir)?
                 .map(|entry| entry.map(|value| value.file_name()))
                 .collect::<std::io::Result<Vec<_>>>()?;
             assert_eq!(snapshot_entries, vec!["generations"]);
@@ -608,7 +608,7 @@ fn supervisor_wipe_and_regenerate_resets_storage_and_genesis() -> Result<()> {
                 !snapshot_dir.join("leftover.bin").exists(),
                 "fresh selected snapshot should not inherit retired state for {alias}"
             );
-            let entries = fs::read_dir(&snapshot_dir)?
+            let entries = fs::read_dir(snapshot_dir)?
                 .map(|entry| entry.map(|value| value.file_name()))
                 .collect::<std::io::Result<Vec<_>>>()?;
             assert_eq!(entries, vec!["generations"]);

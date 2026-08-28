@@ -42,7 +42,7 @@ kagami localnet-wizard
 Existing Sora network / observer peer config, guided:
 
 ```bash
-kagami wizard --profile nexus
+kagami wizard
 ```
 
 Direct disposable localnet, permissioned by default:
@@ -192,10 +192,10 @@ the profile-specific defaults.
 Generate BLS validator keys and PoPs:
 
 ```bash
-target/debug/kagami keys --algorithm bls_normal --pop --out-dir ./validator-a \
-  --seed-hex 5151515151515151515151515151515151515151515151515151515151515151
-target/debug/kagami keys --algorithm bls_normal --pop --out-dir ./validator-b \
-  --seed-hex 5252525252525252525252525252525252525252525252525252525252525252
+target/debug/kagami keys --algorithm bls_normal --pop --out-dir ./validator-a
+target/debug/kagami keys --algorithm bls_normal --pop --out-dir ./validator-b
+target/debug/kagami keys --algorithm bls_normal --pop --out-dir ./validator-c
+target/debug/kagami keys --algorithm bls_normal --pop --out-dir ./validator-d
 ```
 
 Each directory contains `public.key`, `private.key`, and `pop.hex`; the private
@@ -205,8 +205,11 @@ Generate a genesis JSON:
 
 ```bash
 target/debug/kagami genesis generate \
+  --profile iroha3-dev \
   --ivm-dir ./ivm_libs \
-  --genesis-public-key ed25519:...
+  --genesis-public-key ed25519:... \
+  --consensus-mode permissioned \
+  default
 ```
 
 Sign with topology and PoPs:
@@ -217,11 +220,17 @@ target/debug/kagami genesis sign \
   --topology "$TOPOLOGY_JSON" \
   --peer-pop "$PK_A=$POP_A" \
   --peer-pop "$PK_B=$POP_B" \
+  --peer-pop "$PK_C=$POP_C" \
+  --peer-pop "$PK_D=$POP_D" \
   --private-key-file "$GENESIS_PRIVATE_KEY_FILE" \
   --expected-public-key "$GENESIS_PUBLIC_KEY" \
   --out-file genesis.signed.nrt \
   --expected-hash-out genesis.expected_hash
 ```
+
+`TOPOLOGY_JSON` must contain those same four validators at distinct canonical
+addresses. First-release NPoS admission requires an exact `3f + 1` committee,
+so a two-validator signing example is intentionally unsupported.
 
 The one-line `genesis.expected_hash` output is the deployment trust root. It
 carries the exact signed header hash as one canonical checked NetworkId literal.

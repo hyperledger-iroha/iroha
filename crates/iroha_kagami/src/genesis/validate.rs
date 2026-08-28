@@ -5,8 +5,6 @@ use iroha_data_model::{account::address::ChainDiscriminantGuard, name::Name};
 use iroha_genesis::{
     ManifestCrypto, RawGenesisTransaction, genesis_instructions_json, read_genesis_manifest_bytes,
 };
-#[cfg(test)]
-use std::fs;
 use std::{
     io::{BufWriter, Write},
     path::PathBuf,
@@ -170,44 +168,8 @@ mod tests {
         },
     };
     use iroha_genesis::GenesisBuilder;
-    use std::{io::BufWriter, path::PathBuf};
+    use std::{fs, io::BufWriter, path::PathBuf};
     use tempfile::NamedTempFile;
-    fn manifest_file_with_protocols(versions: &[u32]) -> NamedTempFile {
-        let manifest = GenesisBuilder::new_without_executor(ChainId::from("v2-only"), ".")
-            .build_raw()
-            .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-            .with_consensus_meta();
-        let mut value = norito::json::value::to_value(&manifest).expect("serialize manifest");
-        value
-            .as_object_mut()
-            .expect("manifest serializes as object")
-            .insert(
-                "wire_protocol_version".to_owned(),
-                norito::json::value::to_value(&versions.to_vec()).expect("serialize protocol list"),
-            );
-        let file = NamedTempFile::new().expect("create genesis fixture");
-        fs::write(
-            file.path(),
-            norito::json::to_json_pretty(&value).expect("serialize manifest JSON"),
-        )
-        .expect("write genesis fixture");
-        file
-    }
-    #[test]
-    fn validation_rejects_legacy_mixed_empty_and_duplicate_protocol_lists() {
-        for versions in [Vec::new(), vec![1], vec![1, 2], vec![2, 1], vec![2, 2]] {
-            let file = manifest_file_with_protocols(&versions);
-            let error = Args {
-                genesis_file: file.path().to_owned(),
-            }
-            .run(&mut BufWriter::new(Vec::<u8>::new()))
-            .expect_err("non-canonical protocol list must fail validation");
-            assert!(
-                format!("{error:#}").contains("exactly wire_protocol_version = [4]"),
-                "unexpected error for {versions:?}: {error:#}"
-            );
-        }
-    }
     #[test]
     fn detects_invalid_custom_parameter_key() {
         let json = norito::json!({

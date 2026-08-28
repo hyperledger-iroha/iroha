@@ -4008,8 +4008,8 @@ impl Kura {
         if recover && !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
             return None;
         }
-        let mut index = std::fs::File::open(index_path).ok()?;
-        let mut data = std::fs::File::open(data_path).ok()?;
+        let mut index = open_read_only_regular_file(index_path, "indexed sidecar index").ok()?;
+        let mut data = open_read_only_regular_file(data_path, "indexed sidecar data").ok()?;
         Self::read_indexed_sidecar_from_open_files_with_limit(
             height,
             &mut data,

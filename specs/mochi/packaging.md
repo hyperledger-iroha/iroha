@@ -9,8 +9,8 @@ and CI usage.
 
 - Rust toolchain (edition 2024 / Rust 1.82+) with workspace dependencies
   already built.
-- `iroha3d`, `iroha`, and `kagami` compiled for the desired target. The
-  bundler reuses binaries from `target/<profile>/`.
+- `iroha3d` and `kagami` compiled for the desired target. Mochi runs
+  `iroha3d`; the bundler includes `kagami` from `target/<profile>/`.
 - Sufficient disk space for the bundle output under `target/` or a custom
   destination.
 
@@ -18,7 +18,6 @@ Build the dependencies once before running the bundler:
 
 ```bash
 cargo build -p irohad --bin iroha3d
-cargo build -p iroha_cli --bin iroha
 cargo build -p iroha_kagami --bin kagami
 ```
 
@@ -91,14 +90,12 @@ environment variables:
 
 - `--data-root` / `MOCHI_DATA_ROOT` – override the workspace used for peer
   configs, storage, and logs.
-- `--profile` – select the `four-peer-bft` topology preset or a custom exact
-  3f+1 committee. The historical `single-peer` name also launches four
-  validators.
+- `--profile` – select the exact `four-peer-bft` topology preset or a custom
+  exact 3f+1 committee.
 - `--torii-start`, `--p2p-start` – change the base ports used when allocating
   services.
 - `--irohad` / `MOCHI_IROHAD` – point at a specific `iroha3d` binary.
 - `--kagami` / `MOCHI_KAGAMI` – override the bundled `kagami`.
-- `--iroha-cli` / `MOCHI_IROHA_CLI` – override the optional CLI helper.
 - `--restart-mode <never|on-failure>` – disable automatic restarts or force the
   exponential backoff policy.
 - `--restart-max <attempts>` – override the number of restart attempts when

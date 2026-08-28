@@ -4,10 +4,7 @@
 //! helpers for common HTTP and WebSocket interactions. UI layers can build on
 //! top by wiring retries, auth, and payload codecs.
 use crate::compose::{InstructionPermission, SigningAuthority};
-use base64::{
-    Engine as _,
-    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
-};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures::{SinkExt, future::join_all};
 use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
@@ -49,10 +46,11 @@ use norito::json;
 use rand::{TryRngCore as _, rngs::OsRng};
 use reqwest::{
     Client, Response, StatusCode,
-    header::{HeaderMap, HeaderName, HeaderValue, SEC_WEBSOCKET_PROTOCOL},
+    header::{HeaderMap, HeaderValue, SEC_WEBSOCKET_PROTOCOL},
 };
 use std::{
     convert::TryFrom,
+    future::Future,
     num::{NonZeroU32, NonZeroU64},
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -63,9 +61,10 @@ use tokio::{
     sync::{
         Mutex,
         broadcast::{self, error::RecvError},
+        watch,
     },
     task::JoinHandle,
-    time::sleep,
+    time::{sleep, timeout},
 };
 use tokio_stream::StreamExt;
 use tokio_tungstenite::{
@@ -82,9 +81,9 @@ pub type ToriiResult<T> = std::result::Result<T, ToriiError>;
 /// Errors emitted by the Torii client.
 #[derive(thiserror::Error, Debug)]
 pub enum ToriiError {
-    /// Base URL could not be parsed.
+    /// Base URL could not be parsed or was not in the canonical first-release form.
     #[error("invalid Torii base URL: {0}")]
-    InvalidBaseUrl(url::ParseError),
+    InvalidBaseUrl(String),
     /// Endpoint URL composition failed.
     #[error("invalid Torii endpoint URL: {0}")]
     InvalidEndpoint(url::ParseError),
@@ -442,7 +441,18 @@ async fn read_bounded_json_response(
     decode_bounded_json_response(&bytes, context)
 }
 fn compose_base_urls(base_url: &str) -> ToriiResult<(Url, Url)> {
-    let http_base = Url::parse(base_url).map_err(ToriiError::InvalidBaseUrl)?;
+    let http_base =
+        Url::parse(base_url).map_err(|error| ToriiError::InvalidBaseUrl(error.to_string()))?;
+    if !http_base.username().is_empty() || http_base.password().is_some() {
+        return Err(ToriiError::InvalidBaseUrl(
+            "embedded URL credentials are not allowed".to_owned(),
+        ));
+    }
+    if http_base.query().is_some() || http_base.fragment().is_some() {
+        return Err(ToriiError::InvalidBaseUrl(
+            "base URL query and fragment components are not allowed".to_owned(),
+        ));
+    }
     let scheme = http_base.scheme().to_owned();
     let ws_scheme = match scheme.as_str() {
         "http" => "ws",
@@ -575,7 +585,7 @@ impl ReadinessOptions {
 /// Options for waiting until a submitted transaction is observed in the committed block stream.
 #[derive(Debug, Clone, Copy)]
 pub struct SmokeCommitOptions {
-    /// Maximum duration to wait for the smoke transaction to commit.
+    /// Maximum duration for stream setup, submission, and commit observation.
     pub timeout: Duration,
 }
 impl SmokeCommitOptions {
@@ -589,6 +599,30 @@ impl Default for SmokeCommitOptions {
     fn default() -> Self {
         Self::new(Duration::from_secs(15))
     }
+}
+fn smoke_commit_deadline(started: Instant, timeout: Duration) -> ToriiResult<Instant> {
+    started.checked_add(timeout).ok_or_else(|| {
+        ToriiError::Decode(
+            "smoke commit timeout exceeds the platform monotonic-clock range".to_owned(),
+        )
+    })
+}
+async fn await_torii_before_deadline<T>(
+    deadline: Instant,
+    context: &str,
+    operation: impl Future<Output = ToriiResult<T>>,
+) -> ToriiResult<T> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(ToriiError::Timeout {
+            context: context.to_owned(),
+        });
+    }
+    timeout(remaining, operation)
+        .await
+        .map_err(|_| ToriiError::Timeout {
+            context: context.to_owned(),
+        })?
 }
 /// Successful observation of a committed smoke transaction.
 #[derive(Debug, Clone)]
@@ -976,15 +1010,15 @@ impl Default for ReadinessOptions {
         Self::new(Duration::from_secs(10))
     }
 }
-/// Builder for [`ToriiClient`] that allows configuring headers and timeouts.
-#[derive(Clone, Debug)]
+/// Fixed first-release timeout for individual Torii HTTP requests.
+const TORII_HTTP_REQUEST_TIMEOUT_V1: Duration = Duration::from_secs(10);
+/// Builder for [`ToriiClient`] authentication and network-lineage settings.
+#[derive(Debug)]
 pub struct ToriiClientBuilder {
     http_base: Url,
     ws_base: Url,
     network_id: Option<NetworkId>,
     operator_signing_context: Option<OperatorSigningContext>,
-    default_headers: HeaderMap,
-    timeout: Option<Duration>,
 }
 impl ToriiClientBuilder {
     /// Create a builder targeting the provided Torii base URL.
@@ -995,48 +1029,7 @@ impl ToriiClientBuilder {
             ws_base,
             network_id: None,
             operator_signing_context: None,
-            default_headers: HeaderMap::new(),
-            timeout: None,
         })
-    }
-    /// Attach the `x-api-token` header to every request.
-    pub fn with_api_token(mut self, token: impl AsRef<str>) -> ToriiResult<Self> {
-        let value =
-            HeaderValue::from_str(token.as_ref()).map_err(|source| ToriiError::InvalidHeader {
-                name: "x-api-token".into(),
-                source,
-            })?;
-        self.default_headers
-            .insert(HeaderName::from_static("x-api-token"), value);
-        Ok(self)
-    }
-    /// Apply a custom header to every HTTP/WebSocket request.
-    pub fn with_header(mut self, name: HeaderName, value: HeaderValue) -> Self {
-        self.default_headers.insert(name, value);
-        self
-    }
-    /// Attach HTTP basic authentication credentials to every request.
-    pub fn with_basic_auth(
-        mut self,
-        username: impl AsRef<str>,
-        password: impl AsRef<str>,
-    ) -> ToriiResult<Self> {
-        let encoded =
-            BASE64_STANDARD.encode(format!("{}:{}", username.as_ref(), password.as_ref()));
-        let value = HeaderValue::from_str(&format!("Basic {encoded}")).map_err(|source| {
-            ToriiError::InvalidHeader {
-                name: "authorization".into(),
-                source,
-            }
-        })?;
-        self.default_headers
-            .insert(HeaderName::from_static("authorization"), value);
-        Ok(self)
-    }
-    /// Set the HTTP client timeout.
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
-        self
     }
     /// Bind all signed queries produced by this client to one exact genesis lineage.
     pub fn with_network_id(mut self, network_id: NetworkId) -> Self {
@@ -1064,24 +1057,18 @@ impl ToriiClientBuilder {
         };
         // Signed query bodies are one-shot. A redirect could replay the same
         // nonce after the original endpoint already admitted the request.
-        let mut client_builder = Client::builder()
+        let http = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never());
-        if let Some(timeout) = self.timeout {
-            client_builder = client_builder.timeout(timeout);
-        }
-        if !self.default_headers.is_empty() {
-            client_builder = client_builder.default_headers(self.default_headers.clone());
-        }
-        let http = client_builder.build()?;
+            .retry(reqwest::retry::never())
+            .timeout(TORII_HTTP_REQUEST_TIMEOUT_V1)
+            .build()?;
         Ok(ToriiClient {
             http_base: self.http_base,
             ws_base: self.ws_base,
             network_id,
-            operator_signing_context: self.operator_signing_context,
+            operator_signing_context: self.operator_signing_context.map(Arc::new),
             http,
             status_state: Arc::new(Mutex::new(StatusState::default())),
-            default_headers: self.default_headers,
         })
     }
 }
@@ -1266,12 +1253,7 @@ impl ExplorerPaginationMeta {
             &["page", "per_page", "total_pages", "total_items"],
             "explorer blocks pagination",
         )?;
-        let page = parse_u64_field(
-            record,
-            "page",
-            false,
-            "explorer blocks pagination.page",
-        )?;
+        let page = parse_u64_field(record, "page", false, "explorer blocks pagination.page")?;
         let per_page = parse_u64_field(
             record,
             "per_page",
@@ -1284,26 +1266,38 @@ impl ExplorerPaginationMeta {
                 format!("must be between 1 and {EXPLORER_HISTORY_MAX_PER_PAGE}"),
             ));
         }
+        let total_pages = parse_u64_field(
+            record,
+            "total_pages",
+            true,
+            "explorer blocks pagination.total_pages",
+        )?;
+        let total_items = parse_u64_field(
+            record,
+            "total_items",
+            true,
+            "explorer blocks pagination.total_items",
+        )?;
+        let expected_total_pages = total_items.div_ceil(per_page);
+        if total_pages != expected_total_pages {
+            return Err(decode_error(
+                "explorer blocks pagination.total_pages",
+                format!("must equal ceil(total_items / per_page), expected {expected_total_pages}"),
+            ));
+        }
         Ok(Self {
             page,
             per_page,
-            total_pages: parse_u64_field(
-                record,
-                "total_pages",
-                true,
-                "explorer blocks pagination.total_pages",
-            )?,
-            total_items: parse_u64_field(
-                record,
-                "total_items",
-                true,
-                "explorer blocks pagination.total_items",
-            )?,
+            total_pages,
+            total_items,
         })
     }
 }
 const EXPLORER_CURSOR_MAX_LENGTH: usize = 1_424;
+const EXPLORER_CURSOR_DEFAULT_LIMIT: u32 = 25;
 const EXPLORER_CURSOR_MAX_LIMIT: u32 = 100;
+const EXPLORER_HISTORY_DEFAULT_PAGE: u64 = 1;
+const EXPLORER_HISTORY_DEFAULT_PER_PAGE: u64 = 10;
 const EXPLORER_HISTORY_MAX_PER_PAGE: u64 = 100;
 fn require_exact_explorer_fields(
     record: &json::Map,
@@ -1317,6 +1311,65 @@ fn require_exact_explorer_fields(
         ));
     }
     Ok(())
+}
+fn is_canonical_explorer_rfc3339_utc(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() < 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+    {
+        return false;
+    }
+    let decimal = |start: usize, end: usize| {
+        bytes
+            .get(start..end)?
+            .iter()
+            .try_fold(0_u32, |value, byte| {
+                byte.is_ascii_digit()
+                    .then_some(value * 10 + u32::from(*byte - b'0'))
+            })
+    };
+    let Some(year) = decimal(0, 4) else {
+        return false;
+    };
+    let Some(month) = decimal(5, 7) else {
+        return false;
+    };
+    let Some(day) = decimal(8, 10) else {
+        return false;
+    };
+    let Some(hour) = decimal(11, 13) else {
+        return false;
+    };
+    let Some(minute) = decimal(14, 16) else {
+        return false;
+    };
+    let Some(second) = decimal(17, 19) else {
+        return false;
+    };
+    let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap_year => 29,
+        2 => 28,
+        _ => return false,
+    };
+    if !(1..=days_in_month).contains(&day) || hour > 23 || minute > 59 || second > 59 {
+        return false;
+    }
+    match bytes.len() {
+        20 => bytes[19] == b'Z',
+        22..=30 => {
+            bytes[19] == b'.'
+                && bytes[bytes.len() - 1] == b'Z'
+                && bytes[20..bytes.len() - 1].iter().all(u8::is_ascii_digit)
+        }
+        _ => false,
+    }
 }
 fn validate_explorer_items_len(
     items_len: usize,
@@ -1483,16 +1536,35 @@ impl ExplorerBlockRecord {
                     "must not contain surrounding whitespace",
                 ));
             }
+            value if !is_canonical_explorer_rfc3339_utc(value) => {
+                return Err(decode_error(
+                    "explorer block record.created_at",
+                    "must be canonical UTC RFC3339 with at most 9 fractional digits",
+                ));
+            }
             value => Some(value.to_owned()),
         };
+        let transactions_rejected = parse_u64_field(
+            record,
+            "transactions_rejected",
+            true,
+            "explorer block record.transactions_rejected",
+        )?;
+        let transactions_total = parse_u64_field(
+            record,
+            "transactions_total",
+            true,
+            "explorer block record.transactions_total",
+        )?;
+        if transactions_rejected > transactions_total {
+            return Err(decode_error(
+                "explorer block record.transactions_rejected",
+                "must not exceed transactions_total",
+            ));
+        }
         Ok(Self {
             hash,
-            height: parse_u64_field(
-                record,
-                "height",
-                false,
-                "explorer block record.height",
-            )?,
+            height: parse_u64_field(record, "height", false, "explorer block record.height")?,
             created_at,
             prev_block_hash: parse_optional_hex_field(
                 record,
@@ -1504,18 +1576,8 @@ impl ExplorerBlockRecord {
                 "transactions_hash",
                 "explorer block record.transactions_hash",
             )?,
-            transactions_rejected: parse_u64_field(
-                record,
-                "transactions_rejected",
-                true,
-                "explorer block record.transactions_rejected",
-            )?,
-            transactions_total: parse_u64_field(
-                record,
-                "transactions_total",
-                true,
-                "explorer block record.transactions_total",
-            )?,
+            transactions_rejected,
+            transactions_total,
         })
     }
 }
@@ -1553,6 +1615,22 @@ impl ExplorerBlocksPage {
                 format!(
                     "must contain at most {} entries, matching pagination.per_page",
                     pagination.per_page
+                ),
+            ));
+        }
+        let skipped = pagination
+            .page
+            .saturating_sub(1)
+            .saturating_mul(pagination.per_page);
+        let expected_items = pagination
+            .total_items
+            .saturating_sub(skipped)
+            .min(pagination.per_page);
+        if u64::try_from(items_array.len()).ok() != Some(expected_items) {
+            return Err(decode_error(
+                "explorer blocks response.items",
+                format!(
+                    "must contain exactly {expected_items} entries for the declared pagination"
                 ),
             ));
         }
@@ -1870,10 +1948,7 @@ fn require_exact_smoke_status_fields(
     }
     Ok(())
 }
-fn require_exact_iroha_hash<'a>(
-    value: &'a str,
-    context: &str,
-) -> ToriiResult<&'a str> {
+fn require_exact_iroha_hash<'a>(value: &'a str, context: &str) -> ToriiResult<&'a str> {
     if value.len() != 64
         || !value
             .as_bytes()
@@ -2107,10 +2182,9 @@ pub struct ToriiClient {
     http_base: Url,
     ws_base: Url,
     network_id: Option<NetworkId>,
-    operator_signing_context: Option<OperatorSigningContext>,
+    operator_signing_context: Option<Arc<OperatorSigningContext>>,
     http: Client,
     status_state: Arc<Mutex<StatusState>>,
-    default_headers: HeaderMap,
 }
 #[cfg(test)]
 pub(crate) fn test_network_id() -> NetworkId {
@@ -2234,10 +2308,10 @@ impl ToriiClient {
         self.http_endpoint("v1/mcp")
     }
     fn explorer_blocks_endpoint(&self) -> ToriiResult<Url> {
-        self.http_endpoint(torii_routes::EXPLORER_BLOCKS_GET.path())
+        self.http_endpoint(torii_routes::application_api::EXPLORER_BLOCKS_GET.path())
     }
     fn explorer_assets_endpoint(&self) -> ToriiResult<Url> {
-        self.http_endpoint(torii_routes::EXPLORER_ASSETS_GET.path())
+        self.http_endpoint(torii_routes::application_api::EXPLORER_ASSETS_GET.path())
     }
     /// URL of the `/v1/pipeline/transactions/status` endpoint.
     pub fn pipeline_transaction_status_endpoint(&self) -> ToriiResult<Url> {
@@ -2257,8 +2331,12 @@ impl ToriiClient {
             .checked_add(options.timeout)
             .unwrap_or_else(|| start + options.timeout);
         loop {
-            match self.fetch_status_snapshot().await {
+            match self
+                .fetch_status_snapshot_before(deadline, "peer readiness")
+                .await
+            {
                 Ok(snapshot) => return Ok(snapshot),
+                Err(err @ ToriiError::Timeout { .. }) => return Err(err),
                 Err(err) => {
                     let now = Instant::now();
                     if now >= deadline {
@@ -2288,10 +2366,24 @@ impl ToriiClient {
         let deadline = start
             .checked_add(options.timeout)
             .unwrap_or_else(|| start + options.timeout);
+        let mut saw_zero_height = false;
         loop {
-            let poll_error = match self.fetch_status_snapshot().await {
+            let poll_error = match self
+                .fetch_status_snapshot_before(deadline, "genesis commitment")
+                .await
+            {
                 Ok(snapshot) if snapshot.status.blocks > 0 => return Ok(snapshot),
-                Ok(_) => None,
+                Ok(_) => {
+                    saw_zero_height = true;
+                    None
+                }
+                Err(ToriiError::Timeout { .. }) if saw_zero_height => {
+                    return Err(ToriiError::Timeout {
+                        context: "genesis commitment (status remained at zero committed blocks)"
+                            .to_owned(),
+                    });
+                }
+                Err(err @ ToriiError::Timeout { .. }) => return Err(err),
                 Err(err) => Some(err),
             };
             let now = Instant::now();
@@ -2418,14 +2510,6 @@ impl ToriiClient {
             message,
         })
     }
-    /// Submit a signed transaction using its canonical versioned Norito encoding.
-    pub async fn submit_signed_transaction(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> ToriiResult<()> {
-        let bytes = transaction.encode_versioned();
-        self.submit_transaction(&bytes).await
-    }
     /// Submit a signed transaction and wait until local Torii reports it as committed.
     ///
     /// This helper is primarily intended for readiness smoke checks in local tooling.
@@ -2437,27 +2521,44 @@ impl ToriiClient {
         let tx_hash = transaction.hash();
         let tx_hash_str = encode_lower_hex(tx_hash.as_ref());
         let started = Instant::now();
+        let deadline = smoke_commit_deadline(started, options.timeout)?;
+        let deadline_context = format!("smoke commit {tx_hash_str}");
         // Stream notifications are latency optimizations for this exact-hash
         // readiness check. Torii may temporarily throttle WebSocket handshakes
         // while all peers start; keep the canonical HTTP status reconciliation
         // authoritative instead of failing an otherwise healthy localnet.
-        let block_stream = match self.block_stream().await {
-            Ok(stream) => Some(stream),
-            Err(ToriiError::RateLimited { .. }) => None,
-            Err(error) => return Err(error),
-        };
-        let events_stream = match self.events_stream().await {
-            Ok(stream) => Some(stream),
-            Err(ToriiError::RateLimited { .. }) => None,
-            Err(error) => return Err(error),
-        };
+        let block_stream =
+            match await_torii_before_deadline(deadline, &deadline_context, self.block_stream())
+                .await
+            {
+                Ok(stream) => Some(stream),
+                Err(ToriiError::RateLimited { .. }) => None,
+                Err(error) => return Err(error),
+            };
+        let events_stream =
+            match await_torii_before_deadline(deadline, &deadline_context, self.events_stream())
+                .await
+            {
+                Ok(stream) => Some(stream),
+                Err(ToriiError::RateLimited { .. }) => None,
+                Err(error) => return Err(error),
+            };
         let mut block_rx = block_stream.as_ref().map(BlockStream::subscribe);
         let mut event_rx = events_stream.as_ref().map(EventStream::subscribe);
         let signed_bytes = transaction.encode_versioned();
-        let mut admission_outcome_unknown = match self.submit_transaction(&signed_bytes).await {
+        let submission = await_torii_before_deadline(
+            deadline,
+            &deadline_context,
+            self.submit_transaction(&signed_bytes),
+        )
+        .await;
+        let mut admission_outcome_unknown = match submission {
             Ok(()) => false,
             Err(err) if err.confirms_existing_submission() => false,
             Err(err) if err.is_queue_plan_journal_outcome_unknown() => true,
+            Err(ToriiError::Timeout { .. }) => {
+                return Err(ToriiError::SmokeAdmissionOutcomeUnknown { hash: tx_hash_str });
+            }
             Err(err) => return Err(err),
         };
         let wait = async {
@@ -2579,14 +2680,16 @@ impl ToriiClient {
                 }
             }
         };
-        let result = match tokio::time::timeout(options.timeout, wait).await {
-            Ok(result) => result,
-            Err(_) if admission_outcome_unknown => Err(ToriiError::SmokeAdmissionOutcomeUnknown {
-                hash: tx_hash_str.clone(),
+        let result = match await_torii_before_deadline(deadline, &deadline_context, wait).await {
+            Err(ToriiError::Timeout { .. }) if admission_outcome_unknown => {
+                Err(ToriiError::SmokeAdmissionOutcomeUnknown {
+                    hash: tx_hash_str.clone(),
+                })
+            }
+            Err(ToriiError::Timeout { .. }) => Err(ToriiError::Timeout {
+                context: deadline_context,
             }),
-            Err(_) => Err(ToriiError::Timeout {
-                context: format!("smoke commit {tx_hash_str}"),
-            }),
+            result => result,
         };
         drop(block_stream);
         drop(events_stream);
@@ -2672,14 +2775,20 @@ impl ToriiClient {
         };
         Ok(ToriiStatusSnapshot::new(timestamp, status, metrics))
     }
+    async fn fetch_status_snapshot_before(
+        &self,
+        deadline: Instant,
+        context: &'static str,
+    ) -> ToriiResult<ToriiStatusSnapshot> {
+        await_torii_before_deadline(deadline, context, self.fetch_status_snapshot()).await
+    }
     /// Fetch the exact reducer-owned Sumeragi v2 status snapshot.
     pub async fn fetch_sumeragi_status(&self) -> ToriiResult<SumeragiV2Status> {
         let url = self.sumeragi_status_endpoint()?;
         let request = build_operator_get_request(
             &self.http,
-            &self.default_headers,
             self.network_id,
-            self.operator_signing_context.as_ref(),
+            self.operator_signing_context.as_deref(),
             url,
         )?;
         let response = self.http.execute(request).await?;
@@ -2702,9 +2811,8 @@ impl ToriiClient {
         let url = self.sumeragi_diagnostics_endpoint()?;
         let request = build_operator_get_request(
             &self.http,
-            &self.default_headers,
             self.network_id,
-            self.operator_signing_context.as_ref(),
+            self.operator_signing_context.as_deref(),
             url,
         )?;
         let response = self.http.execute(request).await?;
@@ -2858,32 +2966,25 @@ impl ToriiClient {
         &self,
         query: ExplorerBlocksQuery,
     ) -> ToriiResult<ExplorerBlocksPage> {
-        let requested_page = query.page;
-        let requested_per_page = query.per_page;
+        let requested_page = query.page.unwrap_or(EXPLORER_HISTORY_DEFAULT_PAGE);
+        let requested_per_page = query.per_page.unwrap_or(EXPLORER_HISTORY_DEFAULT_PER_PAGE);
+        if requested_page == 0 {
+            return Err(decode_error(
+                "explorer blocks query.page",
+                "must be at least 1",
+            ));
+        }
+        if !(1..=EXPLORER_HISTORY_MAX_PER_PAGE).contains(&requested_per_page) {
+            return Err(decode_error(
+                "explorer blocks query.per_page",
+                format!("must be between 1 and {EXPLORER_HISTORY_MAX_PER_PAGE}"),
+            ));
+        }
         let url = self.explorer_blocks_endpoint()?;
-        let mut request = self.http.get(url);
-        let mut params: Vec<(&str, String)> = Vec::new();
-        if let Some(page) = query.page {
-            if page == 0 {
-                return Err(decode_error(
-                    "explorer blocks query.page",
-                    "must be at least 1",
-                ));
-            }
-            params.push(("page", page.to_string()));
-        }
-        if let Some(per_page) = query.per_page {
-            if !(1..=EXPLORER_HISTORY_MAX_PER_PAGE).contains(&per_page) {
-                return Err(decode_error(
-                    "explorer blocks query.per_page",
-                    format!("must be between 1 and {EXPLORER_HISTORY_MAX_PER_PAGE}"),
-                ));
-            }
-            params.push(("per_page", per_page.to_string()));
-        }
-        if !params.is_empty() {
-            request = request.query(&params);
-        }
+        let request = self.http.get(url).query(&[
+            ("page", requested_page.to_string()),
+            ("per_page", requested_per_page.to_string()),
+        ]);
         let response = request.send().await?;
         if !response.status().is_success() {
             return Err(ToriiError::UnexpectedStatus {
@@ -2894,13 +2995,13 @@ impl ToriiClient {
         }
         let value = read_bounded_json_response(response, "Explorer blocks").await?;
         let page = ExplorerBlocksPage::from_json(&value)?;
-        if requested_page.is_some_and(|expected| page.pagination.page != expected) {
+        if page.pagination.page != requested_page {
             return Err(decode_error(
                 "explorer blocks response.pagination.page",
                 "does not match the requested page",
             ));
         }
-        if requested_per_page.is_some_and(|expected| page.pagination.per_page != expected) {
+        if page.pagination.per_page != requested_per_page {
             return Err(decode_error(
                 "explorer blocks response.pagination.per_page",
                 "does not match the requested per_page",
@@ -2919,10 +3020,16 @@ impl ToriiClient {
             owned_by,
             definition,
         } = query;
+        let requested_limit = limit.unwrap_or(EXPLORER_CURSOR_DEFAULT_LIMIT);
         let url = self.explorer_assets_endpoint()?;
         let mut request = self.http.get(url);
         let mut params: Vec<(&str, String)> = Vec::new();
-        append_explorer_cursor_params(&mut params, cursor, limit, "explorer assets query")?;
+        append_explorer_cursor_params(
+            &mut params,
+            cursor,
+            Some(requested_limit),
+            "explorer assets query",
+        )?;
         let owned_by = validate_explorer_account_filter(owned_by)?;
         if let Some(owned_by) = owned_by.as_ref() {
             params.push(("owned_by", owned_by.clone()));
@@ -2944,7 +3051,7 @@ impl ToriiClient {
         }
         let value = read_bounded_json_response(response, "Explorer assets").await?;
         let page = ExplorerAssetsPage::from_json(&value)?;
-        if limit.is_some_and(|expected| page.pagination.limit != expected) {
+        if page.pagination.limit != requested_limit {
             return Err(decode_error(
                 "explorer assets response.pagination.limit",
                 "does not match the requested limit",
@@ -2975,10 +3082,6 @@ impl ToriiClient {
     /// Establish a canonical WebSocket connection to `/v1/blocks/stream`.
     pub async fn connect_block_stream(&self) -> ToriiResult<ToriiWebSocket> {
         self.connect_ws(self.block_stream_endpoint()?).await
-    }
-    /// Establish a canonical WebSocket connection to `/v1/events/ws`.
-    pub async fn connect_events_stream(&self) -> ToriiResult<ToriiWebSocket> {
-        self.connect_ws(self.events_stream_endpoint()?).await
     }
     /// Subscribe to blocks from height one on `/v1/blocks/stream`.
     pub async fn subscribe_block_stream(&self) -> ToriiResult<WsSubscription> {
@@ -3105,16 +3208,10 @@ impl ToriiClient {
             .to_string()
             .into_client_request()
             .map_err(|err| ToriiError::InvalidWebSocketRequest(err.to_string()))?;
-        {
-            let headers = request.headers_mut();
-            for (name, value) in self.default_headers.iter() {
-                headers.insert(name.clone(), value.clone());
-            }
-            headers.insert(
-                SEC_WEBSOCKET_PROTOCOL,
-                HeaderValue::from_static(NORITO_V1_WEBSOCKET_SUBPROTOCOL),
-            );
-        }
+        request.headers_mut().insert(
+            SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static(NORITO_V1_WEBSOCKET_SUBPROTOCOL),
+        );
         let (stream, response) = connect_async(request)
             .await
             .map_err(websocket_connect_error)?;

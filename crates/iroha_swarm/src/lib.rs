@@ -110,12 +110,12 @@ pub enum Error {
         /// Duplicated secret target.
         target: String,
     },
-    /// Prepared validator {index} must use distinct non-zero P2P/API ports, got {p2p_port}/{api_port}.
+    /// Peer {index} must use distinct non-zero P2P/API ports, got {p2p_port}/{api_port}.
     #[expect(
         clippy::doc_markdown,
         reason = "displaydoc uses this text verbatim; Markdown markup would alter the error"
     )]
-    InvalidPreparedPorts {
+    InvalidPeerPorts {
         /// Zero-based validator index.
         index: usize,
         /// P2P host/container port.
@@ -123,8 +123,8 @@ pub enum Error {
         /// Torii host/container port.
         api_port: u16,
     },
-    /// Prepared validator {index} reuses host port {port}.
-    DuplicatePreparedHostPort {
+    /// Peer {index} reuses host port {port}.
+    DuplicateHostPort {
         /// Zero-based validator index.
         index: usize,
         /// Duplicated host port.
@@ -345,6 +345,26 @@ impl PeerSettings {
         }
         Ok(())
     }
+    fn validate_host_ports(
+        ports: impl IntoIterator<Item = (usize, u16, u16)>,
+    ) -> Result<(), Error> {
+        let mut host_ports = std::collections::BTreeSet::new();
+        for (index, p2p_port, api_port) in ports {
+            if p2p_port == 0 || api_port == 0 || p2p_port == api_port {
+                return Err(Error::InvalidPeerPorts {
+                    index,
+                    p2p_port,
+                    api_port,
+                });
+            }
+            for port in [p2p_port, api_port] {
+                if !host_ports.insert(port) {
+                    return Err(Error::DuplicateHostPort { index, port });
+                }
+            }
+        }
+        Ok(())
+    }
     fn deterministic_dev(
         count: std::num::NonZeroU16,
         overrides: Option<Vec<peer::PeerOverride>>,
@@ -364,6 +384,12 @@ impl PeerSettings {
                     actual: overrides.len(),
                 });
             }
+            Self::validate_host_ports(
+                overrides
+                    .iter()
+                    .enumerate()
+                    .map(|(index, peer)| (index, peer.p2p_port, peer.api_port)),
+            )?;
             overrides
                 .into_iter()
                 .enumerate()
@@ -437,7 +463,12 @@ impl PeerSettings {
         Self::validate_committee_size(validator_count)?;
         let mut network = std::collections::BTreeMap::new();
         let mut prepared_runtime = std::collections::BTreeMap::new();
-        let mut host_ports = std::collections::BTreeSet::new();
+        Self::validate_host_ports(
+            validators
+                .iter()
+                .enumerate()
+                .map(|(index, validator)| (index, validator.p2p_port, validator.api_port)),
+        )?;
         let mut transport_public_keys = std::collections::BTreeSet::new();
         for (index, validator) in validators.into_iter().enumerate() {
             iroha_crypto::bls_normal_pop_verify(validator.key_pair.public_key(), &validator.pop)
@@ -463,21 +494,6 @@ impl PeerSettings {
                 return Err(Error::DuplicatePreparedTransportIdentity { index });
             }
             let id = u16::try_from(index).expect("prepared validator index fits u16");
-            if validator.p2p_port == 0
-                || validator.api_port == 0
-                || validator.p2p_port == validator.api_port
-            {
-                return Err(Error::InvalidPreparedPorts {
-                    index,
-                    p2p_port: validator.p2p_port,
-                    api_port: validator.api_port,
-                });
-            }
-            for port in [validator.p2p_port, validator.api_port] {
-                if !host_ports.insert(port) {
-                    return Err(Error::DuplicatePreparedHostPort { index, port });
-                }
-            }
             let source =
                 path::AbsolutePath::new(&validator.runtime_config_path)?.relative_to(target_dir)?;
             let mut targets = std::collections::BTreeSet::new();
@@ -776,6 +792,21 @@ mod tests {
             },
         )
     }
+    fn valid_peer_overrides() -> Vec<PeerOverride> {
+        [
+            ("alpha", 2000, 9000),
+            ("beta", 2001, 9001),
+            ("gamma", 2002, 9002),
+            ("delta", 2003, 9003),
+        ]
+        .into_iter()
+        .map(|(name, p2p_port, api_port)| PeerOverride {
+            name: name.to_owned(),
+            p2p_port,
+            api_port,
+        })
+        .collect()
+    }
     fn assert_runtime_genesis_artifact_contract(output: &str, peer_count: usize) {
         for required in [
             "IROHA_GENESIS_PUBLIC_KEY_FILE:?set",
@@ -1046,28 +1077,7 @@ mod tests {
     fn peer_overrides_replace_default_names_and_ports() {
         let temp = TempDir::new("peer_overrides");
         let target_path = temp.path().join("docker-compose.yml");
-        let overrides = vec![
-            PeerOverride {
-                name: "alpha".into(),
-                p2p_port: 2000,
-                api_port: 9000,
-            },
-            PeerOverride {
-                name: "beta".into(),
-                p2p_port: 2001,
-                api_port: 9001,
-            },
-            PeerOverride {
-                name: "gamma".into(),
-                p2p_port: 2002,
-                api_port: 9002,
-            },
-            PeerOverride {
-                name: "delta".into(),
-                p2p_port: 2003,
-                api_port: 9003,
-            },
-        ];
+        let overrides = valid_peer_overrides();
         let output = build_with_paths(
             nonzero_ext::nonzero!(4u16),
             false,
@@ -1089,6 +1099,47 @@ mod tests {
         );
         assert!(output.contains("2000"), "custom P2P port missing: {output}");
         assert!(output.contains("9000"), "custom API port missing: {output}");
+    }
+    #[test]
+    fn deterministic_peer_overrides_reject_invalid_and_reused_host_ports() {
+        let temp = TempDir::new("invalid_override_ports");
+        let target_path = temp.path().join("docker-compose.yml");
+        let mut invalid = valid_peer_overrides();
+        invalid[0].p2p_port = 0;
+        let result = Swarm::deterministic_dev(
+            nonzero_ext::nonzero!(4u16),
+            b"iroha-swarm-tests",
+            false,
+            IMAGE,
+            None,
+            false,
+            &target_path,
+            Some(invalid),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::Error::InvalidPeerPorts { index: 0, .. })
+        ));
+
+        let mut duplicated = valid_peer_overrides();
+        duplicated[1].api_port = duplicated[0].p2p_port;
+        let result = Swarm::deterministic_dev(
+            nonzero_ext::nonzero!(4u16),
+            b"iroha-swarm-tests",
+            false,
+            IMAGE,
+            None,
+            false,
+            &target_path,
+            Some(duplicated),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::Error::DuplicateHostPort {
+                index: 1,
+                port: 2000
+            })
+        ));
     }
     #[test]
     fn rejects_directory_target_path() {

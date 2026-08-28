@@ -35,11 +35,18 @@ fn relative_out_dir_paths_are_absolute_in_configs() {
         consensus_mode: SumeragiConsensusMode::Npos,
     };
 
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
-        .expect("generate localnet with relative path");
+    let mut handoff = BufWriter::new(Vec::new());
+    generate_localnet(&opts, &mut handoff).expect("generate localnet with relative path");
+    let handoff = String::from_utf8(handoff.into_inner().expect("flush localnet handoff"))
+        .expect("localnet handoff is UTF-8");
 
     let out_dir = fs::canonicalize(base.path().join("localnet"))
         .expect("canonical generated localnet output directory");
+    assert!(handoff.contains(&out_dir.display().to_string()));
+    let shell_out_dir = crate::shell::absolute_quote_path(&out_dir)
+        .expect("quote canonical localnet output directory");
+    let readme = fs::read_to_string(out_dir.join("README.md")).expect("read localnet guide");
+    assert!(readme.contains(&format!("cd {shell_out_dir}")));
     let peer_cfg = fs::read_to_string(out_dir.join("peer0.toml")).expect("read peer config");
     let parsed: toml::Value = toml::from_str(&peer_cfg).expect("parse peer config");
     let genesis_path = parsed
@@ -269,11 +276,11 @@ fn start_and_stop_scripts_are_executable() {
     let (debug_path, release_path) = default_irohad_bin_paths(false);
     let expected_debug = format!(
         "DEFAULT_IROHAD_BIN_DEBUG={}",
-        shell_quote_path(&debug_path).expect("quote debug path")
+        crate::shell::quote_path(&debug_path).expect("quote debug path")
     );
     let expected_release = format!(
         "DEFAULT_IROHAD_BIN_RELEASE={}",
-        shell_quote_path(&release_path).expect("quote release path")
+        crate::shell::quote_path(&release_path).expect("quote release path")
     );
     assert!(
         start_contents.lines().any(|line| line == expected_debug),
@@ -311,6 +318,15 @@ fn start_and_stop_scripts_are_executable() {
         start_contents.contains("--fee-payer authority --output-format json"),
         "start script should explicitly select authority-paid typed fees for faucet reserve top-ups"
     );
+    assert!(
+        start_contents.contains("$(\"$IROHA_CLI\" --machine"),
+        "faucet reads must preserve an iroha CLI path containing spaces"
+    );
+    assert!(
+        start_contents.contains("      \"$IROHA_CLI\" --machine"),
+        "faucet mints must preserve an iroha CLI path containing spaces"
+    );
+    assert!(!start_contents.contains("$($IROHA_CLI --machine"));
     assert!(!start_contents.contains("faucet-topup.metadata.json"));
     assert!(!start_contents.contains("gas_asset_id"));
     assert!(
@@ -398,7 +414,7 @@ fn start_and_stop_scripts_are_executable() {
 #[test]
 fn shell_assignment_quoting_preserves_metacharacters_as_data() {
     let input = "target dir/it's-$(printf injected)-`printf other`";
-    let quoted = shell_single_quote(input).expect("quote shell value");
+    let quoted = crate::shell::single_quote(input).expect("quote shell value");
     let command = format!("value={quoted}; printf '%s' \"$value\"");
     let output = std::process::Command::new("bash")
         .arg("-c")
@@ -407,7 +423,7 @@ fn shell_assignment_quoting_preserves_metacharacters_as_data() {
         .expect("run generated assignment");
     assert!(output.status.success());
     assert_eq!(output.stdout, input.as_bytes());
-    assert!(shell_single_quote("line one\nline two").is_err());
+    assert!(crate::shell::single_quote("line one\nline two").is_err());
 }
 
 #[cfg(unix)]

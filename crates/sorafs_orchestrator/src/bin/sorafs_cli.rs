@@ -47,7 +47,6 @@ use norito::{
     json::{Map, Number, Value, from_slice, to_string_pretty, to_value, to_vec},
     to_bytes,
 };
-use sorafs_orchestrator::DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR;
 use reqwest::{
     StatusCode,
     blocking::Client as HttpClient,
@@ -89,6 +88,7 @@ use sorafs_manifest::{
     governance_dag_block_cid_v1, validate_governance_dag_head_against_chain_v1,
     validate_governance_log_node_bytes,
 };
+use sorafs_orchestrator::DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR;
 use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, OrchestratorConfig, RolloutPhase, TransportPolicy,
     WriteModeHint,

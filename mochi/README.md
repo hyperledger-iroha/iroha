@@ -31,6 +31,8 @@ The desktop app now treats the selected workspace as the home for bootstrap file
 `<workspace>/.mochi/sandbox/<profile>` as the default runtime state root. The dashboard and the
 headless `sandbox serve` flow both write `.env.local` plus `.mochi/generated/*` into that
 workspace, while runtime logs/storage/session metadata stay under `.mochi/sandbox/<profile>`.
+Secret-bearing vault and `.env.local` writes are supported on Unix hosts in the
+first release and fail closed before filesystem mutation elsewhere.
 
 On a clean launch, Mochi now opens a first-run wizard instead of dropping you
 into the raw ops view. The default home is the Dashboard, which surfaces:
@@ -129,9 +131,12 @@ the dedicated `storage-generations/<generation-id>/kura` root, and Mochi initial
 Snapshot metadata pins this as `storage_layout = "kura-subdirectory-v1"`; restore rejects older
 unmarked aggregate-layout snapshots and snapshots from another immutable generation. Config and
 genesis copies in a snapshot are audit evidence; restore verifies them and rewrites only mutable
-storage and logs. Snapshot digests stream file contents and enumerate each directory through a
-canonical 4,096-entry lexical window (maximum depth 64), so the digest supports long Kura histories
-without retaining a path or byte vector proportional to the whole snapshot.
+storage and logs. Snapshot copy and digest traversal share the V1 limits of 65,536 entries per
+directory, 262,144 entries per tree, and 64 directory levels. Digesting loads and sorts each
+directory once while streaming file contents, so long Kura histories do not require a whole-tree
+path inventory or a file-sized comparison buffer. Restore stages and verifies every bounded copy
+before stopping peers, then uses a durable journal and commit marker to roll back an interrupted
+swap or finish committed cleanup when the supervisor starts again.
 
 ## Repo-Shared Skill
 

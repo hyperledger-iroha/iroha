@@ -15399,9 +15399,7 @@ impl ToriiRecipientLookupRoute {
         if bearer_token.is_empty() {
             emit_torii_config_error(
                 emitter,
-                format!(
-                    "torii.recipient_lookup.routes[{index}].bearer_token must not be empty"
-                ),
+                format!("torii.recipient_lookup.routes[{index}].bearer_token must not be empty"),
             );
             return None;
         }

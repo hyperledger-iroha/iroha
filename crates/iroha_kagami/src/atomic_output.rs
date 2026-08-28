@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(crate) fn resolve_output_file(path: &Path) -> Result<PathBuf> {
+pub fn resolve_output_file(path: &Path) -> Result<PathBuf> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -30,7 +30,11 @@ fn reject_final_symlink(path: &Path) -> Result<()> {
             "refusing to replace symbolic-link output: {}",
             path.display()
         )),
-        Ok(_) => Ok(()),
+        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(_) => Err(color_eyre::eyre::eyre!(
+            "refusing to replace non-regular output: {}",
+            path.display()
+        )),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
         Err(error) => {
             Err(error).wrap_err_with(|| format!("inspect output destination {}", path.display()))
@@ -39,7 +43,7 @@ fn reject_final_symlink(path: &Path) -> Result<()> {
 }
 
 /// Resolve an output file outside a protected directory without following a final symlink.
-pub(crate) fn resolve_outside_directory(
+pub fn resolve_outside_directory(
     protected_directory: &Path,
     output: &Path,
     protected_label: &str,
@@ -61,7 +65,7 @@ pub(crate) fn resolve_outside_directory(
 }
 
 /// Render a file beside its destination, synchronize it, and atomically publish it.
-pub(crate) fn write_file(
+pub fn write_file(
     path: &Path,
     temporary_prefix: &str,
     render: impl FnOnce(&mut dyn std::io::Write) -> Result<()>,
@@ -196,6 +200,28 @@ mod tests {
                 .count(),
             2,
             "failed publication must remove its staging file"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn special_file_output_is_rejected_without_blocking_or_replacement() {
+        use std::os::unix::fs::FileTypeExt as _;
+
+        let directory = tempfile::tempdir().expect("create special-file output directory");
+        let output = directory.path().join("output.fifo");
+        crate::secure_fs::create_fifo_for_test(&output, 0o600).expect("create output FIFO");
+
+        let error = write_file(&output, ".kagami-test-", |writer| {
+            writer.write_all(b"replacement").map_err(Into::into)
+        })
+        .expect_err("special-file output must fail closed");
+        assert!(error.to_string().contains("non-regular output"));
+        assert!(
+            fs::symlink_metadata(&output)
+                .expect("inspect preserved output FIFO")
+                .file_type()
+                .is_fifo()
         );
     }
 }

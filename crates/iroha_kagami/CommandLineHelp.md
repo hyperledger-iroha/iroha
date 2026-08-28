@@ -56,7 +56,7 @@ Task-first Iroha operator tooling for guided setup, local devnets, genesis work,
 
 Common tasks:
   kagami localnet-wizard
-  kagami wizard --profile nexus
+  kagami wizard
   kagami localnet --out-dir ./localnet
   kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml
   kagami keys --out-dir ./key-custody
@@ -66,7 +66,7 @@ Common tasks:
 
 ###### **Subcommands:**
 
-* `wizard` — Guided node/bootstrap flow for configuring a peer against an existing network profile
+* `wizard` — Guided onboarding flow for staging a Sora Nexus observer configuration
 * `localnet-wizard` — Guided disposable local devnet flow for generating peers, configs, genesis, and scripts
 * `localnet` — Generate a bare-metal local network: genesis, per-peer configs, client config, and scripts
 * `docker` — Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
@@ -90,35 +90,25 @@ Common tasks:
 
 ## `kagami wizard`
 
-Guided node/bootstrap flow for configuring a peer against an existing network profile
+Guided onboarding flow for staging a Sora Nexus observer configuration
 
 **Usage:** `kagami wizard [OPTIONS]`
 
 ###### **Options:**
 
-* `--profile <PROFILE>` — Optional preset profile; if omitted, the wizard prompts for one
-
-  Possible values:
-  - `local`:
-    Canonical local single-lane profile
-  - `nexus`:
-    Sora Nexus (mainnet)
-
 * `--output-dir <PATH>` — Directory where generated config/genesis files will be written
 
   Default value: `wizard-output`
 * `--non-interactive` — Run non-interactively, accepting defaults for prompts that are not supplied via flags
-* `--chain-id <CHAIN>` — Override the default chain identifier
-* `--p2p-host <HOST>` — Override the public P2P host/IP advertised for this peer
+* `--p2p-host <HOST>` — Override the public P2P host/IP advertised for this generated observer
 * `--p2p-port <PORT>` — Override the public P2P port for this peer
-* `--torii-host <HOST>` — Override the Torii host/IP advertised for this peer
-* `--torii-port <PORT>` — Override the Torii port for this peer
+* `--torii-port <PORT>` — Override the local Torii listener port for this peer
 * `--relay-mode <RELAY_MODE>` — Override the relay mode instead of prompting interactively
 
   Possible values: `disabled`, `hub`, `spoke`, `assist`
 
 * `--relay-hub-address <HOST:PORT>` — Relay hub addresses (`host:port`), repeat once per hub when relay mode uses them
-* `--trusted-peers <PEERS>` — Override the bootstrap peer (`pubkey@host:port`). Comma-separated for multiple entries
+* `--trusted-peers <PEERS>` — Trusted roster (`pubkey` or `pubkey@host:port`); include a reachable address without a relay
 * `--trusted-peers-pop <POPS>` — Comma-separated PoP entries for trusted peers (`pubkey=pop_hex`)
 
 
@@ -142,7 +132,7 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 * `-p`, `--peers <COUNT>` — Number of peers to generate (minimum four)
 
   Default value: `4`
-* `-s`, `--seed <SEED>` — Optional UTF-8 seed for deterministic development keys
+* `-s`, `--seed <SEED>` — Optional UTF-8 seed for deterministic development keys.
 
    Omit this option to generate independent keys from operating-system entropy.
 * `--chain-id <CHAIN_ID>` — Canonical chain identifier written into genesis, peer configs, and the client config
@@ -237,7 +227,7 @@ Generate validator-only Docker Compose from a prepared bundle or explicit dev se
 
    Note that the target path still needs to be provided, as it is used to resolve paths.
 * `-F`, `--force` — Overwrite the target file if it already exists
-* `--no-banner` — Do not include the banner with the generation notice in the file.
+* `--no-banner` — Do not include the banner with the generation notice in the file
 
 
 
@@ -261,7 +251,7 @@ Generate cryptographic key pairs and optional validator Proofs-of-Possession
 * `--out-dir <DIR>` — Write the key pair into a new owner-only custody directory.
 
    The directory must not contain any existing entries. Files are written as `public.key` and `private.key`; `--pop` also writes `pop.hex`. The private key never passes through standard output.
-* `--pop` — Also output a BLS Proof-of-Possession (PoP) for this key (BLS-normal only). Written as `pop.hex` in the custody directory.
+* `--pop` — Also output a BLS Proof-of-Possession (PoP) for this key (BLS-normal only). Written as `pop.hex` in the custody directory
 
 
 
@@ -286,7 +276,7 @@ Commands related to genesis
 
 Sign the genesis block
 
-**Usage:** `kagami genesis sign [OPTIONS] <GENESIS_FILE>`
+**Usage:** `kagami genesis sign [OPTIONS] --private-key-file <PATH> <GENESIS_FILE>`
 
 ###### **Arguments:**
 
@@ -311,7 +301,6 @@ Sign the genesis block
 
    Omit this for a fresh wall-clock timestamp. Fixture generators should set it so repeated signing produces identical canonical wire bytes.
 * `--config <PATH>` — Optional peer config TOML used to derive the DA proof-policy bundle embedded into genesis
-
 
 
 

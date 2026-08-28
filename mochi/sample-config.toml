@@ -9,7 +9,7 @@
 data_root = "./data"
 
 # When enabled, MOCHI will try to run `cargo build` for missing binaries
-# (`iroha3d`, `iroha`, and `kagami`) before launching peers.
+# (`iroha3d` and `kagami`) before launching peers.
 build_binaries = false
 
 # Choose a topology profile. Use a preset string or a custom table:
@@ -18,13 +18,13 @@ build_binaries = false
 # profile = { peer_count = 7, consensus_mode = "npos", genesis_profile = "iroha3-dev" }
 # Custom peer counts must be exact 3f+1 Sumeragi committees (4 or 7 here).
 profile = "four-peer-bft"
-# Override the generated chain identifier. Leave blank to use `mochi-local`.
+# Override the generated chain identifier. Omit this key to use `mochi-local`.
 # If `genesis_profile` is set, the chain id must match the profile default.
-chain_id = ""
+# chain_id = "mochi-local"
 # Optional Kagami genesis profile (NPoS). For custom profiles, include
 # `genesis_profile` inside the profile table shown above.
 # genesis_profile = "iroha3-dev"
-# Optional VRF seed for genesis profiles that require it (testus/nexus).
+# Optional VRF seed for genesis profiles that require it (Taira/Nexus).
 # vrf_seed_hex = "<64 hexadecimal characters>"
 
 # When enabled, MOCHI submits a small “smoke” transaction and waits for it to be
@@ -48,13 +48,13 @@ torii_start = 11300
 p2p_start = 1337
 
 [binaries]
-# Set these paths if `iroha3d`, `iroha`, or `kagami` are not discoverable in
-# your PATH. Leave empty to inherit the PATH lookup. You can also set the
+# Set these paths if `iroha3d` or `kagami` are not discoverable in
+# your PATH. Omit a key to inherit the PATH lookup. You can also set the
 # `MOCHI_IROHAD` or `MOCHI_KAGAMI` environment variables—or pass CLI flags like
 # `./bin/mochi --kagami /path/to/kagami`—to override these values without editing
 # this file.
-irohad = ""
-kagami = ""
+# irohad = "/path/to/iroha3d"
+# kagami = "/path/to/kagami"
 
 [nexus]
 # Nexus is mandatory. Optionally set an explicit lane count (defaults to 1 when
