@@ -120,7 +120,6 @@ enum ExactJsonRpcIdKind {
     String(String),
     I64(i64),
     U64(u64),
-    F64(u64),
 }
 
 impl ExactJsonRpcId {
@@ -129,9 +128,6 @@ impl ExactJsonRpcId {
             Value::String(value) => ExactJsonRpcIdKind::String(value.clone()),
             Value::Number(json::native::Number::I64(value)) => ExactJsonRpcIdKind::I64(*value),
             Value::Number(json::native::Number::U64(value)) => ExactJsonRpcIdKind::U64(*value),
-            Value::Number(json::native::Number::F64(value)) => {
-                ExactJsonRpcIdKind::F64(value.to_bits())
-            }
             _ => return None,
         };
         Some(Self { kind })

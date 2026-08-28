@@ -4622,6 +4622,17 @@ if not hasattr(select, "poll"):
 for required in ("/proc", "/proc/self/stat", "/proc/self/status", "/proc/sys/kernel/random/boot_id"):
     if not os.path.exists(required):
         raise SystemExit("Taira process control requires Linux procfs")
+try:
+    descriptor = os.pidfd_open(os.getpid(), 0)
+    try:
+        signal.pidfd_send_signal(descriptor, 0, None, 0)
+        poller = select.poll()
+        poller.register(descriptor, select.POLLIN | select.POLLHUP)
+        poller.poll(0)
+    finally:
+        os.close(descriptor)
+except OSError as error:
+    raise SystemExit("Taira process control cannot exercise native Linux pidfds: {}".format(error))
 PY
 for legacy_pidfile in "$DIR"/peer*.pid; do
   if [ -e "$legacy_pidfile" ] || [ -L "$legacy_pidfile" ]; then
@@ -4689,9 +4700,9 @@ def _status_ids(payload, pid):
             values = tuple(int(value) for value in rows[0][len(label):].split())
         except ValueError:
             raise RuntimeError("malformed Linux procfs status for Taira process {}".format(pid))
-        if len(values) != 4 or len(set(values)) != 1:
-            raise RuntimeError("unstable UID/GID identity for Taira process {}".format(pid))
-        result.append(values[0])
+        if len(values) != 4:
+            raise RuntimeError("malformed Linux procfs status for Taira process {}".format(pid))
+        result.append(values[1])
     return tuple(result)
 
 def _open_pidfd(pid):
@@ -4727,17 +4738,23 @@ def _observe(pid):
         if before[0] == "Z":
             return None
         cmdline = _proc_read(root + "/cmdline", 65536)
-        if not cmdline.endswith(b"\0"):
-            raise RuntimeError("malformed Linux procfs cmdline for Taira process {}".format(pid))
+        if not cmdline or not cmdline.endswith(b"\0"):
+            return None
         raw_argv = cmdline[:-1].split(b"\0")
         if not raw_argv or any(not argument for argument in raw_argv):
-            raise RuntimeError("malformed Linux procfs cmdline for Taira process {}".format(pid))
+            return None
         argv = [os.fsdecode(argument) for argument in raw_argv]
         executable_path = os.readlink(root + "/exe")
         executable = os.stat(root + "/exe")
         uid, gid = _status_ids(_proc_read(root + "/status", 131072), pid)
         after = _parse_stat(_proc_read(root + "/stat", 16384), pid)
-        if after != before:
+        cmdline_after = _proc_read(root + "/cmdline", 65536)
+        executable_path_after = os.readlink(root + "/exe")
+        executable_after = os.stat(root + "/exe")
+        uid_after, gid_after = _status_ids(_proc_read(root + "/status", 131072), pid)
+        if (after != before or cmdline_after != cmdline or executable_path_after != executable_path
+                or (executable_after.st_dev, executable_after.st_ino) != (executable.st_dev, executable.st_ino)
+                or (uid_after, gid_after) != (uid, gid)):
             raise RuntimeError("Taira process changed while observing procfs")
         boot_id = _proc_read("/proc/sys/kernel/random/boot_id", 128).decode("ascii").strip()
     except (FileNotFoundError, ProcessLookupError):
@@ -4783,8 +4800,9 @@ def _validate_record(record, peer_index, config_path, executable_path=None):
     if any(type(record[field]) is not int for field in integer_fields):
         raise RuntimeError("Taira process record contains a non-integer identity field")
     pid = record["pid"]
-    if not (1 < pid <= 2147483647 and record["start_time_ticks"] > 0
-            and record["executable_device"] >= 0 and record["executable_inode"] > 0
+    if not (1 < pid <= 2147483647 and 0 < record["start_time_ticks"] <= 18446744073709551615
+            and 0 <= record["executable_device"] <= 18446744073709551615
+            and 0 < record["executable_inode"] <= 18446744073709551615
             and 0 <= record["uid"] <= 4294967295 and 0 <= record["gid"] <= 4294967295
             and record["session_id"] == pid and record["process_group_id"] == pid):
         raise RuntimeError("Taira process record contains a malformed identity")
@@ -4878,7 +4896,8 @@ def _atomic_publish_record(path, record):
 
 def _unlink_record(path, expected):
     current = os.lstat(path)
-    if ((current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino)
+    stable = ("st_dev", "st_ino", "st_uid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if (any(getattr(current, field) != getattr(expected, field) for field in stable)
             or not stat.S_ISREG(current.st_mode) or current.st_uid != os.geteuid()
             or stat.S_IMODE(current.st_mode) != 0o600 or current.st_nlink != 1):
         raise RuntimeError("Taira process record changed before removal")
@@ -4924,7 +4943,10 @@ def preflight_taira_start(record_path, peer_index, expected_argv):
             continue
         try:
             observed = _bound_observation(descriptor, pid)
-            if observed is not None and observed["argv"] == expected_argv:
+            argv = None if observed is None else observed["argv"]
+            if (type(argv) is list and len(argv) == 4
+                    and os.path.basename(argv[0]) == "iroha3d_taira"
+                    and argv[1:] == ["--sora", "--config", config_path]):
                 raise RuntimeError("unrecorded Taira process already owns the exact peer config")
         finally:
             os.close(descriptor)
@@ -5448,6 +5470,33 @@ fn write_stop_script(stop: &Path, peers: u16, taira: bool) -> Result<()> {
     writeln!(stop_file, "  fi")?;
     writeln!(stop_file, "  SELECTED_PEERS=\"$peer_index\"")?;
     writeln!(stop_file, "fi")?;
+    if taira {
+        write_taira_pidfd_preflight(&mut stop_file)?;
+        writeln!(stop_file, "for i in $SELECTED_PEERS; do")?;
+        writeln!(
+            stop_file,
+            "  PROCESS_RECORD=\"$DIR/peer${{i}}.process.json\""
+        )?;
+        writeln!(
+            stop_file,
+            "  if [ ! -e \"$PROCESS_RECORD\" ] && [ ! -L \"$PROCESS_RECORD\" ]; then continue; fi"
+        )?;
+        writeln!(
+            stop_file,
+            "  IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_PROCESS_RECORD=\"$PROCESS_RECORD\" python3 - <<'PY'"
+        )?;
+        writeln!(stop_file, "import os")?;
+        writeln!(stop_file, "import stat")?;
+        stop_file.write_all(TAIRA_PROCESS_IDENTITY_PY.as_bytes())?;
+        writeln!(stop_file, "env = os.environ")?;
+        writeln!(
+            stop_file,
+            "stop_taira_process(env[\"IROHA_PEER_PROCESS_RECORD\"], int(env[\"IROHA_PEER_INDEX\"]), env[\"IROHA_PEER_CONFIG\"])"
+        )?;
+        writeln!(stop_file, "PY")?;
+        writeln!(stop_file, "done")?;
+        return Ok(stop_file.flush()?);
+    }
     writeln!(stop_file, "pid_matches_peer() {{")?;
     writeln!(stop_file, "  pid=\"$1\"")?;
     writeln!(stop_file, "  config=\"$2\"")?;

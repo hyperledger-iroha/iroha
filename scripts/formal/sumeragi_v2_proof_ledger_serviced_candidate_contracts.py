@@ -2231,9 +2231,26 @@ assert!(
             """
 assert_eq!(normal_scheduler.selected, RuntimeSelectedOwnerKind::Fifo);
 assert_eq!(normal_scheduler.validate_exact(), Ok(()));
+assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
 assert_eq!(runtime.queued_commands(), 2);
 """,
-            "the skipped Normal class must receive the next ordinary FIFO turn",
+            "the skipped unowned Normal class must receive the next ordinary FIFO turn without fabricating a route terminal",
+        ),
+        (
+            """
+assert_eq!(runtime.queued_commands(), 1);
+assert!(matches!(
+    runtime.ingress.commands.front().map(|queued| &queued.command),
+    Some(AdapterCommand::Authenticated(message))
+        if matches!(
+            message.payload(),
+            wire::ConsensusMessageV2Payload::QuorumCertificate(remaining)
+                if remaining == &intervening_certificate
+        )
+));
+""",
+            "the later future PrepareQC must remain the sole queued owner after the newly unblocked PrepareQC runs",
         ),
     ):
         _require_rust_token_sequence(

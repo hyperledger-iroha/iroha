@@ -281,7 +281,7 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
     );
     runtime
         .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(intervening_certificate),
+            wire::ConsensusMessageV2Payload::QuorumCertificate(intervening_certificate.clone()),
         ))
         .expect("enqueue a second retryable future PrepareQC before the matching TC");
     runtime
@@ -372,7 +372,7 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
     assert_eq!(normal_scheduler.selected, RuntimeSelectedOwnerKind::Fifo);
     assert_eq!(normal_scheduler.validate_exact(), Ok(()));
     assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
-    assert_eq!(runtime.take_leader_wire_runtime_terminals().len(), 1);
+    assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
     assert_eq!(runtime.queued_commands(), 2);
 
     let retried = runtime
@@ -401,6 +401,15 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
         .take_effect_ownership(certificate_effects.len())
         .expect("consume matching-view PrepareQC effect ownership");
     assert_eq!(runtime.queued_commands(), 1);
+    assert!(matches!(
+        runtime.ingress.commands.front().map(|queued| &queued.command),
+        Some(AdapterCommand::Authenticated(message))
+            if matches!(
+                message.payload(),
+                wire::ConsensusMessageV2Payload::QuorumCertificate(remaining)
+                    if remaining == &intervening_certificate
+            )
+    ));
     let terminals = runtime.take_leader_wire_runtime_terminals();
     let [LeaderWireRuntimeTerminal::Volatile(retired)] = terminals.as_slice() else {
         panic!("matching-view PrepareQC must emit one volatile runtime terminal")

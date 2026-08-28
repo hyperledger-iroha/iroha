@@ -3,7 +3,7 @@
 mod quic_datagram;
 
 #[cfg(feature = "quic")]
-pub(crate) use quic_datagram::{QUIC_DATAGRAM_PROTOCOL_ERROR_CODE, QuicDatagramIngress};
+pub(crate) use quic_datagram::QuicDatagramIngress;
 
 #[cfg(test)]
 use crate::puzzle_work_admission::{

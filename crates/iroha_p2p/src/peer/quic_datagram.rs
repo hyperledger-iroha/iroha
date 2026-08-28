@@ -7,7 +7,7 @@ const QUIC_DATAGRAM_INBOX_CAPACITY: usize = 256;
 const QUIC_DATAGRAM_PREAUTH_DRAIN_LIMIT: usize = 256;
 
 /// QUIC application error used for malformed production P2P DATAGRAMs.
-pub(crate) const QUIC_DATAGRAM_PROTOCOL_ERROR_CODE: u32 = 0x4952_4f44;
+const QUIC_DATAGRAM_PROTOCOL_ERROR_CODE: u32 = 0x4952_4f44;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QuicDatagramDisposition {
@@ -110,13 +110,9 @@ impl QuicDatagramIngress {
         let (terminal_tx, terminal) = watch::channel(None::<Arc<str>>);
         let (activation_tx, mut activation_rx) = oneshot::channel::<QuicDatagramActivation>();
         let task_connection = connection.clone();
-        // TODO: Upgrade to Quinn 0.12 once released, or backport Quinn main's
-        // `DatagramBuffer::memory_used()` accounting and
-        // `empty_frame_flood_limit` regression. quinn-proto 0.11.15 charges
-        // only `data.len()`, so empty frames cost zero and can grow its private
-        // `VecDeque` before `read_datagram()` is polled. Quinn main charges the
-        // payload plus `size_of::<Datagram>()`, which supplies the missing
-        // dependency-owned per-entry bound.
+        // TODO: Upgrade quinn-proto to 0.11.17 or later. The locked 0.11.15
+        // release charges only `data.len()`, so empty frames cost zero and can
+        // grow its private `VecDeque` before `read_datagram()` is polled.
         let task = tokio::spawn(async move {
             let mut frames_since_yield = 0_u8;
             let mut byte_budget: Option<InboundSourceByteBudget> = None;
@@ -303,16 +299,12 @@ impl Drop for QuicDatagramIngress {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quinn::{Endpoint, ServerConfig, TransportConfig};
+    use quinn::{ClientConfig, Endpoint, ServerConfig, TransportConfig};
     use rustls::pki_types::PrivatePkcs8KeyDer;
 
-    async fn connection_pair() -> std::io::Result<(
-        Endpoint,
-        crate::transport::QuicDialer,
-        quinn::Connection,
-        quinn::Connection,
-    )> {
-        use quinn::crypto::rustls::QuicServerConfig;
+    async fn connection_pair()
+    -> std::io::Result<(Endpoint, Endpoint, quinn::Connection, quinn::Connection)> {
+        use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 
         let rcgen::CertifiedKey { cert, signing_key } =
             rcgen::generate_simple_self_signed(["iroha-quic".to_owned()])
@@ -335,14 +327,24 @@ mod tests {
         let endpoint =
             Endpoint::server(server_config, "127.0.0.1:0".parse().expect("test address"))?;
         let server_addr = endpoint.local_addr()?;
-        let dialer = crate::transport::QuicDialer::bind(
-            "127.0.0.1:0".parse().expect("test address"),
-            crate::transport::quic::DialerConfig {
-                datagram_receive_buffer: Some(64 * 1024),
-                datagram_send_buffer: 64 * 1024,
-                ..crate::transport::quic::DialerConfig::default()
-            },
-        )?;
+        let mut client_endpoint = Endpoint::client("127.0.0.1:0".parse().expect("test address"))?;
+        let verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> =
+            Arc::new(crate::transport::CertificateKeyProofVerifier::unpinned());
+        let mut client_tls = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
+        client_tls.enable_early_data = false;
+        client_tls.alpn_protocols = vec![crate::transport::quic::P2P_ALPN.to_vec()];
+        let client_crypto =
+            QuicClientConfig::try_from(Arc::new(client_tls)).map_err(std::io::Error::other)?;
+        let mut client_config = ClientConfig::new(Arc::new(client_crypto));
+        let mut client_transport = TransportConfig::default();
+        client_transport
+            .datagram_receive_buffer_size(Some(64 * 1024))
+            .datagram_send_buffer_size(64 * 1024);
+        client_config.transport_config(Arc::new(client_transport));
+        client_endpoint.set_default_client_config(client_config);
         let accepted = async {
             let incoming = endpoint
                 .accept()
@@ -351,9 +353,15 @@ mod tests {
             let connecting = incoming.accept().map_err(std::io::Error::other)?;
             connecting.await.map_err(std::io::Error::other)
         };
-        let connected = dialer.connect(server_addr, "iroha-quic");
+        let connected = async {
+            client_endpoint
+                .connect(server_addr, "iroha-quic")
+                .map_err(std::io::Error::other)?
+                .await
+                .map_err(std::io::Error::other)
+        };
         let (server, client) = tokio::try_join!(accepted, connected)?;
-        Ok((endpoint, dialer, server, client))
+        Ok((endpoint, client_endpoint, server, client))
     }
 
     #[test]
@@ -485,7 +493,7 @@ mod tests {
     #[tokio::test]
     async fn preauth_datagram_does_not_cross_activation_boundary() {
         let pair = tokio::time::timeout(Duration::from_secs(5), connection_pair()).await;
-        let (_endpoint, _dialer, server, client) = match pair {
+        let (_server_endpoint, _client_endpoint, server, client) = match pair {
             Ok(Ok(pair)) => pair,
             Ok(Err(error)) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 eprintln!("QUIC test skipped: {error}");
@@ -530,7 +538,7 @@ mod tests {
     #[tokio::test]
     async fn empty_datagram_is_rejected_before_application_authentication() {
         let pair = tokio::time::timeout(Duration::from_secs(5), connection_pair()).await;
-        let (_endpoint, _dialer, server, client) = match pair {
+        let (_server_endpoint, _client_endpoint, server, client) = match pair {
             Ok(Ok(pair)) => pair,
             Ok(Err(error)) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 eprintln!("QUIC test skipped: {error}");

@@ -9374,8 +9374,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::bridge::SubmitBridgeProof,
         iroha_data_model::isi::bridge::RecordBridgeReceipt,
         iroha_data_model::isi::bridge::ApplySccpRouteGovernance,
-        iroha_data_model::isi::bridge::FundSccpRouteEscrow,
-        iroha_data_model::isi::bridge::RefundSccpRouteEscrow,
         iroha_data_model::isi::bridge::RecordSccpMessage,
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,

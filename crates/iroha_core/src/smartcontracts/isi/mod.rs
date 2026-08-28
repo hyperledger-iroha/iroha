@@ -454,8 +454,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordSccpMessage>,
     dispatch_instruction::<iroha_data_model::isi::bridge::ApplySccpRouteGovernance>,
-    dispatch_instruction::<iroha_data_model::isi::bridge::FundSccpRouteEscrow>,
-    dispatch_instruction::<iroha_data_model::isi::bridge::RefundSccpRouteEscrow>,
     dispatch_instruction::<confidential::PublishPedersenParams>,
     dispatch_instruction::<confidential::SetPedersenParamsLifecycle>,
     dispatch_instruction::<confidential::PublishPoseidonParams>,

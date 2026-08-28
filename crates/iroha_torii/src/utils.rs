@@ -829,10 +829,9 @@ fn split_accept_list(raw: &str) -> Result<Vec<&str>, MediaParseError> {
             }
             b',' => {
                 let entry = trim_optional_whitespace(&raw[start..position]);
-                if entry.is_empty() {
-                    return Err(MediaParseError::InvalidSyntax);
+                if !entry.is_empty() {
+                    entries.push(entry);
                 }
-                entries.push(entry);
                 position += 1;
                 start = position;
             }
@@ -844,10 +843,12 @@ fn split_accept_list(raw: &str) -> Result<Vec<&str>, MediaParseError> {
         return Err(MediaParseError::InvalidSyntax);
     }
     let entry = trim_optional_whitespace(&raw[start..]);
-    if entry.is_empty() {
+    if !entry.is_empty() {
+        entries.push(entry);
+    }
+    if entries.is_empty() {
         return Err(MediaParseError::InvalidSyntax);
     }
-    entries.push(entry);
     Ok(entries)
 }
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -912,27 +913,25 @@ fn typed_range_specificity(
     media_type: &ParsedMediaType,
     format: ResponseFormat,
 ) -> Option<MediaSpecificity> {
+    // A structured-suffix JSON range is compatible with Torii's JSON
+    // representation, but the canonical `application/json` range remains
+    // more specific when both are present.
     let type_level = match (media_type.type_name.as_str(), media_type.subtype.as_str()) {
         ("*", "*") => 0,
         ("application", "*") => 1,
-        ("application", subtype)
-            if match format {
-                // Torii emits the typed JSON representation as
-                // `application/json`. A concrete structured-suffix type is a
-                // distinct representation, not an alias for it.
-                ResponseFormat::Json => subtype == "json",
-                ResponseFormat::Norito => subtype == "x-norito",
-            } =>
-        {
-            2
-        }
+        ("application", subtype) => match format {
+            ResponseFormat::Json if subtype == "json" => 3,
+            ResponseFormat::Json if is_json_subtype(subtype) => 2,
+            ResponseFormat::Norito if subtype == "x-norito" => 3,
+            _ => return None,
+        },
         _ => return None,
     };
     let parameters_match = media_type.parameters.iter().all(|parameter| match format {
         ResponseFormat::Json => {
             parameter.name == "charset" && parameter.value.eq_ignore_ascii_case("utf-8")
         }
-        ResponseFormat::Norito => false,
+        ResponseFormat::Norito => parameter.name == "version" && parameter.value == "1",
     });
     parameters_match.then_some(MediaSpecificity {
         type_level,
@@ -971,6 +970,10 @@ fn native_range_specificity(
     })
 }
 /// Negotiate the response format from an optional `Accept` header value.
+///
+/// Omitted headers retain Torii's native Norito default. Explicit wildcard
+/// ranges select JSON for broad HTTP-client interoperability, while equal
+/// canonical JSON and Norito preferences retain the binary-first tie-break.
 ///
 /// Returns an HTTP response carrying status `406 Not Acceptable` when the header
 /// explicitly forbids both JSON and Norito or contains an invalid q-value.
@@ -1053,14 +1056,14 @@ fn negotiate_response_format_with_default(
                 json
             } else if norito.specificity > json.specificity {
                 norito
-            } else if json.specificity.type_level == 2 {
+            } else if json.specificity.type_level == 3 {
                 // Equal explicit preferences use Torii's binary-first tie
-                // break. Wildcard-only ties retain the endpoint's default.
+                // break. Wildcard-only ties use the interoperable JSON
+                // representation while an omitted header retains the
+                // endpoint's default.
                 norito
-            } else if default_format == ResponseFormat::Json {
-                json
             } else {
-                norito
+                json
             }
         }
         (Some(candidate), None) | (None, Some(candidate)) => candidate,
@@ -1080,8 +1083,9 @@ fn negotiate_response_format_with_default(
 /// Validate `Accept` for JSON-only dynamic endpoints.
 ///
 /// Dynamic `norito::json::Value` payloads do not have a stable Norito schema,
-/// so JSON-only routes accept omitted, wildcard, and JSON `Accept` values, but
-/// reject clients that explicitly ask for Norito without accepting JSON.
+/// so JSON-only routes accept omitted, wildcard, and JSON-compatible `Accept`
+/// values, but reject clients that explicitly ask for Norito without accepting
+/// JSON.
 #[allow(clippy::result_large_err)] // callers bubble the full HTTP response on negotiation failure
 pub fn negotiate_json_only_response(accept: Option<&HeaderValue>) -> Result<(), Response> {
     negotiate_single_typed_response(accept, ResponseFormat::Json)
@@ -3215,10 +3219,13 @@ pub mod extractors {
             assert_eq!(format, super::super::ResponseFormat::Norito);
         }
         #[test]
-        fn negotiate_accept_header_wildcard_defaults_norito() {
-            let header = HeaderValue::from_static("*/*");
-            let format = super::super::negotiate_response_format(Some(&header)).expect("format");
-            assert_eq!(format, super::super::ResponseFormat::Norito);
+        fn negotiate_accept_header_wildcards_default_json() {
+            for raw in ["*/*", "application/*"] {
+                let header = HeaderValue::from_static(raw);
+                let format =
+                    super::super::negotiate_response_format(Some(&header)).expect("format");
+                assert_eq!(format, super::super::ResponseFormat::Json, "header={raw}");
+            }
         }
         #[test]
         fn negotiate_accept_header_explicit_zero_overrides_wildcard() {
@@ -3247,21 +3254,22 @@ pub mod extractors {
             assert_eq!(format, super::super::ResponseFormat::Norito);
         }
         #[test]
-        fn negotiate_accept_header_rejects_concrete_structured_suffix_for_plain_json() {
+        fn negotiate_accept_header_treats_structured_suffix_as_json_compatible() {
             let header = HeaderValue::from_static("application/vnd.api+json");
-            let error = super::super::negotiate_response_format(Some(&header))
-                .expect_err("a concrete vendor type must not accept application/json");
-            assert_eq!(error.status(), StatusCode::NOT_ACCEPTABLE);
+            assert_eq!(
+                super::super::negotiate_response_format(Some(&header)).expect("format"),
+                super::super::ResponseFormat::Json
+            );
         }
         #[test]
-        fn negotiate_ignores_unrelated_suffix_quality_and_preserves_exact_precedence() {
+        fn negotiate_canonical_range_overrides_suffix_quality() {
             let header = HeaderValue::from_static(
                 "application/vnd.api+json;q=1, application/json;q=0.4, application/x-norito;q=0.5",
             );
             assert_eq!(
                 super::super::negotiate_response_format(Some(&header)).expect("format"),
                 super::super::ResponseFormat::Norito,
-                "a high-quality vendor type must not raise application/json's quality"
+                "a canonical JSON range remains more specific than a suffix-compatible range"
             );
             let header = HeaderValue::from_static(
                 "application/vnd.api+json;q=1, application/json;q=0, */*;q=0.5",
@@ -3390,19 +3398,32 @@ pub mod extractors {
             }
         }
         #[test]
-        fn accept_parser_rejects_empty_list_members() {
-            for raw in [
-                "",
-                " ",
-                ",application/json",
-                "application/json,",
-                "application/json,,application/x-norito",
-                "application/json, \t , application/x-norito",
-            ] {
+        fn accept_parser_ignores_empty_list_members_but_rejects_empty_lists() {
+            for raw in ["", " ", ",", " , \t , "] {
                 let header = HeaderValue::from_str(raw).expect("valid header field bytes");
                 let error = super::super::negotiate_response_format(Some(&header))
-                    .expect_err("empty Accept list members must fail closed");
+                    .expect_err("an Accept list needs at least one media range");
                 assert_eq!(error.status(), StatusCode::NOT_ACCEPTABLE, "header={raw:?}");
+            }
+            for (raw, expected) in [
+                (",application/json", super::super::ResponseFormat::Json),
+                ("application/json,", super::super::ResponseFormat::Json),
+                (
+                    "application/json,,application/x-norito",
+                    super::super::ResponseFormat::Norito,
+                ),
+                (
+                    "text/plain, \t , application/json",
+                    super::super::ResponseFormat::Json,
+                ),
+            ] {
+                let header = HeaderValue::from_str(raw).expect("valid header field bytes");
+                assert_eq!(
+                    super::super::negotiate_response_format(Some(&header))
+                        .expect("empty list members are ignored"),
+                    expected,
+                    "header={raw:?}"
+                );
             }
         }
         #[test]
@@ -3425,8 +3446,8 @@ pub mod extractors {
                 HeaderValue::from_static("application/json;charset=iso-8859-1;q=0, */*;q=1");
             assert_eq!(
                 super::super::negotiate_response_format(Some(&header)).expect("format"),
-                super::super::ResponseFormat::Norito,
-                "an incompatible charset range must not match the UTF-8 JSON representation"
+                super::super::ResponseFormat::Json,
+                "the incompatible charset range does not override the all-type wildcard"
             );
         }
         #[test]
@@ -3459,6 +3480,40 @@ pub mod extractors {
             }
         }
         #[test]
+        fn negotiate_accept_is_case_insensitive_and_allows_supported_media_parameters() {
+            for (raw, expected) in [
+                (
+                    "Application/JSON; Charset=UTF-8",
+                    super::super::ResponseFormat::Json,
+                ),
+                (
+                    "Application/X-Norito; Version=1",
+                    super::super::ResponseFormat::Norito,
+                ),
+            ] {
+                let header = HeaderValue::from_static(raw);
+                assert_eq!(
+                    super::super::negotiate_response_format(Some(&header)).expect("format"),
+                    expected,
+                    "header={raw}"
+                );
+            }
+            for raw in [
+                "application/x-norito;version=2",
+                "application/x-norito;profile=torii-v1",
+                "application/json;profile=torii-v1",
+            ] {
+                let header = HeaderValue::from_static(raw);
+                assert_eq!(
+                    super::super::negotiate_response_format(Some(&header))
+                        .expect_err("unsupported media parameter must not match")
+                        .status(),
+                    StatusCode::NOT_ACCEPTABLE,
+                    "header={raw}"
+                );
+            }
+        }
+        #[test]
         fn negotiate_json_only_accepts_missing_json_and_wildcards() {
             assert!(super::super::negotiate_json_only_response(None).is_ok());
             let json = HeaderValue::from_static("application/json");
@@ -3470,19 +3525,15 @@ pub mod extractors {
                     "header={raw}"
                 );
             }
-            let unrelated_zero =
-                HeaderValue::from_static("application/problem+json;q=0, application/*;q=0.7");
-            assert!(
-                super::super::negotiate_json_only_response(Some(&unrelated_zero)).is_ok(),
-                "a concrete suffix rejection must not override the matching type wildcard"
-            );
+            let suffix = HeaderValue::from_static("application/problem+json");
+            assert!(super::super::negotiate_json_only_response(Some(&suffix)).is_ok());
         }
         #[test]
         fn negotiate_json_only_rejects_nonmatching_concrete_types() {
-            for raw in ["application/x-norito", "application/problem+json"] {
+            for raw in ["application/x-norito", "text/plain"] {
                 let header = HeaderValue::from_static(raw);
                 let err = super::super::negotiate_json_only_response(Some(&header))
-                    .expect_err("a JSON-only route emits application/json exactly");
+                    .expect_err("the concrete type is not JSON-compatible");
                 assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE, "header={raw}");
             }
         }
@@ -3491,11 +3542,16 @@ pub mod extractors {
             let header = HeaderValue::from_static("application/json;q=0, */*;q=1");
             let err = super::super::negotiate_json_only_response(Some(&header)).unwrap_err();
             assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
+            let header =
+                HeaderValue::from_static("application/problem+json;q=0, application/*;q=0.7");
+            let err = super::super::negotiate_json_only_response(Some(&header))
+                .expect_err("a suffix-compatible q=0 must override the type wildcard");
+            assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
             let header = HeaderValue::from_static(
                 "application/problem+json;q=1, application/json;q=0, */*;q=0.5",
             );
             let err = super::super::negotiate_json_only_response(Some(&header))
-                .expect_err("an unrelated suffix type must not undo exact JSON q=0");
+                .expect_err("a suffix-compatible range must not undo canonical JSON q=0");
             assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
         }
         #[test]
@@ -3588,7 +3644,6 @@ pub mod extractors {
             for raw in [
                 "text/event-stream;profile",
                 "text/event-stream;profile=one;PROFILE=two",
-                "text/event-stream,",
             ] {
                 let header = HeaderValue::from_str(raw).expect("header field bytes");
                 assert_eq!(
@@ -3602,6 +3657,12 @@ pub mod extractors {
                     "header={raw}"
                 );
             }
+            let trailing_empty = HeaderValue::from_static("text/event-stream,");
+            super::super::ensure_response_media_type_acceptable(
+                Some(&trailing_empty),
+                "text/event-stream",
+            )
+            .expect("an empty trailing list member is ignored");
             let wildcard = HeaderValue::from_static("*/*");
             for actual in [
                 "text/event-stream;profile",

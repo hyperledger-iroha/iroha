@@ -1084,20 +1084,90 @@ fn cancel_notification(id: Value) -> Value {
 }
 
 #[test]
-fn cancellation_keys_preserve_exact_json_number_representation() {
+fn cancellation_keys_preserve_lossless_json_id_representation() {
     let signed = ExactJsonRpcId::from_value(&Value::Number(json::native::Number::I64(7)))
         .expect("signed id");
     let unsigned = ExactJsonRpcId::from_value(&Value::Number(json::native::Number::U64(7)))
         .expect("unsigned id");
-    let float = ExactJsonRpcId::from_value(&Value::Number(
-        json::native::Number::from_f64(7.0).expect("finite float"),
-    ))
-    .expect("float id");
     let string = ExactJsonRpcId::from_value(&Value::String("7".to_owned())).expect("string id");
     assert_ne!(signed, unsigned);
-    assert_ne!(signed, float);
-    assert_ne!(unsigned, float);
-    assert_ne!(float, string);
+    assert_ne!(signed, string);
+    assert_ne!(unsigned, string);
+
+    let fractional: Value = json::from_str("7.5").expect("fractional JSON id");
+    assert!(ExactJsonRpcId::from_value(&fractional).is_none());
+    let rounded_a: Value = json::from_str("18446744073709551616").expect("oversized JSON id A");
+    let rounded_b: Value = json::from_str("18446744073709551617").expect("oversized JSON id B");
+    assert_eq!(
+        rounded_a, rounded_b,
+        "fixture must exercise Norito's lossy f64 fallback"
+    );
+    assert!(ExactJsonRpcId::from_value(&rounded_a).is_none());
+    assert!(ExactJsonRpcId::from_value(&rounded_b).is_none());
+}
+
+#[tokio::test]
+async fn lossy_numeric_ids_cannot_enter_or_target_cancellation_registry() {
+    let started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let route_started = std::sync::Arc::clone(&started);
+    let route_release = std::sync::Arc::clone(&release);
+    let router =
+        axum::Router::new().fallback_service(tower::service_fn(move |_request: Request<Body>| {
+            let started = std::sync::Arc::clone(&route_started);
+            let release = std::sync::Arc::clone(&route_release);
+            async move {
+                started.notify_one();
+                release.notified().await;
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .status(StatusCode::NO_CONTENT)
+                        .body(Body::empty())
+                        .expect("response"),
+                )
+            }
+        }));
+    let mut app = mk_app_state_for_tests();
+    {
+        let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_tokens_set = std::sync::Arc::new(["client".to_owned()].into_iter().collect());
+        state.mcp_tools = std::sync::Arc::new(vec![iroha_health_tool()]);
+        *state
+            .mcp_dispatch_router
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(router);
+    }
+    let request: Value = json::from_str(
+        r#"{"jsonrpc":"2.0","id":18446744073709551616,"method":"tools/call","params":{"name":"iroha.health","arguments":{}}}"#,
+    )
+    .expect("oversized-id request");
+    let call_app = std::sync::Arc::clone(&app);
+    let headers = cancellation_test_headers("client");
+    let call =
+        tokio::spawn(async move { handle_jsonrpc_request(call_app, &headers, request).await });
+    tokio::time::timeout(Duration::from_secs(2), started.notified())
+        .await
+        .expect("lossy-id request reaches dispatch");
+
+    let notification: Value = json::from_str(
+        r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":18446744073709551617}}"#,
+    )
+    .expect("colliding cancellation notification");
+    handle_cancelled_notification(&app, &cancellation_test_headers("client"), &notification);
+    tokio::task::yield_now().await;
+    assert!(
+        !call.is_finished(),
+        "rounded numeric cancellation must not target the live request"
+    );
+    release.notify_one();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), call)
+            .await
+            .expect("released request completes")
+            .expect("request task joins"),
+        JsonRpcRequestOutcome::Response(_)
+    ));
 }
 
 #[tokio::test]

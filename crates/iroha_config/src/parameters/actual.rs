@@ -1605,12 +1605,15 @@ pub struct Network {
     ///
     /// Every HTTPS proxy dial pins the proxy leaf certificate to this value.
     pub p2p_proxy_tls_pinned_cert_der_base64: Option<String>,
-    /// Enable QUIC transport (feature-gated).
+    /// Request QUIC transport (feature-gated).
+    ///
+    /// Runtime startup rejects `true` before binding while the lockfile resolves
+    /// vulnerable quinn-proto 0.11.15. TLS-over-TCP remains available.
     pub quic_enabled: bool,
     /// Request QUIC DATAGRAM support for best-effort topics (gossip/health).
     ///
-    /// Runtime startup rejects `true` until Quinn supplies fixed per-entry
-    /// receive-queue accounting. The disabled path uses reliable streams.
+    /// Runtime startup rejects `true` until quinn-proto 0.11.17 or later is
+    /// locked and requalified. The disabled path uses reliable streams.
     pub quic_datagrams_enabled: bool,
     /// Upper bound (bytes) for QUIC datagram payloads.
     pub quic_datagram_max_payload_bytes: usize,

@@ -7795,14 +7795,17 @@ pub struct Network {
     /// Maximum stream-wire bytes retained across every deferred outbound peer queue.
     #[config(default = "defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL")]
     pub deferred_send_max_bytes_total: usize,
-    /// Enable QUIC transport (feature-gated).
+    /// Request QUIC transport (feature-gated).
+    ///
+    /// Runtime startup rejects `true` before binding while the lockfile resolves
+    /// vulnerable quinn-proto 0.11.15. TLS-over-TCP remains available.
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
     /// Request QUIC DATAGRAM support for best-effort topics (feature-gated by QUIC).
     ///
-    /// The first-release runtime rejects `true` while the locked Quinn receive
-    /// queue lacks fixed per-entry accounting. Leave this disabled so gossip
-    /// and health frames use their reliable-stream fallback.
+    /// The first-release runtime rejects `true` until quinn-proto 0.11.17 or
+    /// later is locked and requalified. Leave this disabled so gossip and
+    /// health frames use their reliable-stream fallback.
     #[config(default = "defaults::network::QUIC_DATAGRAMS_ENABLED")]
     pub quic_datagrams_enabled: bool,
     /// Upper bound (bytes) for QUIC datagram payloads.

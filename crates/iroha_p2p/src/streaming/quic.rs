@@ -37,14 +37,31 @@ use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::{sync::Notify, task::JoinHandle};
 const CONTROL_STREAM_PREFACE: &[u8; 5] = b"NSC/1";
+const MEDIA_STREAM_PREFACE: &[u8; 5] = b"NSM/1";
 const CONTROL_TYPE_PUBLISHER_TO_VIEWER: u8 = 0x01;
 const CONTROL_TYPE_VIEWER_TO_PUBLISHER: u8 = 0x02;
-const DEFAULT_MAX_DATAGRAM_SIZE: usize = 1350;
-const DEFAULT_DATAGRAM_BUFFER: usize = 1 << 20;
 const MAX_CONTROL_FRAME_LEN: usize = 512 * 1024;
+const MAX_MEDIA_DATA_FRAMES_PER_WINDOW: usize = 12;
+const MAX_MEDIA_PARITY_FRAMES_PER_WINDOW: usize = 6;
+const MAX_MEDIA_FRAMES_PER_WINDOW: usize =
+    MAX_MEDIA_DATA_FRAMES_PER_WINDOW + MAX_MEDIA_PARITY_FRAMES_PER_WINDOW;
+const MAX_MEDIA_FRAME_LEN: usize = 4 * 1024 * 1024;
+const MAX_MEDIA_WINDOW_LEN: usize = 16 * 1024 * 1024;
+const MAX_CONCURRENT_UNI_STREAMS: u32 = 16;
+const CONTROL_STREAM_PRIORITY: i32 = 256;
+const MEDIA_STREAM_PRIORITY: i32 = 128;
 const MAX_DATAGRAM_INBOX_ENTRIES: usize = 256;
 const DATAGRAM_NEGOTIATING: usize = usize::MAX;
 const DATAGRAM_PROTOCOL_ERROR_CODE: u32 = 0x4e53_4301;
+const MEDIA_PROTOCOL_ERROR_CODE: u32 = 0x4e53_4302;
+const QUIC_DEPENDENCY_BLOCK_REASON: &str = "streaming QUIC is unavailable with locked quinn-proto 0.11.15: \
+released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, \
+connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 \
+or later and requalify QUIC before re-enabling it";
+const QUIC_DATAGRAM_DEPENDENCY_BLOCK_REASON: &str = "streaming QUIC DATAGRAM transport is unavailable with locked quinn-proto 0.11.15: \
+its receive queue charges only DATAGRAM payload bytes, so zero-length frames consume no configured \
+budget and can grow the private VecDeque before application polling; upgrade quinn-proto to \
+0.11.17 or later before re-enabling DATAGRAM";
 const SETUP_PENDING: u8 = 0;
 const SETUP_COMPLETE: u8 = 1;
 const SETUP_TIMED_OUT: u8 = 2;
@@ -129,6 +146,9 @@ pub enum Error {
     /// Streaming transport setup exceeded its single absolute pre-authentication deadline.
     #[error("streaming setup exceeded its pre-authentication deadline")]
     SetupTimeout,
+    /// A media segment window violated deterministic framing or resource limits.
+    #[error("invalid media segment window: {0}")]
+    InvalidMediaWindow(String),
 }
 /// Direction of the dedicated QUIC control stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,10 +202,16 @@ impl EndpointRole {
 #[derive(Clone, Copy, Debug)]
 pub struct TransportConfigSettings {
     /// Maximum QUIC DATAGRAM payload size (after AEAD).
+    ///
+    /// This must remain zero until the Quinn per-entry accounting fix lands.
     pub max_datagram_size: usize,
     /// Total receive buffer reserved for datagrams.
+    ///
+    /// This must remain zero until the Quinn per-entry accounting fix lands.
     pub datagram_receive_buffer: usize,
     /// Total send buffer reserved for datagrams.
+    ///
+    /// This must remain zero until the Quinn per-entry accounting fix lands.
     pub datagram_send_buffer: usize,
     /// Idle timeout advertised at the transport layer.
     pub idle_timeout: Duration,
@@ -193,12 +219,32 @@ pub struct TransportConfigSettings {
 impl Default for TransportConfigSettings {
     fn default() -> Self {
         Self {
-            max_datagram_size: DEFAULT_MAX_DATAGRAM_SIZE,
-            datagram_receive_buffer: DEFAULT_DATAGRAM_BUFFER,
-            datagram_send_buffer: DEFAULT_DATAGRAM_BUFFER,
+            max_datagram_size: 0,
+            datagram_receive_buffer: 0,
+            datagram_send_buffer: 0,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
         }
     }
+}
+
+/// One encrypted media or parity chunk carried by the stream fallback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaChunk {
+    /// Manifest-assigned chunk identifier.
+    pub chunk_id: u16,
+    /// Whether this frame carries a parity shard rather than source media.
+    pub is_parity: bool,
+    /// Encrypted chunk payload committed by the segment manifest.
+    pub payload: Bytes,
+}
+
+/// One complete segment window received through the stream fallback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaSegmentWindow {
+    /// Monotonic manifest segment number.
+    pub segment_number: u64,
+    /// Source chunks followed by parity shards in strictly increasing chunk-id order.
+    pub chunks: Vec<MediaChunk>,
 }
 /// Listener for incoming viewer connections.
 #[derive(Clone)]
@@ -210,6 +256,15 @@ pub struct StreamingServer {
 impl StreamingServer {
     /// Bind a QUIC listener on `addr` using the provided transport settings.
     pub async fn bind(addr: SocketAddr, settings: TransportConfigSettings) -> Result<Self> {
+        validate_shipping_quic_dependency()?;
+        Self::bind_for_requalification(addr, settings).await
+    }
+
+    async fn bind_for_requalification(
+        addr: SocketAddr,
+        settings: TransportConfigSettings,
+    ) -> Result<Self> {
+        let transport = build_transport_config(settings)?;
         let rcgen::CertifiedKey { cert, signing_key } =
             rcgen::generate_simple_self_signed(["nsc.local".to_owned()])
                 .map_err(|e| Error::TlsServer(e.to_string()))?;
@@ -227,7 +282,6 @@ impl StreamingServer {
         let crypto = QuinnRustlsServerConfig::try_from(rustls_config)
             .map_err(|e| Error::TlsServer(e.to_string()))?;
         let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
-        let transport = build_transport_config(settings)?;
         server_config.transport_config(transport);
         let endpoint = Endpoint::server(server_config, addr)?;
         Ok(Self {
@@ -290,7 +344,19 @@ impl StreamingClient {
         expected_certificate_fingerprint: CertificateFingerprint,
         settings: TransportConfigSettings,
     ) -> Result<Self> {
+        validate_shipping_quic_dependency()?;
+        Self::connect_for_requalification(multiaddr, expected_certificate_fingerprint, settings)
+            .await
+    }
+
+    async fn connect_for_requalification(
+        multiaddr: &str,
+        expected_certificate_fingerprint: CertificateFingerprint,
+        settings: TransportConfigSettings,
+    ) -> Result<Self> {
         let parsed = parse_multiaddr(multiaddr)?;
+        // Validate transport policy before binding a UDP socket.
+        let transport = build_transport_config(settings)?;
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())?;
         let verifier: Arc<dyn ServerCertVerifier> = Arc::new(
             crate::transport::CertificateKeyProofVerifier::pinned(expected_certificate_fingerprint),
@@ -305,7 +371,6 @@ impl StreamingClient {
         let crypto = QuinnRustlsClientConfig::try_from(Arc::clone(&tls_config))
             .map_err(|e| Error::TlsClient(e.to_string()))?;
         let mut client_config = ClientConfig::new(Arc::new(crypto));
-        let transport = build_transport_config(settings)?;
         client_config.transport_config(transport);
         endpoint.set_default_client_config(client_config);
         let server_addr = SocketAddr::new(parsed.host, parsed.port);
@@ -343,6 +408,12 @@ fn setup_deadline(settings: TransportConfigSettings) -> Result<crate::preauth::P
     crate::preauth::PreauthDeadline::from_now(settings.idle_timeout).ok_or_else(|| {
         Error::TransportConfig("streaming setup timeout cannot be represented".into())
     })
+}
+
+fn validate_shipping_quic_dependency() -> Result<()> {
+    Err(Error::TransportConfig(
+        QUIC_DEPENDENCY_BLOCK_REASON.to_owned(),
+    ))
 }
 
 #[derive(Clone, Debug)]
@@ -601,6 +672,8 @@ pub struct StreamingConnection {
     setup_state: Arc<AtomicU8>,
     setup_watchdog: JoinHandle<()>,
     pending_publisher_ack: Option<PendingCapabilityAck>,
+    last_sent_media_segment: Option<u64>,
+    last_received_media_segment: Option<u64>,
 }
 impl StreamingConnection {
     #[cfg(test)]
@@ -624,13 +697,9 @@ impl StreamingConnection {
         // Drain Quinn continuously before the control stream is authenticated.
         // The bounded application inbox counts entries as well as bytes and
         // closes the connection on the first empty DATAGRAM.
-        // TODO: Upgrade to Quinn 0.12 once released, or backport Quinn main's
-        // `DatagramBuffer::memory_used()` accounting and
-        // `empty_frame_flood_limit` regression. quinn-proto 0.11.15 charges
-        // only `data.len()`, so empty frames cost zero and can grow its private
-        // `VecDeque` before `read_datagram()` is polled. Quinn main charges the
-        // payload plus `size_of::<Datagram>()`, which supplies the missing
-        // dependency-owned per-entry bound.
+        // TODO: Upgrade quinn-proto to 0.11.17 or later. The locked 0.11.15
+        // release charges only `data.len()`, so empty frames cost zero and can
+        // grow its private `VecDeque` before `read_datagram()` is polled.
         let datagram_task = spawn_datagram_pump(
             connection.clone(),
             Arc::clone(&datagram_inbox),
@@ -695,6 +764,8 @@ impl StreamingConnection {
             setup_state,
             setup_watchdog,
             pending_publisher_ack: None,
+            last_sent_media_segment: None,
+            last_received_media_segment: None,
         })
     }
     /// Return the local role.
@@ -803,6 +874,49 @@ impl StreamingConnection {
         let limit = self.max_datagram.load(Ordering::Acquire);
         limit != DATAGRAM_NEGOTIATING && limit > 0
     }
+    /// Send one deterministic media segment window on its own unidirectional stream.
+    ///
+    /// This is the reliable fallback selected when capability negotiation disables DATAGRAM
+    /// delivery. Windows must be sent by the publisher in strictly increasing segment order.
+    pub async fn send_media_window(
+        &mut self,
+        segment_number: u64,
+        chunks: &[MediaChunk],
+    ) -> Result<()> {
+        self.ensure_stream_fallback(EndpointRole::Publisher)?;
+        validate_media_window(segment_number, self.last_sent_media_segment, chunks)?;
+
+        let stream = self
+            .connection
+            .open_uni()
+            .await
+            .map_err(|error| Error::Io(std::io::Error::from(error)))?;
+        write_media_window(stream, segment_number, chunks).await?;
+        self.last_sent_media_segment = Some(segment_number);
+        Ok(())
+    }
+    /// Receive the next deterministic media segment window from a unidirectional stream.
+    ///
+    /// The viewer validates framing, bounded lengths, chunk ordering, and monotonic segment
+    /// numbers before returning any payloads to the caller.
+    pub async fn recv_media_window(&mut self) -> Result<MediaSegmentWindow> {
+        self.ensure_stream_fallback(EndpointRole::Viewer)?;
+        let stream = self.connection.accept_uni().await?;
+        let result = read_media_window(stream, self.last_received_media_segment).await;
+        match result {
+            Ok(window) => {
+                self.last_received_media_segment = Some(window.segment_number);
+                Ok(window)
+            }
+            Err(error) => {
+                self.connection.close(
+                    VarInt::from_u32(MEDIA_PROTOCOL_ERROR_CODE),
+                    b"invalid media stream",
+                );
+                Err(error)
+            }
+        }
+    }
     /// Close the underlying QUIC connection.
     pub fn close(&self) {
         self.connection.close(VarInt::from_u32(0), &[]);
@@ -810,6 +924,24 @@ impl StreamingConnection {
     /// Wait for the underlying QUIC connection to close.
     pub async fn closed(&self) -> ConnectionError {
         self.connection.closed().await
+    }
+    fn ensure_stream_fallback(&self, required_role: EndpointRole) -> Result<()> {
+        if self.role != required_role {
+            return Err(Error::InvalidMediaWindow(format!(
+                "the {required_role:?} role is required"
+            )));
+        }
+        if self.setup_state.load(Ordering::Acquire) != SETUP_COMPLETE {
+            return Err(Error::InvalidMediaWindow(
+                "transport capability negotiation is incomplete".into(),
+            ));
+        }
+        if self.datagram_enabled() {
+            return Err(Error::InvalidMediaWindow(
+                "stream fallback cannot be used when DATAGRAM delivery is negotiated".into(),
+            ));
+        }
+        Ok(())
     }
     fn finish_setup(&mut self) -> Result<()> {
         let Some(deadline) = self.setup_deadline else {
@@ -881,6 +1013,237 @@ impl StreamingConnection {
         self.max_datagram.store(max_datagram, Ordering::Release);
         Ok(())
     }
+}
+
+fn validate_media_window(
+    segment_number: u64,
+    previous_segment: Option<u64>,
+    chunks: &[MediaChunk],
+) -> Result<()> {
+    if previous_segment.is_some_and(|previous| segment_number <= previous) {
+        return Err(Error::InvalidMediaWindow(format!(
+            "segment number {segment_number} must be greater than previously completed segment {}",
+            previous_segment.expect("checked as some")
+        )));
+    }
+    if chunks.is_empty() {
+        return Err(Error::InvalidMediaWindow(
+            "a segment window must contain at least one source chunk".into(),
+        ));
+    }
+    if chunks.len() > MAX_MEDIA_FRAMES_PER_WINDOW {
+        return Err(Error::InvalidMediaWindow(format!(
+            "segment window contains {} frames; maximum is {MAX_MEDIA_FRAMES_PER_WINDOW}",
+            chunks.len()
+        )));
+    }
+
+    let mut data_frames = 0_usize;
+    let mut parity_frames = 0_usize;
+    let mut parity_started = false;
+    let mut previous_chunk = None;
+    let mut payload_bytes = 0_usize;
+    for chunk in chunks {
+        if chunk.payload.is_empty() {
+            return Err(Error::InvalidMediaWindow(format!(
+                "chunk {} has an empty payload",
+                chunk.chunk_id
+            )));
+        }
+        if chunk.payload.len() > MAX_MEDIA_FRAME_LEN {
+            return Err(Error::InvalidMediaWindow(format!(
+                "chunk {} payload is {} bytes; maximum is {MAX_MEDIA_FRAME_LEN}",
+                chunk.chunk_id,
+                chunk.payload.len()
+            )));
+        }
+        payload_bytes = payload_bytes
+            .checked_add(chunk.payload.len())
+            .ok_or_else(|| Error::InvalidMediaWindow("payload byte count overflow".into()))?;
+        if payload_bytes > MAX_MEDIA_WINDOW_LEN {
+            return Err(Error::InvalidMediaWindow(format!(
+                "segment payload is {payload_bytes} bytes; maximum is {MAX_MEDIA_WINDOW_LEN}"
+            )));
+        }
+        if previous_chunk.is_some_and(|previous| chunk.chunk_id <= previous) {
+            return Err(Error::InvalidMediaWindow(format!(
+                "chunk id {} is not strictly greater than its predecessor",
+                chunk.chunk_id
+            )));
+        }
+        previous_chunk = Some(chunk.chunk_id);
+        if chunk.is_parity {
+            parity_started = true;
+            parity_frames += 1;
+            if parity_frames > MAX_MEDIA_PARITY_FRAMES_PER_WINDOW {
+                return Err(Error::InvalidMediaWindow(format!(
+                    "segment window contains {parity_frames} parity frames; maximum is {MAX_MEDIA_PARITY_FRAMES_PER_WINDOW}"
+                )));
+            }
+        } else {
+            if parity_started {
+                return Err(Error::InvalidMediaWindow(
+                    "source chunks must precede every parity shard".into(),
+                ));
+            }
+            data_frames += 1;
+            if data_frames > MAX_MEDIA_DATA_FRAMES_PER_WINDOW {
+                return Err(Error::InvalidMediaWindow(format!(
+                    "segment window contains {data_frames} source frames; maximum is {MAX_MEDIA_DATA_FRAMES_PER_WINDOW}"
+                )));
+            }
+        }
+    }
+    if data_frames == 0 {
+        return Err(Error::InvalidMediaWindow(
+            "a segment window must contain at least one source chunk".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn write_media_window(
+    mut stream: SendStream,
+    segment_number: u64,
+    chunks: &[MediaChunk],
+) -> Result<()> {
+    stream
+        .set_priority(MEDIA_STREAM_PRIORITY)
+        .map_err(|error| Error::Io(std::io::Error::other(error)))?;
+    stream
+        .write_all(MEDIA_STREAM_PREFACE)
+        .await
+        .map_err(|error| Error::Io(std::io::Error::from(error)))?;
+    stream
+        .write_all(&segment_number.to_le_bytes())
+        .await
+        .map_err(|error| Error::Io(std::io::Error::from(error)))?;
+    let frame_count = u16::try_from(chunks.len()).expect("media frame limit fits u16");
+    stream
+        .write_all(&frame_count.to_le_bytes())
+        .await
+        .map_err(|error| Error::Io(std::io::Error::from(error)))?;
+    for chunk in chunks {
+        stream
+            .write_all(&chunk.chunk_id.to_le_bytes())
+            .await
+            .map_err(|error| Error::Io(std::io::Error::from(error)))?;
+        stream
+            .write_all(&[u8::from(chunk.is_parity)])
+            .await
+            .map_err(|error| Error::Io(std::io::Error::from(error)))?;
+        let payload_len = u32::try_from(chunk.payload.len()).expect("media frame limit fits u32");
+        stream
+            .write_all(&payload_len.to_le_bytes())
+            .await
+            .map_err(|error| Error::Io(std::io::Error::from(error)))?;
+        stream
+            .write_all(&chunk.payload)
+            .await
+            .map_err(|error| Error::Io(std::io::Error::from(error)))?;
+    }
+    stream
+        .finish()
+        .map_err(|error| Error::Io(std::io::Error::other(error)))?;
+    Ok(())
+}
+
+async fn read_media_exact(stream: &mut RecvStream, buffer: &mut [u8]) -> Result<()> {
+    match stream.read_exact(buffer).await {
+        Ok(()) => Ok(()),
+        Err(ReadExactError::FinishedEarly(_)) => Err(Error::InvalidMediaWindow(
+            "media stream ended before its declared payload".into(),
+        )),
+        Err(ReadExactError::ReadError(error)) => Err(Error::Io(std::io::Error::from(error))),
+    }
+}
+
+async fn read_media_window(
+    mut stream: RecvStream,
+    previous_segment: Option<u64>,
+) -> Result<MediaSegmentWindow> {
+    let mut preface = [0_u8; MEDIA_STREAM_PREFACE.len()];
+    read_media_exact(&mut stream, &mut preface).await?;
+    if preface != *MEDIA_STREAM_PREFACE {
+        return Err(Error::InvalidMediaWindow(
+            "media stream preface mismatch".into(),
+        ));
+    }
+    let mut segment_bytes = [0_u8; 8];
+    read_media_exact(&mut stream, &mut segment_bytes).await?;
+    let segment_number = u64::from_le_bytes(segment_bytes);
+    let mut count_bytes = [0_u8; 2];
+    read_media_exact(&mut stream, &mut count_bytes).await?;
+    let frame_count = usize::from(u16::from_le_bytes(count_bytes));
+    if frame_count == 0 || frame_count > MAX_MEDIA_FRAMES_PER_WINDOW {
+        return Err(Error::InvalidMediaWindow(format!(
+            "media stream declared {frame_count} frames; expected 1..={MAX_MEDIA_FRAMES_PER_WINDOW}"
+        )));
+    }
+
+    let mut chunks = Vec::with_capacity(frame_count);
+    let mut payload_bytes = 0_usize;
+    for _ in 0..frame_count {
+        let mut chunk_id_bytes = [0_u8; 2];
+        read_media_exact(&mut stream, &mut chunk_id_bytes).await?;
+        let chunk_id = u16::from_le_bytes(chunk_id_bytes);
+        let mut parity_byte = [0_u8; 1];
+        read_media_exact(&mut stream, &mut parity_byte).await?;
+        let is_parity = match parity_byte[0] {
+            0 => false,
+            1 => true,
+            value => {
+                return Err(Error::InvalidMediaWindow(format!(
+                    "chunk {chunk_id} uses reserved parity flag {value}"
+                )));
+            }
+        };
+        let mut payload_len_bytes = [0_u8; 4];
+        read_media_exact(&mut stream, &mut payload_len_bytes).await?;
+        let payload_len = usize::try_from(u32::from_le_bytes(payload_len_bytes))
+            .expect("u32 payload length fits supported platforms");
+        if payload_len == 0 || payload_len > MAX_MEDIA_FRAME_LEN {
+            return Err(Error::InvalidMediaWindow(format!(
+                "chunk {chunk_id} declared {payload_len} payload bytes; expected 1..={MAX_MEDIA_FRAME_LEN}"
+            )));
+        }
+        payload_bytes = payload_bytes
+            .checked_add(payload_len)
+            .ok_or_else(|| Error::InvalidMediaWindow("payload byte count overflow".into()))?;
+        if payload_bytes > MAX_MEDIA_WINDOW_LEN {
+            return Err(Error::InvalidMediaWindow(format!(
+                "segment payload exceeds {MAX_MEDIA_WINDOW_LEN} bytes"
+            )));
+        }
+        let mut payload = Vec::new();
+        payload.try_reserve_exact(payload_len).map_err(|_| {
+            Error::InvalidMediaWindow(format!(
+                "unable to reserve {payload_len} bytes for chunk {chunk_id}"
+            ))
+        })?;
+        payload.resize(payload_len, 0);
+        read_media_exact(&mut stream, &mut payload).await?;
+        chunks.push(MediaChunk {
+            chunk_id,
+            is_parity,
+            payload: Bytes::from(payload),
+        });
+    }
+    if stream
+        .read_chunk(1, true)
+        .await
+        .map_err(|error| Error::Io(std::io::Error::from(error)))?
+        .is_some()
+    {
+        return Err(Error::InvalidMediaWindow(
+            "media stream contains bytes after its declared frames".into(),
+        ));
+    }
+    validate_media_window(segment_number, previous_segment, &chunks)?;
+    Ok(MediaSegmentWindow {
+        segment_number,
+        chunks,
+    })
 }
 
 impl Drop for StreamingConnection {
@@ -1121,6 +1484,9 @@ struct ControlStreamWriter {
 impl ControlStreamWriter {
     async fn new(mut stream: SendStream, direction: ControlStreamDirection) -> Result<Self> {
         stream
+            .set_priority(CONTROL_STREAM_PRIORITY)
+            .map_err(|error| Error::Io(std::io::Error::other(error)))?;
+        stream
             .write_all(CONTROL_STREAM_PREFACE)
             .await
             .map_err(|e| Error::Io(std::io::Error::from(e)))?;
@@ -1289,14 +1655,28 @@ where
     Ok(port)
 }
 fn build_transport_config(settings: TransportConfigSettings) -> Result<Arc<TransportConfig>> {
+    if settings.max_datagram_size != 0
+        || settings.datagram_receive_buffer != 0
+        || settings.datagram_send_buffer != 0
+    {
+        return Err(Error::TransportConfig(
+            QUIC_DATAGRAM_DEPENDENCY_BLOCK_REASON.to_owned(),
+        ));
+    }
     let mut transport = TransportConfig::default();
     // Quinn defaults to zero concurrent streams, which makes `open_uni()`/`accept_uni()` hang
     // indefinitely. Streaming sessions always use at least one uni stream in each direction for
     // control frames.
-    transport.max_concurrent_uni_streams(VarInt::from_u32(16));
+    // Each endpoint permanently consumes one unidirectional stream for control. The remaining 15
+    // bound the number of unfinished per-segment media streams a peer can hold concurrently.
+    transport.max_concurrent_uni_streams(VarInt::from_u32(MAX_CONCURRENT_UNI_STREAMS));
     transport.max_concurrent_bidi_streams(VarInt::from_u32(16));
-    transport.datagram_receive_buffer_size(Some(settings.datagram_receive_buffer));
-    transport.datagram_send_buffer_size(settings.datagram_send_buffer);
+    // `None` omits max_datagram_frame_size from the transport parameters, so
+    // peers cannot send a conforming DATAGRAM and a raw unexpected frame is a
+    // transport-level protocol violation before Quinn queues it. A zero send
+    // buffer independently prevents this endpoint from retaining sends.
+    transport.datagram_receive_buffer_size(None);
+    transport.datagram_send_buffer_size(0);
     transport.keep_alive_interval(Some(settings.idle_timeout / 2));
     let idle = IdleTimeout::try_from(settings.idle_timeout)
         .map_err(|e| Error::TransportConfig(e.to_string()))?;
@@ -1427,6 +1807,116 @@ mod tests {
             "unexpected error: {error:?}"
         );
     }
+    #[test]
+    fn shipping_streaming_transport_disables_quinn_datagram_queues() {
+        let settings = TransportConfigSettings::default();
+        assert_eq!(settings.max_datagram_size, 0);
+        assert_eq!(settings.datagram_receive_buffer, 0);
+        assert_eq!(settings.datagram_send_buffer, 0);
+        build_transport_config(settings)
+            .expect("dormant stream-only QUIC transport must remain testable");
+
+        for enabled in [
+            TransportConfigSettings {
+                max_datagram_size: 1,
+                ..settings
+            },
+            TransportConfigSettings {
+                datagram_receive_buffer: 1,
+                ..settings
+            },
+            TransportConfigSettings {
+                datagram_send_buffer: 1,
+                ..settings
+            },
+        ] {
+            let error = build_transport_config(enabled)
+                .expect_err("each DATAGRAM-enabling setting must fail closed");
+            let Error::TransportConfig(reason) = error else {
+                panic!("unexpected error: {error:?}");
+            };
+            assert!(reason.contains("quinn-proto 0.11.15"));
+            assert!(reason.contains("zero-length frames"));
+            assert!(reason.contains("0.11.17"));
+        }
+    }
+    #[tokio::test]
+    async fn public_streaming_endpoints_reject_vulnerable_quinn_before_binding() {
+        let settings = TransportConfigSettings::default();
+        let server_error = match StreamingServer::bind(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            settings,
+        )
+        .await
+        {
+            Ok(_) => panic!("public server must reject vulnerable Quinn"),
+            Err(error) => error,
+        };
+        let client_error = match StreamingClient::connect(
+            "/ip4/127.0.0.1/udp/9/quic",
+            [0; iroha_crypto::Hash::LENGTH],
+            settings,
+        )
+        .await
+        {
+            Ok(_) => panic!("public client must reject vulnerable Quinn"),
+            Err(error) => error,
+        };
+        for error in [server_error, client_error] {
+            let Error::TransportConfig(reason) = error else {
+                panic!("unexpected error: {error:?}");
+            };
+            assert!(reason.contains("quinn-proto 0.11.15"));
+            assert!(reason.contains("remote memory exhaustion"));
+            assert!(reason.contains("0.11.17"));
+        }
+    }
+    #[test]
+    fn media_window_validation_enforces_deterministic_order_and_bounds() {
+        let source = MediaChunk {
+            chunk_id: 1,
+            is_parity: false,
+            payload: Bytes::from_static(b"source"),
+        };
+        let parity = MediaChunk {
+            chunk_id: 2,
+            is_parity: true,
+            payload: Bytes::from_static(b"parity"),
+        };
+        validate_media_window(9, Some(8), &[source.clone(), parity.clone()])
+            .expect("ordered bounded window");
+
+        for (chunks, expected) in [
+            (vec![parity.clone(), source.clone()], "strictly greater"),
+            (vec![source.clone(), source.clone()], "strictly greater"),
+            (
+                vec![MediaChunk {
+                    payload: Bytes::new(),
+                    ..source.clone()
+                }],
+                "empty payload",
+            ),
+        ] {
+            let error = validate_media_window(9, Some(8), &chunks)
+                .expect_err("malformed window must be rejected");
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+
+        let too_many = (0..=MAX_MEDIA_FRAMES_PER_WINDOW)
+            .map(|chunk_id| MediaChunk {
+                chunk_id: u16::try_from(chunk_id).expect("small fixture id"),
+                is_parity: false,
+                payload: Bytes::from_static(b"x"),
+            })
+            .collect::<Vec<_>>();
+        let error = validate_media_window(9, Some(8), &too_many)
+            .expect_err("frame count must be bounded before per-frame validation");
+        assert!(error.to_string().contains("maximum is 18"));
+
+        let error = validate_media_window(8, Some(8), &[source])
+            .expect_err("segment numbers must increase monotonically");
+        assert!(error.to_string().contains("previously completed segment 8"));
+    }
     #[tokio::test]
     async fn datagram_inbox_bounds_count_and_bytes_and_revalidates_policy() {
         let inbox = DatagramInbox::new(MAX_DATAGRAM_INBOX_ENTRIES + 32);
@@ -1544,7 +2034,7 @@ mod tests {
             idle_timeout: TokioDuration::from_millis(100),
             ..TransportConfigSettings::default()
         };
-        let server = match StreamingServer::bind(
+        let server = match StreamingServer::bind_for_requalification(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             settings,
         )
@@ -1596,7 +2086,7 @@ mod tests {
             idle_timeout: TokioDuration::from_millis(150),
             ..TransportConfigSettings::default()
         };
-        let server = match StreamingServer::bind(
+        let server = match StreamingServer::bind_for_requalification(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             settings,
         )
@@ -1616,7 +2106,7 @@ mod tests {
             within("server.accept", server.accept()),
             within(
                 "client.connect",
-                StreamingClient::connect(&multiaddr, fingerprint, settings)
+                StreamingClient::connect_for_requalification(&multiaddr, fingerprint, settings)
             )
         );
         let publisher = accepted.expect("publisher control streams");
@@ -1733,10 +2223,11 @@ mod tests {
         }
     }
     #[tokio::test]
+    #[ignore = "dormant until quinn-proto 0.11.17 per-entry DATAGRAM accounting is in the lockfile"]
     async fn capability_negotiation_and_datagram_roundtrip() {
         let settings = TransportConfigSettings::default();
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let server = match StreamingServer::bind(server_addr, settings).await {
+        let server = match StreamingServer::bind_for_requalification(server_addr, settings).await {
             Ok(server) => server,
             Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
                 eprintln!("quic test skipped: {err}");
@@ -1947,7 +2438,7 @@ mod tests {
     async fn feedback_frames_roundtrip_over_quic() {
         let settings = TransportConfigSettings::default();
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let server = match StreamingServer::bind(server_addr, settings).await {
+        let server = match StreamingServer::bind_for_requalification(server_addr, settings).await {
             Ok(server) => server,
             Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
                 eprintln!("quic test skipped: {err}");
@@ -2024,7 +2515,7 @@ mod tests {
         let viewer_task = async move {
             let mut client = within(
                 "client.connect",
-                StreamingClient::connect(
+                StreamingClient::connect_for_requalification(
                     &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
                     server_certificate_fingerprint,
                     settings,
@@ -2115,6 +2606,7 @@ mod tests {
         within("server.shutdown", server.shutdown()).await;
     }
     #[tokio::test]
+    #[ignore = "dormant until quinn-proto 0.11.17 per-entry DATAGRAM accounting is in the lockfile"]
     async fn mtu_negotiation_clamps_asymmetric_local_limits_on_the_wire() {
         let server_settings = TransportConfigSettings {
             max_datagram_size: 1_200,
@@ -2125,14 +2617,15 @@ mod tests {
             ..TransportConfigSettings::default()
         };
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let server = match StreamingServer::bind(server_addr, server_settings).await {
-            Ok(server) => server,
-            Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("quic test skipped: {err}");
-                return;
-            }
-            Err(err) => panic!("server bind failed: {err:?}"),
-        };
+        let server =
+            match StreamingServer::bind_for_requalification(server_addr, server_settings).await {
+                Ok(server) => server,
+                Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                    eprintln!("quic test skipped: {err}");
+                    return;
+                }
+                Err(err) => panic!("server bind failed: {err:?}"),
+            };
         let listen_addr = server.local_addr().expect("listen addr");
         let server_certificate_fingerprint = server.certificate_fingerprint();
         let (datagram_received_tx, datagram_received_rx) = tokio::sync::oneshot::channel();
@@ -2181,7 +2674,7 @@ mod tests {
         let viewer_task = async move {
             let mut client = within(
                 "client.connect",
-                StreamingClient::connect(
+                StreamingClient::connect_for_requalification(
                     &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
                     server_certificate_fingerprint,
                     viewer_settings,
@@ -2253,7 +2746,7 @@ mod tests {
     async fn datagram_disabled_sets_zero_limit() {
         let settings = TransportConfigSettings::default();
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let server = match StreamingServer::bind(server_addr, settings).await {
+        let server = match StreamingServer::bind_for_requalification(server_addr, settings).await {
             Ok(server) => server,
             Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
                 eprintln!("quic test skipped: {err}");
@@ -2294,13 +2787,38 @@ mod tests {
                 )
                 .await
                 .expect("ack");
+                within(
+                    "send_media_window",
+                    conn.send_media_window(
+                        42,
+                        &[
+                            MediaChunk {
+                                chunk_id: 3,
+                                is_parity: false,
+                                payload: Bytes::from_static(b"encrypted-source-a"),
+                            },
+                            MediaChunk {
+                                chunk_id: 4,
+                                is_parity: false,
+                                payload: Bytes::from_static(b"encrypted-source-b"),
+                            },
+                            MediaChunk {
+                                chunk_id: 5,
+                                is_parity: true,
+                                payload: Bytes::from_static(b"encrypted-parity"),
+                            },
+                        ],
+                    ),
+                )
+                .await
+                .expect("stream fallback media window");
                 let _ = within("wait_client_close", conn.closed()).await;
             }
         };
         let viewer_task = async move {
             let mut client = within(
                 "client.connect",
-                StreamingClient::connect(
+                StreamingClient::connect_for_requalification(
                     &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
                     server_certificate_fingerprint,
                     settings,
@@ -2343,6 +2861,30 @@ mod tests {
             assert_eq!(ack.max_datagram_size, 0);
             assert_eq!(client.connection().max_datagram_size(), 0);
             assert!(!client.connection().datagram_enabled());
+            let media = within("recv_media_window", client.connection().recv_media_window())
+                .await
+                .expect("stream fallback media window");
+            assert_eq!(media.segment_number, 42);
+            assert_eq!(
+                media.chunks,
+                vec![
+                    MediaChunk {
+                        chunk_id: 3,
+                        is_parity: false,
+                        payload: Bytes::from_static(b"encrypted-source-a"),
+                    },
+                    MediaChunk {
+                        chunk_id: 4,
+                        is_parity: false,
+                        payload: Bytes::from_static(b"encrypted-source-b"),
+                    },
+                    MediaChunk {
+                        chunk_id: 5,
+                        is_parity: true,
+                        payload: Bytes::from_static(b"encrypted-parity"),
+                    },
+                ]
+            );
             let payload = vec![0_u8; 1];
             let err = within("send_datagram", client.connection().send_datagram(&payload))
                 .await
@@ -2351,12 +2893,13 @@ mod tests {
                 Error::DatagramTooLarge { max, .. } => assert_eq!(max, 0),
                 other => panic!("unexpected error: {other:?}"),
             }
-            client
+            let error = client
                 .connection()
                 .connection
                 .send_datagram(Bytes::from_static(&[1]))
-                .expect("raw peer can attempt to violate negotiated policy");
-            let _ = within("wait_server_close", client.connection().closed()).await;
+                .expect_err("the local transport must disable DATAGRAM sends");
+            assert!(matches!(error, SendDatagramError::Disabled));
+            client.connection().close();
             within("client.close", client.close()).await;
         };
         tokio::join!(server_task, viewer_task);

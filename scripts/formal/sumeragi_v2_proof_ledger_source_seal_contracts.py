@@ -1677,6 +1677,7 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_HELPER_CHAIN = (
     "physically_eligible_deferred_admission_ordinals",
     "pop_pacemaker_progress_with_ownership",
     "runtime_view_blocked_progress_authorization_projection_hash",
+    "wire_payload_matches_current_strict_timeout_recovery_round",
     "validates_retained_blocker",
     "runtime_queue_occurrence_owner_projection_hash",
     "runtime_queue_ownership_snapshot_projection_hash",
@@ -1720,6 +1721,9 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
     ),
     "runtime_view_blocked_progress_authorization_projection_hash": (
         "e9a29e0a277bbae16f4b1ef8219bdf892f79ce733b56bbe01bd2a9f7c5c36158"
+    ),
+    "wire_payload_matches_current_strict_timeout_recovery_round": (
+        "68e1d7b8e1c16bca7c17b81a0cff0ef1709aa66d2a952d50c5b8d928835cd458"
     ),
     "validates_retained_blocker": (
         "e1b3b5823bf3c81749298d436f04c1bdf1d8d0b06b3f1d26693089aab119a05b"
@@ -1777,6 +1781,15 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
     ),
     "queue_selection_kind_code": (
         "08b07eaf05cd85228dc54c2f49a2b54071814c916a19e92cb3cff56fd5eb2518"
+    ),
+    "view_blocked_authorization_struct": (
+        "fec50a1d9938ec78bdf262bb973e4943802843a0d4a48c0be4bf2624dff3c0dd"
+    ),
+    "scheduler_arbitration_inputs_struct": (
+        "af1222460a1e16f0e7d60b90ef34fc28a768185538f554bc0281cba85bb2a9a8"
+    ),
+    "scheduler_ownership_evidence_struct": (
+        "ea80f8f1f216fe71d8219279593dd64b86ba13afec0cfb86ac1b46b6a4a1a903"
     ),
     "queue_selection_matches_scheduler_occurrence": (
         "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
@@ -1971,7 +1984,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
 
 _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
     "ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc": (
-        "a998fd581c2b0ed01441cad6e752e8599e7f41634844045bff07ab4f7213aa29"
+        "e3aad9aae8a82eb29d223230fa3f8b2cf26ba5dfa75b6859be40d0ce1cd45b71"
     ),
     "deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences": (
         "275408912512b0588a7fd1403629e9039115288b25d66aa707ddfb77a66d902e"

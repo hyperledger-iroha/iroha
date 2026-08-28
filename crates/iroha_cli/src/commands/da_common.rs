@@ -207,7 +207,7 @@ impl DaPublisher {
         if let Some((ref login, ref password)) = self.basic_auth {
             request = request.basic_auth(login, Some(password));
         }
-        let mut response = request
+        let response = request
             .send()
             .wrap_err("failed to submit DA ingest request to Torii")?;
         let status = response.status();

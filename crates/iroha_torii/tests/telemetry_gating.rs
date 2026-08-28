@@ -26,7 +26,7 @@ async fn disabled_profile_hides_status_and_metrics() {
         None,
         None,
         LaneRoutingPolicy::default(),
-        None,
+        0,
         None,
     )
     .await
@@ -49,7 +49,7 @@ async fn operator_profile_exposes_status_only() {
         None,
         None,
         LaneRoutingPolicy::default(),
-        None,
+        0,
         None,
     )
     .await
@@ -71,7 +71,7 @@ async fn extended_profile_exposes_prometheus_metrics() {
         None,
         None,
         LaneRoutingPolicy::default(),
-        None,
+        0,
         None,
     )
     .await

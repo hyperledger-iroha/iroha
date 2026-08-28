@@ -191,6 +191,11 @@ captures the key points so implementers can line them up with the codec spec.
 
 ### QUIC profile and capability negotiation
 
+- Shipping streaming QUIC is temporarily fail-closed before endpoint creation.
+  `StreamingServer::bind` and `StreamingClient::connect` return a transport
+  configuration error while the lockfile resolves quinn-proto 0.11.15;
+  released 0.11.17 fixes three unauthenticated remote-memory exhaustion paths.
+  The implementation below remains dormant requalification material.
 - Streaming QUIC is fail-closed on server identity. `StreamingServer` exposes
   the fingerprint of its self-signed leaf certificate, and callers must
   distribute that value through an authenticated manifest, directory, or
@@ -231,38 +236,45 @@ captures the key points so implementers can line them up with the codec spec.
   transactions automatically set bit 8 during capability negotiation so viewers and relays
   can detect SM-capable manifests; binaries built without the `sm` feature clear that bit even if
   the operator-supplied mask includes it.
-- Media travels via QUIC DATAGRAMs when supported; otherwise publishers fall
-  back to deterministic unidirectional streams with monotonic stream IDs per
-  segment window. Control messages (key updates, feedback) ride a dedicated
-  bidirectional stream with the highest priority weight.
+- The dormant helper advertises no QUIC DATAGRAM capability.
+  `TransportConfigSettings::default()` configures a zero payload limit and no
+  receive or send queue; any nonzero DATAGRAM limit or buffer is rejected.
+  Control messages (key updates, feedback) remain implemented over dedicated
+  QUIC streams but are not shipping while the dependency gate is active.
+  DATAGRAM media delivery remains dormant. The deterministic media-stream
+  fallback is implemented as a publisher-to-viewer unidirectional stream per
+  segment window and remains available only to the private requalification
+  path while the public vulnerable-dependency gate is active.
 
 ### MTU negotiation and fallbacks
 
-- `StreamingConnection::max_datagram_size` and `StreamingConnection::datagram_enabled`
-  clamp DATAGRAM payloads to the negotiated peer minimum and the local configured
-  maximum, and expose a runtime guard so hosts can pivot to the fallback path
-  when peers disable DATAGRAM delivery. The locally constrained resolution is
-  the value acknowledged and returned to the caller.
-  The same limit is enforced again on receive; disabled or oversized remote
-  delivery closes the session.
+- `StreamingConnection::max_datagram_size` returns zero and
+  `StreamingConnection::datagram_enabled` returns false in the shipping
+  profile, explicitly reporting that DATAGRAM media is unavailable. Capability
+  negotiation records a zero DATAGRAM size on both sides.
 - The capability handshake now enforces consistent `CapabilityReport`/`CapabilityAck`
   stream/version/MTU/DPLPMTUD values. Zero-length DATAGRAM payloads are forbidden
   in every mode. Negotiated policy installation and admission share one inbox
   lock, so frames cannot cross the policy transition under a stale limit. A
   continuously drained, count-and-byte-bounded application inbox bounds frames
-  once the pump receives them. Empty frames are rejected immediately; after an
-  invalid frame closes the session, the pump continues draining buffered Quinn
-  entries until transport termination. Quinn's dependency-owned queue remains
-  byte-accounted rather than entry-accounted before that pump runs, so a formal
-  upstream per-entry bound remains release work. Integration tests cover the
-  negotiated and locally configured limits, DATAGRAM-off path, and empty-frame
-  connection closure.
-- Restricted environments (enterprise firewalls and other restricted networks) should enable the
-  deterministic fallback by muxing chunk payloads over per-segment unidirectional
-  streams, with mandatory authenticated TLS-over-TCP as the transport fallback
-  when QUIC is unavailable. Torii exposes no peer-transport tunnel. Chunk framing,
-  Norito manifest commitments, and privacy masks must be identical across
-  DATAGRAM and fallback modes so viewers cannot distinguish paths.
+  once the pump receives them. That implementation and its DATAGRAM-on tests
+  remain dormant for requalification. Locked `quinn-proto` 0.11.15 accounts its
+  dependency-owned receive queue by payload bytes rather than entries, so the
+  dormant requalification transport sets the receive buffer to `None` and the
+  send buffer to zero. This omits DATAGRAM support from transport parameters and makes an
+  unexpected raw frame a transport violation before enqueue. Re-enable only
+  after locking and requalifying quinn-proto 0.11.17 or later, whose
+  `DatagramBuffer::memory_used()` includes fixed per-entry overhead.
+- The restricted-environment QUIC fallback muxes chunk payloads over one
+  publisher-to-viewer unidirectional stream per segment. It uses a fixed
+  `NSM/1` window preface and little-endian `(segment_number, frame_count)` header,
+  followed by ordered `(chunk_id, is_parity, payload_len, payload)` frames.
+  Source chunks precede parity shards; frame count, individual payload size,
+  aggregate window size, and outstanding stream concurrency are all bounded.
+  Public QUIC construction remains fail-closed until Quinn is upgraded and
+  requalified. Torii exposes no peer-transport tunnel. Chunk framing, Norito
+  manifest commitments, and privacy masks remain identical across DATAGRAM and
+  fallback modes so viewers cannot distinguish paths.
 
 ### Congestion and FEC model
 

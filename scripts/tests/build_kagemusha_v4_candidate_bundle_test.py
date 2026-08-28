@@ -217,9 +217,14 @@ class SealedCandidateBuildTests(unittest.TestCase):
         )
         self.extended_metadata_inspector = self.extended_metadata_patcher.start()
         self.addCleanup(self.extended_metadata_patcher.stop)
-        self.temporary = tempfile.TemporaryDirectory()
+        # Linux's shared /tmp is intentionally rejected by the production
+        # custody check.  GitHub Actions provides a runner-owned temporary
+        # root; elsewhere retain the configured tempfile root so the same
+        # production check still rejects insecure ancestry.
+        test_temp_parent = os.environ.get("RUNNER_TEMP")
+        self.temporary = tempfile.TemporaryDirectory(dir=test_temp_parent)
         self.root = Path(self.temporary.name).resolve(strict=True)
-        self.external = tempfile.TemporaryDirectory()
+        self.external = tempfile.TemporaryDirectory(dir=test_temp_parent)
         self.external_root = Path(self.external.name).resolve(strict=True)
         self.target_dir = self.external_root / "cargo-target"
         self.cargo = self.root / "admitted-cargo"
@@ -1153,6 +1158,8 @@ class SealedCandidateBuildTests(unittest.TestCase):
     def test_same_uid_snapshot_materialization_is_rejected(self) -> None:
         """Read-only mode bits are not an immutability boundary for their owner."""
 
+        cargo = builder._admit_direct_executable(str(self.cargo), "Cargo")
+        rustc = builder._admit_direct_executable(str(self.rustc), "rustc")
         with mock.patch.object(builder.os, "geteuid", return_value=501):
             with self.assertRaisesRegex(
                 builder.CandidateBuildError,
@@ -1165,8 +1172,8 @@ class SealedCandidateBuildTests(unittest.TestCase):
                     self.reviewed_source_closure,
                     self.reviewed_source_closure_sha256,
                     self.cargo_home,
-                    builder._admit_direct_executable(str(self.cargo), "Cargo"),
-                    builder._admit_direct_executable(str(self.rustc), "rustc"),
+                    cargo,
+                    rustc,
                     self.build_input_closure_value,
                     lambda _root, _path, _sha256: self.identity,
                     65_534,

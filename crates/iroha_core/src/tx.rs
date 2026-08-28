@@ -12314,8 +12314,26 @@ pub mod tests {
                 .is_some(),
             "claim marker must survive the transaction overlay commit"
         );
+        let snapshot = norito::json::to_value(&state).expect("serialize marker-bearing state");
+        let restarted = crate::state::deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json(snapshot)
+        .expect("restore marker-bearing state");
+        assert!(
+            restarted
+                .view()
+                .world()
+                .smart_contract_state
+                .get(&marker_path)
+                .is_some(),
+            "claim marker must survive snapshot restore"
+        );
         let replay_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut replay_block = state.block(replay_header);
+        let mut replay_block = restarted.block(replay_header);
 
         let duplicate = marked_test_transaction(
             faucet.clone(),

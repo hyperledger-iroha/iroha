@@ -9052,7 +9052,7 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
         (
             "can_admit_network_message_with_ingress_ownership",
             ".can_admit_network_message_with_ingress_ownership(message, ingress_ownership)",
-            ".can_admit_network_message(message)",
+            "true",
             "public ownership-aware retained-debt capacity preflight declaration and complete control flow",
         ),
         (

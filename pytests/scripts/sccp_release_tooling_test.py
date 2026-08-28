@@ -23,6 +23,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import sccp_release_bundle as builder  # noqa: E402
 import sccp_release_common as common  # noqa: E402
+import sccp_phase_log_runner as phase_log_runner  # noqa: E402
 import sccp_verify_release_bundle as verifier  # noqa: E402
 
 
@@ -1581,6 +1582,222 @@ def test_secret_scanner_rejects_deep_encoding_and_colon_credentials() -> None:
         common.reject_secret_material(encoded, label="nested artifact")
     with pytest.raises(common.SccpReleaseError, match="credential material"):
         common.reject_secret_material(b"password: hunter2", label="colon artifact")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        b'{"pa\\u0073sword":"hidden"}',
+        "pass\u200bword=hidden".encode(),
+        "ｐａｓｓｗｏｒｄ＝hidden".encode(),
+        base64.b64encode(b"client_secret=hidden").rstrip(b"="),
+        base64.urlsafe_b64encode("\u083eclient_secret=hidden".encode()),
+        base64.urlsafe_b64encode("\u083eclient_secret=hidden".encode()).rstrip(b"="),
+        b"707269766174655f6b65793d68696464656e",
+        b"-----BEGIN OPENSSH PRIVATE KEY-----",
+        b"Authorization: Basic YWxpY2U6aGlkZGVu",
+        b"AKIAABCDEFGHIJKLMNOP",
+    ),
+)
+def test_secret_scanner_rejects_recursive_and_concrete_secret_shapes(
+    payload: bytes,
+) -> None:
+    with pytest.raises(common.SccpReleaseError, match="credential material"):
+        common.reject_secret_material(payload, label="adversarial artifact")
+
+
+def test_secret_scanner_decodes_jwt_segments_and_nested_json() -> None:
+    header = base64.urlsafe_b64encode(b'{"alg":"EdDSA"}').rstrip(b"=")
+    payload = base64.urlsafe_b64encode(b'{"client_secret":"hidden"}').rstrip(b"=")
+    token = b".".join((header, payload, b"c2lnbmF0dXJl"))
+    with pytest.raises(common.SccpReleaseError, match="credential material"):
+        common.reject_secret_material(token, label="JWT artifact")
+
+
+def test_secret_scanner_allows_public_hashes_keys_signatures_and_safe_jwt() -> None:
+    header = base64.urlsafe_b64encode(b'{"alg":"EdDSA"}').rstrip(b"=")
+    payload = base64.urlsafe_b64encode(b'{"sub":"public-release"}').rstrip(b"=")
+    public_material = common.canonical_json_bytes(
+        {
+            "sha256_hex": "ab" * 32,
+            "public_key_hex": "cd" * 32,
+            "signature_b64": base64.b64encode(bytes(range(64))).decode(),
+            "signed_claim": b".".join((header, payload, b"c2lnbmF0dXJl")).decode(),
+        }
+    )
+    common.reject_secret_material(public_material, label="public cryptographic material")
+
+
+def test_secret_scanner_errors_never_echo_untrusted_labels_or_values() -> None:
+    hidden = "scanner-label-hidden-value"
+    with pytest.raises(common.SccpReleaseError) as failure:
+        common.reject_secret_material(
+            b"client_secret=scanner-content-hidden-value",
+            label=f"token={hidden}",
+        )
+    message = str(failure.value)
+    assert hidden not in message
+    assert "scanner-content-hidden-value" not in message
+
+
+def _phase_log_command(log_dir: Path, *command: str) -> list[str]:
+    return [
+        sys.executable,
+        str(SCRIPTS / "sccp_phase_log_runner.py"),
+        "--log-dir",
+        str(log_dir),
+        "--phase",
+        "python-sdk",
+        "--",
+        *command,
+    ]
+
+
+def test_phase_log_runner_publishes_private_hashed_manifest_and_exit_status(
+    tmp_path: Path,
+) -> None:
+    log_dir = tmp_path / "corridor-logs"
+    result = subprocess.run(
+        _phase_log_command(
+            log_dir,
+            sys.executable,
+            "-c",
+            "import os,sys;os.write(1,b'out\\n');os.write(2,b'err\\n');sys.exit(7)",
+        ),
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 7
+    assert result.stdout == b"out\nerr\n"
+    assert result.stderr == b""
+
+    log_path = log_dir / "python-sdk.log"
+    manifest_path = log_dir / "python-sdk.manifest.json"
+    log_bytes = log_path.read_bytes()
+    manifest = json.loads(manifest_path.read_bytes())
+    assert log_bytes == result.stdout
+    assert manifest == {
+        "schema": phase_log_runner.MANIFEST_SCHEMA,
+        "phase": "python-sdk",
+        "log_file": "python-sdk.log",
+        "log_sha256_hex": hashlib.sha256(log_bytes).hexdigest(),
+        "size_bytes": len(log_bytes),
+        "maximum_size_bytes": phase_log_runner._PHASE_LOG_LIMITS["python-sdk"],
+        "command_sha256_hex": phase_log_runner._command_hash(
+            (
+                sys.executable,
+                "-c",
+                "import os,sys;os.write(1,b'out\\n');os.write(2,b'err\\n');sys.exit(7)",
+            )
+        ),
+        "exit_status": 7,
+        "terminating_signal": None,
+    }
+    assert stat.S_IMODE(log_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(manifest_path.stat().st_mode) == 0o600
+
+
+def test_phase_log_runner_never_overwrites_existing_publication(tmp_path: Path) -> None:
+    log_dir = tmp_path / "corridor-logs"
+    first = subprocess.run(
+        _phase_log_command(log_dir, sys.executable, "-c", "print('first')"),
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert first.returncode == 0
+    before_log = (log_dir / "python-sdk.log").read_bytes()
+    before_manifest = (log_dir / "python-sdk.manifest.json").read_bytes()
+    second = subprocess.run(
+        _phase_log_command(log_dir, sys.executable, "-c", "print('second')"),
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert second.returncode == phase_log_runner.RUNNER_FAILURE_STATUS
+    assert second.stdout == b""
+    assert (log_dir / "python-sdk.log").read_bytes() == before_log
+    assert (log_dir / "python-sdk.manifest.json").read_bytes() == before_manifest
+
+
+def test_phase_log_runner_rejects_secret_output_without_echo_or_publication(
+    tmp_path: Path,
+) -> None:
+    log_dir = tmp_path / "corridor-logs"
+    hidden = "phase-runner-hidden-value"
+    result = subprocess.run(
+        _phase_log_command(
+            log_dir,
+            sys.executable,
+            "-c",
+            f"print('client_secret={hidden}')",
+        ),
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == phase_log_runner.RUNNER_FAILURE_STATUS
+    assert result.stdout == b""
+    assert hidden.encode() not in result.stderr
+    assert not (log_dir / "python-sdk.log").exists()
+    assert not (log_dir / "python-sdk.manifest.json").exists()
+
+
+def test_phase_log_runner_rejects_links_and_nonprivate_directories(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    linked = tmp_path / "linked-logs"
+    linked.symlink_to(outside, target_is_directory=True)
+    linked_result = subprocess.run(
+        _phase_log_command(linked, sys.executable, "-c", "print('safe')"),
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert linked_result.returncode == phase_log_runner.RUNNER_FAILURE_STATUS
+    assert not tuple(outside.iterdir())
+
+    nonprivate = tmp_path / "nonprivate-logs"
+    nonprivate.mkdir(mode=0o755)
+    nonprivate.chmod(0o755)
+    mode_result = subprocess.run(
+        _phase_log_command(nonprivate, sys.executable, "-c", "print('safe')"),
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert mode_result.returncode == phase_log_runner.RUNNER_FAILURE_STATUS
+    assert not tuple(nonprivate.iterdir())
+
+
+def test_phase_log_runner_removes_overflowed_partial_log(tmp_path: Path) -> None:
+    log_dir = tmp_path / "corridor-logs"
+    with pytest.raises(phase_log_runner.PhaseLogError, match="byte limit"):
+        phase_log_runner.run_phase(
+            str(log_dir),
+            "python-sdk",
+            (sys.executable, "-c", "print('x' * 64)"),
+            maximum_bytes=8,
+        )
+    assert not (log_dir / "python-sdk.log").exists()
+    assert not (log_dir / "python-sdk.manifest.json").exists()
+
+
+def test_corridor_log_mode_uses_descriptor_relative_runner_not_shell_tee() -> None:
+    source = (SCRIPTS / "check_sccp_production_corridor.sh").read_text()
+    log_function = source.split("run_with_log_dir()", 1)[1].split("\n}\n", 1)[0]
+    assert "sccp_phase_log_runner.py" in log_function
+    assert "tee " not in log_function
 
 
 def test_public_error_is_bounded_and_redacts_userinfo_and_secret_markers() -> None:

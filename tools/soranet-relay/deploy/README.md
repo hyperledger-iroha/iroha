@@ -5,6 +5,11 @@ This directory provides opinionated deployment artefacts for the reference
 operators and integrators; review and harden them for your own environment
 before production use.
 
+Current source fails closed before opening the relay QUIC listener while the
+workspace lockfile resolves vulnerable quinn-proto 0.11.15. Upgrade to 0.11.17
+or later and complete the tracked transport requalification before deploying
+these manifests; this guard must not be removed on the old dependency.
+
 The samples cover two common targets:
 
 1. `systemd` units for bare-metal or VM deployments.

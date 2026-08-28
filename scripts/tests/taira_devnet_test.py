@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -390,6 +391,8 @@ class FakeProcessOps:
         return pid not in self.observations
 
     def observe(self, pid: int) -> dict[str, object] | None:
+        if pid not in self.handles.values():
+            raise AssertionError(f"observing fake process {pid} without a held pidfd")
         observation = self.observations.get(pid)
         command = self.process_commands.get(pid)
         if observation is None or command is None:
@@ -1221,7 +1224,13 @@ class FakeRuntime:
                 }
                 process_path = target / f"peer{index}.process.json"
                 process_path.write_text(
-                    json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+                    json.dumps(
+                        record,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n",
                     encoding="utf-8",
                 )
                 process_path.chmod(0o600)
@@ -2269,51 +2278,6 @@ class TairaDevnetTests(unittest.TestCase):
             before_rows[0]["guest_boot_id_sha256"],
         )
 
-    def test_restart_proof_accepts_same_pid_only_with_new_start_time(self) -> None:
-        runtime = FakeRuntime()
-        runtime.reuse_pid_on_restart = True
-
-        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
-
-        restart = report["inrou_restart"]
-        before = restart["processes_before"][0]
-        after = restart["processes_after"][0]
-        self.assertEqual(after["pid"], before["pid"])
-        self.assertNotEqual(after["start_time_ticks"], before["start_time_ticks"])
-        self.assertEqual(
-            restart["processes_after"][1:],
-            restart["processes_before"][1:],
-        )
-
-    def test_pid_reuse_is_rejected_without_nonzero_signal(self) -> None:
-        runtime = FakeRuntime()
-        module.up(self.up_args(), run=runtime.run, request=runtime.request)
-        target = self.root / "state" / "network"
-        identity = module.read_taira_process_identity(target, 0)
-        pid = int(identity["pid"])
-        runtime.process_ops.observations[pid]["start_time_ticks"] = (
-            int(identity["start_time_ticks"]) + 1
-        )
-        runtime.process_ops.signals.clear()
-
-        self.assertIsNone(module._bind_taira_process_identity(identity))
-        self.assertTrue(runtime.process_ops.signals)
-        self.assertEqual(
-            {signal_number for _pid, signal_number in runtime.process_ops.signals},
-            {0},
-        )
-        self.assertEqual(runtime.process_ops.handles, {})
-
-    def test_native_process_ops_fail_closed_on_non_linux_before_mutation(self) -> None:
-        state = self.root / "unsupported-state"
-        args = module.parser().parse_args(["--dir", str(state), "down"])
-        with (
-            mock.patch.object(module, "_PROCESS_OPS", module.LinuxPidfdProcessOps()),
-            mock.patch.object(module.platform, "system", return_value="Darwin"),
-            self.assertRaisesRegex(module.DevnetError, "requires Linux pidfds"),
-        ):
-            module.down(args, run=lambda *_args, **_kwargs: None)
-        self.assertFalse(state.exists())
         self.assertEqual(after_rows[1:], before_rows[1:])
         target = self.root / "state" / "network"
         self.assertIn(
@@ -2611,6 +2575,177 @@ class TairaDevnetTests(unittest.TestCase):
                 command[command.index("--faucet-amount") + 1],
                 FAKE_FAUCET_AMOUNT,
             )
+
+    def test_restart_proof_accepts_same_pid_only_with_new_start_time(self) -> None:
+        runtime = FakeRuntime()
+        runtime.reuse_pid_on_restart = True
+
+        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        restart = report["inrou_restart"]
+        before = restart["processes_before"][0]
+        after = restart["processes_after"][0]
+        self.assertEqual(after["pid"], before["pid"])
+        self.assertNotEqual(after["start_time_ticks"], before["start_time_ticks"])
+        self.assertEqual(
+            restart["processes_after"][1:],
+            restart["processes_before"][1:],
+        )
+
+    def test_pid_reuse_is_rejected_without_nonzero_signal(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        target = self.root / "state" / "network"
+        identity = module.read_taira_process_identity(target, 0)
+        pid = int(identity["pid"])
+        runtime.process_ops.observations[pid]["start_time_ticks"] = (
+            int(identity["start_time_ticks"]) + 1
+        )
+        runtime.process_ops.signals.clear()
+
+        self.assertIsNone(module._bind_taira_process_identity(identity))
+        self.assertTrue(runtime.process_ops.signals)
+        self.assertEqual(
+            {signal_number for _pid, signal_number in runtime.process_ops.signals},
+            {0},
+        )
+        self.assertEqual(runtime.process_ops.handles, {})
+
+    def test_process_record_requires_exact_canonical_owner_only_v1(self) -> None:
+        runtime, target = self.generated_network("process-record-schema")
+        runtime.run(
+            ["/bin/bash", str(target / "start.sh")],
+            cwd=target,
+            env={},
+            capture_output=False,
+        )
+        path = target / "peer0.process.json"
+        original = path.read_bytes()
+        identity = module.read_taira_process_identity(target, 0)
+        self.assertEqual(set(identity), module.TAIRA_PROCESS_RECORD_KEYS_V1)
+
+        extended = json.loads(original)
+        extended["legacy_pid"] = extended["pid"]
+        path.write_text(
+            json.dumps(extended, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o600)
+        with self.assertRaisesRegex(module.DevnetError, "exact Taira process V1 schema"):
+            module.read_taira_process_identity(target, 0)
+
+        path.write_bytes(original.replace(b"{", b"{\n", 1))
+        path.chmod(0o600)
+        with self.assertRaisesRegex(module.DevnetError, "not canonical JSON"):
+            module.read_taira_process_identity(target, 0)
+
+        duplicate = original[:-2] + b',"pid":123}\n'
+        path.write_bytes(duplicate)
+        path.chmod(0o600)
+        with self.assertRaisesRegex(module.DevnetError, "not canonical JSON"):
+            module.read_taira_process_identity(target, 0)
+
+        path.write_bytes(original)
+        path.chmod(0o644)
+        with self.assertRaisesRegex(module.DevnetError, "mode 0600"):
+            module.read_taira_process_identity(target, 0)
+
+    def test_restart_proof_rejects_retired_bare_pid_vectors(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        target = self.root / "state" / "network"
+        qualification_path = target / module.INROU_GUEST_QUALIFICATION_FILE
+        qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
+        restart = qualification["inrou_restart"]
+        before = restart.pop("processes_before")
+        after = restart.pop("processes_after")
+        restart["pids_before"] = [identity["pid"] for identity in before]
+        restart["pids_after"] = [identity["pid"] for identity in after]
+        qualification_path.write_text(
+            json.dumps(qualification, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        qualification_path.chmod(0o600)
+        args = module.parser().parse_args(
+            ["--dir", str(target.parent), "check", "--timeout-seconds", "1"]
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "restart proof violates the exact V1"):
+            module.check(args, run=runtime.run, request=runtime.request)
+
+    def test_same_incarnation_executable_drift_is_never_signaled(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        target = self.root / "state" / "network"
+        identity = module.read_taira_process_identity(target, 0)
+        pid = int(identity["pid"])
+        runtime.process_ops.observations[pid]["executable_inode"] = 999
+        runtime.process_ops.signals.clear()
+
+        with self.assertRaisesRegex(module.DevnetError, "retained its incarnation but drifted"):
+            module._bind_taira_process_identity(identity)
+        self.assertTrue(runtime.process_ops.signals)
+        self.assertEqual(
+            {signal_number for _pid, signal_number in runtime.process_ops.signals},
+            {0},
+        )
+        self.assertEqual(runtime.process_ops.handles, {})
+
+    def test_native_process_ops_fail_closed_on_non_linux_before_mutation(self) -> None:
+        state = self.root / "unsupported-state"
+        args = module.parser().parse_args(["--dir", str(state), "down"])
+        with (
+            mock.patch.object(module, "_PROCESS_OPS", module.LinuxPidfdProcessOps()),
+            mock.patch.object(module.platform, "system", return_value="Darwin"),
+            self.assertRaisesRegex(module.DevnetError, "requires Linux pidfds"),
+        ):
+            module.down(args, run=lambda *_args, **_kwargs: None)
+        self.assertFalse(state.exists())
+
+    def test_kagami_taira_lifecycle_source_is_pidfd_only_and_linux_only(self) -> None:
+        source = (
+            REPO_ROOT / "crates" / "iroha_kagami" / "src" / "localnet.rs"
+        ).read_text(encoding="utf-8")
+        embedded_match = re.search(
+            r'const TAIRA_PROCESS_IDENTITY_PY: &str = r#"(.*?)"#;',
+            source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(embedded_match)
+        embedded = embedded_match.group(1)
+        compile(embedded, "<TAIRA_PROCESS_IDENTITY_PY>", "exec")
+        for required in (
+            "os.pidfd_open(pid, 0)",
+            "signal.pidfd_send_signal(descriptor, signal_number, None, 0)",
+            "select.poll()",
+            "if not cmdline or not cmdline.endswith",
+            '"schema_version": 1',
+            '"start_time_ticks"',
+            '"executable_device"',
+            '"executable_inode"',
+            '"process_group_id"',
+            "_atomic_publish_record(record_path, record)",
+            "stop_taira_process(record_path, peer_index, config_path)",
+        ):
+            self.assertIn(required, embedded)
+        for forbidden in (
+            "os.kill(",
+            "os.killpg(",
+            "subprocess.run",
+            "subprocess.call",
+            "process.terminate(",
+            "process.kill(",
+        ):
+            self.assertNotIn(forbidden, embedded)
+        self.assertIn("descriptor = os.pidfd_open(os.getpid(), 0)", source)
+        stop_writer = source[source.index("fn write_stop_script(") :]
+        taira_return = stop_writer.index("return Ok(stop_file.flush()?);")
+        generic_pid_logic = stop_writer.index('writeln!(stop_file, "pid_matches_peer()')
+        generic_kill = stop_writer.index('writeln!(stop_file, "  kill \\"$pid\\"')
+        self.assertLess(taira_return, generic_pid_logic)
+        self.assertLess(taira_return, generic_kill)
+        self.assertIn("write_taira_pidfd_preflight(&mut stop_file)?", stop_writer)
+        self.assertIn("peer${{i}}.process.json", stop_writer[:taira_return])
 
     def test_up_maps_local_placement_peer_id_without_slot_index_fallback(self) -> None:
         runtime = FakeRuntime()
@@ -4212,6 +4347,59 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertTrue((state / "network" / "peer0.process.json").is_file())
         self.assertTrue((state / "network" / "peer0.toml").is_file())
 
+    def test_down_cleans_a_recorded_process_that_already_exited(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        exited_pid = runtime.peer_pids[0]
+        runtime.process_ops.remove(exited_pid)
+        args = module.parser().parse_args(
+            ["--dir", str(self.root / "state"), "down"]
+        )
+
+        report = module.down(args, run=runtime.run)
+
+        self.assertTrue(report["network_destroyed"])
+        self.assertFalse(runtime.process_commands)
+
+    def test_down_rejects_unrecorded_replacement_before_generated_stop(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        target = self.root / "state" / "network"
+        recorded = module.read_taira_process_identity(target, 0)
+        runtime.process_ops.remove(int(recorded["pid"]))
+        replacement_pid = 99_999
+        replacement = {
+            key: list(value) if key == "argv" else value
+            for key, value in recorded.items()
+            if key in module.TAIRA_PROCESS_RECORD_RUNTIME_KEYS_V1
+        }
+        replacement.update(
+            {
+                "pid": replacement_pid,
+                "start_time_ticks": int(recorded["start_time_ticks"]) + 1,
+                "session_id": replacement_pid,
+                "process_group_id": replacement_pid,
+            }
+        )
+        runtime.process_ops.add(replacement)
+        stop_count = sum(
+            command[0] == "/bin/bash" and command[1].endswith("/stop.sh")
+            for command in runtime.commands
+        )
+        args = module.parser().parse_args(["--dir", str(target.parent), "down"])
+
+        with self.assertRaisesRegex(module.DevnetError, "does not exclusively bind"):
+            module.down(args, run=runtime.run)
+
+        self.assertEqual(
+            sum(
+                command[0] == "/bin/bash" and command[1].endswith("/stop.sh")
+                for command in runtime.commands
+            ),
+            stop_count,
+        )
+        self.assertTrue((target / "peer0.process.json").is_file())
+
     def test_down_retry_after_completed_delete_is_idempotent(self) -> None:
         state = module.managed_root(self.root / "state", create=True)
         target = state / "network"
@@ -4316,7 +4504,7 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "run `up` first"):
             module.check(args, request=FakeRuntime().request)
 
-    def test_check_rejects_healthy_listeners_not_owned_by_bundle_pids(self) -> None:
+    def test_check_rejects_healthy_listeners_not_owned_by_process_records(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
         runtime.process_commands.clear()

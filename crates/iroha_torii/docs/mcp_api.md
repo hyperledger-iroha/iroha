@@ -160,8 +160,11 @@ treat `structuredContent` as data rather than instructions.
   for bounded tools.
 - When API-token authentication is required, `notifications/cancelled` can stop
   one exact live `tools/call` or `tools/call_batch` owned by the same validated
-  token principal. String, signed-integer, unsigned-integer, and floating-point
-  IDs are type-tagged so numerically similar representations cannot alias.
+  token principal. String and losslessly parsed signed/unsigned integer IDs are
+  type-tagged so numerically similar representations cannot alias. Fractional
+  or out-of-range numeric IDs still receive normal JSON-RPC responses but are
+  deliberately not remotely cancellable because JSON parsing cannot preserve
+  their exact wire identity.
 - Anonymous MCP calls remain usable but are not remotely cancellable: source IP
   is intentionally not treated as cancellation authentication.
 - Unknown method is `method_not_found`.
@@ -241,7 +244,10 @@ Torii accepts the notification when:
 Accepts the standard best-effort cancellation shape with
 `params.requestId` and an optional string `params.reason`. Cancellation is
 enabled only for requests admitted with one exact configured API token and is
-bound to the token fingerprint plus the exact JSON-RPC ID representation.
+bound to the token fingerprint plus an exact string or losslessly parsed
+signed/unsigned integer JSON-RPC ID. Fractional and out-of-range numeric IDs are
+accepted for ordinary requests but are not entered in the cancellation
+registry.
 Unknown, completed, malformed, anonymous, and cross-principal cancellations
 are deliberately indistinguishable `202 Accepted` responses. A simultaneous
 duplicate live ID for the same authenticated principal is rejected as

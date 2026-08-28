@@ -4347,16 +4347,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     pub(crate) const fn current_tag(&self) -> EventTag {
         self.runtime.round_tag()
     }
-    #[cfg(test)]
-    pub(crate) fn can_admit_network_message(&self, message: &wire::ConsensusMessageV2) -> bool {
-        if self.fatal_reason.is_some()
-            || self.output_guard.restart_required()
-            || !self.retained_dispatch_allows_network_ingress(&message.payload)
-        {
-            return false;
-        }
-        self.runtime.can_admit_network_message(message)
-    }
     /// Whether body-store open routed one nondeferred validation marker into the runtime.
     #[cfg(test)]
     pub(in crate::sumeragi) fn recovered_validated_body_was_bound_for_test(

@@ -183,6 +183,12 @@ fn certified_sidecar_prefix_covers_occurrence(
 #[derive(Debug)]
 struct PendingExactOutput {
     fanouts: VecDeque<PendingExactFanout>,
+    /// Kura-verified authority observed only after State committed this height.
+    ///
+    /// This never relaxes ordinary exact-output ownership. It only proves that
+    /// a ticketless GlobalV2 topology target is superseded by the exact durable
+    /// finality artifact when a committed roster transition removes that target.
+    applied_height_finality: Option<wire::finality::V2FinalityArtifact>,
     /// Writer-flushed sidecar cursor receipts not yet applied by lane work.
     admitted_sidecar_chunks: VecDeque<CertifiedMergeSidecarChunkAdmission>,
     /// Separate byte-free control-queue bound for sidecar admission receipts.
@@ -301,6 +307,7 @@ impl PendingExactOutput {
             .ok_or_else(|| "Sumeragi v2 outbound drive budget overflowed".to_owned())?;
         Ok(Self {
             fanouts: VecDeque::new(),
+            applied_height_finality: None,
             admitted_sidecar_chunks: VecDeque::new(),
             sidecar_admission_capacity,
             next_fanout_index: 0,
@@ -3150,13 +3157,34 @@ impl PendingExactOutput {
                             "Sumeragi v2 network actor changed an exact output target".to_owned()
                         );
                     }
-                    let release_to_reconstruction_source = ticket.is_none()
-                        && matches!(&route, ExactTargetRoute::Topology)
+                    let ticketless_topology_target =
+                        ticket.is_none() && matches!(&route, ExactTargetRoute::Topology);
+                    let release_to_reconstruction_source = ticketless_topology_target
                         && self
                             .fanouts
                             .get(fanout_index)
                             .is_some_and(PendingExactFanout::is_reconstructible_topology_fanout);
-                    if release_to_reconstruction_source {
+                    let release_to_applied_height_finality = ticketless_topology_target
+                        && self
+                            .applied_height_finality
+                            .as_ref()
+                            .is_some_and(|artifact| {
+                                self.fanouts.get(fanout_index).is_some_and(|fanout| {
+                                    matches!(
+                                        &fanout.rollover_claim,
+                                        ExactOutputRolloverClaim::GlobalV2(_)
+                                    ) && applied_height_reconstruction_covers(
+                                        &fanout.messages,
+                                        &fanout.semantic_peers(),
+                                        &fanout.rollover_claim,
+                                        artifact,
+                                        None,
+                                        None,
+                                    )
+                                    .is_ok()
+                                })
+                            });
+                    if release_to_reconstruction_source || release_to_applied_height_finality {
                         // No actor ticket means this target owns no FIFO rank:
                         // its live-topology membership may have disappeared, or
                         // the bounded waiter table may be full. The fetch,
@@ -3166,7 +3194,11 @@ impl PendingExactOutput {
                         // retries and the durable sidecar stream retries
                         // cumulative Close.
                         // Retaining this ticketless worker copy could consume
-                        // the only shared non-roster slot forever.
+                        // the only shared non-roster slot forever. Exact durable
+                        // finality also supersedes a same-height GlobalV2
+                        // occurrence after a committed roster transition; its
+                        // typed creation scope prevents unrelated ticketless
+                        // topology traffic from taking that release path.
                         drop(message);
                         self.fanouts
                             .get_mut(fanout_index)

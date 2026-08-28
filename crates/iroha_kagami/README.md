@@ -100,8 +100,11 @@ into the output directory.
   custody checks do not traverse platform temporary-directory symlinks
 - Writes genesis, signed genesis, its exact hash, per-peer configs,
   `client.toml`, `start.sh`, `stop.sh`, and a generated guide
-- Generated stop scripts validate pidfiles against the expected peer config
-  path before signalling a live process, so stale or reused pids are left alone.
+- Generic generated stop scripts validate pidfiles against the expected peer
+  config path before signalling a live process. Taira has a stricter
+  first-release path: owner-only `peerN.process.json` identities bind the boot,
+  start time, executable, exact argv/config, and OS ownership/session fields;
+  observation, signaling, and exit waits use held Linux pidfds only.
 
 `kagami wizard`
 - Guided observer-onboarding flow for the existing Sora Nexus network; use
@@ -125,7 +128,8 @@ into the output directory.
   An owner-only `genesis.private_key` is never mounted by generated Compose files
 - Fresh-custody bundles keep directories and lifecycle scripts at `0700`, all
   other files at `0600`, and lifecycle scripts enforce `umask 077` for new
-  logs, pidfiles, and runtime state
+  logs and runtime state. Generic localnets retain pidfiles; Taira emits only
+  exact mode-`0600` process records and rejects legacy pidfiles.
 - Defaults to `permissioned` unless a Sora profile or perf preset requires
   `npos`
 - `--sora-profile nexus` enforces public-dataspace rules and requires `npos`
@@ -182,7 +186,9 @@ into the output directory.
   use its `check` and `down` subcommands
   for inspection and teardown. The low-level `iroha3-taira` Kagami profile
   remains available for manifest generation and verification, targets the live
-  Taira chain id, requires NPoS, and requires `--vrf-seed-hex`.
+  Taira chain id, requires NPoS, and requires `--vrf-seed-hex`. Disposable
+  Taira lifecycle scripts require Linux pidfd/procfs APIs and deliberately have
+  no `ps`, numeric-PID signal, shell-kill, or non-Linux fallback.
 
 See [specs/kagami_profiles.md](../../specs/kagami_profiles.md) for
 the profile-specific defaults.

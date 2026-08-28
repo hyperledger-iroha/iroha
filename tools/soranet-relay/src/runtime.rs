@@ -621,6 +621,12 @@ fn abort_constant_rate_task(task: Option<JoinHandle<()>>) {
 }
 
 const STRICT_CONSTANT_RATE_CLOSE_CODE: u32 = 0x534e_01;
+const STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS: u32 = 8;
+const QUIC_DEPENDENCY_BLOCK_REASON: &str = "SoraNet relay QUIC is unavailable with locked quinn-proto 0.11.15: released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 or later and requalify QUIC before re-enabling it";
+
+fn validate_shipping_quinn_dependency() -> Result<(), RelayError> {
+    Err(RelayError::Quic(QUIC_DEPENDENCY_BLOCK_REASON.to_owned()))
+}
 
 struct StrictMuxTransport {
     outbound: mpsc::Sender<MuxFrame>,
@@ -706,6 +712,8 @@ enum StrictConstantRateRuntimeError {
     Send(#[from] quinn::SendDatagramError),
     #[error("strict constant-rate DATAGRAM receive failed: {0}")]
     Receive(#[from] quinn::ConnectionError),
+    #[error("strict constant-rate receiver observed no cell within {deadline:?}")]
+    ReceiveTickMissing { deadline: Duration },
     #[error("strict constant-rate sender missed a fixed-rate tick by {lateness:?}")]
     TickMissed { lateness: Duration },
 }
@@ -731,6 +739,8 @@ fn spawn_strict_constant_rate_transport(
     ensure_strict_datagram_available(&connection)?;
     let (sealer, opener) = constant_rate_codec(record_layer)?;
     let maximum_lanes = usize::from(spec.lane_cap.max(1));
+    let tick_duration = milliseconds_to_duration(spec.tick_millis);
+    let receive_deadline = strict_constant_rate_receive_deadline(tick_duration);
     let queue_capacity = maximum_lanes.saturating_mul(4);
     let (outbound, outbound_rx) = mpsc::channel(queue_capacity);
     let (inbound_tx, inbound) = mpsc::channel(queue_capacity);
@@ -748,6 +758,7 @@ fn spawn_strict_constant_rate_transport(
             opener,
             inbound_tx,
             maximum_lanes,
+            receive_deadline,
         );
         tokio::pin!(send);
         tokio::pin!(receive);
@@ -850,10 +861,15 @@ async fn run_strict_constant_rate_receiver(
     mut opener: ConstantRateOpener,
     inbound: mpsc::Sender<MuxFrame>,
     maximum_lanes: usize,
+    receive_deadline: Duration,
 ) -> Result<(), StrictConstantRateRuntimeError> {
     let mut lifecycle = iroha_crypto::soranet::constant_rate::MuxLifecycle::new(maximum_lanes);
     loop {
-        let datagram = connection.read_datagram().await?;
+        let datagram = timeout(receive_deadline, connection.read_datagram())
+            .await
+            .map_err(|_| StrictConstantRateRuntimeError::ReceiveTickMissing {
+                deadline: receive_deadline,
+            })??;
         let frame = opener.open(&datagram)?;
         lifecycle.accept(&frame)?;
         if frame.channel == MuxChannel::Cover {
@@ -863,6 +879,9 @@ async fn run_strict_constant_rate_receiver(
             .try_send(frame)
             .map_err(|_| StrictConstantRateRuntimeError::IncomingQueueUnavailable)?;
     }
+}
+fn strict_constant_rate_receive_deadline(tick_duration: Duration) -> Duration {
+    tick_duration.saturating_mul(STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS)
 }
 fn milliseconds_to_duration(millis: f64) -> Duration {
     let clamped = millis.max(1.0);
@@ -3769,6 +3788,9 @@ impl RelayRuntime {
     }
     /// Start the relay control/data planes until shutdown is requested.
     pub async fn run(self) -> Result<(), RelayError> {
+        // Reject before constructing the endpoint so vulnerable Quinn cannot
+        // bind a socket or receive unauthenticated traffic.
+        validate_shipping_quinn_dependency()?;
         let listen_addr = self.config.listen_addr()?;
         let admin_addr = self.config.admin_addr()?;
         let mode = self.config.mode;

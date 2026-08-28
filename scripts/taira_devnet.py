@@ -1359,6 +1359,8 @@ class LinuxPidfdProcessOps:
             fail("Taira process control requires pidfd_open and pidfd_send_signal")
         if not hasattr(os, "O_CLOEXEC") or not hasattr(os, "O_NOFOLLOW"):
             fail("Taira process control requires safe Linux procfs open flags")
+        if not hasattr(select, "poll"):
+            fail("Taira process control requires pollable pidfds")
         required = (
             Path("/proc"),
             Path("/proc/self/stat"),
@@ -1367,6 +1369,17 @@ class LinuxPidfdProcessOps:
         )
         if any(not path.exists() for path in required):
             fail("Taira process control requires Linux procfs")
+        try:
+            descriptor = int(getattr(os, "pidfd_open")(os.getpid(), 0))
+            try:
+                getattr(signal, "pidfd_send_signal")(descriptor, 0, None, 0)
+                poller = select.poll()
+                poller.register(descriptor, select.POLLIN | select.POLLHUP)
+                poller.poll(0)
+            finally:
+                os.close(descriptor)
+        except (OSError, TypeError, ValueError) as error:
+            fail(f"Taira process control cannot exercise native Linux pidfds: {error}")
 
     def open_pidfd(self, pid: int) -> int | None:
         self.require_supported()
@@ -1459,10 +1472,10 @@ class LinuxPidfdProcessOps:
                 parsed = tuple(int(value) for value in rows[0][len(prefix) :].split())
             except ValueError:
                 fail(f"Linux procfs status is malformed for Taira process {pid}")
-            if len(parsed) != 4 or len(set(parsed)) != 1:
-                fail(f"Taira process {pid} does not have one stable UID/GID identity")
+            if len(parsed) != 4:
+                fail(f"Linux procfs status is malformed for Taira process {pid}")
             values[label] = parsed
-        return values["Uid"][0], values["Gid"][0]
+        return values["Uid"][1], values["Gid"][1]
 
     def observe(self, pid: int) -> dict[str, object] | None:
         self.require_supported()
@@ -1476,23 +1489,34 @@ class LinuxPidfdProcessOps:
             if state == "Z":
                 return None
             cmdline = self._read_proc(proc_root / "cmdline", 64 * 1024)
-            if not cmdline.endswith(b"\0"):
-                fail(f"Linux procfs cmdline is malformed for Taira process {pid}")
+            if not cmdline or not cmdline.endswith(b"\0"):
+                return None
             raw_argv = cmdline[:-1].split(b"\0")
             if not raw_argv or any(not argument for argument in raw_argv):
-                fail(f"Linux procfs cmdline is malformed for Taira process {pid}")
+                return None
             argv = [os.fsdecode(argument) for argument in raw_argv]
+            executable_path = os.readlink(proc_root / "exe")
             executable = os.stat(proc_root / "exe")
             uid, gid = self._parse_status(
                 self._read_proc(proc_root / "status", 128 * 1024),
                 pid,
             )
             stat_after = self._read_proc(proc_root / "stat", 16 * 1024)
-            if self._parse_stat(stat_after, pid) != (
-                state,
-                process_group_id,
-                session_id,
-                start_time_ticks,
+            cmdline_after = self._read_proc(proc_root / "cmdline", 64 * 1024)
+            executable_path_after = os.readlink(proc_root / "exe")
+            executable_after = os.stat(proc_root / "exe")
+            uid_after, gid_after = self._parse_status(
+                self._read_proc(proc_root / "status", 128 * 1024),
+                pid,
+            )
+            if (
+                self._parse_stat(stat_after, pid)
+                != (state, process_group_id, session_id, start_time_ticks)
+                or cmdline_after != cmdline
+                or executable_path_after != executable_path
+                or (executable_after.st_dev, executable_after.st_ino)
+                != (executable.st_dev, executable.st_ino)
+                or (uid_after, gid_after) != (uid, gid)
             ):
                 fail(f"Taira process {pid} changed while observing procfs")
             boot_id = self._read_proc(LINUX_BOOT_ID_PATH, 128).decode("ascii").strip()
@@ -1504,7 +1528,7 @@ class LinuxPidfdProcessOps:
             "pid": pid,
             "boot_id": boot_id,
             "start_time_ticks": start_time_ticks,
-            "executable_path": argv[0],
+            "executable_path": executable_path,
             "executable_device": executable.st_dev,
             "executable_inode": executable.st_ino,
             "argv": argv,
@@ -1630,7 +1654,10 @@ def read_taira_process_identity(target: Path, peer_index: int) -> dict[str, obje
         value = json_loads_no_duplicates(payload.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         fail(f"Taira process record is not canonical JSON: {path}")
-    canonical = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    canonical = (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
     if canonical != payload:
         fail(f"Taira process record is not canonical JSON: {path}")
     return _canonical_taira_process_identity(
@@ -1773,6 +1800,41 @@ def require_running_cohort(
     finally:
         for descriptor in descriptors:
             _PROCESS_OPS.close_pidfd(descriptor)
+
+
+def require_stoppable_cohort(
+    target: Path,
+    run: Runner,
+) -> tuple[dict[str, object], ...]:
+    """Preflight a complete record cohort, allowing an already-exited incarnation."""
+
+    del run
+    _PROCESS_OPS.require_supported()
+    _reject_legacy_taira_pidfiles(target)
+    identities: list[dict[str, object]] = []
+    descriptors: list[int | None] = []
+    try:
+        for index in range(PEER_COUNT):
+            identity = read_taira_process_identity(target, index)
+            identities.append(identity)
+            descriptors.append(_bind_taira_process_identity(identity))
+        if len({identity["pid"] for identity in identities}) != PEER_COUNT:
+            fail("generated peer process records do not identify four distinct processes")
+        matches = _matching_taira_processes(target)
+        for index, (identity, descriptor) in enumerate(
+            zip(identities, descriptors, strict=True)
+        ):
+            expected = [identity["pid"]] if descriptor is not None else []
+            if matches[index] != expected:
+                fail(
+                    f"peer{index} process record does not exclusively bind the process "
+                    "using its generated config"
+                )
+        return tuple(identities)
+    finally:
+        for descriptor in descriptors:
+            if descriptor is not None:
+                _PROCESS_OPS.close_pidfd(descriptor)
 
 
 def require_partial_restart_cohort(
@@ -1932,7 +1994,7 @@ def stop_network(
             # The generated stop script has process-control authority. Do not run
             # it until all four exact process records prove that the live cohort
             # is ours through held pidfds.
-            require_running_cohort(target, run)
+            require_stoppable_cohort(target, run)
         else:
             if (
                 expected_partial_peer_index is None

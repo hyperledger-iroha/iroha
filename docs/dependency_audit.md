@@ -13,7 +13,12 @@ Current incident-response status:
   2026-08-20 `arrayref` incident list. It retains the legitimate
   `arrayref 0.3.9`, now exact-pinned in `iroha_crypto`, and does not contain the
   named malicious releases or `proc-macro1` family.
-- Remediations are applied in the working tree for `quinn-proto 0.11.15`,
+- The `quinn-proto 0.11.15` remote-memory exposures in stream reassembly,
+  connection-ID retirement, and zero-length DATAGRAM accounting are contained
+  by rejecting shipping P2P, streaming, SoraNet relay, and VPN-helper QUIC
+  endpoint creation pending an upgrade to released `quinn-proto 0.11.17` or
+  later (GHSA-qfwj-vfxf-92j2, GHSA-hmxj-32vh-65vr, and
+  GHSA-2hv7-gw8g-gpq5). Remediations are applied in the working tree for
   `h2 0.4.16`, `crossbeam-epoch 0.9.20`, `webbrowser 1.2.2`, and
   `zbus_xml 5.2.1`; the vulnerable `quick-xml 0.39.4` resolution and Norito's
   unused `rkyv 0.8` dependency were pruned.
@@ -78,7 +83,8 @@ Current validation status:
 - `cargo metadata --locked --format-version 1 --no-deps` passed.
 - `cargo iroha-fast -- check -p norito --lib --locked` passed.
 - `cargo iroha-fast -- check -p soranet-relay -p sora-vpn-helper --locked`
-  passed with `quinn-proto 0.11.15`.
+  passed with the production pre-endpoint dependency gate compiled against
+  `quinn-proto 0.11.15`; this is not runtime qualification of that release.
 - `cargo iroha-fast -- check -p iroha_torii --lib --locked` compiled the
   patched `h2 0.4.16` dependency, then stopped on unrelated concurrent
   `iroha_core` source errors in `block.rs` and `state.rs`.

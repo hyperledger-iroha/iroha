@@ -12767,102 +12767,6 @@ pub mod isi {
             ))
         }
     }
-    impl Execute for bridge::FundSccpRouteEscrow {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            if self.amount.is_zero() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "SCCP route escrow funding amount must be positive".into(),
-                    ),
-                ));
-            }
-            let route = state_transaction
-                .sccp_registry
-                .route(&self.route_key)
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "SCCP route escrow funding references an ungoverned route revision"
-                                .into(),
-                        ),
-                    )
-                })?;
-            if route.settlement.asset_definition_id != self.asset_definition_id
-                || route.settlement.custody_owner != *authority
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "SCCP route escrow funding requires the exact governed asset and custody owner"
-                        .into(),
-                ));
-            }
-            ensure_sccp_route_escrow_account(
-                &self.route_key,
-                &self.asset_definition_id,
-                state_transaction,
-            )?;
-            crate::smartcontracts::isi::asset::isi::execute_sccp_route_owner_funding(
-                state_transaction,
-                authority,
-                &self.route_key,
-                &self.asset_definition_id,
-                self.amount,
-            )
-        }
-    }
-    impl Execute for bridge::RefundSccpRouteEscrow {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            if self.amount.is_zero() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "SCCP route escrow refund amount must be positive".into(),
-                    ),
-                ));
-            }
-            let route = state_transaction
-                .sccp_registry
-                .route(&self.route_key)
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "SCCP route escrow refund references an ungoverned route revision"
-                                .into(),
-                        ),
-                    )
-                })?;
-            if route.settlement.asset_definition_id != self.asset_definition_id
-                || route.settlement.custody_owner != *authority
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "SCCP route escrow refund requires the exact governed asset and custody owner"
-                        .into(),
-                ));
-            }
-            if !matches!(
-                route.activation,
-                iroha_data_model::bridge::SccpRouteActivationV1::Staged
-                    | iroha_data_model::bridge::SccpRouteActivationV1::Retired
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "SCCP route escrow may be refunded only while staged or retired".into(),
-                ));
-            }
-            crate::smartcontracts::isi::asset::isi::execute_sccp_route_owner_refund(
-                state_transaction,
-                authority,
-                &self.route_key,
-                &self.asset_definition_id,
-                self.amount,
-            )
-        }
-    }
     impl Execute for bridge::RecordBridgeReceipt {
         fn execute(
             self,
@@ -24507,7 +24411,7 @@ pub mod isi {
                 crate::smartcontracts::isi::asset::isi::is_sccp_custody_owner(&stx, &ALICE_ID,)
             );
         });
-        world_test!(sccp_route_escrow_accepts_only_owner_funding_and_rejects_ordinary_drain {
+        world_test!(sccp_route_escrow_rejects_ordinary_credit_and_drain {
             blank_test_state_transaction!(state, block, stx);
             let mut registry = test_active_eth_registry();
             registry.lanes[0].routes[0].settlement.custody_owner = ALICE_ID.clone();
@@ -24522,26 +24426,12 @@ pub mod isi {
                 &route_key,
                 &definition,
             );
-            let amount = Quantity::from(7_u64);
-            bridge::FundSccpRouteEscrow {
-                route_key: route_key.clone(),
-                asset_definition_id: definition.clone(),
-                amount: amount.clone(),
-            }
-            .expect_execute(&ALICE_ID, &mut stx, "the exact route owner may fund only the derived escrow");
             let escrow_asset = AssetId::new(definition.clone(), escrow.clone());
-            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), amount);
+            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), Quantity::ZERO);
             if stx.world.account(&BOB_ID).is_err() {
                 Register::account(Account::new(BOB_ID.clone()))
                     .expect_execute(&ALICE_ID, &mut stx, "register non-owner fixture");
             }
-            let non_owner_error = bridge::FundSccpRouteEscrow {
-                route_key: route_key.clone(),
-                asset_definition_id: definition.clone(),
-                amount: Quantity::from(1_u64),
-            }
-            .expect_execute_err(&BOB_ID, &mut stx, "a route manager or unrelated account cannot debit itself into custody");
-            assert_err!(format!("{non_owner_error:?}"), "exact governed asset and custody owner");
             Grant::account_permission(
                 Permission::from(CanTransferAsset {
                     asset: escrow_asset.clone(),
@@ -24552,11 +24442,11 @@ pub mod isi {
             let drain_error = Transfer::asset_quantity(escrow_asset.clone(), 1_u64, BOB_ID.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "ordinary transfer cannot drain SCCP route escrow");
             assert_err!(format!("{drain_error:?}"), "SCCP custody can only be debited");
-            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), amount);
+            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), Quantity::ZERO);
             let mint_error = Mint::asset_quantity(1_u64, escrow_asset.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "ordinary mint cannot credit SCCP route escrow");
             assert_contains!(format!("{mint_error:?}"), "only be credited by a route-bound native SCCP instruction");
-            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), amount);
+            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), Quantity::ZERO);
         });
         world_test!(record_sccp_message_rejects_duplicate_outbound_key {
             sccp_recording_transaction!(state, block, stx);

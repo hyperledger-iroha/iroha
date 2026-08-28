@@ -679,10 +679,15 @@ only defined first-release flag; parsers reject every reserved flag bit. The
 suite-list first-byte MSB uses its separate required-bit encoding described
 above.
 
-The current relay parses the strict constant-rate flag for wire compatibility but does not accept
+The shipping relay currently rejects QUIC endpoint creation before binding
+because the lockfile resolves vulnerable quinn-proto 0.11.15; released 0.11.17
+fixes three unauthenticated remote-memory exhaustion paths. The protocol and
+tests below remain dormant requalification material until that upgrade.
+
+The relay parses the strict constant-rate flag for wire compatibility but does not accept
 strict circuits. Configuration with `constant_rate_capability.enabled=true` and `strict=true`
 fails validation, and live handshake preflight independently rejects any negotiated strict result
-before sending the relay response or registering a circuit. Best-effort mode currently schedules
+before sending the relay response or registering a circuit. Dormant best-effort code schedules
 dummy QUIC DATAGRAM cover only; application payload remains on QUIC streams. This fail-closed rule
 is required because locked Quinn 0.11.9 / quinn-proto 0.11.15 charges payload bytes, but no fixed amount per
 queued DATAGRAM entry, against the receive budget. Strict activation remains gated on per-entry

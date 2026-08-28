@@ -2071,7 +2071,7 @@
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "fn v2_ingress_head_can_drain<R: EffectRuntime>(",
             "executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)",
-            "executor.can_admit_network_message(message)",
+            "executor.runtime.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)",
             "effect-executor preflight must preserve the exact fair-ingress carrier into owned runtime capacity admission",
         ),
         (

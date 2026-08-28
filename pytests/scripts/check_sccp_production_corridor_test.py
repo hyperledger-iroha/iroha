@@ -314,6 +314,7 @@ def test_retired_operator_surface_is_physically_absent() -> None:
         "sccp_release_bundle.py",
         "sccp_release_common.py",
         "sccp_release_fixture.py",
+        "sccp_phase_log_runner.py",
         "sccp_release_readiness_report.py",
         "sccp_verify_release_bundle.py",
     }

@@ -11,7 +11,7 @@ use super::record::{
     DuplexRecordLayer, RECORD_HEADER_LEN, RECORD_TAG_LEN, RecordEndpoint, RecordError, RecordLayer,
     RecordOpener, RecordSealer, RecordStreamContext, RecordStreamKind,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use thiserror::Error;
 
 /// Exact QUIC DATAGRAM payload size advertised by `snnet.constant_rate` v1.
@@ -417,6 +417,8 @@ pub struct FixedRateScheduler {
     queues: [VecDeque<MuxFrame>; 3],
     queue_capacity_per_class: usize,
     lifecycle: MuxLifecycle,
+    reserved_lanes: HashSet<LaneKey>,
+    maximum_lanes: usize,
     deficit: [i32; 3],
 }
 
@@ -428,6 +430,8 @@ impl FixedRateScheduler {
             queues: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
             queue_capacity_per_class,
             lifecycle: MuxLifecycle::new(maximum_lanes),
+            reserved_lanes: HashSet::new(),
+            maximum_lanes,
             deficit: [0; 3],
         }
     }
@@ -451,7 +455,31 @@ impl FixedRateScheduler {
         self.queues[index]
             .try_reserve(1)
             .map_err(|_| ConstantRateError::QueueAllocation)?;
+        let key = LaneKey {
+            channel: frame.channel,
+            lane_id: frame.lane_id,
+        };
+        if frame.flags.is_open() {
+            if self.reserved_lanes.contains(&key) {
+                return Err(ConstantRateError::DuplicateOpen {
+                    channel: frame.channel,
+                    lane_id: frame.lane_id,
+                });
+            }
+            if self.reserved_lanes.len() >= self.maximum_lanes {
+                return Err(ConstantRateError::LaneCapacity {
+                    maximum: self.maximum_lanes,
+                });
+            }
+            self.reserved_lanes
+                .try_reserve(1)
+                .map_err(|_| ConstantRateError::LaneAllocation)?;
+        }
         self.lifecycle.accept(&frame)?;
+        if frame.flags.is_open() {
+            let inserted = self.reserved_lanes.insert(key);
+            debug_assert!(inserted, "checked scheduler lane reservation uniqueness");
+        }
         self.queues[index].push_back(frame);
         Ok(())
     }
@@ -484,6 +512,16 @@ impl FixedRateScheduler {
         let frame = self.queues[index]
             .pop_front()
             .expect("selected constant-rate queue is non-empty");
+        if frame.flags.is_fin() || frame.flags.is_reset() {
+            let removed = self.reserved_lanes.remove(&LaneKey {
+                channel: frame.channel,
+                lane_id: frame.lane_id,
+            });
+            debug_assert!(
+                removed,
+                "terminal frame must release a reserved scheduler lane"
+            );
+        }
         if self.queues[index].is_empty() {
             self.deficit[index] = 0;
         }
@@ -1108,6 +1146,54 @@ mod tests {
         assert_eq!(scheduler.next_frame().payload, b"one");
         assert_eq!(scheduler.next_frame().payload, b"two");
         assert_eq!(scheduler.next_frame(), MuxFrame::cover());
+    }
+
+    #[test]
+    fn scheduler_lane_reuse_waits_until_the_terminal_frame_is_selected() {
+        let mut scheduler = FixedRateScheduler::new(4, 1);
+        scheduler
+            .enqueue(frame(
+                MuxChannel::Application,
+                CellClass::Bulk,
+                19,
+                MuxFlags::OPEN,
+                b"first",
+            ))
+            .expect("open first lane generation");
+        scheduler
+            .enqueue(frame(
+                MuxChannel::Application,
+                CellClass::Bulk,
+                19,
+                MuxFlags::FIN,
+                b"last",
+            ))
+            .expect("queue terminal frame");
+
+        let replacement = || {
+            frame(
+                MuxChannel::Application,
+                CellClass::Control,
+                19,
+                MuxFlags::OPEN | MuxFlags::FIN,
+                b"replacement",
+            )
+        };
+        assert!(matches!(
+            scheduler.enqueue(replacement()),
+            Err(ConstantRateError::DuplicateOpen { lane_id: 19, .. })
+        ));
+        assert_eq!(scheduler.next_frame().payload, b"first");
+        assert!(matches!(
+            scheduler.enqueue(replacement()),
+            Err(ConstantRateError::DuplicateOpen { lane_id: 19, .. })
+        ));
+        assert_eq!(scheduler.next_frame().payload, b"last");
+
+        scheduler
+            .enqueue(replacement())
+            .expect("reuse is safe after the terminal frame is selected");
+        assert_eq!(scheduler.next_frame().payload, b"replacement");
     }
 
     #[test]

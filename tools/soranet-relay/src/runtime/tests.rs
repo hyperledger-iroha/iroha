@@ -2693,6 +2693,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn strict_receiver_fails_when_the_next_tick_never_arrives() {
+        assert_eq!(
+            strict_constant_rate_receive_deadline(Duration::from_millis(5)),
+            Duration::from_millis(40)
+        );
+        let (server, client, server_connection, client_connection) = strict_test_quic_pair().await;
+        let session_key = vec![0x71; 32];
+        let relay_records =
+            RecordLayer::new(SessionKey::new(session_key.clone()), RecordEndpoint::Relay)
+                .expect("relay record layer");
+        let client_records = RecordLayer::new(SessionKey::new(session_key), RecordEndpoint::Client)
+            .expect("client record layer");
+        let (_, relay_opener) = constant_rate_codec(&relay_records).expect("relay strict codec");
+        let (mut client_sealer, _) =
+            constant_rate_codec(&client_records).expect("client strict codec");
+        let first = MuxFrame::new(
+            MuxChannel::Application,
+            AuthenticatedCellClass::Bulk,
+            77,
+            MuxFlags::new(MuxFlags::OPEN | MuxFlags::FIN).expect("flags"),
+            b"one tick".to_vec(),
+        )
+        .expect("first frame");
+        let encoded = client_sealer.seal(&first).expect("seal first").encode();
+        client_connection
+            .send_datagram(encoded.to_vec().into())
+            .expect("send first tick");
+
+        let (inbound_tx, mut inbound) = mpsc::channel(1);
+        let receive_deadline = Duration::from_millis(40);
+        let error = timeout(
+            Duration::from_secs(2),
+            run_strict_constant_rate_receiver(
+                server_connection,
+                relay_opener,
+                inbound_tx,
+                1,
+                receive_deadline,
+            ),
+        )
+        .await
+        .expect("receiver deadline test timed out")
+        .expect_err("silence after the first cell must fail closed");
+        assert!(matches!(
+            error,
+            StrictConstantRateRuntimeError::ReceiveTickMissing { deadline }
+                if deadline == receive_deadline
+        ));
+        assert_eq!(
+            inbound.try_recv().expect("first cell reached the mux"),
+            first
+        );
+
+        client.close(0u32.into(), b"test complete");
+        server.close(0u32.into(), b"test complete");
+        tokio::join!(server.wait_idle(), client.wait_idle());
+    }
+
+    #[tokio::test]
     async fn strict_datagram_mux_carries_payload_cover_and_fails_closed_on_loss() {
         let (server, client, server_connection, client_connection) = strict_test_quic_pair().await;
         let session_key = vec![0x5c; 32];
@@ -4450,5 +4509,17 @@ mod tests {
             !ndjson.contains("\"detail\""),
             "proxy policy NDJSON must not carry free-form detail: {ndjson}"
         );
+    }
+
+    #[test]
+    fn production_relay_rejects_vulnerable_quinn_dependency() {
+        let error = validate_shipping_quinn_dependency()
+            .expect_err("locked vulnerable Quinn must remain fail-closed");
+        let RelayError::Quic(reason) = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert!(reason.contains("quinn-proto 0.11.15"));
+        assert!(reason.contains("remote memory exhaustion"));
+        assert!(reason.contains("0.11.17"));
     }
 }

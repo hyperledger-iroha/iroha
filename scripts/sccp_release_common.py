@@ -370,16 +370,88 @@ _HEX_RE = re.compile(r"^[0-9a-f]+$")
 _SENSITIVE_RE = re.compile(
     r"(?:"
     r"private[\s._-]*key|secret[\s._-]*key|seed[\s._-]*phrase|"
-    r"recovery[\s._-]*phrase|mnemonic|bearer[\s._-]+[a-z0-9]|"
-    r"authorization[\s._-]*(?::|=)|password[\s._-]*(?::|=)|"
-    r"client[\s._-]*secret|(?:api|access|refresh)[\s._-]*(?:key|token)[\s._-]*(?::|=)"
+    r"recovery[\s._-]*phrase|mnemonic|client[\s._-]*secret|"
+    r"bearer[\s._-]+[^\s,;]+|"
+    r"(?:authorization|proxy[\s._-]*authorization|password|passphrase)"
+    r"[\s\"'._-]*(?::|=)|"
+    r"(?:api|access|refresh|session|auth)[\s._-]*(?:key|token)"
+    r"[\s\"'._-]*(?::|=)"
     r")",
     re.IGNORECASE,
 )
-_BASE64_TOKEN_RE = re.compile(
-    rb"(?<![A-Za-z0-9+/=])(?:[A-Za-z0-9+/]{4}){4,}"
-    rb"(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?(?![A-Za-z0-9+/=])"
+_CREDENTIAL_ASSIGNMENT_RE = re.compile(
+    r"(?<![a-z0-9])(?:"
+    r"password|passphrase|private[\s._-]*key|secret[\s._-]*key|"
+    r"client[\s._-]*secret|api[\s._-]*key|access[\s._-]*key|"
+    r"(?:access|refresh|session|auth|bearer)[\s._-]*token|token|secret"
+    r")(?![a-z0-9])[\s\"']*(?::|=)[\s\"']*\S",
+    re.IGNORECASE,
 )
+_CREDENTIAL_JSON_KEYS = frozenset(
+    {
+        "accesstoken",
+        "accesskey",
+        "apikey",
+        "authorization",
+        "authtoken",
+        "bearertoken",
+        "clientsecret",
+        "cookie",
+        "credential",
+        "credentials",
+        "mnemonic",
+        "passphrase",
+        "password",
+        "privatekey",
+        "proxyauthorization",
+        "recoveryphrase",
+        "refreshtoken",
+        "secret",
+        "secretkey",
+        "seedphrase",
+        "sessiontoken",
+        "token",
+    }
+)
+_PEM_PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN[ -]+(?:RSA[ -]+|EC[ -]+|DSA[ -]+|OPENSSH[ -]+)?PRIVATE[ -]+KEY-----",
+    re.IGNORECASE,
+)
+_CREDENTIAL_HEADER_RE = re.compile(
+    r"(?im)^(?:authorization|proxy-authorization|x-api-key|x-auth-token|"
+    r"x-iroha-signature|cookie|set-cookie)\s*:\s*\S"
+)
+_CONCRETE_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"(?:AKIA|ASIA)[A-Z0-9]{16}|"
+    r"github_pat_[A-Za-z0-9_]{20,}|"
+    r"gh[pousr]_[A-Za-z0-9]{20,}|"
+    r"xox[baprs]-[A-Za-z0-9-]{10,}|"
+    r"AIza[0-9A-Za-z_-]{30,}|"
+    r"sk_live_[0-9A-Za-z]{16,}|"
+    r"npm_[0-9A-Za-z]{20,}|"
+    r"pypi-[0-9A-Za-z_-]{20,}"
+    r")(?![A-Za-z0-9])"
+)
+_URL_USERINFO_RE = re.compile(r"(?i)\bhttps?://[^/@\s:]+:[^/@\s]+@")
+_JSON_KEY_RE = re.compile(r'"((?:\\.|[^"\\])*)"\s*:')
+_JSON_ESCAPE_RE = re.compile(r'\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})')
+_BASE64_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9+/_=-])([A-Za-z0-9+/_-]{8,}={0,2})"
+    r"(?![A-Za-z0-9+/_=-])"
+)
+_JWT_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{2,})\."
+    r"([A-Za-z0-9_-]{2,})(?:\.([A-Za-z0-9_-]{2,}))?"
+    r"(?![A-Za-z0-9_-])"
+)
+_HEX_TOKEN_RE = re.compile(r"(?<![0-9A-Fa-f])([0-9A-Fa-f]{12,})(?![0-9A-Fa-f])")
+_SECRET_SCAN_MAX_DEPTH = 8
+_SECRET_SCAN_MAX_VARIANTS = 128
+_SECRET_SCAN_MAX_ADDITIONAL_BYTES = 64 * 1024 * 1024
+_SECRET_SCAN_ABSOLUTE_DECODED_BYTES = 1024 * 1024 * 1024
+_SECRET_SCAN_MAX_TOKEN_CHARS = 2 * 1024 * 1024
+_SECRET_SCAN_MAX_DECODED_TOKENS = 32_768
 _SAFE_VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){2}(?:[-+][A-Za-z0-9.-]+)?$")
 _UNAVAILABLE_REASON_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -565,6 +637,10 @@ def public_error(error: BaseException) -> str:
     """Return a bounded error message with common secret shapes redacted."""
 
     text = unicodedata.normalize("NFKC", str(error))
+    try:
+        reject_secret_material(text.encode("utf-8", "replace"), label="public error")
+    except SccpReleaseError:
+        return "SCCP release error contained redacted credential material"
     text = re.sub(r"(?i)(?:https?://)[^/@\s]+@", "https://<redacted>@", text)
     text = _SENSITIVE_RE.sub("<redacted>", text)
     # Errors are embedded after a fixed CLI prefix. Keep them on one physical
@@ -671,6 +747,7 @@ def require_canonical_json_file(data: bytes, value: Any, *, label: str) -> None:
 def _safe_relative_parts(value: Any, *, label: str) -> tuple[str, ...]:
     if type(value) is not str or not value or len(value.encode("utf-8", "strict")) > 240:
         _fail(f"{label} must be a bounded relative POSIX path")
+    reject_secret_material(value.encode("utf-8"), label="public artifact path")
     if value != value.strip() or "\\" in value or any(ord(ch) < 0x20 for ch in value):
         _fail(f"{label} must be a canonical relative POSIX path")
     path = PurePosixPath(value)
@@ -1121,43 +1198,204 @@ def _canonical_base64(value: Any, *, label: str, decoded_length: int) -> bytes:
     return decoded
 
 
+def _secret_scan_failure(*, encoded: bool = False) -> None:
+    qualifier = "encoded " if encoded else ""
+    _fail(f"SCCP public material contains {qualifier}forbidden credential material")
+
+
+def _secret_scan_limit() -> None:
+    _fail("SCCP public material exceeds the bounded secret-scan decoding limits")
+
+
+def _without_format_characters(value: str) -> str:
+    return "".join(ch for ch in value if unicodedata.category(ch) != "Cf")
+
+
+def _decode_json_escapes(value: str) -> str:
+    def decode(match: re.Match[str]) -> str:
+        try:
+            return json.loads('"' + match.group(0) + '"')
+        except (ValueError, TypeError):
+            return match.group(0)
+
+    return _JSON_ESCAPE_RE.sub(decode, value)
+
+
+def _canonical_credential_key(value: str) -> str:
+    normalized = _without_format_characters(unicodedata.normalize("NFKC", value))
+    return "".join(ch for ch in normalized.casefold() if ch.isalnum())
+
+
+def _contains_credential_json_key(value: str) -> bool:
+    for match in _JSON_KEY_RE.finditer(value):
+        raw = match.group(1)
+        try:
+            key = json.loads('"' + raw + '"')
+        except (ValueError, TypeError):
+            key = _decode_json_escapes(raw)
+        if type(key) is str and _canonical_credential_key(key) in _CREDENTIAL_JSON_KEYS:
+            return True
+    return False
+
+
+def _contains_secret_marker(value: str) -> bool:
+    return bool(
+        _SENSITIVE_RE.search(value)
+        or _CREDENTIAL_ASSIGNMENT_RE.search(value)
+        or _contains_credential_json_key(value)
+        or _PEM_PRIVATE_KEY_RE.search(value)
+        or _CREDENTIAL_HEADER_RE.search(value)
+        or _CONCRETE_TOKEN_RE.search(value)
+        or _URL_USERINFO_RE.search(value)
+    )
+
+
+def _printable_decoded_text(value: bytes) -> str | None:
+    try:
+        text = value.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        return None
+    if not text or any(
+        not (ch.isprintable() or ch in "\r\n\t")
+        for ch in text
+    ):
+        return None
+    return text
+
+
+def _decode_base64_token(token: str, *, urlsafe: bool) -> str | None:
+    if len(token) > _SECRET_SCAN_MAX_TOKEN_CHARS:
+        _secret_scan_limit()
+    if len(token) % 4 == 1:
+        return None
+    unpadded = token.rstrip("=")
+    if "=" in unpadded:
+        return None
+    padded = unpadded + "=" * (-len(unpadded) % 4)
+    try:
+        decoded = base64.b64decode(
+            padded.encode("ascii"),
+            altchars=b"-_" if urlsafe else None,
+            validate=True,
+        )
+    except (binascii.Error, ValueError):
+        return None
+    return _printable_decoded_text(decoded)
+
+
+def _decoded_token_variants(value: str) -> Iterable[str]:
+    decoded_tokens = 0
+    for match in _JWT_TOKEN_RE.finditer(value):
+        for token in (part for part in match.groups() if part is not None):
+            decoded = _decode_base64_token(token, urlsafe=True)
+            if decoded is not None:
+                decoded_tokens += 1
+                if decoded_tokens > _SECRET_SCAN_MAX_DECODED_TOKENS:
+                    _secret_scan_limit()
+                yield decoded
+    for match in _BASE64_TOKEN_RE.finditer(value):
+        token = match.group(1)
+        urlsafe = "-" in token or "_" in token
+        decoded = _decode_base64_token(token, urlsafe=urlsafe)
+        if decoded is not None:
+            decoded_tokens += 1
+            if decoded_tokens > _SECRET_SCAN_MAX_DECODED_TOKENS:
+                _secret_scan_limit()
+            yield decoded
+    for match in _HEX_TOKEN_RE.finditer(value):
+        token = match.group(1)
+        if len(token) > _SECRET_SCAN_MAX_TOKEN_CHARS:
+            _secret_scan_limit()
+        if len(token) % 2:
+            continue
+        decoded = _printable_decoded_text(bytes.fromhex(token))
+        if decoded is not None:
+            decoded_tokens += 1
+            if decoded_tokens > _SECRET_SCAN_MAX_DECODED_TOKENS:
+                _secret_scan_limit()
+            yield decoded
+
+
 def _secret_scan_variants(data: bytes, *, label: str) -> Iterable[str]:
+    del label  # Diagnostics intentionally never interpolate untrusted identifiers.
     text = data.decode("utf-8", "ignore")
-    variants: set[str] = set()
     pending = [(text, 0)]
+    seen: set[bytes] = set()
+    decoded_bytes = 0
+    decoded_byte_limit = min(
+        _SECRET_SCAN_ABSOLUTE_DECODED_BYTES,
+        max(
+            len(data) + _SECRET_SCAN_MAX_ADDITIONAL_BYTES,
+            len(data) * 4,
+        ),
+    )
     while pending:
         current, depth = pending.pop()
-        if current in variants:
+        encoded = current.encode("utf-8", "surrogatepass")
+        identity = hashlib.sha256(encoded).digest()
+        if identity in seen:
             continue
-        variants.add(current)
-        if len(variants) > 32:
-            _fail(f"{label} uses excessively nested public encodings")
-        transformed = {
-            urllib.parse.unquote(current),
-            html.unescape(current),
-            unicodedata.normalize("NFKC", current),
-        }
+        seen.add(identity)
+        decoded_bytes += len(encoded)
+        if (
+            len(seen) > _SECRET_SCAN_MAX_VARIANTS
+            or decoded_bytes > decoded_byte_limit
+        ):
+            _secret_scan_limit()
+        yield current
+
+        transformed: set[str] = set()
+        if "%" in current:
+            transformed.add(urllib.parse.unquote(current))
+            transformed.add(urllib.parse.unquote_plus(current))
+        if "&" in current and ";" in current:
+            transformed.add(html.unescape(current))
+        if "\\" in current:
+            transformed.add(_decode_json_escapes(current))
+            try:
+                decoded_json = json.loads(current)
+                _json_shape(decoded_json)
+                transformed.add(
+                    json.dumps(
+                        decoded_json,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                )
+            except (SccpReleaseError, TypeError, ValueError, RecursionError):
+                pass
+        if any(ord(ch) > 0x7F for ch in current):
+            transformed.add(unicodedata.normalize("NFKC", current))
+            transformed.add(_without_format_characters(current))
+        transformed.update(_decoded_token_variants(current))
         transformed.discard(current)
-        if transformed and depth >= 8:
-            _fail(f"{label} uses excessively nested public encodings")
-        pending.extend((item, depth + 1) for item in transformed if item not in variants)
-    return variants
+        transformed.discard("")
+        unseen = [
+            item
+            for item in transformed
+            if hashlib.sha256(item.encode("utf-8", "surrogatepass")).digest()
+            not in seen
+        ]
+        if unseen and depth >= _SECRET_SCAN_MAX_DEPTH:
+            _secret_scan_limit()
+        pending.extend((item, depth + 1) for item in unseen)
 
 
 def reject_secret_material(data: bytes, *, label: str) -> None:
-    """Reject public artifacts that contain common credential material markers."""
+    """Reject bounded recursively encoded concrete credential material.
 
+    The scan deliberately has no entropy rule: public hashes, public keys,
+    signatures, and proofs remain admissible unless their decoded text contains
+    a concrete credential key, assignment, header, PEM marker, or token prefix.
+    """
+
+    first = True
     for variant in _secret_scan_variants(data, label=label):
-        if _SENSITIVE_RE.search(variant):
-            _fail(f"{label} contains forbidden credential material")
-    for token in _BASE64_TOKEN_RE.findall(data):
-        try:
-            decoded = base64.b64decode(token, validate=True)
-        except (binascii.Error, ValueError):
-            continue
-        for variant in _secret_scan_variants(decoded, label=label):
-            if _SENSITIVE_RE.search(variant):
-                _fail(f"{label} contains encoded forbidden credential material")
+        if _contains_secret_marker(variant):
+            _secret_scan_failure(encoded=not first)
+        first = False
 
 
 def validate_trust_policy_bytes(
@@ -1170,6 +1408,7 @@ def validate_trust_policy_bytes(
     test policy schema.
     """
 
+    reject_secret_material(data, label="release trust policy")
     value = parse_json_bytes(data, label="release trust policy", maximum=MAX_TRUST_POLICY_BYTES)
     require_canonical_json_file(data, value, label="release trust policy")
     policy = _require_object(
@@ -1504,7 +1743,6 @@ def validate_trust_policy_bytes(
                 circuit_policy_signing_payload(proof, report_hash),
             ):
                 _fail("proof-system audit has an invalid detached signature")
-    reject_secret_material(data, label="release trust policy")
     return policy, data
 
 
@@ -2233,10 +2471,10 @@ def validate_test_fixture_evidence_signing_candidate(
         label="unsigned release evidence",
         keys=_UNSIGNED_EVIDENCE_KEYS,
     )
-    _validate_evidence_body(evidence, trust_policy)
     reject_secret_material(
         canonical_json_bytes(evidence), label="unsigned release evidence"
     )
+    _validate_evidence_body(evidence, trust_policy)
     return evidence
 
 
@@ -2250,9 +2488,9 @@ def validate_evidence(
         label="release evidence",
         keys=(*_UNSIGNED_EVIDENCE_KEYS, "provenance"),
     )
+    reject_secret_material(canonical_json_bytes(evidence), label="release evidence")
     _validate_evidence_body(evidence, trust_policy)
     _validate_provenance(evidence["provenance"], evidence, trust_policy)
-    reject_secret_material(canonical_json_bytes(evidence), label="release evidence")
     return evidence
 
 
@@ -2525,6 +2763,7 @@ def derive_validator_identity(
         _fail("canonical Rust validator identity wrote unexpected stderr")
     if not stdout.endswith(b"\n") or stdout.count(b"\n") != 1:
         _fail("canonical Rust validator identity must emit exactly one JSON line")
+    reject_secret_material(stdout, label="Rust validator identity")
     value = parse_json_bytes(
         stdout[:-1],
         label="Rust validator identity",
@@ -2592,6 +2831,7 @@ def verify_rust_release_signatures(
         _fail(f"canonical Rust release signature validation failed: {detail}")
     if stderr or not stdout.endswith(b"\n") or stdout.count(b"\n") != 1:
         _fail("canonical Rust release signature validator emitted invalid output")
+    reject_secret_material(stdout, label="Rust release signature receipt")
     value = parse_json_bytes(
         stdout[:-1],
         label="Rust release signature receipt",
@@ -2694,6 +2934,7 @@ def verify_rust_semantic_proofs(
             _fail(f"canonical Rust semantic proof validation failed: {detail}")
         if stderr or not stdout.endswith(b"\n") or stdout.count(b"\n") != 1:
             _fail("canonical Rust semantic proof validator emitted invalid output")
+        reject_secret_material(stdout, label="Rust semantic proof receipt")
         value = parse_json_bytes(
             stdout[:-1],
             label="Rust semantic proof receipt",
@@ -3021,6 +3262,7 @@ def verify_rust_lane_evidence(
             _fail("canonical Rust lane validator wrote unexpected stderr")
         if not stdout.endswith(b"\n") or stdout.count(b"\n") != 1:
             _fail("canonical Rust lane validator must emit exactly one JSON line")
+        reject_secret_material(stdout, label="Rust lane validation receipt")
         value = parse_json_bytes(
             stdout[:-1],
             label="Rust lane validation receipt",
@@ -3166,6 +3408,7 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
             "bundle_root_hash_hex",
         ),
     )
+    reject_secret_material(canonical_json_bytes(index), label="bundle index")
     if index["schema"] != BUNDLE_SCHEMA:
         _fail(f"bundle index schema must be exactly {BUNDLE_SCHEMA}")
     _require_id(index["release_id"], label="bundle release_id")

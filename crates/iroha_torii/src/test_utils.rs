@@ -573,7 +573,9 @@ pub fn contract_view_request_json(
 /// Build a minimal actual configuration root suitable for constructing Kiso and Torii in tests.
 ///
 /// The configuration mirrors the helpers used across integration tests and sets required
-/// fields for `Genesis`, `Torii`, and `Sumeragi` to current structures.
+/// fields for `Genesis`, `Torii`, and `Sumeragi` to current structures. Durable paths initialized
+/// by the minimal Torii router are rooted under the active test data directory so construction
+/// cannot write to the process current directory.
 pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     use iroha_config::{
         base::WithOrigin,
@@ -588,8 +590,18 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     use iroha_data_model::peer::Peer;
     use iroha_logger::Level;
     use iroha_primitives::addr::socket_addr;
+    let torii_data_dir = crate::data_dir::base_dir();
+    let mut da_ingest = A::DaIngest::default();
+    da_ingest.replay_cache_store_dir = torii_data_dir.join("da_replay");
+    da_ingest.manifest_store_dir = torii_data_dir.join("da_manifests");
     let mut sorafs_storage = A::SorafsStorage::default();
-    sorafs_storage.data_dir = crate::data_dir::base_dir().join("sorafs");
+    sorafs_storage.data_dir = torii_data_dir.join("sorafs");
+    let mut sorafs_por = A::SorafsPor::default();
+    let sorafs_por_state_dir = sorafs_storage.data_dir.join("por");
+    sorafs_por.state_dir = sorafs_por_state_dir.clone();
+    sorafs_por.drand.state_path =
+        sorafs_por_state_dir.join(defaults::sorafs::por::DRAND_STATE_FILE);
+    sorafs_por.vrf_state_path = sorafs_por_state_dir.join(defaults::sorafs::por::VRF_STATE_FILE);
     A::Root {
         common: A::Common {
             chain: ChainId::from("test-chain"),
@@ -759,7 +771,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         torii: A::Torii {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             max_content_len: (1_048_576u64).into(),
-            data_dir: defaults::torii::data_dir(),
+            data_dir: torii_data_dir,
             receipt_signer: None,
             transport: A::ToriiTransport::default(),
             mcp: A::ToriiMcp::default(),
@@ -946,7 +958,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zk_ivm_prove_job_max_retained_bytes_per_owner:
                 defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER,
             transaction_ingress: A::TransactionIngress::default(),
-            da_ingest: A::DaIngest::default(),
+            da_ingest,
             connect: A::Connect {
                 enabled: false,
                 ws_max_sessions: defaults::connect::WS_MAX_SESSIONS,
@@ -992,7 +1004,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 require_manifest_envelope: false,
                 ..Default::default()
             },
-            sorafs_por: Default::default(),
+            sorafs_por,
             sorafs_appeal_finance_settlement: Default::default(),
             account_onboarding: None,
         },
@@ -1487,8 +1499,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
 mod tests {
     use super::checked_random_keypair;
     use super::{
-        apply_queued_in_one_block, contract_code_hash_hex, execution_context_for_routing_plan,
-        minimal_ivm_program,
+        TestDataDirGuard, apply_queued_in_one_block, contract_code_hash_hex,
+        execution_context_for_routing_plan, minimal_ivm_program,
     };
     use iroha_core::{
         kura::Kura,
@@ -1507,6 +1519,33 @@ mod tests {
         transaction::{TransactionBuilder, TransactionEntrypoint},
     };
     use std::{borrow::Cow, sync::Arc};
+    #[test]
+    fn minimal_root_cfg_keeps_durable_torii_paths_in_the_test_data_dir() {
+        let data_dir = TestDataDirGuard::new();
+        let cfg = super::mk_minimal_root_cfg();
+        let sorafs_dir = data_dir.path().join("sorafs");
+        let por_dir = sorafs_dir.join("por");
+
+        assert_eq!(cfg.torii.data_dir, data_dir.path());
+        assert_eq!(
+            cfg.torii.da_ingest.replay_cache_store_dir,
+            data_dir.path().join("da_replay")
+        );
+        assert_eq!(
+            cfg.torii.da_ingest.manifest_store_dir,
+            data_dir.path().join("da_manifests")
+        );
+        assert_eq!(cfg.torii.sorafs_storage.data_dir, sorafs_dir);
+        assert_eq!(cfg.torii.sorafs_por.state_dir, por_dir);
+        assert_eq!(
+            cfg.torii.sorafs_por.drand.state_path,
+            por_dir.join(iroha_config::parameters::defaults::sorafs::por::DRAND_STATE_FILE)
+        );
+        assert_eq!(
+            cfg.torii.sorafs_por.vrf_state_path,
+            por_dir.join(iroha_config::parameters::defaults::sorafs::por::VRF_STATE_FILE)
+        );
+    }
     #[test]
     fn contract_code_hash_hex_matches_domain_separated_full_artifact_hash() {
         let code = minimal_ivm_program(1);

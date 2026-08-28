@@ -241,7 +241,7 @@ p2p_scion_outbound_total 0
   - Proxy exemptions and outbound DNS policy suffixes match only complete DNS labels, so `example.com` never matches `notexample.com`. IPv4-mapped IPv6 literals and mapped-specific (`/96` or narrower) CIDRs are canonicalized to IPv4 for both dial admission and exact-IP proxy exemptions; deny rules additionally retain the original IPv6 match so representation changes cannot weaken them.
   - The outbound policy checks the logical name before lookup and every concrete address returned by the one lookup used for the dial. One lookup may retain at most 64 raw answers; a 65th answer fails the attempt before dialing. TCP, QUIC, SCION-preferred QUIC, SOCKS5, and HTTP(S) CONNECT share the same fail-closed policy.
   - When a CIDR policy applies to a proxied hostname, the node resolves it locally before opening the proxy connection and tunnels to an admitted numeric endpoint. This prevents remote proxy DNS from bypassing the CIDR policy and avoids a second resolution window.
-  - Malformed CIDRs and DNS suffixes abort startup before listeners are bound.
+  - Malformed proxy hosts, CIDRs, and DNS suffixes abort startup before listeners are bound.
   - Disabling `p2p_proxy_tls_verify` for an HTTPS proxy is rejected before connecting.
   - Proxies apply only to the mandatory TLS-over-TCP dial. QUIC (UDP) bypasses the proxy; set `quic_enabled=false` and `p2p_proxy_required=true` (with no `p2p_no_proxy` exemptions) if you must force all outbound P2P traffic through a proxy.
   - If no proxy is configured, connections go direct.
@@ -560,32 +560,56 @@ admission API.
 ### Optional QUIC Transport
 
 - Build-time: enable `iroha_p2p/quic` to include QUIC support.
-- Runtime: set `[network].quic_enabled = true` to make the QUIC listener and dialer mandatory startup components. A runtime QUIC connection failure may fall back only to authenticated TLS.
-- Current status: inbound QUIC accepts authenticated bidirectional streams. Outbound dialing can attempt QUIC to hostnames with mandatory TLS as the only fallback.
-- Authentication: nodes use self-signed transport certificates. Rustls verifies
+- Current shipping status: `[network].quic_enabled = true` is rejected before
+  any UDP socket is created. The lockfile resolves quinn-proto 0.11.15, while
+  released 0.11.17 fixes unauthenticated remote-memory exhaustion in stream
+  reassembly and connection-ID retirement as well as DATAGRAM accounting.
+  Mandatory authenticated TLS-over-TCP remains the active P2P transport.
+- The QUIC implementation and its focused tests remain as dormant
+  requalification material. After the lockfile reaches quinn-proto 0.11.17 or
+  later, rerun the abuse and interoperability suites before allowing
+  `[network].quic_enabled = true` again.
+- Dormant QUIC authentication: nodes use self-signed transport certificates. Rustls verifies
   the TLS `CertificateVerify` proof, then the Iroha identity handshake signs the
   certificate fingerprint together with the active SoraNet session and V5
   transport-delegation binding. A certificate issued by an untrusted root is
   therefore acceptable, but replaying another node's certificate without its
   private key is not.
-- Best-effort datagrams: when `[network].quic_datagrams_enabled = true` (default), small best-effort topics (`TxGossip`, `PeerGossip`, `TrustGossip`, `Health`) may be sent over QUIC DATAGRAM instead of streams. This avoids retransmission/head-of-line blocking for "green" traffic and is safe to drop. Reliable topics remain stream-only.
-  - `[network].quic_datagram_max_payload_bytes` (default: 1200) caps the QUIC DATAGRAM payload size conservatively to avoid fragmentation.
-  - `[network].quic_datagram_receive_buffer_bytes` / `[network].quic_datagram_send_buffer_bytes` control the QUIC DATAGRAM buffers **per active QUIC connection** (default: 1 MiB each; both must be non-zero to enable the extension). Their process-level memory term is `max_total_connections × (receive + send)`, in addition to the bounded actor, connected-stream, deferred-frame, and subscriber owners; they are not aggregate endpoint-wide caps.
-  - Production P2P and the feature-gated streaming helper drain received DATAGRAMs eagerly before application authentication and close on empty or oversized frames. They compact accepted payloads into exact-size allocations before retaining them, so a tiny slice cannot pin a packet-sized backing buffer. Production P2P admits authenticated frames through a 256-entry queue charged to the existing process-wide low-priority byte budget. Locked `quinn-proto` 0.11.15 still charges its private receive queue by payload bytes only, so zero-length entries before an eager pump's first poll lack a formal bound. Quinn main/0.12 adds per-entry `Datagram` overhead to its memory accounting and an empty-frame flood regression; upgrading or backporting that change remains tracked in `roadmap.md`.
+- Best-effort datagrams are independently fail-closed. The default is
+  `[network].quic_datagrams_enabled = false`, and startup rejects an explicit
+  `true` before binding sockets. QUIC endpoints advertise no DATAGRAM receive
+  support and retain no DATAGRAM send queue; `TxGossip`, `PeerGossip`,
+  `TrustGossip`, and `Health` therefore use their reliable-stream fallback.
+  - The payload and per-connection buffer knobs remain in the schema for
+    requalification but cannot currently enable the extension.
+  - Locked `quinn-proto` 0.11.15 charges its private receive queue by payload
+    bytes only, so zero-length entries can consume no configured budget before
+    application polling. Released quinn-proto 0.11.17 fixes this with
+    `DatagramBuffer::memory_used()` (payload plus fixed `Datagram` overhead).
+    Upgrade the lockfile to released quinn-proto 0.11.17 or later before
+    re-enabling DATAGRAM.
+  - The dormant P2P ingress still has eager pre-authentication draining,
+    exact-size payload compaction, a serialized authentication boundary, and a
+    256-entry handoff charged to the process-wide low-priority byte budget.
+    These defenses and focused tests remain for dependency-upgrade
+    requalification; they are not presented as a bound on Quinn's vulnerable
+    pre-poll queue.
 
 ### Mandatory TLS-over-TCP
 
 - TLS-over-TCP is compiled unconditionally; there is no feature or supported build profile that removes it.
 - `[network].address` is the TLS 1.3 listener and outbound TCP dials always upgrade to TLS 1.3 with the exact `iroha-p2p/1` ALPN. There is no plaintext listener, retry, or runtime downgrade knob.
 - Identity remains authenticated by the canonical V5 application handshake, which binds the certificate fingerprint and configured `NetworkId`; rustls separately verifies possession of the self-signed certificate key.
-- Requesting QUIC without compiled support, or failing to initialize its dialer or listener, aborts startup. A runtime QUIC connection failure may fall back only to this authenticated TLS path.
+- Requesting QUIC currently aborts startup because of the locked dependency;
+  requesting it without compiled support also remains an error. There is no
+  silent downgrade from an explicitly requested transport.
 
 ### No WebSocket peer transport
 
 The first release exposes no Torii WebSocket peer route, build feature, dialer,
-or external stream adapter. Peer traffic enters only through the process-owned
-TLS 1.3 or QUIC listeners that provide the exact certificate fingerprint used
-by V5 channel-binding admission.
+or external stream adapter. Shipping peer traffic enters through the
+process-owned TLS 1.3 listener; dormant QUIC uses the same exact certificate
+fingerprint in V5 channel-binding admission.
 
 ### First-release SoraNet P2P authentication (V5)
 
@@ -778,4 +802,6 @@ Recommended:
 
 - TLS: TLS 1.3 and the exact raw-P2P ALPN are unconditional.
 - QUIC: configure idle timeout via `[network].quic_max_idle_timeout_ms`.
-- QUIC DATAGRAM (best-effort): tune via `[network].quic_datagrams_enabled`, `[network].quic_datagram_max_payload_bytes`, `[network].quic_datagram_receive_buffer_bytes`, and `[network].quic_datagram_send_buffer_bytes`.
+- QUIC DATAGRAM (best-effort): unavailable in the shipping profile until
+  quinn-proto 0.11.17 or later is locked and requalified. Leave
+  `[network].quic_datagrams_enabled = false`; an explicit `true` aborts startup.

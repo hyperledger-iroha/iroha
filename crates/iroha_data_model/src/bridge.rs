@@ -9,7 +9,9 @@ use std::{string::String, vec::Vec};
 use thiserror::Error;
 /// Versioned SCCP network, lane, and source-identity wire types.
 pub mod sccp;
+mod sccp_liability;
 mod sccp_registry;
+mod sccp_replay;
 pub use sccp::{
     SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1, SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
     SCCP_SOLANA_TESTNET_GENESIS_HASH_V1, SCCP_TON_BASECHAIN_WORKCHAIN_V1,
@@ -59,6 +61,15 @@ pub use sccp_registry::{
     sccp_ton_destination_binding_hash_v1, sccp_tron_destination_binding_hash_v1,
     sccp_v1_taira_xor_asset_definition_id,
 };
+pub use sccp_replay::{
+    SCCP_REPLAY_SMT_DEPTH_V1, SCCP_REPLAY_SMT_MAGIC_V1, SCCP_REPLAY_SMT_MAX_SIBLINGS_V1,
+    SCCP_REPLAY_SMT_SHARD_COUNT_V1, SccpReplayAccumulatorError, SccpReplayAccumulatorIdV1,
+    SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDeltaV1, SccpReplayDomainV1,
+    SccpReplayForestV1, SccpReplayPrincipalV1, SccpReplayRecordV1, SccpSparseMerkleWitnessV1,
+    sccp_replay_domain_hash_v1, sccp_replay_empty_hashes_v1, sccp_replay_key_v1,
+    sccp_replay_record_digest_v1,
+};
+pub use sccp_liability::SccpRouteLiabilityV1;
 /// Definition metadata for a wrapped asset originating from another chain.
 ///
 /// Stored alongside an Iroha asset definition to bind it to its origin.

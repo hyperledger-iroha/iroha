@@ -3808,8 +3808,11 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             "runtime_view_blocked_progress_authorization_projection_hash(authorization)",
             "forged_target.validate_exact().is_err()",
             "normal_scheduler.selected, RuntimeSelectedOwnerKind::Fifo",
+            "runtime.take_leader_wire_runtime_terminals().is_empty()",
             "runtime.queued_commands(), 2",
             "AdapterEffect::FetchBody",
+            "runtime.queued_commands(), 1",
+            "remaining == &intervening_certificate",
         ),
     )
 

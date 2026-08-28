@@ -1046,6 +1046,109 @@ async fn mcp_jsonrpc_generic_notifications_return_accepted_without_body() {
         assert!(body.is_empty(), "{method} must not receive a response body");
     }
 }
+
+#[tokio::test]
+async fn mcp_jsonrpc_authenticated_cancellation_stops_exact_live_call() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Writer;
+    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(10_000).expect("nonzero rate"));
+    cfg.torii.mcp.burst = Some(NonZeroU32::new(10_000).expect("nonzero burst"));
+    cfg.torii.require_api_token = true;
+    cfg.torii.api_tokens = vec!["cancellation-client".to_owned()];
+    let app = build_router(cfg);
+
+    let call_request = Request::builder()
+        .method("POST")
+        .uri("/v1/mcp")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2025-06-18")
+        .header("x-api-token", "cancellation-client")
+        .body(Body::from(
+            norito::json::to_vec(&norito::json!({
+                "jsonrpc": "2.0",
+                "id": "cancel-me",
+                "method": "tools/call",
+                "params": {
+                    "name": "iroha.transactions.wait",
+                    "arguments": {
+                        "query": { "hash": ("ab".repeat(32)) },
+                        "timeout_ms": 600_000,
+                        "poll_interval_ms": 100
+                    }
+                }
+            }))
+            .expect("serialize call"),
+        ))
+        .expect("valid call request");
+    let call_app_clone = app.clone();
+    let live_call = tokio::spawn(async move { call_app(&call_app_clone, call_request).await });
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let (status, duplicate) = post_mcp_with_headers(
+                &app,
+                norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": "cancel-me",
+                    "method": "tools/call",
+                    "params": { "name": "iroha.health", "arguments": {} }
+                }),
+                &[("x-api-token", "cancellation-client")],
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            if duplicate
+                .pointer("/error/data/error_code")
+                .and_then(Value::as_str)
+                == Some("request_id_in_use")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("live request registers before cancellation");
+    let cancellation_request = Request::builder()
+        .method("POST")
+        .uri("/v1/mcp")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2025-06-18")
+        .header("x-api-token", "cancellation-client")
+        .body(Body::from(
+            norito::json::to_vec(&norito::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {
+                    "requestId": "cancel-me",
+                    "reason": "integration test"
+                }
+            }))
+            .expect("serialize cancellation"),
+        ))
+        .expect("valid cancellation request");
+    let cancellation = call_app(&app, cancellation_request).await;
+    assert_eq!(cancellation.status(), StatusCode::ACCEPTED);
+    assert!(read_body_bytes(cancellation).await.is_empty());
+
+    let cancelled = tokio::time::timeout(Duration::from_secs(2), live_call)
+        .await
+        .expect("cancelled request completes promptly")
+        .expect("live request task joins");
+    assert_eq!(cancelled.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        cancelled
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("private, no-store")
+    );
+    assert!(read_body_bytes(cancelled).await.is_empty());
+}
 #[tokio::test]
 async fn mcp_jsonrpc_response_messages_return_accepted_without_body() {
     let _data_dir = test_utils::TestDataDirGuard::new();

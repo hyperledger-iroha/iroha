@@ -11982,6 +11982,7 @@ mod openapi_tests {
         assert_eq!(state.network_id_ref(), &network_id);
         assert_eq!(state.chain_id_ref(), &cfg.common.chain);
     }
+    include!("tests/openapi_router_storage_isolation.rs");
     // Direct fragment keeps this cohesive OpenAPI regression test together under the source cap.
     include!("tests/openapi_empty_manifest_writers.rs");
     #[test]

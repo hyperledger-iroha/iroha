@@ -46978,11 +46978,7 @@ mod validation_fee_torii_ingress_tests {
             });
         }
         attempt
-            .register_sortition_request_batch(
-                governance_attempt_id,
-                registrations,
-                candidates.clone(),
-            )
+            .register_sortition_request_batch(governance_attempt_id, registrations, candidates)
             .expect("register deterministic sortition request batch");
         request_ids.sort_unstable();
         let sortition_pulse_id = BeaconPulseId::new(parliament_test_root(0xB1));

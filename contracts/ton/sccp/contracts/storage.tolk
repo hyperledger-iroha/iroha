@@ -1,5 +1,6 @@
 import "@stdlib/strings"
 import "constants"
+import "errors"
 
 /// Immutable route hashes. Every role must be nonzero and distinct.
 struct RouteHashes {
@@ -27,6 +28,22 @@ struct FinalityHashesTail {
     /// TON representation hash of the exact immutable key cell.
     verifyingKeyCellHash: uint256
     verifyingKey: cell
+    /// Immutable, route-bound 3-of-5 emergency mint controller.
+    mintBreakerGuardians: Cell<MintBreakerGuardians>
+}
+
+/// Tail split keeps the five fixed guardian keys in ordinary cells.
+struct MintBreakerGuardiansTail {
+    guardian3: uint256
+    guardian4: uint256
+}
+
+/// Canonically ordered Ed25519 public keys for the disable-only controller.
+struct MintBreakerGuardians {
+    guardian0: uint256
+    guardian1: uint256
+    guardian2: uint256
+    tail: Cell<MintBreakerGuardiansTail>
 }
 
 /// Shared immutable bridge configuration committed by master and bridge StateInit.
@@ -34,6 +51,8 @@ struct BridgeConfig {
     expectedGlobalId: int32
     routeRevision: uint32
     tairaToTonMultiplier: uint64
+    /// Positive immutable ceiling shared with the governed SORA route.
+    maxWrappedSupply: coins
     sourceLaneBytes: cell
     destinationLaneBytes: cell
     routeHashes: Cell<RouteHashes>
@@ -75,6 +94,9 @@ struct BridgePendingState {
     mints: map<uint256, Cell<PendingMint>>
     burns: map<uint256, Cell<PendingBurn>>
     refunds: map<uint256, Cell<PendingRefund>>
+    mintCount: uint16
+    burnCount: uint16
+    refundCount: uint16
 }
 
 struct BridgeStorage {
@@ -88,6 +110,8 @@ struct BridgeStorage {
     pending: Cell<BridgePendingState>
     /// Monotonic identity allocated before each rejected-deposit refund.
     refundSequence: uint64
+    /// One-way breaker state. Canonical deployment always starts enabled.
+    mintingDisabled: bool
 }
 
 struct MasterMintRecord {
@@ -120,6 +144,10 @@ struct MasterStorage {
     metadata: cell
     bridgeConfig: Cell<BridgeConfig>
     replay: Cell<MasterReplayState>
+    /// Number of master-to-wallet mints awaiting an authenticated ack.
+    pendingMintCount: uint16
+    /// One-way breaker state. Canonical deployment always starts enabled.
+    mintingDisabled: bool
 }
 
 /// Exact debit record retained by a wallet while an SCCP burn can be retried.
@@ -145,6 +173,9 @@ struct WalletReplayState {
     mints: map<uint256, uint8>
     burns: map<uint256, Cell<WalletBurnRecord>>
     refunds: map<uint256, Cell<WalletRefundRecord>>
+    mintCount: uint16
+    burnCount: uint16
+    refundCount: uint16
 }
 
 struct WalletStorage {
@@ -187,6 +218,9 @@ fun emptyBridgePendingState(): Cell<BridgePendingState> {
         mints: [],
         burns: [],
         refunds: [],
+        mintCount: 0,
+        burnCount: 0,
+        refundCount: 0,
     }.toCell();
 }
 
@@ -208,7 +242,9 @@ fun canonicalBridgeInitialStorage(
     config: Cell<BridgeConfig>,
     masterAddress: address,
 ): BridgeStorage {
-    val routeConfigurationHash = config.load().routeHashes.load().routeConfigurationHash;
+    val loadedConfig = config.load();
+    assert (loadedConfig.maxWrappedSupply > 0) throw SccpErrors.InvalidConfiguration;
+    val routeConfigurationHash = loadedConfig.routeHashes.load().routeConfigurationHash;
     return {
         storageVersion: SCCP_STORAGE_VERSION,
         routeConfigurationHash,
@@ -218,6 +254,7 @@ fun canonicalBridgeInitialStorage(
         replay: emptyBridgeReplayState(),
         pending: emptyBridgePendingState(),
         refundSequence: 0,
+        mintingDisabled: false,
     };
 }
 
@@ -229,7 +266,9 @@ fun canonicalMasterInitialStorage(
     metadata: cell,
     bridgeConfig: Cell<BridgeConfig>,
 ): MasterStorage {
-    val routeConfigurationHash = bridgeConfig.load().routeHashes.load().routeConfigurationHash;
+    val loadedConfig = bridgeConfig.load();
+    assert (loadedConfig.maxWrappedSupply > 0) throw SccpErrors.InvalidConfiguration;
+    val routeConfigurationHash = loadedConfig.routeHashes.load().routeConfigurationHash;
     return {
         storageVersion: SCCP_STORAGE_VERSION,
         routeConfigurationHash,
@@ -237,6 +276,8 @@ fun canonicalMasterInitialStorage(
         metadata,
         bridgeConfig,
         replay: emptyMasterReplayState(),
+        pendingMintCount: 0,
+        mintingDisabled: false,
     };
 }
 

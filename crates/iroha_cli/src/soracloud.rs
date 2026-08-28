@@ -8536,7 +8536,9 @@ impl Drop for SensitiveTairaTomlTable {
 
 #[cfg(unix)]
 fn zeroize_taira_toml_table(table: &mut toml::Table) {
-    table.values_mut().for_each(zeroize_taira_toml_value);
+    table
+        .iter_mut()
+        .for_each(|(_, value)| zeroize_taira_toml_value(value));
 }
 
 #[cfg(unix)]
@@ -9004,13 +9006,9 @@ fn taira_validator_config_stat_at(
     description: &str,
     max_bytes: u64,
 ) -> Result<TairaFileIdentity> {
-    let stat = rustix::fs::statat(
-        &directory.file,
-        name,
-        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-    )
-    .map_err(io::Error::from)
-    .wrap_err_with(|| format!("inspect {description} {name}"))?;
+    let stat = rustix::fs::statat(&directory.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(io::Error::from)
+        .wrap_err_with(|| format!("inspect {description} {name}"))?;
     validate_taira_validator_config_stat(&stat, description, max_bytes)
 }
 
@@ -9040,15 +9038,13 @@ fn exact_taira_validator_config_entries(
             )
         })?;
     for entry in &mut entries {
-        let name = entry
-            .map_err(io::Error::from)
-            .wrap_err_with(|| {
-                format!(
-                    "read entry in retained Taira validator config directory {}",
-                    directory.path.display()
-                )
-            })?
-            .file_name();
+        let entry = entry.map_err(io::Error::from).wrap_err_with(|| {
+            format!(
+                "read entry in retained Taira validator config directory {}",
+                directory.path.display()
+            )
+        })?;
+        let name = entry.file_name();
         let bytes = name.to_bytes();
         if bytes.starts_with(b"peer") && bytes.ends_with(b".toml") {
             let name = std::str::from_utf8(bytes).map_err(|_| {
@@ -9101,9 +9097,7 @@ fn read_sensitive_taira_validator_config_at(
         rustix::fs::openat(
             &directory.file,
             name,
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
             rustix::fs::Mode::empty(),
         )
         .map_err(io::Error::from)
@@ -9122,7 +9116,7 @@ fn read_sensitive_taira_validator_config_at(
     bytes
         .try_reserve_exact(capacity.saturating_add(1))
         .map_err(|_| eyre!("reserve bounded sensitive buffer for {description} {name}"))?;
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|_| eyre!("read bounded sensitive bytes from {description} {name}"))?;
@@ -9291,33 +9285,38 @@ fn stage_taira_validator_config_replacement(
                 });
             }
         };
-        let created = taira_metadata_identity(&file.metadata().wrap_err_with(|| {
-            format!("inspect new temporary peer{}.toml", prepared.peer_index)
-        })?);
+        let created =
+            taira_metadata_identity(&file.metadata().wrap_err_with(|| {
+                format!("inspect new temporary peer{}.toml", prepared.peer_index)
+            })?);
         let prepare = (|| -> Result<TairaFileIdentity> {
-            rustix::fs::fchmod(
-                &file,
-                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            rustix::fs::fchmod(&file, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)
+                .map_err(io::Error::from)
+                .wrap_err_with(|| {
+                    format!(
+                        "set owner-only temporary peer{}.toml mode",
+                        prepared.peer_index
+                    )
+                })?;
+            let named_created_stat = rustix::fs::statat(
+                &directory.file,
+                &name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
             )
             .map_err(io::Error::from)
-            .wrap_err_with(|| {
-                format!(
-                    "set owner-only temporary peer{}.toml mode",
-                    prepared.peer_index
-                )
-            })?;
-            let named_created = taira_validator_config_stat_at(
-                directory,
-                &name,
-                "temporary Taira validator config",
-                MAX_TOML_SOURCE_BYTES,
-            )?;
+            .wrap_err_with(|| format!("inspect new temporary peer{}.toml", prepared.peer_index))?;
+            let named_created = taira_file_identity_from_stat(&named_created_stat)?;
             let opened_created = taira_metadata_identity(&file.metadata().wrap_err_with(|| {
                 format!("reinspect new temporary peer{}.toml", prepared.peer_index)
             })?);
             if named_created != opened_created
                 || opened_created.dev != created.dev
                 || opened_created.ino != created.ino
+                || rustix::fs::FileType::from_raw_mode(named_created_stat.st_mode)
+                    != rustix::fs::FileType::RegularFile
+                || opened_created.uid != rustix::process::geteuid().as_raw()
+                || opened_created.mode & 0o7777 != 0o600
+                || opened_created.nlink != 1
             {
                 return Err(eyre!(
                     "temporary peer{}.toml changed identity while it was opened",
@@ -9381,9 +9380,12 @@ fn require_staged_taira_validator_config_identity_at(
     staged: &StagedTairaValidatorConfig,
     peer_index: usize,
 ) -> Result<()> {
-    let opened = taira_metadata_identity(&staged.file.metadata().wrap_err_with(|| {
-        format!("reinspect opened temporary peer{peer_index}.toml")
-    })?);
+    let opened = taira_metadata_identity(
+        &staged
+            .file
+            .metadata()
+            .wrap_err_with(|| format!("reinspect opened temporary peer{peer_index}.toml"))?,
+    );
     let named = taira_validator_config_stat_at(
         directory,
         &staged.name,
@@ -9404,21 +9406,13 @@ fn remove_taira_validator_config_temp_at(
     name: &str,
     expected: TairaFileIdentity,
 ) {
-    let current = rustix::fs::statat(
-        &directory.file,
-        name,
-        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-    );
+    let current = rustix::fs::statat(&directory.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW);
     if current
         .ok()
         .and_then(|stat| taira_file_identity_from_stat(&stat).ok())
         .is_some_and(|identity| identity.dev == expected.dev && identity.ino == expected.ino)
     {
-        let _ = rustix::fs::unlinkat(
-            &directory.file,
-            name,
-            rustix::fs::AtFlags::empty(),
-        );
+        let _ = rustix::fs::unlinkat(&directory.file, name, rustix::fs::AtFlags::empty());
         let _ = directory.file.sync_all();
     }
 }
@@ -9445,19 +9439,14 @@ pub(crate) fn bind_taira_inrou_validator_configs(
     receipt: &TairaInrouStageReceiptV1,
 ) -> Result<()> {
     validate_taira_inrou_config_receipt(receipt)?;
-    let paths = exact_taira_validator_config_paths(config_dir)?;
-    let config_dir = paths[0]
-        .parent()
-        .expect("validated Taira validator config has a parent")
-        .to_path_buf();
-    let directory_identity =
-        taira_owned_directory_identity(&config_dir, "Taira validator config directory")?;
+    let directory = open_taira_validator_config_directory(config_dir)?;
+    let entries = exact_taira_validator_config_entries(&directory)?;
     let mut placements = BTreeSet::new();
     let mut validator_accounts = BTreeSet::new();
     let mut peer_ids = BTreeSet::new();
     let mut prepared = Vec::with_capacity(TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1);
-    for (peer_index, path) in paths.into_iter().enumerate() {
-        let (placement, projected) = prepare_taira_validator_config(peer_index, path, receipt)?;
+    for entry in entries {
+        let (placement, projected) = prepare_taira_validator_config(&directory, entry, receipt)?;
         validator_accounts.insert(placement.validator_account_id.clone());
         peer_ids.insert(placement.peer_id.clone());
         placements.insert(placement);
@@ -9471,74 +9460,90 @@ pub(crate) fn bind_taira_inrou_validator_configs(
             "Taira validator config placements do not match the exact staged Inrou placement set"
         ));
     }
-    for projected in &mut prepared {
-        if taira_owned_directory_identity(&config_dir, "Taira validator config directory")?
-            != directory_identity
-        {
-            return Err(eyre!(
-                "Taira validator config directory changed before replacement staging"
-            ));
+    let binding = (|| -> Result<()> {
+        for projected in &mut prepared {
+            require_taira_validator_config_directory_identity(&directory)?;
+            require_taira_validator_config_identity_at(&directory, projected)?;
+            projected.temporary = Some(stage_taira_validator_config_replacement(
+                &directory, projected,
+            )?);
         }
-        require_taira_validator_config_identity(projected)?;
-        stage_taira_validator_config_replacement(&config_dir, projected)?;
-    }
-    for projected in &prepared {
-        require_taira_validator_config_identity(projected)?;
-    }
-    for projected in &mut prepared {
-        if taira_owned_directory_identity(&config_dir, "Taira validator config directory")?
-            != directory_identity
-        {
-            return Err(eyre!(
-                "Taira validator config directory changed before atomic replacement"
-            ));
+        for projected in &prepared {
+            require_taira_validator_config_identity_at(&directory, projected)?;
         }
-        require_taira_validator_config_identity(projected)?;
-        let temporary = projected
-            .temporary
-            .take()
-            .expect("every validated Taira config has one staged replacement");
-        validate_taira_stage_owned_entry(
-            temporary.path(),
-            false,
-            "temporary Taira validator config",
-        )?;
-        let installed = temporary.persist(&projected.path).map_err(|error| {
-            eyre!(
-                "atomically replace peer{}.toml with its V1 Inrou binding: {}",
+        for projected in &mut prepared {
+            require_taira_validator_config_directory_identity(&directory)?;
+            let staged = projected
+                .temporary
+                .as_ref()
+                .expect("every validated Taira config has one staged replacement");
+            require_staged_taira_validator_config_identity_at(
+                &directory,
+                staged,
                 projected.peer_index,
-                error.error
+            )?;
+            // Keep this identity check directly adjacent to `renameat`: the target must not
+            // change between the final comparison and descriptor-relative publication.
+            require_taira_validator_config_identity_at(&directory, projected)?;
+            rustix::fs::renameat(
+                &directory.file,
+                &staged.name,
+                &directory.file,
+                &projected.name,
             )
-        })?;
-        installed
-            .sync_all()
-            .wrap_err_with(|| format!("synchronize installed peer{}.toml", projected.peer_index))?;
-        fs::File::open(&config_dir)
-            .and_then(|directory| directory.sync_all())
+            .map_err(io::Error::from)
             .wrap_err_with(|| {
                 format!(
-                    "synchronize Taira validator config directory after peer{}.toml replacement",
+                    "atomically replace peer{}.toml with its V1 Inrou binding",
                     projected.peer_index
                 )
             })?;
-        validate_taira_stage_owned_entry(
-            &projected.path,
-            false,
-            "installed Taira validator config",
-        )?;
-        let installed_bytes = Zeroizing::new(taira_stage_owned_file_bytes(
-            &projected.path,
-            "installed Taira validator config",
-            MAX_TOML_SOURCE_BYTES,
-        )?);
-        if installed_bytes.as_slice() != projected.rendered.as_bytes() {
-            return Err(eyre!(
-                "installed peer{}.toml differs from its validated V1 Inrou projection",
-                projected.peer_index
-            ));
+            let installed_opened =
+                taira_metadata_identity(&staged.file.metadata().wrap_err_with(|| {
+                    format!("inspect installed peer{}.toml", projected.peer_index)
+                })?);
+            let installed_named = taira_validator_config_stat_at(
+                &directory,
+                &projected.name,
+                "installed Taira validator config",
+                MAX_TOML_SOURCE_BYTES,
+            )?;
+            if installed_opened != installed_named
+                || installed_opened.dev != staged.identity.dev
+                || installed_opened.ino != staged.identity.ino
+            {
+                return Err(eyre!(
+                    "installed peer{}.toml changed identity during atomic publication",
+                    projected.peer_index
+                ));
+            }
+            directory.file.sync_all().wrap_err_with(|| {
+                format!(
+                    "synchronize retained Taira validator config directory after peer{}.toml replacement",
+                    projected.peer_index
+                )
+            })?;
+            let (installed_bytes, installed_identity) = read_sensitive_taira_validator_config_at(
+                &directory,
+                &projected.name,
+                "installed Taira validator config",
+                MAX_TOML_SOURCE_BYTES,
+            )?;
+            if installed_identity != installed_opened
+                || installed_bytes.as_slice() != projected.rendered.as_bytes()
+            {
+                return Err(eyre!(
+                    "installed peer{}.toml differs from its validated V1 Inrou projection",
+                    projected.peer_index
+                ));
+            }
         }
+        Ok(())
+    })();
+    if binding.is_err() {
+        cleanup_taira_validator_config_temps(&directory, &prepared);
     }
-    Ok(())
+    binding
 }
 
 #[cfg(not(unix))]
@@ -24584,6 +24589,274 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         }
     }
     #[cfg(unix)]
+    const TAIRA_VALIDATOR_CONFIG_FIXTURES: [&str; TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1] = [
+        include_str!("../../../defaults/kagami/iroha3-dev/peer0.toml"),
+        include_str!("../../../defaults/kagami/iroha3-dev/peer1.toml"),
+        include_str!("../../../defaults/kagami/iroha3-dev/peer2.toml"),
+        include_str!("../../../defaults/kagami/iroha3-dev/peer3.toml"),
+    ];
+    #[cfg(unix)]
+    fn taira_validator_fixture_signer(seed: u8) -> toml::Table {
+        let key_pair = soracloud_fixture_key_pair(seed);
+        let (algorithm, public_key_bytes) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture signer public key must encode");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        let public_key_hex = hex::encode(public_key_bytes);
+        let authority = AccountId::new(key_pair.public_key().clone()).to_string();
+        let mut signer = toml::Table::new();
+        signer.insert(
+            "handle".to_owned(),
+            toml::Value::String(format!("software://taira/inrou/{public_key_hex}")),
+        );
+        signer.insert("authority".to_owned(), toml::Value::String(authority));
+        signer.insert(
+            "algorithm".to_owned(),
+            toml::Value::String("ed25519".to_owned()),
+        );
+        signer.insert(
+            "public_key_hex".to_owned(),
+            toml::Value::String(public_key_hex),
+        );
+        signer.insert("revision".to_owned(), toml::Value::Integer(1));
+        signer.insert(
+            "policy_digest_hex".to_owned(),
+            toml::Value::String("a7".repeat(32)),
+        );
+        signer
+    }
+    #[cfg(unix)]
+    fn install_taira_validator_fixture_runtime(root: &mut toml::Table, signer_seed: u8) {
+        let mut submission = toml::Table::new();
+        submission.insert(
+            "fee_payer".to_owned(),
+            toml::Value::String("authority".to_owned()),
+        );
+        submission.insert(
+            "signer".to_owned(),
+            toml::Value::Table(taira_validator_fixture_signer(signer_seed)),
+        );
+        let mut egress = toml::Table::new();
+        egress.insert("default_allow".to_owned(), toml::Value::Boolean(false));
+        egress.insert("allowed_hosts".to_owned(), toml::Value::Array(Vec::new()));
+        egress.insert(
+            "rate_per_minute".to_owned(),
+            toml::Value::Integer(i64::from(defaults::taira::INROU_EGRESS_RATE_PER_MINUTE)),
+        );
+        egress.insert(
+            "max_bytes_per_minute".to_owned(),
+            toml::Value::Integer(
+                i64::try_from(defaults::taira::INROU_EGRESS_MAX_BYTES_PER_MINUTE)
+                    .expect("Taira egress byte budget fits TOML integer"),
+            ),
+        );
+        let mut runtime = toml::Table::new();
+        runtime.insert("production_mode".to_owned(), toml::Value::Boolean(true));
+        runtime.insert("submission".to_owned(), toml::Value::Table(submission));
+        runtime.insert("egress".to_owned(), toml::Value::Table(egress));
+        root.insert("soracloud_runtime".to_owned(), toml::Value::Table(runtime));
+    }
+    #[cfg(unix)]
+    fn replace_taira_validator_fixture_signer(root: &mut toml::Table, signer_seed: u8) {
+        taira_toml_table_at(
+            root,
+            &["soracloud_runtime", "submission"],
+            "fixture submission",
+        )
+        .expect("fixture submission table");
+        root.get_mut("soracloud_runtime")
+            .and_then(toml::Value::as_table_mut)
+            .and_then(|runtime| runtime.get_mut("submission"))
+            .and_then(toml::Value::as_table_mut)
+            .expect("fixture submission table")
+            .insert(
+                "signer".to_owned(),
+                toml::Value::Table(taira_validator_fixture_signer(signer_seed)),
+            );
+    }
+    #[cfg(unix)]
+    fn parse_complete_taira_validator_fixture(path: &Path, source: &str) -> actual::Root {
+        let table = toml::from_str(source).expect("complete generated-like validator TOML");
+        actual::Root::from_toml_source(TomlSource::new_sensitive(
+            path.to_path_buf(),
+            table,
+            zeroize_taira_toml_table,
+        ))
+        .expect("complete generated-like validator config must parse")
+    }
+    #[cfg(unix)]
+    fn write_complete_taira_validator_fixtures(config_dir: &Path) -> TairaInrouStageReceiptV1 {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::create_dir(config_dir).expect("create validator fixture directory");
+        fs::set_permissions(config_dir, fs::Permissions::from_mode(0o700))
+            .expect("make validator fixture directory owner-private");
+        let mut placements = BTreeSet::new();
+        for (peer_index, source) in TAIRA_VALIDATOR_CONFIG_FIXTURES.iter().enumerate() {
+            let mut table = toml::from_str(source).expect("parse generated validator fixture");
+            install_taira_validator_fixture_runtime(
+                &mut table,
+                0xA0_u8
+                    .checked_add(u8::try_from(peer_index).expect("fixture index fits u8"))
+                    .expect("fixture signer seed"),
+            );
+            placements.insert(
+                taira_validator_placement_from_table(&table, peer_index)
+                    .expect("fixture validator placement"),
+            );
+            let rendered = toml::to_string_pretty(&table)
+                .expect("render complete generated-like validator fixture");
+            let path = config_dir.join(format!("peer{peer_index}.toml"));
+            let parsed = parse_complete_taira_validator_fixture(&path, &rendered);
+            assert!(parsed.soracloud_runtime.production_mode);
+            assert!(!parsed.soracloud_runtime.inrou.enabled);
+            fs::write(&path, rendered.as_bytes()).expect("write validator fixture");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .expect("make validator fixture owner-private");
+        }
+        let trusted_guest = sample_published_inrou_artifact(0x31);
+        let mut receipt = canonical_taira_stage_receipt_fixture();
+        receipt.guest_manifest_digest_hex = trusted_guest.manifest_digest_hex;
+        receipt.guest_content_cid = trusted_guest.content_cid;
+        receipt.placement_targets = placements;
+        validate_taira_inrou_config_receipt(&receipt).expect("valid binder fixture receipt");
+        receipt
+    }
+    #[cfg(unix)]
+    fn taira_validator_config_snapshots(
+        config_dir: &Path,
+    ) -> [(Vec<u8>, TairaFileIdentity); TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1] {
+        (0..TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1)
+            .map(|peer_index| {
+                let path = config_dir.join(format!("peer{peer_index}.toml"));
+                let bytes = fs::read(&path).expect("snapshot validator config bytes");
+                let identity = taira_metadata_identity(
+                    &fs::symlink_metadata(path).expect("snapshot validator config identity"),
+                );
+                (bytes, identity)
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("four validator config snapshots")
+    }
+    #[cfg(unix)]
+    fn assert_taira_validator_configs_unchanged(
+        config_dir: &Path,
+        expected: &[(Vec<u8>, TairaFileIdentity); TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1],
+    ) {
+        assert_eq!(&taira_validator_config_snapshots(config_dir), expected);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_validator_config_binding_installs_exact_typed_profiles_atomically() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let temp = taira_test_tempdir("taira-inrou-validator-config-bind-");
+        let config_dir = temp.path().join("configs");
+        let receipt = write_complete_taira_validator_fixtures(&config_dir);
+        let before = taira_validator_config_snapshots(&config_dir);
+
+        bind_taira_inrou_validator_configs(&config_dir, &receipt)
+            .expect("bind all four exact Taira Inrou validator configs");
+
+        for peer_index in 0..TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1 {
+            let path = config_dir.join(format!("peer{peer_index}.toml"));
+            let metadata = fs::symlink_metadata(&path).expect("inspect bound validator config");
+            assert!(metadata.is_file());
+            assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
+            assert_ne!(
+                (metadata.dev(), metadata.ino()),
+                (before[peer_index].1.dev, before[peer_index].1.ino)
+            );
+            let source = Zeroizing::new(
+                fs::read_to_string(&path).expect("read bound validator config for typed assertion"),
+            );
+            let parsed = parse_complete_taira_validator_fixture(&path, source.as_str());
+            assert!(parsed.soracloud_runtime.production_mode);
+            assert_eq!(
+                parsed.soracloud_runtime.inrou,
+                expected_taira_inrou_validator_config(peer_index, &receipt)
+                    .expect("exact expected typed Inrou profile")
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_validator_config_binding_mismatch_leaves_all_originals_unchanged() {
+        let temp = taira_test_tempdir("taira-inrou-validator-config-mismatch-");
+        let config_dir = temp.path().join("configs");
+        let receipt = write_complete_taira_validator_fixtures(&config_dir);
+        let fourth = config_dir.join("peer3.toml");
+        let mut table: toml::Table =
+            toml::from_str(&fs::read_to_string(&fourth).expect("read fourth validator fixture"))
+                .expect("parse fourth validator fixture");
+        replace_taira_validator_fixture_signer(&mut table, 0xD3);
+        let rendered = toml::to_string_pretty(&table).expect("render mismatched fourth config");
+        parse_complete_taira_validator_fixture(&fourth, &rendered);
+        fs::write(&fourth, rendered).expect("write mismatched fourth config");
+        let before = taira_validator_config_snapshots(&config_dir);
+
+        let error = bind_taira_inrou_validator_configs(&config_dir, &receipt)
+            .expect_err("mismatched fourth placement must fail before staging");
+        assert!(
+            error.to_string().contains("placements do not match"),
+            "{error}"
+        );
+        assert_taira_validator_configs_unchanged(&config_dir, &before);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_validator_config_binding_render_limit_leaves_all_originals_unchanged() {
+        let temp = taira_test_tempdir("taira-inrou-validator-config-limit-");
+        let config_dir = temp.path().join("configs");
+        let receipt = write_complete_taira_validator_fixtures(&config_dir);
+        let fourth = config_dir.join("peer3.toml");
+        let mut table: toml::Table =
+            toml::from_str(&fs::read_to_string(&fourth).expect("read fourth validator fixture"))
+                .expect("parse fourth validator fixture");
+        table
+            .get_mut("torii")
+            .and_then(toml::Value::as_table_mut)
+            .expect("generated fixture Torii table")
+            .insert("data_dir".to_owned(), toml::Value::String(String::new()));
+        let empty = toml::to_string_pretty(&table).expect("render unpadded fourth config");
+        let limit = usize::try_from(MAX_TOML_SOURCE_BYTES).expect("TOML limit fits usize");
+        let padding = limit
+            .checked_sub(empty.len().saturating_add(1))
+            .expect("fixture leaves room for near-limit path");
+        table
+            .get_mut("torii")
+            .and_then(toml::Value::as_table_mut)
+            .expect("generated fixture Torii table")
+            .insert(
+                "data_dir".to_owned(),
+                toml::Value::String("x".repeat(padding)),
+            );
+        let rendered = toml::to_string_pretty(&table).expect("render near-limit fourth config");
+        assert_eq!(rendered.len(), limit - 1);
+        parse_complete_taira_validator_fixture(&fourth, &rendered);
+        let mut projected = table.clone();
+        insert_taira_inrou_validator_table(&mut projected, 3, &receipt)
+            .expect("project fourth Inrou table for boundary assertion");
+        assert!(
+            toml::to_string_pretty(&projected)
+                .expect("render oversized projected config")
+                .len()
+                > limit
+        );
+        fs::write(&fourth, rendered).expect("write near-limit fourth config");
+        let before = taira_validator_config_snapshots(&config_dir);
+
+        let error = bind_taira_inrou_validator_configs(&config_dir, &receipt)
+            .expect_err("oversized rendered config must fail before staging");
+        assert!(
+            error.to_string().contains("configuration-source limit"),
+            "{error}"
+        );
+        assert_taira_validator_configs_unchanged(&config_dir, &before);
+    }
+    #[cfg(unix)]
     #[test]
     fn taira_validator_inrou_table_uses_only_exact_v1_defaults() {
         let receipt = canonical_taira_stage_receipt_fixture();
@@ -24717,9 +24990,11 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 path
             })
             .collect::<Vec<_>>();
+        let directory = open_taira_validator_config_directory(&config_dir)
+            .expect("retain private validator config directory");
         assert_eq!(
-            exact_taira_validator_config_paths(&config_dir)
-                .expect("accept exact private validator config paths")
+            exact_taira_validator_config_entries(&directory)
+                .expect("accept exact private validator configs")
                 .len(),
             TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1
         );
@@ -24728,23 +25003,23 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         fs::write(&extra, b"private_key = \"extra\"\n").expect("write unexpected validator config");
         fs::set_permissions(&extra, fs::Permissions::from_mode(0o600))
             .expect("make unexpected validator config owner-private");
-        exact_taira_validator_config_paths(&config_dir)
+        exact_taira_validator_config_entries(&directory)
             .expect_err("an additional peer TOML must be rejected");
         fs::remove_file(extra).expect("remove unexpected validator config");
 
         fs::set_permissions(&paths[0], fs::Permissions::from_mode(0o640))
             .expect("weaken validator config custody");
-        exact_taira_validator_config_paths(&config_dir)
+        exact_taira_validator_config_entries(&directory)
             .expect_err("a group-readable validator config must be rejected");
         fs::set_permissions(&paths[0], fs::Permissions::from_mode(0o600))
             .expect("restore validator config custody");
 
         fs::remove_file(&paths[1]).expect("remove second validator config fixture");
         fs::hard_link(&paths[0], &paths[1]).expect("alias validator config inode");
-        let error = exact_taira_validator_config_paths(&config_dir)
+        let error = exact_taira_validator_config_entries(&directory)
             .expect_err("hard-linked validator configs must be rejected");
         assert!(
-            error.to_string().contains("exactly one hard link"),
+            error.to_string().contains("singly-linked"),
             "unexpected linked-config error: {error}"
         );
     }

@@ -412,6 +412,73 @@ fn start_and_stop_scripts_are_executable() {
 
 #[cfg(unix)]
 #[test]
+fn taira_lifecycle_is_exact_process_record_and_pidfd_only() {
+    let temp = tempfile::tempdir().expect("tmp dir");
+    write_scripts(
+        temp.path(),
+        4,
+        true,
+        true,
+        &localnet_client_account_literal(Some(369)),
+        &localnet_fee_asset_literal(),
+    )
+    .expect("write Taira scripts");
+
+    let start = fs::read_to_string(temp.path().join("start.sh")).expect("read Taira start");
+    let stop = fs::read_to_string(temp.path().join("stop.sh")).expect("read Taira stop");
+    for (name, script) in [("start", &start), ("stop", &stop)] {
+        assert!(
+            script.contains("peer${i}.process.json"),
+            "{name} record path"
+        );
+        assert!(script.contains("\"schema_version\": 1"), "{name} V1 schema");
+        assert!(script.contains("\"start_time_ticks\""), "{name} start time");
+        assert!(
+            script.contains("\"executable_device\""),
+            "{name} executable device"
+        );
+        assert!(
+            script.contains("\"executable_inode\""),
+            "{name} executable inode"
+        );
+        assert!(
+            script.contains("\"process_group_id\""),
+            "{name} process group"
+        );
+        assert!(
+            script.contains("os.pidfd_open(pid, 0)"),
+            "{name} pidfd open"
+        );
+        assert!(
+            script.contains("signal.pidfd_send_signal(descriptor, signal_number, None, 0)"),
+            "{name} pidfd signaling"
+        );
+        assert!(script.contains("select.poll()"), "{name} pidfd wait");
+        assert!(script.contains("/proc/sys/kernel/random/boot_id"));
+        assert!(script.contains("retired Taira PID file is unsupported"));
+        assert!(
+            !script.contains("PIDFILE="),
+            "{name} must not write PID files"
+        );
+        assert!(!script.contains("pid_is_running()"), "{name} PID fallback");
+        assert!(!script.contains("command -v ps"), "{name} ps fallback");
+        assert!(
+            !script.contains("kill \"$pid\""),
+            "{name} shell kill fallback"
+        );
+    }
+    assert!(start.contains("capture_taira_start(process.pid"));
+    assert!(start.contains("os.link(temporary, path, follow_symlinks=False)"));
+    assert!(start.contains("stat.S_IMODE(metadata.st_mode) != 0o600"));
+    assert!(!start.contains("nohup env SNAPSHOT_STORE_DIR="));
+    assert!(!start.contains("echo \"$peer_pid\" >"));
+    assert!(stop.contains("stop_taira_process(env[\"IROHA_PEER_PROCESS_RECORD\"]"));
+    assert!(stop.contains("_terminate_pidfd(descriptor)"));
+    assert!(!stop.contains("ps -p"));
+}
+
+#[cfg(unix)]
+#[test]
 fn shell_assignment_quoting_preserves_metacharacters_as_data() {
     let input = "target dir/it's-$(printf injected)-`printf other`";
     let quoted = crate::shell::single_quote(input).expect("quote shell value");

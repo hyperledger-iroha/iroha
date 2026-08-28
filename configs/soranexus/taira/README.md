@@ -225,8 +225,10 @@ python3 scripts/taira_devnet.py check
 ```
 
 `check` binds the listeners to the generated Taira chain, genesis hash,
-loopback ports, and the four exact PID/config pairs; unrelated services on the
-same ports cannot satisfy it. It reads the Torii base port from the generated
+loopback ports, and four exact owner-only `peerN.process.json` V1 identities.
+Each identity pins the Linux boot, process start time, executable path/device/inode,
+exact argv/config, UID/GID, session, and process group; unrelated services or a
+reused numeric PID cannot satisfy it. It reads the Torii base port from the generated
 `client.toml`, so an `up` started with a custom `--base-api-port` needs no
 repeated port argument. It also requires and strictly validates the owner-only
 V1 guest qualification record, including the canonical four-replica canary
@@ -249,8 +251,13 @@ python3 scripts/taira_devnet.py down
 ```
 
 Every `up`, `check`, and `down` holds one exclusive lock on the managed marker.
-Teardown returns success only after every managed PID file and matching peer
-process is gone and the pinned cleanup-directory identity is unchanged. It
+Taira lifecycle control is Linux-only and requires native `pidfd_open`,
+`pidfd_send_signal`, pollable pidfds, and procfs. Startup, restart, inspection,
+and teardown reopen and hold a pidfd before observing or signaling a process;
+signals and exit waits use only that pidfd. There is no `ps`, PID signal, or
+shell-kill fallback. Bare `peerN.pid` files are retired and rejected without
+migration. Teardown returns success only after every exact process record and
+matching process is gone and the pinned cleanup-directory identity is unchanged. It
 atomically moves that exact inode to a private cleanup name, proves the identity
 again, then removes configs, logs, state, runtime signers, and onboarding
 material together. If either proof fails, the bundle (or quarantined racing

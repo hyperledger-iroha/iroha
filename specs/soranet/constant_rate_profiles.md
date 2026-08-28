@@ -22,14 +22,16 @@ normative parameters mandated by SNNet-17B1, the
 tick→bandwidth conversion table used by SDKs, and the CLI interface that operators can call when
 generating configs or status reports.
 
-> **Current relay status:** strict mode is implemented but deliberately unreachable in production.
-> The locked Quinn 0.11.9 / quinn-proto 0.11.15 receive queue charges payload bytes but no fixed cost per
-> DATAGRAM entry, so an authenticated peer could enqueue unbounded zero-length entries without
+> **Current relay status:** all relay QUIC endpoint creation is deliberately unreachable in production
+> until quinn-proto 0.11.17 or later replaces vulnerable 0.11.15. Strict mode is implemented but remains
+> independently gated. The locked receive queue charges payload bytes but no fixed cost per
+> DATAGRAM entry, so an unauthenticated remote peer could enqueue unbounded zero-length entries without
 > consuming the configured byte budget. Configuration and live handshake preflight independently
 > reject strict mode until per-entry accounting is available and the complete end-to-end path is
 > requalified. The dormant mux carries application/exit, measurement, and VPN bytes with cover in
 > exact 1,024-byte cells and fails closed on transport or scheduling errors; its presence is not an
-> activation claim. Best-effort cover and the existing authenticated VPN stream remain available.
+> activation claim. Best-effort cover and the authenticated VPN stream remain dormant with the
+> broader QUIC runtime.
 
 ## Preset summary
 
@@ -57,11 +59,12 @@ generating configs or status reports.
   45 % for `null`), guaranteeing that residential operators cannot oversubscribe their access links
   indefinitely.
 
-**Null preset usage:** operators should use `null` when validating SNNet-17A2 capability negotiation,
+**Null preset usage:** after the Quinn upgrade, operators may use `null` when validating SNNet-17A2 capability negotiation,
 mixed hops, downgrade policies, and the best-effort cover loop without consuming the bandwidth that
 the production profiles require. It does not exercise scheduler-bound application payload, and its
 low lane cap and ceiling make it unsuitable for production privacy guarantees. Limit the preset to
-staging clusters or constrained pilots.
+staging clusters or constrained pilots. While the dependency gate is active, the preset remains
+configuration and requalification material only; relay startup fails before binding a QUIC endpoint.
 
 Relays now enforce the `neighbor_cap` directly during the handshake: once the number of
 constant-rate circuits reaches the preset limit, additional `snnet.constant_rate` sessions are
@@ -125,7 +128,8 @@ structure without re-running the command. The JSON payload mirrors the preset ta
 includes the optional `tick_bandwidth` section when `--tick-table` (or `--tick-values`) is supplied,
 allowing SDKs or ops tooling to load the canonical parameters without scraping documentation.
 
-The relay daemon exposes the same presets through configuration and runtime overrides:
+The relay daemon retains the same presets through configuration and runtime overrides for post-upgrade
+requalification:
 
 ```bash
 # Persisted in the relay JSON config
@@ -137,7 +141,8 @@ soranet-relay --config relay.json --constant-rate-profile core
 
 The `constant_rate_profile` key accepts `core`, `home`, or `null`. The default remains `core` so
 data-centre deployments stay on the higher-duty-cycle plan unless explicitly reconfigured. `null`
-is a staging/dogfood preset; only enable it when exercising the SNNet‑17A capability rollout plan.
+is a staging/dogfood preset; stage it only when exercising the SNNet‑17A capability rollout plan after
+the Quinn dependency gate has been cleared.
 
 ## MTU and padding guidance
 
@@ -181,13 +186,14 @@ is a staging/dogfood preset; only enable it when exercising the SNNet‑17A capa
   a dummy cell or allocate storage proportional to `cell_bytes`.
 - At the wire-protocol level, clients that set the strict flag require every hop to expose the same
   TLV; capability negotiation rejects a strict request when a server advertises best-effort or no
-  constant-rate support. The current relay also rejects an otherwise matching strict result before
-  responding because Quinn 0.11.9 / quinn-proto 0.11.15 does not bound queued DATAGRAM entries. It never accepts strict
-  as best-effort instead.
-- Defaults keep the capability disabled so brownfield deployments can stage the rollout. Operators
-  may enable `strict=false` for best-effort cover-traffic telemetry. `strict=true` is a startup
-  configuration error until the transport dependency and end-to-end qualification gates close.
-  The Sora VPN helper therefore continues to use its authenticated record-protected QUIC stream.
+  constant-rate support. The dormant handshake preflight also rejects an otherwise matching strict
+  result before responding; it never accepts strict as best-effort instead.
+- Defaults keep the capability disabled. The current relay and Sora VPN helper reject all QUIC
+  endpoint creation before binding while the lockfile resolves vulnerable Quinn 0.11.9 /
+  quinn-proto 0.11.15, so neither best-effort nor strict constant-rate operation is a shipping path.
+  Upgrade to quinn-proto 0.11.17 or later and complete end-to-end requalification before activating
+  either mode; `strict=true` remains an independent startup configuration error until that work is
+  complete.
 
 ## Telemetry-driven lane management
 

@@ -99,8 +99,10 @@ const CONNECT_READY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const STRICT_CONSTANT_RATE_TICK: Duration = Duration::from_millis(5);
+const STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS: u32 = 8;
 const STRICT_CONSTANT_RATE_QUEUE_CAPACITY: usize = 16;
 const STRICT_CONSTANT_RATE_CLOSE_CODE: u32 = 0x534e_01;
+const QUIC_DEPENDENCY_BLOCK_REASON: &str = "Sora VPN helper QUIC is unavailable with locked quinn-proto 0.11.15: released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 or later and requalify QUIC before re-enabling it";
 const VPN_STREAM_FINISH_TIMEOUT: Duration = Duration::from_secs(10);
 const SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(target_os = "linux")]
@@ -4707,6 +4709,9 @@ async fn network_worker_control_loop(
 async fn connect_and_handshake(
     payload: &ConnectPayload,
 ) -> Result<(Endpoint, Connection, Arc<RecordLayer>), ControllerError> {
+    // Reject before constructing the endpoint so vulnerable Quinn cannot bind
+    // a socket or process unauthenticated traffic.
+    validate_shipping_quinn_dependency()?;
     let helper_ticket = WipeBytes(decode_hex(payload.helper_ticket_hex.as_str())?);
     let relay = parse_multiaddr(payload.relay_endpoint.as_str())?;
     let relay_addr = resolve_multiaddr_socket_addr(&relay)
@@ -4757,6 +4762,12 @@ async fn connect_and_handshake(
     let record_layer = RecordLayer::new(session.session_key, RecordEndpoint::Client)
         .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     Ok((endpoint, connection, Arc::new(record_layer)))
+}
+
+fn validate_shipping_quinn_dependency() -> Result<(), ControllerError> {
+    Err(ControllerError::State(
+        QUIC_DEPENDENCY_BLOCK_REASON.to_owned(),
+    ))
 }
 
 type ProtectedVpnSend = RecordWriter<SendStream>;
@@ -4952,25 +4963,29 @@ async fn strict_vpn_receiver(
     lane_id: u64,
 ) -> Result<(), String> {
     let mut lifecycle = MuxLifecycle::new(1);
+    let receive_deadline = strict_constant_rate_receive_deadline(STRICT_CONSTANT_RATE_TICK);
     loop {
-        let datagram = tokio::select! {
-            datagram = connection.read_datagram() => {
-                datagram.map_err(|error| format!("strict VPN DATAGRAM receive failed: {error}"))?
-            }
-            stream = connection.accept_bi() => {
-                if let Ok((mut send, mut recv)) = stream {
-                    let _ = send.reset(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
-                    let _ = recv.stop(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
+        let datagram = strict_vpn_receive_with_deadline(receive_deadline, async {
+            tokio::select! {
+                datagram = connection.read_datagram() => {
+                    datagram.map_err(|error| format!("strict VPN DATAGRAM receive failed: {error}"))
                 }
-                return Err("relay attempted an unscheduled bidirectional stream in strict mode".to_owned());
-            }
-            stream = connection.accept_uni() => {
-                if let Ok(mut recv) = stream {
-                    let _ = recv.stop(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
+                stream = connection.accept_bi() => {
+                    if let Ok((mut send, mut recv)) = stream {
+                        let _ = send.reset(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
+                        let _ = recv.stop(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
+                    }
+                    Err("relay attempted an unscheduled bidirectional stream in strict mode".to_owned())
                 }
-                return Err("relay attempted an unscheduled unidirectional stream in strict mode".to_owned());
+                stream = connection.accept_uni() => {
+                    if let Ok(mut recv) = stream {
+                        let _ = recv.stop(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
+                    }
+                    Err("relay attempted an unscheduled unidirectional stream in strict mode".to_owned())
+                }
             }
-        };
+        })
+        .await?;
         let frame = opener.open(&datagram).map_err(|error| error.to_string())?;
         lifecycle
             .accept(&frame)
@@ -4999,6 +5014,17 @@ async fn strict_vpn_receiver(
             return Err("relay reset the strict VPN mux lane".to_owned());
         }
     }
+}
+fn strict_constant_rate_receive_deadline(tick_duration: Duration) -> Duration {
+    tick_duration.saturating_mul(STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS)
+}
+async fn strict_vpn_receive_with_deadline<T>(
+    deadline: Duration,
+    receive: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    timeout(deadline, receive)
+        .await
+        .map_err(|_| format!("strict VPN receiver observed no cell within {deadline:?}"))?
 }
 async fn resolve_multiaddr_socket_addr(
     relay: &ParsedMultiaddr,
@@ -11199,6 +11225,25 @@ mod tests {
         assert_eq!(strict_vpn_lane_id(session_id), 9);
     }
 
+    #[tokio::test]
+    async fn dormant_strict_receiver_deadline_expires_without_a_next_cell() {
+        assert_eq!(
+            strict_constant_rate_receive_deadline(STRICT_CONSTANT_RATE_TICK),
+            Duration::from_millis(40)
+        );
+        let deadline = Duration::from_millis(5);
+        let error = strict_vpn_receive_with_deadline(
+            deadline,
+            std::future::pending::<Result<(), String>>(),
+        )
+        .await
+        .expect_err("a silent strict peer must exceed the receive deadline");
+        assert_eq!(
+            error,
+            format!("strict VPN receiver observed no cell within {deadline:?}")
+        );
+    }
+
     #[test]
     fn fixed_secret_owner_redacts_and_uses_the_drop_clear_path() {
         let mut guarded = WipeArray([0xA5; 16]);
@@ -14792,5 +14837,17 @@ mod tests {
             default_state_root(),
             PathBuf::from("/var/lib/sora-vpn-controller")
         );
+    }
+
+    #[test]
+    fn production_helper_rejects_vulnerable_quinn_dependency() {
+        let error = validate_shipping_quinn_dependency()
+            .expect_err("locked vulnerable Quinn must remain fail-closed");
+        let ControllerError::State(reason) = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert!(reason.contains("quinn-proto 0.11.15"));
+        assert!(reason.contains("remote memory exhaustion"));
+        assert!(reason.contains("0.11.17"));
     }
 }

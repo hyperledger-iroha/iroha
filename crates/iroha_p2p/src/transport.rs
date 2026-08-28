@@ -103,8 +103,8 @@ pub mod quic {
     /// ALPN negotiated for Iroha P2P QUIC connections.
     pub use super::P2P_ALPN;
     use quinn::{
-        ClientConfig, Connection, Endpoint, IdleTimeout, RecvStream, SendStream, TransportConfig,
-        VarInt, crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
+        ClientConfig, Connection, Endpoint, RecvStream, SendStream, TransportConfig, VarInt,
+        crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
     };
     use rustls::client::danger::ServerCertVerifier;
     use std::{io, sync::Arc, time::Duration};
@@ -112,6 +112,10 @@ pub mod quic {
     pub const P2P_BIDI_STREAMS_PER_CONNECTION: u32 = 2;
     /// Smallest per-direction flow-control allocation used by the budget split.
     pub const FLOW_CONTROL_GRANULE_BYTES: usize = 64 * 1024;
+    const QUIC_DEPENDENCY_BLOCK_REASON: &str = "QUIC transport is unavailable with locked quinn-proto 0.11.15: \
+released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, \
+connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 \
+or later and requalify QUIC before re-enabling it";
     const FLOW_CONTROL_DIRECTIONS_PER_CONNECTION: usize = 4;
     // Quinn's endpoint configuration expresses the maximum UDP payload as a
     // `u16`, and its receive path additionally caps one datagram at 64 KiB.
@@ -177,8 +181,10 @@ pub mod quic {
     /// [`flow_control_geometry`] requires four such granules per active connection, each aggregate
     /// pending region fits within one quarter of the same minimum process geometry. Datagram
     /// buffers are separately configured, but their per-connection sum and aggregate multiplication
-    /// are still checked explicitly. Fixed Quinn object and allocator metadata is count-bounded by
-    /// `max_incoming`, but is not part of this payload/flow-credit byte geometry.
+    /// are still checked explicitly. This arithmetic is not a DATAGRAM-entry bound: locked Quinn
+    /// charges only payload bytes for those entries. Shipping constructors reject DATAGRAM buffers
+    /// until quinn-proto 0.11.17 or later is locked. Pending-`Incoming` object metadata is
+    /// count-bounded by `max_incoming`, but is not part of this payload/flow-credit byte geometry.
     pub fn endpoint_buffer_geometry(
         flow_control: FlowControlConfig,
         max_incoming: usize,
@@ -391,9 +397,13 @@ pub mod quic {
         /// QUIC keep-alive interval, if set.
         pub keep_alive_interval: Option<Duration>,
         /// Receive buffer reserved for QUIC datagrams on each connection (bytes).
-        /// `None` disables datagrams.
+        ///
+        /// This must be `None` while the locked Quinn release lacks fixed
+        /// per-entry receive accounting; any `Some` value is rejected.
         pub datagram_receive_buffer: Option<usize>,
-        /// Send buffer reserved for QUIC datagrams on each connection (bytes). Set to 0 to disable.
+        /// Send buffer reserved for QUIC datagrams on each connection (bytes).
+        ///
+        /// This must be zero while DATAGRAM receive support is fail-closed.
         pub datagram_send_buffer: usize,
         /// Checked process-wide flow-control geometry inputs.
         pub flow_control: FlowControlConfig,
@@ -418,6 +428,9 @@ pub mod quic {
     impl Dialer {
         /// Create a QUIC dialer bound to `bind_addr` (usually `0.0.0.0:0`).
         pub fn bind(bind_addr: std::net::SocketAddr, cfg: DialerConfig) -> io::Result<Self> {
+            // Validate before creating the UDP socket so rejected shipping
+            // QUIC has no externally observable transport side effect.
+            let transport = build_transport_config(cfg)?;
             let mut endpoint = Endpoint::client(bind_addr)?;
             let verifier: Arc<dyn ServerCertVerifier> =
                 Arc::new(super::CertificateKeyProofVerifier::unpinned());
@@ -433,7 +446,6 @@ pub mod quic {
             let crypto = QuinnRustlsClientConfig::try_from(tls)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
             let mut client = ClientConfig::new(Arc::new(crypto));
-            let transport = build_transport_config(cfg)?;
             client.transport_config(transport);
             endpoint.set_default_client_config(client);
             Ok(Self { endpoint })
@@ -487,24 +499,13 @@ pub mod quic {
             Ok((connection, hi, lo))
         }
     }
-    fn build_transport_config(cfg: DialerConfig) -> io::Result<Arc<TransportConfig>> {
-        endpoint_buffer_geometry(
-            cfg.flow_control,
-            cfg.flow_control.max_total_connections,
-            cfg.datagram_receive_buffer,
-            cfg.datagram_send_buffer,
-        )?;
-        let mut transport = TransportConfig::default();
-        configure_flow_control(&mut transport, cfg.flow_control)?;
-        if let Some(timeout) = cfg.max_idle_timeout {
-            let idle = IdleTimeout::try_from(timeout)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-            transport.max_idle_timeout(Some(idle));
-        }
-        transport.keep_alive_interval(cfg.keep_alive_interval);
-        transport.datagram_receive_buffer_size(cfg.datagram_receive_buffer);
-        transport.datagram_send_buffer_size(cfg.datagram_send_buffer);
-        Ok(Arc::new(transport))
+    fn build_transport_config(_cfg: DialerConfig) -> io::Result<Arc<TransportConfig>> {
+        // This is called before `Endpoint::client`, so the rejected transport
+        // cannot create a UDP socket or emit packets.
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            QUIC_DEPENDENCY_BLOCK_REASON,
+        ))
     }
     #[cfg(test)]
     mod tests {
@@ -531,6 +532,33 @@ pub mod quic {
             .checked_mul(cfg.max_total_connections)
             .expect("small process budget");
             assert!(total <= cfg.process_budget_bytes);
+        }
+        #[test]
+        fn public_dialer_rejects_vulnerable_quinn_before_binding() {
+            let unbindable: std::net::SocketAddr = "192.0.2.1:0".parse().unwrap();
+            for cfg in [
+                DialerConfig::default(),
+                DialerConfig {
+                    datagram_receive_buffer: Some(0),
+                    ..DialerConfig::default()
+                },
+                DialerConfig {
+                    datagram_receive_buffer: Some(1),
+                    ..DialerConfig::default()
+                },
+                DialerConfig {
+                    datagram_send_buffer: 1,
+                    ..DialerConfig::default()
+                },
+            ] {
+                let error = Dialer::bind(unbindable, cfg)
+                    .expect_err("vulnerable Quinn must fail before the UDP bind");
+                assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+                let reason = error.to_string();
+                assert!(reason.contains("quinn-proto 0.11.15"));
+                assert!(reason.contains("remote memory exhaustion"));
+                assert!(reason.contains("0.11.17"));
+            }
         }
         #[test]
         fn home_profile_uses_larger_window_under_same_process_budget() {
@@ -1344,12 +1372,16 @@ fn parse_proxy_value(raw: &str) -> std::result::Result<Proxy, String> {
     if host.is_empty() {
         return Err("proxy URL missing host".to_string());
     }
+    let host = host.parse::<std::net::IpAddr>().map_or_else(
+        |_| normalize_dns_name(host).map_err(|_| "proxy URL has invalid host".to_owned()),
+        |address| Ok(canonical_proxy_ip(address).to_string()),
+    )?;
     let port: u16 = port_str
         .parse()
         .map_err(|_| "proxy URL has invalid port".to_string())?;
     Ok(Proxy {
         kind,
-        host: host.to_string(),
+        host,
         port,
         auth,
     })
@@ -1902,6 +1934,23 @@ mod tests {
         assert_eq!(proxy.kind, ProxyKind::HttpConnectTls);
         assert_eq!(proxy.host, "proxy.example.com");
         assert_eq!(proxy.port, 8443);
+    }
+    #[test]
+    fn parse_proxy_rejects_invalid_host_syntax_before_dial() {
+        for value in [
+            "http://bad..example:8080",
+            "http://bad_example:8080",
+            "http://-bad.example:8080",
+            "http://bad-.example:8080",
+            "http://proxy.example\r\nInjected:8080",
+        ] {
+            let error = parse_proxy_value(value).expect_err("invalid proxy host must fail");
+            assert_eq!(error, "proxy URL has invalid host", "value: {value:?}");
+        }
+
+        let proxy = parse_proxy_value("http://PROXY.Example.:8080")
+            .expect("valid proxy host is normalized");
+        assert_eq!(proxy.host, "proxy.example");
     }
     #[test]
     fn connect_request_includes_basic_auth_when_present() {

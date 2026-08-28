@@ -149,8 +149,6 @@ impl_direct_instruction_box!(crate::isi::bridge::SubmitBridgeProof);
 impl_direct_instruction_box!(crate::isi::bridge::RecordBridgeReceipt);
 impl_direct_instruction_box!(crate::isi::bridge::RecordSccpMessage);
 impl_direct_instruction_box!(crate::isi::bridge::ApplySccpRouteGovernance);
-impl_direct_instruction_box!(crate::isi::bridge::FundSccpRouteEscrow);
-impl_direct_instruction_box!(crate::isi::bridge::RefundSccpRouteEscrow);
 impl_direct_instruction_box!(crate::isi::asset_alias::SetAssetDefinitionAlias);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferAvailability);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferBlacklist);
@@ -2671,8 +2669,7 @@ pub mod prelude {
             SetAssetTransferControl,
         },
         bridge::{
-            ApplySccpRouteGovernance, FundSccpRouteEscrow, RecordBridgeReceipt, RecordSccpMessage,
-            RefundSccpRouteEscrow, SubmitBridgeProof,
+            ApplySccpRouteGovernance, RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof,
         },
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,

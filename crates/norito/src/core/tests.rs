@@ -585,26 +585,6 @@ fn decode_vec_u8_from_slice_reports_prefix_used() {
     ));
     reset_decode_state();
 }
-#[cfg(feature = "parallel-decode")]
-#[test]
-fn sequence_parallel_decode_threshold_requires_large_plans() {
-    reset_decode_state();
-    let large_plan = SequencePlan {
-        spans: vec![SequenceSpan { start: 0, end: 8 }; PARALLEL_DECODE_MIN_ELEMENTS],
-        used: PARALLEL_DECODE_MIN_BYTES,
-    };
-    assert!(should_decode_sequence_parallel(&large_plan));
-    let small_bytes = SequencePlan {
-        used: PARALLEL_DECODE_MIN_BYTES - 1,
-        ..large_plan.clone()
-    };
-    assert!(!should_decode_sequence_parallel(&small_bytes));
-    let small_count = SequencePlan {
-        spans: vec![SequenceSpan { start: 0, end: 8 }; PARALLEL_DECODE_MIN_ELEMENTS - 1],
-        used: PARALLEL_DECODE_MIN_BYTES,
-    };
-    assert!(!should_decode_sequence_parallel(&small_count));
-}
 #[test]
 fn decode_field_canonical_propagates_access_to_parent_ctx() {
     reset_decode_state();

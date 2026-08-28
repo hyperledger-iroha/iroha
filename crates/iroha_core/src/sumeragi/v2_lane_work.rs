@@ -159,10 +159,7 @@ use iroha_p2p::network::{
     NetworkActorAdmissionTicketTestFixture, NetworkReplyFlushAckTestFixture,
     NetworkReplyRouteError, NetworkReplyRouteTestFixture,
 };
-use iroha_p2p::{
-    Priority,
-    network::{NetworkReplyRoute, NetworkReplyRoutes},
-};
+use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRoutes};
 use iroha_primitives::{numeric::Quantity, time::TimeSource};
 use norito::codec::Encode as _;
 #[cfg(test)]

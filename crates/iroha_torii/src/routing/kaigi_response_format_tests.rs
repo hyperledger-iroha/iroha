@@ -121,17 +121,6 @@ mod kaigi_response_format_tests {
     }
 
     #[test]
-    fn kaigi_relay_metadata_rejects_duplicate_registrations_across_domains() {
-        let relay_id = kaigi_relay_metadata_test_account(0x58);
-        let mut seen = BTreeSet::new();
-        ensure_unique_kaigi_relay_registration(&mut seen, &relay_id)
-            .expect("first relay registration");
-        let error = ensure_unique_kaigi_relay_registration(&mut seen, &relay_id)
-            .expect_err("duplicate relay registration must fail closed");
-        assert_kaigi_relay_metadata_error(error, "duplicate");
-    }
-
-    #[test]
     fn kaigi_relay_metadata_rejects_malformed_feedback() {
         let relay_id = kaigi_relay_metadata_test_account(0x54);
         let malformed = IrohaJson::new("not relay feedback");

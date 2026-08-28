@@ -65,6 +65,15 @@ removes the complete tree, including configs, logs, state, and runtime
 credentials. If either proof fails, it preserves the tree or quarantined racing
 replacement for operator recovery.
 
+All three disposable-deployment commands require Linux pidfds and procfs.
+Kagami records each peer only as owner-only `peerN.process.json` schema V1,
+binding its boot ID, process start time, executable path/device/inode, exact
+argv/config, UID/GID, session, and process group. Every observation, restart,
+signal, and exit wait reopens and holds a pidfd; signaling uses only
+`pidfd_send_signal` and waiting uses the pidfd readiness event. Never add a
+`ps`, numeric-PID signal, shell-kill, or non-Linux fallback. Retired
+`peerN.pid` files are an error and are not migrated.
+
 `up` builds the current Kagami, daemon, CLI, and SoraFS node and replaces one
 marked owner-only directory under `/var/lib/iroha-taira-devnet/` by default. It
 generates exactly four fresh-key NPoS validators on the canonical Taira chain,

@@ -340,6 +340,13 @@ continuations, supplied Ed25519 signatures, and the conservative validator-key
 upper bound before parsing cells, hashing, validating keys, or verifying
 signatures.
 
+Every accepted TON proof BOC has exactly one root. Compact Merkle proofs bind
+ordinary cells, transactions, messages, accounts, and code by TON hash zero,
+the original-tree identity preserved by pruned branches; a higher virtual-level
+hash cannot replace it. Validator-roster key parses and signer checks are
+metered separately, and internal canonicalization never revalidates an already
+validated roster.
+
 Native continuations are canonical shortest prefixes. A BSC proof may select a
 target only within the first full 1,000-block Parlia epoch after its governed
 anchor and may carry at most four later headers: the three retained

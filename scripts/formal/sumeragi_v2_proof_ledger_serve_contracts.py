@@ -1624,7 +1624,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256 = {
 }
 _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
     "ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc": (
-        "a998fd581c2b0ed01441cad6e752e8599e7f41634844045bff07ab4f7213aa29"
+        "e3aad9aae8a82eb29d223230fa3f8b2cf26ba5dfa75b6859be40d0ce1cd45b71"
     ),
     "same_view_generation_upgrade_restarts_timeout_with_a_fresh_owner": (
         "9c2930e2bec6e33904f20f6135300bcce4164b36a2cd03d9c8e516729ab84666"

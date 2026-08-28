@@ -3866,6 +3866,24 @@ impl ProductionV2Services {
         }
     }
     fn drive_pending_exact_output(&self, pending: &mut PendingExactOutput) -> Result<bool, String> {
+        if pending.applied_height_finality.is_none()
+            && u64::try_from(self.state.committed_height())
+                .is_ok_and(|height| height >= self.context.height)
+        {
+            let artifact = self
+                .kura
+                .v2_finality_artifact(self.context.height)
+                .map_err(|error| error.to_string())?;
+            if let Some(artifact) = artifact {
+                if artifact.height_context != self.context {
+                    return Err(
+                        "Sumeragi v2 committed exact-output height differs from Kura finality"
+                            .to_owned(),
+                    );
+                }
+                pending.applied_height_finality = Some(artifact);
+            }
+        }
         pending.poll_reply_flushes()?;
         let outcome = {
             #[cfg(test)]

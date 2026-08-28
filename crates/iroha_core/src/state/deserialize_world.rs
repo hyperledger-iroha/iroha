@@ -6520,6 +6520,8 @@ fn parse_world(
         .validate_sccp_registry()?;
     let sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1> =
         take_required(&mut map, "sccp_registry")?;
+    let sccp_route_liabilities: Storage<SccpRouteKeyV1, SccpRouteLiabilityV1> =
+        take_required(&mut map, "sccp_route_liabilities")?;
     let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
     let sccp_outbound_pending_messages = take_required(&mut map, "sccp_outbound_pending_messages")?;
     let sccp_outbound_message_locator = take_required(&mut map, "sccp_outbound_message_locator")?;
@@ -6885,6 +6887,7 @@ fn parse_world(
         axt_replay_ledger,
         axt_handle_budget_ledger,
         sccp_registry,
+        sccp_route_liabilities,
         sccp_outbound_pending_usage,
         sccp_outbound_pending_messages,
         sccp_outbound_message_locator,

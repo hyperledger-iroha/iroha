@@ -151,22 +151,19 @@ Completed history lives in [`status.md`](./status.md).
 
 ## P2P first-release closure
 
-- Add an operator-configured outbound peer-dial policy covering literal and
-  resolved IP ranges plus DNS suffixes across TCP, QUIC, SOCKS5, and HTTP(S)
-  CONNECT as defense in depth against operator mistakes and future discovery
-  sources. Current gossip requires a uniquely top-ranked mapping backed by at
-  least `f + 1` distinct active-validator reports from an exact `3f + 1` active
-  roster, and honest nodes advertise only locally configured mappings; retain
-  those provenance rules while adding proxy-aware resolution and DNS-rebinding
-  tests at every dial sink.
-- Upstream or vendor a Quinn receive-accounting change that charges a fixed
-  amount per queued DATAGRAM entry. Production P2P and the in-crate streaming
-  reader now drain eagerly before application authentication, close on empty or
-  oversized frames, and use count-and-byte-bounded handoffs, but dependency-owned
-  work before the first pump poll and between reactor polls is not a formal
-  per-entry memory bound. Locked Quinn 0.11.9 / quinn-proto 0.11.15 still has payload-only
-  receive accounting, so strict SoraNet configuration and live preflight remain
+- Upgrade the lockfile from quinn-proto 0.11.15 to released 0.11.17 or later,
+  which fixes unauthenticated remote-memory exhaustion in stream reassembly,
+  connection-ID retirement, and zero-length DATAGRAM accounting. Shipping P2P,
+  streaming, SoraNet relay, and VPN-helper QUIC reject endpoint creation while
+  the vulnerable resolution remains locked. After the dependency fix lands,
+  reactivate the QUIC and DATAGRAM-on abuse suites before removing those
+  fail-closed gates. Strict SoraNet configuration and live preflight remain
   rejected without downgrade.
+- Expose the documented deterministic Norito streaming media fallback over
+  bounded unidirectional streams. The current QUIC helper exposes its control
+  streams but no stream-based media payload API; until both that fallback and
+  fixed Quinn DATAGRAM accounting are qualified, DATAGRAM media remains
+  dormant.
 - Requalify the dormant strict SoraNet mux after per-entry DATAGRAM accounting
   lands. Application/exit, measurement, and VPN payload are wired through the
   authenticated fixed-rate scheduler; unavailability, missed deadlines, bounded
@@ -174,10 +171,6 @@ Completed history lives in [`status.md`](./status.md).
   circuit-fatal, with direct mixed-channel and loss regressions. Final activation
   still requires dependency-level zero-length-DATAGRAM abuse coverage and full
   relay/helper end-to-end traffic-shape qualification.
-- Carry the already-signed broadcast envelope in reliable-progress retry
-  ownership so retries across actor turns also avoid repeated BLS signing. Add
-  deterministic signing, allocation, and retained-byte benchmarks for direct,
-  hub-fallback, broadcast, and reliable-retry paths.
 - Split the large peer and network actors along their existing transport,
   handshake, admission, queueing, and relay ownership boundaries after adding a
   production-source reachability guard. Keep the single TLS/optional-QUIC wire
@@ -291,6 +284,11 @@ Completed history lives in [`status.md`](./status.md).
 - Extend the CAR output prepare/commit boundary to the optional summary output,
   then rerun the focused Torii, CLI, xtask, viewer, CAR, integration, and
   full-workspace matrices from a settled candidate.
+- Remediate and verify the mutable-path TOCTOU in the Taikai evidence collector
+  reported as the sole Medium-severity collateral finding by sealed Codex
+  Security scan `6ab84cf2-4c1f-47e4-9cb0-92d126eb333e`. Receipt validation,
+  digesting, copying, and optional signing must consume one immutable artifact
+  snapshot rather than reopening attacker-replaceable pathnames.
 
 ## Data-model first-release closure
 
@@ -306,10 +304,6 @@ Completed history lives in [`status.md`](./status.md).
   signing workflow so its manifest and version-index provenance names the
   release source and all three Torii schema snapshots come from that one
   settled authority. A dirty-tree development pass is not release provenance.
-- Resume Codex Security scan `6ab84cf2-4c1f-47e4-9cb0-92d126eb333e` when the
-  Security capability is available, disposition its one collateral Taikai
-  validation candidate, and retain the final report artifact. Discovery found
-  no Hijiri candidate, but an unfinished validation phase is not a clean scan.
 - Keep observer and evidence ingestion, peer reputation, registry credits,
   Hijiri checkpoints, and dedicated events or telemetry deferred until each has
   authenticated bounded ingress and one deterministic state owner. Define the

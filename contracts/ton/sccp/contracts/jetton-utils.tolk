@@ -4,6 +4,133 @@ import "messages"
 import "sccp-codec"
 import "storage"
 
+/// Compute the exact balance that must survive this message. `originalBalance`
+/// includes the inbound value at the start of the compute phase, so checked
+/// subtraction reconstructs the pre-message balance.
+fun sccpPreMessageReserveAmount(
+    originalBalance: coins,
+    inboundValue: coins,
+    protocolMinimum: coins,
+): coins {
+    assert (originalBalance >= inboundValue) throw SccpErrors.ReserveInvariant;
+    val beforeMessage = originalBalance - inboundValue;
+    return beforeMessage >= protocolMinimum ? beforeMessage : protocolMinimum;
+}
+
+/// Install the reserve before any outbound action. Exact mode is intentional:
+/// `AT_MOST` would silently weaken the storage-rent invariant.
+fun reserveSccpPreMessageBalance(inboundValue: coins, protocolMinimum: coins) {
+    val originalBalance = contract.getOriginalBalance();
+    val reserve = sccpPreMessageReserveAmount(
+        originalBalance,
+        inboundValue,
+        protocolMinimum,
+    );
+    assert (originalBalance >= reserve) throw SccpErrors.NotEnoughGas;
+    reserveToncoinsOnBalance(
+        reserve,
+        RESERVE_MODE_EXACT_AMOUNT | RESERVE_MODE_BOUNCE_ON_ACTION_FAIL,
+    );
+}
+
+/// Explicit excess value derived solely from the current inbound message.
+/// One operation allowance remains unallocated for forwarding and action fees.
+fun sccpBoundedInboundExcess(inboundValue: coins, committedValue: coins): coins {
+    assert (inboundValue >= committedValue) throw SccpErrors.NotEnoughGas;
+    val available = inboundValue - committedValue;
+    return available > SCCP_OPERATION_VALUE ? available - SCCP_OPERATION_VALUE : 0;
+}
+
+fun sccpPendingCapacityAvailable(count: uint16): bool {
+    return count < SCCP_PENDING_OPERATION_CAP;
+}
+
+/// Guardian keys are immutable, nonzero, distinct, and canonically ordered.
+fun mintBreakerGuardiansAreCanonical(guardians: MintBreakerGuardians): bool {
+    val tail = guardians.tail.load();
+    return guardians.guardian0 != 0 &&
+    guardians.guardian0 < guardians.guardian1 &&
+    guardians.guardian1 < guardians.guardian2 &&
+    guardians.guardian2 < tail.guardian3 &&
+    tail.guardian3 < tail.guardian4;
+}
+
+/// Exact cell signed by a breaker guardian. The target contract address stops
+/// an authorization for the bridge being replayed against the master.
+fun sccpMintBreakerAuthorization(config: BridgeConfig, target: address): cell {
+    return beginCell()
+        .storeSlice("sccp:ton:mint-breaker:disable:v1".literalSlice())
+        .storeAddress(target)
+        .storeInt(config.expectedGlobalId, 32)
+        .storeUint(config.routeRevision, 32)
+        .storeUint(config.routeHashes.load().routeConfigurationHash, 256)
+        .storeUint(1, 8)
+        .endCell();
+}
+
+fun mintBreakerSignatureValid(
+    signature: cell?,
+    digest: uint256,
+    guardian: uint256,
+): bool {
+    if (signature == null) {
+        return false;
+    }
+    val encoded = signature!.beginParse();
+    if (encoded.remainingBitsCount() != 512 || encoded.remainingRefsCount() != 0) {
+        return false;
+    }
+    return isSignatureValid(digest, encoded, guardian);
+}
+
+/// Verify the immutable fixed-slot 3-of-5 controller. Every supplied signature
+/// must be canonical and valid; omitted slots do not count.
+fun verifyMintBreakerAuthorization(
+    config: BridgeConfig,
+    target: address,
+    message: SccpDisableMinting,
+): bool {
+    val guardians = config.finalityHashes.load().tail.load().mintBreakerGuardians.load();
+    if (!mintBreakerGuardiansAreCanonical(guardians)) {
+        return false;
+    }
+    val signatures = message.tail.load();
+    val digest = sccpMintBreakerAuthorization(config, target).hash();
+    var validCount = 0;
+    if (message.signature0 != null) {
+        if (!mintBreakerSignatureValid(message.signature0, digest, guardians.guardian0)) {
+            return false;
+        }
+        validCount += 1;
+    }
+    if (message.signature1 != null) {
+        if (!mintBreakerSignatureValid(message.signature1, digest, guardians.guardian1)) {
+            return false;
+        }
+        validCount += 1;
+    }
+    if (signatures.signature2 != null) {
+        if (!mintBreakerSignatureValid(signatures.signature2, digest, guardians.guardian2)) {
+            return false;
+        }
+        validCount += 1;
+    }
+    val guardianTail = guardians.tail.load();
+    if (signatures.signature3 != null) {
+        if (!mintBreakerSignatureValid(signatures.signature3, digest, guardianTail.guardian3)) {
+            return false;
+        }
+        validCount += 1;
+    }
+    if (signatures.signature4 != null) {
+        if (!mintBreakerSignatureValid(signatures.signature4, digest, guardianTail.guardian4)) {
+            return false;
+        }
+        validCount += 1;
+    }
+    return validCount >= SCCP_MINT_BREAKER_THRESHOLD;
+}
+
 /// Bind each refund to one unique rejected deposit, even when a wallet reuses
 /// its query id, owner, and amount for multiple transfers.
 fun sccpRefundIdentity(
@@ -153,6 +280,9 @@ fun emptyWalletReplayState(): Cell<WalletReplayState> {
         mints: [],
         burns: [],
         refunds: [],
+        mintCount: 0,
+        burnCount: 0,
+        refundCount: 0,
     }.toCell();
 }
 

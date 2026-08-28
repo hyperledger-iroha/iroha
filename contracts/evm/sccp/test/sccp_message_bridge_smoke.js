@@ -466,20 +466,97 @@ contract TokenRouteHarness {
 }
 contract FalseToken {
   address public immutable bridge;
+  uint8 public constant decimals = 18;
+  uint256 public totalSupply;
+  mapping(address => uint256) public balanceOf;
+  constructor(address routeBridge) { bridge = routeBridge; }
+  function seed(address holder,uint256 value) external {
+    require(totalSupply == 0, "already seeded");
+    totalSupply = value;
+    balanceOf[holder] = value;
+  }
+  function mint(address,uint256) external pure returns(bool) { return false; }
+  function burnFrom(address,uint256) external pure returns(bool) { return false; }
+}
+contract WrongDecimalsToken {
+  address public immutable bridge;
+  uint8 public constant decimals = 17;
+  uint256 public totalSupply;
+  mapping(address => uint256) public balanceOf;
   constructor(address routeBridge) { bridge = routeBridge; }
   function mint(address,uint256) external pure returns(bool) { return false; }
   function burnFrom(address,uint256) external pure returns(bool) { return false; }
 }
+contract NonzeroSupplyToken {
+  address public immutable bridge;
+  uint8 public constant decimals = 18;
+  uint256 public totalSupply = 1;
+  mapping(address => uint256) public balanceOf;
+  constructor(address routeBridge) { bridge = routeBridge; }
+  function mint(address,uint256) external pure returns(bool) { return false; }
+  function burnFrom(address,uint256) external pure returns(bool) { return false; }
+}
+contract TrueNoopToken {
+  address public immutable bridge;
+  uint8 public constant decimals = 18;
+  uint256 public totalSupply;
+  mapping(address => uint256) public balanceOf;
+  constructor(address routeBridge) { bridge = routeBridge; }
+  function seed(address holder,uint256 value) external {
+    require(totalSupply == 0, "already seeded");
+    totalSupply = value;
+    balanceOf[holder] = value;
+  }
+  function mint(address,uint256) external pure returns(bool) { return true; }
+  function burnFrom(address,uint256) external pure returns(bool) { return true; }
+}
+contract WrongDeltaToken {
+  address public immutable bridge;
+  uint8 public constant decimals = 18;
+  uint256 public totalSupply;
+  mapping(address => uint256) public balanceOf;
+  constructor(address routeBridge) { bridge = routeBridge; }
+  function seed(address holder,uint256 value) external {
+    require(totalSupply == 0, "already seeded");
+    totalSupply = value;
+    balanceOf[holder] = value;
+  }
+  function mint(address to,uint256 value) external returns(bool) {
+    require(msg.sender == bridge, "not bridge");
+    totalSupply += value + 1;
+    balanceOf[to] += value + 1;
+    return true;
+  }
+  function burnFrom(address from,uint256 value) external returns(bool) {
+    require(msg.sender == bridge && value > 1, "bad burn");
+    totalSupply -= value - 1;
+    balanceOf[from] -= value - 1;
+    return true;
+  }
+}
 contract ReentrantToken {
   address public immutable bridge;
+  uint8 public constant decimals = 18;
+  uint256 public totalSupply;
+  mapping(address => uint256) public balanceOf;
   bytes private recipient;
   bool private entered;
   constructor(address routeBridge, bytes memory tairaRecipient) {
     bridge = routeBridge;
     recipient = tairaRecipient;
   }
-  function mint(address,uint256) external pure returns(bool) { return true; }
-  function burnFrom(address,uint256) external returns(bool) {
+  function seed(address holder,uint256 value) external {
+    require(totalSupply == 0, "already seeded");
+    totalSupply = value;
+    balanceOf[holder] = value;
+  }
+  function mint(address to,uint256 value) external returns(bool) {
+    require(msg.sender == bridge, "bad mint setup");
+    totalSupply += value;
+    balanceOf[to] += value;
+    return true;
+  }
+  function burnFrom(address from,uint256 value) external returns(bool) {
     require(msg.sender == bridge && !entered, "bad reentry setup");
     entered = true;
     (bool success,) = bridge.call(
@@ -487,6 +564,8 @@ contract ReentrantToken {
     );
     require(!success, "reentry was accepted");
     entered = false;
+    totalSupply -= value;
+    balanceOf[from] -= value;
     return true;
   }
 }
@@ -979,6 +1058,8 @@ async function deployPreboundRoute(
 ) {
   const routeAddress = await nextCreateAddress(signer, 1);
   const token = await deploy(signer, tokenArtifact, [routeAddress]);
+  assert.equal(await token.decimals(), 18n);
+  assert.equal(await token.totalSupply(), 0n);
   assert.equal(
     await nextCreateAddress(signer),
     routeAddress,
@@ -1595,6 +1676,26 @@ async function main() {
     "TairaXorSccpBridge",
   );
   const falseTokenArtifact = artifact(mockContracts, "Mocks.sol", "FalseToken");
+  const wrongDecimalsTokenArtifact = artifact(
+    mockContracts,
+    "Mocks.sol",
+    "WrongDecimalsToken",
+  );
+  const nonzeroSupplyTokenArtifact = artifact(
+    mockContracts,
+    "Mocks.sol",
+    "NonzeroSupplyToken",
+  );
+  const trueNoopTokenArtifact = artifact(
+    mockContracts,
+    "Mocks.sol",
+    "TrueNoopToken",
+  );
+  const wrongDeltaTokenArtifact = artifact(
+    mockContracts,
+    "Mocks.sol",
+    "WrongDeltaToken",
+  );
   const reentrantTokenArtifact = artifact(
     mockContracts,
     "Mocks.sol",
@@ -1663,6 +1764,8 @@ async function main() {
       await outsider.getAddress(),
     ]);
     assert.equal(await preboundToken.bridge(), await outsider.getAddress());
+    assert.equal(await preboundToken.decimals(), 18n);
+    assert.equal(await preboundToken.totalSupply(), 0n);
   }
 
   for (const [label, exactRouteArtifact] of [
@@ -1697,6 +1800,18 @@ async function main() {
   }
 
   assert(!bridgeArtifact.abi.some((entry) => entry.name === "burnToTaira"));
+  assert(!bridgeArtifact.abi.some((entry) => entry.name === "transferNonce"));
+  assert(!ethereumBridgeArtifact.abi.some((entry) => entry.name === "transferNonce"));
+  for (const exactRouteArtifact of [bridgeArtifact, ethereumBridgeArtifact]) {
+    const nonceGetter = exactRouteArtifact.abi.find(
+      (entry) => entry.name === "transferNonces",
+    );
+    assert(nonceGetter, "per-sender EVM nonce getter is missing");
+    assert.deepEqual(
+      nonceGetter.inputs.map(({ type }) => type),
+      ["address"],
+    );
+  }
   assert(
     !bridgeArtifact.abi.some((entry) => entry.name === "submitSccpSourceEvent"),
   );
@@ -2151,6 +2266,33 @@ async function main() {
     SORA_FINALITY_ANCHOR_HASH,
   );
 
+  const tronWrongDecimalsRouteAddress = await nextCreateAddress(signer, 1);
+  const tronWrongDecimalsToken = await deploy(signer, wrongDecimalsTokenArtifact, [
+    tronWrongDecimalsRouteAddress,
+  ]);
+  await assert.rejects(
+    deploy(signer, tronBridgeArtifact, [
+      await tronWrongDecimalsToken.getAddress(),
+      verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
+      TRON_NILE_PROFILE,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith("Unexpected token decimals"),
+  );
+  const tronNonzeroSupplyRouteAddress = await nextCreateAddress(signer, 1);
+  const tronNonzeroSupplyToken = await deploy(signer, nonzeroSupplyTokenArtifact, [
+    tronNonzeroSupplyRouteAddress,
+  ]);
+  await assert.rejects(
+    deploy(signer, tronBridgeArtifact, [
+      await tronNonzeroSupplyToken.getAddress(),
+      verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
+      TRON_NILE_PROFILE,
+      ROUTE_REVISION,
+    ]),
+    rejectedWith("Token supply must start at zero"),
+  );
+
   const tronRoute = await deployPreboundRoute(
     signer,
     tronTokenArtifact,
@@ -2600,6 +2742,166 @@ async function main() {
   );
   assert.equal(await tronBridge.transferNonces(tronBurnAccount), 2n);
   assert.equal(await tronBridge.transferNonces(tronOutsiderAddress), 1n);
+
+  const predictedTronNoopBridgeAddress = await nextCreateAddress(signer, 1);
+  const tronNoopToken = await deploy(signer, trueNoopTokenArtifact, [
+    predictedTronNoopBridgeAddress,
+  ]);
+  const tronNoopBridge = await deploy(signer, tronBridgeArtifact, [
+    await tronNoopToken.getAddress(),
+    verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
+    TRON_NILE_PROFILE,
+    ROUTE_REVISION,
+  ]);
+  assert.equal(
+    await tronNoopBridge.getAddress(),
+    predictedTronNoopBridgeAddress,
+  );
+  await (await tronNoopToken.seed(tronBurnAccount, 2n * SCALE)).wait();
+  await assert.rejects(
+    tronNoopBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE, 0n),
+    rejectedWith("Token delta mismatch"),
+  );
+  assert.equal(await tronNoopBridge.transferNonces(tronBurnAccount), 0n);
+  assert.equal(await tronNoopToken.totalSupply(), 2n * SCALE);
+  assert.equal(await tronNoopToken.balanceOf(tronBurnAccount), 2n * SCALE);
+
+  const tronNoopMintPayload = transferPayload({
+    sourceDomain: DOMAIN_SORA,
+    destinationDomain: DOMAIN_TRON,
+    nonce: 400,
+    amount: 1,
+    senderCodec: CODEC_TEXT,
+    sender: Buffer.from(CANONICAL_I105_BYTES),
+    recipientCodec: CODEC_TRON21,
+    recipient: tronRecipient,
+    route: "taira_tron_xor",
+  });
+  const tronNoopMintPayloadHex = ethers.hexlify(tronNoopMintPayload);
+  const tronNoopMintMessageId =
+    await tronNoopBridge.sccpDestinationMessageId(tronNoopMintPayloadHex);
+  const tronNoopMintPublicInputs = [
+    tronNoopMintMessageId,
+    await tronNoopBridge.sccpPayloadHash(tronNoopMintPayloadHex),
+    word(DOMAIN_TRON),
+    ethers.keccak256(ethers.toUtf8Bytes("tron-noop-mint-commitment-root")),
+    word(400),
+    ethers.keccak256(ethers.toUtf8Bytes("tron-noop-mint-finality-block")),
+  ];
+  const tronNoopMintStatementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("tron-noop-mint-statement"),
+  );
+  const tronNoopMintProof = await acceptingProof(
+    provider,
+    abi,
+    tronNoopMintPublicInputs,
+    tronNoopMintStatementHash,
+    await tronNoopBridge.destinationBindingHash(),
+    await tronNoopBridge.routeConfigHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+    g1,
+    g2,
+  );
+  await assert.rejects(
+    tronNoopBridge.finalizeFromTaira(
+      tronNoopMintProof,
+      tronNoopMintPublicInputs,
+      tronNoopMintStatementHash,
+      tronNoopMintPayloadHex,
+    ),
+    rejectedWith("Token delta mismatch"),
+  );
+  assert.equal(
+    await tronNoopBridge.usedDestinationMessages(tronNoopMintMessageId),
+    false,
+  );
+  assert.equal(await tronNoopToken.totalSupply(), 2n * SCALE);
+  assert.equal(await tronNoopToken.balanceOf(tronBurnAccount), 2n * SCALE);
+
+  const predictedTronWrongDeltaBridgeAddress = await nextCreateAddress(signer, 1);
+  const tronWrongDeltaToken = await deploy(signer, wrongDeltaTokenArtifact, [
+    predictedTronWrongDeltaBridgeAddress,
+  ]);
+  const tronWrongDeltaBridge = await deploy(signer, tronBridgeArtifact, [
+    await tronWrongDeltaToken.getAddress(),
+    verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
+    TRON_NILE_PROFILE,
+    ROUTE_REVISION,
+  ]);
+  assert.equal(
+    await tronWrongDeltaBridge.getAddress(),
+    predictedTronWrongDeltaBridgeAddress,
+  );
+  await (await tronWrongDeltaToken.seed(tronBurnAccount, 2n * SCALE)).wait();
+  await assert.rejects(
+    tronWrongDeltaBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE, 0n),
+    rejectedWith("Token delta mismatch"),
+  );
+  assert.equal(await tronWrongDeltaBridge.transferNonces(tronBurnAccount), 0n);
+  assert.equal(await tronWrongDeltaToken.totalSupply(), 2n * SCALE);
+  assert.equal(await tronWrongDeltaToken.balanceOf(tronBurnAccount), 2n * SCALE);
+
+  const tronWrongDeltaMintPayload = transferPayload({
+    sourceDomain: DOMAIN_SORA,
+    destinationDomain: DOMAIN_TRON,
+    nonce: 401,
+    amount: 1,
+    senderCodec: CODEC_TEXT,
+    sender: Buffer.from(CANONICAL_I105_BYTES),
+    recipientCodec: CODEC_TRON21,
+    recipient: tronRecipient,
+    route: "taira_tron_xor",
+  });
+  const tronWrongDeltaMintPayloadHex = ethers.hexlify(
+    tronWrongDeltaMintPayload,
+  );
+  const tronWrongDeltaMintMessageId =
+    await tronWrongDeltaBridge.sccpDestinationMessageId(
+      tronWrongDeltaMintPayloadHex,
+    );
+  const tronWrongDeltaMintPublicInputs = [
+    tronWrongDeltaMintMessageId,
+    await tronWrongDeltaBridge.sccpPayloadHash(tronWrongDeltaMintPayloadHex),
+    word(DOMAIN_TRON),
+    ethers.keccak256(
+      ethers.toUtf8Bytes("tron-wrong-delta-mint-commitment-root"),
+    ),
+    word(401),
+    ethers.keccak256(
+      ethers.toUtf8Bytes("tron-wrong-delta-mint-finality-block"),
+    ),
+  ];
+  const tronWrongDeltaMintStatementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("tron-wrong-delta-mint-statement"),
+  );
+  const tronWrongDeltaMintProof = await acceptingProof(
+    provider,
+    abi,
+    tronWrongDeltaMintPublicInputs,
+    tronWrongDeltaMintStatementHash,
+    await tronWrongDeltaBridge.destinationBindingHash(),
+    await tronWrongDeltaBridge.routeConfigHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+    g1,
+    g2,
+  );
+  await assert.rejects(
+    tronWrongDeltaBridge.finalizeFromTaira(
+      tronWrongDeltaMintProof,
+      tronWrongDeltaMintPublicInputs,
+      tronWrongDeltaMintStatementHash,
+      tronWrongDeltaMintPayloadHex,
+    ),
+    rejectedWith("Token delta mismatch"),
+  );
+  assert.equal(
+    await tronWrongDeltaBridge.usedDestinationMessages(
+      tronWrongDeltaMintMessageId,
+    ),
+    false,
+  );
+  assert.equal(await tronWrongDeltaToken.totalSupply(), 2n * SCALE);
+  assert.equal(await tronWrongDeltaToken.balanceOf(tronBurnAccount), 2n * SCALE);
   await tronEip1193Provider.disconnect();
   }
 
@@ -2659,6 +2961,30 @@ async function main() {
       ROUTE_REVISION,
     ]),
     rejectedWith(),
+  );
+  const wrongDecimalsRouteAddress = await nextCreateAddress(signer, 1);
+  const wrongDecimalsToken = await deploy(signer, wrongDecimalsTokenArtifact, [
+    wrongDecimalsRouteAddress,
+  ]);
+  await assert.rejects(
+    deploy(signer, injectedBscRouteArtifact, [
+      await wrongDecimalsToken.getAddress(),
+      verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+      ROUTE_REVISION,
+    ]),
+    rejectedWith("Unexpected token decimals"),
+  );
+  const nonzeroSupplyRouteAddress = await nextCreateAddress(signer, 1);
+  const nonzeroSupplyToken = await deploy(signer, nonzeroSupplyTokenArtifact, [
+    nonzeroSupplyRouteAddress,
+  ]);
+  await assert.rejects(
+    deploy(signer, injectedBscRouteArtifact, [
+      await nonzeroSupplyToken.getAddress(),
+      verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+      ROUTE_REVISION,
+    ]),
+    rejectedWith("Token supply must start at zero"),
   );
   const rejectedBscRouteAddress = await nextCreateAddress(signer, 1);
   const rejectedBscToken = await deploy(signer, tokenArtifact, [
@@ -3392,12 +3718,26 @@ async function main() {
   );
   const signerBalanceBeforeAllowanceAttacks = await token.balanceOf(signerAddress);
   const outsiderBalanceBeforeAllowanceAttacks = await token.balanceOf(outsiderAddress);
+  await (await token.approve(outsiderAddress, SCALE)).wait();
+  await (
+    await token
+      .connect(outsider)
+      .transferFrom(signerAddress, outsiderAddress, SCALE)
+  ).wait();
+  assert.equal(await token.allowance(signerAddress, outsiderAddress), 0n);
+  await assert.rejects(
+    token.approve(outsiderAddress, 2n * SCALE),
+    rejectedWith("Clear allowance first"),
+  );
+  await (await token.approve(outsiderAddress, 0n)).wait();
+  await (await token.connect(outsider).transfer(signerAddress, SCALE)).wait();
   await (await token.approve(outsiderAddress, 2n * SCALE)).wait();
   await assert.rejects(
     token.connect(outsider).transferFrom(signerAddress, outsiderAddress, 3n * SCALE),
     rejectedWith("Allowance exceeded"),
   );
   assert.equal(await token.allowance(signerAddress, outsiderAddress), 2n * SCALE);
+  await (await token.approve(outsiderAddress, 0n)).wait();
   await (await token.approve(outsiderAddress, ethers.MaxUint256)).wait();
   await assert.rejects(
     token.connect(outsider).transferFrom(signerAddress, outsiderAddress, 6n * SCALE),
@@ -3412,6 +3752,30 @@ async function main() {
     await token.balanceOf(signerAddress),
     signerBalanceBeforeAllowanceAttacks,
   );
+  assert.equal(
+    await token.balanceOf(outsiderAddress),
+    outsiderBalanceBeforeAllowanceAttacks,
+  );
+  await (await token.approve(outsiderAddress, 0n)).wait();
+
+  await (await token.transfer(outsiderAddress, SCALE)).wait();
+  assert.equal(await bridge.transferNonces(signerAddress), 0n);
+  assert.equal(await bridge.transferNonces(outsiderAddress), 0n);
+  const outsiderFirstMessageId = await bridge
+    .connect(outsider)
+    .transferToTaira.staticCall(CANONICAL_I105_BYTES, SCALE);
+  const signerFirstMessageId = await bridge.transferToTaira.staticCall(
+    CANONICAL_I105_BYTES,
+    SCALE,
+  );
+  assert.notEqual(outsiderFirstMessageId, signerFirstMessageId);
+  await (
+    await bridge
+      .connect(outsider)
+      .transferToTaira(CANONICAL_I105_BYTES, SCALE)
+  ).wait();
+  assert.equal(await bridge.transferNonces(outsiderAddress), 1n);
+  assert.equal(await bridge.transferNonces(signerAddress), 0n);
   assert.equal(
     await token.balanceOf(outsiderAddress),
     outsiderBalanceBeforeAllowanceAttacks,
@@ -3431,7 +3795,7 @@ async function main() {
     ...invalidTairaRecipients,
   ];
   const balanceBeforeInvalidBurns = await token.balanceOf(signerAddress);
-  const nonceBeforeInvalidBurns = await bridge.transferNonce();
+  const nonceBeforeInvalidBurns = await bridge.transferNonces(signerAddress);
   for (const recipient of invalidRecipients) {
     await assert.rejects(
       bridge.transferToTaira(recipient, SCALE),
@@ -3445,7 +3809,7 @@ async function main() {
     );
   }
   assert.equal(await token.balanceOf(signerAddress), balanceBeforeInvalidBurns);
-  assert.equal(await bridge.transferNonce(), nonceBeforeInvalidBurns);
+  assert.equal(await bridge.transferNonces(signerAddress), nonceBeforeInvalidBurns);
   const sourceTx = await bridge.transferToTaira(
     CANONICAL_I105_BYTES,
     SCALE,
@@ -3467,8 +3831,12 @@ async function main() {
     parsedSource[0].args.routeConfigHash,
     await bridge.routeConfigHash(),
   );
-  assert.equal(await bridge.transferNonce(), 1n);
-  assert.equal(await token.balanceOf(signerAddress), 4n * SCALE);
+  assert.equal(await bridge.transferNonces(signerAddress), 1n);
+  assert.equal(
+    await token.balanceOf(signerAddress),
+    balanceBeforeInvalidBurns - SCALE,
+  );
+  assert.equal(await bridge.transferNonces(outsiderAddress), 1n);
   const sourcePayload = ethers.getBytes(parsedSource[0].args.canonicalPayload);
   assert.equal(Buffer.from(sourcePayload).readUInt32LE(18), ROUTE_REVISION);
   assert.equal(
@@ -3504,11 +3872,12 @@ async function main() {
     ROUTE_REVISION,
   ]);
   assert.equal(await falseBridge.getAddress(), predictedFalseBridgeAddress);
+  await (await falseToken.seed(signerAddress, SCALE)).wait();
   await assert.rejects(
     falseBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE),
     rejectedWith("Token burn failed"),
   );
-  assert.equal(await falseBridge.transferNonce(), 0n);
+  assert.equal(await falseBridge.transferNonces(signerAddress), 0n);
 
   const falseMintPayload = transferPayload({
     sourceDomain: DOMAIN_SORA,
@@ -3564,6 +3933,148 @@ async function main() {
     "destination-message consumption must roll back when minting fails",
   );
 
+  const predictedNoopBridgeAddress = await nextCreateAddress(signer, 1);
+  const trueNoopToken = await deploy(signer, trueNoopTokenArtifact, [
+    predictedNoopBridgeAddress,
+  ]);
+  const trueNoopBridge = await deploy(signer, injectedBscRouteArtifact, [
+    await trueNoopToken.getAddress(),
+    verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+    ROUTE_REVISION,
+  ]);
+  assert.equal(await trueNoopBridge.getAddress(), predictedNoopBridgeAddress);
+  await (await trueNoopToken.seed(signerAddress, 2n * SCALE)).wait();
+  await assert.rejects(
+    trueNoopBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE),
+    rejectedWith("Token delta mismatch"),
+  );
+  assert.equal(await trueNoopBridge.transferNonces(signerAddress), 0n);
+  assert.equal(await trueNoopToken.totalSupply(), 2n * SCALE);
+  assert.equal(await trueNoopToken.balanceOf(signerAddress), 2n * SCALE);
+
+  const noopMintPayload = transferPayload({
+    sourceDomain: DOMAIN_SORA,
+    destinationDomain: DOMAIN_BSC,
+    nonce: 11,
+    amount: 1,
+    senderCodec: CODEC_TEXT,
+    sender: Buffer.from(CANONICAL_I105_BYTES),
+    recipientCodec: CODEC_EVM20,
+    recipient: recipient20,
+  });
+  const noopMintPayloadHex = ethers.hexlify(noopMintPayload);
+  const noopMintMessageId =
+    await trueNoopBridge.sccpDestinationMessageId(noopMintPayloadHex);
+  const noopMintPublicInputs = [
+    noopMintMessageId,
+    await trueNoopBridge.sccpPayloadHash(noopMintPayloadHex),
+    word(DOMAIN_BSC),
+    ethers.keccak256(ethers.toUtf8Bytes("noop-mint-commitment-root")),
+    word(102),
+    ethers.keccak256(ethers.toUtf8Bytes("noop-mint-finality-block")),
+  ];
+  const noopMintStatementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("noop-mint-statement"),
+  );
+  const noopMintProof = await acceptingProof(
+    provider,
+    abi,
+    noopMintPublicInputs,
+    noopMintStatementHash,
+    await trueNoopBridge.destinationBindingHash(),
+    await trueNoopBridge.routeConfigHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+    g1,
+    g2,
+  );
+  await assert.rejects(
+    trueNoopBridge.finalizeFromTaira(
+      noopMintProof,
+      noopMintPublicInputs,
+      noopMintStatementHash,
+      noopMintPayloadHex,
+    ),
+    rejectedWith("Token delta mismatch"),
+  );
+  assert.equal(await trueNoopBridge.usedDestinationMessages(noopMintMessageId), false);
+  assert.equal(await trueNoopToken.totalSupply(), 2n * SCALE);
+  assert.equal(await trueNoopToken.balanceOf(signerAddress), 2n * SCALE);
+
+  const predictedWrongDeltaBridgeAddress = await nextCreateAddress(signer, 1);
+  const wrongDeltaToken = await deploy(signer, wrongDeltaTokenArtifact, [
+    predictedWrongDeltaBridgeAddress,
+  ]);
+  const wrongDeltaBridge = await deploy(signer, injectedBscRouteArtifact, [
+    await wrongDeltaToken.getAddress(),
+    verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+    ROUTE_REVISION,
+  ]);
+  assert.equal(
+    await wrongDeltaBridge.getAddress(),
+    predictedWrongDeltaBridgeAddress,
+  );
+  await (await wrongDeltaToken.seed(outsiderAddress, 2n * SCALE)).wait();
+  await assert.rejects(
+    wrongDeltaBridge
+      .connect(outsider)
+      .transferToTaira(CANONICAL_I105_BYTES, SCALE),
+    rejectedWith("Token delta mismatch"),
+  );
+  assert.equal(await wrongDeltaBridge.transferNonces(outsiderAddress), 0n);
+  assert.equal(await wrongDeltaToken.totalSupply(), 2n * SCALE);
+  assert.equal(await wrongDeltaToken.balanceOf(outsiderAddress), 2n * SCALE);
+
+  const wrongDeltaMintPayload = transferPayload({
+    sourceDomain: DOMAIN_SORA,
+    destinationDomain: DOMAIN_BSC,
+    nonce: 12,
+    amount: 1,
+    senderCodec: CODEC_TEXT,
+    sender: Buffer.from(CANONICAL_I105_BYTES),
+    recipientCodec: CODEC_EVM20,
+    recipient: recipient20,
+  });
+  const wrongDeltaMintPayloadHex = ethers.hexlify(wrongDeltaMintPayload);
+  const wrongDeltaMintMessageId =
+    await wrongDeltaBridge.sccpDestinationMessageId(wrongDeltaMintPayloadHex);
+  const wrongDeltaMintPublicInputs = [
+    wrongDeltaMintMessageId,
+    await wrongDeltaBridge.sccpPayloadHash(wrongDeltaMintPayloadHex),
+    word(DOMAIN_BSC),
+    ethers.keccak256(ethers.toUtf8Bytes("wrong-delta-mint-commitment-root")),
+    word(103),
+    ethers.keccak256(ethers.toUtf8Bytes("wrong-delta-mint-finality-block")),
+  ];
+  const wrongDeltaMintStatementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("wrong-delta-mint-statement"),
+  );
+  const wrongDeltaMintProof = await acceptingProof(
+    provider,
+    abi,
+    wrongDeltaMintPublicInputs,
+    wrongDeltaMintStatementHash,
+    await wrongDeltaBridge.destinationBindingHash(),
+    await wrongDeltaBridge.routeConfigHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+    g1,
+    g2,
+  );
+  await assert.rejects(
+    wrongDeltaBridge.finalizeFromTaira(
+      wrongDeltaMintProof,
+      wrongDeltaMintPublicInputs,
+      wrongDeltaMintStatementHash,
+      wrongDeltaMintPayloadHex,
+    ),
+    rejectedWith("Token delta mismatch"),
+  );
+  assert.equal(
+    await wrongDeltaBridge.usedDestinationMessages(wrongDeltaMintMessageId),
+    false,
+  );
+  assert.equal(await wrongDeltaToken.totalSupply(), 2n * SCALE);
+  assert.equal(await wrongDeltaToken.balanceOf(signerAddress), 0n);
+
   const predictedReentrantBridgeAddress = await nextCreateAddress(signer, 1);
   const reentrantToken = await deploy(signer, reentrantTokenArtifact, [
     predictedReentrantBridgeAddress,
@@ -3583,6 +4094,7 @@ async function main() {
     await reentrantBridge.getAddress(),
     predictedReentrantBridgeAddress,
   );
+  await (await reentrantToken.seed(outsiderAddress, SCALE)).wait();
   const reentrantReceipt = await (
     await reentrantBridge
       .connect(outsider)
@@ -3593,7 +4105,9 @@ async function main() {
     (log) => log.address.toLowerCase() === reentrantBridgeAddress.toLowerCase(),
   );
   assert.equal(reentrantEvents.length, 1);
-  assert.equal(await reentrantBridge.transferNonce(), 1n);
+  assert.equal(await reentrantBridge.transferNonces(outsiderAddress), 1n);
+  assert.equal(await reentrantToken.totalSupply(), 0n);
+  assert.equal(await reentrantToken.balanceOf(outsiderAddress), 0n);
 
   const bscSourceLaneHash = await bridge.sourceLaneHash();
   const bscDestinationLaneHash = await bridge.destinationLaneHash();
@@ -3898,7 +4412,10 @@ async function main() {
     await ethereumToken.balanceOf(ethereumSignerAddress),
     6n * SCALE,
   );
-  assert.equal(await ethereumBridge.transferNonce(), 1n);
+  assert.equal(
+    await ethereumBridge.transferNonces(await ethereumSigner.getAddress()),
+    1n,
+  );
 
   await assert.rejects(
     ethereumSigner.sendTransaction({

@@ -345,96 +345,11 @@ fn bind_reusable_tcp_listener_addr(addr: std::net::SocketAddr) -> io::Result<Tcp
     socket.listen(TCP_LISTEN_BACKLOG)?;
     TcpListener::from_std(socket.into())
 }
+mod admission;
 #[cfg(test)]
 #[path = "network/tcp_listener_bind_tests.rs"]
 mod tcp_listener_bind_tests;
-// Simple CIDR (IPv4/IPv6) representation for ACLs.
-#[derive(Clone, Debug)]
-struct IpNet {
-    kind: IpKind,
-}
-#[derive(Clone, Debug)]
-enum IpKind {
-    V4 { net: u32, mask: u32 },
-    V6 { net: [u8; 16], bits: u8 },
-}
-fn parse_cidr(s: &str) -> Option<IpNet> {
-    if let Some((ip, bits_str)) = s.split_once('/') {
-        let bits: u8 = bits_str.parse().ok()?;
-        if let Ok(v4) = ip.parse::<std::net::Ipv4Addr>() {
-            if bits > 32 {
-                return None;
-            }
-            let n = u32::from(v4);
-            let mask = if bits == 0 {
-                0
-            } else {
-                u32::MAX << (32 - bits)
-            };
-            return Some(IpNet {
-                kind: IpKind::V4 {
-                    net: n & mask,
-                    mask,
-                },
-            });
-        }
-        if let Ok(v6) = ip.parse::<std::net::Ipv6Addr>() {
-            if bits > 128 {
-                return None;
-            }
-            let mut net = [0u8; 16];
-            net.copy_from_slice(&v6.octets());
-            let full_bytes = (bits / 8) as usize;
-            let rem_bits = bits % 8;
-            if full_bytes < 16 {
-                if rem_bits == 0 {
-                    for b in net.iter_mut().skip(full_bytes) {
-                        *b = 0;
-                    }
-                } else {
-                    for b in net.iter_mut().skip(full_bytes + 1) {
-                        *b = 0;
-                    }
-                    let mask = 0xFFu8 << (8 - rem_bits);
-                    net[full_bytes] &= mask;
-                }
-            }
-            return Some(IpNet {
-                kind: IpKind::V6 { net, bits },
-            });
-        }
-    }
-    None
-}
-fn parse_cidrs(list: &[String]) -> Vec<IpNet> {
-    list.iter().filter_map(|s| parse_cidr(s)).collect()
-}
-fn cidr_contains(nets: &[IpNet], ip: std::net::IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let x = u32::from(v4);
-            nets.iter().any(|n| match &n.kind {
-                IpKind::V4 { net, mask } => (x & mask) == *net,
-                _ => false,
-            })
-        }
-        IpAddr::V6(v6) => {
-            let x = v6.octets();
-            nets.iter().any(|n| match &n.kind {
-                IpKind::V6 { net, bits } => {
-                    let full = (*bits / 8) as usize;
-                    let rem = *bits % 8;
-                    (full == 0 || x[..full] == net[..full])
-                        && (rem == 0 || {
-                            let mask = 0xFFu8 << (8 - rem);
-                            (x[full] & mask) == (net[full] & mask)
-                        })
-                }
-                _ => false,
-            })
-        }
-    }
-}
+use admission::*;
 fn relay_role_from_mode(mode: iroha_config::parameters::actual::RelayMode) -> RelayRole {
     match mode {
         iroha_config::parameters::actual::RelayMode::Hub => RelayRole::Hub,
@@ -5780,298 +5695,6 @@ pub fn inc_post_overflow_for_test(priority_high: bool, topic: message::Topic, n:
     }
 }
 // LogSampler is provided by crate::sampler
-/// A coarse bucket key for IPs used for throttling.
-/// The prefix length used to derive the bucket is stored alongside the masked address.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct IpBucketKey([u8; 16], u8);
-fn ip_bucket_key(ip: std::net::IpAddr, prefix_v4_bits: u8, prefix_v6_bits: u8) -> IpBucketKey {
-    match ip {
-        IpAddr::V4(v4) => {
-            let bits = prefix_v4_bits.min(32);
-            let raw = u32::from_be_bytes(v4.octets());
-            let masked = if bits == 0 {
-                0
-            } else {
-                raw & (!0u32 << (32 - bits))
-            };
-            let mut key = [0u8; 16];
-            key[..4].copy_from_slice(&masked.to_be_bytes());
-            IpBucketKey(key, bits)
-        }
-        IpAddr::V6(v6) => {
-            let bits = prefix_v6_bits.min(128);
-            let raw = u128::from_be_bytes(v6.octets());
-            let masked = if bits == 0 {
-                0
-            } else {
-                raw & (!0u128 << (128 - bits))
-            };
-            IpBucketKey(masked.to_be_bytes(), bits)
-        }
-    }
-}
-/// Simple token-bucket limiter for accepts.
-#[derive(Debug, Clone)]
-struct TokenBucket {
-    tokens: f64,
-    last_refill: tokio::time::Instant,
-    rate_per_sec: f64,
-    burst: f64,
-}
-impl TokenBucket {
-    fn new(rate_per_sec: f64, burst: f64) -> Self {
-        let now = tokio::time::Instant::now();
-        let tokens = burst;
-        Self {
-            tokens,
-            last_refill: now,
-            rate_per_sec,
-            burst,
-        }
-    }
-    fn allow(&mut self) -> bool {
-        self.allow_at(tokio::time::Instant::now())
-    }
-    fn allow_at(&mut self, now: tokio::time::Instant) -> bool {
-        let elapsed = now
-            .saturating_duration_since(self.last_refill)
-            .as_secs_f64();
-        self.last_refill = now;
-        self.tokens = elapsed
-            .mul_add(self.rate_per_sec, self.tokens)
-            .min(self.burst);
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
-            true
-        } else {
-            false
-        }
-    }
-    /// Allow consuming an arbitrary amount from the bucket.
-    fn allow_n(&mut self, amount: f64) -> bool {
-        self.allow_n_at(amount, tokio::time::Instant::now())
-    }
-    /// Allow consuming an arbitrary amount from the bucket at a specific instant.
-    fn allow_n_at(&mut self, amount: f64, now: tokio::time::Instant) -> bool {
-        let elapsed = now
-            .saturating_duration_since(self.last_refill)
-            .as_secs_f64();
-        self.last_refill = now;
-        self.tokens = elapsed
-            .mul_add(self.rate_per_sec, self.tokens)
-            .min(self.burst);
-        if self.tokens >= amount {
-            self.tokens -= amount;
-            true
-        } else {
-            false
-        }
-    }
-    fn update_shape(&mut self, rate_per_sec: f64, burst: f64) {
-        self.rate_per_sec = rate_per_sec;
-        self.burst = burst;
-        self.tokens = self.tokens.min(self.burst);
-    }
-}
-#[derive(Debug, Clone)]
-struct AcceptBucket {
-    bucket: TokenBucket,
-    last_seen: tokio::time::Instant,
-}
-impl AcceptBucket {
-    fn new(rate_per_sec: f64, burst: f64, now: tokio::time::Instant) -> Self {
-        Self {
-            bucket: TokenBucket::new(rate_per_sec, burst),
-            last_seen: now,
-        }
-    }
-    fn allow(&mut self, now: tokio::time::Instant) -> bool {
-        self.last_seen = now;
-        self.bucket.allow_at(now)
-    }
-    fn update_shape(&mut self, rate_per_sec: f64, burst: f64) {
-        self.bucket.update_shape(rate_per_sec, burst);
-    }
-}
-#[derive(Clone, Copy, Debug)]
-struct AcceptThrottleParams {
-    prefix_rate_per_sec: Option<f64>,
-    prefix_burst: Option<f64>,
-    prefix_v4_bits: u8,
-    prefix_v6_bits: u8,
-    ip_rate_per_sec: Option<f64>,
-    ip_burst: Option<f64>,
-    max_buckets: usize,
-    bucket_idle: Duration,
-}
-impl AcceptThrottleParams {
-    fn new(
-        prefix_rate_per_sec: Option<f64>,
-        prefix_burst: Option<f64>,
-        prefix_v4_bits: u8,
-        prefix_v6_bits: u8,
-        ip_rate_per_sec: Option<f64>,
-        ip_burst: Option<f64>,
-        max_buckets: usize,
-        bucket_idle: Duration,
-    ) -> Self {
-        Self {
-            prefix_rate_per_sec,
-            prefix_burst,
-            prefix_v4_bits,
-            prefix_v6_bits,
-            ip_rate_per_sec,
-            ip_burst,
-            max_buckets: max_buckets.max(1),
-            bucket_idle,
-        }
-    }
-}
-fn evict_oldest_bucket(map: &mut HashMap<IpBucketKey, AcceptBucket>) -> bool {
-    let Some(oldest_key) = map
-        .iter()
-        .min_by_key(|(_, entry)| entry.last_seen)
-        .map(|(k, _)| *k)
-    else {
-        return false;
-    };
-    map.remove(&oldest_key);
-    true
-}
-fn prune_accept_buckets(
-    buckets: &mut HashMap<IpBucketKey, AcceptBucket>,
-    max_buckets: usize,
-    bucket_idle: Duration,
-    now: tokio::time::Instant,
-) -> usize {
-    let mut evicted = 0;
-    if bucket_idle != Duration::ZERO {
-        let before = buckets.len();
-        buckets.retain(|_, entry| now.saturating_duration_since(entry.last_seen) < bucket_idle);
-        evicted += before.saturating_sub(buckets.len());
-    }
-    while buckets.len() > max_buckets {
-        if !evict_oldest_bucket(buckets) {
-            break;
-        }
-        evicted += 1;
-    }
-    evicted
-}
-fn consume_accept_bucket(
-    buckets: &mut HashMap<IpBucketKey, AcceptBucket>,
-    key: IpBucketKey,
-    rate_per_sec: f64,
-    burst: f64,
-    params: &AcceptThrottleParams,
-    now: tokio::time::Instant,
-) -> (bool, bool, usize) {
-    let existed = buckets.contains_key(&key);
-    let mut evicted = 0;
-    if !existed && buckets.len() >= params.max_buckets && evict_oldest_bucket(buckets) {
-        evicted += 1;
-    }
-    let entry = buckets
-        .entry(key)
-        .or_insert_with(|| AcceptBucket::new(rate_per_sec, burst, now));
-    entry.update_shape(rate_per_sec, burst);
-    (entry.allow(now), existed, evicted)
-}
-fn update_accept_bucket_gauge(
-    prefix_buckets: &HashMap<IpBucketKey, AcceptBucket>,
-    ip_buckets: &HashMap<IpBucketKey, AcceptBucket>,
-) {
-    ACCEPT_BUCKETS_CURRENT.store(
-        (prefix_buckets.len() + ip_buckets.len()) as u64,
-        Ordering::Relaxed,
-    );
-}
-/// Evaluate IP gating rules and accept throttle buckets (prefix then per-IP).
-fn allow_ip_with_policy(
-    allow_nets: &[IpNet],
-    deny_nets: &[IpNet],
-    allowlist_only: bool,
-    params: AcceptThrottleParams,
-    prefix_buckets: &mut HashMap<IpBucketKey, AcceptBucket>,
-    ip_buckets: &mut HashMap<IpBucketKey, AcceptBucket>,
-    ip: std::net::IpAddr,
-) -> bool {
-    if cidr_contains(deny_nets, ip) {
-        return false;
-    }
-    let allowlist_present = !allow_nets.is_empty();
-    let allowlisted = cidr_contains(allow_nets, ip);
-    if allowlist_present && !allowlisted {
-        return false;
-    }
-    let now = tokio::time::Instant::now();
-    let evicted = prune_accept_buckets(prefix_buckets, params.max_buckets, params.bucket_idle, now)
-        + prune_accept_buckets(ip_buckets, params.max_buckets, params.bucket_idle, now);
-    if evicted > 0 {
-        ACCEPT_BUCKET_EVICTIONS.fetch_add(evicted as u64, Ordering::Relaxed);
-    }
-    if allowlisted {
-        update_accept_bucket_gauge(prefix_buckets, ip_buckets);
-        return true;
-    }
-    if allowlist_only && allowlist_present {
-        update_accept_bucket_gauge(prefix_buckets, ip_buckets);
-        return true;
-    }
-    if let Some(rate) = params.prefix_rate_per_sec {
-        let burst = params.prefix_burst.unwrap_or_else(|| rate.max(1.0));
-        let (allow, existed, evicted) = consume_accept_bucket(
-            prefix_buckets,
-            ip_bucket_key(ip, params.prefix_v4_bits, params.prefix_v6_bits),
-            rate,
-            burst,
-            &params,
-            now,
-        );
-        if evicted > 0 {
-            ACCEPT_BUCKET_EVICTIONS.fetch_add(evicted as u64, Ordering::Relaxed);
-        }
-        if existed {
-            ACCEPT_PREFIX_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
-        } else {
-            ACCEPT_PREFIX_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
-        }
-        if allow {
-            ACCEPT_PREFIX_ALLOWED.fetch_add(1, Ordering::Relaxed);
-        } else {
-            ACCEPT_PREFIX_THROTTLED.fetch_add(1, Ordering::Relaxed);
-            ACCEPT_THROTTLED.fetch_add(1, Ordering::Relaxed);
-            update_accept_bucket_gauge(prefix_buckets, ip_buckets);
-            return false;
-        }
-    } else {
-        ACCEPT_PREFIX_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
-    }
-    if let Some(rate) = params.ip_rate_per_sec {
-        let burst = params.ip_burst.unwrap_or_else(|| rate.max(1.0));
-        let (allow, _, evicted) = consume_accept_bucket(
-            ip_buckets,
-            ip_bucket_key(ip, 32, 128),
-            rate,
-            burst,
-            &params,
-            now,
-        );
-        if evicted > 0 {
-            ACCEPT_BUCKET_EVICTIONS.fetch_add(evicted as u64, Ordering::Relaxed);
-        }
-        if allow {
-            ACCEPT_IP_ALLOWED.fetch_add(1, Ordering::Relaxed);
-        } else {
-            ACCEPT_IP_THROTTLED.fetch_add(1, Ordering::Relaxed);
-            ACCEPT_THROTTLED.fetch_add(1, Ordering::Relaxed);
-            update_accept_bucket_gauge(prefix_buckets, ip_buckets);
-            return false;
-        }
-    }
-    update_accept_bucket_gauge(prefix_buckets, ip_buckets);
-    true
-}
 /// Filter for peer-message subscriptions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SubscriberFilter {
@@ -6505,11 +6128,22 @@ fn invalid_transport_geometry(message: impl Into<String>) -> Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into()).into()
 }
 
-const QUIC_DATAGRAM_DEPENDENCY_BLOCK_REASON: &str =
-    "network.quic_datagrams_enabled=true is unavailable with locked quinn-proto 0.11.15: \
+const QUIC_DATAGRAM_DEPENDENCY_BLOCK_REASON: &str = "network.quic_datagrams_enabled=true is unavailable with locked quinn-proto 0.11.15: \
 its receive queue charges only DATAGRAM payload bytes, so zero-length frames consume no configured \
-budget and can grow the private VecDeque before application polling; upgrade to Quinn 0.12 or \
-backport DatagramBuffer::memory_used() and empty_frame_flood_limit";
+budget and can grow the private VecDeque before application polling; upgrade quinn-proto to \
+0.11.17 or later before re-enabling DATAGRAM";
+
+const QUIC_DEPENDENCY_BLOCK_REASON: &str = "network.quic_enabled=true is unavailable with locked quinn-proto 0.11.15: \
+released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly and \
+connection-ID retirement in addition to DATAGRAM accounting; upgrade the lockfile to 0.11.17 or \
+later and requalify QUIC before re-enabling it";
+
+fn validate_shipping_quic_policy(configured: bool) -> Result<bool, Error> {
+    if configured {
+        return Err(invalid_transport_geometry(QUIC_DEPENDENCY_BLOCK_REASON));
+    }
+    Ok(false)
+}
 
 fn validate_shipping_quic_datagram_policy(configured: bool) -> Result<bool, Error> {
     if configured {
@@ -7197,18 +6831,22 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         mut initial_validator_dial_roster: HashSet<PeerId>,
         shutdown_signal: ShutdownSignal,
     ) -> Result<(Self, Child), Error> {
-        // Reject before listener or dialer sockets are created. Returning the
-        // validated value also keeps every downstream capability, transport,
-        // and actor configuration on the same fail-closed branch.
+        // Reject vulnerable QUIC before listener or dialer sockets are created.
+        // Returning the validated values also keeps every downstream
+        // capability, transport, and actor configuration on the same
+        // fail-closed branch.
+        let quic_enabled = validate_shipping_quic_policy(quic_enabled)?;
         let quic_datagrams_enabled =
             validate_shipping_quic_datagram_policy(quic_datagrams_enabled)?;
+        let (allow_nets, deny_nets) = parse_acl_cidrs(&allow_cidrs, &deny_cidrs)
+            .map_err(invalid_transport_geometry)?;
         let P2pIdentityKeys {
             node: key_pair,
             soranet_transport,
         } = identity_keys;
-        // This is the first startup preflight because QUIC and TCP listener setup below may bind
-        // sockets. It prevents a sender from reaching encryption with a frame length that the
-        // deterministic contiguous-buffer limit cannot represent.
+        // Continue startup preflight before QUIC or TCP listener setup can bind
+        // sockets. This prevents a sender from reaching encryption with a frame
+        // length that the deterministic contiguous-buffer limit cannot represent.
         let topic_frame_caps = TopicFrameCaps {
             consensus: max_frame_bytes_consensus,
             control: max_frame_bytes_control,
@@ -7761,8 +7399,8 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             allowlist_only,
             allow_keys: allow_keys.into_iter().collect(),
             deny_keys: deny_keys.into_iter().collect(),
-            allow_nets: parse_cidrs(&allow_cidrs),
-            deny_nets: parse_cidrs(&deny_cidrs),
+            allow_nets,
+            deny_nets,
             retry_backoff: HashMap::new(),
             pending_connects: Vec::new(),
             deferred_send_queue: DeferredPeerFrameQueue::new_with_total(
@@ -9364,7 +9002,21 @@ mod accept_stream_tests {
         let reason = error.to_string();
         assert!(reason.contains("quinn-proto 0.11.15"));
         assert!(reason.contains("zero-length frames"));
-        assert!(reason.contains("Quinn 0.12"));
+        assert!(reason.contains("0.11.17"));
+    }
+    #[test]
+    fn shipped_quic_policy_rejects_vulnerable_locked_dependency() {
+        let error = validate_shipping_quic_policy(true)
+            .expect_err("vulnerable Quinn must fail before binding sockets");
+        let Error::Io(error) = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        let reason = error.to_string();
+        assert!(reason.contains("quinn-proto 0.11.15"));
+        assert!(reason.contains("remote memory exhaustion"));
+        assert!(reason.contains("0.11.17"));
+        assert!(!validate_shipping_quic_policy(false).unwrap());
     }
     #[test]
     fn network_actor_budget_uses_exact_encrypted_stream_geometry() {
@@ -9625,7 +9277,7 @@ mod accept_stream_tests {
     }
     #[cfg(feature = "quic")]
     #[tokio::test(flavor = "current_thread")]
-    async fn requested_quic_listener_bind_failure_aborts_startup() {
+    async fn start_rejects_vulnerable_quic_before_listener_binding() {
         let blocker = match std::net::UdpSocket::bind("127.0.0.1:0") {
             Ok(socket) => socket,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
@@ -9639,12 +9291,11 @@ mod accept_stream_tests {
         cfg.quic_enabled = true;
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
 
-        if let Ok((_handle, _child)) =
-            start_test_network(test_node_key_pair(), cfg, shutdown.clone()).await
-        {
-            shutdown.send();
-            panic!("requested QUIC listener failure must not downgrade startup to TLS-only");
-        }
+        let started = start_test_network(test_node_key_pair(), cfg, shutdown).await;
+        assert!(
+            matches!(started, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput),
+            "vulnerable Quinn must be rejected before reaching the occupied UDP listener"
+        );
     }
     #[tokio::test(flavor = "current_thread")]
     async fn connect_peer_propagates_frame_cap() {
@@ -10513,7 +10164,7 @@ mod accept_stream_tests {
     }
     #[cfg(feature = "quic")]
     #[tokio::test(flavor = "current_thread")]
-    async fn shipping_quic_listener_disables_datagram_transport() {
+    async fn dormant_quic_listener_disables_datagram_transport() {
         use std::sync::Arc;
         use tokio::sync::mpsc;
         let baseline = snapshot().len();
@@ -10652,7 +10303,7 @@ mod accept_stream_tests {
         }
         let error = connection
             .send_datagram(bytes::Bytes::from_static(b"probe"))
-            .expect_err("the shipping listener must advertise no DATAGRAM receive support");
+            .expect_err("the dormant listener must advertise no DATAGRAM receive support");
         assert!(
             matches!(error, quinn::SendDatagramError::UnsupportedByPeer),
             "unexpected disabled-DATAGRAM error: {error:?}"
