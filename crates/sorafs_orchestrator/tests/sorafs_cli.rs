@@ -6,8 +6,6 @@ use blake3::hash as blake3_hash;
 use ed25519_dalek::{Signer as _, SigningKey};
 use hex::{decode as hex_decode, encode as hex_encode};
 use httpmock::prelude::*;
-#[cfg(feature = "local-quic-proxy")]
-use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use iroha_data_model::account::AccountId;
 use iroha_data_model::taikai::TaikaiSegmentEnvelopeV1;

@@ -364,6 +364,18 @@ fun canonicalTonAddress36(value: address): cell {
     return beginCell().storeInt(workchain, 32).storeUint(accountHash, 256).endCell();
 }
 
+/// Encode a standard TON address for an internal, domain-separated identity.
+///
+/// Unlike the external SCCP account codec, internal replay/refund identities
+/// must accept masterchain owners as well as basechain owners. The workchain
+/// remains an explicit signed i32 so the same account hash cannot alias across
+/// workchains. This helper is never used to admit an external route address.
+fun canonicalInternalTonAddress36(value: address): cell {
+    val (workchain, accountHash) = value.getWorkchainAndHash();
+    assert (accountHash != 0) throw SccpErrors.InvalidPayload;
+    return beginCell().storeInt(workchain, 32).storeUint(accountHash, 256).endCell();
+}
+
 /// Decode exactly one canonical 36-byte basechain TON account.
 fun decodeCanonicalTonAddress36(value: slice): address {
     var input = value;

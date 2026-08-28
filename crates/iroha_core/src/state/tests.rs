@@ -27,10 +27,11 @@ use iroha_data_model::soracloud::{
     SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1, SORA_RUNTIME_RECEIPT_VERSION_V1,
     SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1, SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
     SoraAppInfraActionV1, SoraAppInfraManifestV1, SoraAppInfraServiceRefV1,
-    SoraCertifiedResponsePolicyV1, SoraInrouGuestIsaV1, SoraInrouReplicaHostAvailabilityV1,
-    SoraInrouReplicaPlacementV1, SoraRuntimeDeterministicValidatorHostV1, SoraRuntimeReceiptV1,
-    SoraServiceHandlerClassV1, SoraServiceHealthStatusV1, SoraServiceLeaseClockV1,
-    SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceMailboxMessageV1,
+    SoraCertifiedResponsePolicyV1, SoraInrouGuestIsaV1, SoraInrouPlacementTargetV1,
+    SoraInrouReplicaHostAvailabilityV1, SoraInrouReplicaPlacementV1,
+    SoraRuntimeDeterministicValidatorHostV1, SoraRuntimeReceiptV1, SoraServiceHandlerClassV1,
+    SoraServiceHealthStatusV1, SoraServiceLeaseClockV1, SoraServiceLeaseStateV1,
+    SoraServiceLeaseStatusV1, SoraServiceMailboxMessageV1,
 };
 use iroha_data_model::zk::BackendTag;
 use iroha_data_model::{
@@ -15335,29 +15336,10 @@ state_test! { sync set_crypto_updates_sm2_distid_default
     crypto_cfg.sm2_distid_default = original;
     state.set_crypto(crypto_cfg);
 }
-state_test! { sync set_streaming_storage_paths_updates_process_local_paths
-    let mut state = blank_test_state();
-    let soranet_spool = PathBuf::from("soranet-spool");
-    let soravpn_spool = PathBuf::from("soravpn-spool");
-    state.set_streaming_storage_paths(soranet_spool.clone(), soravpn_spool.clone());
-    assert_eq!(
-        state.streaming_storage_paths.soranet_provision_spool_dir,
-        soranet_spool
-    );
-    assert_eq!(
-        state.streaming_storage_paths.soravpn_provision_spool_dir,
-        soravpn_spool
-    );
-}
-state_test! { sync enforce_nexus_storage_budget_prunes_spools_before_cold
+state_test! { sync enforce_nexus_storage_budget_prunes_cold_snapshots
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let store_root = temp_dir.path().join("kura");
-    let soranet_spool = temp_dir.path().join("soranet");
-    let soravpn_spool = temp_dir.path().join("soravpn");
     let cold_root = temp_dir.path().join("cold");
-    std::fs::create_dir_all(&soranet_spool).expect("create soranet spool");
-    std::fs::write(soranet_spool.join("b-file.norito"), vec![0u8; 60]).expect("write spool file");
-    std::fs::write(soranet_spool.join("a-file.norito"), vec![0u8; 60]).expect("write spool file");
     let snapshot_dir = cold_root.join("00000000000000000001");
     std::fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
     std::fs::write(snapshot_dir.join("payload.norito"), vec![0u8; 50]).expect("write cold payload");
@@ -15365,7 +15347,6 @@ state_test! { sync enforce_nexus_storage_budget_prunes_spools_before_cold
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
-    state.set_streaming_storage_paths(soranet_spool.clone(), soravpn_spool.clone());
     state
         .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
             enabled: true,
@@ -15378,15 +15359,10 @@ state_test! { sync enforce_nexus_storage_budget_prunes_spools_before_cold
             max_cold_bytes: iroha_config::base::util::Bytes(0),
         })
         .expect("configure tiered state for storage budget test");
-    let_row! { oldest_spool_size = std::fs::metadata(soranet_spool.join("a-file.norito")) .expect("stat soranet spool file") .len() };
     let kura_used = state.kura.disk_usage_bytes().expect("measure kura bytes");
-    let soranet_used = dir_size(&soranet_spool).expect("measure soranet spool");
-    let soravpn_used = dir_size(&soravpn_spool).expect("measure soravpn spool");
     let_row! { cold_used = { let backend = state.tiered_backend.lock(); backend .cold_store_bytes() .expect("measure cold store bytes") .unwrap_or(0) } };
-    let_row! { total_used = kura_used .saturating_add(cold_used) .saturating_add(soranet_used) .saturating_add(soravpn_used) };
-    // Leave a deficit smaller than one spool entry so only the oldest entry is evicted.
-    let desired_excess = oldest_spool_size.saturating_sub(1).max(1);
-    let max_disk_usage = total_used.saturating_sub(desired_excess);
+    let total_used = kura_used.saturating_add(cold_used);
+    let max_disk_usage = total_used.saturating_sub(1).max(1);
     let mut storage = iroha_config::parameters::actual::NexusStorage::default();
     storage.local_budget_bytes = Some(iroha_config::base::util::Bytes(max_disk_usage));
     storage.effective_local_budget_bytes = Some(iroha_config::base::util::Bytes(max_disk_usage));
@@ -15396,34 +15372,34 @@ state_test! { sync enforce_nexus_storage_budget_prunes_spools_before_cold
         nexus.storage = storage;
     }
     state.enforce_nexus_storage_budget(1);
-    assert!(
-        !soranet_spool.join("a-file.norito").exists(),
-        "oldest spool entry should be evicted"
-    );
-    assert!(
-        soranet_spool.join("b-file.norito").exists(),
-        "newer spool entry should remain"
-    );
-    assert!(snapshot_dir.exists(), "cold snapshot should remain");
+    assert!(!snapshot_dir.exists(), "cold snapshot should be evicted");
 }
 state_test! { sync enforce_nexus_storage_budget_respects_interval_blocks
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let store_root = temp_dir.path().join("kura");
-    let soranet_spool = temp_dir.path().join("soranet");
-    std::fs::create_dir_all(&soranet_spool).expect("create soranet spool");
-    let spool_file = soranet_spool.join("a-file.norito");
-    std::fs::write(&spool_file, vec![0u8; 60]).expect("write spool file");
+    let cold_root = temp_dir.path().join("cold");
+    let snapshot_dir = cold_root.join("00000000000000000001");
+    std::fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
+    std::fs::write(snapshot_dir.join("payload.norito"), vec![0u8; 60]).expect("write cold payload");
     let kura_cfg = strict_kura_config_for_testing(store_root);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
-    state.set_streaming_storage_paths(
-        soranet_spool.clone(),
-        iroha_config::parameters::actual::StreamingSoravpn::from_defaults().provision_spool_dir,
-    );
+    state
+        .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+            enabled: true,
+            hot_retained_keys: 0,
+            hot_retained_bytes: iroha_config::base::util::Bytes(0),
+            hot_retained_grace_snapshots: 0,
+            cold_store_root: Some(cold_root.clone()),
+            da_store_root: None,
+            max_snapshots: 0,
+            max_cold_bytes: iroha_config::base::util::Bytes(0),
+        })
+        .expect("configure tiered state for storage budget test");
     let kura_used = state.kura.disk_usage_bytes().expect("measure kura bytes");
-    let soranet_used = dir_size(&soranet_spool).expect("measure soranet spool");
-    let total_used = kura_used.saturating_add(soranet_used);
+    let_row! { cold_used = { let backend = state.tiered_backend.lock(); backend .cold_store_bytes() .expect("measure cold store bytes") .unwrap_or(0) } };
+    let total_used = kura_used.saturating_add(cold_used);
     let interval_blocks = 10;
     let mut storage = iroha_config::parameters::actual::NexusStorage::default();
     storage.local_budget_bytes = Some(iroha_config::base::util::Bytes(total_used));
@@ -15435,8 +15411,8 @@ state_test! { sync enforce_nexus_storage_budget_respects_interval_blocks
     }
     state.enforce_nexus_storage_budget(1);
     assert!(
-        spool_file.exists(),
-        "spool entry should remain under budget"
+        snapshot_dir.exists(),
+        "cold snapshot should remain under budget"
     );
     let max_disk_usage = total_used.saturating_sub(1).max(1);
     {
@@ -15445,11 +15421,11 @@ state_test! { sync enforce_nexus_storage_budget_respects_interval_blocks
             Some(iroha_config::base::util::Bytes(max_disk_usage));
     }
     state.enforce_nexus_storage_budget(2);
-    assert!(spool_file.exists(), "spool eviction should be deferred");
+    assert!(snapshot_dir.exists(), "cold eviction should be deferred");
     state.enforce_nexus_storage_budget(11);
     assert!(
-        !spool_file.exists(),
-        "spool entry should be evicted once interval passes"
+        !snapshot_dir.exists(),
+        "cold snapshot should be evicted once interval passes"
     );
 }
 state_test! { sync lane_topology_diff_marks_alias_changes_for_relabel
@@ -33728,6 +33704,8 @@ fn sample_snapshot_hosted_service_bundle() -> SoraDeploymentBundleV1 {
     let mut bundle = sample_snapshot_service_bundle();
     bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
     bundle.container.entrypoint = "/app/main".to_owned();
+    bundle.container.capabilities.network =
+        iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated;
     bundle.container.inrou = Some(iroha_data_model::soracloud::SoraInrouManifestV1 {
         schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
         guest_images: BTreeMap::from([
@@ -33753,6 +33731,11 @@ fn sample_snapshot_hosted_service_bundle() -> SoraDeploymentBundleV1 {
     });
     bundle.service.execution_plane =
         iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+    bundle.service.replicas = std::num::NonZeroU16::new(1).expect("non-zero replica count");
+    bundle.service.placement_targets = BTreeSet::from([SoraInrouPlacementTargetV1 {
+        validator_account_id: ALICE_ID.clone(),
+        peer_id: PeerId::from(ALICE_KEYPAIR.public_key().clone()).to_string(),
+    }]);
     bundle.service.lease_volumes = vec![
         iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
             volume_name: "root_disk".parse().expect("valid root volume name"),
@@ -33766,7 +33749,7 @@ fn sample_snapshot_hosted_service_bundle() -> SoraDeploymentBundleV1 {
             volume_name: "service_state".parse().expect("valid service volume name"),
             kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::ServiceLeaseVolume,
             storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
-            mount_path: "/var/lib/sora".to_owned(),
+            mount_path: "/var/lib/soracloud/volumes/service_state".to_owned(),
             max_total_bytes: NonZeroU64::new(1024 * 1024).expect("non-zero service volume size"),
         },
     ];
@@ -34238,14 +34221,14 @@ fn snapshot_state_from_world(mut world: World) -> State {
 state_test! { sync inrou_reachable_restore_rejects_invalid_and_miskeyed_runtime_records
     let service_name: Name = "snapshot_runtime".parse().expect("valid service name");
 
-    let mut mismatched_capability_world = World::default();
-    mismatched_capability_world.soracloud_inrou_host_capabilities.insert(
+    let mut malformed_capability_world = World::default();
+    malformed_capability_world.soracloud_inrou_host_capabilities.insert(
         ALICE_ID.clone(),
         iroha_data_model::soracloud::SoraInrouHostCapabilityRecordV1 {
             schema_version:
                 iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
             validator_account_id: ALICE_ID.clone(),
-            peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string(),
+            peer_id: "not-a-canonical-peer".to_owned(),
             supported_guest_isas: BTreeSet::from([SoraInrouGuestIsaV1::Aarch64]),
             trusted_guest_artifact: sample_snapshot_inrou_published_artifact(),
             max_hosted_replica_capacity:
@@ -34257,15 +34240,15 @@ state_test! { sync inrou_reachable_restore_rejects_invalid_and_miskeyed_runtime_
             heartbeat_expires_at_ms: 2,
         },
     );
-    let mismatched_capability =
-        norito::json::to_value(&snapshot_state_from_world(mismatched_capability_world))
-            .expect("serialize canonical peer attributed to another validator account");
-    let error = deserialize_state_snapshot_value(mismatched_capability)
+    let malformed_capability =
+        norito::json::to_value(&snapshot_state_from_world(malformed_capability_world))
+            .expect("serialize noncanonical Inrou capability peer");
+    let error = deserialize_state_snapshot_value(malformed_capability)
         .err()
-        .expect("restore must reject account/peer-inconsistent Inrou capability state");
+        .expect("restore must reject noncanonical Inrou capability state");
     assert!(
-        error.to_string().contains("derived from the validator account"),
-        "unexpected mismatched Inrou capability error: {error}"
+        error.to_string().contains("canonical peer public key"),
+        "unexpected malformed Inrou capability error: {error}"
     );
 
     let mut malformed_world = World::default();
@@ -35679,6 +35662,108 @@ state_test! { sync hosted_service_restore_requires_lease_and_latest_rollover_ope
         "unexpected rollover-opener restore error: {error}"
     );
 }
+state_test! { sync inrou_sticky_unavailable_placement_survives_pruned_capability_restore
+    let bundle = sample_snapshot_hosted_service_bundle();
+    let world_with_placement = |host_availability: SoraInrouReplicaHostAvailabilityV1| {
+        let deployment = sample_snapshot_hosted_service_deployment(&bundle);
+        let mut placement = sample_snapshot_inrou_placement(
+            bundle.service.service_name.clone(),
+            bundle.service.service_version.clone(),
+            ALICE_ID.clone(),
+        );
+        placement.eligible_validator_count = if host_availability.is_available() { 1 } else { 0 };
+        placement.placements[0].host_availability = host_availability;
+        placement.last_error = (!host_availability.is_available())
+            .then(|| "sticky assigned host is unavailable".to_owned());
+
+        let mut world = World::default();
+        world.soracloud_service_revisions.insert(
+            (
+                bundle.service.service_name.as_ref().to_owned(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments
+            .insert(deployment.service_name.clone(), deployment);
+        world.soracloud_service_audit_events.insert(
+            1,
+            sample_snapshot_service_audit_event(&bundle, 1),
+        );
+        world.soracloud_inrou_service_placements.insert(
+            (
+                bundle.service.service_name.as_ref().to_owned(),
+                bundle.service.service_version.clone(),
+            ),
+            placement,
+        );
+        world
+    };
+
+    let unavailable_snapshot = norito::json::to_value(&snapshot_state_from_world(
+        world_with_placement(SoraInrouReplicaHostAvailabilityV1::Unavailable),
+    ))
+    .expect("serialize sticky unavailable placement after capability pruning");
+    let restored = deserialize_state_snapshot_value(unavailable_snapshot)
+        .expect("sticky unavailable placement must restore after its capability is pruned");
+    let restored_view = restored.view();
+    let restored_assignment = restored_view
+        .world()
+        .soracloud_inrou_service_placements()
+        .get(&(
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ))
+        .and_then(|record| record.placements.first())
+        .expect("restored sticky placement assignment");
+    assert!(!restored_assignment.host_availability.is_available());
+
+    let mut undersized_capability_world =
+        world_with_placement(SoraInrouReplicaHostAvailabilityV1::Unavailable);
+    undersized_capability_world
+        .soracloud_inrou_host_capabilities
+        .insert(
+            ALICE_ID.clone(),
+            iroha_data_model::soracloud::SoraInrouHostCapabilityRecordV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+                validator_account_id: ALICE_ID.clone(),
+                peer_id: PeerId::from(ALICE_KEYPAIR.public_key().clone()).to_string(),
+                supported_guest_isas: BTreeSet::from([SoraInrouGuestIsaV1::Aarch64]),
+                trusted_guest_artifact: sample_snapshot_inrou_published_artifact(),
+                max_hosted_replica_capacity:
+                    iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
+                max_cpu_millis: 1_000,
+                max_memory_bytes: 512 * 1024 * 1024,
+                max_storage_bytes:
+                    iroha_data_model::soracloud::SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1,
+                advertised_at_ms: 1,
+                heartbeat_expires_at_ms: u64::MAX,
+            },
+        );
+    let undersized_capability_snapshot = norito::json::to_value(&snapshot_state_from_world(
+        undersized_capability_world,
+    ))
+    .expect("serialize unavailable placement with a now-undersized retained capability");
+    deserialize_state_snapshot_value(undersized_capability_snapshot).expect(
+        "unavailable sticky placement must restore when a retained capability no longer fits it",
+    );
+
+    let available_snapshot = norito::json::to_value(&snapshot_state_from_world(
+        world_with_placement(SoraInrouReplicaHostAvailabilityV1::Available),
+    ))
+    .expect("serialize available placement without a retained capability");
+    let error = deserialize_state_snapshot_value(available_snapshot)
+        .err()
+        .expect("available placement without its exact capability must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("available Inrou assignment is missing its exact authoritative host capability"),
+        "unexpected missing available-capability restore error: {error}"
+    );
+}
 state_test! { sync runtime_and_inrou_restore_require_authoritative_references
     let service_name: Name = "snapshot_runtime_refs".parse().expect("valid service name");
 
@@ -36573,25 +36658,25 @@ state_test! { large_stack mailbox_and_receipt_restore_validates_consensus_execut
         "unexpected execution-host substitution error: {error}"
     );
 
-    let mut mismatched_host_receipt = receipt.clone();
-    let Some(host) = mismatched_host_receipt.execution_host.as_mut()
+    let mut malformed_host_receipt = receipt.clone();
+    let Some(host) = malformed_host_receipt.execution_host.as_mut()
     else {
         unreachable!("snapshot mailbox receipt has deterministic attribution")
     };
-    host.validator_account_id = BOB_ID.clone();
-    mismatched_host_receipt.receipt_id =
-        crate::soracloud_runtime::ordered_mailbox_runtime_receipt_id(&mismatched_host_receipt)
-            .expect("structurally mismatched receipt still has a source message");
-    let mismatched_host = norito::json::to_value(&snapshot_state_from_world(world_with_receipt(
-        mismatched_host_receipt,
+    host.peer_id = "not-a-canonical-peer".to_owned();
+    malformed_host_receipt.receipt_id =
+        crate::soracloud_runtime::ordered_mailbox_runtime_receipt_id(&malformed_host_receipt)
+            .expect("structurally malformed receipt still has a source message");
+    let malformed_host = norito::json::to_value(&snapshot_state_from_world(world_with_receipt(
+        malformed_host_receipt,
     )))
-    .expect("serialize mailbox receipt with a mismatched validator account and peer");
-    let error = deserialize_state_snapshot_value(mismatched_host)
+    .expect("serialize mailbox receipt with a noncanonical peer");
+    let error = deserialize_state_snapshot_value(malformed_host)
         .err()
-        .expect("a recomputed receipt ID must not mask structurally invalid host attribution");
+        .expect("a recomputed receipt ID must not mask a noncanonical host peer");
     assert!(
-        error.to_string().contains("derived from the validator account"),
-        "unexpected structurally invalid execution-host error: {error}"
+        error.to_string().contains("canonical peer public key"),
+        "unexpected noncanonical execution-host error: {error}"
     );
 
     let mut detached_host_receipt = receipt.clone();
@@ -37386,6 +37471,67 @@ state_test! { sync strict_snapshot_index_finalization_rejects_mis_homed_kaigi_re
     state
         .finalize_snapshot_derived_state_indexes(true)
         .expect("emergency Fast snapshot restore must defer the Kaigi semantic scan");
+}
+state_test! { sync derived_state_rebuild_rejects_future_kaigi_relay_feedback
+    use iroha_data_model::kaigi::{
+        KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
+        kaigi_relay_feedback_key, kaigi_relay_metadata_key,
+    };
+
+    let home = DomainId::try_new("feedback-home", "universal").expect("home domain");
+    let relay_id = AccountId::new(
+        KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::Ed25519)
+            .expect("deterministic relay key")
+            .public_key()
+            .clone(),
+    );
+    let mut domain = Domain::new(home.clone()).build(&*ALICE_ID);
+    domain.metadata_mut().insert(
+        kaigi_relay_metadata_key(&relay_id).expect("relay metadata key"),
+        Json::try_new(KaigiRelayRegistration {
+            relay_id: relay_id.clone(),
+            hpke_public_key: vec![0xAA],
+            bandwidth_class: 1,
+        })
+        .expect("serialize relay registration"),
+    );
+    domain.metadata_mut().insert(
+        kaigi_relay_feedback_key(&relay_id).expect("relay feedback key"),
+        Json::try_new(KaigiRelayFeedback {
+            relay_id,
+            call: KaigiId::new(
+                home.clone(),
+                "future-feedback".parse().expect("call name"),
+            ),
+            reported_by: ALICE_ID.clone(),
+            status: KaigiRelayHealthStatus::Degraded,
+            reported_at_ms: 21,
+            notes: None,
+        })
+        .expect("serialize relay feedback"),
+    );
+
+    let mut state = blank_test_state();
+    state.world.domains.insert(home, domain);
+    let header = BlockHeader::new(
+        nonzero!(1_u64),
+        None,
+        None,
+        None,
+        20,
+        0,
+    );
+    {
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(header.hash());
+        block_hashes.commit_for_tests();
+    }
+    state.update_latest_block_header_cache_for_tests(header);
+
+    let error = state
+        .rebuild_derived_state_indexes()
+        .expect_err("future relay feedback must fail authenticated state restoration");
+    assert!(error.contains("exceeds restored ledger time 20"), "{error}");
 }
 state_test! { sync governance_lock_test_mutator_replaces_removes_and_rolls_back_expiry_index
     let world = World::default();

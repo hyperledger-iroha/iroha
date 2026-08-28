@@ -49,6 +49,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 const SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS: &str = "60";
+const SORACLOUD_TEST_RETENTION_EPOCH: &str = "4102444800";
 const SORACLOUD_TEST_SUBPROCESS_TIMEOUT_HEADROOM: Duration = Duration::from_secs(15);
 const SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT: Duration = Duration::from_secs(60);
 fn canonical_quantity_literal_from_nanos(nanos: u128) -> String {
@@ -82,6 +83,19 @@ fn program_reuse_existing_or_build() -> PathBuf {
 }
 fn soracloud_fixture(path: &str) -> PathBuf {
     workspace_root().join(path)
+}
+fn install_soracloud_test_bundle(
+    root: &Path,
+    label: &str,
+    container: &mut SoraContainerManifestV1,
+    service: &mut SoraServiceManifestV1,
+) -> eyre::Result<PathBuf> {
+    let bundle_path = root.join(format!("{label}.bundle"));
+    let bundle = format!("iroha:soracloud:integration:{label}:v1");
+    std::fs::write(&bundle_path, bundle.as_bytes())?;
+    container.bundle_hash = Hash::new(bundle.as_bytes());
+    service.container.manifest_hash = Hash::new(Encode::encode(container));
+    Ok(bundle_path)
 }
 const SORACLOUD_HF_LEASE_ASSET_DEFINITION_LITERAL: &str = "5PeSrQmLNwwKtruJvDZrbrm9RuMw";
 fn soracloud_hf_lease_asset_definition() -> AssetDefinitionId {
@@ -1093,12 +1107,17 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     .await?;
     let container_fixture = soracloud_fixture("fixtures/soracloud/sora_container_manifest_v1.json");
     let service_fixture = soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json");
-    let container: SoraContainerManifestV1 =
+    let mut container: SoraContainerManifestV1 =
         norito::json::from_slice(&std::fs::read(&container_fixture)?)?;
     let mut service_v1: SoraServiceManifestV1 =
         norito::json::from_slice(&std::fs::read(&service_fixture)?)?;
     service_v1.service_version = "1.0.0".to_string();
-    service_v1.container.manifest_hash = Hash::new(Encode::encode(&container));
+    let bundle_path = install_soracloud_test_bundle(
+        dir.path(),
+        "live-control-plane",
+        &mut container,
+        &mut service_v1,
+    )?;
     let mut service_v2 = service_v1.clone();
     service_v2.service_version = "1.1.0".to_string();
     let container_path = dir.path().join("container_manifest.json");
@@ -1129,6 +1148,10 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
             container_path.to_string_lossy().as_ref(),
             "--service",
             service_v1_path.to_string_lossy().as_ref(),
+            "--bundle-file",
+            bundle_path.to_string_lossy().as_ref(),
+            "--sorafs-retention-epoch",
+            SORACLOUD_TEST_RETENTION_EPOCH,
             "--torii-url",
             torii_url.as_str(),
         ],
@@ -1150,6 +1173,10 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
             container_path.to_string_lossy().as_ref(),
             "--service",
             service_v2_path.to_string_lossy().as_ref(),
+            "--bundle-file",
+            bundle_path.to_string_lossy().as_ref(),
+            "--sorafs-retention-epoch",
+            SORACLOUD_TEST_RETENTION_EPOCH,
             "--torii-url",
             torii_url.as_str(),
         ],
@@ -1336,12 +1363,17 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
     .await?;
     let container_fixture = soracloud_fixture("fixtures/soracloud/sora_container_manifest_v1.json");
     let service_fixture = soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json");
-    let container: SoraContainerManifestV1 =
+    let mut container: SoraContainerManifestV1 =
         norito::json::from_slice(&std::fs::read(&container_fixture)?)?;
     let mut service: SoraServiceManifestV1 =
         norito::json::from_slice(&std::fs::read(&service_fixture)?)?;
     service.service_version = "1.0.0".to_string();
-    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+    let bundle_path = install_soracloud_test_bundle(
+        dir.path(),
+        "admission-rejection",
+        &mut container,
+        &mut service,
+    )?;
     let mut over_cap_container = container.clone();
     over_cap_container.resources.cpu_millis = NonZeroU32::new(64_001).expect("non-zero cpu");
     let mut over_cap_service = service.clone();
@@ -1364,6 +1396,8 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         "service", "deploy",
         "--container", over_cap_container_path.to_string_lossy().into_owned(),
         "--service", over_cap_service_path.to_string_lossy().into_owned(),
+        "--bundle-file", bundle_path.to_string_lossy().into_owned(),
+        "--sorafs-retention-epoch", SORACLOUD_TEST_RETENTION_EPOCH,
         "--torii-url", network.client().torii_url.to_string(),
     );
     assert!(
@@ -1412,6 +1446,8 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         "service", "deploy",
         "--container", no_write_container_path.to_string_lossy().into_owned(),
         "--service", no_write_service_path.to_string_lossy().into_owned(),
+        "--bundle-file", bundle_path.to_string_lossy().into_owned(),
+        "--sorafs-retention-epoch", SORACLOUD_TEST_RETENTION_EPOCH,
         "--torii-url", network.client().torii_url.to_string(),
     );
     assert!(
@@ -1480,7 +1516,12 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         norito::json::from_slice(&std::fs::read(&service_fixture)?)?;
     container.capabilities.allow_model_training = true;
     service.service_version = "2.0.0".to_string();
-    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+    let bundle_path = install_soracloud_test_bundle(
+        dir.path(),
+        "training-lifecycle",
+        &mut container,
+        &mut service,
+    )?;
     let container_path = dir.path().join("container_training.json");
     let service_path = dir.path().join("service_training.json");
     tokio::fs::write(
@@ -1500,6 +1541,8 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "service", "deploy",
         "--container", container_path.to_string_lossy().into_owned(),
         "--service", service_path.to_string_lossy().into_owned(),
+        "--bundle-file", bundle_path.to_string_lossy().into_owned(),
+        "--sorafs-retention-epoch", SORACLOUD_TEST_RETENTION_EPOCH,
         "--torii-url", network.client().torii_url.to_string(),
     );
     let service_name = service.service_name.to_string();
@@ -2843,10 +2886,40 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
     );
     let site_service_path = site_dir.join("service_manifest.json");
     let webapp_service_path = webapp_dir.join("service_manifest.json");
-    let site_service: SoraServiceManifestV1 =
+    let site_container_path = site_dir.join("container_manifest.json");
+    let webapp_container_path = webapp_dir.join("container_manifest.json");
+    let mut site_container: SoraContainerManifestV1 =
+        norito::json::from_slice(&std::fs::read(&site_container_path)?)?;
+    let mut webapp_container: SoraContainerManifestV1 =
+        norito::json::from_slice(&std::fs::read(&webapp_container_path)?)?;
+    let mut site_service: SoraServiceManifestV1 =
         norito::json::from_slice(&std::fs::read(&site_service_path)?)?;
-    let webapp_service: SoraServiceManifestV1 =
+    let mut webapp_service: SoraServiceManifestV1 =
         norito::json::from_slice(&std::fs::read(&webapp_service_path)?)?;
+    let site_bundle_path =
+        install_soracloud_test_bundle(&site_dir, "site", &mut site_container, &mut site_service)?;
+    let webapp_bundle_path = install_soracloud_test_bundle(
+        &webapp_dir,
+        "webapp",
+        &mut webapp_container,
+        &mut webapp_service,
+    )?;
+    std::fs::write(
+        &site_container_path,
+        norito::json::to_vec_pretty(&site_container)?,
+    )?;
+    std::fs::write(
+        &site_service_path,
+        norito::json::to_vec_pretty(&site_service)?,
+    )?;
+    std::fs::write(
+        &webapp_container_path,
+        norito::json::to_vec_pretty(&webapp_container)?,
+    )?;
+    std::fs::write(
+        &webapp_service_path,
+        norito::json::to_vec_pretty(&webapp_service)?,
+    )?;
     let site_package_json = std::fs::read_to_string(site_dir.join("site/package.json"))?;
     let webapp_frontend_package_json =
         std::fs::read_to_string(webapp_dir.join("webapp/frontend/package.json"))?;
@@ -2876,8 +2949,10 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         cli,
         SoracloudSuccessCase::new("site deploy");
         "service", "deploy",
-        "--container", site_dir.join("container_manifest.json").to_string_lossy().into_owned(),
+        "--container", site_container_path.to_string_lossy().into_owned(),
         "--service", site_service_path.to_string_lossy().into_owned(),
+        "--bundle-file", site_bundle_path.to_string_lossy().into_owned(),
+        "--sorafs-retention-epoch", SORACLOUD_TEST_RETENTION_EPOCH,
         "--torii-url", network.client().torii_url.to_string(),
     );
     let site_join_payload: Value =
@@ -2892,8 +2967,10 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         cli,
         SoracloudSuccessCase::new("webapp deploy");
         "service", "deploy",
-        "--container", webapp_dir.join("container_manifest.json").to_string_lossy().into_owned(),
+        "--container", webapp_container_path.to_string_lossy().into_owned(),
         "--service", webapp_service_path.to_string_lossy().into_owned(),
+        "--bundle-file", webapp_bundle_path.to_string_lossy().into_owned(),
+        "--sorafs-retention-epoch", SORACLOUD_TEST_RETENTION_EPOCH,
         "--torii-url", network.client().torii_url.to_string(),
     );
     let webapp_join_payload: Value =
@@ -2916,8 +2993,10 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         cli,
         SoracloudSuccessCase::new("site upgrade");
         "service", "upgrade",
-        "--container", site_dir.join("container_manifest.json").to_string_lossy().into_owned(),
+        "--container", site_container_path.to_string_lossy().into_owned(),
         "--service", site_service_v2_path.to_string_lossy().into_owned(),
+        "--bundle-file", site_bundle_path.to_string_lossy().into_owned(),
+        "--sorafs-retention-epoch", SORACLOUD_TEST_RETENTION_EPOCH,
         "--torii-url", network.client().torii_url.to_string(),
     );
     let site_upgrade_payload: Value =

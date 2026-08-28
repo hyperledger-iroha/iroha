@@ -10,6 +10,7 @@ GENESIS_CLEAN="$RUN_DIR/genesis.cleaned.json"
 GENESIS_NRT="$RUN_DIR/genesis.nrt"
 SUMMARY_JSON="$RUN_DIR/kaigi_summary.json"
 NODE_LOG="$RUN_DIR/iroha3d.log"
+GENESIS_PRIVATE_KEY_FILE=""
 
 log() {
   printf '[kaigi-demo] %s\n' "$*" >&2
@@ -51,6 +52,10 @@ cleanup() {
     fi
     NODE_PID=""
   fi
+  if [[ -n "$GENESIS_PRIVATE_KEY_FILE" && -f "$GENESIS_PRIVATE_KEY_FILE" && ! -L "$GENESIS_PRIVATE_KEY_FILE" ]]; then
+    rm -f -- "$GENESIS_PRIVATE_KEY_FILE"
+    GENESIS_PRIVATE_KEY_FILE=""
+  fi
 }
 
 trap cleanup EXIT
@@ -59,6 +64,11 @@ ensure_cmd cargo
 ensure_cmd curl
 ensure_cmd python3
 mkdir -p "$RUN_DIR"
+umask 077
+GENESIS_PRIVATE_KEY_FILE="$(mktemp "$RUN_DIR/.genesis-private-key.XXXXXX")"
+printf '%s\n' \
+  '80262082B3BDE54AEBECA4146257DA0DE8D59D8E46D5FE34887DCD8072866792FCB3AD' \
+  >"$GENESIS_PRIVATE_KEY_FILE"
 
 log "preparing genesis manifest -> $GENESIS_CLEAN"
 python3 - "$ROOT/defaults/nexus/genesis.json" "$GENESIS_CLEAN" <<'PY'
@@ -79,6 +89,7 @@ log "signing demo genesis manifest -> $GENESIS_NRT"
 KAGAMI_OUTPUT="$(
   cargo run -q -p iroha_kagami -- genesis sign \
     "$GENESIS_CLEAN" \
+    --private-key-file "$GENESIS_PRIVATE_KEY_FILE" \
     --out-file "$GENESIS_NRT"
 )"
 printf '%s\n' "$KAGAMI_OUTPUT" >&2

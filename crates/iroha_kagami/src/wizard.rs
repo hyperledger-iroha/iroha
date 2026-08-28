@@ -1,67 +1,47 @@
-//! Interactive setup wizard for quickly preparing Iroha/Sora configs.
+//! Interactive onboarding wizard for staging a Sora Nexus observer configuration.
+use crate::genesis::PUBLIC_NEXUS_CHAIN_ID;
 use crate::{Outcome, RunArgs, tui};
 use clap::{Args as ClapArgs, ValueEnum};
-use color_eyre::eyre::{Context as _, Result, eyre};
+use color_eyre::eyre::{Context as _, Result, ensure, eyre};
 use inquire::{Select, Text};
 use iroha_config::parameters::{actual, defaults};
-use iroha_crypto::{
-    Algorithm, ExposedPrivateKey, KeyPair, PublicKey, bls_normal_pop_prove, bls_normal_pop_verify,
-};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, bls_normal_pop_verify};
 use iroha_data_model::peer::{Peer, PeerId};
-use iroha_genesis::{read_genesis_manifest_bytes, validate_genesis_manifest_json};
-use iroha_primitives::addr::{SocketAddr, SocketAddrHost};
+use iroha_genesis::validate_genesis_manifest_json;
+use iroha_primitives::addr::SocketAddr;
 use norito::json::{self, Value as JsonValue};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt, fs,
+    fmt,
     io::{BufWriter, Write},
-    net::{Ipv4Addr, Ipv6Addr},
     num::NonZeroUsize,
     path::{Path, PathBuf},
     str::FromStr,
 };
 use toml::{Value as TomlValue, value::Table as TomlTable};
-/// Supported network profiles for the wizard.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum Profile {
-    /// Canonical local single-lane profile.
-    Local,
-    /// Sora Nexus (mainnet).
-    Nexus,
-}
-impl fmt::Display for Profile {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Profile::Local => write!(f, "Local (single lane)"),
-            Profile::Nexus => write!(f, "Sora Nexus (mainnet)"),
-        }
-    }
-}
+use zeroize::Zeroizing;
+
+const WIZARD_PROFILE_LABEL: &str = "Sora Nexus observer";
+const NEXUS_CHAIN_DISCRIMINANT: i64 = 753;
+const NEXUS_CONFIG_TEMPLATE: &str = include_str!("../../../configs/soranexus/nexus/config.toml");
+const NEXUS_GENESIS_TEMPLATE: &[u8] =
+    include_bytes!("../../../configs/soranexus/nexus/genesis.json");
 /// CLI entrypoint for the setup wizard.
 #[derive(Debug, ClapArgs, Clone)]
 pub struct Args {
-    /// Optional preset profile; if omitted, the wizard prompts for one.
-    #[arg(long, value_enum)]
-    pub profile: Option<Profile>,
     /// Directory where generated config/genesis files will be written.
     #[arg(long, value_name = "PATH", default_value = "wizard-output")]
     pub output_dir: PathBuf,
     /// Run non-interactively, accepting defaults for prompts that are not supplied via flags.
     #[arg(long)]
     pub non_interactive: bool,
-    /// Override the default chain identifier.
-    #[arg(long, value_name = "CHAIN")]
-    pub chain_id: Option<String>,
-    /// Override the public P2P host/IP advertised for this peer.
+    /// Override the public P2P host/IP advertised for this generated observer.
     #[arg(long, value_name = "HOST")]
     pub p2p_host: Option<String>,
     /// Override the public P2P port for this peer.
     #[arg(long, value_name = "PORT")]
     pub p2p_port: Option<u16>,
-    /// Override the Torii host/IP advertised for this peer.
-    #[arg(long, value_name = "HOST")]
-    pub torii_host: Option<String>,
-    /// Override the Torii port for this peer.
+    /// Override the local Torii listener port for this peer.
     #[arg(long, value_name = "PORT")]
     pub torii_port: Option<u16>,
     /// Override the relay mode instead of prompting interactively.
@@ -70,7 +50,7 @@ pub struct Args {
     /// Relay hub addresses (`host:port`), repeat once per hub when relay mode uses them.
     #[arg(long = "relay-hub-address", value_name = "HOST:PORT")]
     pub relay_hub_addresses: Vec<String>,
-    /// Override the bootstrap peer (`pubkey@host:port`). Comma-separated for multiple entries.
+    /// Trusted roster (`pubkey` or `pubkey@host:port`); include a reachable address without a relay.
     #[arg(long, value_name = "PEERS")]
     pub trusted_peers: Option<String>,
     /// Comma-separated PoP entries for trusted peers (`pubkey=pop_hex`).
@@ -79,11 +59,8 @@ pub struct Args {
 }
 #[derive(Clone, Debug)]
 struct Answers {
-    profile: Profile,
-    chain: String,
     p2p_host: String,
     p2p_port: u16,
-    torii_host: String,
     torii_port: u16,
     trusted_peers: Vec<String>,
     relay_mode: RelayMode,
@@ -112,46 +89,31 @@ struct ProfileDefaults {
     chain: &'static str,
     p2p_port: u16,
     torii_port: u16,
-    host: &'static str,
+    observer_public_host: &'static str,
+    relay_hub_host: &'static str,
     trusted_peers: &'static [&'static str],
-    config_template: Option<&'static str>,
-    genesis_template: &'static str,
 }
 impl ProfileDefaults {
-    fn for_profile(profile: Profile) -> Self {
-        match profile {
-            Profile::Local => Self {
-                chain: "00000000-0000-0000-0000-000000000000",
-                p2p_port: 1337,
-                torii_port: 8080,
-                host: "127.0.0.1",
-                trusted_peers: &[],
-                config_template: None,
-                genesis_template: "defaults/genesis.json",
-            },
-            Profile::Nexus => Self {
-                chain: "00000000-0000-0000-0000-000000000753",
-                p2p_port: 1337,
-                torii_port: 8080,
-                host: "nexus.mof2.sora.org",
-                trusted_peers: &[concat!(
-                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@",
-                    "nexus.mof2.sora.org:1337"
-                )],
-                config_template: Some("configs/soranexus/nexus/config.toml"),
-                genesis_template: "configs/soranexus/nexus/genesis.json",
-            },
+    const fn nexus() -> Self {
+        Self {
+            chain: PUBLIC_NEXUS_CHAIN_ID,
+            p2p_port: 1337,
+            torii_port: 8080,
+            observer_public_host: "127.0.0.1",
+            relay_hub_host: "nexus.mof2.sora.org",
+            trusted_peers: &[concat!(
+                "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@",
+                "nexus.mof2.sora.org:1337"
+            )],
         }
     }
 }
 impl<T: Write> RunArgs<T> for Args {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the guided command keeps generation, validation, persistence, and the final operator handoff in one linear workflow"
-    )]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         print_banner();
         let answers = gather_answers(&self)?;
+        crate::shell::quote_path(&answers.output_dir)
+            .wrap_err("validate requested wizard output path for shell handoff command")?;
         let keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .wrap_err("failed to generate wizard BLS key pair")?;
         let soranet_transport_keypair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
@@ -165,13 +127,7 @@ impl<T: Write> RunArgs<T> for Args {
         }
         let trusted_pops = resolve_trusted_peers_pop(&self, &answers, &keypair)?;
         tui::status("Generating config and genesis files");
-        let (mut config, genesis_template_path) = load_config_template(
-            &answers,
-            &keypair,
-            &soranet_transport_keypair,
-            &streaming_identity_keypair,
-            &trusted_pops,
-        )?;
+        let mut config = load_config_template(&answers, &keypair, &trusted_pops)?;
         apply_overrides(
             &mut config,
             &answers,
@@ -180,13 +136,11 @@ impl<T: Write> RunArgs<T> for Args {
             &streaming_identity_keypair,
             &trusted_pops,
         )?;
-        let genesis = load_and_patch_genesis(&genesis_template_path, &answers.chain)?;
-        fs::create_dir_all(&answers.output_dir)
-            .wrap_err("failed to create output directory for wizard artefacts")?;
-        let config_path = answers.output_dir.join("config.toml");
-        let genesis_path = answers.output_dir.join("genesis.json");
-        let mut config_payload = toml::to_string_pretty(&config)
-            .wrap_err("failed to serialise config after wizard updates")?;
+        let genesis = load_genesis_template()?;
+        let mut config_payload = Zeroizing::new(
+            toml::to_string_pretty(&*config)
+                .wrap_err("failed to serialise config after wizard updates")?,
+        );
         // Surface optional networking knobs in the generated config without changing defaults.
         config_payload.push_str(
             r#"
@@ -196,9 +150,14 @@ impl<T: Write> RunArgs<T> for Args {
 #
 # [network]
 # # Outbound proxy (HTTP CONNECT / SOCKS5):
-# p2p_proxy = "http://user:pass@proxy.example.com:8080" # or socks5://...
+# p2p_proxy = "http://proxy.example.com:8080" # or socks5://...
 # p2p_proxy_required = false
 # p2p_no_proxy = ["localhost", ".example.com"]
+# # Deny rules take precedence; empty allow lists are unrestricted:
+# outbound_dial_allow_cidrs = ["192.0.2.0/24", "2001:db8::/32"]
+# outbound_dial_deny_cidrs = ["127.0.0.0/8", "::1/128"]
+# outbound_dial_allow_dns_suffixes = [".example.com"]
+# outbound_dial_deny_dns_suffixes = [".blocked.example.com"]
 #
 # # If p2p_proxy starts with https://, the proxy hop uses pinned TLS:
 # p2p_proxy_tls_verify = true
@@ -206,50 +165,51 @@ impl<T: Write> RunArgs<T> for Args {
 #
 # Notes:
 # - When p2p_proxy_required=true, p2p_no_proxy must be empty.
-# - When p2p_proxy is https:// and p2p_proxy_tls_verify=true, a pinned cert is required.
+# - HTTPS proxy credentials are allowed only with verification and an exact pinned cert.
+# - Dial policy checks hostnames and every resolved address for direct and proxied dials.
 # - P2P always serves TLS 1.3 on network.address; there is no plaintext listener or fallback.
 "#,
         );
-        fs::write(&config_path, config_payload)
-            .wrap_err_with(|| format!("failed to write config to {}", config_path.display()))?;
         let genesis_payload = json::to_string_pretty(&genesis)
             .wrap_err("failed to serialise genesis after wizard updates")?;
         validate_genesis_manifest_json(genesis_payload.as_bytes())
             .wrap_err("generated wizard genesis exceeds fixed resource bounds")?;
-        fs::write(&genesis_path, genesis_payload)
+        let output_dir = crate::secure_fs::prepare_empty_private_directory(&answers.output_dir)
+            .wrap_err("prepare fresh wizard private output directory")?;
+        let shell_output_dir = crate::shell::absolute_quote_path(&output_dir)
+            .wrap_err("validate wizard output path for shell handoff command")?;
+        let config_path = output_dir.join("config.toml");
+        let genesis_path = output_dir.join("genesis.json");
+        crate::secure_fs::write_private_file_atomic(&config_path, config_payload.as_bytes())
+            .wrap_err_with(|| format!("failed to write config to {}", config_path.display()))?;
+        crate::secure_fs::write_private_file_atomic(&genesis_path, genesis_payload.as_bytes())
             .wrap_err_with(|| format!("failed to write genesis to {}", genesis_path.display()))?;
-        let guide_path = answers.output_dir.join("README.md");
+        let guide_path = output_dir.join("README.md");
         let start_command = format!(
-            "cd {} && iroha3d {}--config config.toml",
-            answers.output_dir.display(),
-            if answers.profile == Profile::Nexus {
-                "--sora "
-            } else {
-                ""
-            }
+            "cd {} && iroha3d --sora --config config.toml",
+            shell_output_dir
         );
         write_wizard_readme(
             &guide_path,
-            answers.profile,
-            &answers.chain,
+            ProfileDefaults::nexus().chain,
             keypair.public_key(),
             &config_path,
             &genesis_path,
             &start_command,
         )?;
+        crate::secure_fs::harden_private_tree_with_owner_executables(&output_dir, &[])
+            .wrap_err("harden wizard private artifact tree")?;
         tui::success(format!(
             "Config and reference genesis manifest staged under {}",
-            answers.output_dir.display()
+            output_dir.display()
         ));
-        writeln!(writer, "profile: {}", answers.profile)?;
-        writeln!(writer, "chain_id: {}", answers.chain)?;
+        writeln!(writer, "profile: {WIZARD_PROFILE_LABEL}")?;
+        writeln!(writer, "chain_id: {}", ProfileDefaults::nexus().chain)?;
         writeln!(writer, "generated_public_key: {}", keypair.public_key())?;
         writeln!(writer, "config: {}", config_path.display())?;
         writeln!(writer, "genesis_manifest: {}", genesis_path.display())?;
         writeln!(writer, "guide: {}", guide_path.display())?;
-        if answers.profile == Profile::Nexus {
-            writeln!(writer, "sora profile: pass --sora when starting iroha3d")?;
-        }
+        writeln!(writer, "sora profile: pass --sora when starting iroha3d")?;
         writeln!(
             writer,
             "next: obtain the authoritative genesis.signed.nrt and expected hash; see {}",
@@ -259,45 +219,42 @@ impl<T: Write> RunArgs<T> for Args {
     }
 }
 fn gather_answers(args: &Args) -> Result<Answers> {
-    let profile = resolve_profile(args)?;
-    let defaults = ProfileDefaults::for_profile(profile);
-    let chain = resolve_text(
-        "Chain ID",
-        args.chain_id.clone(),
-        defaults.chain.to_string(),
-        args.non_interactive,
-    )?;
+    let defaults = ProfileDefaults::nexus();
     let p2p_host = resolve_text(
-        "Trusted peer public host",
+        "Observer public P2P host",
         args.p2p_host.clone(),
-        defaults.host.to_string(),
+        defaults.observer_public_host.to_string(),
         args.non_interactive,
     )?;
+    let p2p_host = crate::localnet::canonical_host(&p2p_host, "p2p host")?;
     let p2p_port = resolve_number(
         "P2P port",
         args.p2p_port,
         defaults.p2p_port,
         args.non_interactive,
     )?;
-    let torii_host = resolve_text(
-        "Trusted peer Torii host",
-        args.torii_host.clone(),
-        defaults.host.to_string(),
-        args.non_interactive,
-    )?;
+    if p2p_port == 0 {
+        return Err(eyre!("P2P port must be greater than zero"));
+    }
     let torii_port = resolve_number(
-        "Torii port",
+        "Local Torii listener port",
         args.torii_port,
         defaults.torii_port,
         args.non_interactive,
     )?;
+    if torii_port == 0 {
+        return Err(eyre!("Torii port must be greater than zero"));
+    }
+    if p2p_port == torii_port {
+        return Err(eyre!("P2P and Torii listener ports must be distinct"));
+    }
     let relay_mode = resolve_relay_mode(args.relay_mode, args.non_interactive)?;
     let relay_hub_addresses = if matches!(relay_mode, RelayMode::Spoke | RelayMode::Assist) {
         if args.relay_hub_addresses.is_empty() {
             let raw = resolve_text(
                 "Relay hub addresses (comma separated host:port)",
                 None,
-                format!("{}:{}", defaults.host, defaults.p2p_port),
+                format!("{}:{}", defaults.relay_hub_host, defaults.p2p_port),
                 args.non_interactive,
             )?;
             raw.split(',')
@@ -310,14 +267,17 @@ fn gather_answers(args: &Args) -> Result<Answers> {
         }
     } else {
         Vec::new()
-    };
+    }
+    .into_iter()
+    .map(|address| canonical_addr_literal(&address))
+    .collect::<Result<Vec<_>>>()?;
     let default_trusted = defaults.trusted_peers.join(", ");
     let trusted_default = args
         .trusted_peers
         .as_deref()
         .unwrap_or(default_trusted.as_str());
     let trusted_prompt = resolve_text(
-        "Trusted peers (comma separated pubkey@host:port; PoPs mark validators)",
+        "Trusted peers (comma separated pubkey or pubkey@host:port; PoPs mark validators)",
         args.trusted_peers.clone(),
         trusted_default.to_string(),
         args.non_interactive,
@@ -328,12 +288,15 @@ fn gather_answers(args: &Args) -> Result<Answers> {
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
+    let trusted_peers = sanitize_trusted_peers(&trusted_peers)?;
+    ensure!(
+        matches!(relay_mode, RelayMode::Spoke | RelayMode::Assist)
+            || trusted_peers.iter().any(|peer| peer.contains('@')),
+        "trusted peer roster must include at least one reachable pubkey@host:port entry unless spoke/assist relay hubs provide the bootstrap route"
+    );
     Ok(Answers {
-        profile,
-        chain,
         p2p_host,
         p2p_port,
-        torii_host,
         torii_port,
         trusted_peers,
         relay_mode,
@@ -346,18 +309,17 @@ fn resolve_trusted_peers_pop(
     answers: &Answers,
     keypair: &KeyPair,
 ) -> Result<BTreeMap<PublicKey, Vec<u8>>> {
-    let joins_existing_sora_network = answers.profile == Profile::Nexus;
-    if joins_existing_sora_network && args.non_interactive && args.trusted_peers.is_none() {
+    if args.non_interactive && args.trusted_peers.is_none() {
         return Err(eyre!(
             "non-interactive Sora wizard onboarding requires --trusted-peers with the authoritative full validator roster"
         ));
     }
-    if joins_existing_sora_network && args.non_interactive && args.trusted_peers_pop.is_none() {
+    if args.non_interactive && args.trusted_peers_pop.is_none() {
         return Err(eyre!(
             "non-interactive Sora wizard onboarding requires --trusted-peers-pop matching the authoritative signed genesis roster"
         ));
     }
-    let mut peers = sanitize_trusted_peers(&answers.trusted_peers)?;
+    let mut peers = answers.trusted_peers.clone();
     let self_peer = format!(
         "{}@{}",
         keypair.public_key(),
@@ -377,12 +339,7 @@ fn resolve_trusted_peers_pop(
         }
     }
     let mut pops = parse_trusted_peers_pop_arg(args.trusted_peers_pop.as_deref())?;
-    if !joins_existing_sora_network && !pops.contains_key(keypair.public_key()) {
-        let pop = bls_normal_pop_prove(keypair.private_key())
-            .wrap_err("failed to build PoP for the local keypair")?;
-        pops.insert(keypair.public_key().clone(), pop);
-    }
-    if joins_existing_sora_network && pops.contains_key(keypair.public_key()) {
+    if pops.contains_key(keypair.public_key()) {
         return Err(eyre!(
             "the newly generated Sora peer must start as an observer; its local key must not appear in --trusted-peers-pop"
         ));
@@ -404,32 +361,28 @@ fn resolve_trusted_peers_pop(
         .collect();
     if !missing.is_empty() && !args.non_interactive {
         for pk in missing {
-            if joins_existing_sora_network && pk == *keypair.public_key() {
+            if pk == *keypair.public_key() {
                 continue;
             }
             let pop = prompt_pop_for_peer(&pk)?;
             pops.insert(pk, pop);
         }
     }
-    if joins_existing_sora_network {
-        let missing = roster_keys
-            .iter()
-            .filter(|public_key| {
-                *public_key != keypair.public_key() && !pops.contains_key(*public_key)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            return Err(eyre!(
-                "Sora wizard validator roster is missing authoritative PoPs for: {missing:?}"
-            ));
-        }
-        if !iroha_data_model::block::consensus_v2::is_valid_committee_size(pops.len()) {
-            return Err(eyre!(
-                "Sora wizard authoritative validator roster must contain an exact 3f + 1 committee of 4, 7, ... 31 PoPs; got {}",
-                pops.len()
-            ));
-        }
+    let missing = roster_keys
+        .iter()
+        .filter(|public_key| *public_key != keypair.public_key() && !pops.contains_key(*public_key))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(eyre!(
+            "Sora wizard validator roster is missing authoritative PoPs for: {missing:?}"
+        ));
+    }
+    if !iroha_data_model::block::consensus_v2::is_valid_committee_size(pops.len()) {
+        return Err(eyre!(
+            "Sora wizard authoritative validator roster must contain an exact 3f + 1 committee of 4, 7, ... 31 PoPs; got {}",
+            pops.len()
+        ));
     }
     Ok(pops)
 }
@@ -526,20 +479,6 @@ fn print_banner() {
 "#;
     eprintln!("{banner}");
 }
-fn resolve_profile(args: &Args) -> Result<Profile> {
-    if let Some(profile) = args.profile {
-        return Ok(profile);
-    }
-    if args.non_interactive {
-        return Ok(Profile::Local);
-    }
-    Select::new(
-        "Which profile do you want to set up?",
-        vec![Profile::Local, Profile::Nexus],
-    )
-    .prompt()
-    .wrap_err("failed to read profile selection")
-}
 fn resolve_relay_mode(cli_value: Option<RelayMode>, non_interactive: bool) -> Result<RelayMode> {
     if let Some(mode) = cli_value {
         return Ok(mode);
@@ -597,19 +536,12 @@ fn resolve_number(
 }
 fn write_wizard_readme(
     path: &Path,
-    profile: Profile,
     chain_id: &str,
     public_key: &PublicKey,
     config_path: &Path,
     genesis_path: &Path,
     start_command: &str,
 ) -> Result<()> {
-    let profile_prerequisites = match profile {
-        Profile::Nexus => {
-            "4. Confirm `trusted_peers` and `trusted_peers_pop` are the full operator-authenticated validator roster encoded by the signed genesis; the generated local peer starts as an observer.\n"
-        }
-        Profile::Local => "",
-    };
     let rendered = format!(
         concat!(
             "# Kagami Wizard Output\n\n",
@@ -623,88 +555,60 @@ fn write_wizard_readme(
             "1. Obtain the network-authoritative `genesis.signed.nrt` from the operator.\n",
             "2. Obtain its canonical checked NetworkId, derived from the exact signed genesis hash, as `genesis.expected_hash`.\n",
             "3. Verify both artifacts through the network's authenticated distribution channel.\n\n",
-            "{profile_prerequisites}\n",
+            "4. Confirm `trusted_peers` and `trusted_peers_pop` are the full operator-authenticated validator roster encoded by the signed genesis; the generated local peer starts as an observer.\n\n",
             "`genesis.json` is a reference manifest and must never be used as `genesis.file`.\n\n",
             "## Start after provisioning\n\n",
             "```bash\n",
             "{start_command}\n",
             "```\n",
         ),
-        profile = profile,
+        profile = WIZARD_PROFILE_LABEL,
         chain_id = chain_id,
         public_key = public_key,
         config = config_path.display(),
         genesis = genesis_path.display(),
-        profile_prerequisites = profile_prerequisites,
         start_command = start_command,
     );
-    fs::write(path, rendered)
+    crate::secure_fs::write_private_file_atomic(path, rendered.as_bytes())
         .wrap_err_with(|| format!("failed to write wizard guide to {}", path.display()))
 }
 fn load_config_template(
     answers: &Answers,
     keypair: &KeyPair,
-    soranet_transport_keypair: &KeyPair,
-    streaming_identity_keypair: &KeyPair,
     trusted_pops: &BTreeMap<PublicKey, Vec<u8>>,
-) -> Result<(TomlValue, String)> {
-    let defaults = ProfileDefaults::for_profile(answers.profile);
-    if let Some(path) = defaults.config_template {
-        let config_template_path = resolve_wizard_source_path(path);
-        let raw = fs::read_to_string(&config_template_path).wrap_err_with(|| {
-            format!(
-                "failed to read config template at {}",
-                config_template_path.display()
-            )
-        })?;
-        let mut value: TomlValue = toml::from_str(&raw).wrap_err_with(|| {
-            format!(
-                "failed to parse config template at {}",
-                config_template_path.display()
-            )
-        })?;
-        ensure_trusted_peer_list(
-            &mut value,
-            keypair,
-            &answers.trusted_peers,
-            &answers.p2p_host,
-            answers.p2p_port,
-            trusted_pops,
-        )?;
-        return Ok((
-            value,
-            resolve_wizard_source_path(defaults.genesis_template)
-                .to_string_lossy()
-                .into_owned(),
-        ));
-    }
-    let config = build_vanilla_config(
-        &answers.chain,
+) -> Result<crate::secret_toml::Value> {
+    let mut config = crate::secret_toml::Value::new(
+        toml::from_str(NEXUS_CONFIG_TEMPLATE)
+            .wrap_err("failed to parse embedded Nexus config template")?,
+    );
+    ensure_nexus_config_identity(&config)?;
+    ensure_trusted_peer_list(
+        &mut config,
         keypair,
-        soranet_transport_keypair,
-        streaming_identity_keypair,
+        &answers.trusted_peers,
         &answers.p2p_host,
         answers.p2p_port,
-        &answers.torii_host,
-        answers.torii_port,
-        &answers.trusted_peers,
         trusted_pops,
     )?;
-    Ok((
-        config,
-        resolve_wizard_source_path(defaults.genesis_template)
-            .to_string_lossy()
-            .into_owned(),
-    ))
+    Ok(config)
 }
-fn resolve_wizard_source_path(path: &str) -> PathBuf {
-    let direct = PathBuf::from(path);
-    if direct.is_absolute() || direct.exists() {
-        return direct;
-    }
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(direct)
+fn ensure_nexus_config_identity(config: &TomlValue) -> Result<()> {
+    let defaults = ProfileDefaults::nexus();
+    let root = config
+        .as_table()
+        .ok_or_else(|| eyre!("Nexus config template root must be a TOML table"))?;
+    ensure!(
+        root.get("chain").and_then(TomlValue::as_str) == Some(defaults.chain),
+        "Nexus config template chain must remain pinned to {}",
+        defaults.chain
+    );
+    ensure!(
+        root.get("chain_discriminant")
+            .and_then(TomlValue::as_integer)
+            == Some(NEXUS_CHAIN_DISCRIMINANT),
+        "Nexus config template chain discriminant must remain pinned to {NEXUS_CHAIN_DISCRIMINANT}"
+    );
+    Ok(())
 }
 #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
 fn apply_overrides(
@@ -715,50 +619,49 @@ fn apply_overrides(
     streaming_identity_keypair: &KeyPair,
     trusted_pops: &BTreeMap<PublicKey, Vec<u8>>,
 ) -> Result<()> {
-    set_string(config, "chain", &answers.chain);
-    set_string(config, "public_key", &keypair.public_key().to_string());
+    set_string(config, "public_key", keypair.public_key().to_string());
     set_string(
         config,
         "private_key",
-        &ExposedPrivateKey(keypair.private_key().clone()).to_string(),
+        ExposedPrivateKey(keypair.private_key().clone()).to_string(),
     );
     set_string(
         config,
         "soranet_transport_public_key",
-        &soranet_transport_keypair.public_key().to_string(),
+        soranet_transport_keypair.public_key().to_string(),
     );
     set_string(
         config,
         "soranet_transport_private_key",
-        &ExposedPrivateKey(soranet_transport_keypair.private_key().clone()).to_string(),
+        ExposedPrivateKey(soranet_transport_keypair.private_key().clone()).to_string(),
     );
     if let TomlValue::Table(root) = config {
-        root.remove("private_key_file");
-        root.remove("soranet_transport_private_key_file");
+        crate::secret_toml::remove(root, "private_key_file");
+        crate::secret_toml::remove(root, "soranet_transport_private_key_file");
     }
     let mut streaming = table(config, "streaming");
-    streaming.insert(
+    crate::secret_toml::insert(
+        &mut streaming,
         "identity_public_key".into(),
         TomlValue::String(streaming_identity_keypair.public_key().to_string()),
     );
-    streaming.insert(
+    crate::secret_toml::insert(
+        &mut streaming,
         "identity_private_key".into(),
         TomlValue::String(
             ExposedPrivateKey(streaming_identity_keypair.private_key().clone()).to_string(),
         ),
     );
-    streaming.remove("identity_private_key_file");
+    crate::secret_toml::remove(&mut streaming, "identity_private_key_file");
     set_table(config, "streaming", streaming);
-    if answers.profile == Profile::Nexus {
-        // `iroha3d --sora` otherwise enables embedded storage. Wizard profiles do not provision
-        // the governed gateway-compliance controller required to operate storage safely, so make
-        // the operator-authored false explicit and let CLI profile resolution preserve it.
-        let mut storage = table(config, "sorafs.storage");
-        storage.insert("enabled".into(), TomlValue::Boolean(false));
-        set_table(config, "sorafs.storage", storage);
-    }
+    // `iroha3d --sora` otherwise enables embedded storage. Observer onboarding does not
+    // provision the governed gateway-compliance controller required to operate storage safely,
+    // so make the operator-authored false explicit and let CLI profile resolution preserve it.
+    let mut storage = table(config, "sorafs.storage");
+    crate::secret_toml::insert(&mut storage, "enabled".into(), TomlValue::Boolean(false));
+    set_table(config, "sorafs.storage", storage);
     // trusted peers + ensure self is present
-    let mut peers = sanitize_trusted_peers(&answers.trusted_peers)?;
+    let mut peers = answers.trusted_peers.clone();
     let self_peer = format!(
         "{}@{}",
         keypair.public_key(),
@@ -769,57 +672,62 @@ fn apply_overrides(
     }
     set_array(config, "trusted_peers", peers);
     set_trusted_peers_pop(config, trusted_pops);
-    if answers.profile == Profile::Nexus {
-        let mut sumeragi = table(config, "sumeragi");
-        sumeragi.insert("role".into(), TomlValue::String("observer".into()));
-        set_table(config, "sumeragi", sumeragi);
-    }
+    let mut sumeragi = table(config, "sumeragi");
+    crate::secret_toml::insert(
+        &mut sumeragi,
+        "role".into(),
+        TomlValue::String("observer".into()),
+    );
+    set_table(config, "sumeragi", sumeragi);
     ensure_sumeragi_body_ingress(config, trusted_pops.len())?;
     let mut network = table(config, "network");
     let network_template = network
         .get("address")
         .and_then(TomlValue::as_str)
         .unwrap_or("");
-    network.insert(
+    let network_address = rewrite_address_port(network_template, answers.p2p_port)?;
+    crate::secret_toml::insert(
+        &mut network,
         "address".into(),
-        TomlValue::String(rewrite_address(
-            network_template,
-            &answers.p2p_host,
-            answers.p2p_port,
-        )?),
+        TomlValue::String(network_address),
     );
     let public_network_template = network
         .get("public_address")
         .and_then(TomlValue::as_str)
         .unwrap_or("");
-    network.insert(
+    let _ = parse_addr(public_network_template)
+        .wrap_err("Nexus config template has an invalid public P2P address")?;
+    let public_network_address = addr_literal(&answers.p2p_host, answers.p2p_port)?;
+    crate::secret_toml::insert(
+        &mut network,
         "public_address".into(),
-        TomlValue::String(rewrite_address(
-            public_network_template,
-            &answers.p2p_host,
-            answers.p2p_port,
-        )?),
+        TomlValue::String(public_network_address),
     );
-    let relay_hub_addresses = answers
-        .relay_hub_addresses
-        .iter()
-        .map(|address| canonical_addr_literal(address))
-        .collect::<Result<Vec<_>>>()?;
+    let relay_hub_addresses = &answers.relay_hub_addresses;
     match answers.relay_mode {
         RelayMode::Disabled => {
-            network.remove("relay_mode");
-            network.remove("relay_hub_address");
-            network.remove("relay_hub_addresses");
+            crate::secret_toml::remove(&mut network, "relay_mode");
+            crate::secret_toml::remove(&mut network, "relay_hub_address");
+            crate::secret_toml::remove(&mut network, "relay_hub_addresses");
         }
         RelayMode::Hub => {
-            network.insert("relay_mode".into(), TomlValue::String("hub".to_owned()));
-            network.remove("relay_hub_address");
-            network.remove("relay_hub_addresses");
+            crate::secret_toml::insert(
+                &mut network,
+                "relay_mode".into(),
+                TomlValue::String("hub".to_owned()),
+            );
+            crate::secret_toml::remove(&mut network, "relay_hub_address");
+            crate::secret_toml::remove(&mut network, "relay_hub_addresses");
         }
         RelayMode::Spoke => {
-            network.insert("relay_mode".into(), TomlValue::String("spoke".to_owned()));
-            network.remove("relay_hub_address");
-            network.insert(
+            crate::secret_toml::insert(
+                &mut network,
+                "relay_mode".into(),
+                TomlValue::String("spoke".to_owned()),
+            );
+            crate::secret_toml::remove(&mut network, "relay_hub_address");
+            crate::secret_toml::insert(
+                &mut network,
                 "relay_hub_addresses".into(),
                 TomlValue::Array(
                     relay_hub_addresses
@@ -831,9 +739,14 @@ fn apply_overrides(
             );
         }
         RelayMode::Assist => {
-            network.insert("relay_mode".into(), TomlValue::String("assist".to_owned()));
-            network.remove("relay_hub_address");
-            network.insert(
+            crate::secret_toml::insert(
+                &mut network,
+                "relay_mode".into(),
+                TomlValue::String("assist".to_owned()),
+            );
+            crate::secret_toml::remove(&mut network, "relay_hub_address");
+            crate::secret_toml::insert(
+                &mut network,
                 "relay_hub_addresses".into(),
                 TomlValue::Array(
                     relay_hub_addresses
@@ -851,55 +764,60 @@ fn apply_overrides(
         .get("address")
         .and_then(TomlValue::as_str)
         .unwrap_or("");
-    torii.insert(
+    let torii_address = rewrite_address_port(torii_template, answers.torii_port)?;
+    crate::secret_toml::insert(
+        &mut torii,
         "address".into(),
-        TomlValue::String(rewrite_address(
-            torii_template,
-            &answers.torii_host,
-            answers.torii_port,
-        )?),
+        TomlValue::String(torii_address),
     );
     set_table(config, "torii", torii);
     let mut genesis = table(config, "genesis");
-    if answers.profile == Profile::Local {
-        genesis.insert(
-            "public_key".into(),
-            TomlValue::String(keypair.public_key().to_string()),
-        );
-    }
-    genesis.insert(
+    crate::secret_toml::insert(
+        &mut genesis,
         "file".into(),
         TomlValue::String("genesis.signed.nrt".to_owned()),
     );
-    genesis.remove("expected_hash");
-    genesis.insert(
+    crate::secret_toml::remove(&mut genesis, "expected_hash");
+    crate::secret_toml::insert(
+        &mut genesis,
         "expected_hash_file".into(),
         TomlValue::String("genesis.expected_hash".to_owned()),
     );
     set_table(config, "genesis", genesis);
     Ok(())
 }
-fn load_and_patch_genesis(template_path: &str, chain: &str) -> Result<JsonValue> {
-    let raw = read_genesis_manifest_bytes(Path::new(template_path))
-        .wrap_err_with(|| format!("failed to read bounded genesis template at {template_path}"))?;
-    let mut genesis: JsonValue = json::from_slice(&raw)
-        .wrap_err_with(|| format!("failed to parse genesis template at {template_path}"))?;
-    drop(raw);
-    if let Some(chain_slot) = genesis.get_mut("chain") {
-        *chain_slot = JsonValue::String(chain.to_string());
-    } else if let Some(root) = genesis.as_object_mut() {
-        root.insert("chain".to_owned(), JsonValue::String(chain.to_string()));
-    }
+fn load_genesis_template() -> Result<JsonValue> {
+    validate_genesis_manifest_json(NEXUS_GENESIS_TEMPLATE)
+        .wrap_err("embedded Nexus genesis template exceeds fixed resource bounds")?;
+    parse_nexus_genesis_template(NEXUS_GENESIS_TEMPLATE)
+}
+fn parse_nexus_genesis_template(raw: &[u8]) -> Result<JsonValue> {
+    let genesis: JsonValue =
+        json::from_slice(raw).wrap_err("failed to parse embedded Nexus genesis template")?;
+    let defaults = ProfileDefaults::nexus();
+    ensure!(
+        genesis.get("chain").and_then(JsonValue::as_str) == Some(defaults.chain),
+        "Nexus genesis template chain must remain pinned to {}",
+        defaults.chain
+    );
+    ensure!(
+        genesis
+            .get("chain_discriminant")
+            .and_then(JsonValue::as_i64)
+            == Some(NEXUS_CHAIN_DISCRIMINANT),
+        "Nexus genesis template chain discriminant must remain pinned to {NEXUS_CHAIN_DISCRIMINANT}"
+    );
     Ok(genesis)
 }
-fn set_string(config: &mut TomlValue, key: &str, value: &str) {
+fn set_string(config: &mut TomlValue, key: &str, value: String) {
     if let TomlValue::Table(root) = config {
-        root.insert(key.to_owned(), TomlValue::String(value.to_owned()));
+        crate::secret_toml::insert(root, key.to_owned(), TomlValue::String(value));
     }
 }
 fn set_array(config: &mut TomlValue, key: &str, values: Vec<String>) {
     if let TomlValue::Table(root) = config {
-        root.insert(
+        crate::secret_toml::insert(
+            root,
             key.to_owned(),
             TomlValue::Array(values.into_iter().map(TomlValue::String).collect()),
         );
@@ -907,7 +825,11 @@ fn set_array(config: &mut TomlValue, key: &str, values: Vec<String>) {
 }
 fn set_trusted_peers_pop(config: &mut TomlValue, pops: &BTreeMap<PublicKey, Vec<u8>>) {
     if let TomlValue::Table(root) = config {
-        root.insert("trusted_peers_pop".into(), trusted_peers_pop_value(pops));
+        crate::secret_toml::insert(
+            root,
+            "trusted_peers_pop".into(),
+            trusted_peers_pop_value(pops),
+        );
     }
 }
 fn trusted_peers_pop_value(pops: &BTreeMap<PublicKey, Vec<u8>>) -> TomlValue {
@@ -1062,7 +984,9 @@ fn wizard_reply_source_capacity(config: &TomlValue) -> Result<usize> {
         .get("lane_profile")
         .and_then(TomlValue::as_str)
         .unwrap_or(defaults::network::lane_profile::DEFAULT);
-    let lane_profile = actual::LaneProfile::from_label(lane_profile);
+    let lane_profile = actual::LaneProfile::parse_label(lane_profile).ok_or_else(|| {
+        eyre!("wizard template network.lane_profile must be exactly `core` or `home`")
+    })?;
     Ok(lane_profile
         .derived_limits()
         .max_total_connections
@@ -1151,7 +1075,7 @@ fn set_table(config: &mut TomlValue, path: &str, table: TomlTable) {
                 .as_table_mut()
                 .expect("table at path");
         }
-        cursor.insert(last.to_owned(), TomlValue::Table(table));
+        crate::secret_toml::insert(cursor, last.to_owned(), TomlValue::Table(table));
     }
 }
 fn ensure_trusted_peer_list(
@@ -1171,155 +1095,57 @@ fn ensure_trusted_peer_list(
     set_trusted_peers_pop(config, trusted_pops);
     Ok(())
 }
-#[allow(clippy::too_many_arguments)]
-fn build_vanilla_config(
-    chain: &str,
-    keypair: &KeyPair,
-    soranet_transport_keypair: &KeyPair,
-    streaming_identity_keypair: &KeyPair,
-    p2p_host: &str,
-    p2p_port: u16,
-    torii_host: &str,
-    torii_port: u16,
-    peers: &[String],
-    trusted_pops: &BTreeMap<PublicKey, Vec<u8>>,
-) -> Result<TomlValue> {
-    let mut root = TomlTable::new();
-    root.insert("chain".into(), TomlValue::String(chain.to_owned()));
-    root.insert(
-        "public_key".into(),
-        TomlValue::String(keypair.public_key().to_string()),
-    );
-    root.insert(
-        "private_key".into(),
-        TomlValue::String(ExposedPrivateKey(keypair.private_key().clone()).to_string()),
-    );
-    root.insert(
-        "soranet_transport_public_key".into(),
-        TomlValue::String(soranet_transport_keypair.public_key().to_string()),
-    );
-    root.insert(
-        "soranet_transport_private_key".into(),
-        TomlValue::String(
-            ExposedPrivateKey(soranet_transport_keypair.private_key().clone()).to_string(),
-        ),
-    );
-    let mut streaming = TomlTable::new();
-    streaming.insert(
-        "identity_public_key".into(),
-        TomlValue::String(streaming_identity_keypair.public_key().to_string()),
-    );
-    streaming.insert(
-        "identity_private_key".into(),
-        TomlValue::String(
-            ExposedPrivateKey(streaming_identity_keypair.private_key().clone()).to_string(),
-        ),
-    );
-    root.insert("streaming".into(), TomlValue::Table(streaming));
-    root.insert(
-        "trusted_peers".into(),
-        TomlValue::Array(
-            sanitize_trusted_peers(peers)?
-                .into_iter()
-                .map(TomlValue::String)
-                .collect(),
-        ),
-    );
-    root.insert(
-        "trusted_peers_pop".into(),
-        trusted_peers_pop_value(trusted_pops),
-    );
-    let mut network = TomlTable::new();
-    network.insert(
-        "address".into(),
-        TomlValue::String(addr_literal(p2p_host, p2p_port)?),
-    );
-    network.insert(
-        "public_address".into(),
-        TomlValue::String(addr_literal(p2p_host, p2p_port)?),
-    );
-    root.insert("network".into(), TomlValue::Table(network));
-    let mut torii = TomlTable::new();
-    torii.insert(
-        "address".into(),
-        TomlValue::String(addr_literal(torii_host, torii_port)?),
-    );
-    root.insert("torii".into(), TomlValue::Table(torii));
-    let mut genesis = TomlTable::new();
-    genesis.insert(
-        "public_key".into(),
-        TomlValue::String(keypair.public_key().to_string()),
-    );
-    genesis.insert(
-        "file".into(),
-        TomlValue::String("genesis.signed.nrt".to_owned()),
-    );
-    genesis.insert(
-        "expected_hash_file".into(),
-        TomlValue::String("genesis.expected_hash".to_owned()),
-    );
-    root.insert("genesis".into(), TomlValue::Table(genesis));
-    let mut nexus = TomlTable::new();
-    nexus.insert("lane_count".into(), TomlValue::Integer(1));
-    root.insert("nexus".into(), TomlValue::Table(nexus));
-    Ok(TomlValue::Table(root))
-}
-/// Recompute the canonical address literal after overriding its host and port.
-fn rewrite_address(_template: &str, host: &str, port: u16) -> Result<String> {
-    addr_literal(host, port)
+/// Recompute a canonical listener address after overriding only its port.
+fn rewrite_address_port(template: &str, port: u16) -> Result<String> {
+    ensure!(port != 0, "listener port must be greater than zero");
+    let mut address = parse_addr(template)?;
+    match &mut address {
+        SocketAddr::Ipv4(address) => address.port = port,
+        SocketAddr::Ipv6(address) => address.port = port,
+        SocketAddr::Host(address) => address.port = port,
+    }
+    validated_addr_literal(&address, "listener host")
 }
 /// Render a host and port as a checksummed canonical socket-address literal.
 fn addr_literal(host: &str, port: u16) -> Result<String> {
-    let trimmed = host.trim();
-    if trimmed.is_empty() {
-        return Err(eyre!("address host must not be empty"));
-    }
-    let has_prefix = trimmed.starts_with('[');
-    let has_suffix = trimmed.ends_with(']');
-    if has_prefix != has_suffix {
-        return Err(eyre!("address host has unmatched '[' or ']': `{host}`"));
-    }
-    let unbracketed = if has_prefix && trimmed.len() >= 2 {
-        &trimmed[1..trimmed.len() - 1]
-    } else {
-        trimmed
-    };
-    if unbracketed.is_empty() {
-        return Err(eyre!("address host must not be empty"));
-    }
-    let address = if let Ok(ipv4) = unbracketed.parse::<Ipv4Addr>() {
-        SocketAddr::from((ipv4.octets(), port))
-    } else if let Ok(ipv6) = unbracketed.parse::<Ipv6Addr>() {
-        SocketAddr::from((ipv6.segments(), port))
-    } else {
-        if unbracketed.contains(':') {
-            return Err(eyre!(
-                "address host must be a host name or IP literal without a port: `{host}`"
-            ));
-        }
-        SocketAddr::Host(SocketAddrHost {
-            host: unbracketed.to_ascii_lowercase().into(),
-            port,
-        })
-    };
-    Ok(address.to_literal())
+    crate::localnet::canonical_endpoint_literal(host, "address host", port)
 }
 /// Parse either a plain socket address or an existing canonical literal and render it canonically.
 fn canonical_addr_literal(raw: &str) -> Result<String> {
+    validated_addr_literal(&parse_addr(raw)?, "socket address host")
+}
+fn parse_addr(raw: &str) -> Result<SocketAddr> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(eyre!("socket address must not be empty"));
     }
-    let address = if trimmed.starts_with("addr:") {
+    if trimmed != raw {
+        return Err(eyre!(
+            "socket address must not contain surrounding whitespace"
+        ));
+    }
+    if trimmed.starts_with("addr:") {
         let encoded = json::to_string(&trimmed.to_owned())
             .wrap_err("failed to encode socket address literal for validation")?;
         json::from_str::<SocketAddr>(&encoded)
-            .wrap_err_with(|| format!("invalid canonical socket address literal `{raw}`"))?
+            .wrap_err_with(|| format!("invalid canonical socket address literal `{raw}`"))
     } else {
         trimmed
             .parse::<SocketAddr>()
-            .wrap_err_with(|| format!("invalid socket address `{raw}`"))?
-    };
+            .wrap_err_with(|| format!("invalid socket address `{raw}`"))
+    }
+}
+fn validated_addr_literal(address: &SocketAddr, host_field: &str) -> Result<String> {
+    if address.port() == 0 {
+        return Err(eyre!("socket address port must be greater than zero"));
+    }
+    if let SocketAddr::Host(host) = address {
+        return crate::localnet::canonical_endpoint_literal(
+            host.host.as_ref(),
+            host_field,
+            host.port,
+        );
+    }
     Ok(address.to_literal())
 }
 /// Validate trusted-peer entries and render every supplied address canonically.
@@ -1327,10 +1153,19 @@ fn sanitize_trusted_peers(peers: &[String]) -> Result<Vec<String>> {
     let mut normalized_by_key = BTreeMap::<PublicKey, String>::new();
     let mut normalized = Vec::with_capacity(peers.len());
     for entry in peers {
+        if entry.trim() != entry {
+            return Err(eyre!(
+                "trusted peer entry must not contain surrounding whitespace: `{entry}`"
+            ));
+        }
         let peer = Peer::from_str(entry)
             .wrap_err_with(|| format!("invalid trusted peer entry: {entry}"))?;
         let rendered = if entry.contains('@') {
-            format!("{}@{}", peer.id().public_key(), peer.address().to_literal())
+            format!(
+                "{}@{}",
+                peer.id().public_key(),
+                validated_addr_literal(peer.address(), "trusted peer host")?
+            )
         } else {
             peer.id().public_key().to_string()
         };
@@ -1362,6 +1197,8 @@ fn trusted_peers_contain_key(peers: &[String], key: &PublicKey) -> Result<bool> 
 mod tests {
     use super::*;
     use iroha_config::base::toml::TomlSource;
+    use iroha_crypto::bls_normal_pop_prove;
+    use std::fs;
     fn checked_wizard_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("wizard BLS fixture key generation should succeed")
@@ -1379,6 +1216,39 @@ mod tests {
             Algorithm::Ed25519,
         )
         .expect("wizard streaming identity fixture key generation should succeed")
+    }
+    fn nexus_non_interactive_args(output_dir: PathBuf) -> Args {
+        let mut trusted_peers = Vec::new();
+        let mut trusted_pops = Vec::new();
+        for index in 0_u8..4 {
+            let validator =
+                KeyPair::try_from_seed(vec![0x80_u8.wrapping_add(index); 32], Algorithm::BlsNormal)
+                    .expect("derive authoritative wizard validator fixture");
+            trusted_peers.push(format!(
+                "{}@127.0.0.1:{}",
+                validator.public_key(),
+                13_337_u16 + u16::from(index)
+            ));
+            trusted_pops.push(format!(
+                "{}={}",
+                validator.public_key(),
+                hex::encode(
+                    bls_normal_pop_prove(validator.private_key())
+                        .expect("derive authoritative wizard validator PoP")
+                )
+            ));
+        }
+        Args {
+            output_dir,
+            non_interactive: true,
+            p2p_host: None,
+            p2p_port: None,
+            torii_port: None,
+            relay_mode: None,
+            relay_hub_addresses: Vec::new(),
+            trusted_peers: Some(trusted_peers.join(",")),
+            trusted_peers_pop: Some(trusted_pops.join(",")),
+        }
     }
     #[test]
     fn wizard_fixture_key_generation_preserves_bls_algorithm() {
@@ -1401,49 +1271,173 @@ mod tests {
         );
     }
     #[test]
-    fn wizard_non_interactive_defaults_to_local_profile() {
+    fn wizard_non_interactive_uses_nexus_observer_defaults() {
+        let args = nexus_non_interactive_args(PathBuf::from("out"));
+        let answers = gather_answers(&args).expect("resolve Nexus observer defaults");
+        let defaults = ProfileDefaults::nexus();
+        assert_eq!(answers.p2p_host, defaults.observer_public_host);
+    }
+    #[test]
+    fn wizard_rejects_noncanonical_hosts_and_ports() {
+        let base = nexus_non_interactive_args(PathBuf::from("out"));
+        let mut invalid_host = base.clone();
+        invalid_host.p2p_host = Some("bad host".to_owned());
+        let mut padded_host = base.clone();
+        padded_host.p2p_host = Some(" localhost".to_owned());
+        let mut zero_p2p = base.clone();
+        zero_p2p.p2p_port = Some(0);
+        let mut zero_torii = base.clone();
+        zero_torii.torii_port = Some(0);
+        let mut hostile_relay = base.clone();
+        hostile_relay.relay_mode = Some(RelayMode::Spoke);
+        hostile_relay.relay_hub_addresses = vec!["/tmp/socket:1337".to_owned()];
+
+        for (label, args, expected) in [
+            ("host", invalid_host, "ASCII DNS"),
+            ("whitespace", padded_host, "surrounding whitespace"),
+            ("P2P port", zero_p2p, "P2P port"),
+            ("Torii port", zero_torii, "Torii port"),
+            ("relay host", hostile_relay, "ASCII DNS"),
+        ] {
+            let error = match gather_answers(&args) {
+                Ok(_) => panic!("{label} fixture must be rejected"),
+                Err(error) => error,
+            };
+            assert!(
+                format!("{error:#}").contains(expected),
+                "unexpected {label} diagnostic: {error:#}"
+            );
+        }
+
+        let mut canonical = base;
+        canonical.p2p_host = Some("EXAMPLE.COM".to_owned());
+        let answers = gather_answers(&canonical).expect("canonical DNS names must be accepted");
+        assert_eq!(answers.p2p_host, "example.com");
+    }
+    #[test]
+    fn wizard_requires_a_remote_bootstrap_route() {
+        let mut args = nexus_non_interactive_args(PathBuf::from("out"));
+        args.trusted_peers = args.trusted_peers.as_ref().map(|peers| {
+            peers
+                .split(',')
+                .map(|peer| peer.split_once('@').expect("addressed fixture").0)
+                .collect::<Vec<_>>()
+                .join(",")
+        });
+        let error = gather_answers(&args).expect_err("an all-key roster cannot bootstrap directly");
+        assert!(
+            error.to_string().contains("reachable pubkey@host:port"),
+            "unexpected bootstrap diagnostic: {error:#}"
+        );
+
+        args.relay_mode = Some(RelayMode::Spoke);
+        let answers = gather_answers(&args).expect("a spoke can bootstrap through its relay hub");
+        assert_eq!(answers.relay_hub_addresses.len(), 1);
+    }
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    #[test]
+    fn wizard_refuses_to_mix_with_existing_output() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let output = tempfile::tempdir().expect("wizard output");
+        fs::set_permissions(output.path(), fs::Permissions::from_mode(0o700))
+            .expect("harden wizard output directory");
+        let sentinel = output.path().join("keep.txt");
+        fs::write(&sentinel, b"do not overwrite").expect("write sentinel");
+        let args = nexus_non_interactive_args(output.path().to_owned());
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("non-empty output must be rejected before publication");
+        assert!(format!("{error:#}").contains("must be empty"));
+        assert_eq!(
+            fs::read(sentinel).expect("read sentinel"),
+            b"do not overwrite"
+        );
+    }
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    #[test]
+    fn wizard_handoff_uses_the_canonical_published_directory() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("wizard path parent");
+        let canonical_parent = temp.path().join("canonical-parent");
+        fs::create_dir(&canonical_parent).expect("create canonical parent");
+        let alias_parent = temp.path().join("mutable-alias");
+        symlink(&canonical_parent, &alias_parent).expect("create parent alias");
+        let requested = alias_parent.join("wizard-output");
+        let mut output = BufWriter::new(Vec::new());
+        nexus_non_interactive_args(requested.clone())
+            .run(&mut output)
+            .expect("generate wizard output below a symlinked parent");
+        let rendered = String::from_utf8(output.into_inner().expect("flush wizard output"))
+            .expect("wizard output is UTF-8");
+        let published = fs::canonicalize(canonical_parent.join("wizard-output"))
+            .expect("canonicalize published wizard directory");
+        let quoted = crate::shell::absolute_quote_path(&published)
+            .expect("quote canonical wizard directory");
+        let guide = fs::read_to_string(published.join("README.md")).expect("read wizard guide");
+
+        assert!(rendered.contains(&published.display().to_string()));
+        assert!(guide.contains(&format!("cd {quoted} &&")));
+        assert!(!guide.contains(&requested.display().to_string()));
+    }
+    #[test]
+    fn invalid_wizard_request_does_not_create_output_directory() {
+        let parent = tempfile::tempdir().expect("wizard validation parent");
+        let output = parent.path().join("invalid-wizard");
         let args = Args {
-            profile: None,
-            output_dir: PathBuf::from("out"),
+            output_dir: output.clone(),
             non_interactive: true,
-            chain_id: None,
             p2p_host: None,
             p2p_port: None,
-            torii_host: None,
             torii_port: None,
             relay_mode: None,
             relay_hub_addresses: Vec::new(),
             trusted_peers: None,
             trusted_peers_pop: None,
         };
-        assert_eq!(
-            resolve_profile(&args).expect("non-interactive profile resolution"),
-            Profile::Local
+
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("missing authoritative Nexus roster must fail");
+        assert!(format!("{error:#}").contains("requires --trusted-peers"));
+        assert!(
+            !output.exists(),
+            "request validation must finish before creating wizard custody"
         );
     }
     #[test]
-    fn wizard_profiles_exclude_public_taira_onboarding() {
+    fn embedded_nexus_templates_are_valid_and_pinned() {
+        let config: TomlValue =
+            toml::from_str(NEXUS_CONFIG_TEMPLATE).expect("parse embedded config template");
+        ensure_nexus_config_identity(&config).expect("embedded config identity is pinned");
+        let genesis = load_genesis_template().expect("load embedded genesis template");
         assert_eq!(
-            <Profile as clap::ValueEnum>::value_variants(),
-            &[Profile::Local, Profile::Nexus]
+            genesis.get("chain").and_then(JsonValue::as_str),
+            Some(ProfileDefaults::nexus().chain)
         );
-        assert!(<Profile as clap::ValueEnum>::from_str("taira", false).is_err());
     }
     #[test]
-    fn rewrite_address_recomputes_fingerprint() {
-        let rewritten = rewrite_address("addr:0.0.0.0:1337#BF18", "1.2.3.4", 9999)
+    fn rewrite_address_port_preserves_bind_host_and_recomputes_fingerprint() {
+        let rewritten = rewrite_address_port("addr:0.0.0.0:1337#BF18", 9999)
             .expect("rewritten address is valid");
         assert_eq!(
             rewritten,
-            addr_literal("1.2.3.4", 9999).expect("expected address is valid")
+            addr_literal("0.0.0.0", 9999).expect("expected address is valid")
         );
-        assert_ne!(rewritten, "addr:1.2.3.4:9999#BF18");
+        assert_ne!(rewritten, "addr:0.0.0.0:9999#BF18");
     }
     #[test]
-    fn rewrite_address_plain() {
+    fn rewrite_address_port_accepts_plain_template() {
         assert_eq!(
-            rewrite_address("0.0.0.0:8080", "10.0.0.5", 18100).expect("rewritten address is valid"),
-            addr_literal("10.0.0.5", 18100).expect("expected address is valid")
+            rewrite_address_port("0.0.0.0:8080", 18100).expect("rewritten address is valid"),
+            addr_literal("0.0.0.0", 18100).expect("expected address is valid")
         );
     }
     #[test]
@@ -1470,95 +1464,19 @@ mod tests {
             "unexpected conflict diagnostic: {error:?}"
         );
     }
-    #[test]
-    fn vanilla_config_has_minimal_sections() {
-        let kp = checked_wizard_bls_keypair();
-        let transport_kp = checked_wizard_transport_keypair();
-        let streaming_kp = checked_wizard_streaming_keypair();
-        let pop = bls_normal_pop_prove(kp.private_key()).expect("pop");
-        let mut pops = BTreeMap::new();
-        pops.insert(kp.public_key().clone(), pop);
-        let peer = format!("{}@localhost:1337", kp.public_key());
-        let config = build_vanilla_config(
-            "chain-x",
-            &kp,
-            &transport_kp,
-            &streaming_kp,
-            "localhost",
-            1337,
-            "localhost",
-            8080,
-            &[peer],
-            &pops,
-        )
-        .expect("build vanilla wizard config");
-        let table = config.as_table().expect("table");
-        assert_eq!(
-            table.get("chain").and_then(TomlValue::as_str),
-            Some("chain-x")
-        );
-        assert!(table.get("network").is_some());
-        assert!(table.get("torii").is_some());
-        assert!(table.get("genesis").is_some());
-        assert_eq!(
-            table
-                .get("genesis")
-                .and_then(TomlValue::as_table)
-                .and_then(|genesis| genesis.get("expected_hash_file"))
-                .and_then(TomlValue::as_str),
-            Some("genesis.expected_hash"),
-            "wizard output must require the operator-provided authoritative hash file"
-        );
-        assert_eq!(
-            table
-                .get("genesis")
-                .and_then(TomlValue::as_table)
-                .and_then(|genesis| genesis.get("file"))
-                .and_then(TomlValue::as_str),
-            Some("genesis.signed.nrt"),
-            "the reference JSON manifest must never be configured as a signed genesis block"
-        );
-        assert!(table.get("trusted_peers").is_some());
-        assert!(table.get("trusted_peers_pop").is_some());
-        let nexus = table
-            .get("nexus")
-            .and_then(TomlValue::as_table)
-            .expect("nexus table");
-        assert_eq!(
-            nexus.get("lane_count").and_then(TomlValue::as_integer),
-            Some(1)
-        );
-        assert!(
-            !nexus.contains_key("enabled"),
-            "wizard output must not expose the retired Nexus availability switch"
-        );
-        assert_eq!(
-            table
-                .get("soranet_transport_public_key")
-                .and_then(TomlValue::as_str),
-            Some(transport_kp.public_key().to_string().as_str())
-        );
-        assert_eq!(
-            table
-                .get("soranet_transport_private_key")
-                .and_then(TomlValue::as_str),
-            Some(
-                ExposedPrivateKey(transport_kp.private_key().clone())
-                    .to_string()
-                    .as_str()
-            )
-        );
-        assert_ne!(transport_kp.public_key(), kp.public_key());
-        assert_ne!(streaming_kp.public_key(), transport_kp.public_key());
-    }
+    #[cfg(unix)]
     #[test]
     fn wizard_handoff_never_treats_reference_manifest_as_signed_genesis() {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let directory = tempfile::tempdir().expect("wizard README directory");
-        let path = directory.path().join("README.md");
+        let root = fs::canonicalize(directory.path()).expect("canonical wizard README directory");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .expect("harden wizard README directory");
+        let path = root.join("README.md");
         write_wizard_readme(
             &path,
-            Profile::Nexus,
-            ProfileDefaults::for_profile(Profile::Nexus).chain,
+            ProfileDefaults::nexus().chain,
             checked_wizard_bls_keypair().public_key(),
             Path::new("config.toml"),
             Path::new("genesis.json"),
@@ -1578,7 +1496,6 @@ mod tests {
         reason = "the geometry scenario proves both required scaling and preservation of larger authored capacities on one config"
     )]
     fn wizard_scales_body_ingress_for_seven_validators_without_shrinking_authored_capacity() {
-        let mut local_keypair = None;
         let mut peers = Vec::new();
         let mut pops = BTreeMap::new();
         for index in 0_u8..7 {
@@ -1594,26 +1511,21 @@ mod tests {
                 "{public_key}@127.0.0.1:{}",
                 1337_u16 + u16::from(index)
             ));
-            if index == 0 {
-                local_keypair = Some(keypair);
-            }
         }
-        let keypair = local_keypair.expect("fixture includes the local validator");
+        let keypair = checked_wizard_bls_keypair();
         let transport_keypair = checked_wizard_transport_keypair();
         let streaming_keypair = checked_wizard_streaming_keypair();
-        let mut config = build_vanilla_config(
-            "chain-x",
-            &keypair,
-            &transport_keypair,
-            &streaming_keypair,
-            "127.0.0.1",
-            1337,
-            "127.0.0.1",
-            8080,
-            &peers,
-            &pops,
-        )
-        .expect("build vanilla wizard config");
+        let answers = Answers {
+            p2p_host: "127.0.0.1".to_owned(),
+            p2p_port: 1337,
+            torii_port: 8080,
+            trusted_peers: peers,
+            relay_mode: RelayMode::Disabled,
+            relay_hub_addresses: Vec::new(),
+            output_dir: PathBuf::from("out"),
+        };
+        let mut config = load_config_template(&answers, &keypair, &pops)
+            .expect("load Nexus observer wizard config");
         let authenticated_non_validator_sources = 5_usize;
         let body_source_bytes = defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
         let mut queues = TomlTable::new();
@@ -1630,18 +1542,6 @@ mod tests {
         queues.insert("bodies".into(), TomlValue::Integer(1));
         queues.insert("body_bytes".into(), TomlValue::Integer(1));
         set_table(&mut config, "sumeragi.queues", queues);
-        let answers = Answers {
-            profile: Profile::Local,
-            chain: "chain-x".to_owned(),
-            p2p_host: "127.0.0.1".to_owned(),
-            p2p_port: 1337,
-            torii_host: "127.0.0.1".to_owned(),
-            torii_port: 8080,
-            trusted_peers: peers,
-            relay_mode: RelayMode::Disabled,
-            relay_hub_addresses: Vec::new(),
-            output_dir: PathBuf::from("out"),
-        };
         apply_overrides(
             &mut config,
             &answers,
@@ -1773,14 +1673,10 @@ mod tests {
             validator_peers.push(validator.public_key().clone());
         }
         {
-            let profile = Profile::Nexus;
-            let defaults = ProfileDefaults::for_profile(profile);
+            let defaults = ProfileDefaults::nexus();
             let answers = Answers {
-                profile,
-                chain: defaults.chain.to_owned(),
-                p2p_host: defaults.host.to_owned(),
+                p2p_host: defaults.observer_public_host.to_owned(),
                 p2p_port: defaults.p2p_port,
-                torii_host: defaults.host.to_owned(),
                 torii_port: defaults.torii_port,
                 trusted_peers: validator_peers
                     .iter()
@@ -1788,7 +1684,7 @@ mod tests {
                     .map(|(index, public_key)| {
                         format!(
                             "{public_key}@{}:{}",
-                            defaults.host,
+                            defaults.relay_hub_host,
                             defaults.p2p_port
                                 + u16::try_from(index).expect("fixture port offset fits")
                         )
@@ -1798,14 +1694,8 @@ mod tests {
                 relay_hub_addresses: Vec::new(),
                 output_dir: PathBuf::from("out"),
             };
-            let (mut config, _) = load_config_template(
-                &answers,
-                &keypair,
-                &transport_keypair,
-                &streaming_keypair,
-                &pops,
-            )
-            .unwrap_or_else(|error| panic!("load {profile} wizard template: {error:?}"));
+            let mut config = load_config_template(&answers, &keypair, &pops)
+                .unwrap_or_else(|error| panic!("load Nexus wizard template: {error:?}"));
             apply_overrides(
                 &mut config,
                 &answers,
@@ -1814,7 +1704,7 @@ mod tests {
                 &streaming_keypair,
                 &pops,
             )
-            .unwrap_or_else(|error| panic!("apply {profile} wizard overrides: {error:?}"));
+            .unwrap_or_else(|error| panic!("apply Nexus wizard overrides: {error:?}"));
             let root = config.as_table_mut().expect("wizard config table");
             assert!(!root.contains_key("private_key_file"));
             assert!(!root.contains_key("soranet_transport_private_key_file"));
@@ -1837,6 +1727,39 @@ mod tests {
                     .and_then(TomlValue::as_str)
                     != Some(keypair.public_key().to_string().as_str())
             }));
+            let network = root
+                .get("network")
+                .and_then(TomlValue::as_table)
+                .expect("wizard network table");
+            assert_eq!(
+                network.get("address").and_then(TomlValue::as_str),
+                Some(
+                    addr_literal("0.0.0.0", defaults.p2p_port)
+                        .expect("expected P2P listener")
+                        .as_str()
+                ),
+                "the observer must bind locally rather than to a remote Nexus hostname"
+            );
+            assert_eq!(
+                network.get("public_address").and_then(TomlValue::as_str),
+                Some(
+                    addr_literal(defaults.observer_public_host, defaults.p2p_port)
+                        .expect("expected advertised P2P endpoint")
+                        .as_str()
+                )
+            );
+            assert_eq!(
+                root.get("torii")
+                    .and_then(TomlValue::as_table)
+                    .and_then(|torii| torii.get("address"))
+                    .and_then(TomlValue::as_str),
+                Some(
+                    addr_literal("0.0.0.0", defaults.torii_port)
+                        .expect("expected Torii listener")
+                        .as_str()
+                ),
+                "Torii must keep the template's local bind host"
+            );
             let streaming = root
                 .get("streaming")
                 .and_then(TomlValue::as_table)
@@ -1877,7 +1800,7 @@ mod tests {
                 ),
             );
             let mut actual = actual::Root::from_toml_source(TomlSource::inline(root.clone()))
-                .unwrap_or_else(|error| panic!("{profile} wizard config admission: {error:?}"));
+                .unwrap_or_else(|error| panic!("Nexus wizard config admission: {error:?}"));
             let configured_storage_enabled = actual.torii.sorafs_storage.enabled;
             actual.apply_sora_profile();
             // Mirror `iroha3d` CLI resolution: an explicit authored value survives profile
@@ -1887,59 +1810,25 @@ mod tests {
         }
     }
     #[test]
-    fn genesis_chain_is_patched() {
-        let tmp = tempfile::NamedTempFile::new().expect("tmp file");
-        fs::write(tmp.path(), r#"{"chain":"old","transactions":[]}"#).expect("write");
-        let path = tmp.path().display().to_string();
-        let genesis = load_and_patch_genesis(&path, "new-chain").expect("genesis");
+    fn genesis_template_identity_is_pinned() {
+        let error = parse_nexus_genesis_template(
+            br#"{"chain":"old","chain_discriminant":753,"transactions":[]}"#,
+        )
+        .expect_err("foreign chain must be rejected");
+        assert!(error.to_string().contains("must remain pinned"));
+
+        let raw = format!(
+            r#"{{"chain":"{}","chain_discriminant":753,"transactions":[]}}"#,
+            ProfileDefaults::nexus().chain
+        );
+        let genesis =
+            parse_nexus_genesis_template(raw.as_bytes()).expect("pinned genesis template");
         assert_eq!(
             genesis
                 .get("chain")
                 .and_then(JsonValue::as_str)
                 .unwrap_or(""),
-            "new-chain"
-        );
-    }
-    #[test]
-    fn trusted_peers_pop_missing_non_interactive_marks_peer_observer() {
-        let keypair = checked_wizard_bls_keypair();
-        let other = checked_wizard_bls_keypair();
-        let answers = Answers {
-            profile: Profile::Local,
-            chain: "chain-x".to_string(),
-            p2p_host: "127.0.0.1".to_string(),
-            p2p_port: 1337,
-            torii_host: "127.0.0.1".to_string(),
-            torii_port: 8080,
-            trusted_peers: vec![format!("{}@127.0.0.1:1338", other.public_key())],
-            relay_mode: RelayMode::Disabled,
-            relay_hub_addresses: Vec::new(),
-            output_dir: PathBuf::from("out"),
-        };
-        let args = Args {
-            profile: None,
-            output_dir: PathBuf::from("out"),
-            non_interactive: true,
-            chain_id: None,
-            p2p_host: None,
-            p2p_port: None,
-            torii_host: None,
-            torii_port: None,
-            relay_mode: None,
-            relay_hub_addresses: Vec::new(),
-            trusted_peers: None,
-            trusted_peers_pop: None,
-        };
-        let result = resolve_trusted_peers_pop(&args, &answers, &keypair);
-        let pops =
-            result.expect("missing remote PoPs should leave peers as non-validator trusted peers");
-        assert!(
-            pops.contains_key(keypair.public_key()),
-            "local validator PoP should be generated"
-        );
-        assert!(
-            !pops.contains_key(other.public_key()),
-            "remote trusted peer without PoP should not be promoted into the validator roster"
+            ProfileDefaults::nexus().chain
         );
     }
     #[test]
@@ -1961,13 +1850,8 @@ mod tests {
             pop_entries.push(format!("{}={}", validator.public_key(), hex::encode(pop)));
         }
         let answers = Answers {
-            profile: Profile::Nexus,
-            chain: ProfileDefaults::for_profile(Profile::Nexus)
-                .chain
-                .to_owned(),
             p2p_host: "127.0.0.1".to_owned(),
             p2p_port: 1_337,
-            torii_host: "127.0.0.1".to_owned(),
             torii_port: 8_080,
             trusted_peers: trusted_peers.clone(),
             relay_mode: RelayMode::Disabled,
@@ -1975,13 +1859,10 @@ mod tests {
             output_dir: PathBuf::from("out"),
         };
         let mut args = Args {
-            profile: Some(Profile::Nexus),
             output_dir: PathBuf::from("out"),
             non_interactive: true,
-            chain_id: None,
             p2p_host: None,
             p2p_port: None,
-            torii_host: None,
             torii_port: None,
             relay_mode: None,
             relay_hub_addresses: Vec::new(),

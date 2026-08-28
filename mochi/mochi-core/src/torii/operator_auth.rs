@@ -9,7 +9,7 @@ use iroha_data_model::prelude::NetworkId;
 use rand::{TryRngCore as _, rngs::OsRng};
 use reqwest::{
     Client, Method, Request,
-    header::{ACCEPT, HeaderMap, HeaderValue},
+    header::{ACCEPT, HeaderValue},
 };
 use std::{
     fmt,
@@ -21,22 +21,7 @@ const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
-const FORBIDDEN_DEFAULT_AUTH_HEADERS: [&str; 12] = [
-    "authorization",
-    "x-api-token",
-    "x-iroha-account",
-    "x-iroha-signature",
-    "x-iroha-timestamp-ms",
-    "x-iroha-nonce",
-    "x-iroha-witness",
-    HEADER_OPERATOR_PUBLIC_KEY,
-    HEADER_OPERATOR_TIMESTAMP_MS,
-    HEADER_OPERATOR_NONCE,
-    HEADER_OPERATOR_SIGNATURE,
-    "x-iroha-torii-proxy-target-peer-id",
-];
 /// Immutable signing material for one exact Torii network.
-#[derive(Clone)]
 pub struct OperatorSigningContext {
     network_id: NetworkId,
     key_pair: KeyPair,
@@ -72,7 +57,6 @@ impl fmt::Debug for OperatorSigningContext {
 }
 pub(super) fn build_operator_get_request(
     http: &Client,
-    default_headers: &HeaderMap,
     configured_network_id: Option<NetworkId>,
     context: Option<&OperatorSigningContext>,
     url: Url,
@@ -91,14 +75,6 @@ pub(super) fn build_operator_get_request(
         return Err(ToriiError::SignedQueryContext(format!(
             "operator signing context network id `{}` does not match client network id `{configured_network_id}`",
             context.network_id
-        )));
-    }
-    if let Some(name) = FORBIDDEN_DEFAULT_AUTH_HEADERS
-        .into_iter()
-        .find(|name| default_headers.contains_key(*name))
-    {
-        return Err(ToriiError::SignedQueryContext(format!(
-            "operator request forbids configured fallback or precomputed auth header `{name}`"
         )));
     }
     let timestamp_ms: u64 = SystemTime::now()
@@ -208,7 +184,6 @@ fn operator_request_message(
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair, ed25519_parse_signature};
-    use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
     fn context() -> OperatorSigningContext {
         OperatorSigningContext::new(
             crate::torii::test_network_id(),
@@ -222,7 +197,6 @@ mod tests {
             Url::parse("http://127.0.0.1:8080/v1/sumeragi/status?z=2&a=1").expect("valid URL");
         let request = build_operator_get_request(
             &Client::new(),
-            &HeaderMap::new(),
             Some(context.network_id()),
             Some(&context),
             url,
@@ -258,20 +232,5 @@ mod tests {
                 .windows(b"a=1&z=2".len())
                 .any(|window| window == b"a=1&z=2")
         );
-    }
-    #[test]
-    fn operator_get_rejects_default_auth_before_dispatch() {
-        let context = context();
-        let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer fallback"));
-        let error = build_operator_get_request(
-            &Client::new(),
-            &headers,
-            Some(context.network_id()),
-            Some(&context),
-            Url::parse("http://127.0.0.1:8080/v1/sumeragi/status").expect("URL"),
-        )
-        .expect_err("fallback auth must be rejected");
-        assert!(error.to_string().contains("authorization"));
     }
 }

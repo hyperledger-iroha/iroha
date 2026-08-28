@@ -241,13 +241,6 @@ pub struct CongestionLease {
     controller: CongestionController,
     remote: SocketAddr,
 }
-impl CongestionLease {
-    /// Remote address tracked by this lease.
-    #[allow(dead_code)]
-    pub fn remote(&self) -> SocketAddr {
-        self.remote
-    }
-}
 impl Drop for CongestionLease {
     fn drop(&mut self) {
         let controller = self.controller.clone();

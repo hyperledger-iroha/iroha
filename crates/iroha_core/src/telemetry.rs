@@ -4580,11 +4580,6 @@ impl StreamingTelemetry {
         .streaming_quic_datagrams_dropped_total.inc_by(delta);]
     /// Record a feedback timeout event.
     [inc_feedback_timeout() => .streaming_feedback_timeout_total.inc();]
-    /// Record a `SoraNet` provisioning failure.
-    [inc_soranet_provision_failure() => .streaming_soranet_provision_fail_total.inc();]
-    /// Record a `SoraNet` provisioning queue drop with the provided reason.
-    [inc_soranet_provision_queue_drop(reason: &'static str) =>
-        .streaming_soranet_provision_queue_drop_total.with_label_values(&[reason]).inc();]
     /// Record a privacy redaction failure event.
     [inc_privacy_redaction_failure() => .streaming_privacy_redaction_fail_total.inc();]
     }
@@ -10319,44 +10314,26 @@ mod tests {
         record_network_metrics(&telemetry, metrics_ref);
         record_sync_metrics(&telemetry, metrics_ref);
         record_energy_metrics(&telemetry, metrics_ref);
-        telemetry.record_storage_budget_usage("soranet_spool", 64, 128);
-        telemetry.inc_storage_budget_exceeded("soranet_spool");
-        telemetry.inc_soranet_provision_failure();
-        telemetry.inc_soranet_provision_queue_drop("full");
-        telemetry.inc_soranet_provision_queue_drop("disconnected");
+        telemetry.record_storage_budget_usage("wsv_cold", 64, 128);
+        telemetry.inc_storage_budget_exceeded("wsv_cold");
         assert_eq!(
             metrics
                 .storage_budget_bytes_used
-                .with_label_values(&["soranet_spool"])
+                .with_label_values(&["wsv_cold"])
                 .get(),
             64
         );
         assert_eq!(
             metrics
                 .storage_budget_bytes_limit
-                .with_label_values(&["soranet_spool"])
+                .with_label_values(&["wsv_cold"])
                 .get(),
             128
         );
         assert_eq!(
             metrics
                 .storage_budget_exceeded_total
-                .with_label_values(&["soranet_spool"])
-                .get(),
-            1
-        );
-        assert_eq!(metrics.streaming_soranet_provision_fail_total.get(), 1);
-        assert_eq!(
-            metrics
-                .streaming_soranet_provision_queue_drop_total
-                .with_label_values(&["full"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .streaming_soranet_provision_queue_drop_total
-                .with_label_values(&["disconnected"])
+                .with_label_values(&["wsv_cold"])
                 .get(),
             1
         );

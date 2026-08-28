@@ -17,6 +17,7 @@ public final class SccpV1Tests {
 
   public static void main(final String[] args) throws Exception {
     closedInventoryReservesRetiredTagsAndAliases();
+    tonProfilesBindCanonicalZeroStates();
     allSharedEthBscTronTransferVectorsMatchRust();
     governedHashRotationPreservesReplayIdentityButChangesCommitment();
     payloadDecoderRejectsRetiredAndNoncanonicalForms();
@@ -30,7 +31,7 @@ public final class SccpV1Tests {
 
   private static void closedInventoryReservesRetiredTagsAndAliases() {
     assert Arrays.stream(SccpNetworkV1.values()).map(SccpNetworkV1::tag).toList()
-        .equals(List.of(1, 2, 3, 4, 5, 10, 11, 12));
+        .equals(List.of(1, 2, 3, 4, 5, 10, 11, 12, 14, 15));
     assert SccpNetworkV1.fromProfileKey("sora-taira") == SccpNetworkV1.SORA_TAIRA;
     assert SccpNetworkV1.SORA_TAIRA.isProduction();
     assert SccpNetworkV1.fromTag(0) == null;
@@ -40,7 +41,6 @@ public final class SccpV1Tests {
             "sora-nexus",
             "sora_nexus",
             "solana-mainnet-beta",
-            "ton-mainnet",
             "SORA-TAIRA",
             "sora_taira",
             "sora-taira ",
@@ -48,6 +48,26 @@ public final class SccpV1Tests {
             "tron")) {
       assert SccpNetworkV1.fromProfileKey(alias) == null : alias;
     }
+  }
+
+  private static void tonProfilesBindCanonicalZeroStates() {
+    assert SccpNetworkV1.fromProfileKey("ton-mainnet") == SccpNetworkV1.TON_MAINNET;
+    assert SccpNetworkV1.fromProfileKey("ton-testnet") == SccpNetworkV1.TON_TESTNET;
+    assert SccpNetworkV1.fromTag(14) == SccpNetworkV1.TON_MAINNET;
+    assert SccpNetworkV1.fromTag(15) == SccpNetworkV1.TON_TESTNET;
+
+    final byte[] mainnet = SccpV1.canonicalNetworkBytes(SccpNetworkV1.TON_MAINNET);
+    final byte[] testnet = SccpV1.canonicalNetworkBytes(SccpNetworkV1.TON_TESTNET);
+    assert mainnet.length == 90;
+    assert testnet.length == 90;
+    assert (mainnet[0] & 0xff) == 1 && (mainnet[1] & 0xff) == 14;
+    assert (testnet[0] & 0xff) == 1 && (testnet[1] & 0xff) == 15;
+    assert Arrays.equals(Arrays.copyOfRange(mainnet, 2, 6), new byte[] {4, 0, 0, 0});
+    assert Arrays.equals(Arrays.copyOfRange(testnet, 2, 6), new byte[] {4, 0, 0, 0});
+    assert Arrays.equals(
+        Arrays.copyOfRange(mainnet, 6, 10), new byte[] {0x11, (byte) 0xff, (byte) 0xff, (byte) 0xff});
+    assert Arrays.equals(
+        Arrays.copyOfRange(testnet, 6, 10), new byte[] {(byte) 0xfd, (byte) 0xff, (byte) 0xff, (byte) 0xff});
   }
 
   private static void allSharedEthBscTronTransferVectorsMatchRust() throws Exception {
@@ -121,7 +141,7 @@ public final class SccpV1Tests {
   }
 
   private static void transferRejectsRetiredDomainsCodecsAndInvalidWidths() {
-    for (final int domain : List.of(3, 4, 6, -1)) {
+    for (final int domain : List.of(3, 6, -1)) {
       expectFailure(
           () ->
               transfer(
@@ -163,6 +183,55 @@ public final class SccpV1Tests {
     final byte[] badTron = repeated(1, 21);
     badTron[0] = 0x42;
     expectFailure(() -> transfer(0, 5, 1, 1, text("xor"), BigInteger.ONE, 1, text("alice"), 5, badTron, text("route")));
+
+    final byte[] tonAccount = repeated(0x31, 36);
+    Arrays.fill(tonAccount, 0, 4, (byte) 0);
+    final SccpTransferPayloadV1 tonTransfer =
+        transfer(
+            0,
+            4,
+            1,
+            1,
+            text("xor"),
+            BigInteger.ONE,
+            1,
+            text("alice"),
+            7,
+            tonAccount,
+            text("taira_ton_xor"));
+    assert Arrays.equals(tonAccount, tonTransfer.recipient());
+
+    final byte[] nonBasechain = tonAccount.clone();
+    nonBasechain[3] = 1;
+    expectFailure(
+        () ->
+            transfer(
+                0,
+                4,
+                1,
+                1,
+                text("xor"),
+                BigInteger.ONE,
+                1,
+                text("alice"),
+                7,
+                nonBasechain,
+                text("taira_ton_xor")));
+    final byte[] zeroAccount = new byte[36];
+    expectFailure(
+        () ->
+            transfer(
+                0,
+                4,
+                1,
+                1,
+                text("xor"),
+                BigInteger.ONE,
+                1,
+                text("alice"),
+                7,
+                zeroAccount,
+                text("taira_ton_xor")));
   }
 
   private static void canonicalTextAcceptsExactI105AndRejectsUnicodeSubstitutions() {

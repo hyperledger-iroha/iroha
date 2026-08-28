@@ -2,13 +2,9 @@
 //! multi-source fetch loop implemented in `sorafs_car`.
 use futures::future::join_all;
 use iroha_core::prelude::Hash;
-use iroha_data_model::{
-    name::Name,
-    soranet::privacy_metrics::{
-        SoranetPrivacyEventKindV1, SoranetPrivacyEventV1, SoranetPrivacyHandshakeFailureV1,
-        SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
-    },
-    taikai::{TaikaiEventId, TaikaiRenditionId, TaikaiStreamId},
+use iroha_data_model::soranet::privacy_metrics::{
+    SoranetPrivacyEventKindV1, SoranetPrivacyEventV1, SoranetPrivacyHandshakeFailureV1,
+    SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
 };
 use iroha_logger::{debug, info, warn};
 use iroha_telemetry::{
@@ -19,7 +15,7 @@ use norito::json;
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use reqwest::{Client, Response, StatusCode, Url, redirect};
 use sorafs_car::{
-    CarBuildPlan, CarVerifier, CarWriteStats, CarWriter, TaikaiSegmentHint,
+    CarBuildPlan, CarVerifier, CarWriteStats, CarWriter,
     gateway::{
         GatewayBuildError, GatewayFetchConfig, GatewayFetchContext, GatewayFetchedManifest,
         GatewayManifestError, GatewayProviderInput,
@@ -37,12 +33,9 @@ use sorafs_manifest::{
 use std::{
     cmp::Ordering as CmpOrdering,
     collections::{HashMap, VecDeque},
-    future::Future,
     io::Cursor,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
-    pin::Pin,
-    str::FromStr,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering as AtomicOrdering},
@@ -66,8 +59,9 @@ pub mod moderation_runner;
 pub mod proxy;
 pub mod routing_authority;
 pub mod soranet;
-pub mod taikai_cache;
 pub mod treasury;
+/// Default owner-local spool used by the optional local QUIC proxy bridges.
+pub const DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR: &str = "./storage/streaming/soranet_routes";
 pub(crate) const SORANET_PQ_RANK_STEP_WEIGHT: u32 = 250;
 pub(crate) const SORANET_PQ_HANDSHAKE_BONUS: u32 = 500;
 pub(crate) const SORANET_BANDWIDTH_UNIT_BYTES: u64 = 256 * 1024; // 256 KiB per weight step.
@@ -309,12 +303,6 @@ use soranet::{
     CircuitManagerError, CircuitRotationRecord, GuardCapabilityComponents, GuardRecord, GuardSet,
     RelayDescriptor, RelayDirectory, RelayDirectoryValidityError, RelayPathHint,
 };
-use taikai_cache::{
-    CacheAdmissionError, CacheAdmissionGossip, CacheAdmissionTracker, QosClass, QosConfig,
-    ReliabilityTuning, SegmentKey as TaikaiSegmentKey, TaikaiCache, TaikaiCacheConfig,
-    TaikaiCacheHandle, TaikaiCacheStatsSnapshot, TaikaiPullQueueStats, TaikaiPullRequest,
-    TaikaiPullTicket, TaikaiQueueError,
-};
 /// Convenient re-exports for downstream callers.
 pub mod prelude {
     pub use crate::{
@@ -347,14 +335,6 @@ pub mod prelude {
             GuardRecord, GuardRetention, GuardSelector, GuardSet, PathHintReport, PathMetadata,
             RelayDescriptor, RelayDirectory, RelayDirectoryValidityError, RelayPathHint,
             RelayRoles,
-        },
-        taikai_cache::{
-            CacheEviction as TaikaiCacheEviction, CacheEvictionReason as TaikaiCacheEvictionReason,
-            CachePromotion as TaikaiCachePromotion, CacheTierKind as TaikaiCacheTierKind,
-            CachedSegment as TaikaiCachedSegment, QosClass as TaikaiQosClass,
-            QosConfig as TaikaiQosConfig, QosError as TaikaiQosError,
-            SegmentKey as TaikaiSegmentKey, TaikaiCache, TaikaiCacheConfig,
-            TaikaiCacheInsertOutcome, TaikaiCacheQueryOutcome, TaikaiShardId, TaikaiShardRing,
         },
         treasury::{
             AdjustmentKind, AdjustmentRequest, DisputeId, DisputeOutcome, DisputeResolution,
@@ -861,8 +841,6 @@ pub struct OrchestratorConfig {
     pub write_mode: WriteModeHint,
     /// Privacy event polling configuration. `None` disables the collector.
     pub privacy_events: Option<PrivacyEventsConfig>,
-    /// Optional Taikai cache configuration wired for SNNet-14 distribution pilots.
-    pub taikai_cache: Option<TaikaiCacheConfig>,
 }
 impl OrchestratorConfig {
     /// Attach a telemetry region label used when emitting metrics.
@@ -953,12 +931,6 @@ impl OrchestratorConfig {
         self.privacy_events = config;
         self
     }
-    /// Attach a Taikai cache configuration. `None` disables the cache.
-    #[must_use]
-    pub fn with_taikai_cache(mut self, cache: Option<TaikaiCacheConfig>) -> Self {
-        self.taikai_cache = cache;
-        self
-    }
     /// Configure the downgrade remediation policy.
     #[must_use]
     pub fn with_downgrade_remediation(
@@ -994,7 +966,6 @@ impl Default for OrchestratorConfig {
             policy_override: PolicyOverride::default(),
             write_mode: WriteModeHint::default(),
             privacy_events: Some(PrivacyEventsConfig::default()),
-            taikai_cache: None,
         }
     }
 }
@@ -1237,11 +1208,6 @@ pub mod bindings {
                 root.insert("downgrade_remediation".into(), Value::Null);
             }
         }
-        if let Some(cache) = &config.taikai_cache {
-            root.insert("taikai_cache".into(), taikai_cache_to_json(cache));
-        } else {
-            root.insert("taikai_cache".into(), Value::Null);
-        }
         Value::Object(root)
     }
     /// Parse an [`OrchestratorConfig`] from a Norito JSON value.
@@ -1249,6 +1215,11 @@ pub mod bindings {
         let root = value
             .as_object()
             .ok_or_else(|| ConfigJsonError::new("orchestrator config must be a JSON object"))?;
+        if root.contains_key("taikai_cache") {
+            return Err(ConfigJsonError::new(
+                "taikai_cache was removed from the V1 orchestrator configuration",
+            ));
+        }
         let mut config = OrchestratorConfig::default();
         if let Some(scoreboard_value) = root.get("scoreboard") {
             let scoreboard = scoreboard_value
@@ -2122,219 +2093,7 @@ pub mod bindings {
                 config.downgrade_remediation = Some(remediation);
             }
         }
-        if let Some(cache_value) = root.get("taikai_cache") {
-            if cache_value.is_null() {
-                config.taikai_cache = None;
-            } else {
-                let cache = taikai_cache_from_json(cache_value)?;
-                config.taikai_cache = Some(cache);
-            }
-        }
         Ok(config)
-    }
-    fn taikai_cache_to_json(config: &TaikaiCacheConfig) -> Value {
-        let mut root = Map::new();
-        root.insert(
-            "hot_capacity_bytes".into(),
-            Value::from(config.hot_capacity_bytes),
-        );
-        root.insert(
-            "hot_retention_secs".into(),
-            Value::from(config.hot_retention.as_secs()),
-        );
-        root.insert(
-            "warm_capacity_bytes".into(),
-            Value::from(config.warm_capacity_bytes),
-        );
-        root.insert(
-            "warm_retention_secs".into(),
-            Value::from(config.warm_retention.as_secs()),
-        );
-        root.insert(
-            "cold_capacity_bytes".into(),
-            Value::from(config.cold_capacity_bytes),
-        );
-        root.insert(
-            "cold_retention_secs".into(),
-            Value::from(config.cold_retention.as_secs()),
-        );
-        let mut qos = Map::new();
-        qos.insert(
-            "priority_rate_bps".into(),
-            Value::from(config.qos.priority_rate_bps),
-        );
-        qos.insert(
-            "standard_rate_bps".into(),
-            Value::from(config.qos.standard_rate_bps),
-        );
-        qos.insert(
-            "bulk_rate_bps".into(),
-            Value::from(config.qos.bulk_rate_bps),
-        );
-        qos.insert(
-            "burst_multiplier".into(),
-            Value::from(u64::from(config.qos.burst_multiplier)),
-        );
-        root.insert("qos".into(), Value::Object(qos));
-        let mut reliability = Map::new();
-        reliability.insert(
-            "failures_to_trip".into(),
-            Value::from(config.reliability.failures_to_trip),
-        );
-        reliability.insert(
-            "open_secs".into(),
-            Value::from(config.reliability.open_secs),
-        );
-        root.insert("reliability".into(), Value::Object(reliability));
-        Value::Object(root)
-    }
-    fn taikai_cache_from_json(value: &Value) -> Result<TaikaiCacheConfig, ConfigJsonError> {
-        fn require_positive(value: u64, label: &str) -> Result<(), ConfigJsonError> {
-            if value == 0 {
-                Err(ConfigJsonError::new(format!(
-                    "{label} must be greater than zero"
-                )))
-            } else {
-                Ok(())
-            }
-        }
-        let object = value
-            .as_object()
-            .ok_or_else(|| ConfigJsonError::new("taikai_cache must be a JSON object"))?;
-        let hot_capacity = object
-            .get("hot_capacity_bytes")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                ConfigJsonError::new("taikai_cache.hot_capacity_bytes must be an unsigned integer")
-            })?;
-        let hot_retention_secs = object
-            .get("hot_retention_secs")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                ConfigJsonError::new("taikai_cache.hot_retention_secs must be an unsigned integer")
-            })?;
-        let warm_capacity = object
-            .get("warm_capacity_bytes")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                ConfigJsonError::new("taikai_cache.warm_capacity_bytes must be an unsigned integer")
-            })?;
-        let warm_retention_secs = object
-            .get("warm_retention_secs")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                ConfigJsonError::new("taikai_cache.warm_retention_secs must be an unsigned integer")
-            })?;
-        let cold_capacity = object
-            .get("cold_capacity_bytes")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                ConfigJsonError::new("taikai_cache.cold_capacity_bytes must be an unsigned integer")
-            })?;
-        let cold_retention_secs = object
-            .get("cold_retention_secs")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                ConfigJsonError::new("taikai_cache.cold_retention_secs must be an unsigned integer")
-            })?;
-        for (value, label) in [
-            (hot_capacity, "taikai_cache.hot_capacity_bytes"),
-            (hot_retention_secs, "taikai_cache.hot_retention_secs"),
-            (warm_capacity, "taikai_cache.warm_capacity_bytes"),
-            (warm_retention_secs, "taikai_cache.warm_retention_secs"),
-            (cold_capacity, "taikai_cache.cold_capacity_bytes"),
-            (cold_retention_secs, "taikai_cache.cold_retention_secs"),
-        ] {
-            require_positive(value, label)?;
-        }
-        let qos_value = object
-            .get("qos")
-            .ok_or_else(|| ConfigJsonError::new("taikai_cache.qos section is required"))?;
-        let qos_object = qos_value
-            .as_object()
-            .ok_or_else(|| ConfigJsonError::new("taikai_cache.qos must be a JSON object"))?;
-        let priority_rate = qos_object
-            .get("priority_rate_bps")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                ConfigJsonError::new(
-                    "taikai_cache.qos.priority_rate_bps must be an unsigned integer",
-                )
-            })?;
-        let standard_rate = qos_object
-            .get("standard_rate_bps")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                ConfigJsonError::new(
-                    "taikai_cache.qos.standard_rate_bps must be an unsigned integer",
-                )
-            })?;
-        let bulk_rate = qos_object
-            .get("bulk_rate_bps")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                ConfigJsonError::new("taikai_cache.qos.bulk_rate_bps must be an unsigned integer")
-            })?;
-        let burst_multiplier = qos_object
-            .get("burst_multiplier")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                ConfigJsonError::new(
-                    "taikai_cache.qos.burst_multiplier must be an unsigned integer",
-                )
-            })?;
-        for (value, label) in [
-            (priority_rate, "taikai_cache.qos.priority_rate_bps"),
-            (standard_rate, "taikai_cache.qos.standard_rate_bps"),
-            (bulk_rate, "taikai_cache.qos.bulk_rate_bps"),
-            (burst_multiplier, "taikai_cache.qos.burst_multiplier"),
-        ] {
-            require_positive(value, label)?;
-        }
-        Ok(TaikaiCacheConfig {
-            hot_capacity_bytes: hot_capacity,
-            hot_retention: Duration::from_secs(hot_retention_secs),
-            warm_capacity_bytes: warm_capacity,
-            warm_retention: Duration::from_secs(warm_retention_secs),
-            cold_capacity_bytes: cold_capacity,
-            cold_retention: Duration::from_secs(cold_retention_secs),
-            qos: QosConfig {
-                priority_rate_bps: priority_rate,
-                standard_rate_bps: standard_rate,
-                bulk_rate_bps: bulk_rate,
-                burst_multiplier: u32::try_from(burst_multiplier).map_err(|_| {
-                    ConfigJsonError::new(
-                        "taikai_cache.qos.burst_multiplier must fit into a 32-bit integer",
-                    )
-                })?,
-            },
-            reliability: {
-                let defaults = ReliabilityTuning::default();
-                let reliability = object
-                    .get("reliability")
-                    .and_then(Value::as_object)
-                    .cloned()
-                    .unwrap_or_default();
-                let failures_to_trip = reliability
-                    .get("failures_to_trip")
-                    .and_then(Value::as_u64)
-                    .map(|value| value.max(1))
-                    .unwrap_or(u64::from(defaults.failures_to_trip));
-                let open_secs = reliability
-                    .get("open_secs")
-                    .and_then(Value::as_u64)
-                    .map(|value| value.max(1))
-                    .unwrap_or(defaults.open_secs);
-                ReliabilityTuning {
-                    failures_to_trip: u32::try_from(failures_to_trip).map_err(|_| {
-                        ConfigJsonError::new(
-                            "taikai_cache.reliability.failures_to_trip must fit in u32",
-                        )
-                    })?,
-                    open_secs,
-                }
-            },
-        })
     }
     fn compliance_to_json(policy: &CompliancePolicy) -> Value {
         let mut map = Map::new();
@@ -2499,8 +2258,6 @@ pub struct Orchestrator {
     circuit_manager: Option<Arc<Mutex<CircuitManager>>>,
     proxy_runtime: Option<Arc<AsyncMutex<LocalProxyRuntime>>>,
     downgrade_remediator: Option<Arc<DowngradeRemediator>>,
-    taikai_cache: Option<TaikaiCacheHandle>,
-    taikai_cache_tracker: Option<Arc<Mutex<CacheAdmissionTracker>>>,
 }
 impl Clone for Orchestrator {
     fn clone(&self) -> Self {
@@ -2509,8 +2266,6 @@ impl Clone for Orchestrator {
             circuit_manager: self.circuit_manager.clone(),
             proxy_runtime: self.proxy_runtime.clone(),
             downgrade_remediator: self.downgrade_remediator.clone(),
-            taikai_cache: self.taikai_cache.clone(),
-            taikai_cache_tracker: self.taikai_cache_tracker.clone(),
         }
     }
 }
@@ -2574,14 +2329,6 @@ impl Orchestrator {
             .circuit_manager
             .clone()
             .map(|cfg| Arc::new(Mutex::new(CircuitManager::new(cfg))));
-        let taikai_cache = config
-            .taikai_cache
-            .clone()
-            .map(TaikaiCacheHandle::from_config);
-        let taikai_cache_tracker = taikai_cache
-            .as_ref()
-            .map(|handle| CacheAdmissionTracker::with_defaults(handle.clone()))
-            .map(|tracker| Arc::new(Mutex::new(tracker)));
         let proxy_runtime = match config.local_proxy.clone() {
             Some(proxy_cfg) => {
                 let label = proxy_cfg
@@ -2629,8 +2376,6 @@ impl Orchestrator {
             circuit_manager,
             proxy_runtime,
             downgrade_remediator,
-            taikai_cache,
-            taikai_cache_tracker,
         }
     }
     /// Returns the orchestrator configuration.
@@ -2665,63 +2410,6 @@ impl Orchestrator {
             proxy_cfg.proxy_mode = mode;
         }
         Ok(manifest)
-    }
-    /// Returns the Taikai cache handle if configured.
-    #[must_use]
-    pub fn taikai_cache(&self) -> Option<Arc<Mutex<TaikaiCache>>> {
-        self.taikai_cache.as_ref().map(TaikaiCacheHandle::cache)
-    }
-    /// Returns a clone of the Taikai cache handle so callers can interact
-    /// with the cache and pull queue without managing the underlying mutexes.
-    #[must_use]
-    pub fn taikai_cache_handle(&self) -> Option<TaikaiCacheHandle> {
-        self.taikai_cache.clone()
-    }
-    /// Returns the Taikai cache admission tracker if configured.
-    #[must_use]
-    pub fn taikai_cache_tracker(&self) -> Option<Arc<Mutex<CacheAdmissionTracker>>> {
-        self.taikai_cache_tracker.clone()
-    }
-    /// Applies a cache admission gossip entry to the Taikai shard ring.
-    pub fn apply_cache_admission_gossip(
-        &self,
-        gossip: &CacheAdmissionGossip,
-        now_unix_ms: u64,
-    ) -> Result<bool, CacheAdmissionError> {
-        let Some(tracker) = &self.taikai_cache_tracker else {
-            return Ok(false);
-        };
-        match tracker.lock() {
-            Ok(mut guard) => guard.ingest(gossip, now_unix_ms),
-            Err(err) => {
-                warn!(
-                    target: "soranet.taikai_cache",
-                    ?err,
-                    "failed to lock Taikai cache admission tracker"
-                );
-                Ok(false)
-            }
-        }
-    }
-    fn snapshot_taikai_cache_stats(&self) -> Option<TaikaiCacheStatsSnapshot> {
-        self.taikai_cache
-            .as_ref()
-            .and_then(|handle| match handle.cache().lock() {
-                Ok(guard) => Some(guard.stats()),
-                Err(err) => {
-                    warn!(
-                        target: "soranet.taikai_cache",
-                        ?err,
-                        "failed to lock Taikai cache while collecting stats"
-                    );
-                    None
-                }
-            })
-    }
-    fn snapshot_taikai_queue_stats(&self) -> Option<TaikaiPullQueueStats> {
-        self.taikai_cache
-            .as_ref()
-            .map(TaikaiCacheHandle::queue_stats)
     }
     fn validate_relay_trust_at(&self, now: SystemTime) -> Result<(), OrchestratorError> {
         let Some(directory) = &self.config.relay_directory else {
@@ -3011,36 +2699,19 @@ impl Orchestrator {
             }
             None => None,
         };
-        let queue_bridge = self
-            .taikai_cache_handle()
-            .and_then(|handle| TaikaiQueueBridge::new(handle, plan));
-        let result = if let Some(bridge) = queue_bridge.clone() {
-            let wrapped_fetcher = wrap_fetcher_with_taikai_queue(fetcher, bridge);
-            multi_fetch::fetch_plan_parallel(
-                plan,
-                providers,
-                wrapped_fetcher,
-                fetch_options.clone(),
-            )
-            .await
-        } else {
-            multi_fetch::fetch_plan_parallel(plan, providers, fetcher, fetch_options).await
-        };
+        let result =
+            multi_fetch::fetch_plan_parallel(plan, providers, fetcher, fetch_options).await;
         let session = match result {
             Ok(outcome) => {
                 let proxy_manifest = self.proxy_manifest().await?;
                 ctx.on_success(&outcome);
                 ctx.finish();
                 let policy_report = PolicyReport::from(summary);
-                let cache_stats = self.snapshot_taikai_cache_stats();
-                let cache_queue_stats = self.snapshot_taikai_queue_stats();
                 Ok(FetchSession {
                     outcome,
                     policy_report,
                     local_proxy_manifest: proxy_manifest.clone(),
                     car_verification: None,
-                    taikai_cache_stats: cache_stats,
-                    taikai_cache_queue: cache_queue_stats,
                 })
             }
             Err(error) => {
@@ -3151,44 +2822,25 @@ impl Orchestrator {
             }
             None => None,
         };
-        let queue_bridge = self
-            .taikai_cache_handle()
-            .and_then(|handle| TaikaiQueueBridge::new(handle, plan));
-        let result = if let Some(bridge) = queue_bridge.clone() {
-            let wrapped_fetcher = wrap_fetcher_with_taikai_queue(fetcher, bridge);
-            multi_fetch::fetch_plan_parallel_with_observer(
-                plan,
-                providers,
-                wrapped_fetcher,
-                fetch_options.clone(),
-                observer,
-            )
-            .await
-        } else {
-            multi_fetch::fetch_plan_parallel_with_observer(
-                plan,
-                providers,
-                fetcher,
-                fetch_options,
-                observer,
-            )
-            .await
-        };
+        let result = multi_fetch::fetch_plan_parallel_with_observer(
+            plan,
+            providers,
+            fetcher,
+            fetch_options,
+            observer,
+        )
+        .await;
         let session = match result {
             Ok(outcome) => {
                 let proxy_manifest = self.proxy_manifest().await?;
                 ctx.on_success(&outcome);
                 ctx.finish();
                 let policy_report = PolicyReport::from(summary);
-                let cache_stats = self.snapshot_taikai_cache_stats();
-                let cache_queue_stats = self.snapshot_taikai_queue_stats();
                 Ok(FetchSession {
                     outcome,
                     policy_report,
                     local_proxy_manifest: proxy_manifest.clone(),
                     car_verification: None,
-                    taikai_cache_stats: cache_stats,
-                    taikai_cache_queue: cache_queue_stats,
                 })
             }
             Err(error) => {
@@ -3512,10 +3164,6 @@ pub struct FetchSession {
     pub local_proxy_manifest: Option<BrowserExtensionManifest>,
     /// Optional CAR/manifest verification proof.
     pub car_verification: Option<GatewayCarVerification>,
-    /// Snapshot of Taikai cache statistics captured after the fetch.
-    pub taikai_cache_stats: Option<TaikaiCacheStatsSnapshot>,
-    /// Snapshot of the Taikai cache pull queue after the fetch.
-    pub taikai_cache_queue: Option<TaikaiPullQueueStats>,
 }
 /// Verification artefacts produced after validating manifest + CAR parity.
 #[derive(Debug, Clone)]
@@ -5797,209 +5445,6 @@ fn attempt_failure_reason(failure: &AttemptFailure) -> &'static str {
         },
     }
 }
-fn wrap_fetcher_with_taikai_queue<F, Fut, E>(
-    fetcher: F,
-    bridge: Arc<TaikaiQueueBridge>,
-) -> impl Fn(FetchRequest) -> Pin<Box<dyn Future<Output = Result<ChunkResponse, E>> + Send>>
-+ Send
-+ Sync
-+ 'static
-where
-    F: Fn(FetchRequest) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<ChunkResponse, E>> + Send + 'static,
-    E: std::error::Error + Send + Sync + 'static,
-{
-    let fetcher = Arc::new(fetcher);
-    move |request: FetchRequest| {
-        let bridge = bridge.clone();
-        let hedge_after = bridge.hedge_after();
-        let hedge_candidate = request.clone();
-        let fetcher = fetcher.clone();
-        Box::pin(async move {
-            let mut lease = bridge.before_request(&request);
-            if lease.is_none() {
-                return (*fetcher)(request).await;
-            }
-            let batch_id = lease.as_ref().map(TaikaiQueueLease::batch_id);
-            let mut primary = Box::pin((*fetcher)(request));
-            let mut hedge_delay = Box::pin(sleep(hedge_after));
-            let mut hedged: Option<Pin<Box<_>>> = None;
-            let mut primary_result: Option<Result<ChunkResponse, E>> = None;
-            let mut hedged_result: Option<Result<ChunkResponse, E>> = None;
-            loop {
-                tokio::select! {
-                    outcome = &mut primary, if primary_result.is_none() => {
-                        primary_result = Some(outcome);
-                    }
-                    _ = &mut hedge_delay, if hedged.is_none() => {
-                        let should_hedge = match batch_id {
-                            Some(id) => bridge.trigger_hedge(id, Instant::now()),
-                            None => true,
-                        };
-                        if should_hedge {
-                            hedged = Some(Box::pin((*fetcher)(hedge_candidate.clone())));
-                        }
-                    }
-                    outcome = async {
-                        if let Some(fut) = hedged.as_mut() {
-                            fut.await
-                        } else {
-                            futures::future::pending().await
-                        }
-                    }, if hedged.is_some() && hedged_result.is_none() => {
-                        hedged_result = Some(outcome);
-                    }
-                }
-                if let Some(Ok(value)) = primary_result.take() {
-                    if let Some(lease) = lease.take() {
-                        lease.success();
-                    }
-                    return Ok(value);
-                }
-                if let Some(Ok(value)) = hedged_result.take() {
-                    if let Some(lease) = lease.take() {
-                        lease.success();
-                    }
-                    return Ok(value);
-                }
-                let primary_failed = matches!(primary_result, Some(Err(_)));
-                let hedged_failed = matches!(hedged_result, Some(Err(_)));
-                if primary_failed && hedged_failed {
-                    if let Some(lease) = lease.take() {
-                        lease.failure();
-                    }
-                    return primary_result.take().unwrap_or_else(|| {
-                        hedged_result.expect("hedged result collected before returning")
-                    });
-                }
-                if primary_failed && hedged.is_none() {
-                    if let Some(lease) = lease.take() {
-                        lease.failure();
-                    }
-                    return primary_result
-                        .expect("primary result captured when hedged future is absent");
-                }
-            }
-        })
-    }
-}
-struct TaikaiQueueBridge {
-    handle: TaikaiCacheHandle,
-    hedge_after: Duration,
-}
-impl TaikaiQueueBridge {
-    fn new(handle: TaikaiCacheHandle, plan: &CarBuildPlan) -> Option<Arc<Self>> {
-        if plan
-            .chunks
-            .iter()
-            .any(|chunk| chunk.taikai_segment_hint.is_some())
-        {
-            let hedge_after = handle.pull_queue_config().hedge_after;
-            Some(Arc::new(Self {
-                handle,
-                hedge_after,
-            }))
-        } else {
-            None
-        }
-    }
-    fn before_request(&self, request: &FetchRequest) -> Option<TaikaiQueueLease> {
-        let hint = request.spec.taikai_segment_hint.as_ref()?;
-        let key = taikai_segment_key_from_hint(hint)?;
-        let size_bytes = hint.payload_len.unwrap_or(request.spec.length as u64);
-        let pull = TaikaiPullRequest::new(
-            key.clone(),
-            QosClass::Priority,
-            size_bytes,
-            hint.payload_digest,
-        );
-        match self.handle.enqueue_pull(pull) {
-            Ok(()) => match self.handle.issue_specific_at(&key, Instant::now()) {
-                Ok(Some(batch)) => Some(TaikaiQueueLease::new(
-                    self.handle.clone(),
-                    TaikaiPullTicket::from(batch.id),
-                    batch.id,
-                )),
-                Ok(None) => {
-                    _ = self.handle.cancel_pending(&key);
-                    None
-                }
-                Err(err) => {
-                    warn!(
-                        target: "soranet.taikai_cache",
-                        ?err,
-                        "failed to issue Taikai queue batch for fetch request"
-                    );
-                    _ = self.handle.cancel_pending(&key);
-                    None
-                }
-            },
-            Err(TaikaiQueueError::Backpressure { .. }) => {
-                warn!(
-                    target: "soranet.taikai_cache",
-                    "Taikai pull queue backpressure while scheduling fetch request"
-                );
-                _ = self.handle.cancel_pending(&key);
-                None
-            }
-            Err(TaikaiQueueError::Unavailable) => None,
-        }
-    }
-    fn hedge_after(&self) -> Duration {
-        self.hedge_after
-    }
-    fn trigger_hedge(&self, id: crate::taikai_cache::TaikaiPullBatchId, now: Instant) -> bool {
-        match self.handle.hedge_overdue_batches_at(now) {
-            Ok(batches) => batches.iter().any(|batch| batch.id == id),
-            Err(error) => {
-                warn!(
-                    target: "soranet.taikai_cache",
-                    ?error,
-                    "taikai hedge trigger failed while acquiring queue lock"
-                );
-                false
-            }
-        }
-    }
-}
-struct TaikaiQueueLease {
-    handle: TaikaiCacheHandle,
-    ticket: TaikaiPullTicket,
-    batch_id: crate::taikai_cache::TaikaiPullBatchId,
-}
-impl TaikaiQueueLease {
-    fn new(
-        handle: TaikaiCacheHandle,
-        ticket: TaikaiPullTicket,
-        batch_id: crate::taikai_cache::TaikaiPullBatchId,
-    ) -> Self {
-        Self {
-            handle,
-            ticket,
-            batch_id,
-        }
-    }
-    fn success(self) {
-        let _ = self.handle.complete_batch(self.ticket);
-    }
-    fn failure(self) {
-        let _ = self.handle.fail_batch(self.ticket);
-    }
-    fn batch_id(&self) -> crate::taikai_cache::TaikaiPullBatchId {
-        self.batch_id
-    }
-}
-fn taikai_segment_key_from_hint(hint: &TaikaiSegmentHint) -> Option<TaikaiSegmentKey> {
-    let event = TaikaiEventId::new(Name::from_str(&hint.event).ok()?);
-    let stream = TaikaiStreamId::new(Name::from_str(&hint.stream).ok()?);
-    let rendition = TaikaiRenditionId::new(Name::from_str(&hint.rendition).ok()?);
-    Some(TaikaiSegmentKey::new(
-        event,
-        stream,
-        rendition,
-        hint.sequence,
-    ))
-}
 /// Errors surfaced when orchestrating gateway-backed fetches.
 #[derive(Debug, Error)]
 pub enum GatewayOrchestratorError {
@@ -6146,7 +5591,6 @@ mod tests {
             CircuitId, CircuitRetirementReason, Endpoint, GuardRecord, GuardSet, PathMetadata,
             RelayDescriptor, RelayDirectory, RelayRoles,
         },
-        taikai_cache::TaikaiPullQueueConfig,
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use futures::executor::block_on;
@@ -6170,11 +5614,10 @@ mod tests {
     use rand::rand_core::TryRngCore;
     use reqwest::Url;
     use sorafs_car::{
-        CarBuildPlan, CarChunk, ChunkFetchSpec, ChunkStore, FilePlan, TaikaiSegmentHint,
+        CarBuildPlan, ChunkStore,
         multi_fetch::{ChunkResponse, FetchProvider, FetchRequest, TransportHint},
         scoreboard::{IneligibilityReason, ProviderTelemetry},
     };
-    use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
     use soranet_pq::MlDsaSuite;
     use std::{
@@ -6305,13 +5748,6 @@ mod tests {
         message.contains("Operation not permitted") || message.contains("Permission denied")
     }
     #[derive(Debug)]
-    struct HedgedTestError(&'static str);
-    impl fmt::Display for HedgedTestError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str(self.0)
-        }
-    }
-    impl std::error::Error for HedgedTestError {}
     struct FailingJobIdRng;
     #[derive(Debug)]
     struct FailingJobIdRngError;
@@ -6338,38 +5774,6 @@ mod tests {
         let mut rng = FailingJobIdRng;
         let error = generate_job_id_with_rng(&mut rng).expect_err("RNG failure should propagate");
         assert!(error.contains("failing SoraFS fetch job id RNG"));
-    }
-    fn taikai_plan_with_hint(payload: &[u8]) -> CarBuildPlan {
-        let digest = blake3::hash(payload);
-        let hint = TaikaiSegmentHint {
-            event: "global-keynote".into(),
-            stream: "stage-a".into(),
-            rendition: "1080p".into(),
-            sequence: 7,
-            payload_len: Some(payload.len() as u64),
-            payload_digest: Some(*digest.as_bytes()),
-        };
-        let chunk = CarChunk {
-            offset: 0,
-            length: payload
-                .len()
-                .try_into()
-                .expect("small payload fits into u32"),
-            digest: *digest.as_bytes(),
-            taikai_segment_hint: Some(hint),
-        };
-        CarBuildPlan {
-            chunk_profile: ChunkProfile::DEFAULT,
-            payload_digest: digest,
-            content_length: payload.len() as u64,
-            chunks: vec![chunk],
-            files: vec![FilePlan {
-                path: vec!["taikai.ts".into()],
-                first_chunk: 0,
-                chunk_count: 1,
-                size: payload.len() as u64,
-            }],
-        }
     }
     #[cfg(feature = "local-quic-proxy")]
     #[tokio::test(flavor = "multi_thread")]
@@ -6468,57 +5872,6 @@ mod tests {
             .reconcile_circuits_at(UNIX_EPOCH + Duration::from_secs(1))
             .expect_err("sticky guard state must not be usable without a current directory");
         assert!(matches!(error, OrchestratorError::GuardDirectoryRequired));
-    }
-    #[tokio::test(flavor = "multi_thread")]
-    async fn taikai_fetch_wrapper_hedges_overdue_batches() {
-        test_logger();
-        let plan = taikai_plan_with_hint(&[0x01, 0x02, 0x03, 0x04]);
-        let cache_config = TaikaiCacheConfig::default();
-        let mut queue_config = TaikaiPullQueueConfig::tuned_for_cache(&cache_config);
-        queue_config.hedge_after = Duration::from_millis(5);
-        let handle = TaikaiCacheHandle::with_queue_config(cache_config, queue_config);
-        let bridge = TaikaiQueueBridge::new(handle.clone(), &plan)
-            .expect("taikai plan activates queue bridge");
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let fetcher = {
-            let attempts = attempts.clone();
-            move |_request: FetchRequest| {
-                let attempts = attempts.clone();
-                async move {
-                    let idx = attempts.fetch_add(1, AtomicOrdering::SeqCst);
-                    if idx == 0 {
-                        sleep(Duration::from_millis(20)).await;
-                        return Err(HedgedTestError("primary stalled"));
-                    }
-                    Ok(ChunkResponse::new(vec![0xAA, 0xBB, 0xCC, 0xDD]))
-                }
-            }
-        };
-        let wrapped = wrap_fetcher_with_taikai_queue(fetcher, bridge);
-        let chunk = plan
-            .chunks
-            .first()
-            .expect("taikai plan must contain one chunk")
-            .clone();
-        let request = FetchRequest {
-            provider: Arc::new(FetchProvider::new("provider-1")),
-            spec: ChunkFetchSpec {
-                chunk_index: 0,
-                offset: chunk.offset,
-                length: chunk.length,
-                digest: chunk.digest,
-                taikai_segment_hint: chunk.taikai_segment_hint.clone(),
-            },
-            attempt: 1,
-        };
-        let outcome = wrapped(request).await.expect("hedged fetch succeeds");
-        assert_eq!(outcome.bytes, vec![0xAA, 0xBB, 0xCC, 0xDD]);
-        assert_eq!(attempts.load(AtomicOrdering::SeqCst), 2);
-        let stats = handle.queue_stats();
-        assert!(
-            stats.hedged_batches >= 1,
-            "expected hedged batch to be recorded, stats={stats:?}"
-        );
     }
     #[test]
     fn reconcile_circuits_reports_and_teardown() {
@@ -7032,94 +6385,14 @@ mod tests {
         assert!(object.contains_key("compliance"));
     }
     #[test]
-    fn taikai_cache_config_roundtrips_in_json() {
-        let cache_config = TaikaiCacheConfig {
-            hot_capacity_bytes: 8 * 1024 * 1024,
-            hot_retention: Duration::from_secs(45),
-            warm_capacity_bytes: 32 * 1024 * 1024,
-            warm_retention: Duration::from_mins(3),
-            cold_capacity_bytes: 256 * 1024 * 1024,
-            cold_retention: Duration::from_hours(1),
-            qos: QosConfig {
-                priority_rate_bps: 80 * 1024 * 1024,
-                standard_rate_bps: 40 * 1024 * 1024,
-                bulk_rate_bps: 12 * 1024 * 1024,
-                burst_multiplier: 4,
-            },
-            reliability: ReliabilityTuning {
-                failures_to_trip: 5,
-                open_secs: 7,
-            },
-        };
-        let config = OrchestratorConfig {
-            taikai_cache: Some(cache_config.clone()),
-            ..OrchestratorConfig::default()
-        };
-        let json = bindings::config_to_json(&config);
-        let parsed = bindings::config_from_json(&json).expect("roundtrip taikai cache config");
-        assert_eq!(parsed.taikai_cache, Some(cache_config));
-        let object = json
-            .as_object()
-            .expect("orchestrator config serialises as JSON object");
-        assert!(object.contains_key("taikai_cache"));
-    }
-    #[test]
-    fn taikai_cache_config_json_rejects_zero_runtime_limits() {
-        let config = OrchestratorConfig {
-            taikai_cache: Some(TaikaiCacheConfig::default()),
-            ..OrchestratorConfig::default()
-        };
-        let valid = bindings::config_to_json(&config);
-        for field in [
-            "hot_capacity_bytes",
-            "hot_retention_secs",
-            "warm_capacity_bytes",
-            "warm_retention_secs",
-            "cold_capacity_bytes",
-            "cold_retention_secs",
-        ] {
-            let mut json = valid.clone();
-            json.as_object_mut()
-                .expect("config JSON object")
-                .get_mut("taikai_cache")
-                .expect("Taikai cache config")
-                .as_object_mut()
-                .expect("Taikai cache JSON object")
-                .insert(field.into(), Value::from(0_u64));
-            let error = bindings::config_from_json(&json)
-                .expect_err("zero Taikai cache limit must be rejected");
-            let message = error.to_string();
-            assert!(
-                message.contains(field) && message.contains("greater than zero"),
-                "unexpected error for {field}: {message}"
-            );
-        }
-        for field in [
-            "priority_rate_bps",
-            "standard_rate_bps",
-            "bulk_rate_bps",
-            "burst_multiplier",
-        ] {
-            let mut json = valid.clone();
-            json.as_object_mut()
-                .expect("config JSON object")
-                .get_mut("taikai_cache")
-                .expect("Taikai cache config")
-                .as_object_mut()
-                .expect("Taikai cache JSON object")
-                .get_mut("qos")
-                .expect("Taikai cache QoS config")
-                .as_object_mut()
-                .expect("Taikai cache QoS JSON object")
-                .insert(field.into(), Value::from(0_u64));
-            let error = bindings::config_from_json(&json)
-                .expect_err("zero Taikai cache QoS limit must be rejected");
-            let message = error.to_string();
-            assert!(
-                message.contains(field) && message.contains("greater than zero"),
-                "unexpected error for {field}: {message}"
-            );
-        }
+    fn retired_taikai_cache_config_is_rejected() {
+        let value = norito::json!({"taikai_cache": {}});
+        let error = bindings::config_from_json(&value)
+            .expect_err("retired Taikai cache config must fail closed");
+        assert_eq!(
+            error.to_string(),
+            "taikai_cache was removed from the V1 orchestrator configuration"
+        );
     }
     #[test]
     fn canonical_compliance_catalog_is_valid() {

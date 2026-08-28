@@ -50,18 +50,6 @@ fn catalog_route_mounted_decision(
 
 fn tool_requires_catalog_mcp_projection(name: &str) -> bool {
     name.starts_with("torii.")
-        || matches!(
-            name,
-            "iroha.status"
-                | "iroha.time.now"
-                | "iroha.time.status"
-                | "iroha.ledger.headers"
-                | "iroha.ledger.state_root"
-                | "iroha.ledger.state_proof"
-                | "iroha.ledger.block_proof"
-                | "iroha.proofs.get"
-                | "iroha.proofs.retention"
-        )
 }
 
 fn retain_catalog_mcp_tools(tools: &mut Vec<ToolSpec>, groups: &[CatalogProjectionGroup]) {

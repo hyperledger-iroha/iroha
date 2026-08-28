@@ -27,6 +27,28 @@ impl Supervisor {
             )))
         }
     }
+    pub(super) fn stop_running_captured_peers(&mut self, aliases: &[String]) -> Result<()> {
+        let mut failures = Vec::new();
+        for alias in aliases {
+            let Some(peer) = self.peers.iter_mut().find(|peer| peer.alias() == alias) else {
+                failures.push(format!("{alias}: peer disappeared from the topology"));
+                continue;
+            };
+            if matches!(peer.state(), PeerState::Running | PeerState::Restarting)
+                && let Err(error) = peer.stop()
+            {
+                failures.push(format!("{alias}: {error}"));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(SupervisorError::Config(format!(
+                "failed to stop peers started from restored state: {}",
+                failures.join("; ")
+            )))
+        }
+    }
     pub(super) fn restore_captured_running_peers(&mut self, aliases: &[String]) -> Result<()> {
         if aliases.is_empty() {
             return Ok(());
@@ -55,6 +77,61 @@ impl Supervisor {
             })
         }
     }
+    pub(super) fn verify_captured_peers_survive(
+        &mut self,
+        aliases: &[String],
+        grace: Duration,
+    ) -> Result<()> {
+        if aliases.is_empty() {
+            return Ok(());
+        }
+        let deadline = Instant::now().checked_add(grace).ok_or_else(|| {
+            SupervisorError::Config("snapshot restore restart deadline overflowed".to_owned())
+        })?;
+        loop {
+            let mut failures = Vec::new();
+            for alias in aliases {
+                let Some(peer) = self.peers.iter_mut().find(|peer| peer.alias() == alias) else {
+                    failures.push(format!("{alias}: peer disappeared from the topology"));
+                    continue;
+                };
+                let Some(child) = peer.process.as_mut() else {
+                    failures.push(format!("{alias}: restored peer has no child process"));
+                    continue;
+                };
+                match child.try_wait() {
+                    Ok(None) => {}
+                    Ok(Some(status)) => {
+                        peer.process = None;
+                        peer.teardown_log_threads();
+                        peer.state = PeerState::Stopped;
+                        peer.restart_attempts = 0;
+                        peer.next_restart_at = None;
+                        peer.emit_lifecycle_event(LifecycleEvent::Exited {
+                            code: status.code(),
+                            success: status.success(),
+                        });
+                        failures.push(format!(
+                            "{alias}: restored peer exited during the post-spawn survival check with {status}"
+                        ));
+                    }
+                    Err(error) => failures.push(format!(
+                        "{alias}: failed to poll restored peer during the post-spawn survival check: {error}"
+                    )),
+                }
+            }
+            if !failures.is_empty() {
+                return Err(SupervisorError::RunningSetRestore {
+                    details: failures.join("; "),
+                });
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(());
+            }
+            thread::sleep((deadline - now).min(Duration::from_millis(10)));
+        }
+    }
     pub(super) fn restore_running_set_after_error(
         &mut self,
         aliases: &[String],
@@ -74,7 +151,14 @@ impl Supervisor {
         alias: &str,
         extra_layers: &[toml::Table],
     ) -> Result<()> {
-        self.restart_peer_with_extra_layers_inner(alias, extra_layers, None)
+        #[cfg(test)]
+        {
+            self.restart_peer_with_extra_layers_inner(alias, extra_layers, None)
+        }
+        #[cfg(not(test))]
+        {
+            self.restart_peer_with_extra_layers_inner(alias, extra_layers)
+        }
     }
     #[cfg(test)]
     pub(super) fn restart_peer_with_extra_layers_with_publication_fault(
@@ -89,7 +173,7 @@ impl Supervisor {
         &mut self,
         alias: &str,
         extra_layers: &[toml::Table],
-        publication_fault: Option<PublicationFaultPoint>,
+        #[cfg(test)] publication_fault: Option<PublicationFaultPoint>,
     ) -> Result<()> {
         let index = self
             .peers
@@ -150,12 +234,15 @@ impl Supervisor {
             genesis_public_key: genesis.public_key(),
             expected_hash,
         };
+        #[cfg(test)]
         let publication = match publication_fault {
             Some(fault) => {
                 generation_transaction.publish_with_fault_retaining_failure(inventory, fault)
             }
             None => generation_transaction.publish_retaining_failure(inventory),
         };
+        #[cfg(not(test))]
+        let publication = generation_transaction.publish_retaining_failure(inventory);
         let mut publication = match publication {
             Ok(publication) => publication,
             Err(mut failure) => {
@@ -195,7 +282,12 @@ impl Supervisor {
     ///
     /// If peers were running before this call they are restarted afterwards.
     pub fn wipe_and_regenerate(&mut self) -> Result<()> {
-        self.wipe_and_regenerate_inner(None, || {})
+        self.wipe_and_regenerate_inner(
+            #[cfg(test)]
+            None,
+            #[cfg(test)]
+            || {},
+        )
     }
     #[cfg(test)]
     pub(super) fn wipe_and_regenerate_with_publication_fault(
@@ -215,14 +307,11 @@ impl Supervisor {
     {
         self.wipe_and_regenerate_inner(Some(fault), on_precommit_failure)
     }
-    fn wipe_and_regenerate_inner<F>(
+    fn wipe_and_regenerate_inner(
         &mut self,
-        publication_fault: Option<PublicationFaultPoint>,
-        on_precommit_failure: F,
-    ) -> Result<()>
-    where
-        F: FnOnce(),
-    {
+        #[cfg(test)] publication_fault: Option<PublicationFaultPoint>,
+        #[cfg(test)] on_precommit_failure: impl FnOnce(),
+    ) -> Result<()> {
         self.refresh_peer_states();
         let previously_running = self.running_peer_aliases();
         let mut generation_transaction = GenerationTransaction::begin_replacing(
@@ -252,8 +341,8 @@ impl Supervisor {
                 config_overrides: &self.peer_config_overrides,
                 consensus_mode: self.profile.consensus_mode,
                 block_cadence_ms: self.profile.signed_block_cadence_ms(),
-                genesis_profile: self.genesis.profile,
-                vrf_seed_hex: self.genesis.vrf_seed_hex.as_deref(),
+                genesis_profile: self.genesis_profile,
+                vrf_seed_hex: self.vrf_seed_hex.as_deref(),
                 onboarding_authority: &self.onboarding.authority,
             },
         )?;
@@ -281,16 +370,20 @@ impl Supervisor {
             genesis_public_key: genesis.public_key(),
             expected_hash,
         };
+        #[cfg(test)]
         let publication = match publication_fault {
             Some(fault) => {
                 generation_transaction.publish_with_fault_retaining_failure(inventory, fault)
             }
             None => generation_transaction.publish_retaining_failure(inventory),
         };
+        #[cfg(not(test))]
+        let publication = generation_transaction.publish_retaining_failure(inventory);
         let mut publication = match publication {
             Ok(publication) => publication,
             Err(mut failure) => {
                 let primary = failure.take_error();
+                #[cfg(test)]
                 on_precommit_failure();
                 let error = self.restore_running_set_after_error(&previously_running, primary);
                 drop(failure);
@@ -328,6 +421,5 @@ impl Supervisor {
             peer.replace_spec(spec);
         }
         self.genesis = genesis;
-        self.compatibility = None;
     }
 }

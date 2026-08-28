@@ -273,7 +273,7 @@ Root {
         p2p_proxy_tls_verify: true,
         p2p_proxy_tls_pinned_cert_der_base64: None,
         quic_enabled: false,
-        quic_datagrams_enabled: true,
+        quic_datagrams_enabled: false,
         quic_datagram_max_payload_bytes: 1200,
         quic_datagram_receive_buffer_bytes: 1048576,
         quic_datagram_send_buffer_bytes: 1048576,
@@ -1521,6 +1521,7 @@ Root {
             enabled: false,
             max_request_bytes: 1048576,
             max_tools_per_list: 500,
+            max_inflight_dispatches: 32,
             profile: ReadOnly,
             expose_operator_routes: false,
             allow_tool_prefixes: [],
@@ -1803,11 +1804,9 @@ Root {
                 8589934592,
             ),
             disk_budget_weights: NexusStorageWeights {
-                kura_blocks_bps: 3000,
+                kura_blocks_bps: 3500,
                 wsv_snapshots_bps: 2000,
-                sorafs_bps: 4000,
-                soranet_spool_bps: 500,
-                soravpn_spool_bps: 500,
+                sorafs_bps: 4500,
             },
         },
         staking: NexusStaking {
@@ -2947,27 +2946,6 @@ Root {
         },
         session_store_dir: "./storage/streaming",
         feature_bits: 0,
-        soranet: StreamingSoranet {
-            enabled: false,
-            exit_multiaddr: "/dns/torii/udp/9443/quic",
-            padding_budget_ms: Some(
-                25,
-            ),
-            access_kind: Authenticated,
-            channel_salt: "iroha.soranet.channel.seed.v1",
-            provision_spool_dir: "./storage/streaming/soranet_routes",
-            provision_spool_max_bytes: Bytes(
-                0,
-            ),
-            provision_window_segments: 4,
-            provision_queue_capacity: 256,
-        },
-        soravpn: StreamingSoravpn {
-            provision_spool_dir: "./storage/streaming/soravpn_routes",
-            provision_spool_max_bytes: Bytes(
-                0,
-            ),
-        },
         sync: StreamingSync {
             enabled: false,
             observe_only: true,

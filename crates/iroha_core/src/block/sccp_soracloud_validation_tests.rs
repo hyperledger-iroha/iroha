@@ -147,6 +147,7 @@ fn seed_soracloud_mailbox_fixture(
                     iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
             },
             replicas: NonZeroU16::new(1).expect("nonzero replicas"),
+            placement_targets: BTreeSet::new(),
             route: None,
             rollout: SoraRolloutPolicyV1 {
                 canary_percent: 0,

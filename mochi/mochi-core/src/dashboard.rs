@@ -1,14 +1,19 @@
 //! Dashboard data aggregation for the Mochi desktop shell.
-use crate::{
-    SigningAuthority,
-    torii::{
-        ExplorerAccountRecord, ExplorerAccountsQuery, ExplorerAssetRecord, ExplorerAssetsQuery,
-        ExplorerBlockRecord, ExplorerBlocksQuery, ToriiClient, ToriiError, ToriiErrorInfo,
-    },
+use crate::torii::{
+    ExplorerAssetsQuery, ExplorerBlockRecord, ExplorerBlocksQuery, ToriiClient, ToriiErrorInfo,
 };
-use std::collections::{BTreeMap, BTreeSet};
-const DASHBOARD_BLOCK_LIMIT: u32 = 6;
-const DASHBOARD_EXPLORER_PAGE_SIZE: u32 = 100;
+use futures::{StreamExt, TryStreamExt, stream};
+const DASHBOARD_BLOCK_LIMIT: u64 = 6;
+const DASHBOARD_ASSET_LIMIT: u32 = 4;
+const DASHBOARD_ASSET_FETCH_CONCURRENCY: usize = 8;
+/// Non-secret account identity used to populate a dashboard card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardAccountInput {
+    /// Friendly signer label.
+    pub label: String,
+    /// Canonical account identifier.
+    pub account_id: String,
+}
 /// An individual balance displayed under a dev account card.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardAssetBalance {
@@ -24,14 +29,6 @@ pub struct DashboardAccountCard {
     pub label: String,
     /// Canonical account identifier.
     pub account_id: String,
-    /// Optional I105 address returned by Explorer.
-    pub i105_address: Option<String>,
-    /// Number of owned assets reported by Explorer, if available.
-    pub owned_assets: Option<u64>,
-    /// Number of owned domains reported by Explorer, if available.
-    pub owned_domains: Option<u64>,
-    /// Number of owned NFTs reported by Explorer, if available.
-    pub owned_nfts: Option<u64>,
     /// Recent balances for this account.
     pub balances: Vec<DashboardAssetBalance>,
 }
@@ -40,8 +37,8 @@ pub struct DashboardAccountCard {
 pub struct DashboardRecentBlock {
     /// Block height.
     pub height: u64,
-    /// RFC3339 creation timestamp.
-    pub created_at: String,
+    /// RFC3339 creation timestamp, when Explorer retained it.
+    pub created_at: Option<String>,
     /// Included transaction count.
     pub transactions_total: u64,
     /// Rejected transaction count.
@@ -63,96 +60,22 @@ pub struct DashboardSnapshot {
 pub async fn fetch_dashboard_snapshot(
     peer_alias: impl Into<String>,
     client: &ToriiClient,
-    signers: &[SigningAuthority],
+    accounts: Vec<DashboardAccountInput>,
 ) -> Result<DashboardSnapshot, ToriiErrorInfo> {
     let peer_alias = peer_alias.into();
     let blocks = client
         .fetch_blocks_page(ExplorerBlocksQuery {
-            offset_height: None,
-            limit: Some(DASHBOARD_BLOCK_LIMIT),
+            page: Some(1),
+            per_page: Some(DASHBOARD_BLOCK_LIMIT),
         })
         .await
         .map_err(|err| err.summarize())?;
-    let signer_ids = signers
-        .iter()
-        .map(|signer| signer.account_id().to_string())
-        .collect::<BTreeSet<_>>();
-    let mut accounts_by_id = BTreeMap::new();
-    let mut account_cursor = None;
-    let mut seen_account_cursors = BTreeSet::new();
-    loop {
-        let accounts = client
-            .fetch_explorer_accounts_page(ExplorerAccountsQuery {
-                cursor: account_cursor,
-                limit: Some(DASHBOARD_EXPLORER_PAGE_SIZE),
-                domain: None,
-                with_asset: None,
-            })
-            .await
-            .map_err(|err| err.summarize())?;
-        for record in accounts.items {
-            if signer_ids.contains(&record.id) {
-                accounts_by_id.insert(record.id.clone(), record);
-            }
-        }
-        if accounts_by_id.len() == signer_ids.len() || !accounts.pagination.has_more {
-            break;
-        }
-        let Some(next) = accounts.pagination.next_cursor else {
-            return Err(ToriiError::Decode(
-                "explorer accounts response omitted its continuation cursor".to_owned(),
-            )
-            .summarize());
-        };
-        if !seen_account_cursors.insert(next.clone()) {
-            return Err(ToriiError::Decode(
-                "explorer accounts response repeated a cursor".to_owned(),
-            )
-            .summarize());
-        }
-        account_cursor = Some(next);
-    }
-    let mut cards = Vec::with_capacity(signers.len());
-    for signer in signers {
-        let account_id = signer.account_id().to_string();
-        let mut balances = Vec::new();
-        let mut asset_cursor = None;
-        let mut seen_asset_cursors = BTreeSet::new();
-        loop {
-            let page = client
-                .fetch_explorer_assets_page(ExplorerAssetsQuery {
-                    cursor: asset_cursor,
-                    limit: Some(DASHBOARD_EXPLORER_PAGE_SIZE),
-                    owned_by: Some(account_id.clone()),
-                    definition: None,
-                })
-                .await
-                .map_err(|err| err.summarize())?;
-            balances.extend(page.items);
-            if !page.pagination.has_more {
-                break;
-            }
-            let Some(next) = page.pagination.next_cursor else {
-                return Err(ToriiError::Decode(
-                    "explorer assets response omitted its continuation cursor".to_owned(),
-                )
-                .summarize());
-            };
-            if !seen_asset_cursors.insert(next.clone()) {
-                return Err(ToriiError::Decode(
-                    "explorer assets response repeated a cursor".to_owned(),
-                )
-                .summarize());
-            }
-            asset_cursor = Some(next);
-        }
-        cards.push(map_account_card(
-            signer.label(),
-            &account_id,
-            accounts_by_id.get(&account_id),
-            balances,
-        ));
-    }
+    let cards = stream::iter(accounts.into_iter().map(|account| async move {
+        fetch_account_card(client, account.label, account.account_id).await
+    }))
+    .buffered(DASHBOARD_ASSET_FETCH_CONCURRENCY)
+    .try_collect::<Vec<_>>()
+    .await?;
     Ok(DashboardSnapshot {
         peer_alias,
         api_base: client.base_url().to_owned(),
@@ -160,19 +83,24 @@ pub async fn fetch_dashboard_snapshot(
         recent_blocks: blocks.items.into_iter().map(map_recent_block).collect(),
     })
 }
-fn map_account_card(
-    label: &str,
-    account_id: &str,
-    explorer: Option<&ExplorerAccountRecord>,
-    assets: Vec<ExplorerAssetRecord>,
-) -> DashboardAccountCard {
-    DashboardAccountCard {
-        label: label.to_owned(),
-        account_id: account_id.to_owned(),
-        i105_address: explorer.map(|record| record.i105_address.clone()),
-        owned_assets: explorer.map(|record| record.owned_assets),
-        owned_domains: explorer.map(|record| record.owned_domains),
-        owned_nfts: explorer.map(|record| record.owned_nfts),
+async fn fetch_account_card(
+    client: &ToriiClient,
+    label: String,
+    account_id: String,
+) -> Result<DashboardAccountCard, ToriiErrorInfo> {
+    let assets = client
+        .fetch_explorer_assets_page(ExplorerAssetsQuery {
+            cursor: None,
+            limit: Some(DASHBOARD_ASSET_LIMIT),
+            owned_by: Some(account_id.clone()),
+            definition: None,
+        })
+        .await
+        .map_err(|err| err.summarize())?
+        .items;
+    Ok(DashboardAccountCard {
+        label,
+        account_id,
         balances: assets
             .into_iter()
             .map(|asset| DashboardAssetBalance {
@@ -180,7 +108,7 @@ fn map_account_card(
                 value: asset.value,
             })
             .collect(),
-    }
+    })
 }
 fn map_recent_block(block: ExplorerBlockRecord) -> DashboardRecentBlock {
     DashboardRecentBlock {
@@ -192,13 +120,24 @@ fn map_recent_block(block: ExplorerBlockRecord) -> DashboardRecentBlock {
 }
 #[cfg(test)]
 mod tests {
-    use super::fetch_dashboard_snapshot;
-    use crate::{SigningAuthority, torii::ToriiClient};
+    use super::{DashboardAccountInput, fetch_dashboard_snapshot};
+    use crate::torii::ToriiClient;
     use httpmock::prelude::*;
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::json;
-    fn signer() -> SigningAuthority {
-        SigningAuthority::new("Alice", ALICE_ID.clone(), ALICE_KEYPAIR.clone())
+    use std::time::Duration;
+    const EXPLORER_DEFINITION: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+    fn signer() -> DashboardAccountInput {
+        DashboardAccountInput {
+            label: "Alice".to_owned(),
+            account_id: ALICE_ID.to_string(),
+        }
+    }
+    fn bob_signer() -> DashboardAccountInput {
+        DashboardAccountInput {
+            label: "Bob".to_owned(),
+            account_id: BOB_ID.to_string(),
+        }
     }
     #[tokio::test]
     async fn fetch_dashboard_snapshot_aggregates_signers_assets_and_blocks() {
@@ -206,61 +145,37 @@ mod tests {
         let alice_id = ALICE_ID.to_string();
         server.mock(|when, then| {
             when.method(GET)
-                .path("/v1/blocks")
-                .query_param("limit", "6");
+                .path("/v1/explorer/blocks")
+                .query_param("page", "1")
+                .query_param("per_page", "6");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(
                     r#"{
   "pagination":{"page":1,"per_page":6,"total_pages":1,"total_items":1},
-  "items":[{"hash":"aa11","height":42,"created_at":"2026-03-26T10:00:00Z","transactions_rejected":1,"transactions_total":3}]
+  "items":[{"hash":"abababababababababababababababababababababababababababababababab","height":42,"created_at":"2026-03-26T10:00:00Z","prev_block_hash":null,"transactions_hash":null,"transactions_rejected":1,"transactions_total":3}]
 }"#,
                 );
         });
-        server.mock(|when, then| {
-            when.method(GET)
-                .path("/v1/explorer/accounts")
-                .query_param("limit", "100");
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(
-                    json::to_string(&json!({
-                        "pagination": {
-                            "limit": 100,
-                            "next_cursor": null,
-                            "has_more": false
-                        },
-                        "items": [{
-                            "id": alice_id,
-                            "i105_address": "i105:alice",
-                            "network_prefix": 0,
-                            "owned_domains": 1,
-                            "owned_assets": 2,
-                            "owned_nfts": 0,
-                            "metadata": {}
-                        }]
-                    }))
-                    .expect("serialize accounts body"),
-                );
-        });
+        let asset_id = format!("{EXPLORER_DEFINITION}#{alice_id}");
         let owned_by = alice_id.clone();
         server.mock(move |when, then| {
             when.method(GET)
                 .path("/v1/explorer/assets")
-                .query_param("limit", "100")
+                .query_param("limit", "4")
                 .query_param("owned_by", &owned_by);
             then.status(200)
                 .header("content-type", "application/json")
                 .body(
                     json::to_string(&json!({
                         "pagination": {
-                            "limit": 100,
+                            "limit": 4,
                             "next_cursor": null,
                             "has_more": false
                         },
                         "items": [{
-                            "id": "rose##1",
-                            "definition_id": "rose#wonderland",
+                            "id": asset_id,
+                            "definition_id": EXPLORER_DEFINITION,
                             "account_id": alice_id,
                             "value": "25"
                         }]
@@ -269,17 +184,148 @@ mod tests {
                 );
         });
         let client = ToriiClient::new(server.url("/")).expect("client");
-        let snapshot = fetch_dashboard_snapshot("peer0", &client, &[signer()])
+        let snapshot = fetch_dashboard_snapshot("peer0", &client, vec![signer()])
             .await
             .expect("snapshot");
         assert_eq!(snapshot.peer_alias, "peer0");
         assert_eq!(snapshot.accounts.len(), 1);
         assert_eq!(snapshot.accounts[0].label, "Alice");
-        assert_eq!(snapshot.accounts[0].owned_assets, Some(2));
         assert_eq!(
             snapshot.accounts[0].balances[0].definition_id,
-            "rose#wonderland"
+            EXPLORER_DEFINITION
         );
         assert_eq!(snapshot.recent_blocks[0].height, 42);
+    }
+
+    #[tokio::test]
+    async fn fetch_dashboard_snapshot_preserves_signer_order_across_buffered_fetches() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/explorer/blocks")
+                .query_param("page", "1")
+                .query_param("per_page", "6");
+            then.status(200).body(
+                r#"{
+  "pagination":{"page":1,"per_page":6,"total_pages":0,"total_items":0},
+  "items":[]
+}"#,
+            );
+        });
+        let alice_id = ALICE_ID.to_string();
+        let alice_asset_id = format!("{EXPLORER_DEFINITION}#{alice_id}");
+        let alice_response_id = alice_id.clone();
+        server.mock(move |when, then| {
+            when.method(GET)
+                .path("/v1/explorer/assets")
+                .query_param("limit", "4")
+                .query_param("owned_by", &alice_id);
+            then.status(200).delay(Duration::from_millis(50)).body(
+                json::to_string(&json!({
+                    "pagination": {
+                        "limit": 4,
+                        "next_cursor": null,
+                        "has_more": false
+                    },
+                    "items": [{
+                        "id": alice_asset_id,
+                        "definition_id": EXPLORER_DEFINITION,
+                        "account_id": alice_response_id,
+                        "value": "1"
+                    }]
+                }))
+                .expect("serialize Alice assets"),
+            );
+        });
+        let bob_id = BOB_ID.to_string();
+        let bob_asset_id = format!("{EXPLORER_DEFINITION}#{bob_id}");
+        let bob_response_id = bob_id.clone();
+        server.mock(move |when, then| {
+            when.method(GET)
+                .path("/v1/explorer/assets")
+                .query_param("limit", "4")
+                .query_param("owned_by", &bob_id);
+            then.status(200).body(
+                json::to_string(&json!({
+                    "pagination": {
+                        "limit": 4,
+                        "next_cursor": null,
+                        "has_more": false
+                    },
+                    "items": [{
+                        "id": bob_asset_id,
+                        "definition_id": EXPLORER_DEFINITION,
+                        "account_id": bob_response_id,
+                        "value": "2"
+                    }]
+                }))
+                .expect("serialize Bob assets"),
+            );
+        });
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let snapshot = fetch_dashboard_snapshot("peer0", &client, vec![signer(), bob_signer()])
+            .await
+            .expect("snapshot");
+        let labels = snapshot
+            .accounts
+            .iter()
+            .map(|card| card.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(labels, ["Alice", "Bob"]);
+        assert_eq!(snapshot.accounts[0].balances[0].value, "1");
+        assert_eq!(snapshot.accounts[1].balances[0].value, "2");
+    }
+    #[tokio::test]
+    async fn fetch_dashboard_snapshot_rejects_assets_for_another_account() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/explorer/blocks")
+                .query_param("page", "1")
+                .query_param("per_page", "6");
+            then.status(200).body(
+                r#"{
+  "pagination":{"page":1,"per_page":6,"total_pages":0,"total_items":0},
+  "items":[]
+}"#,
+            );
+        });
+        let alice_id = ALICE_ID.to_string();
+        let bob_id = BOB_ID.to_string();
+        let bob_asset_id = format!("{EXPLORER_DEFINITION}#{bob_id}");
+        server.mock(move |when, then| {
+            when.method(GET)
+                .path("/v1/explorer/assets")
+                .query_param("limit", "4")
+                .query_param("owned_by", &alice_id);
+            then.status(200).body(
+                json::to_string(&json!({
+                    "pagination": {
+                        "limit": 4,
+                        "next_cursor": null,
+                        "has_more": false
+                    },
+                    "items": [{
+                        "id": bob_asset_id,
+                        "definition_id": EXPLORER_DEFINITION,
+                        "account_id": bob_id,
+                        "value": "2"
+                    }]
+                }))
+                .expect("serialize mismatched asset response"),
+            );
+        });
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let error = fetch_dashboard_snapshot("peer0", &client, vec![signer()])
+            .await
+            .expect_err("a filtered response must not cross account cards");
+        assert_eq!(error.kind, crate::torii::ToriiErrorKind::Decode);
+        assert_eq!(error.message, "Failed to decode Norito payload from Torii");
+        assert!(
+            error
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("owned_by filter"))
+        );
     }
 }

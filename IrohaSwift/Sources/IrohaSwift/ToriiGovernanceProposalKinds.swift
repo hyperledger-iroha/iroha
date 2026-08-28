@@ -35,6 +35,18 @@ func governanceRequireExactJSONIntegers(
                 )
             )
         }
+    case let .integer(integer):
+        let isSccpUInt128 = context.hasSuffix(".max_wrapped_supply")
+            || context.hasSuffix(".max_outstanding_liability")
+        guard isSccpUInt128,
+              SccpUInt128.parse(integer, positive: true) != nil else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: codingPath,
+                    debugDescription: "\(context) is outside the exact first-release JSON integer range"
+                )
+            )
+        }
     case .string, .bool, .null:
         break
     }
@@ -226,6 +238,25 @@ private func governanceCanonicalUInt64String(
         )
     }
     return raw
+}
+
+private func governancePositiveUInt128<Key: CodingKey>(
+    _ container: KeyedDecodingContainer<Key>,
+    key: Key,
+    field: String
+) throws -> String {
+    // A generic Decoder cannot expose the source token's spelling. Decode the
+    // integer through the standard library's exact-width type here; public
+    // Parliament Data entry points separately scan the raw JSON and reject
+    // fractional, exponent, quoted, signed, and non-canonical spellings.
+    guard let value = try? container.decode(UInt128.self, forKey: key), value > 0 else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(field) must be an unquoted positive UInt128 JSON integer"
+        )
+    }
+    return String(value)
 }
 
 private func governanceCanonicalKey(_ raw: String) -> Bool {
@@ -1613,6 +1644,7 @@ public struct ToriiGovernanceSccpEvmDestinationDeployment: Decodable, Sendable, 
     public let routeAddress: Data
     public let routeCodeHash: Data
     public let tairaToTokenMultiplier: UInt64
+    public let maxWrappedSupply: String
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case tokenAddress = "token_address"
@@ -1625,6 +1657,7 @@ public struct ToriiGovernanceSccpEvmDestinationDeployment: Decodable, Sendable, 
         case routeAddress = "route_address"
         case routeCodeHash = "route_code_hash"
         case tairaToTokenMultiplier = "taira_to_token_multiplier"
+        case maxWrappedSupply = "max_wrapped_supply"
     }
 
     public init(from decoder: Decoder) throws {
@@ -1656,6 +1689,11 @@ public struct ToriiGovernanceSccpEvmDestinationDeployment: Decodable, Sendable, 
         routeAddress = try bytes(.routeAddress, count: 20)
         routeCodeHash = try bytes(.routeCodeHash, count: 32)
         tairaToTokenMultiplier = try container.decode(UInt64.self, forKey: .tairaToTokenMultiplier)
+        maxWrappedSupply = try governancePositiveUInt128(
+            container,
+            key: .maxWrappedSupply,
+            field: "max_wrapped_supply"
+        )
         guard tairaToTokenMultiplier == 1_000_000_000,
               Set([tokenAddress, verifierAddress, routeAddress]).count == 3,
               Set([tokenCodeHash, verifierCodeHash, verifierKeyHash, routeCodeHash]).count == 4 else {
@@ -1681,6 +1719,7 @@ public struct ToriiGovernanceSccpTronDestinationDeployment: Decodable, Sendable,
     public let routeAddress: Data
     public let routeCodeHash: Data
     public let tairaToTokenMultiplier: UInt64
+    public let maxWrappedSupply: String
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case tokenAddress = "token_address"
@@ -1693,6 +1732,7 @@ public struct ToriiGovernanceSccpTronDestinationDeployment: Decodable, Sendable,
         case routeAddress = "route_address"
         case routeCodeHash = "route_code_hash"
         case tairaToTokenMultiplier = "taira_to_token_multiplier"
+        case maxWrappedSupply = "max_wrapped_supply"
     }
 
     public init(from decoder: Decoder) throws {
@@ -1724,6 +1764,11 @@ public struct ToriiGovernanceSccpTronDestinationDeployment: Decodable, Sendable,
         routeAddress = try bytes(.routeAddress, count: 20)
         routeCodeHash = try bytes(.routeCodeHash, count: 32)
         tairaToTokenMultiplier = try container.decode(UInt64.self, forKey: .tairaToTokenMultiplier)
+        maxWrappedSupply = try governancePositiveUInt128(
+            container,
+            key: .maxWrappedSupply,
+            field: "max_wrapped_supply"
+        )
         guard tairaToTokenMultiplier == 1_000_000_000,
               Set([tokenAddress, verifierAddress, routeAddress]).count == 3,
               Set([tokenCodeHash, verifierCodeHash, verifierKeyHash, routeCodeHash]).count == 4 else {
@@ -1755,6 +1800,7 @@ public struct ToriiGovernanceSccpSolanaDestinationDeployment: Decodable, Sendabl
     public let verifierKeyHash: Data
     public let outboundProofPolicy: ToriiGovernanceSccpOutboundProofPolicy
     public let tairaToTokenMultiplier: UInt64
+    public let maxWrappedSupply: String
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case tokenMintAddress = "token_mint_address"
@@ -1773,6 +1819,7 @@ public struct ToriiGovernanceSccpSolanaDestinationDeployment: Decodable, Sendabl
         case verifierKeyHash = "verifier_key_hash"
         case outboundProofPolicy = "outbound_proof_policy"
         case tairaToTokenMultiplier = "taira_to_token_multiplier"
+        case maxWrappedSupply = "max_wrapped_supply"
     }
 
     public init(from decoder: Decoder) throws {
@@ -1813,6 +1860,11 @@ public struct ToriiGovernanceSccpSolanaDestinationDeployment: Decodable, Sendabl
             forKey: .outboundProofPolicy
         )
         tairaToTokenMultiplier = try container.decode(UInt64.self, forKey: .tairaToTokenMultiplier)
+        maxWrappedSupply = try governancePositiveUInt128(
+            container,
+            key: .maxWrappedSupply,
+            field: "max_wrapped_supply"
+        )
         let fixedRoles = [
             tokenMintAddress,
             routeProgramId,
@@ -1894,6 +1946,22 @@ public enum ToriiGovernanceSccpDestination: Decodable, Sendable, Equatable {
         case .evm: return "evm"
         case .tron: return "tron"
         case .solana: return "solana"
+        }
+    }
+
+    fileprivate var tairaToTokenMultiplier: UInt64 {
+        switch self {
+        case let .evm(deployment): return deployment.tairaToTokenMultiplier
+        case let .tron(deployment): return deployment.tairaToTokenMultiplier
+        case let .solana(deployment): return deployment.tairaToTokenMultiplier
+        }
+    }
+
+    fileprivate var maxWrappedSupply: String {
+        switch self {
+        case let .evm(deployment): return deployment.maxWrappedSupply
+        case let .tron(deployment): return deployment.maxWrappedSupply
+        case let .solana(deployment): return deployment.maxWrappedSupply
         }
     }
 }
@@ -1996,11 +2064,13 @@ public struct ToriiGovernanceSccpSettlement: Decodable, Sendable, Equatable {
     public let assetDefinitionId: String
     public let custodyOwner: String
     public let payloadAmountScale: UInt32
+    public let maxOutstandingLiability: String
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case assetDefinitionId = "asset_definition_id"
         case custodyOwner = "custody_owner"
         case payloadAmountScale = "payload_amount_scale"
+        case maxOutstandingLiability = "max_outstanding_liability"
     }
 
     public init(from decoder: Decoder) throws {
@@ -2021,6 +2091,11 @@ public struct ToriiGovernanceSccpSettlement: Decodable, Sendable, Equatable {
             field: "custody_owner"
         )
         payloadAmountScale = try container.decode(UInt32.self, forKey: .payloadAmountScale)
+        maxOutstandingLiability = try governancePositiveUInt128(
+            container,
+            key: .maxOutstandingLiability,
+            field: "max_outstanding_liability"
+        )
         guard assetDefinitionId == "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
               payloadAmountScale == 9 else {
             throw DecodingError.dataCorrupted(
@@ -2103,6 +2178,11 @@ public struct ToriiGovernanceSccpGovernedRoute: Decodable, Sendable, Equatable {
               revision > 0,
               sourceIdentity.lane == laneId,
               destination.family == laneId.source.family,
+              SccpUInt128.product(
+                  settlement.maxOutstandingLiability,
+                  by: destination.tairaToTokenMultiplier,
+                  equals: destination.maxWrappedSupply
+              ),
               activation.isTerminal == (inboundFinalityCutoff != nil) else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: container.codingPath, debugDescription: "governed SCCP route is invalid")

@@ -100,7 +100,9 @@ def main() -> int:
             "MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1: u32 = 16",
             "MAX_PARLIAMENT_SORTITION_RETRIES_V1: u32 = 16",
             "MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1: u32 = 1_000",
+            "PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32",
             "MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1: usize = 16 * 1024 * 1024",
+            "pub fn parliament_timed_ovn_required_chunk_blocks_v1",
             "parliament_ballot_failure_root_v1",
             "parliament_ballot_result_root_v1",
             "OpeningDeadlineExpired",
@@ -302,15 +304,21 @@ def main() -> int:
         instruction_path,
         instructions,
         (
-            "PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32",
             "MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1: usize = 10",
             "pub struct ParliamentSortitionRequestRegistrationV1",
             "pub requests: Vec<ParliamentSortitionRequestRegistrationV1>",
-            "parliament_timed_ovn_required_chunk_blocks_v1",
             "next contiguous corpus chunk is appended",
             "complete exact survivor coverage and causes automatic corpus sealing",
         ),
     )
+    for misplaced_policy_definition in (
+        "pub const PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1",
+        "pub fn parliament_timed_ovn_required_chunk_blocks_v1",
+    ):
+        if misplaced_policy_definition in instructions:
+            raise RuntimeError(
+                f"{instruction_path}: timed-OVN chunk policy must be owned by {types_path}"
+            )
     transition_enum = section(
         instructions,
         "pub enum ParliamentLifecycleTransitionV1 {",

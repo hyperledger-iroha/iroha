@@ -119,6 +119,26 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
     assert_eq!(config.queue.capacity, nonzero!(100_000_usize));
     assert_eq!(config.logger.level, new_level);
     assert_eq!(config.logger.filter, new_filter);
+    let baseline_handshake_identity = (
+        config
+            .network
+            .soranet_handshake
+            .descriptor_commit_hex
+            .clone(),
+        config
+            .network
+            .soranet_handshake
+            .client_capabilities_hex
+            .clone(),
+        config
+            .network
+            .soranet_handshake
+            .relay_capabilities_hex
+            .clone(),
+        config.network.soranet_handshake.kem_id,
+        config.network.soranet_handshake.sig_id,
+        config.network.soranet_handshake.resume_hash_hex.clone(),
+    );
     // Now override SoraNet proof-of-work settings without changing the live
     // peer handshake identity or negotiated suite.
     let handshake_update = ConfigUpdateDTO {
@@ -164,6 +184,17 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
         config = client.get_config()?;
     }
     let handshake = &config.network.soranet_handshake;
+    assert_eq!(
+        (
+            handshake.descriptor_commit_hex.clone(),
+            handshake.client_capabilities_hex.clone(),
+            handshake.relay_capabilities_hex.clone(),
+            handshake.kem_id,
+            handshake.sig_id,
+            handshake.resume_hash_hex.clone(),
+        ),
+        baseline_handshake_identity
+    );
     assert_eq!(handshake.pow.difficulty, 5);
     let puzzle = handshake.pow.puzzle;
     assert_eq!(puzzle.memory_kib, UPDATED_POW_MEMORY_KIB);

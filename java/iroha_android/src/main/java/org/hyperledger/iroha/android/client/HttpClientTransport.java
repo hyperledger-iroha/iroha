@@ -15,6 +15,7 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -59,7 +60,9 @@ import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus;
 import org.hyperledger.iroha.android.consensus.SumeragiStatusModels;
 import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.SumeragiV2Status;
+import org.hyperledger.iroha.android.crypto.Blake3;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.nexus.UaidBindingsQuery;
 import org.hyperledger.iroha.android.nexus.UaidBindingsResponse;
 import org.hyperledger.iroha.android.nexus.UaidJsonParser;
@@ -71,7 +74,12 @@ import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
+import org.hyperledger.iroha.android.model.Executable;
+import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
@@ -92,6 +100,9 @@ import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.validationfee.ValidationFeeHijiriQuoteBridge;
+import org.hyperledger.iroha.android.validationfee.ValidationFeeHijiriQuoteRequestV1;
+import org.hyperledger.iroha.android.validationfee.ValidationFeeHijiriQuoteV1;
 
 /**
  * HTTP-based client implementation that will forward transactions to an Iroha Torii endpoint.
@@ -109,6 +120,27 @@ public final class HttpClientTransport implements IrohaClient {
   private static final String TRON_BASE58_ALPHABET =
       "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   private static final String ENTRYPOINT_HASH_HEADER = "x-iroha-entrypoint-hash";
+
+  interface ValidationFeeHijiriQuoteCodec {
+    byte[] encode(ValidationFeeHijiriQuoteRequestV1 request);
+
+    ValidationFeeHijiriQuoteV1 verify(byte[] responseNorito, byte[] requestNorito);
+  }
+
+  private static final ValidationFeeHijiriQuoteCodec NATIVE_HIJIRI_QUOTE_CODEC =
+      new ValidationFeeHijiriQuoteCodec() {
+        @Override
+        public byte[] encode(final ValidationFeeHijiriQuoteRequestV1 request) {
+          return ValidationFeeHijiriQuoteBridge.encodeRequestV1(request);
+        }
+
+        @Override
+        public ValidationFeeHijiriQuoteV1 verify(
+            final byte[] responseNorito, final byte[] requestNorito) {
+          return ValidationFeeHijiriQuoteBridge.verifyResponseV1(
+              responseNorito, requestNorito);
+        }
+      };
 
   private final HttpTransportExecutor executor;
   private final ClientConfig config;
@@ -584,6 +616,21 @@ public final class HttpClientTransport implements IrohaClient {
         "SCCP proof request");
   }
 
+  /** Fetch one concrete BN254 or TON BLS12-381 SCCP proof request as canonical Norito bytes. */
+  public CompletableFuture<byte[]> getSccpProofRequestNorito(final String messageIdHex) {
+    final String messageId =
+        normalizeExactNonZeroEvenLengthHex(messageIdHex, "messageIdHex", 32);
+    final TransportRequest request =
+        buildExactNoritoGetRequest(
+            "/v1/sccp/proof-requests/" + encodePathSegment(messageId),
+            SccpSubmitEncoding.MAX_GROTH16_ARTIFACT_BYTES);
+    return fetchExactNoritoBytes(request, "SCCP proof request")
+        .thenApply(
+            body ->
+                SccpSubmitEncoding.validateCanonicalProofRequestNorito(
+                    body, "SCCP proof request"));
+  }
+
   /** Fetch newest-first exact-context SCCP outbound messages. */
   public CompletableFuture<SccpModels.RecentMessages> getSccpRecentMessages() {
     return getSccpRecentMessages(null, null, null);
@@ -941,6 +988,80 @@ public final class HttpClientTransport implements IrohaClient {
             });
   }
 
+  /**
+   * Posts one account-signed, native-Norito Hijiri validation-fee quote request.
+   *
+   * <p>The authenticated account may be the quoted account or a direct signatory of that multisig
+   * controller; Torii resolves and authorizes that live relationship. The projection is exposed
+   * only after native canonical decoding, exact request binding, hash validation, and Q16
+   * aggregate-fee verification succeed.
+   */
+  public CompletableFuture<ValidationFeeHijiriQuoteV1> postValidationFeeHijiriQuote(
+      final ValidationFeeHijiriQuoteRequestV1 request,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return postValidationFeeHijiriQuote(request, canonicalAuth, NATIVE_HIJIRI_QUOTE_CODEC);
+  }
+
+  /** Convenience overload constructing the frozen V1 request. */
+  public CompletableFuture<ValidationFeeHijiriQuoteV1> postValidationFeeHijiriQuote(
+      final String accountId,
+      final int qualifyingTransferCount,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return postValidationFeeHijiriQuote(
+        new ValidationFeeHijiriQuoteRequestV1(accountId, qualifyingTransferCount),
+        canonicalAuth);
+  }
+
+  CompletableFuture<ValidationFeeHijiriQuoteV1> postValidationFeeHijiriQuote(
+      final ValidationFeeHijiriQuoteRequestV1 request,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final ValidationFeeHijiriQuoteCodec codec) {
+    Objects.requireNonNull(request, "request");
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    Objects.requireNonNull(codec, "codec");
+    if (!"https".equalsIgnoreCase(config.baseUri().getScheme())) {
+      throw new IllegalStateException(
+          "Hijiri validation-fee quote requests require an HTTPS Torii base URL");
+    }
+    final byte[] encoded = Objects.requireNonNull(codec.encode(request), "encoded request");
+    final byte[] body = encoded.clone();
+    if (body.length == 0 || body.length > ValidationFeeHijiriQuoteRequestV1.MAX_REQUEST_BYTES) {
+      throw new IllegalArgumentException(
+          "Hijiri validation-fee quote request must contain 1.."
+              + ValidationFeeHijiriQuoteRequestV1.MAX_REQUEST_BYTES
+              + " bytes");
+    }
+    final TransportRequest transportRequest =
+        buildExactNoritoPostRequest(
+            "/v1/validation-fee/hijiri/quote",
+            body,
+            ValidationFeeHijiriQuoteV1.MAX_RESPONSE_BYTES,
+            canonicalAuth,
+            true);
+    return fetchExactNoritoBytes(
+            transportRequest,
+            "Hijiri validation-fee quote",
+            true,
+            true,
+            true,
+            true,
+            true)
+        .thenApply(
+            response -> {
+              final ValidationFeeHijiriQuoteV1 quote =
+                  Objects.requireNonNull(
+                      codec.verify(response.clone(), body.clone()),
+                      "verified Hijiri validation-fee quote");
+              if (quote.qualifyingTransferCount() != request.qualifyingTransferCount()
+                  || !sameCanonicalHijiriQuoteAccount(
+                      quote.accountId(), request.accountId())) {
+                throw new IllegalStateException(
+                    "Hijiri validation-fee quote response does not bind the exact request");
+              }
+              return quote;
+            });
+  }
+
   private static NetworkId requireNetworkTransactionDomain(
       final Map<String, Object> unsignedPayload) {
     for (final String field : Arrays.asList("chain", "chainId", "chain_id")) {
@@ -995,11 +1116,10 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   /**
-   * Prepares an unsigned contract-call transaction for local signing.
+   * Retained source-compatible overload that fails closed without trusted draft intent.
    *
-   * <p>Private signing material is never accepted by or sent to Torii. Sign the returned
-   * canonical transaction payload locally and submit the resulting signed transaction through {@link
-   * #submitTransaction(SignedTransaction)}.
+   * <p>Use the overload accepting {@link ContractCallDraftIntent}; response echoes cannot prove
+   * the exact invocation and final metadata a caller intends to sign.
    */
   public CompletableFuture<ContractCallResponse> prepareContractCall(
       final String authority,
@@ -1008,6 +1128,27 @@ public final class HttpClientTransport implements IrohaClient {
       final String contractAlias,
       final String entrypoint,
       final Object payload) {
+    buildContractCallDraftPayload(
+        authority, feePayment, contractAddress, contractAlias, entrypoint, payload);
+    throw new IllegalStateException(
+        "ContractCallDraftIntent is required before requesting an unsigned contract-call draft");
+  }
+
+  /**
+   * Prepares an unsigned contract-call transaction and binds it to caller-trusted local intent.
+   *
+   * <p>The intent is deliberately local-only. It is used after the response is decoded to prove
+   * that Torii did not substitute the resolved invocation or final transaction metadata. Torii
+   * may enrich fee charge maxima, but cannot select any other signed field.
+   */
+  public CompletableFuture<ContractCallResponse> prepareContractCall(
+      final String authority,
+      final FeePaymentIntent feePayment,
+      final String contractAddress,
+      final String contractAlias,
+      final String entrypoint,
+      final Object payload,
+      final ContractCallDraftIntent draftIntent) {
     final Map<String, Object> requestPayload =
         buildContractCallDraftPayload(
             authority,
@@ -1016,20 +1157,27 @@ public final class HttpClientTransport implements IrohaClient {
             contractAlias,
             entrypoint,
             payload);
+    validateContractCallDraftIntent(requestPayload, draftIntent);
+    final NetworkId expectedNetworkId = config.requireLocalSigningContext().networkId();
     final byte[] body = encodeJsonBody(requestPayload);
     final TransportRequest request = buildJsonPostRequest("/v1/contracts/call", body);
     return fetchJson(request, ContractJsonParser::parseCallResponse, "contract call draft")
-        .thenApply(response -> validateContractCallDraft(response, requestPayload));
+        .thenApply(
+            response ->
+                validateContractCallDraft(
+                    response, requestPayload, expectedNetworkId, draftIntent));
   }
 
   /** Proposes a generic multisig instruction batch via `POST /v1/multisig/propose`. */
   @Override
   public CompletableFuture<MultisigResponse> proposeMultisig(
       final MultisigProposeRequest requestBody) {
+    final NetworkId expectedNetworkId = config.requireLocalSigningContext().networkId();
     final byte[] body = encodeJsonBody(buildMultisigProposePayload(requestBody));
     final TransportRequest request = buildJsonPostRequest("/v1/multisig/propose", body);
     return fetchJson(request, ContractJsonParser::parseMultisigResponse, "multisig propose")
-        .thenApply(response -> validateMultisigResponse(response, requestBody));
+        .thenApply(
+            response -> validateMultisigResponse(response, requestBody, expectedNetworkId));
   }
 
   /** Fetches one governance binding via `GET /v1/gov/contracts/{contract_address}`. */
@@ -2413,8 +2561,21 @@ public final class HttpClientTransport implements IrohaClient {
       final byte[] body,
       final long maximumResponseBytes,
       final ToriiCanonicalRequestAuth canonicalAuth) {
+    return buildExactNoritoPostRequest(
+        path, body, maximumResponseBytes, canonicalAuth, false);
+  }
+
+  private TransportRequest buildExactNoritoPostRequest(
+      final String path,
+      final byte[] body,
+      final long maximumResponseBytes,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final boolean requestNoStore) {
     final List<String> managedHeaders =
-        Arrays.asList("Accept", "Content-Type", "Accept-Encoding", "Content-Encoding");
+        requestNoStore
+            ? Arrays.asList(
+                "Accept", "Content-Type", "Accept-Encoding", "Content-Encoding", "Cache-Control")
+            : Arrays.asList("Accept", "Content-Type", "Accept-Encoding", "Content-Encoding");
     for (final String candidate : config.defaultHeaders().keySet()) {
       for (final String managed : managedHeaders) {
         if (candidate.equalsIgnoreCase(managed)) {
@@ -2435,6 +2596,9 @@ public final class HttpClientTransport implements IrohaClient {
             .addHeader("Accept-Encoding", "identity")
             .setMaximumResponseBytes(Long.valueOf(maximumResponseBytes))
             .setTimeout(config.requestTimeout());
+    if (requestNoStore) {
+      builder.addHeader("Cache-Control", "no-store");
+    }
     for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
       builder.addHeader(entry.getKey(), entry.getValue());
     }
@@ -2907,13 +3071,34 @@ public final class HttpClientTransport implements IrohaClient {
 
   private CompletableFuture<byte[]> fetchExactNoritoBytes(
       final TransportRequest request, final String errorContext) {
-    return fetchExactNoritoBytes(request, errorContext, false);
+    return fetchExactNoritoBytes(request, errorContext, false, false, false, false, false);
   }
 
   private CompletableFuture<byte[]> fetchExactNoritoBytes(
       final TransportRequest request,
       final String errorContext,
       final boolean requireIdentityEncoding) {
+    return fetchExactNoritoBytes(
+        request, errorContext, requireIdentityEncoding, false, false, false, false);
+  }
+
+  private CompletableFuture<byte[]> fetchExactNoritoBytes(
+      final TransportRequest request,
+      final String errorContext,
+      final boolean requireIdentityEncoding,
+      final boolean forbidRejectCodeHeader) {
+    return fetchExactNoritoBytes(
+        request, errorContext, requireIdentityEncoding, forbidRejectCodeHeader, false, false, false);
+  }
+
+  private CompletableFuture<byte[]> fetchExactNoritoBytes(
+      final TransportRequest request,
+      final String errorContext,
+      final boolean requireIdentityEncoding,
+      final boolean forbidRejectCodeHeader,
+      final boolean allowExplicitIdentityEncoding,
+      final boolean requirePrivateNoStore,
+      final boolean requireExactResponseProvenance) {
     notifyRequest(request);
     final CompletableFuture<byte[]> future = new CompletableFuture<>();
     executor
@@ -2937,25 +3122,16 @@ public final class HttpClientTransport implements IrohaClient {
                       null,
                       extractRejectCode(response));
               try {
-                if (response.statusCode() != 200) {
-                  throw new IllegalStateException(
-                      errorContext + " request failed with status " + response.statusCode());
-                }
-                requireExactHeader(
-                    response.headers(),
-                    "Content-Type",
-                    APPLICATION_NORITO,
-                    errorContext);
-                if (requireIdentityEncoding) {
-                  requireHeaderAbsent(response.headers(), "Content-Encoding", errorContext);
-                }
-                if (body.length == 0) {
-                  throw new IllegalStateException(errorContext + " response must not be empty");
+                if (requireExactResponseProvenance) {
+                  requireExactSignedResponseProvenance(request, response, errorContext);
                 }
                 final Long maximumResponseBytes = request.maximumResponseBytes();
                 if (maximumResponseBytes == null) {
                   throw new IllegalStateException(
                       errorContext + " request must declare a response-body limit");
+                }
+                if (body.length == 0) {
+                  throw new IllegalStateException(errorContext + " response must not be empty");
                 }
                 if ((long) body.length > maximumResponseBytes.longValue()) {
                   throw new IllegalStateException(
@@ -2965,6 +3141,48 @@ public final class HttpClientTransport implements IrohaClient {
                           + " bytes");
                 }
                 requireExactOptionalContentLength(response.headers(), body.length, errorContext);
+                if (requirePrivateNoStore) {
+                  requireExactHeader(
+                      response.headers(),
+                      "Content-Type",
+                      APPLICATION_NORITO,
+                      errorContext);
+                  if (requireIdentityEncoding) {
+                    if (allowExplicitIdentityEncoding) {
+                      requireAbsentOrIdentityEncoding(response.headers(), errorContext);
+                    } else {
+                      requireHeaderAbsent(response.headers(), "Content-Encoding", errorContext);
+                    }
+                  }
+                  requirePrivateNoStore(response.headers(), errorContext);
+                }
+                if (response.statusCode() != 200) {
+                  throw new IllegalStateException(
+                      errorContext + " request failed with status " + response.statusCode());
+                }
+                if (!requirePrivateNoStore) {
+                  requireExactHeader(
+                      response.headers(),
+                      "Content-Type",
+                      APPLICATION_NORITO,
+                      errorContext);
+                  if (requireIdentityEncoding) {
+                    if (allowExplicitIdentityEncoding) {
+                      requireAbsentOrIdentityEncoding(response.headers(), errorContext);
+                    } else {
+                      requireHeaderAbsent(response.headers(), "Content-Encoding", errorContext);
+                    }
+                  }
+                }
+                if (forbidRejectCodeHeader) {
+                  for (final String name : response.headers().keySet()) {
+                    if (name.equalsIgnoreCase("x-iroha-reject-code")) {
+                      throw new IllegalStateException(
+                          errorContext
+                              + " successful response carried x-iroha-reject-code");
+                    }
+                  }
+                }
                 notifyResponse(request, clientResponse);
                 future.complete(body.clone());
               } catch (final RuntimeException error) {
@@ -2973,6 +3191,30 @@ public final class HttpClientTransport implements IrohaClient {
               }
             });
     return future;
+  }
+
+  private static boolean sameCanonicalHijiriQuoteAccount(
+      final String left, final String right) {
+    try {
+      return Arrays.equals(
+          AccountAddress.parseEncodedIgnoringCurveSupport(left, null).canonicalBytes(),
+          AccountAddress.parseEncodedIgnoringCurveSupport(right, null).canonicalBytes());
+    } catch (final AccountAddress.AccountAddressException error) {
+      return false;
+    }
+  }
+
+  private static void requireExactSignedResponseProvenance(
+      final TransportRequest request,
+      final TransportResponse response,
+      final String errorContext) {
+    final URI finalUri = response.finalUri();
+    if (response.redirected()
+        || finalUri == null
+        || !request.uri().toASCIIString().equals(finalUri.toASCIIString())) {
+      throw new IllegalStateException(
+          errorContext + " response must come from the exact signed URL without redirects");
+    }
   }
 
   private static void requireExactHeader(
@@ -2996,6 +3238,165 @@ public final class HttpClientTransport implements IrohaClient {
         throw new IllegalStateException(
             errorContext + " response must not contain " + name);
       }
+    }
+  }
+
+  private static void requireAbsentOrIdentityEncoding(
+      final Map<String, List<String>> headers, final String errorContext) {
+    final List<String> values = headerValues(headers, "Content-Encoding");
+    if (!values.isEmpty()
+        && (values.size() != 1 || !"identity".equalsIgnoreCase(values.get(0).trim()))) {
+      throw new IllegalStateException(
+          errorContext + " response Content-Encoding must be absent or identity");
+    }
+  }
+
+  private static void requirePrivateNoStore(
+      final Map<String, List<String>> headers, final String errorContext) {
+    final List<CacheControlDirective> directives =
+        parseCacheControlDirectives(headerValues(headers, "Cache-Control"));
+    boolean privateDirectivePresent = false;
+    boolean noStoreDirectivePresent = false;
+    boolean publicDirectivePresent = false;
+    if (directives != null) {
+      for (final CacheControlDirective directive : directives) {
+        if ("private".equals(directive.name) && !directive.hasValue) {
+          privateDirectivePresent = true;
+        } else if ("no-store".equals(directive.name) && !directive.hasValue) {
+          noStoreDirectivePresent = true;
+        }
+        if ("public".equals(directive.name)) {
+          publicDirectivePresent = true;
+        }
+      }
+    }
+    if (!privateDirectivePresent || !noStoreDirectivePresent || publicDirectivePresent) {
+      throw new IllegalStateException(
+          errorContext + " response must remain private and no-store");
+    }
+  }
+
+  private static List<CacheControlDirective> parseCacheControlDirectives(
+      final List<String> headerValues) {
+    final List<CacheControlDirective> parsed = new ArrayList<>();
+    for (final String headerValue : headerValues) {
+      final List<String> rawDirectives = splitCacheControlDirectives(headerValue);
+      if (rawDirectives == null) {
+        return null;
+      }
+      for (final String rawDirective : rawDirectives) {
+        final CacheControlDirective directive = parseCacheControlDirective(rawDirective);
+        if (directive == null) {
+          return null;
+        }
+        parsed.add(directive);
+      }
+    }
+    return parsed;
+  }
+
+  private static List<String> splitCacheControlDirectives(final String headerValue) {
+    final List<String> directives = new ArrayList<>();
+    int start = 0;
+    boolean inQuotes = false;
+    boolean escaped = false;
+    for (int index = 0; index < headerValue.length(); index++) {
+      final char character = headerValue.charAt(index);
+      if (inQuotes) {
+        if (escaped) {
+          if (!isHttpQuotedPairCharacter(character)) {
+            return null;
+          }
+          escaped = false;
+        } else if (character == '\\') {
+          escaped = true;
+        } else if (character == '"') {
+          inQuotes = false;
+        }
+      } else if (character == '"') {
+        inQuotes = true;
+      } else if (character == ',') {
+        directives.add(headerValue.substring(start, index));
+        start = index + 1;
+      }
+    }
+    if (inQuotes || escaped) {
+      return null;
+    }
+    directives.add(headerValue.substring(start));
+    return directives;
+  }
+
+  private static CacheControlDirective parseCacheControlDirective(final String rawDirective) {
+    int index = skipHttpOws(rawDirective, 0);
+    final int nameStart = index;
+    while (index < rawDirective.length()
+        && isHttpTokenCharacter(rawDirective.charAt(index))) {
+      index++;
+    }
+    if (index == nameStart) {
+      return null;
+    }
+    final String name = rawDirective.substring(nameStart, index).toLowerCase(Locale.ROOT);
+    index = skipHttpOws(rawDirective, index);
+    if (index == rawDirective.length()) {
+      return new CacheControlDirective(name, false);
+    }
+    if (rawDirective.charAt(index) != '=') {
+      return null;
+    }
+    index = skipHttpOws(rawDirective, index + 1);
+    if (index == rawDirective.length()) {
+      return null;
+    }
+
+    if (rawDirective.charAt(index) == '"') {
+      index = parseCacheControlQuotedValue(rawDirective, index);
+      if (index < 0) {
+        return null;
+      }
+    } else {
+      final int valueStart = index;
+      while (index < rawDirective.length()
+          && isHttpTokenCharacter(rawDirective.charAt(index))) {
+        index++;
+      }
+      if (index == valueStart) {
+        return null;
+      }
+    }
+    index = skipHttpOws(rawDirective, index);
+    return index == rawDirective.length() ? new CacheControlDirective(name, true) : null;
+  }
+
+  private static int parseCacheControlQuotedValue(final String value, final int quoteIndex) {
+    int index = quoteIndex + 1;
+    while (index < value.length()) {
+      final char character = value.charAt(index);
+      if (character == '"') {
+        return index + 1;
+      }
+      if (character == '\\') {
+        index++;
+        if (index == value.length()
+            || !isHttpQuotedPairCharacter(value.charAt(index))) {
+          return -1;
+        }
+      } else if (!isHttpQuotedTextCharacter(character)) {
+        return -1;
+      }
+      index++;
+    }
+    return -1;
+  }
+
+  private static final class CacheControlDirective {
+    private final String name;
+    private final boolean hasValue;
+
+    private CacheControlDirective(final String name, final boolean hasValue) {
+      this.name = name;
+      this.hasValue = hasValue;
     }
   }
 
@@ -3463,9 +3864,36 @@ public final class HttpClientTransport implements IrohaClient {
     return payload;
   }
 
-  /** Validates that Torii returned a secret-free draft bound to the requested call. */
+  private static void validateContractCallDraftIntent(
+      final Map<String, Object> request, final ContractCallDraftIntent draftIntent) {
+    Objects.requireNonNull(draftIntent, "draftIntent");
+    final String authority = (String) request.get("authority");
+    AccountIdLiteral.requireCanonicalI105Address(authority, "authority");
+    if (!draftIntent.invocation().entrypoint().equals(request.get("entrypoint"))) {
+      throw new IllegalArgumentException(
+          "contract call draft intent entrypoint does not match the request");
+    }
+    final Object requestedAddress = request.get("contract_address");
+    if (requestedAddress != null
+        && !draftIntent.invocation().contractAddress().equals(requestedAddress)) {
+      throw new IllegalArgumentException(
+          "contract call draft intent address does not match the request");
+    }
+    if (request.containsKey("payload") != (draftIntent.invocation().arguments() != null)) {
+      throw new IllegalArgumentException(
+          "contract call draft intent argument presence does not match the request payload");
+    }
+  }
+
+  /** Validates that Torii returned a secret-free draft bound to caller-trusted local intent. */
   static ContractCallResponse validateContractCallDraft(
-      final ContractCallResponse response, final Map<String, Object> request) {
+      final ContractCallResponse response,
+      final Map<String, Object> request,
+      final NetworkId expectedNetworkId,
+      final ContractCallDraftIntent draftIntent) {
+    Objects.requireNonNull(response, "response");
+    Objects.requireNonNull(expectedNetworkId, "expectedNetworkId");
+    validateContractCallDraftIntent(request, draftIntent);
     if (!response.ok()) {
       throw new IllegalStateException("contract call draft.ok must be true");
     }
@@ -3480,40 +3908,107 @@ public final class HttpClientTransport implements IrohaClient {
           "contract call draft entrypoint is not bound to the request");
     }
     final ContractOperationReceipt receipt = response.operationReceipt();
+    if (receipt == null) {
+      throw new IllegalStateException("contract call draft must contain an operation receipt");
+    }
     if (!"contract_call".equals(receipt.operationKind())
-        || !"pending_signature".equals(receipt.status())) {
+        || !"pending_signature".equals(receipt.status())
+        || !"torii".equals(receipt.transport())) {
       throw new IllegalStateException(
-          "contract call draft receipt must be pending_signature");
+          "contract call draft receipt must be a pending_signature Torii contract call");
     }
     if (!Objects.equals(receipt.entrypoint(), response.entrypoint())
         || receipt.txHashHex() != null) {
       throw new IllegalStateException("contract call draft receipt is inconsistent");
     }
-    if (response.transactionPayloadB64() == null) {
-      throw new IllegalStateException(
-          "contract call draft must contain one exact canonical transaction payload");
-    }
-    if (response.signingMessageB64() == null) {
-      throw new IllegalStateException("contract call draft must contain a signing message");
-    }
-    if (Base64.getDecoder().decode(response.signingMessageB64()).length != 32) {
-      throw new IllegalStateException("contract call draft signing message must be 32 bytes");
-    }
     if (response.entrypointHashHex() != null || receipt.entrypointHashHex() != null) {
       throw new IllegalStateException(
           "contract call draft must not claim a final entrypoint hash");
     }
-    final Object expectedAddress = request.get("contract_address");
-    if (expectedAddress != null
-        && (!expectedAddress.equals(response.contractAddress())
-            || !expectedAddress.equals(receipt.contractAddress()))) {
-      throw new IllegalStateException("contract call draft address is not bound to the request");
+    final String expectedAddress = draftIntent.invocation().contractAddress();
+    if (!expectedAddress.equals(response.contractAddress())
+        || !expectedAddress.equals(receipt.contractAddress())) {
+      throw new IllegalStateException(
+          "contract call draft resolved address is not bound to the trusted intent");
     }
     final Object expectedAlias = request.get("contract_alias");
-    if (expectedAlias != null && !expectedAlias.equals(receipt.contractAlias())) {
-      throw new IllegalStateException("contract call draft alias is not bound to the request");
+    if (expectedAlias != null) {
+      if (!expectedAlias.equals(receipt.contractAlias())) {
+        throw new IllegalStateException("contract call draft alias is not bound to the request");
+      }
+    } else if (receipt.contractAlias() != null) {
+      throw new IllegalStateException("contract call draft receipt unexpectedly contains an alias");
+    }
+    final String expectedCodeHash = hexLower(draftIntent.invocation().expectedCodeHash());
+    if (!expectedCodeHash.equals(response.codeHashHex())
+        || !expectedCodeHash.equals(receipt.codeHashHex())) {
+      throw new IllegalStateException(
+          "contract call draft code hash is not bound to the trusted intent");
+    }
+    if (!draftIntent.invocation().entrypoint().equals(receipt.entrypoint())) {
+      throw new IllegalStateException(
+          "contract call draft receipt entrypoint is not bound to the trusted intent");
+    }
+    if (!Objects.equals(receipt.dataspace(), response.dataspace())
+        || !Objects.equals(receipt.abiHashHex(), response.abiHashHex())) {
+      throw new IllegalStateException(
+          "contract call draft receipt target metadata is inconsistent with the response");
+    }
+    if (response.transactionTtlMs() != null) {
+      throw new IllegalStateException(
+          "contract call draft response unexpectedly selected a transaction TTL");
+    }
+    final FeePaymentIntent requestedFee =
+        FeePaymentJson.parse(request.get("fee_payment"), "contract call request.fee_payment");
+    final FeePaymentIntent responseFee = receipt.feePayment();
+    if (responseFee == null || !requestedFee.hasSamePayerAndGasBound(responseFee)) {
+      throw new IllegalStateException(
+          "contract call draft fee_payment changed the requested payer, sponsor revision, or gas bound");
+    }
+    if (!Objects.equals(receipt.gasLimit(), responseFee.gasLimit())) {
+      throw new IllegalStateException(
+          "contract call draft receipt gas limit is inconsistent with fee_payment");
+    }
+    if (!contractCallPayloadDigestHex(request).equals(receipt.payloadDigestHex())) {
+      throw new IllegalStateException(
+          "contract call draft receipt payload digest does not match the exact request payload");
+    }
+    if (receipt.gasUsed() != null) {
+      throw new IllegalStateException(
+          "contract call draft receipt must not report gas usage before signing");
+    }
+    final TransactionPayload decoded =
+        decodeUnsignedDraftPayload(
+            response.transactionPayloadB64(),
+            response.signingMessageB64(),
+            "contract call draft");
+    final TransactionPayload expected =
+        TransactionPayload.builder()
+            .setNetworkId(expectedNetworkId)
+            .setAuthority((String) request.get("authority"))
+            .setCreationTimeMs(response.creationTimeMs())
+            .setExecutable(Executable.contractCall(draftIntent.invocation()))
+            .setFeePayment(responseFee)
+            .setAdmissionIntent(TransactionAdmissionIntent.ORDINARY)
+            .setMetadata(draftIntent.metadata())
+            .buildDecodedForCodec();
+    if (!sameTransactionPayload(decoded, expected)) {
+      throw new IllegalStateException(
+          "contract call transaction payload does not match the exact caller-trusted executable and metadata");
     }
     return response;
+  }
+
+  private static String contractCallPayloadDigestHex(final Map<String, Object> request) {
+    final Object payload = request.get("payload");
+    final byte[] canonicalBytes;
+    if (payload == null) {
+      canonicalBytes = new byte[0];
+    } else {
+      final String canonical = JsonValue.parse(JsonEncoder.encode(payload)).canonicalJson();
+      canonicalBytes = canonical.getBytes(StandardCharsets.UTF_8);
+    }
+    return hexLower(Blake3.hashUnbounded(canonicalBytes));
   }
 
   static Map<String, Object> buildMultisigProposePayload(
@@ -3582,7 +4077,29 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Rejects a multisig response that changes a signature-bound request field. */
   static MultisigResponse validateMultisigResponse(
-      final MultisigResponse response, final MultisigProposeRequest request) {
+      final MultisigResponse response,
+      final MultisigProposeRequest request,
+      final NetworkId expectedNetworkId) {
+    Objects.requireNonNull(response, "response");
+    Objects.requireNonNull(request, "request");
+    Objects.requireNonNull(expectedNetworkId, "expectedNetworkId");
+    if (!response.ok()) {
+      throw new IllegalStateException("multisig response.ok must be true");
+    }
+    final String signerAccountId =
+        AccountIdLiteral.requireCanonicalI105Address(
+            normalizeNonBlank(request.signerAccountId(), "signerAccountId"),
+            "signerAccountId");
+    if (request.multisigAccountId() != null) {
+      final String expectedMultisigAccountId =
+          AccountIdLiteral.requireCanonicalI105Address(
+              normalizeNonBlank(request.multisigAccountId(), "multisigAccountId"),
+              "multisigAccountId");
+      if (!expectedMultisigAccountId.equals(response.resolvedMultisigAccountId())) {
+        throw new IllegalStateException(
+            "multisig response resolved account does not match the requested account");
+      }
+    }
     if (!request.feePayment().hasSamePayerAndGasBound(response.feePayment())) {
       throw new IllegalStateException(
           "multisig response fee_payment changed the requested payer, sponsor revision, or gas bound");
@@ -3592,7 +4109,186 @@ public final class HttpClientTransport implements IrohaClient {
       throw new IllegalStateException(
           "multisig response creation_time_ms is not bound to the request");
     }
+    final List<byte[]> expectedProposalInstructions;
+    final byte[] proposalHash;
+    try {
+      expectedProposalInstructions =
+          NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(request);
+      proposalHash =
+          NoritoJavaCodecAdapter.hashCanonicalInstructionBoxes(expectedProposalInstructions);
+    } catch (final Exception ex) {
+      throw new IllegalStateException(
+          "multisig request does not contain canonical proposal instructions", ex);
+    }
+    final String expectedProposalId = hexLower(proposalHash);
+    if (response.proposalId() == null
+        || !response.proposalId().equals(response.instructionsHash())
+        || !expectedProposalId.equals(response.proposalId())) {
+      throw new IllegalStateException(
+          "multisig response proposal hash does not match the exact requested instructions and validation-fee marker");
+    }
+    if (response.submitted()) {
+      if (response.txHashHex() == null
+          || response.transactionPayloadB64() != null
+          || response.signingMessageB64() != null) {
+        throw new IllegalStateException(
+            "submitted multisig response must contain only the final transaction hash");
+      }
+      return response;
+    }
+    if (request.multisigAccountId() == null) {
+      throw new IllegalStateException(
+          "unsigned multisig drafts require a caller-trusted concrete multisigAccountId; a server-resolved alias is not signing intent");
+    }
+    if (response.txHashHex() != null || response.executedTxHashHex() != null) {
+      throw new IllegalStateException(
+          "unsubmitted multisig response must not contain transaction hashes");
+    }
+    if (response.creationTimeMs() == null) {
+      throw new IllegalStateException(
+          "unsubmitted multisig response must contain creation_time_ms");
+    }
+    final TransactionPayload decoded =
+        decodeUnsignedDraftPayload(
+            response.transactionPayloadB64(),
+            response.signingMessageB64(),
+            "multisig response");
+    if (!response.feePayment().equals(decoded.feePayment())) {
+      throw new IllegalStateException(
+          "multisig response fee_payment does not match the transaction payload");
+    }
+    if (decoded.creationTimeMs() != response.creationTimeMs().longValue()) {
+      throw new IllegalStateException(
+          "multisig response creation_time_ms does not match the transaction payload");
+    }
+    try {
+      final byte[] verifiedProposalHash =
+          NoritoJavaCodecAdapter.verifyCanonicalMultisigProposeExecutable(
+              decoded,
+              response.resolvedMultisigAccountId(),
+              expectedProposalInstructions);
+      if (!Arrays.equals(proposalHash, verifiedProposalHash)) {
+        throw new IllegalStateException(
+            "multisig response executable changed the proposal hash");
+      }
+    } catch (final Exception ex) {
+      throw new IllegalStateException(
+          "multisig response transaction payload does not match the exact requested executable",
+          ex);
+    }
+    final TransactionPayload expected =
+        TransactionPayload.builder()
+            .setNetworkId(expectedNetworkId)
+            .setAuthority(signerAccountId)
+            .setCreationTimeMs(response.creationTimeMs())
+            .setExecutable(decoded.executable())
+            .setFeePayment(response.feePayment())
+            .setAdmissionIntent(TransactionAdmissionIntent.ORDINARY)
+            .setMetadata(canonicalMultisigTransactionMetadata(request))
+            .buildDecodedForCodec();
+    if (!sameTransactionPayload(decoded, expected)) {
+      throw new IllegalStateException(
+          "multisig response transaction payload does not match the exact requested envelope and metadata");
+    }
     return response;
+  }
+
+  private static Map<String, JsonValue> canonicalMultisigTransactionMetadata(
+      final MultisigProposeRequest request) {
+    final Map<String, JsonValue> metadata = new LinkedHashMap<>();
+    if (request.memo() != null) {
+      metadata.put("memo", JsonValue.string(normalizeNonBlank(request.memo(), "memo")));
+    }
+    if (request.validationFeePolicyVersion() != null) {
+      metadata.put(
+          "validation_fee_policy_version",
+          JsonValue.number(request.validationFeePolicyVersion()));
+      metadata.put(
+          "validation_fee_policy_hash",
+          JsonValue.string(
+              normalizeHex32(
+                  request.validationFeePolicyHash(), "validationFeePolicyHash")));
+      if (request.validationFeeHijiriFeeQuoteHash() != null) {
+        metadata.put(
+            "validation_fee_hijiri_fee_quote_hash",
+            JsonValue.string(
+                normalizeHex32(
+                    request.validationFeeHijiriFeeQuoteHash(),
+                    "validationFeeHijiriFeeQuoteHash")));
+      }
+      if (request.validationFeeInstructionIndex() != null) {
+        metadata.put(
+            "validation_fee_instruction_index",
+            JsonValue.number(request.validationFeeInstructionIndex()));
+      }
+      if (request.validationFeeTransferEntryIndex() != null) {
+        metadata.put(
+            "validation_fee_transfer_entry_index",
+            JsonValue.number(request.validationFeeTransferEntryIndex()));
+      }
+    }
+    return metadata;
+  }
+
+  private static TransactionPayload decodeUnsignedDraftPayload(
+      final String transactionPayloadB64,
+      final String signingMessageB64,
+      final String context) {
+    final byte[] transactionPayload;
+    final byte[] signingMessage;
+    try {
+      transactionPayload =
+          Base64.getDecoder()
+              .decode(
+                  normalizeRequiredExactBase64Payload(
+                      transactionPayloadB64, context + ".transaction_payload_b64"));
+      signingMessage =
+          Base64.getDecoder()
+              .decode(
+                  normalizeRequiredExactBase64Payload(
+                      signingMessageB64, context + ".signing_message_b64"));
+    } catch (final RuntimeException ex) {
+      throw new IllegalStateException(
+          context + " must contain exact canonical base64 draft fields", ex);
+    }
+    if (signingMessage.length != 32
+        || !Arrays.equals(signingMessage, IrohaHash.prehash(transactionPayload))) {
+      throw new IllegalStateException(
+          context + ".signing_message_b64 must be the exact TransactionPayload hash");
+    }
+    try {
+      return NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
+          transactionPayload, TransactionAdmissionIntent.ORDINARY);
+    } catch (final Exception ex) {
+      throw new IllegalStateException(
+          context + ".transaction_payload_b64 must contain one canonical TransactionPayload",
+          ex);
+    }
+  }
+
+  private static boolean sameTransactionPayload(
+      final TransactionPayload left, final TransactionPayload right) {
+    return left.networkId().equals(right.networkId())
+        && sameCanonicalAccountId(left.authority(), right.authority())
+        && left.creationTimeMs() == right.creationTimeMs()
+        && left.executable().equals(right.executable())
+        && left.timeToLiveMs().equals(right.timeToLiveMs())
+        && left.nonce().equals(right.nonce())
+        && left.feePayment().equals(right.feePayment())
+        && left.admissionIntent() == right.admissionIntent()
+        && left.metadata().equals(right.metadata())
+        && left.attachments().equals(right.attachments());
+  }
+
+  private static boolean sameCanonicalAccountId(final String left, final String right) {
+    try {
+      return AccountAddress.parseEncodedIgnoringCurveSupport(left, null)
+          .canonicalHex()
+          .equals(
+              AccountAddress.parseEncodedIgnoringCurveSupport(right, null).canonicalHex());
+    } catch (final AccountAddress.AccountAddressException exception) {
+      return false;
+    }
   }
 
   static void putValidationFeePolicyMetadata(

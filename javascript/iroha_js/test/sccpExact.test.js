@@ -7,19 +7,23 @@ import { keccak_256 } from "@noble/hashes/sha3";
 
 import { AccountAddress } from "../src/address.js";
 import { blake2b256 } from "../src/blake2b.js";
+import { stringifyStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
 import {
   SCCP_CODEC_CANONICAL_TEXT,
   SCCP_CODEC_EVM_ADDRESS20,
   SCCP_CODEC_KEYS,
   SCCP_CODEC_SOLANA_PUBKEY32,
+  SCCP_CODEC_TON_ACCOUNT36,
   SCCP_CODEC_TRON_ADDRESS21,
   SCCP_DOMAIN_SOLANA,
+  SCCP_DOMAIN_TON,
   SCCP_NETWORK_PROFILES,
   SCCP_PAYLOAD_KINDS,
   SCCP_SOLANA_TESTNET_GENESIS_HASH,
   deriveSccpSolanaDestinationHashesV1,
   deriveSccpSolanaNativeVerifierConfigHashV1,
   deriveSccpSolanaSourceIdentityHashesV1,
+  deriveSccpTonDestinationHashesV1,
   normalizeBridgeMessageSubmitPayload,
   normalizeBridgeProofSubmitPayload,
   normalizeSccpBridgeSubmitResponse,
@@ -48,11 +52,16 @@ const PUBLIC_KEY = Uint8Array.from([
 ]);
 const ACCOUNT = AccountAddress.fromAccount({ publicKey: PUBLIC_KEY });
 const AUTHORITY = ACCOUNT.toI105(369);
+const TEST_MAX_OUTSTANDING_LIABILITY = 1_000_000_000_000;
+const TEST_EVM_MAX_WRAPPED_SUPPLY =
+  BigInt(TEST_MAX_OUTSTANDING_LIABILITY) * 1_000_000_000n;
 const MESSAGE_ID = HASH(0x11);
 const MESSAGE_BUNDLE_NORITO_TYPE = "iroha_sccp::TairaSccpMessageProofV1";
 const PROOF_REQUEST_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
+const TON_PROOF_REQUEST_NORITO_TYPE =
+  "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1";
 const DESTINATION_PROOF_NORITO_TYPE =
-  "iroha_sccp::SccpGroth16Bn254ProofArtifactV1";
+  "iroha_data_model::bridge::BridgeSccpDestinationProofV1";
 const NATIVE_MESSAGE_PROOF_NORITO_TYPE =
   "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
 const PUBLIC_SIGNAL_SCHEMA_HASH =
@@ -139,6 +148,32 @@ function keyHash(key) {
   return Buffer.from(keccak_256(verifyingKeyBytes(key))).toString("hex");
 }
 
+function bls12381VerifyingKey() {
+  const g1 = `80${"00".repeat(47)}`;
+  const g2 = `${g1}${"00".repeat(48)}`;
+  const ic = { constant: g1 };
+  for (let index = 0; index < 11; index += 1) ic[`signal_${index}`] = g1;
+  return { version: 1, alpha1: g1, beta2: g2, gamma2: g2, delta2: g2, ic };
+}
+
+function bls12381VerifyingKeyBytes(key) {
+  return Buffer.concat([
+    Buffer.from([1]),
+    Buffer.from(key.alpha1, "hex"),
+    Buffer.from(key.beta2, "hex"),
+    Buffer.from(key.gamma2, "hex"),
+    Buffer.from(key.delta2, "hex"),
+    Buffer.from(key.ic.constant, "hex"),
+    ...Array.from({ length: 11 }, (_, index) =>
+      Buffer.from(key.ic[`signal_${index}`], "hex"),
+    ),
+  ]);
+}
+
+function bls12381KeyHash(key) {
+  return createHash("sha256").update(bls12381VerifyingKeyBytes(key)).digest("hex");
+}
+
 function semanticProfile() {
   return {
     profile: "sora_taira_finality_inclusion_groth16_bn254",
@@ -147,6 +182,19 @@ function semanticProfile() {
       circuit_commitment: UPPER(0xc1, 32),
       witness_generator_commitment: UPPER(0xc2, 32),
       public_signal_schema_hash: PUBLIC_SIGNAL_SCHEMA_HASH,
+    },
+  };
+}
+
+function tonSemanticProfile() {
+  return {
+    profile: "sora_taira_finality_inclusion_groth16_bls12381",
+    commitments: {
+      version: 1,
+      circuit_commitment: UPPER(0x95, 32),
+      witness_generator_commitment: UPPER(0x96, 32),
+      public_signal_schema_hash:
+        "A4DB9F6AAC0ECD22AC107BFDAFBF30DD01087147517EFE285D345F3F1182B874",
     },
   };
 }
@@ -168,6 +216,14 @@ function outboundPolicy(protocolVersion = 4) {
   return {
     version: 1,
     semantic_profile: semanticProfile(),
+    sora_finality_anchor: finalityAnchor(protocolVersion),
+  };
+}
+
+function tonOutboundPolicy(protocolVersion = 4) {
+  return {
+    version: 1,
+    semantic_profile: tonSemanticProfile(),
     sora_finality_anchor: finalityAnchor(protocolVersion),
   };
 }
@@ -194,7 +250,14 @@ function policyHashes(policy = outboundPolicy()) {
     keccak_256(
       Buffer.concat([
         Buffer.from("sccp:semantic-proof-profile:v1"),
-        Buffer.from([1, 0, 1]),
+        Buffer.from([
+          1,
+          semanticPolicy.profile ===
+          "sora_taira_finality_inclusion_groth16_bls12381"
+            ? 1
+            : 0,
+          1,
+        ]),
         Buffer.from(semanticPolicy.commitments.circuit_commitment, "hex"),
         Buffer.from(semanticPolicy.commitments.witness_generator_commitment, "hex"),
         Buffer.from(semanticPolicy.commitments.public_signal_schema_hash, "hex"),
@@ -222,6 +285,55 @@ function policyHashes(policy = outboundPolicy()) {
   return { semantic: semantic.toString("hex"), anchor: anchor.toString("hex") };
 }
 
+const BLS12381_SCALAR_MODULUS = BigInt(
+  "0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001",
+);
+const TON_SIGNAL_LABELS = [
+  "sccp:groth16-bls12381:signal:message-id:v1",
+  "sccp:groth16-bls12381:signal:payload-hash:v1",
+  "sccp:groth16-bls12381:signal:target-domain:v1",
+  "sccp:groth16-bls12381:signal:commitment-root:v1",
+  "sccp:groth16-bls12381:signal:finality-height:v1",
+  "sccp:groth16-bls12381:signal:finality-block-hash:v1",
+  "sccp:groth16-bls12381:signal:source-domain:v1",
+  "sccp:groth16-bls12381:signal:statement-hash:v1",
+  "sccp:groth16-bls12381:signal:destination-binding-hash:v1",
+  "sccp:groth16-bls12381:signal:route-config-hash:v1",
+  "sccp:groth16-bls12381:signal:sora-finality-anchor-hash:v1",
+];
+const TON_SIGNAL_FIELDS = [
+  "message_id",
+  "payload_hash",
+  "target_domain",
+  "commitment_root",
+  "finality_height",
+  "finality_block_hash",
+  "source_domain",
+  "statement_hash",
+  "destination_binding_hash",
+  "route_configuration_hash",
+  "sora_finality_anchor_hash",
+];
+
+function tonProofProfileCommitment() {
+  return createHash("sha256")
+    .update(Buffer.from("sccp:ton:groth16-bls12381:proof-profile:v1"))
+    .update(Buffer.from([1]))
+    .update(Buffer.from("ietf-bls12381-compressed-g1-48-g2-96"))
+    .update(Buffer.from("groth16-a-g1-b-g2-c-g1"))
+    .update(Buffer.from("sha256-sha256-label-value-mod-r"))
+    .update(Buffer.from(BLS12381_SCALAR_MODULUS.toString(16).padStart(64, "0"), "hex"))
+    .update(Buffer.from(tonSemanticProfile().commitments.public_signal_schema_hash, "hex"))
+    .digest();
+}
+
+function tonSignalWord(label, input) {
+  const labelHash = createHash("sha256").update(label).digest();
+  const digest = createHash("sha256").update(labelHash).update(input).digest();
+  const scalar = BigInt(`0x${digest.toString("hex")}`) % BLS12381_SCALAR_MODULUS;
+  return `0x${scalar.toString(16).padStart(64, "0")}`;
+}
+
 function concatenate(...values) {
   return Buffer.concat(values.map((value) => Buffer.from(value)));
 }
@@ -234,6 +346,12 @@ function littleEndian(value, width) {
     remaining >>= 8n;
   }
   assert.equal(remaining, 0n);
+  return result;
+}
+
+function signedLittleEndian32(value) {
+  const result = Buffer.alloc(4);
+  result.writeInt32LE(value);
   return result;
 }
 
@@ -320,6 +438,34 @@ const TEST_NETWORK_IDENTITIES = Object.freeze({
     routeId: "taira_sol_xor",
     id: null,
   }),
+  "ton-mainnet": Object.freeze({
+    tag: 14,
+    domain: 4,
+    routeId: "taira_ton_xor",
+    id: -239,
+    bytes: concatenate(
+      signedLittleEndian32(-239),
+      signedLittleEndian32(-1),
+      littleEndian(0x8000_0000_0000_0000n, 8),
+      Buffer.alloc(4),
+      Buffer.from("17a3a92992aabea785a7a090985a265cd31f323d849da51239737e321fb05569", "hex"),
+      Buffer.from("5e994fcf4d425c0a6ce6a792594b7173205f740a39cd56f537defd28b48a0f6e", "hex"),
+    ),
+  }),
+  "ton-testnet": Object.freeze({
+    tag: 15,
+    domain: 4,
+    routeId: "taira_ton_xor",
+    id: -3,
+    bytes: concatenate(
+      signedLittleEndian32(-3),
+      signedLittleEndian32(-1),
+      littleEndian(0x8000_0000_0000_0000n, 8),
+      Buffer.alloc(4),
+      Buffer.from("823f81f306ff02694f935cf5021548e3ce2b86b529812af6a12148879e95a128", "hex"),
+      Buffer.from("67e20ac184b9e039a62667acc3f9c00f90f359a76738233379efa47604980ce8", "hex"),
+    ),
+  }),
 });
 
 function canonicalNetwork(profile) {
@@ -391,6 +537,7 @@ function testDestinationHashes(route) {
         keccak_256(Buffer.from(descriptor.routeId)),
         abiWord(route.revision),
         abiWord(deployment.taira_to_token_multiplier),
+        abiWord(deployment.max_wrapped_supply),
       ),
     ),
   );
@@ -543,6 +690,7 @@ function governedRoute({
         route_address: routeAddress,
         route_code_hash: routeCodeHash,
         taira_to_token_multiplier: 1_000_000_000,
+        max_wrapped_supply: TEST_EVM_MAX_WRAPPED_SUPPLY,
       },
     },
     sora_outbound_execution_policy: soraOutboundExecutionPolicy(),
@@ -550,6 +698,7 @@ function governedRoute({
       asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
       custody_owner: AUTHORITY,
       payload_amount_scale: 9,
+      max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
     },
   };
   route.source_identity.emitter.identity.route_config_hash =
@@ -576,6 +725,7 @@ function solanaDeployment() {
     verifier_key_hash: keyHash(key).toUpperCase(),
     outbound_proof_policy: outboundPolicy(),
     taira_to_token_multiplier: 1,
+    max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY,
   };
   deployment.native_verifier_config_hash =
     deriveSccpSolanaNativeVerifierConfigHashV1(deployment, UPPER(0x31, 32), 1)
@@ -614,6 +764,60 @@ function solanaGovernedRoute({ activation = "staged" } = {}) {
       asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
       custody_owner: AUTHORITY,
       payload_amount_scale: 9,
+      max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
+    },
+  };
+}
+
+function tonDeployment() {
+  const key = bls12381VerifyingKey();
+  return {
+    jetton_master_address: { workchain: 0, account: UPPER(0x81, 32) },
+    jetton_master_code_hash: UPPER(0x91, 32),
+    jetton_master_initial_data_hash: UPPER(0x89, 32),
+    jetton_wallet_code_hash: UPPER(0x92, 32),
+    route_address: { workchain: 0, account: UPPER(0x82, 32) },
+    route_code_hash: UPPER(0x93, 32),
+    route_initial_data_hash: UPPER(0x8a, 32),
+    embedded_verifier_code_hash: UPPER(0x94, 32),
+    verifier_circuit_hash: UPPER(0x95, 32),
+    verifying_key: key,
+    verifier_key_hash: bls12381KeyHash(key).toUpperCase(),
+    proof_profile_commitment: tonProofProfileCommitment().toString("hex").toUpperCase(),
+    outbound_proof_policy: tonOutboundPolicy(),
+    taira_to_token_multiplier: 1,
+    max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY,
+  };
+}
+
+function tonGovernedRoute({ source = "ton-mainnet", activation = "staged" } = {}) {
+  const deployment = tonDeployment();
+  const routeHashes = deriveSccpTonDestinationHashesV1(deployment, source, 1);
+  return {
+    lane_id: lane(source),
+    route_id: "taira_ton_xor",
+    asset_key: "xor",
+    revision: 1,
+    activation: { activation, direction: null },
+    inbound_finality_cutoff: null,
+    source_identity: {
+      lane: lane(source),
+      emitter: {
+        emitter: "ton",
+        identity: {
+          address: structuredClone(deployment.route_address),
+          code_hash: deployment.route_code_hash,
+          route_config_hash: routeHashes.route_configuration_hash.slice(2).toUpperCase(),
+        },
+      },
+    },
+    destination: { family: "ton", deployment },
+    sora_outbound_execution_policy: soraOutboundExecutionPolicy(),
+    settlement: {
+      asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      custody_owner: AUTHORITY,
+      payload_amount_scale: 9,
+      max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
     },
   };
 }
@@ -623,6 +827,8 @@ function nativeTrustAnchor(source = "bsc-mainnet") {
     ? "tron_dpos_v1"
     : source.startsWith("solana-")
       ? "solana_agave_v1"
+    : source.startsWith("ton-")
+      ? "ton_masterchain_v1"
     : source.startsWith("bsc-")
       ? "bsc_parlia_v1"
       : "ethereum_beacon_v1";
@@ -722,6 +928,58 @@ function proofRequest(protocolVersion = 4) {
   };
 }
 
+function tonProofRequest(protocolVersion = 4) {
+  const key = bls12381VerifyingKey();
+  const policy = tonOutboundPolicy(protocolVersion);
+  const hashes = policyHashes(policy);
+  const request = {
+    version: 1,
+    backend: { backend: "ton_groth16_bls12381_v1", family: null },
+    source_network: network("sora-taira"),
+    target_network: network("ton-mainnet"),
+    public_inputs: {
+      version: 1,
+      message_id: PREFIX_HASH(0x11),
+      payload_hash: PREFIX_HASH(0x12),
+      target_domain: 4,
+      commitment_root: PREFIX_HASH(0x13),
+      finality_height: "9",
+      finality_block_hash: PREFIX_HASH(0x14),
+    },
+    public_signals: {},
+    verifying_key: key,
+    verifier_key_hash: `0x${bls12381KeyHash(key)}`,
+    verifier_circuit_hash: `0x${policy.semantic_profile.commitments.circuit_commitment.toLowerCase()}`,
+    proof_profile_commitment: `0x${tonProofProfileCommitment().toString("hex")}`,
+    semantic_proof_profile: policy.semantic_profile,
+    semantic_proof_profile_hash: `0x${hashes.semantic}`,
+    sora_finality_anchor: policy.sora_finality_anchor,
+    sora_finality_anchor_hash: `0x${hashes.anchor}`,
+    bundle_bytes: "0x0102",
+    statement_hash: PREFIX_HASH(0x61),
+    destination_binding_hash: PREFIX_HASH(0x62),
+    route_configuration_hash: PREFIX_HASH(0x63),
+    request_hash: PREFIX_HASH(0x64),
+  };
+  const inputWords = [
+    Buffer.from(request.public_inputs.message_id.slice(2), "hex"),
+    Buffer.from(request.public_inputs.payload_hash.slice(2), "hex"),
+    abiWord(4),
+    Buffer.from(request.public_inputs.commitment_root.slice(2), "hex"),
+    abiWord(9),
+    Buffer.from(request.public_inputs.finality_block_hash.slice(2), "hex"),
+    abiWord(0),
+    Buffer.from(request.statement_hash.slice(2), "hex"),
+    Buffer.from(request.destination_binding_hash.slice(2), "hex"),
+    Buffer.from(request.route_configuration_hash.slice(2), "hex"),
+    Buffer.from(request.sora_finality_anchor_hash.slice(2), "hex"),
+  ];
+  TON_SIGNAL_FIELDS.forEach((field, index) => {
+    request.public_signals[field] = tonSignalWord(TON_SIGNAL_LABELS[index], inputWords[index]);
+  });
+  return request;
+}
+
 function crossPolicyAliasedProofRequest() {
   const request = proofRequest();
   request.semantic_proof_profile.commitments.circuit_commitment =
@@ -793,7 +1051,7 @@ function preparedResponse(overrides = {}) {
   };
 }
 
-test("closed SCCP inventory exposes exact ETH, BSC, Solana testnet, and TRON profiles", async () => {
+test("closed SCCP inventory exposes exact ETH, BSC, Solana, TRON, and TON profiles", async () => {
   assert.deepEqual(Object.keys(SCCP_NETWORK_PROFILES), [
     "sora-taira",
     "ethereum-mainnet",
@@ -804,9 +1062,11 @@ test("closed SCCP inventory exposes exact ETH, BSC, Solana testnet, and TRON pro
     "tron-nile",
     "tron-shasta",
     "solana-testnet",
+    "ton-mainnet",
+    "ton-testnet",
   ]);
   assert.equal(Object.values(SCCP_NETWORK_PROFILES).some(({ tag }) => tag === 0), false);
-  assert.deepEqual(Object.keys(SCCP_CODEC_KEYS), ["1", "2", "5", "6"]);
+  assert.deepEqual(Object.keys(SCCP_CODEC_KEYS), ["1", "2", "5", "6", "7"]);
   assert.deepEqual(SCCP_NETWORK_PROFILES["solana-testnet"], {
     profile: "solana-testnet",
     tag: 13,
@@ -815,12 +1075,24 @@ test("closed SCCP inventory exposes exact ETH, BSC, Solana testnet, and TRON pro
     genesisHash: SCCP_SOLANA_TESTNET_GENESIS_HASH,
   });
   assert.deepEqual(SCCP_PAYLOAD_KINDS, ["transfer"]);
+  assert.deepEqual(SCCP_NETWORK_PROFILES["ton-mainnet"], {
+    profile: "ton-mainnet",
+    tag: 14,
+    domain: SCCP_DOMAIN_TON,
+    sora: false,
+    globalId: -239,
+  });
+  assert.deepEqual(SCCP_NETWORK_PROFILES["ton-testnet"], {
+    profile: "ton-testnet",
+    tag: 15,
+    domain: SCCP_DOMAIN_TON,
+    sora: false,
+    globalId: -3,
+  });
   const exports = await import("../src/sccp.js");
   for (const retired of [
     "SCCP_DOMAIN_SOL",
-    "SCCP_DOMAIN_TON",
     "SCCP_CODEC_SOLANA_BASE58",
-    "SCCP_CODEC_TON_ACCOUNT36",
     "SCCP_CODEC_SORA_ASSET_ID",
     "normalizeSccpProofManifests",
     "normalizeSccpSourceAdapterEngineDeployment",
@@ -840,12 +1112,22 @@ test("closed codecs accept exact layouts and reject retired tags and textual ali
   );
   assert.equal(normalizeSccpCodecValue(6, new Uint8Array(32).fill(3)).length, 32);
   assert.equal(SCCP_CODEC_SOLANA_PUBKEY32, 6);
+  assert.equal(
+    normalizeSccpCodecValue(
+      SCCP_CODEC_TON_ACCOUNT36,
+      Uint8Array.from([...new Uint8Array(4), ...new Uint8Array(32).fill(4)]),
+    ).length,
+    36,
+  );
   for (const [tag, value] of [
     [3, new Uint8Array(32).fill(1)],
     [4, new Uint8Array(36).fill(1)],
     [6, Uint8Array.of(1)],
     [6, new Uint8Array(32)],
     [6, "11111111111111111111111111111111"],
+    [7, new Uint8Array(36)],
+    [7, Uint8Array.from([0, 0, 0, 1, ...new Uint8Array(32).fill(1)])],
+    [7, new Uint8Array(35).fill(1)],
     [2, `0x${"11".repeat(20)}`],
     [2, new Uint8Array(20)],
     [5, Uint8Array.from([0x42, ...new Uint8Array(20).fill(1)])],
@@ -1104,19 +1386,71 @@ test("registry validates complete typed route identity and immutable key hash", 
   );
 });
 
+test("registry requires exact lossless supply and liability caps for every destination", () => {
+  const routes = [
+    governedRoute(),
+    governedRoute({ source: "tron-mainnet" }),
+    solanaGovernedRoute(),
+    tonGovernedRoute(),
+  ];
+  for (const route of routes) {
+    const missingSupply = structuredClone(route);
+    delete missingSupply.destination.deployment.max_wrapped_supply;
+    assert.throws(
+      () => normalizeSccpRegistry(registry([missingSupply])),
+      /max_wrapped_supply/u,
+    );
+  }
+
+  const missingLiability = governedRoute();
+  delete missingLiability.settlement.max_outstanding_liability;
+  assert.throws(
+    () => normalizeSccpRegistry(registry([missingLiability])),
+    /max_outstanding_liability/u,
+  );
+
+  const mismatched = governedRoute();
+  mismatched.destination.deployment.max_wrapped_supply += 1n;
+  assert.throws(
+    () => normalizeSccpRegistry(registry([mismatched])),
+    /must equal settlement\.max_outstanding_liability/u,
+  );
+
+  const unsafeLiability = BigInt(Number.MAX_SAFE_INTEGER) + 2n;
+  const lossless = governedRoute();
+  lossless.settlement.max_outstanding_liability = unsafeLiability;
+  lossless.destination.deployment.max_wrapped_supply =
+    unsafeLiability * BigInt(lossless.destination.deployment.taira_to_token_multiplier);
+  lossless.source_identity.emitter.identity.route_config_hash =
+    testDestinationHashes(lossless).routeConfigurationHash;
+  const parsed = parseSccpJsonObject(
+    stringifyStrictLosslessIntegerJson(registry([lossless]), "SCCP registry"),
+    "SCCP registry",
+  );
+  assert.equal(
+    typeof parsed.lanes[0].routes[0].settlement.max_outstanding_liability,
+    "bigint",
+  );
+  assert.equal(
+    typeof parsed.lanes[0].routes[0].destination.deployment.max_wrapped_supply,
+    "bigint",
+  );
+  assert.equal(normalizeSccpRegistry(parsed).lanes.length, 1);
+});
+
 test("registry destination hashes match the canonical Rust EVM and TRON layouts", () => {
   const vectors = [
     {
       source: "bsc-mainnet",
       destinationBindingHash: "0D3F2789F19AF900584D24BAB4148AC32AC1532E85748845646CA032E43C0757",
       deploymentConfigHash: "C96A33A74F1E4134A7D6D63CB2EE4EAFFE7D2007D4189BDDCE6D39F5AA97BC5C",
-      routeConfigurationHash: "DDF6B59EE7DAE1F134455EAA19B166F951AF30188E1ADC2CF9D68DD8734789C1",
+      routeConfigurationHash: "3DBB23C4F6659308B48114E68049674E5CFC0F1AA2A517FF6B64BF448834DC28",
     },
     {
       source: "tron-mainnet",
       destinationBindingHash: "F0D778ECB625C27DEAE6ADCFCD14167DF0E4934EB167F34BA6ADFCD9750A797F",
       deploymentConfigHash: "CF8C2A47D3F54928B688A118E49AA066577DB2A5DCAD73D1BDEE9D25A365C13C",
-      routeConfigurationHash: "EB5CB094A22C5424716A64693E35F6C21B95D654E609121E40CFE13EEEC31969",
+      routeConfigurationHash: "05EC19470E64BB89F6B5E359B553E6D83878100A590033947F1676CCF39DA383",
     },
   ];
   for (const vector of vectors) {
@@ -1138,23 +1472,23 @@ test("Solana registry hashes match Rust and bind every Loader-v3 role", () => {
   const deployment = solanaDeployment();
   assert.equal(
     deriveSccpSolanaNativeVerifierConfigHashV1(deployment, UPPER(0x31, 32), 1),
-    "0x81acbcf95363017aabb1cf1edbc0f3f85d3ddb0529666870e653894fee567d98",
+    "0x136f783ad2f6b8d5018627d1147fc79f61cd8c0cbcddaf12a79f8ccb8df509fb",
   );
   const hashes = deriveSccpSolanaDestinationHashesV1(deployment, UPPER(0x31, 32), 1);
   assert.deepEqual(hashes, {
     destination_binding_hash:
-      "0x647aa3dfb00a102f4fbbac9f00c0b5828b4851212df46aaa302d416b43feaa18",
+      "0x43a30d059f46f955884bba0dd1481e8b6a6ccd678449861454593f818bb9a8b1",
     deployment_config_hash:
-      "0x08af60c35a8f65810b1f537d0e21cf30b50c574f7a8bc80596c54bdb9c1e71df",
+      "0xa1f2fb40ffc4e150b09af9c60decd8ec5d1776371f5b6e17bdfd334a3bdef9b3",
     route_configuration_hash:
-      "0x72f9cc2bfa3bb4064777315ef6288e74052849f842fba0c84b4557d939fdc9d1",
+      "0x56604615dee63e1b55fa43cf4cd6f22cc0a0f6e7d9a1357b7b787beae05daccf",
   });
   const route = solanaGovernedRoute();
   assert.deepEqual(deriveSccpSolanaSourceIdentityHashesV1(route.source_identity), {
     source_emitter_identity_hash:
-      "0x714bd05afa96ae367e08d4daed9632b208f6c432660f106dd10a8d616d17929c",
+      "0x4310310f34ed710f75e5df59842317edb60bd0671fa7c4666162acb2d7c09c6c",
     source_identity_hash:
-      "0x8577e67ddc7f0bb8f0058e23449a811dfb04ab0808b696af66cd2d75fa714771",
+      "0x98d75aead76ba724a38b35e50e970915e28956d87c9722e940169ec71abf6120",
   });
   assert.equal(normalizeSccpRegistry(registry([route])).lanes.length, 1);
 
@@ -1211,6 +1545,7 @@ test("Solana registry hashes match Rust and bind every Loader-v3 role", () => {
     ["route_program_id", UPPER(0x48, 32)],
     ["route_state_account", UPPER(0x49, 32)],
     ["native_verifier_program_id", UPPER(0x4a, 32)],
+    ["max_wrapped_supply", TEST_MAX_OUTSTANDING_LIABILITY + 1],
   ]) {
     const changed = structuredClone(deployment);
     changed[field] = value;
@@ -1268,6 +1603,64 @@ test("Solana registry hashes match Rust and bind every Loader-v3 role", () => {
       `${sourceField} must remain distinct from destination ${destinationField}`,
     );
   }
+});
+
+test("TON registry enforces account, storage, BLS12-381, and fixed-point-safe hash roles", () => {
+  const deployment = tonDeployment();
+  const hashes = deriveSccpTonDestinationHashesV1(deployment, "ton-mainnet", 1);
+  for (const value of Object.values(hashes)) assert.match(value, /^0x[0-9a-f]{64}$/u);
+  assert.equal(normalizeSccpRegistry(registry([tonGovernedRoute()])).lanes.length, 1);
+
+  for (const field of ["jetton_master_initial_data_hash", "route_initial_data_hash"]) {
+    const changed = structuredClone(deployment);
+    changed[field] = field === "jetton_master_initial_data_hash" ? UPPER(0x87, 32) : UPPER(0x88, 32);
+    assert.deepEqual(
+      deriveSccpTonDestinationHashesV1(changed, "ton-mainnet", 1),
+      hashes,
+      `${field} must stay outside fixed-point D/R preimages`,
+    );
+  }
+  for (const field of ["jetton_master_address", "route_address"]) {
+    const changed = structuredClone(deployment);
+    changed[field].account = field === "jetton_master_address" ? UPPER(0x84, 32) : UPPER(0x85, 32);
+    assert.deepEqual(
+      deriveSccpTonDestinationHashesV1(changed, "ton-mainnet", 1),
+      hashes,
+      `${field} must stay outside fixed-point D/R preimages`,
+    );
+  }
+  const changedCode = structuredClone(deployment);
+  changedCode.jetton_master_code_hash = UPPER(0x86, 32);
+  assert.notDeepEqual(
+    deriveSccpTonDestinationHashesV1(changedCode, "ton-mainnet", 1),
+    hashes,
+  );
+  const changedSupply = structuredClone(deployment);
+  changedSupply.max_wrapped_supply += 1;
+  assert.notDeepEqual(
+    deriveSccpTonDestinationHashesV1(changedSupply, "ton-mainnet", 1),
+    hashes,
+  );
+  const aliasedStorage = structuredClone(deployment);
+  aliasedStorage.route_initial_data_hash = aliasedStorage.jetton_master_initial_data_hash;
+  assert.throws(
+    () => deriveSccpTonDestinationHashesV1(aliasedStorage, "ton-mainnet", 1),
+    /reuses/u,
+  );
+  const wrongWorkchain = structuredClone(deployment);
+  wrongWorkchain.route_address.workchain = -1;
+  assert.throws(
+    () => deriveSccpTonDestinationHashesV1(wrongWorkchain, "ton-mainnet", 1),
+    /basechain/u,
+  );
+  const sourceAlias = tonGovernedRoute();
+  sourceAlias.source_identity.emitter.identity.address = structuredClone(
+    sourceAlias.destination.deployment.jetton_master_address,
+  );
+  assert.throws(
+    () => normalizeSccpRegistry(registry([sourceAlias])),
+    /source emitter does not identify/u,
+  );
 });
 
 test("registry rejects stale emitter hashes after either typed proof policy changes", () => {
@@ -1856,6 +2249,45 @@ test("recent discovery admits only the exact Solana projection shape", () => {
   assert.throws(() => normalizeSccpRecentMessages({ items: [item] }), /nonzero/u);
 });
 
+test("recent discovery admits only canonical TON basechain projections", () => {
+  const item = recentItem();
+  item.target_profile = "ton-mainnet";
+  item.target_domain = 4;
+  item.route_id = "taira_ton_xor";
+  item.payload_projection.Transfer.dest_domain = 4;
+  item.payload_projection.Transfer.route_id.CanonicalText.value = "taira_ton_xor";
+  item.payload_projection.Transfer.recipient = {
+    TonAccount36: { workchain: 0, account: `0x${"93".repeat(32)}` },
+  };
+  const parsed = normalizeSccpRecentMessages({ items: [item] });
+  assert.equal(parsed.items[0].payload_projection.Transfer.recipient.TonAccount36.workchain, 0);
+
+  item.payload_projection.Transfer.recipient.TonAccount36.workchain = -1;
+  assert.throws(() => normalizeSccpRecentMessages({ items: [item] }), /workchain/u);
+  item.payload_projection.Transfer.recipient.TonAccount36.workchain = 0;
+  item.payload_projection.Transfer.recipient.TonAccount36.account = `0x${"00".repeat(32)}`;
+  assert.throws(() => normalizeSccpRecentMessages({ items: [item] }), /nonzero/u);
+});
+
+test("TON proof requests authenticate exact BLS12-381 keys, profiles, and signals", () => {
+  const parsed = normalizeSccpProofRequest(tonProofRequest());
+  assert.equal(parsed.backend.backend, "ton_groth16_bls12381_v1");
+  assert.equal(parsed.public_inputs.target_domain, SCCP_DOMAIN_TON);
+
+  const wrongSignal = tonProofRequest();
+  wrongSignal.public_signals.message_id = PREFIX_HASH(0x99);
+  assert.throws(() => normalizeSccpProofRequest(wrongSignal), /exact request role/u);
+  const uncompressed = tonProofRequest();
+  uncompressed.verifying_key.alpha1 = `00${"00".repeat(47)}`;
+  assert.throws(() => normalizeSccpProofRequest(uncompressed), /nonzero|compressed BLS12-381/u);
+  const wrongProfile = tonProofRequest();
+  wrongProfile.semantic_proof_profile = semanticProfile();
+  assert.throws(() => normalizeSccpProofRequest(wrongProfile), /destination backend/u);
+  const bnWithTonField = proofRequest();
+  bnWithTonField.public_signals = {};
+  assert.throws(() => normalizeSccpProofRequest(bnWithTonField), /retired field/u);
+});
+
 test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema", () => {
   assert.equal(normalizeSccpMessageBundle(messageBundle()).version, 1);
   const request = normalizeSccpProofRequest(proofRequest());
@@ -1872,9 +2304,9 @@ test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema",
   aliasedCommitment.commitment.context.route_configuration_hash =
     aliasedCommitment.commitment.context.destination_binding_hash;
   assert.throws(() => normalizeSccpMessageBundle(aliasedCommitment), /role-separated/u);
-  const reservedDomain = messageBundle();
-  reservedDomain.payload.Transfer.dest_domain = 4;
-  assert.throws(() => normalizeSccpMessageBundle(reservedDomain), /reserved/u);
+  const mismatchedTonDomain = messageBundle();
+  mismatchedTonDomain.payload.Transfer.dest_domain = 4;
+  assert.throws(() => normalizeSccpMessageBundle(mismatchedTonDomain), /exact lane/u);
   const oversizedNonce = messageBundle();
   oversizedNonce.payload.Transfer.nonce = (1n << 64n).toString();
   assert.throws(() => normalizeSccpMessageBundle(oversizedNonce), /u64/u);
@@ -2027,6 +2459,13 @@ test("submit DTOs bind the exact proof schema and require zero header padding", 
     authority: AUTHORITY,
     fee_payment: feePayment(),
     destination_proof_b64: nativeProofB64(),
+  }), /schema hash/u);
+  assert.throws(() => normalizeBridgeProofSubmitPayload({
+    authority: AUTHORITY,
+    fee_payment: feePayment(),
+    destination_proof_b64: b64(
+      sccpNoritoFrame("iroha_sccp::SccpGroth16Bn254ProofArtifactV1"),
+    ),
   }), /schema hash/u);
   assert.throws(() => normalizeBridgeMessageSubmitPayload({
     authority: AUTHORITY,
@@ -2222,20 +2661,44 @@ test("Torii exact client constructs fixed query-free endpoints and content negot
   ]);
 });
 
-test("Torii SCCP Norito preflight accepts only the canonical zero-padding frame", async () => {
-  const frame = sccpNoritoFrame(PROOF_REQUEST_NORITO_TYPE);
-  const streamed = response(null, {
-    contentType: "application/x-norito",
-    bytes: frame,
-  });
-  const client = new ToriiClient("https://example.invalid", {
-    fetchImpl: async () => streamed,
-  });
-  assert.deepEqual(
-    Buffer.from(await client.getSccpProofRequest(MESSAGE_ID, { format: "norito" })),
-    frame,
+test("Torii SCCP Norito preflight accepts both concrete request types with zero padding", async () => {
+  for (const typeName of [PROOF_REQUEST_NORITO_TYPE, TON_PROOF_REQUEST_NORITO_TYPE]) {
+    const frame = sccpNoritoFrame(typeName);
+    const streamed = response(null, {
+      contentType: "application/x-norito",
+      bytes: frame,
+    });
+    const client = new ToriiClient("https://example.invalid", {
+      fetchImpl: async () => streamed,
+    });
+    assert.deepEqual(
+      Buffer.from(await client.getSccpProofRequest(MESSAGE_ID, { format: "norito" })),
+      frame,
+    );
+    assert.equal(streamed.streamState.released, true);
+  }
+});
+
+test("destination submit admits the 128 KiB outer allowance and rejects its base64 overflow", () => {
+  const legacyMaximum = 16 * 1024 * 1024 + 64 * 1024;
+  const outerMaximum = 16 * 1024 * 1024 + 128 * 1024;
+  assert.equal(4 * Math.ceil(outerMaximum / 3), 22_544_384);
+  assert.throws(
+    () => normalizeBridgeProofSubmitPayload({
+      authority: AUTHORITY,
+      fee_payment: feePayment(),
+      destination_proof_b64: Buffer.alloc(legacyMaximum + 1).toString("base64"),
+    }),
+    /not an NRT0 frame/u,
   );
-  assert.equal(streamed.streamState.released, true);
+  assert.throws(
+    () => normalizeBridgeProofSubmitPayload({
+      authority: AUTHORITY,
+      fee_payment: feePayment(),
+      destination_proof_b64: Buffer.alloc(outerMaximum + 1).toString("base64"),
+    }),
+    /byte-size bound/u,
+  );
 });
 
 test("Torii SCCP Norito preflight rejects malformed and cross-type frames", async () => {
@@ -2258,6 +2721,7 @@ test("Torii SCCP Norito preflight rejects malformed and cross-type frames", asyn
     ["minor version", mutate(5, 1)],
     ["zero schema", Buffer.concat([canonical.subarray(0, 6), Buffer.alloc(16), canonical.subarray(22)])],
     ["wrong response type", sccpNoritoFrame(MESSAGE_BUNDLE_NORITO_TYPE)],
+    ["unknown response type", sccpNoritoFrame("example::UnknownProofRequestV1")],
     ["compressed payload", mutate(22, 1)],
     ["reserved flag", mutate(39, 0x08)],
     ["invalid bitset flags", mutate(39, 0x20)],

@@ -74,9 +74,9 @@ on:
       - "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json"
       - "integration_tests/tests/native_escrow.rs"
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
-      - "scripts/check_native_sdk_abi22_artifact.py"
+      - "scripts/check_native_sdk_abi23_artifact.py"
       - "scripts/compute_workspace_source_manifest.py"
-      - "scripts/tests/check_native_sdk_abi22_artifact_test.py"
+      - "scripts/tests/check_native_sdk_abi23_artifact_test.py"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "roadmap.md"
       - "specs/sorafs/v1_closure_ledger.md"
@@ -154,7 +154,7 @@ jobs:
       - name: Shell syntax
         run: bash -n ci/check_kagemusha_candidate_android_lab.sh ci/check_kagemusha_jvm_native_bridge.sh ci/check_swift_pod_bridge.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/check_swift_pod_bridge.sh scripts/deploy_localnet.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh scripts/tests/mobile_sdk_python312_contract.sh
       - name: Python syntax
-        run: PYTHONPYCACHEPREFIX="$RUNNER_TEMP/mobile-sdk-pycache" python3 -I -S -B -m py_compile scripts/archive_norito_xcframework.py scripts/tests/archive_norito_xcframework_test.py scripts/render_norito_bridge_podspec.py scripts/tests/render_norito_bridge_podspec_test.py scripts/tests/norito_bridge_source_seal_test.py scripts/norito_bridge_apple_slice_handoff.py scripts/tests/norito_bridge_apple_slice_handoff_test.py scripts/tests/package_mobile_sdk_artifacts_test.py scripts/update_norito_bridge_swift_pins.py scripts/tests/update_norito_bridge_swift_pins_test.py scripts/validate_norito_bridge_xcframework.py scripts/tests/validate_norito_bridge_xcframework_test.py scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/check_native_sdk_abi22_artifact.py scripts/tests/check_native_sdk_abi22_artifact_test.py scripts/exec_with_file_lock.py scripts/tests/exec_with_file_lock_test.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py scripts/kagemusha_mobile_production_authorization.py scripts/tests/kagemusha_mobile_production_authorization_test.py
+        run: PYTHONPYCACHEPREFIX="$RUNNER_TEMP/mobile-sdk-pycache" python3 -I -S -B -m py_compile scripts/archive_norito_xcframework.py scripts/tests/archive_norito_xcframework_test.py scripts/render_norito_bridge_podspec.py scripts/tests/render_norito_bridge_podspec_test.py scripts/tests/norito_bridge_source_seal_test.py scripts/norito_bridge_apple_slice_handoff.py scripts/tests/norito_bridge_apple_slice_handoff_test.py scripts/tests/package_mobile_sdk_artifacts_test.py scripts/update_norito_bridge_swift_pins.py scripts/tests/update_norito_bridge_swift_pins_test.py scripts/validate_norito_bridge_xcframework.py scripts/tests/validate_norito_bridge_xcframework_test.py scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/check_native_sdk_abi23_artifact.py scripts/tests/check_native_sdk_abi23_artifact_test.py scripts/exec_with_file_lock.py scripts/tests/exec_with_file_lock_test.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py scripts/kagemusha_mobile_production_authorization.py scripts/tests/kagemusha_mobile_production_authorization_test.py
       - name: Deterministic NoritoBridge archive owner fixtures
         run: python3 -I -S -B scripts/tests/archive_norito_xcframework_test.py
       - name: NoritoBridge CocoaPods spec renderer fixtures
@@ -172,7 +172,7 @@ jobs:
       - name: Shared output lock fixtures
         run: python3 -I -S -B scripts/tests/exec_with_file_lock_test.py
       - name: Host native ABI-23 artifact checker fixtures
-        run: python3 -B -m pytest -q scripts/tests/check_native_sdk_abi22_artifact_test.py
+        run: python3 -B -m pytest -q scripts/tests/check_native_sdk_abi23_artifact_test.py
       - name: Android app native archive authenticator fixtures
         run: python3 -I -B scripts/tests/check_android_app_native_archive_test.py
       - name: Kagemusha mobile production authorization fixtures

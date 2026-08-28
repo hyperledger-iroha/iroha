@@ -708,9 +708,9 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
         'cargo build --locked --release -p connect_norito_bridge --target "$target"'
         in parity
     )
-    assert "check_native_sdk_abi22_artifact.py record" in parity
-    assert "check_native_sdk_abi22_artifact.py verify" in parity
-    assert "native-sdk-abi22.json" in parity
+    assert "check_native_sdk_abi23_artifact.py record" in parity
+    assert "check_native_sdk_abi23_artifact.py verify" in parity
+    assert "native-sdk-abi23.json" in parity
     assert "ABI-21" not in parity
     assert (
         "dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore "
@@ -811,7 +811,7 @@ def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_sk
     assert 'export PATH="${VIRTUAL_ENV}/bin:${PATH}"' in runner
     assert '"${VENV_PYTHON}" -m maturin develop --release --locked' in runner
     assert (
-        '"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"'
+        '"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py"'
         in runner
     )
     assert "tests/cancel_asset_lock_v1_test.py" in runner

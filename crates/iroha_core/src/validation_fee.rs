@@ -3055,16 +3055,20 @@ fn enforce_policy_with_credit_and_hijiri(
             resolve_fee_coordinate_context(coordinate, &transfer_collection.transfers)
         })
         .transpose()?;
+    // The signed metadata describes the explicitly coordinated fee context. For ordinary
+    // transactions that is context zero; a multisig proposal can instead coordinate a nested
+    // execution account whose account-bound Hijiri quote hash necessarily differs from its signer.
+    let metadata_fee_context_index = explicit_fee_context_index.unwrap_or(0);
     let mut requires_policy_metadata = false;
     let mut credited_minor_units = 0_u64;
-    let mut top_level_hijiri_quote_hash = None;
+    let mut metadata_hijiri_quote_hash = None;
     for (context_index, context) in transfer_collection.contexts.iter().enumerate() {
         let resolved_hijiri =
             resolve_hijiri_fee(hijiri, &context.execution_account_id, resolve_account_risk)?;
-        if context_index == 0 {
-            top_level_hijiri_quote_hash = resolved_hijiri.map(|resolved| resolved.quote_hash);
+        if context_index == metadata_fee_context_index {
+            metadata_hijiri_quote_hash = resolved_hijiri.map(|resolved| resolved.quote_hash);
             if metadata_contains_validation_fee {
-                validate_policy_metadata(tx.metadata(), policy, top_level_hijiri_quote_hash)?;
+                validate_policy_metadata(tx.metadata(), policy, metadata_hijiri_quote_hash)?;
             }
         }
         let transaction_fee_coordinate = if explicit_fee_context_index == Some(context_index) {
@@ -3107,7 +3111,7 @@ fn enforce_policy_with_credit_and_hijiri(
         }
     }
     if requires_policy_metadata && !metadata_contains_validation_fee {
-        validate_policy_metadata(tx.metadata(), policy, top_level_hijiri_quote_hash)?;
+        validate_policy_metadata(tx.metadata(), policy, metadata_hijiri_quote_hash)?;
     }
     Ok(credited_minor_units)
 }

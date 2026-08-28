@@ -68,6 +68,8 @@ pub const SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER: u64 = 1_000_000_000;
 pub const SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER: u64 = 1;
 /// Exact Taira(9-decimal) to TON Jetton(9-decimal) base-unit multiplier.
 pub const SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER: u64 = 1;
+/// Exact storage-layout version required by the first-release TON contracts.
+pub const SCCP_V1_TON_STORAGE_VERSION: u8 = 1;
 /// Exact first-release SORA-side IVM semantics selected by route governance.
 pub const SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS: &str = "ivm_proved_record_sccp_message_v1";
 /// Fixed upper bound for one governed SORA-side outbound IVM execution.
@@ -256,6 +258,9 @@ pub enum SccpRouteValidationError {
     /// Settlement names a SORA asset other than canonical live Taira XOR.
     #[error("SCCP V1 settlement asset must be canonical live Taira XOR")]
     SettlementAssetMismatch,
+    /// Route liability and destination supply ceilings are zero, overflow, or disagree.
+    #[error("SCCP route requires matching positive immutable liability and wrapped-supply caps")]
+    InvalidSupplyCap,
     /// Registration attempted to bypass staged review.
     #[error("new SCCP routes must be registered in staged state")]
     RegistrationMustBeStaged,
@@ -1126,6 +1131,8 @@ pub struct SccpEvmDestinationDeploymentV1 {
     pub route_code_hash: [u8; 32],
     /// Exact Taira base-unit to wrapped-token base-unit multiplier.
     pub taira_to_token_multiplier: u64,
+    /// Positive immutable maximum wrapped-token supply in destination base units.
+    pub max_wrapped_supply: u128,
 }
 /// Exact TRON verifier, route, and TRC-20 deployment identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
@@ -1154,6 +1161,8 @@ pub struct SccpTronDestinationDeploymentV1 {
     pub route_code_hash: [u8; 32],
     /// Exact Taira base-unit to wrapped-token base-unit multiplier.
     pub taira_to_token_multiplier: u64,
+    /// Positive immutable maximum wrapped-token supply in destination base units.
+    pub max_wrapped_supply: u128,
 }
 /// Exact immutable Solana route and native-verifier deployment identity.
 ///
@@ -1202,6 +1211,8 @@ pub struct SccpSolanaDestinationDeploymentV1 {
     pub outbound_proof_policy: SccpOutboundProofPolicyV1,
     /// Exact Taira base-unit to SPL-token base-unit multiplier.
     pub taira_to_token_multiplier: u64,
+    /// Positive immutable maximum wrapped-token supply in destination base units.
+    pub max_wrapped_supply: u128,
 }
 /// Exact TON Jetton route and BLS12-381 Groth16 verifier deployment identity.
 ///
@@ -1223,12 +1234,22 @@ pub struct SccpTonDestinationDeploymentV1 {
     pub jetton_master_address: SccpTonAddressV1,
     /// TON representation hash of the immutable Jetton master code cell.
     pub jetton_master_code_hash: [u8; 32],
+    /// TON representation hash of the canonical initial Jetton master data cell.
+    ///
+    /// The committed cell contains the exact governed bridge configuration,
+    /// zero total supply, and empty mint/burn replay dictionaries.
+    pub jetton_master_initial_data_hash: [u8; 32],
     /// TON representation hash of the wallet code committed by the Jetton master.
     pub jetton_wallet_code_hash: [u8; 32],
     /// Canonical raw value-moving SCCP destination-route contract address.
     pub route_address: SccpTonAddressV1,
     /// TON representation hash of the immutable destination-route code cell.
     pub route_code_hash: [u8; 32],
+    /// TON representation hash of the canonical initial destination-route data cell.
+    ///
+    /// The committed cell contains the exact governed bridge configuration,
+    /// zero refund sequence, and empty nonce, replay, and pending dictionaries.
+    pub route_initial_data_hash: [u8; 32],
     /// TON representation hash of the immutable BLS12-381 Groth16 verifier
     /// code linked into the route contract.
     pub embedded_verifier_code_hash: [u8; 32],
@@ -1244,6 +1265,8 @@ pub struct SccpTonDestinationDeploymentV1 {
     pub outbound_proof_policy: SccpOutboundProofPolicyV1,
     /// Exact Taira base-unit to Jetton base-unit multiplier.
     pub taira_to_token_multiplier: u64,
+    /// Positive immutable maximum wrapped-token supply in destination base units.
+    pub max_wrapped_supply: u128,
 }
 /// Closed family-specific destination deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
@@ -1271,6 +1294,28 @@ pub enum SccpDestinationDeploymentV1 {
     Ton(SccpTonDestinationDeploymentV1),
 }
 impl SccpDestinationDeploymentV1 {
+    /// Return the positive governed wrapped-supply ceiling.
+    #[must_use]
+    pub const fn max_wrapped_supply(&self) -> u128 {
+        match self {
+            Self::Evm(deployment) => deployment.max_wrapped_supply,
+            Self::Tron(deployment) => deployment.max_wrapped_supply,
+            Self::Solana(deployment) => deployment.max_wrapped_supply,
+            Self::Ton(deployment) => deployment.max_wrapped_supply,
+        }
+    }
+
+    /// Return the exact Taira-to-destination base-unit multiplier.
+    #[must_use]
+    pub const fn taira_to_token_multiplier(&self) -> u64 {
+        match self {
+            Self::Evm(deployment) => deployment.taira_to_token_multiplier,
+            Self::Tron(deployment) => deployment.taira_to_token_multiplier,
+            Self::Solana(deployment) => deployment.taira_to_token_multiplier,
+            Self::Ton(deployment) => deployment.taira_to_token_multiplier,
+        }
+    }
+
     /// Return the exact governed destination verification-key commitment.
     #[must_use]
     pub const fn verifier_key_hash(&self) -> [u8; 32] {
@@ -1434,6 +1479,8 @@ pub struct SccpSoraSettlementV1 {
     pub custody_owner: AccountId,
     /// Decimal scale used by the SCCP unsigned amount field.
     pub payload_amount_scale: u32,
+    /// Positive immutable ceiling for route escrow liability in Taira base units.
+    pub max_outstanding_liability: u128,
 }
 /// Derive the non-signable protocol escrow account for one exact SCCP route.
 ///
@@ -1470,6 +1517,9 @@ impl SccpSoraSettlementV1 {
         }
         if self.payload_amount_scale != SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE {
             return Err(SccpRouteValidationError::InvalidSettlementScale);
+        }
+        if self.max_outstanding_liability == 0 {
+            return Err(SccpRouteValidationError::InvalidSupplyCap);
         }
         Ok(())
     }
@@ -1616,6 +1666,16 @@ impl SccpGovernedRouteV1 {
         self.settlement.validate()?;
         self.sora_outbound_execution_policy.validate()?;
         self.destination.validate_for_lane(self.lane_id)?;
+        let expected_wrapped_supply = self
+            .settlement
+            .max_outstanding_liability
+            .checked_mul(u128::from(self.destination.taira_to_token_multiplier()))
+            .ok_or(SccpRouteValidationError::InvalidSupplyCap)?;
+        if self.destination.max_wrapped_supply() == 0
+            || self.destination.max_wrapped_supply() != expected_wrapped_supply
+        {
+            return Err(SccpRouteValidationError::InvalidSupplyCap);
+        }
         if self.source_identity.lane != self.lane_id || !self.source_identity.is_well_formed() {
             return Err(SccpRouteValidationError::SourceDestinationMismatch);
         }
@@ -1653,6 +1713,19 @@ impl SccpGovernedRouteV1 {
             outbound_proof_policy.semantic_profile_hash()?,
             outbound_proof_policy.sora_finality_anchor_hash()?,
         ])?;
+        if let SccpDestinationDeploymentV1::Ton(deployment) = self.destination {
+            validate_hash_roles(&[
+                self.sora_outbound_execution_policy.contract_artifact_sha256,
+                self.sora_outbound_execution_policy.vk_ref.commitment,
+                route_config_hash,
+                destination_binding_hash,
+                deployment.jetton_master_initial_data_hash,
+                deployment.route_initial_data_hash,
+                self.destination.verifier_key_hash(),
+                outbound_proof_policy.semantic_profile_hash()?,
+                outbound_proof_policy.sora_finality_anchor_hash()?,
+            ])?;
+        }
         if !source_matches_destination(
             self.source_identity.emitter,
             &self.destination,
@@ -2485,13 +2558,21 @@ pub fn sccp_solana_destination_binding_hash_v1(
     payload.extend_from_slice(&finality_anchor_hash);
     Ok(keccak256(payload))
 }
-/// Derive the TON destination binding from raw addresses and immutable code,
+/// Derive the pre-deployment TON destination binding from immutable code,
 /// BLS12-381 Groth16 verifier, proof-profile, and Taira-finality commitments.
 ///
-/// Integers in this registry commitment are little-endian. Raw TON addresses
-/// use a signed i32 workchain followed by the account id; this differs from the
-/// big-endian external TON raw-address byte encoding exposed by
-/// [`canonical_sccp_ton_raw_address_bytes_v1`].
+/// Integers in this registry commitment are little-endian. After the domains,
+/// the V1 preimage commits master code/wallet-code, route code, verifier
+/// code/circuit/key/proof profile, and semantic/finality policy hashes, in that
+/// order. TON contract addresses and actual initial-data roots are deliberately
+/// excluded: StateInit derives those values from data cells that already store
+/// this binding and the route-configuration hash, so feeding them back would
+/// require an infeasible cryptographic fixed point. The full governed
+/// [`SccpTonDestinationDeploymentV1`] and signed release readback bind both
+/// addresses and both exact initial-data roots after deployment.
+/// Consequently, this direct primitive helper can be evaluated with placeholder
+/// address/data-root fields during StateInit construction; the enum-level
+/// deployment APIs still require the final nonzero governed values.
 ///
 /// # Errors
 ///
@@ -2501,7 +2582,7 @@ pub fn sccp_ton_destination_binding_hash_v1(
     network: SccpNetworkV1,
     deployment: &SccpTonDestinationDeploymentV1,
 ) -> Result<[u8; 32], SccpRouteValidationError> {
-    validate_ton_deployment(deployment)?;
+    validate_ton_commitment_primitives(deployment)?;
     let global_id = match network {
         SccpNetworkV1::TonMainnet => SCCP_TON_MAINNET_GLOBAL_ID_V1,
         SccpNetworkV1::TonTestnet => SCCP_TON_TESTNET_GLOBAL_ID_V1,
@@ -2519,12 +2600,13 @@ pub fn sccp_ton_destination_binding_hash_v1(
     push_i32(&mut payload, global_id);
     push_u32(&mut payload, SCCP_DOMAIN_SORA);
     push_u32(&mut payload, SCCP_DOMAIN_TON);
-    push_ton_registry_address(&mut payload, deployment.route_address);
+    payload.extend_from_slice(&deployment.jetton_master_code_hash);
+    payload.extend_from_slice(&deployment.jetton_wallet_code_hash);
+    payload.extend_from_slice(&deployment.route_code_hash);
     payload.extend_from_slice(&deployment.embedded_verifier_code_hash);
     payload.extend_from_slice(&deployment.verifier_circuit_hash);
     payload.extend_from_slice(&deployment.verifier_key_hash);
     payload.extend_from_slice(&deployment.proof_profile_commitment);
-    payload.extend_from_slice(&deployment.route_code_hash);
     payload.extend_from_slice(&semantic_profile_hash);
     payload.extend_from_slice(&finality_anchor_hash);
     Ok(sha256_bytes(&payload))
@@ -2605,6 +2687,7 @@ pub fn sccp_solana_native_verifier_config_hash_v1(
     payload.push(asset_len);
     payload.extend_from_slice(asset_key.as_bytes());
     payload.extend_from_slice(&multiplier);
+    payload.extend_from_slice(&deployment.max_wrapped_supply.to_le_bytes());
     payload.extend_from_slice(&deployment.verifier_key_hash);
     payload.extend_from_slice(&deployment.native_verifier_program_id);
     payload.extend_from_slice(&deployment.route_program_id);
@@ -2670,11 +2753,12 @@ pub fn sccp_exact_evm_xor_route_config_hash_v1(
     deployment_config.extend_from_slice(&semantic_profile_hash);
     deployment_config.extend_from_slice(&finality_anchor_hash);
     let deployment_config_hash = keccak256(deployment_config);
-    let mut asset_route = Vec::with_capacity(32 * 4);
+    let mut asset_route = Vec::with_capacity(32 * 5);
     asset_route.extend_from_slice(&keccak256(b"xor"));
     asset_route.extend_from_slice(&keccak256(route_id));
     asset_route.extend_from_slice(&abi_word_u32(route_revision));
     asset_route.extend_from_slice(&abi_word_u64(deployment.taira_to_token_multiplier));
+    asset_route.extend_from_slice(&abi_word_u128(deployment.max_wrapped_supply));
     let asset_route_config_hash = keccak256(asset_route);
     let mut payload = Vec::with_capacity(32 * 8);
     payload.extend_from_slice(&keccak256(CONCRETE_ROUTE_CONFIG_DOMAIN_V1));
@@ -2736,11 +2820,12 @@ pub fn sccp_exact_tron_xor_route_config_hash_v1(
     deployment_config.extend_from_slice(&finality_anchor_hash);
     deployment_config.extend_from_slice(&destination_binding_hash);
     let deployment_config_hash = keccak256(deployment_config);
-    let mut asset_route = Vec::with_capacity(32 * 4);
+    let mut asset_route = Vec::with_capacity(32 * 5);
     asset_route.extend_from_slice(&keccak256(b"xor"));
     asset_route.extend_from_slice(&keccak256(b"taira_tron_xor"));
     asset_route.extend_from_slice(&abi_word_u32(route_revision));
     asset_route.extend_from_slice(&abi_word_u64(deployment.taira_to_token_multiplier));
+    asset_route.extend_from_slice(&abi_word_u128(deployment.max_wrapped_supply));
     let asset_route_config_hash = keccak256(asset_route);
     let mut payload = Vec::with_capacity(32 * 8);
     payload.extend_from_slice(&keccak256(CONCRETE_ROUTE_CONFIG_DOMAIN_V1));
@@ -2816,6 +2901,7 @@ pub fn sccp_exact_solana_xor_route_config_hash_v1(
     asset_route.extend_from_slice(b"taira_sol_xor");
     push_u32(&mut asset_route, route_revision);
     push_u64(&mut asset_route, deployment.taira_to_token_multiplier);
+    push_u128(&mut asset_route, deployment.max_wrapped_supply);
     let asset_route_config_hash = keccak256(asset_route);
     let mut payload = Vec::with_capacity(256);
     payload.extend_from_slice(CONCRETE_ROUTE_CONFIG_DOMAIN_V1);
@@ -2834,8 +2920,13 @@ pub fn sccp_exact_solana_xor_route_config_hash_v1(
 /// The SHA-256 preimage is an explicit little-endian SCCP registry encoding.
 /// It commits the TON zero-state-selected profile transitively through the
 /// network tag/global id, both directional lanes, every destination contract
-/// and code identity, the BLS12-381 verifier circuit/key/profile, and the
-/// governed Taira semantic statement and finality anchor.
+/// code identity, the BLS12-381 verifier circuit/key/profile, and the governed
+/// Taira semantic statement and finality anchor. Contract addresses and actual
+/// initial-data roots remain in the governed deployment object but are omitted
+/// from this pre-deployment hash to avoid a StateInit cryptographic fixed point.
+/// This direct helper therefore depends only on the primitive fields even when
+/// its deployment argument still carries placeholder post-StateInit values;
+/// enum-level route validation requires the final governed values.
 ///
 /// # Errors
 ///
@@ -2848,7 +2939,7 @@ pub fn sccp_exact_ton_xor_route_config_hash_v1(
     deployment: &SccpTonDestinationDeploymentV1,
     route_revision: u32,
 ) -> Result<[u8; 32], SccpRouteValidationError> {
-    validate_ton_deployment(deployment)?;
+    validate_ton_commitment_primitives(deployment)?;
     if route_revision == 0 {
         return Err(SccpRouteValidationError::InvalidRouteRevision);
     }
@@ -2878,10 +2969,8 @@ pub fn sccp_exact_ton_xor_route_config_hash_v1(
         destination_binding_hash,
     ])?;
     let mut deployment_config = Vec::with_capacity(640);
-    push_ton_registry_address(&mut deployment_config, deployment.jetton_master_address);
     deployment_config.extend_from_slice(&deployment.jetton_master_code_hash);
     deployment_config.extend_from_slice(&deployment.jetton_wallet_code_hash);
-    push_ton_registry_address(&mut deployment_config, deployment.route_address);
     deployment_config.extend_from_slice(&deployment.route_code_hash);
     deployment_config.extend_from_slice(&deployment.embedded_verifier_code_hash);
     deployment_config.extend_from_slice(&deployment.verifier_circuit_hash);
@@ -2896,6 +2985,7 @@ pub fn sccp_exact_ton_xor_route_config_hash_v1(
     push_vec(&mut asset_route, b"taira_ton_xor");
     push_u32(&mut asset_route, route_revision);
     push_u64(&mut asset_route, deployment.taira_to_token_multiplier);
+    push_u128(&mut asset_route, deployment.max_wrapped_supply);
     let asset_route_config_hash = sha256_bytes(&asset_route);
     let mut payload = Vec::with_capacity(256);
     payload.extend_from_slice(CONCRETE_ROUTE_CONFIG_DOMAIN_V1);
@@ -2958,7 +3048,9 @@ fn validate_concrete_route_identity(
 fn validate_evm_deployment(
     deployment: &SccpEvmDestinationDeploymentV1,
 ) -> Result<(), SccpRouteValidationError> {
-    if deployment.taira_to_token_multiplier != SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER {
+    if deployment.taira_to_token_multiplier != SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER
+        || deployment.max_wrapped_supply == 0
+    {
         return Err(SccpRouteValidationError::ConcreteRouteMismatch);
     }
     validate_nonzero("token_address", &deployment.token_address)?;
@@ -2993,7 +3085,9 @@ fn validate_evm_deployment(
 fn validate_tron_deployment(
     deployment: &SccpTronDestinationDeploymentV1,
 ) -> Result<(), SccpRouteValidationError> {
-    if deployment.taira_to_token_multiplier != SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER {
+    if deployment.taira_to_token_multiplier != SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER
+        || deployment.max_wrapped_supply == 0
+    {
         return Err(SccpRouteValidationError::ConcreteRouteMismatch);
     }
     validate_nonzero("token_address", &deployment.token_address)?;
@@ -3028,7 +3122,9 @@ fn validate_tron_deployment(
 fn validate_solana_deployment(
     deployment: &SccpSolanaDestinationDeploymentV1,
 ) -> Result<(), SccpRouteValidationError> {
-    if deployment.taira_to_token_multiplier != SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER {
+    if deployment.taira_to_token_multiplier != SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER
+        || deployment.max_wrapped_supply == 0
+    {
         return Err(SccpRouteValidationError::ConcreteRouteMismatch);
     }
     if deployment.route_program_data_slot == 0 || deployment.native_verifier_program_data_slot == 0
@@ -3071,9 +3167,7 @@ fn validate_solana_deployment(
 fn validate_ton_deployment(
     deployment: &SccpTonDestinationDeploymentV1,
 ) -> Result<(), SccpRouteValidationError> {
-    if deployment.taira_to_token_multiplier != SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER {
-        return Err(SccpRouteValidationError::ConcreteRouteMismatch);
-    }
+    validate_ton_commitment_primitives(deployment)?;
     let addresses = [deployment.jetton_master_address, deployment.route_address];
     if addresses
         .iter()
@@ -3082,6 +3176,32 @@ fn validate_ton_deployment(
         return Err(SccpRouteValidationError::InvalidTonAddress);
     }
     validate_distinct(&addresses)?;
+    let semantic_profile_hash = deployment.outbound_proof_policy.semantic_profile_hash()?;
+    let finality_anchor_hash = deployment
+        .outbound_proof_policy
+        .sora_finality_anchor_hash()?;
+    validate_hash_roles(&[
+        deployment.jetton_master_code_hash,
+        deployment.jetton_master_initial_data_hash,
+        deployment.jetton_wallet_code_hash,
+        deployment.route_code_hash,
+        deployment.route_initial_data_hash,
+        deployment.embedded_verifier_code_hash,
+        deployment.verifier_circuit_hash,
+        deployment.verifier_key_hash,
+        deployment.proof_profile_commitment,
+        semantic_profile_hash,
+        finality_anchor_hash,
+    ])
+}
+fn validate_ton_commitment_primitives(
+    deployment: &SccpTonDestinationDeploymentV1,
+) -> Result<(), SccpRouteValidationError> {
+    if deployment.taira_to_token_multiplier != SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER
+        || deployment.max_wrapped_supply == 0
+    {
+        return Err(SccpRouteValidationError::ConcreteRouteMismatch);
+    }
     let derived_key_hash = sccp_groth16_bls12381_verifying_key_hash_v1(deployment.verifying_key)?;
     if derived_key_hash != deployment.verifier_key_hash {
         return Err(SccpRouteValidationError::Groth16VerifyingKeyHashMismatch);
@@ -3185,19 +3305,18 @@ fn source_matches_destination(
             else {
                 return false;
             };
-            source.route_config_hash == route_config_hash
-                && validate_distinct(&[
-                    source.address,
-                    deployment.jetton_master_address,
-                    deployment.route_address,
-                ])
-                .is_ok()
+            source.address == deployment.route_address
+                && source.code_hash == deployment.route_code_hash
+                && source.route_config_hash == route_config_hash
+                && validate_distinct(&[deployment.jetton_master_address, deployment.route_address])
+                    .is_ok()
                 && validate_hash_roles(&[
-                    source.code_hash,
                     source.route_config_hash,
                     deployment.jetton_master_code_hash,
+                    deployment.jetton_master_initial_data_hash,
                     deployment.jetton_wallet_code_hash,
                     deployment.route_code_hash,
+                    deployment.route_initial_data_hash,
                     deployment.embedded_verifier_code_hash,
                     deployment.verifier_circuit_hash,
                     deployment.verifier_key_hash,
@@ -3289,6 +3408,11 @@ fn abi_word_u64(value: u64) -> [u8; 32] {
     word[24..].copy_from_slice(&value.to_be_bytes());
     word
 }
+fn abi_word_u128(value: u128) -> [u8; 32] {
+    let mut word = [0u8; 32];
+    word[16..].copy_from_slice(&value.to_be_bytes());
+    word
+}
 fn abi_word_bytes20(value: [u8; 20]) -> [u8; 32] {
     let mut word = [0u8; 32];
     word[12..].copy_from_slice(&value);
@@ -3310,6 +3434,9 @@ fn push_u16(out: &mut Vec<u8>, value: u16) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 fn push_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+fn push_u128(out: &mut Vec<u8>, value: u128) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 fn push_vec(out: &mut Vec<u8>, value: &[u8]) {
@@ -3351,6 +3478,12 @@ fn blake2b256(prefix: &[u8], payload: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
+
+    const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
+        TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
+    }
     use norito::codec::DecodeAll as _;
     const SIGNATORY: &str =
         "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
@@ -3505,6 +3638,7 @@ mod tests {
             route_address: [0x50_u8.wrapping_add(revision_byte); 20],
             route_code_hash: [0x60_u8.wrapping_add(revision_byte); 32],
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
+            max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
         }
     }
     fn tron_deployment() -> SccpTronDestinationDeploymentV1 {
@@ -3521,6 +3655,7 @@ mod tests {
             route_address: [0x51; 20],
             route_code_hash: [0x61; 32],
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
+            max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
         }
     }
     fn tron_lane(source: SccpNetworkV1) -> SccpLaneIdV1 {
@@ -3572,6 +3707,7 @@ mod tests {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
                 custody_owner: AccountId::new(SIGNATORY.parse().expect("valid custody public key")),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+                max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
             },
         }
     }
@@ -3599,9 +3735,11 @@ mod tests {
         SccpTonDestinationDeploymentV1 {
             jetton_master_address: ton_address(0x81),
             jetton_master_code_hash: [0x91; 32],
+            jetton_master_initial_data_hash: [0x89; 32],
             jetton_wallet_code_hash: [0x92; 32],
             route_address: ton_address(0x82),
             route_code_hash: [0x93; 32],
+            route_initial_data_hash: [0x8a; 32],
             embedded_verifier_code_hash: [0x94; 32],
             verifier_circuit_hash: [0x95; 32],
             verifying_key,
@@ -3610,6 +3748,7 @@ mod tests {
             proof_profile_commitment: [0x97; 32],
             outbound_proof_policy: ton_outbound_proof_policy(),
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER,
+            max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER),
         }
     }
     fn ton_route(
@@ -3644,8 +3783,8 @@ mod tests {
             source_identity: SccpSourceIdentityV1 {
                 lane,
                 emitter: SccpSourceEmitterV1::Ton(SccpTonSourceEmitterV1 {
-                    address: ton_address(0x84),
-                    code_hash: [0x98; 32],
+                    address: deployment.route_address,
+                    code_hash: deployment.route_code_hash,
                     route_config_hash,
                 }),
             },
@@ -3655,6 +3794,7 @@ mod tests {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
                 custody_owner: AccountId::new(SIGNATORY.parse().expect("valid custody public key")),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+                max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
             },
         }
     }
@@ -3716,6 +3856,7 @@ mod tests {
                 .expect("valid structural verification key"),
             outbound_proof_policy: solana_outbound_proof_policy(),
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER,
+            max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER),
         };
         deployment.native_verifier_config_hash = sccp_solana_native_verifier_config_hash_v1(
             solana_lane(),
@@ -3770,6 +3911,7 @@ mod tests {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
                 custody_owner: AccountId::new(SIGNATORY.parse().expect("valid custody public key")),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+                max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
             },
         }
     }
@@ -3819,6 +3961,7 @@ mod tests {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
                 custody_owner: AccountId::new(SIGNATORY.parse().expect("valid custody public key")),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+                max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
             },
         }
     }
@@ -4088,16 +4231,33 @@ mod tests {
             destination_lane_hash,
             hex32("7e68f921bbe63831f95498b695850630818a2a09c0215f4722199a38ec5f55f2")
         );
+        let deployment = tron_deployment();
+        let route_hash = sccp_exact_tron_xor_route_config_hash_v1(
+            SccpNetworkV1::TronNile,
+            source_lane_hash,
+            destination_lane_hash,
+            &deployment,
+            7,
+        )
+        .expect("valid exact TRON route");
         assert_eq!(
+            route_hash,
+            hex32("2c4188bc7a1fecaf6d909f713211ad1363202729f79e745f48b026da67049505")
+        );
+        let changed_cap = SccpTronDestinationDeploymentV1 {
+            max_wrapped_supply: deployment.max_wrapped_supply - 1,
+            ..deployment
+        };
+        assert_ne!(
+            route_hash,
             sccp_exact_tron_xor_route_config_hash_v1(
                 SccpNetworkV1::TronNile,
                 source_lane_hash,
                 destination_lane_hash,
-                &tron_deployment(),
+                &changed_cap,
                 7,
             )
-            .expect("valid exact TRON route"),
-            hex32("0693ffd2ae1fb413a74672a892b28f931209795733aca8e522015431aa8e567f")
+            .expect("positive changed cap remains hashable")
         );
     }
     #[test]
@@ -4179,6 +4339,66 @@ mod tests {
 
         let binding = sccp_ton_destination_binding_hash_v1(lane.source, &deployment)
             .expect("TON destination binding");
+        let governed_deployment_bytes =
+            norito::to_bytes(&deployment).expect("governed TON deployment must encode canonically");
+        let mut changed_master_data = deployment;
+        changed_master_data.jetton_master_initial_data_hash[0] ^= 1;
+        assert_eq!(
+            binding,
+            sccp_ton_destination_binding_hash_v1(lane.source, &changed_master_data)
+                .expect("post-deployment TON master data must not form a binding fixed point")
+        );
+        assert_ne!(
+            governed_deployment_bytes,
+            norito::to_bytes(&changed_master_data).expect("changed TON master data must encode")
+        );
+        let mut changed_route_data = deployment;
+        changed_route_data.route_initial_data_hash[0] ^= 1;
+        assert_eq!(
+            binding,
+            sccp_ton_destination_binding_hash_v1(lane.source, &changed_route_data)
+                .expect("post-deployment TON route data must not form a binding fixed point")
+        );
+        assert_ne!(
+            governed_deployment_bytes,
+            norito::to_bytes(&changed_route_data).expect("changed TON route data must encode")
+        );
+        let changed_addresses = SccpTonDestinationDeploymentV1 {
+            jetton_master_address: ton_address(0x85),
+            route_address: ton_address(0x83),
+            ..deployment
+        };
+        assert_eq!(
+            binding,
+            sccp_ton_destination_binding_hash_v1(lane.source, &changed_addresses)
+                .expect("post-StateInit TON addresses must not form a binding fixed point")
+        );
+        assert_ne!(
+            governed_deployment_bytes,
+            norito::to_bytes(&changed_addresses).expect("changed TON addresses must encode")
+        );
+        let predeployment = SccpTonDestinationDeploymentV1 {
+            jetton_master_address: SccpTonAddressV1 {
+                workchain: 0,
+                account: [0; 32],
+            },
+            jetton_master_initial_data_hash: [0; 32],
+            route_address: SccpTonAddressV1 {
+                workchain: 0,
+                account: [0; 32],
+            },
+            route_initial_data_hash: [0; 32],
+            ..deployment
+        };
+        assert_eq!(
+            binding,
+            sccp_ton_destination_binding_hash_v1(lane.source, &predeployment)
+                .expect("TON primitive binding must be derivable before StateInit")
+        );
+        assert_eq!(
+            SccpDestinationDeploymentV1::Ton(predeployment).validate_for_lane(lane),
+            Err(SccpRouteValidationError::InvalidTonAddress)
+        );
         let source_lane_hash = sccp_lane_id_hash_v1(lane).expect("TON source lane");
         let destination_lane_hash = sccp_lane_id_hash_v1(SccpLaneIdV1 {
             source: lane.target,
@@ -4194,6 +4414,50 @@ mod tests {
         )
         .expect("TON route config");
         assert_ne!(binding, route_hash);
+        assert_eq!(
+            route_hash,
+            sccp_exact_ton_xor_route_config_hash_v1(
+                lane.source,
+                source_lane_hash,
+                destination_lane_hash,
+                &changed_master_data,
+                1,
+            )
+            .expect("post-deployment TON master data must not form a route-config fixed point")
+        );
+        assert_eq!(
+            route_hash,
+            sccp_exact_ton_xor_route_config_hash_v1(
+                lane.source,
+                source_lane_hash,
+                destination_lane_hash,
+                &changed_route_data,
+                1,
+            )
+            .expect("post-deployment TON route data must not form a route-config fixed point")
+        );
+        assert_eq!(
+            route_hash,
+            sccp_exact_ton_xor_route_config_hash_v1(
+                lane.source,
+                source_lane_hash,
+                destination_lane_hash,
+                &changed_addresses,
+                1,
+            )
+            .expect("post-StateInit TON addresses must not form a route-config fixed point")
+        );
+        assert_eq!(
+            route_hash,
+            sccp_exact_ton_xor_route_config_hash_v1(
+                lane.source,
+                source_lane_hash,
+                destination_lane_hash,
+                &predeployment,
+                1,
+            )
+            .expect("TON route config must be derivable before StateInit")
+        );
         assert_ne!(
             binding,
             sccp_ton_destination_binding_hash_v1(SccpNetworkV1::TonTestnet, &deployment)
@@ -4237,7 +4501,19 @@ mod tests {
                 ..deployment
             },
             SccpTonDestinationDeploymentV1 {
+                jetton_master_initial_data_hash: [0; 32],
+                ..deployment
+            },
+            SccpTonDestinationDeploymentV1 {
+                jetton_master_initial_data_hash: deployment.route_initial_data_hash,
+                ..deployment
+            },
+            SccpTonDestinationDeploymentV1 {
                 jetton_wallet_code_hash: deployment.jetton_master_code_hash,
+                ..deployment
+            },
+            SccpTonDestinationDeploymentV1 {
+                route_initial_data_hash: deployment.jetton_master_initial_data_hash,
                 ..deployment
             },
             SccpTonDestinationDeploymentV1 {
@@ -4280,6 +4556,20 @@ mod tests {
             );
         }
 
+        let route_with_derived_hash_alias = ton_route(
+            SccpNetworkV1::TonMainnet,
+            1,
+            SccpRouteActivationV1::Bidirectional,
+            SccpTonDestinationDeploymentV1 {
+                route_initial_data_hash: binding,
+                ..deployment
+            },
+        );
+        assert_eq!(
+            route_with_derived_hash_alias.validate(),
+            Err(SccpRouteValidationError::RoleAlias)
+        );
+
         let route = ton_route(
             SccpNetworkV1::TonMainnet,
             1,
@@ -4299,14 +4589,25 @@ mod tests {
             ),
             Ok(route_hash)
         );
-        let mut aliased_source = route.clone();
-        let SccpSourceEmitterV1::Ton(ref mut source) = aliased_source.source_identity.emitter
+        let mut mismatched_source = route.clone();
+        let SccpSourceEmitterV1::Ton(ref mut source) = mismatched_source.source_identity.emitter
         else {
             unreachable!("TON fixture uses TON source emitter")
         };
-        source.address = deployment.route_address;
+        source.address = ton_address(0x84);
         assert_eq!(
-            aliased_source.validate(),
+            mismatched_source.validate(),
+            Err(SccpRouteValidationError::SourceDestinationMismatch)
+        );
+        let mut mismatched_source_code = route.clone();
+        let SccpSourceEmitterV1::Ton(ref mut source) =
+            mismatched_source_code.source_identity.emitter
+        else {
+            unreachable!("TON fixture uses TON source emitter")
+        };
+        source.code_hash = [0x98; 32];
+        assert_eq!(
+            mismatched_source_code.validate(),
             Err(SccpRouteValidationError::SourceDestinationMismatch)
         );
 
@@ -4322,7 +4623,7 @@ mod tests {
         assert_eq!(source_bytes.len(), 102);
         assert_eq!(&source_bytes[..2], &[1, 3]);
         assert_eq!(&source_bytes[2..6], &0_i32.to_le_bytes());
-        assert_eq!(&source_bytes[6..38], &[0x84; 32]);
+        assert_eq!(&source_bytes[6..38], &[0x82; 32]);
         let source_encoded = source.encode();
         assert_eq!(
             SccpSourceEmitterV1::decode_all(&mut source_encoded.as_slice())

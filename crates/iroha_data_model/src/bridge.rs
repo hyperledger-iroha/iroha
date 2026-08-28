@@ -9,7 +9,9 @@ use std::{string::String, vec::Vec};
 use thiserror::Error;
 /// Versioned SCCP network, lane, and source-identity wire types.
 pub mod sccp;
+mod sccp_liability;
 mod sccp_registry;
+mod sccp_replay;
 pub use sccp::{
     SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1, SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
     SCCP_SOLANA_TESTNET_GENESIS_HASH_V1, SCCP_TON_BASECHAIN_WORKCHAIN_V1,
@@ -24,6 +26,7 @@ pub use sccp::{
     SccpOutboundProofRecordV1, SccpSolanaSourceEmitterV1, SccpSourceEmitterV1,
     SccpSourceIdentityV1, SccpTonAddressV1, SccpTonSourceEmitterV1, SccpTronSourceEmitterV1,
 };
+pub use sccp_liability::SccpRouteLiabilityV1;
 pub use sccp_registry::{
     SCCP_V1_MAX_GOVERNED_LANES, SCCP_V1_MAX_KEY_BYTES, SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
     SCCP_V1_MAX_LIVE_ROUTES_PER_LANE, SCCP_V1_MAX_PAYLOAD_AMOUNT_SCALE,
@@ -31,15 +34,15 @@ pub use sccp_registry::{
     SCCP_V1_MAX_SORA_OUTBOUND_GAS_LIMIT, SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS,
     SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
     SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER, SCCP_V1_TAIRA_XOR_ASSET_DEFINITION_ID,
-    SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
-    SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpGovernedLaneV1,
-    SccpGovernedRouteV1, SccpGroth16Bls12381IcV1, SccpGroth16Bls12381SemanticCircuitV1,
-    SccpGroth16Bls12381VerifyingKeyV1, SccpGroth16Bn254IcV1, SccpGroth16Bn254SemanticCircuitV1,
-    SccpGroth16Bn254VerifyingKeyV1, SccpInboundFinalityCutoffV1, SccpOutboundProofPolicyV1,
-    SccpPortableVerifyingKeyRefV1, SccpRegistryV1, SccpRouteActivationV1, SccpRouteKeyV1,
-    SccpRouteValidationError, SccpSemanticProofProfileV1, SccpSolanaDestinationDeploymentV1,
-    SccpSoraFinalityAnchorV1, SccpSoraOutboundExecutionPolicyV1, SccpSoraSettlementV1,
-    SccpTonDestinationDeploymentV1, SccpTronDestinationDeploymentV1,
+    SCCP_V1_TON_STORAGE_VERSION, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1,
+    SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1,
+    SccpGovernedLaneV1, SccpGovernedRouteV1, SccpGroth16Bls12381IcV1,
+    SccpGroth16Bls12381SemanticCircuitV1, SccpGroth16Bls12381VerifyingKeyV1, SccpGroth16Bn254IcV1,
+    SccpGroth16Bn254SemanticCircuitV1, SccpGroth16Bn254VerifyingKeyV1, SccpInboundFinalityCutoffV1,
+    SccpOutboundProofPolicyV1, SccpPortableVerifyingKeyRefV1, SccpRegistryV1,
+    SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteValidationError, SccpSemanticProofProfileV1,
+    SccpSolanaDestinationDeploymentV1, SccpSoraFinalityAnchorV1, SccpSoraOutboundExecutionPolicyV1,
+    SccpSoraSettlementV1, SccpTonDestinationDeploymentV1, SccpTronDestinationDeploymentV1,
     canonical_sccp_groth16_bls12381_public_signal_schema_bytes_v1,
     canonical_sccp_groth16_bls12381_verifying_key_bytes_v1,
     canonical_sccp_groth16_bn254_public_signal_schema_bytes_v1,
@@ -58,6 +61,14 @@ pub use sccp_registry::{
     sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
     sccp_ton_destination_binding_hash_v1, sccp_tron_destination_binding_hash_v1,
     sccp_v1_taira_xor_asset_definition_id,
+};
+pub use sccp_replay::{
+    SCCP_REPLAY_SMT_DEPTH_V1, SCCP_REPLAY_SMT_MAGIC_V1, SCCP_REPLAY_SMT_MAX_SIBLINGS_V1,
+    SCCP_REPLAY_SMT_SHARD_COUNT_V1, SccpReplayAccumulatorError, SccpReplayAccumulatorIdV1,
+    SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDeltaV1, SccpReplayDomainV1,
+    SccpReplayForestV1, SccpReplayPrincipalV1, SccpReplayRecordV1, SccpSparseMerkleWitnessV1,
+    sccp_replay_domain_hash_v1, sccp_replay_empty_hashes_v1, sccp_replay_key_v1,
+    sccp_replay_record_digest_v1,
 };
 /// Definition metadata for a wrapped asset originating from another chain.
 ///

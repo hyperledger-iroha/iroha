@@ -13,19 +13,13 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
     sync::{
         OnceLock,
-        atomic::{AtomicU16, Ordering},
+        atomic::{AtomicU16, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
-/// Build a mandatory, low-cost SoraNet handshake fixture with isolated replay state.
-fn mandatory_test_soranet_handshake() -> SoranetHandshake {
-    // The runtime owns only the path. Persist this owner-private temporary
-    // directory for the ephemeral integration-test process so parallel peers
-    // never share the production relative replay path or its file lock.
-    let revocation_dir = tempfile::tempdir()
-        .expect("test SoraNet revocation directory")
-        .keep();
+/// Build a low-cost fixture for the mandatory SoraNet admission handshake.
+fn low_cost_test_soranet_handshake() -> SoranetHandshake {
     let mut handshake = SoranetHandshake::default();
     handshake.pow.difficulty = 1;
     handshake.pow.puzzle.memory_kib =
@@ -33,11 +27,6 @@ fn mandatory_test_soranet_handshake() -> SoranetHandshake {
             .expect("minimum puzzle memory is non-zero");
     handshake.pow.puzzle.time_cost = NonZeroU32::new(1).unwrap();
     handshake.pow.puzzle.lanes = NonZeroU32::new(1).unwrap();
-    handshake.pow.revocation_store_path = revocation_dir
-        .join("ticket_revocations.norito")
-        .to_string_lossy()
-        .into_owned()
-        .into();
     handshake
 }
 
@@ -53,9 +42,19 @@ fn test_network_config(
     address: IrohaSocketAddr,
     public_address: IrohaSocketAddr,
     idle_timeout: Duration,
-    soranet_handshake: SoranetHandshake,
+    mut soranet_handshake: SoranetHandshake,
     trust_gossip: bool,
 ) -> Network {
+    static REPLAY_DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+    static NEXT_REPLAY_STORE: AtomicU64 = AtomicU64::new(0);
+    let replay_dir = REPLAY_DIR.get_or_init(|| tempfile::tempdir().expect("test replay dir"));
+    let store_id = NEXT_REPLAY_STORE.fetch_add(1, Ordering::Relaxed);
+    soranet_handshake.pow.revocation_store_path = replay_dir
+        .path()
+        .join(format!("revocations-{store_id}.norito"))
+        .to_string_lossy()
+        .into_owned()
+        .into();
     Network {
         address: WithOrigin::inline(address),
         public_address: WithOrigin::inline(public_address),
@@ -88,6 +87,10 @@ fn test_network_config(
         p2p_proxy: None,
         p2p_proxy_required: false,
         p2p_no_proxy: Vec::new(),
+        outbound_dial_allow_cidrs: Vec::new(),
+        outbound_dial_deny_cidrs: Vec::new(),
+        outbound_dial_allow_dns_suffixes: Vec::new(),
+        outbound_dial_deny_dns_suffixes: Vec::new(),
         p2p_proxy_tls_verify: true,
         p2p_proxy_tls_pinned_cert_der_base64: None,
         happy_eyeballs_stagger: Duration::from_millis(100),

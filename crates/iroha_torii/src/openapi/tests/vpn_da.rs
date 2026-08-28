@@ -1907,7 +1907,7 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
         ballot_chunk.get("maxItems").and_then(Value::as_u64),
         Some(
             u64::try_from(
-                iroha_data_model::isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+                iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
             )
             .expect("timed-OVN ballot chunk bound fits u64"),
         )

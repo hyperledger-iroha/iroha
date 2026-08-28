@@ -4,17 +4,23 @@ use super::{
     prepare_supervisor_with_overrides, resolve_workspace_root_for_cli,
 };
 use mochi_core::{
-    BootstrapBundle, BootstrapInputs, BootstrapWriteError, LocalMcpProbeResult, PeerState,
-    ReadinessOptions, Supervisor, SupervisorSessionInfo, ToriiClient, ToriiError,
+    BootstrapBundle, BootstrapInputs, BootstrapWriteError, ExposedPrivateKey, LocalMcpProbeResult,
+    PeerState, ReadinessOptions, Supervisor, SupervisorSessionInfo, ToriiClient, ToriiError,
     wait_for_all_managed_peers_genesis, write_bootstrap_bundle,
 };
+#[cfg(unix)]
+use std::fs::File;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::{
     collections::BTreeSet,
-    env, fs,
+    env,
+    fs::{self, OpenOptions},
     future::Future,
-    io::ErrorKind,
+    io::{ErrorKind, Write as _},
     path::{Path, PathBuf},
     process,
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 use tokio::runtime::Runtime;
@@ -23,7 +29,6 @@ const LOCAL_MCP_STARTUP_MAX_BACKOFF: Duration = Duration::from_secs(1);
 const REHEARSAL_PEER_COUNT: usize = 4;
 const REHEARSAL_EVIDENCE_SCHEMA: u64 = 1;
 const REHEARSAL_EVIDENCE_MAX_BYTES: usize = 2_048;
-const INTERNAL_GENESIS_TEST_OVERRIDE: &str = "MOCHI_TEST_USE_INTERNAL_GENESIS";
 #[derive(Clone, Copy)]
 struct ReadinessRequirements {
     all_peers_genesis: bool,
@@ -66,7 +71,6 @@ fn write_session_metadata_file(
         "torii_url": (session.torii_url.clone()),
         "mcp_url": (session.mcp_url.clone()),
         "account_id": (session.account_id.clone()),
-        "private_key": (session.private_key.clone()),
         "onboarding_credential_id": (session.onboarding_credential_id.clone()),
         "onboarding_signer_file": (session.onboarding_signer_file.display().to_string()),
         "onboarding_token_file": (session.onboarding_token_file.display().to_string()),
@@ -85,28 +89,79 @@ fn write_session_metadata_file(
             )
         })?;
     }
-    fs::write(session_path, bytes).map_err(|err| {
-        format!(
-            "failed to write session metadata {}: {err}",
+    static NEXT_SESSION_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+    let parent = session_path
+        .parent()
+        .ok_or_else(|| "session metadata path has no parent".to_owned())?;
+    let mut staged = None;
+    for _ in 0..32 {
+        let id = NEXT_SESSION_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let path = parent.join(format!(".session.json.tmp.{}.{id}", process::id()));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        match options.open(&path) {
+            Ok(file) => {
+                staged = Some((path, file));
+                break;
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "failed to stage session metadata {}: {error}",
+                    session_path.display()
+                ));
+            }
+        }
+    }
+    let (staged_path, mut file) =
+        staged.ok_or_else(|| "failed to allocate a unique session metadata file".to_owned())?;
+    let write_result = file.write_all(&bytes).and_then(|()| file.sync_all());
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&staged_path);
+        return Err(format!(
+            "failed to write session metadata {}: {error}",
             session_path.display()
-        )
-    })
+        ));
+    }
+    if let Err(error) = fs::rename(&staged_path, session_path) {
+        let _ = fs::remove_file(&staged_path);
+        return Err(format!(
+            "failed to publish session metadata {}: {error}",
+            session_path.display()
+        ));
+    }
+    #[cfg(unix)]
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| {
+            format!(
+                "failed to sync session metadata directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    Ok(())
 }
-fn bootstrap_inputs_from_session(session: &SupervisorSessionInfo) -> BootstrapInputs {
+fn bootstrap_inputs_from_session(
+    session: &SupervisorSessionInfo,
+    private_key: Option<String>,
+) -> BootstrapInputs {
     BootstrapInputs {
         api_base: session.api_base.clone(),
         torii_url: session.torii_url.clone(),
         mcp_url: Some(session.mcp_url.clone()),
         chain_id: session.chain_id.clone(),
         account_id: session.account_id.clone(),
-        private_key: session.private_key.clone(),
+        private_key,
     }
 }
 fn write_bootstrap_files_for_session(
     workspace_root: &Path,
     session: &SupervisorSessionInfo,
+    private_key: Option<String>,
 ) -> Result<Vec<PathBuf>, BootstrapWriteError> {
-    let bundle = BootstrapBundle::render(&bootstrap_inputs_from_session(session));
+    let bundle = BootstrapBundle::render(&bootstrap_inputs_from_session(session, private_key));
     write_bootstrap_bundle(workspace_root, &bundle, true)
 }
 /// Run the long-lived headless sandbox server.
@@ -137,7 +192,11 @@ pub(super) fn run_serve(overrides: CliOverrides) -> Result<(), String> {
         requirements,
         "sandbox startup",
     ))?;
-    write_bootstrap_files_for_session(&workspace_root, &proof.session)
+    let private_key = supervisor
+        .signers()
+        .first()
+        .map(|signer| ExposedPrivateKey(signer.key_pair().private_key().clone()).to_string());
+    write_bootstrap_files_for_session(&workspace_root, &proof.session, private_key)
         .map_err(|err| format!("failed while writing workspace bootstrap files: {err}"))?;
     let session_path = proof.session.sandbox_root.join("session.json");
     write_session_metadata_file(
@@ -159,7 +218,6 @@ pub(super) fn run_serve(overrides: CliOverrides) -> Result<(), String> {
 /// Run a bounded, one-shot rehearsal of live four-peer wipe and re-genesis.
 pub(super) fn run_wipe_rehearsal(overrides: CliOverrides) -> Result<(), String> {
     require_disposable_data_root(&overrides)?;
-    reject_test_genesis_override()?;
     if overrides.readiness_smoke == Some(false) {
         return Err("wipe rehearsal requires readiness smoke; remove `--disable-smoke`".to_owned());
     }
@@ -451,14 +509,6 @@ fn require_disposable_data_root(overrides: &CliOverrides) -> Result<PathBuf, Str
     }
     Ok(root)
 }
-fn reject_test_genesis_override() -> Result<(), String> {
-    if env::var_os(INTERNAL_GENESIS_TEST_OVERRIDE).is_some() {
-        return Err(format!(
-            "wipe rehearsal requires real Kagami; unset `{INTERNAL_GENESIS_TEST_OVERRIDE}`"
-        ));
-    }
-    Ok(())
-}
 async fn validate_local_mcp_for_startup(
     client: &ToriiClient,
     readiness_timeout: Duration,
@@ -624,7 +674,6 @@ mod tests {
             torii_url: "http://127.0.0.1:8080".to_owned(),
             mcp_url: "http://127.0.0.1:8080/v1/mcp".to_owned(),
             account_id: Some("local-admin".to_owned()),
-            private_key: Some("existing-local-client-key".to_owned()),
             onboarding_credential_id: "local-dev".to_owned(),
             onboarding_signer_file: sandbox_root.join("runtime/onboarding-signer.key"),
             onboarding_token_file: sandbox_root.join("runtime/onboarding.token"),
@@ -634,23 +683,25 @@ mod tests {
     fn bootstrap_inputs_preserve_the_session_contract() {
         let temp = tempfile::tempdir().expect("tempdir");
         let session = session_fixture(temp.path());
-        let inputs = bootstrap_inputs_from_session(&session);
+        let private_key = Some("existing-local-client-key".to_owned());
+        let inputs = bootstrap_inputs_from_session(&session, private_key.clone());
         assert_eq!(inputs.api_base, session.api_base);
         assert_eq!(inputs.torii_url, session.torii_url);
         assert_eq!(inputs.mcp_url.as_deref(), Some(session.mcp_url.as_str()));
         assert_eq!(inputs.chain_id, session.chain_id);
         assert_eq!(inputs.account_id.as_deref(), session.account_id.as_deref());
-        assert_eq!(
-            inputs.private_key.as_deref(),
-            session.private_key.as_deref()
-        );
+        assert_eq!(inputs.private_key, private_key);
     }
     #[test]
     fn bootstrap_writer_emits_all_local_connection_artifacts() {
         let temp = tempfile::tempdir().expect("tempdir");
         let session = session_fixture(temp.path());
-        let written = write_bootstrap_files_for_session(temp.path(), &session)
-            .expect("write bootstrap files");
+        let written = write_bootstrap_files_for_session(
+            temp.path(),
+            &session,
+            Some("existing-local-client-key".to_owned()),
+        )
+        .expect("write bootstrap files");
         assert_eq!(written.len(), 4);
         let env_local =
             fs::read_to_string(temp.path().join(".env.local")).expect("read generated env file");
@@ -681,6 +732,17 @@ mod tests {
         )
         .expect("parse session metadata");
         let payload = payload.as_object().expect("session metadata object");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mode = fs::metadata(&session_path)
+                .expect("session metadata permissions")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode & 0o077, 0, "session metadata must be owner-only");
+        }
         assert_eq!(
             payload.get("generation_id").and_then(Value::as_str),
             Some(session.generation_id.as_str())
@@ -702,6 +764,7 @@ mod tests {
             Some(session.onboarding_token_file.to_string_lossy().as_ref())
         );
         for forbidden in [
+            "private_key",
             "onboarding_token",
             "onboarding_token_hash",
             "onboarding_token_digest",

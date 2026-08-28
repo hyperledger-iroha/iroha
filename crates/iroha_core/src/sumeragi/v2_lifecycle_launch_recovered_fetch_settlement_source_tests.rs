@@ -35,6 +35,9 @@ fn recovered_decision_fetch_store_settlement_is_restart_closed_and_tail_infallib
     let transition = settlement
         .find("prepare_recovered_decision_fetch_store_transition(")
         .expect("Fetch-to-Store coordinator successor is staged");
+    let request_output_prepare = settlement
+        .find("prepare_recovered_decision_fetch_request_output_retirement(request_hash)")
+        .expect("matching request output retirement is preflighted");
     let output = settlement
         .find("begin_fail_stop_operation()")
         .expect("output fail-stop cut precedes publication");
@@ -47,6 +50,9 @@ fn recovered_decision_fetch_store_settlement_is_restart_closed_and_tail_infallib
     let marker_commit = settlement
         .find("commit_published_lifecycle_store_retry_marker(retry_marker);")
         .expect("active Store marker commits after durable publication");
+    let request_output_commit = settlement
+        .find("request_output_retirement.commit_after_publication(operation.permit());")
+        .expect("matching request output retires after durable publication");
     let request_commit = settlement
         .find("commit_recovered_decision_fetch_owner_retirement(retirement);")
         .expect("dedicated request owner retires after publication");
@@ -68,11 +74,13 @@ fn recovered_decision_fetch_store_settlement_is_restart_closed_and_tail_infallib
             && adapter < registry
             && registry < marker_bind
             && marker_bind < transition
-            && transition < output
+            && transition < request_output_prepare
+            && request_output_prepare < output
             && output < fsync
             && fsync < coordinator_commit
             && coordinator_commit < marker_commit
-            && marker_commit < request_commit
+            && marker_commit < request_output_commit
+            && request_output_commit < request_commit
             && request_commit < ingress_commit
             && ingress_commit < worker_commit
             && worker_commit < output_commit

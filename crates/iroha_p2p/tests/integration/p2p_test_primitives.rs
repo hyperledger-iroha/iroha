@@ -9,9 +9,9 @@ fn setup_logger() {
     test_logger();
 }
 fn default_soranet_handshake() -> ActualSoranetHandshake {
-    // Keep mandatory admission inexpensive and replay-state isolated so
-    // general timing tests continue to measure the behavior they name.
-    super::mandatory_test_soranet_handshake()
+    // Keep admission inexpensive so general timing tests continue to measure
+    // the behavior they name. `test_network_config` isolates replay state.
+    super::low_cost_test_soranet_handshake()
 }
 #[test]
 fn test_encryption() {

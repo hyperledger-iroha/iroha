@@ -2,6 +2,8 @@
 //!
 //! The supervisor prepares filesystem layouts, generates a Kagami-aligned
 //! default genesis manifest, and can launch or stop child `iroha3d` processes.
+#[cfg(test)]
+use crate::generation::PublicationFaultPoint;
 use crate::{
     compose::{SigningAuthority, development_signing_authorities},
     config::{
@@ -9,12 +11,12 @@ use crate::{
         infer_workspace_root_from_sandbox_root,
     },
     generation::{
-        GenerationInventoryContext, GenerationTransaction, PublicationFaultPoint,
-        VerifiedGeneration, current_generation_id, try_lock_generation_selection,
-        verify_selected_generation,
+        GenerationInventoryContext, GenerationTransaction, VerifiedGeneration,
+        current_generation_id, try_lock_generation_selection, verify_selected_generation,
     },
     genesis,
     logs::{LifecycleEvent, LogStreamKind, PeerLogStream},
+    path_safety::open_existing_file_no_follow_nonblocking,
     torii::{
         ManagedBlockStream, ManagedEventStream, OperatorSigningContext, ReadinessSmokePlan,
         ToriiClient, ToriiError, ToriiResult,
@@ -40,7 +42,9 @@ use norito::json::{self, Map, Value};
 use once_cell::sync::OnceCell;
 use rand::{TryRngCore as _, rngs::OsRng};
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{
+    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
+};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     env,
@@ -51,18 +55,19 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::runtime::Handle;
 use zeroize::{Zeroize as _, Zeroizing};
 mod generation_lifecycle;
-mod kagami_verify_parse;
 mod ownership;
 mod selected_storage;
 mod snapshot_label;
-use kagami_verify_parse::parse_kagami_verify_output;
 use ownership::SupervisorOwnershipLock;
 #[cfg(test)]
 use selected_storage::resolve_selected_peer_storage_paths_with_hook;
@@ -84,6 +89,10 @@ const GENERATED_GENESIS_RECORD_MAX_BYTES_V1: usize = 4 * 1024;
 const TEST_FINALIZE_KAGAMI_STUB_SIGNATURE: &str = "MOCHI_TEST_FINALIZE_KAGAMI_STUB_SIGNATURE";
 const SNAPSHOT_GENERATIONS_DIR_NAME: &str = "generations";
 const SNAPSHOT_METADATA_MAX_BYTES_V1: usize = 64 * 1024;
+const SNAPSHOT_RESTORE_JOURNAL_FILE_NAME: &str = ".snapshot-restore-v1.json";
+const SNAPSHOT_RESTORE_COMMIT_FILE_NAME: &str = ".snapshot-restore-v1.committed";
+const SNAPSHOT_RESTORE_JOURNAL_MAX_BYTES_V1: usize = 256 * 1024;
+const SNAPSHOT_RESTORE_RESTART_SURVIVAL_GRACE: Duration = Duration::from_millis(250);
 const SMOKE_MAX_ATTEMPTS: usize = 3;
 const LOCAL_MCP_PROFILE: &str = "writer";
 const LOCAL_MCP_TOOL_PREFIX: &str = "iroha.";
@@ -94,9 +103,11 @@ const LOCAL_ONBOARDING_TOKEN_FILE: &str = "onboarding.token";
 const LOCAL_ONBOARDING_CREDENTIAL_ID: &str = "local-dev";
 const LOCAL_ONBOARDING_DATASPACE: &str = "universal";
 const LOCAL_ONBOARDING_SIGNER_MAX_BYTES: usize = 1_024;
-const LOCAL_ONBOARDING_TOKEN_MIN_BYTES: usize = 32;
-const LOCAL_ONBOARDING_TOKEN_MAX_BYTES: usize = 256;
-const LOCAL_ONBOARDING_TOKEN_FILE_MAX_BYTES: usize = LOCAL_ONBOARDING_TOKEN_MAX_BYTES + 2;
+const LOCAL_ONBOARDING_TOKEN_PREFIX: &str = "iroha-localnet-";
+const LOCAL_ONBOARDING_TOKEN_HEX_CHARS: usize = 64;
+const VRF_SEED_HEX_CHARS: usize = 64;
+const LOCAL_ONBOARDING_TOKEN_FILE_MAX_BYTES: usize =
+    LOCAL_ONBOARDING_TOKEN_PREFIX.len() + LOCAL_ONBOARDING_TOKEN_HEX_CHARS;
 const LOCAL_MULTI_PEER_POW_TICKET_TTL_SECS: i64 = 300;
 // Mochi runs every validator on one developer machine. Keep the mandatory
 // SoraNet memory-hard admission proof enabled, but use the protocol's minimum
@@ -133,6 +144,13 @@ fn encode_hex(bytes: &[u8]) -> String {
     out
 }
 fn read_generated_genesis_record(path: &Path, label: &str) -> io::Result<String> {
+    read_generated_genesis_record_inner(path, label, || {})
+}
+fn read_generated_genesis_record_inner(
+    path: &Path,
+    label: &str,
+    before_open: impl FnOnce(),
+) -> io::Result<String> {
     let named = fs::symlink_metadata(path)?;
     if named.file_type().is_symlink() || !named.is_file() {
         return Err(io::Error::new(
@@ -156,7 +174,8 @@ fn read_generated_genesis_record(path: &Path, label: &str) -> io::Result<String>
             ),
         ));
     }
-    let mut file = OpenOptions::new().read(true).open(path)?;
+    before_open();
+    let mut file = open_existing_file_no_follow_nonblocking(path)?;
     let opened = file.metadata()?;
     if !generated_genesis_record_metadata_unchanged(&named, &opened) {
         return Err(io::Error::new(
@@ -278,12 +297,6 @@ pub enum SupervisorError {
     /// External Kagami invocation failed while preparing genesis.
     #[error("failed to generate genesis manifest via `kagami`: {0}")]
     KagamiInvocation(String),
-    /// Validation of a Kagami verify report failed.
-    #[error("kagami verify rejected: {0}")]
-    KagamiVerify(String),
-    /// Failed to probe a binary version string.
-    #[error("failed to probe `{binary}` version: {message}")]
-    VersionProbeFailed { binary: String, message: String },
     /// Attempted to start an already running peer.
     #[error("peer `{alias}` already running")]
     PeerAlreadyRunning { alias: String },
@@ -293,9 +306,6 @@ pub enum SupervisorError {
     /// Referenced peer alias is not part of the supervised topology.
     #[error("peer `{alias}` not found")]
     PeerUnknown { alias: String },
-    /// Attempted to mutate storage for a peer that is still running.
-    #[error("cannot modify storage for running peer `{alias}`")]
-    PeerStillRunning { alias: String },
     /// Requested snapshot already exists.
     #[error("snapshot `{name}` already exists under `{root}`")]
     SnapshotExists { name: String, root: PathBuf },
@@ -468,7 +478,11 @@ impl OnboardingRuntimeBundle {
                     ))
                 })?;
                 let token = Zeroizing::new(
-                    format!("iroha-localnet-{}", encode_hex(token_entropy.as_slice())).into_bytes(),
+                    format!(
+                        "{LOCAL_ONBOARDING_TOKEN_PREFIX}{}",
+                        encode_hex(token_entropy.as_slice())
+                    )
+                    .into_bytes(),
                 );
                 token_entropy.zeroize();
                 write_new_owner_only_runtime_file(&private_key_file, signer_payload.as_bytes())?;
@@ -554,10 +568,7 @@ fn prepare_owner_only_runtime_directory(path: &Path, trusted_root: &Path) -> Res
             }
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir(path)?;
-            let mut permissions = fs::metadata(path)?.permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(path, permissions)?;
+            fs::DirBuilder::new().mode(0o700).create(path)?;
         }
         Err(error) => return Err(error.into()),
     }
@@ -583,13 +594,32 @@ fn read_owner_only_runtime_file(
     max_bytes: usize,
     label: &str,
 ) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    read_owner_only_runtime_file_inner(
+        path,
+        owner_uid,
+        max_bytes,
+        label,
+        #[cfg(test)]
+        || {},
+    )
+}
+#[cfg(unix)]
+fn read_owner_only_runtime_file_inner(
+    path: &Path,
+    owner_uid: u32,
+    max_bytes: usize,
+    label: &str,
+    #[cfg(test)] before_open: impl FnOnce(),
+) -> Result<Option<Zeroizing<Vec<u8>>>> {
     let initial = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     validate_owner_only_runtime_file_metadata(&initial, owner_uid, max_bytes, label)?;
-    let mut file = OpenOptions::new().read(true).open(path)?;
+    #[cfg(test)]
+    before_open();
+    let mut file = open_existing_file_no_follow_nonblocking(path)?;
     let opened = file.metadata()?;
     validate_owner_only_runtime_file_metadata(&opened, owner_uid, max_bytes, label)?;
     if initial.dev() != opened.dev() || initial.ino() != opened.ino() {
@@ -630,10 +660,14 @@ fn validate_owner_only_runtime_file_metadata(
         || metadata.uid() != owner_uid
         || metadata.permissions().mode() & 0o777 != 0o600
         || metadata.nlink() != 1
-        || metadata.len() > max_bytes as u64
     {
         return Err(SupervisorError::Config(format!(
             "{label} must be an owner-only 0600 regular single-link file"
+        )));
+    }
+    if metadata.len() > max_bytes as u64 {
+        return Err(SupervisorError::Config(format!(
+            "{label} exceeds the reviewed size limit"
         )));
     }
     Ok(())
@@ -659,23 +693,19 @@ fn secret_bytes_equal(left: &[u8], right: &[u8]) -> bool {
         })
         == 0
 }
-fn validated_local_onboarding_token(mut payload: Zeroizing<Vec<u8>>) -> Result<Zeroizing<Vec<u8>>> {
-    let token_len = if payload.ends_with(b"\r\n") {
-        payload.len().saturating_sub(2)
-    } else if payload.ends_with(b"\n") {
-        payload.len().saturating_sub(1)
-    } else {
-        payload.len()
-    };
-    payload.truncate(token_len);
-    if !(LOCAL_ONBOARDING_TOKEN_MIN_BYTES..=LOCAL_ONBOARDING_TOKEN_MAX_BYTES)
-        .contains(&payload.len())
-        || !payload.iter().all(|byte| (b'!'..=b'~').contains(byte))
-    {
-        return Err(SupervisorError::Config(
-            "local onboarding token must contain 32 through 256 printable non-whitespace ASCII bytes"
-                .to_owned(),
-        ));
+fn validated_local_onboarding_token(payload: Zeroizing<Vec<u8>>) -> Result<Zeroizing<Vec<u8>>> {
+    let valid = payload
+        .strip_prefix(LOCAL_ONBOARDING_TOKEN_PREFIX.as_bytes())
+        .is_some_and(|suffix| {
+            suffix.len() == LOCAL_ONBOARDING_TOKEN_HEX_CHARS
+                && suffix
+                    .iter()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        });
+    if !valid {
+        return Err(SupervisorError::Config(format!(
+            "local onboarding token must use `{LOCAL_ONBOARDING_TOKEN_PREFIX}` followed by exactly {LOCAL_ONBOARDING_TOKEN_HEX_CHARS} lowercase hexadecimal characters"
+        )));
     }
     Ok(payload)
 }
@@ -772,120 +802,6 @@ impl Default for RestartPolicy {
         }
     }
 }
-/// Describes where a binary path originated so UI layers can surface actionable hints.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BinarySource {
-    /// Explicit override supplied via config/CLI/env.
-    Explicit,
-    /// Discovered via a specific environment variable.
-    Env(&'static str),
-    /// Discovered via a Cargo-set binary env var.
-    CargoEnv(&'static str),
-    /// Located next to the currently running executable.
-    CurrentExeNeighbor,
-    /// Located under the workspace target directory (profile captured for context).
-    WorkspaceTarget(String),
-    /// Found on the system PATH.
-    PathSearch,
-    /// Default unresolved placeholder.
-    AutoDefault,
-    /// Produced by an on-demand cargo build.
-    Built,
-}
-impl BinarySource {
-    fn label(&self) -> String {
-        match self {
-            Self::Explicit => "explicit override".to_owned(),
-            Self::Env(var) => format!("{var} environment variable"),
-            Self::CargoEnv(var) => format!("{var} cargo env"),
-            Self::CurrentExeNeighbor => "bundle directory".to_owned(),
-            Self::WorkspaceTarget(profile) => format!("workspace target/{profile}"),
-            Self::PathSearch => "PATH".to_owned(),
-            Self::AutoDefault => "default lookup".to_owned(),
-            Self::Built => "cargo build".to_owned(),
-        }
-    }
-}
-/// Version and build metadata discovered for a binary.
-#[derive(Debug, Clone)]
-pub struct BinaryVersionInfo {
-    /// Logical name used by the supervisor.
-    pub name: &'static str,
-    /// Resolved path to the executable.
-    pub path: PathBuf,
-    /// Parsed version string when available.
-    pub version: Option<String>,
-    /// Raw stdout/stderr captured during probing.
-    pub raw_output: Option<String>,
-    /// Where the executable was discovered.
-    source: BinarySource,
-}
-impl BinaryVersionInfo {
-    /// Human-readable source label for display.
-    pub fn source_label(&self) -> String {
-        self.source.label()
-    }
-}
-/// Structured summary emitted by `kagami verify`.
-#[derive(Debug, Clone)]
-pub struct KagamiVerifyReport {
-    /// Profile the verification targeted.
-    pub profile: GenesisProfile,
-    /// Reported chain identifier (if present).
-    pub chain_id: Option<String>,
-    /// VRF seed (hex) forwarded to Kagami, if any.
-    pub vrf_seed_hex: Option<String>,
-    /// Number of peers with PoP keys, when surfaced by Kagami.
-    pub peers_with_pop: Option<u16>,
-    /// Optional Kagami fingerprint or hash.
-    pub fingerprint: Option<String>,
-    /// Full stdout/stderr output from the verification command.
-    pub raw_output: String,
-}
-impl KagamiVerifyReport {
-    fn summary_fragment(&self) -> String {
-        let mut parts = Vec::new();
-        if let Some(chain_id) = &self.chain_id {
-            parts.push(format!("chain {chain_id}"));
-        }
-        if let Some(fingerprint) = &self.fingerprint {
-            parts.push(format!("fingerprint {fingerprint}"));
-        }
-        parts.join(" • ")
-    }
-}
-/// Compatibility and version summary for a prepared supervisor.
-#[derive(Debug, Clone)]
-pub struct CompatibilityReport {
-    /// Build-line and version data for binaries.
-    pub versions: Vec<BinaryVersionInfo>,
-    /// Optional verification output from `kagami verify`.
-    pub verify: Option<KagamiVerifyReport>,
-    /// Chain identifier bound to the supervisor.
-    pub chain_id: String,
-    /// Genesis profile used to construct the network, if any.
-    pub profile: Option<GenesisProfile>,
-}
-impl CompatibilityReport {
-    /// One-line human readable summary suitable for the UI header.
-    pub fn summary_line(&self) -> String {
-        let mut fragments = Vec::new();
-        if let Some(profile) = self.profile {
-            fragments.push(format!("profile {}", profile.as_kagami_arg()));
-        }
-        if let Some(verify) = &self.verify {
-            let frag = verify.summary_fragment();
-            if !frag.is_empty() {
-                fragments.push(frag);
-            }
-        }
-        if fragments.is_empty() {
-            format!("chain {}", self.chain_id)
-        } else {
-            format!("chain {} • {}", self.chain_id, fragments.join(" • "))
-        }
-    }
-}
 /// Connection details for the active Mochi sandbox.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisorSessionInfo {
@@ -909,8 +825,6 @@ pub struct SupervisorSessionInfo {
     pub mcp_url: String,
     /// Preferred local dev signer account identifier.
     pub account_id: Option<String>,
-    /// Preferred local dev signer private key.
-    pub private_key: Option<String>,
     /// Stable identifier for the managed local account-onboarding credential.
     pub onboarding_credential_id: String,
     /// Owner-only file containing the local account-onboarding signer.
@@ -922,27 +836,18 @@ pub struct SupervisorSessionInfo {
 #[derive(Debug, Clone)]
 pub struct BinaryPaths {
     irohad: PathBuf,
-    irohad_verified: bool,
     irohad_build_attempted: bool,
     irohad_auto: bool,
-    irohad_source: BinarySource,
     kagami: PathBuf,
-    kagami_verified: bool,
     kagami_build_attempted: bool,
     kagami_auto: bool,
-    kagami_source: BinarySource,
-    iroha_cli: PathBuf,
-    iroha_cli_verified: bool,
-    iroha_cli_build_attempted: bool,
-    iroha_cli_auto: bool,
-    iroha_cli_source: BinarySource,
     allow_builds: bool,
 }
 fn default_binary_entry(
     env_override: &'static str,
     cargo_env: &'static str,
     binary: &str,
-) -> (PathBuf, bool, BinarySource) {
+) -> (PathBuf, bool) {
     let exe_name = format!("{binary}{}", env::consts::EXE_SUFFIX);
     let env_path = |key: &str| {
         env::var_os(key)
@@ -950,17 +855,17 @@ fn default_binary_entry(
             .map(PathBuf::from)
     };
     if let Some(path) = env_path(env_override) {
-        return (path, false, BinarySource::Env(env_override));
+        return (path, false);
     }
     if let Some(path) = env_path(cargo_env) {
-        return (path, false, BinarySource::CargoEnv(cargo_env));
+        return (path, false);
     }
     if let Ok(current) = env::current_exe()
         && let Some(dir) = current.parent()
     {
         let candidate = dir.join(&exe_name);
         if candidate.exists() {
-            return (candidate, true, BinarySource::CurrentExeNeighbor);
+            return (candidate, true);
         }
     }
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -968,80 +873,31 @@ fn default_binary_entry(
         for profile in ["debug", "release"] {
             let candidate = workspace.join("target").join(profile).join(&exe_name);
             if candidate.exists() {
-                return (
-                    candidate,
-                    true,
-                    BinarySource::WorkspaceTarget(profile.to_owned()),
-                );
+                return (candidate, true);
             }
         }
     }
-    (PathBuf::from(binary), true, BinarySource::AutoDefault)
+    (PathBuf::from(binary), true)
 }
-fn default_irohad_entry() -> (PathBuf, bool, BinarySource) {
+fn default_irohad_entry() -> (PathBuf, bool) {
     default_binary_entry("MOCHI_IROHAD", "CARGO_BIN_EXE_iroha3d", "iroha3d")
 }
-fn default_kagami_entry() -> (PathBuf, bool, BinarySource) {
+fn default_kagami_entry() -> (PathBuf, bool) {
     default_binary_entry("MOCHI_KAGAMI", "CARGO_BIN_EXE_kagami", "kagami")
-}
-fn default_iroha_cli_entry() -> (PathBuf, bool, BinarySource) {
-    default_binary_entry("MOCHI_IROHA_CLI", "CARGO_BIN_EXE_iroha_cli", "iroha_cli")
-}
-fn resolve_iroha_cli_alias() -> Option<(PathBuf, BinarySource)> {
-    for bin in ["iroha3", "iroha"] {
-        let exe_name = format!("{bin}{}", env::consts::EXE_SUFFIX);
-        if let Ok(current) = env::current_exe()
-            && let Some(dir) = current.parent()
-        {
-            let candidate = dir.join(&exe_name);
-            if is_executable_file(&candidate) {
-                return Some((candidate, BinarySource::CurrentExeNeighbor));
-            }
-        }
-        let target_root = env::var_os("CARGO_TARGET_DIR")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| workspace_root().map(|workspace| workspace.join("target")));
-        if let Some(target_root) = target_root {
-            for profile in ["debug", "release"] {
-                let candidate = target_root.join(profile).join(&exe_name);
-                if is_executable_file(&candidate) {
-                    return Some((candidate, BinarySource::WorkspaceTarget(profile.to_owned())));
-                }
-            }
-        }
-        if let Some(resolved) = resolve_name_on_path(OsStr::new(bin)) {
-            return Some((resolved, BinarySource::PathSearch));
-        }
-    }
-    None
 }
 impl BinaryPaths {
     /// Override the path to the `iroha3d` executable.
     pub fn irohad(mut self, path: impl Into<PathBuf>) -> Self {
         self.irohad = path.into();
-        self.irohad_verified = false;
         self.irohad_build_attempted = false;
         self.irohad_auto = false;
-        self.irohad_source = BinarySource::Explicit;
         self
     }
     /// Override the path to the `kagami` executable.
     pub fn kagami(mut self, path: impl Into<PathBuf>) -> Self {
         self.kagami = path.into();
-        self.kagami_verified = false;
         self.kagami_build_attempted = false;
         self.kagami_auto = false;
-        self.kagami_source = BinarySource::Explicit;
-        self
-    }
-    /// Override the path to the `iroha_cli` executable.
-    pub fn iroha_cli(mut self, path: impl Into<PathBuf>) -> Self {
-        self.iroha_cli = path.into();
-        self.iroha_cli_verified = false;
-        self.iroha_cli_build_attempted = false;
-        self.iroha_cli_auto = false;
-        self.iroha_cli_source = BinarySource::Explicit;
         self
     }
     /// Enable or disable automatic cargo builds when binaries are missing.
@@ -1049,63 +905,14 @@ impl BinaryPaths {
         self.allow_builds = allow;
         self
     }
-    fn probe_versions(&mut self) -> Result<Vec<BinaryVersionInfo>> {
-        let irohad = self.ensure_irohad_ready()?.to_path_buf();
-        let irohad_source = self.irohad_source.clone();
-        let kagami = self.ensure_kagami_ready()?.to_path_buf();
-        let kagami_source = self.kagami_source.clone();
-        let iroha_cli = self.ensure_iroha_cli_ready()?.to_path_buf();
-        let iroha_cli_source = self.iroha_cli_source.clone();
-        let entries = [
-            ("iroha3d", irohad, irohad_source),
-            ("kagami", kagami, kagami_source),
-            ("iroha_cli", iroha_cli, iroha_cli_source),
-        ];
-        let mut versions = Vec::with_capacity(entries.len());
-        for (name, path, source) in entries {
-            versions.push(Self::probe_single_version(name, &path, source)?);
-        }
-        Ok(versions)
-    }
-    fn probe_single_version(
-        name: &'static str,
-        path: &Path,
-        source: BinarySource,
-    ) -> Result<BinaryVersionInfo> {
-        let (raw_output, version) = probe_version_output(path, name)?;
-        Ok(BinaryVersionInfo {
-            name,
-            path: path.to_path_buf(),
-            version,
-            raw_output,
-            source,
-        })
-    }
-    fn irohad_executable(&self) -> &Path {
-        &self.irohad
-    }
     fn ensure_irohad_ready(&mut self) -> Result<&Path> {
-        if self.irohad_verified && is_executable_file(&self.irohad) {
+        if is_executable_file(&self.irohad) {
             return Ok(&self.irohad);
         }
-        if is_explicit_path(&self.irohad) && is_executable_file(&self.irohad) {
-            self.irohad_verified = true;
-            self.irohad_source = BinarySource::Explicit;
-            return Ok(&self.irohad);
-        }
-        if !is_explicit_path(&self.irohad) {
-            if let Some(resolved) = resolve_name_on_path(self.irohad.as_os_str()) {
-                self.irohad = resolved;
-                self.irohad_verified = true;
-                self.irohad_source = BinarySource::PathSearch;
-                return Ok(&self.irohad);
-            }
-        } else if let Some(name) = self.irohad.file_name()
-            && let Some(resolved) = resolve_name_on_path(name)
+        if !is_explicit_path(&self.irohad)
+            && let Some(resolved) = resolve_name_on_path(self.irohad.as_os_str())
         {
             self.irohad = resolved;
-            self.irohad_verified = true;
-            self.irohad_source = BinarySource::PathSearch;
             return Ok(&self.irohad);
         }
         if self.allow_builds && self.irohad_auto && !self.irohad_build_attempted {
@@ -1114,17 +921,11 @@ impl BinaryPaths {
                 match try_build_irohad(&workspace) {
                     Ok(path) => {
                         self.irohad = path;
-                        self.irohad_verified = true;
-                        self.irohad_source = BinarySource::Built;
                         return Ok(&self.irohad);
                     }
                     Err(err) => return Err(err),
                 }
             }
-        }
-        if is_executable_file(&self.irohad) {
-            self.irohad_verified = true;
-            return Ok(&self.irohad);
         }
         let message = if self.irohad_auto {
             format!(
@@ -1145,27 +946,13 @@ impl BinaryPaths {
         })
     }
     fn ensure_kagami_ready(&mut self) -> Result<&Path> {
-        if self.kagami_verified && is_executable_file(&self.kagami) {
+        if is_executable_file(&self.kagami) {
             return Ok(&self.kagami);
         }
-        if is_explicit_path(&self.kagami) && is_executable_file(&self.kagami) {
-            self.kagami_verified = true;
-            self.kagami_source = BinarySource::Explicit;
-            return Ok(&self.kagami);
-        }
-        if !is_explicit_path(&self.kagami) {
-            if let Some(resolved) = resolve_name_on_path(self.kagami.as_os_str()) {
-                self.kagami = resolved;
-                self.kagami_verified = true;
-                self.kagami_source = BinarySource::PathSearch;
-                return Ok(&self.kagami);
-            }
-        } else if let Some(name) = self.kagami.file_name()
-            && let Some(resolved) = resolve_name_on_path(name)
+        if !is_explicit_path(&self.kagami)
+            && let Some(resolved) = resolve_name_on_path(self.kagami.as_os_str())
         {
             self.kagami = resolved;
-            self.kagami_verified = true;
-            self.kagami_source = BinarySource::PathSearch;
             return Ok(&self.kagami);
         }
         if self.allow_builds && self.kagami_auto && !self.kagami_build_attempted {
@@ -1174,17 +961,11 @@ impl BinaryPaths {
                 match try_build_kagami(&workspace) {
                     Ok(path) => {
                         self.kagami = path;
-                        self.kagami_verified = true;
-                        self.kagami_source = BinarySource::Built;
                         return Ok(&self.kagami);
                     }
                     Err(err) => return Err(err),
                 }
             }
-        }
-        if is_executable_file(&self.kagami) {
-            self.kagami_verified = true;
-            return Ok(&self.kagami);
         }
         let message = if self.kagami_auto {
             format!(
@@ -1204,149 +985,38 @@ impl BinaryPaths {
             message,
         })
     }
-    fn iroha_cli_executable(&self) -> &Path {
-        &self.iroha_cli
-    }
-    fn ensure_iroha_cli_ready(&mut self) -> Result<&Path> {
-        if self.iroha_cli_verified && is_executable_file(&self.iroha_cli) {
-            return Ok(&self.iroha_cli);
-        }
-        if is_explicit_path(&self.iroha_cli) && is_executable_file(&self.iroha_cli) {
-            self.iroha_cli_verified = true;
-            self.iroha_cli_source = BinarySource::Explicit;
-            return Ok(&self.iroha_cli);
-        }
-        if !is_explicit_path(&self.iroha_cli) {
-            if let Some(resolved) = resolve_name_on_path(self.iroha_cli.as_os_str()) {
-                self.iroha_cli = resolved;
-                self.iroha_cli_verified = true;
-                self.iroha_cli_source = BinarySource::PathSearch;
-                return Ok(&self.iroha_cli);
-            }
-        } else if let Some(name) = self.iroha_cli.file_name()
-            && let Some(resolved) = resolve_name_on_path(name)
-        {
-            self.iroha_cli = resolved;
-            self.iroha_cli_verified = true;
-            self.iroha_cli_source = BinarySource::PathSearch;
-            return Ok(&self.iroha_cli);
-        }
-        if let Some((resolved, source)) = resolve_iroha_cli_alias() {
-            self.iroha_cli = resolved;
-            self.iroha_cli_verified = true;
-            self.iroha_cli_source = source;
-            return Ok(&self.iroha_cli);
-        }
-        if self.allow_builds && self.iroha_cli_auto && !self.iroha_cli_build_attempted {
-            self.iroha_cli_build_attempted = true;
-            if let Some(workspace) = workspace_root() {
-                match try_build_iroha_cli(&workspace) {
-                    Ok(path) => {
-                        self.iroha_cli = path;
-                        self.iroha_cli_verified = true;
-                        self.iroha_cli_source = BinarySource::Built;
-                        return Ok(&self.iroha_cli);
-                    }
-                    Err(err) => return Err(err),
-                }
-            }
-        }
-        if is_executable_file(&self.iroha_cli) {
-            self.iroha_cli_verified = true;
-            return Ok(&self.iroha_cli);
-        }
-        let message = if self.iroha_cli_auto {
-            format!(
-                "looked for `{}` and searched on PATH; run `cargo build -p iroha_cli` \
-                 or set `MOCHI_IROHA_CLI`/`binaries.iroha_cli` to the executable",
-                self.iroha_cli.display()
-            )
-        } else {
-            format!(
-                "configured path `{}` is not executable; adjust \
-                 `MOCHI_IROHA_CLI`/`binaries.iroha_cli` to point at a valid `iroha_cli` binary",
-                self.iroha_cli.display()
-            )
-        };
-        Err(SupervisorError::BinaryUnavailable {
-            binary: "iroha_cli",
-            message,
-        })
-    }
 }
 impl Default for BinaryPaths {
     fn default() -> Self {
-        let (irohad, irohad_auto, irohad_source) = default_irohad_entry();
-        let (kagami, kagami_auto, kagami_source) = default_kagami_entry();
-        let (iroha_cli, iroha_cli_auto, iroha_cli_source) = default_iroha_cli_entry();
+        let (irohad, irohad_auto) = default_irohad_entry();
+        let (kagami, kagami_auto) = default_kagami_entry();
         Self {
             irohad,
-            irohad_verified: false,
             irohad_build_attempted: false,
             irohad_auto,
-            irohad_source,
             kagami,
-            kagami_verified: false,
             kagami_build_attempted: false,
             kagami_auto,
-            kagami_source,
-            iroha_cli,
-            iroha_cli_verified: false,
-            iroha_cli_build_attempted: false,
-            iroha_cli_auto,
-            iroha_cli_source,
             allow_builds: false,
         }
     }
-}
-fn probe_version_output(path: &Path, binary: &str) -> Result<(Option<String>, Option<String>)> {
-    let output = Command::new(path)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|err| SupervisorError::VersionProbeFailed {
-            binary: binary.to_owned(),
-            message: err.to_string(),
-        })?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let mut raw_output = None;
-    if !stdout.trim().is_empty() || !stderr.trim().is_empty() {
-        let mut combined = stdout.trim_end().to_owned();
-        let stderr_trimmed = stderr.trim_end();
-        if !stderr_trimmed.is_empty() {
-            if !combined.is_empty() {
-                combined.push('\n');
-            }
-            combined.push_str(stderr_trimmed);
-        }
-        raw_output = Some(combined);
-    }
-    if !output.status.success() {
-        let message = if let Some(raw) = &raw_output {
-            format!("`{binary} --version` exited with {}: {raw}", output.status)
-        } else {
-            format!("`{binary} --version` exited with {}", output.status)
-        };
-        return Err(SupervisorError::VersionProbeFailed {
-            binary: binary.to_owned(),
-            message,
-        });
-    }
-    let version = raw_output
-        .as_deref()
-        .and_then(|text| text.lines().find(|line| !line.trim().is_empty()))
-        .map(|line| line.trim().to_owned());
-    Ok((raw_output, version))
 }
 fn is_explicit_path(path: &Path) -> bool {
     path.has_root() || path.components().count() > 1
 }
 fn is_executable_file(path: &Path) -> bool {
     match fs::metadata(path) {
-        Ok(meta) => meta.is_file(),
+        Ok(meta) if meta.is_file() => {
+            #[cfg(unix)]
+            {
+                meta.permissions().mode() & 0o111 != 0
+            }
+            #[cfg(not(unix))]
+            {
+                true
+            }
+        }
+        Ok(_) => false,
         Err(_) => false,
     }
 }
@@ -1486,59 +1156,13 @@ fn try_build_kagami(workspace: &Path) -> Result<PathBuf> {
         ),
     })
 }
-fn try_build_iroha_cli(workspace: &Path) -> Result<PathBuf> {
-    let cargo = env::var_os("CARGO")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("cargo"));
-    let mut command = Command::new(&cargo);
-    command
-        .current_dir(workspace)
-        .arg("build")
-        .arg("-p")
-        .arg("iroha_cli")
-        .stdout(Stdio::null());
-    let status = command
-        .status()
-        .map_err(|err| SupervisorError::BinaryUnavailable {
-            binary: "iroha_cli",
-            message: format!("failed to invoke `{}`: {err}", cargo.display()),
-        })?;
-    if !status.success() {
-        return Err(SupervisorError::BinaryUnavailable {
-            binary: "iroha_cli",
-            message: format!("`cargo build -p iroha_cli` exited with status {status}"),
-        });
-    }
-    let target_root = env::var_os("CARGO_TARGET_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace.join("target"));
-    for bin in ["iroha3", "iroha"] {
-        let exe_name = format!("{bin}{}", env::consts::EXE_SUFFIX);
-        for candidate in [
-            target_root.join("debug").join(&exe_name),
-            target_root.join("release").join(&exe_name),
-        ] {
-            if is_executable_file(&candidate) {
-                return Ok(candidate);
-            }
-        }
-    }
-    Err(SupervisorError::BinaryUnavailable {
-        binary: "iroha_cli",
-        message: format!(
-            "built `iroha_cli` but could not find an `iroha3`/`iroha` executable under `{}`",
-            target_root.display()
-        ),
-    })
-}
 /// Builds a [`Supervisor`] with user-selected presets.
 #[derive(Debug)]
 pub struct SupervisorBuilder {
     profile: NetworkProfile,
     data_root: PathBuf,
     chain_id: String,
+    chain_id_explicit: bool,
     torii_base_port: u16,
     p2p_base_port: u16,
     genesis_profile: Option<GenesisProfile>,
@@ -1579,6 +1203,7 @@ impl SupervisorBuilder {
             profile,
             data_root,
             chain_id: DEFAULT_CHAIN_ID.to_owned(),
+            chain_id_explicit: false,
             torii_base_port: DEFAULT_TORII_BASE_PORT,
             p2p_base_port: DEFAULT_P2P_BASE_PORT,
             genesis_profile: None,
@@ -1602,6 +1227,7 @@ impl SupervisorBuilder {
             profile,
             data_root,
             chain_id: DEFAULT_CHAIN_ID.to_owned(),
+            chain_id_explicit: false,
             torii_base_port: DEFAULT_TORII_BASE_PORT,
             p2p_base_port: DEFAULT_P2P_BASE_PORT,
             genesis_profile: None,
@@ -1638,6 +1264,7 @@ impl SupervisorBuilder {
     /// Set a custom chain identifier for the generated configurations.
     pub fn chain_id(mut self, chain_id: impl Into<String>) -> Self {
         self.chain_id = chain_id.into();
+        self.chain_id_explicit = true;
         self
     }
     /// Select a Kagami genesis profile; also aligns the chain id and consensus mode for NPoS.
@@ -1645,7 +1272,9 @@ impl SupervisorBuilder {
         self.genesis_profile = Some(profile);
         self.profile.consensus_mode = SumeragiConsensusMode::Npos;
         let defaults = profile.defaults();
-        self.chain_id = defaults.chain_id.to_owned();
+        if !self.chain_id_explicit {
+            self.chain_id = defaults.chain_id.to_owned();
+        }
         self
     }
     /// Provide an explicit VRF seed for Kagami genesis (hex, 32 bytes).
@@ -1681,11 +1310,6 @@ impl SupervisorBuilder {
     /// Override just the `kagami` binary path.
     pub fn kagami_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.binaries = self.binaries.clone().kagami(path);
-        self
-    }
-    /// Override just the `iroha_cli` binary path.
-    pub fn iroha_cli_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.binaries = self.binaries.clone().iroha_cli(path);
         self
     }
     /// Configure the restart policy for managed peers.
@@ -1824,6 +1448,45 @@ impl SupervisorBuilder {
                 "genesis_profile requires consensus_mode npos".to_owned(),
             ));
         }
+        validate_genesis_profile_inputs(self.genesis_profile, self.vrf_seed_hex.as_deref())?;
+        let chain_id = self.chain_id.parse::<ChainId>().map_err(|error| {
+            SupervisorError::Config(format!("invalid chain id `{}`: {error}", self.chain_id))
+        })?;
+        let chain_id = chain_id.to_string();
+        let chain_id = if let Some(profile) = self.genesis_profile {
+            let defaults = profile.defaults();
+            if chain_id != defaults.chain_id {
+                return Err(SupervisorError::Config(format!(
+                    "genesis profile {profile:?} requires chain id `{}`; remove the chain override",
+                    defaults.chain_id
+                )));
+            }
+            defaults.chain_id.to_owned()
+        } else {
+            chain_id
+        };
+        let mut nexus_config = self.nexus_config.clone();
+        let mut sumeragi_config = self.sumeragi_config.clone();
+        let mut torii_config = self.torii_config.clone();
+        reject_account_onboarding_override(torii_config.as_ref())?;
+        normalize_peer_config_overrides(
+            &mut nexus_config,
+            &mut sumeragi_config,
+            &mut torii_config,
+        )?;
+        let nexus_topology_custom = nexus_config
+            .as_ref()
+            .is_some_and(nexus_table_uses_custom_topology);
+        if nexus_topology_custom && self.profile.consensus_mode != SumeragiConsensusMode::Npos {
+            return Err(SupervisorError::Config(
+                "custom Nexus lane topology requires an NPoS signed-genesis consensus mode"
+                    .to_owned(),
+            ));
+        }
+        // Resolve or build Kagami before creating the sandbox, ownership lock, or credentials.
+        // Invalid binary/configuration requests therefore leave no runtime-secret residue.
+        let mut binaries = self.binaries.allow_auto_builds(self.auto_build_binaries);
+        binaries.ensure_kagami_ready()?;
         // Peer processes run from their managed peer directory so upstream
         // relative defaults cannot collide. Resolve a caller-supplied relative
         // data root before deriving any paths; otherwise the rendered paths
@@ -1837,49 +1500,14 @@ impl SupervisorBuilder {
             SupervisorOwnershipLock::acquire(paths.root())?
         };
         paths.ensure()?;
+        recover_snapshot_restore_if_needed(paths.root())?;
         let onboarding = OnboardingRuntimeBundle::create(&paths, localnet_admin_signer()?)?;
-        let mut binaries = self.binaries.allow_auto_builds(self.auto_build_binaries);
-        let chain_id = if let Some(profile) = self.genesis_profile {
-            let defaults = profile.defaults();
-            if self.chain_id != defaults.chain_id {
-                return Err(SupervisorError::Config(format!(
-                    "genesis profile {profile:?} requires chain id `{}`; remove the chain override",
-                    defaults.chain_id
-                )));
-            }
-            defaults.chain_id.to_owned()
-        } else {
-            self.chain_id.clone()
-        };
-        let mut nexus_config = self.nexus_config.clone();
-        let mut sumeragi_config = self.sumeragi_config.clone();
-        let mut torii_config = self.torii_config.clone();
-        normalize_peer_config_overrides(
-            &mut nexus_config,
-            &mut sumeragi_config,
-            &mut torii_config,
-        )?;
         install_managed_account_onboarding_config(&mut torii_config, &onboarding)?;
         let peer_config_overrides = PeerConfigOverrides {
             nexus: nexus_config,
             sumeragi: sumeragi_config,
             torii: torii_config,
         };
-        let nexus_topology_custom = peer_config_overrides
-            .nexus
-            .as_ref()
-            .is_some_and(nexus_table_uses_custom_topology);
-        if nexus_topology_custom && self.profile.consensus_mode != SumeragiConsensusMode::Npos {
-            return Err(SupervisorError::Config(
-                "custom Nexus lane topology requires an NPoS signed-genesis consensus mode"
-                    .to_owned(),
-            ));
-        }
-        if self.genesis_profile.is_some() {
-            binaries.ensure_irohad_ready()?;
-            binaries.ensure_kagami_ready()?;
-            binaries.ensure_iroha_cli_ready()?;
-        }
         let mut torii_ports = PortAllocator::new(self.torii_base_port);
         let mut p2p_ports = PortAllocator::new(self.p2p_base_port);
         let mut reserved_ports = HashSet::new();
@@ -1976,23 +1604,21 @@ impl SupervisorBuilder {
                 .map(|spec| PeerHandle::prepared(spec, paths.logs_dir(), self.restart_policy))
                 .collect::<Vec<_>>();
             let vault = SignerVault::new(&paths);
-            let signers = vault.load_with_fallback();
-            let mut supervisor = Supervisor {
+            let signers = vault.load_or_development()?;
+            let supervisor = Supervisor {
                 profile: self.profile,
                 paths,
                 chain_id,
+                genesis_profile: self.genesis_profile,
+                vrf_seed_hex: self.vrf_seed_hex,
                 genesis,
                 peers,
                 signers,
                 onboarding,
                 binaries,
                 peer_config_overrides: peer_config_overrides.clone(),
-                compatibility: None,
-                irohad_ready: false,
-                iroha_cli_ready: false,
                 _ownership_lock: ownership_lock,
             };
-            supervisor.run_compatibility_checks()?;
             Ok(supervisor)
         })();
         let uncertainty = publication.take_uncertainty();
@@ -2019,6 +1645,45 @@ fn merge_table(target: &mut toml::Table, overlay: &toml::Table) {
         target.insert(key.clone(), value.clone());
     }
 }
+fn zeroize_toml_table(table: &mut toml::Table) {
+    for (_, value) in table.iter_mut() {
+        zeroize_toml_value(value);
+    }
+}
+fn zeroize_toml_value(value: &mut toml::Value) {
+    match value {
+        toml::Value::String(value) => value.zeroize(),
+        toml::Value::Array(values) => {
+            for value in values {
+                zeroize_toml_value(value);
+            }
+        }
+        toml::Value::Table(table) => zeroize_toml_table(table),
+        toml::Value::Integer(_)
+        | toml::Value::Float(_)
+        | toml::Value::Boolean(_)
+        | toml::Value::Datetime(_) => {}
+    }
+}
+#[derive(Default)]
+struct SecretTomlTable(toml::Table);
+impl std::ops::Deref for SecretTomlTable {
+    type Target = toml::Table;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for SecretTomlTable {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for SecretTomlTable {
+    fn drop(&mut self) {
+        zeroize_toml_table(&mut self.0);
+    }
+}
 fn generated_sumeragi_body_ingress_required_byte_capacity(
     validator_count: usize,
     authenticated_non_validator_sources: usize,
@@ -2026,7 +1691,6 @@ fn generated_sumeragi_body_ingress_required_byte_capacity(
 ) -> Option<usize> {
     validator_count
         .checked_add(authenticated_non_validator_sources)
-        .and_then(|source_count| source_count.checked_add(1))
         .and_then(|source_count| source_count.checked_mul(body_source_bytes))
 }
 fn generated_sumeragi_queue_capacity(
@@ -2104,40 +1768,6 @@ fn ensure_generated_sumeragi_body_bytes(
         );
     }
     Ok(())
-}
-fn restore_streaming_soranet_defaults(table: &mut toml::Table) {
-    // `StreamingSoranet` is read as one nested value. Once Mochi emits that
-    // table to manage its spool, it must remain structurally complete instead
-    // of relying on defaults that apply only when the whole table is absent.
-    table
-        .entry("enabled")
-        .or_insert(toml::Value::Boolean(false));
-    table
-        .entry("exit_multiaddr")
-        .or_insert_with(|| toml::Value::String("/dns/torii/udp/9443/quic".to_owned()));
-    table
-        .entry("padding_budget_ms")
-        .or_insert(toml::Value::Integer(25));
-    table
-        .entry("access_kind")
-        .or_insert_with(|| toml::Value::String("authenticated".to_owned()));
-    table
-        .entry("channel_salt")
-        .or_insert_with(|| toml::Value::String("iroha.soranet.channel.seed.v1".to_owned()));
-    table
-        .entry("provision_spool_max_bytes")
-        .or_insert(toml::Value::Integer(0));
-    table
-        .entry("provision_window_segments")
-        .or_insert(toml::Value::Integer(4));
-    table
-        .entry("provision_queue_capacity")
-        .or_insert(toml::Value::Integer(256));
-}
-fn restore_streaming_soravpn_defaults(table: &mut toml::Table) {
-    table
-        .entry("provision_spool_max_bytes")
-        .or_insert(toml::Value::Integer(0));
 }
 fn lane_aliases(nexus: Option<&toml::Table>) -> BTreeMap<u32, String> {
     let Some(nexus) = nexus else {
@@ -2233,7 +1863,7 @@ fn lane_slug(alias: &str, lane_id: u32) -> String {
 }
 fn normalize_peer_config_overrides(
     nexus: &mut Option<toml::Table>,
-    _sumeragi: &mut Option<toml::Table>,
+    sumeragi: &mut Option<toml::Table>,
     torii: &mut Option<toml::Table>,
 ) -> Result<()> {
     if let Some(table) = nexus.as_mut() {
@@ -2283,6 +1913,22 @@ fn normalize_peer_config_overrides(
             }
         }
     }
+    if let Some(table) = sumeragi.as_ref()
+        && let Some(queues) = table.get("queues")
+    {
+        let queues = queues
+            .as_table()
+            .ok_or_else(|| SupervisorError::Config("sumeragi.queues must be a table".to_owned()))?;
+        for field in [
+            "authenticated_non_validator_sources",
+            "body_source_bytes",
+            "body_bytes",
+        ] {
+            if queues.contains_key(field) {
+                let _ = generated_sumeragi_queue_capacity(queues, field, 1)?;
+            }
+        }
+    }
     if let Some(table) = torii.as_ref()
         && let Some(da_ingest) = table.get("da_ingest")
         && !matches!(da_ingest, toml::Value::Table(_))
@@ -2291,8 +1937,38 @@ fn normalize_peer_config_overrides(
             "torii.da_ingest must be a table".to_owned(),
         ));
     }
+    if let Some(table) = torii.as_ref()
+        && let Some(operator_signatures) = table.get("operator_signatures")
+    {
+        let operator_signatures = operator_signatures.as_table().ok_or_else(|| {
+            SupervisorError::Config("torii.operator_signatures must be a table".to_owned())
+        })?;
+        if let Some(keys) = operator_signatures.get("allowed_public_keys") {
+            let keys = keys.as_array().ok_or_else(|| {
+                SupervisorError::Config(
+                    "torii.operator_signatures.allowed_public_keys must be an array of strings"
+                        .to_owned(),
+                )
+            })?;
+            if !keys.iter().all(|value| value.as_str().is_some()) {
+                return Err(SupervisorError::Config(
+                    "torii.operator_signatures.allowed_public_keys must be an array of strings"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
     ensure_local_mcp_config(torii)?;
     ensure_local_norito_rpc_config(torii)?;
+    Ok(())
+}
+fn reject_account_onboarding_override(torii: Option<&toml::Table>) -> Result<()> {
+    if torii.is_some_and(|table| table.contains_key("account_onboarding")) {
+        return Err(SupervisorError::Config(
+            "torii.account_onboarding is managed by Mochi's owner-only local runtime bundle"
+                .to_owned(),
+        ));
+    }
     Ok(())
 }
 fn nexus_table_uses_custom_topology(table: &toml::Table) -> bool {
@@ -2346,9 +2022,29 @@ fn ensure_local_mcp_config(torii: &mut Option<toml::Table>) -> Result<()> {
         .or_insert_with(|| {
             toml::Value::Array(vec![toml::Value::String(LOCAL_MCP_TOOL_PREFIX.to_owned())])
         });
-    if !matches!(mcp.get("allow_tool_prefixes"), Some(toml::Value::Array(_))) {
+    if mcp.get("enabled") != Some(&toml::Value::Boolean(true)) {
         return Err(SupervisorError::Config(
-            "torii.mcp.allow_tool_prefixes must be an array".to_owned(),
+            "torii.mcp.enabled must be true".to_owned(),
+        ));
+    }
+    if mcp.get("profile").and_then(toml::Value::as_str) != Some(LOCAL_MCP_PROFILE) {
+        return Err(SupervisorError::Config(format!(
+            "torii.mcp.profile must be `{LOCAL_MCP_PROFILE}`"
+        )));
+    }
+    if mcp.get("expose_operator_routes") != Some(&toml::Value::Boolean(false)) {
+        return Err(SupervisorError::Config(
+            "torii.mcp.expose_operator_routes must be false".to_owned(),
+        ));
+    }
+    let expected_prefixes = [toml::Value::String(LOCAL_MCP_TOOL_PREFIX.to_owned())];
+    if mcp
+        .get("allow_tool_prefixes")
+        .and_then(toml::Value::as_array)
+        .is_none_or(|prefixes| prefixes.as_slice() != expected_prefixes)
+    {
+        return Err(SupervisorError::Config(
+            "torii.mcp.allow_tool_prefixes must be exactly [\"iroha.\"]".to_owned(),
         ));
     }
     Ok(())
@@ -2380,6 +2076,74 @@ fn ensure_local_norito_rpc_config(torii: &mut Option<toml::Table>) -> Result<()>
     norito_rpc
         .entry("stage".to_owned())
         .or_insert(toml::Value::String(LOCAL_NORITO_RPC_STAGE.to_owned()));
+    if norito_rpc.get("enabled") != Some(&toml::Value::Boolean(true)) {
+        return Err(SupervisorError::Config(
+            "torii.transport.norito_rpc.enabled must be true".to_owned(),
+        ));
+    }
+    if norito_rpc.get("require_mtls") != Some(&toml::Value::Boolean(false)) {
+        return Err(SupervisorError::Config(
+            "torii.transport.norito_rpc.require_mtls must be false".to_owned(),
+        ));
+    }
+    if norito_rpc.get("stage").and_then(toml::Value::as_str) != Some(LOCAL_NORITO_RPC_STAGE) {
+        return Err(SupervisorError::Config(format!(
+            "torii.transport.norito_rpc.stage must be `{LOCAL_NORITO_RPC_STAGE}`"
+        )));
+    }
+    Ok(())
+}
+fn validate_genesis_profile_inputs(
+    genesis_profile: Option<GenesisProfile>,
+    vrf_seed_hex: Option<&str>,
+) -> Result<()> {
+    if let Some(profile) = genesis_profile
+        && profile.requires_seed()
+        && vrf_seed_hex.is_none()
+    {
+        return Err(SupervisorError::Config(format!(
+            "genesis profile {profile:?} requires a 32-byte hexadecimal VRF seed"
+        )));
+    }
+    if genesis_profile.is_none() && vrf_seed_hex.is_some() {
+        return Err(SupervisorError::Config(
+            "a VRF seed requires a genesis profile (NPoS mode)".to_owned(),
+        ));
+    }
+    if let Some(seed) = vrf_seed_hex
+        && (seed.len() != VRF_SEED_HEX_CHARS || !seed.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err(SupervisorError::Config(
+            "VRF seed must be exactly 32 hexadecimal bytes".to_owned(),
+        ));
+    }
+    Ok(())
+}
+fn validate_kagami_manifest_chain(value: &Value, expected_chain_id: &str) -> Result<()> {
+    let object = value.as_object().ok_or_else(|| {
+        SupervisorError::KagamiInvocation("`kagami` JSON payload must be an object".to_owned())
+    })?;
+    let raw_chain_id = object.get("chain").and_then(Value::as_str).ok_or_else(|| {
+        SupervisorError::KagamiInvocation(
+            "`kagami` JSON payload must contain a string `chain` field".to_owned(),
+        )
+    })?;
+    let chain_id = raw_chain_id.parse::<ChainId>().map_err(|error| {
+        SupervisorError::KagamiInvocation(format!(
+            "`kagami` emitted invalid chain id `{raw_chain_id}`: {error}"
+        ))
+    })?;
+    let canonical_chain_id = chain_id.to_string();
+    if raw_chain_id != canonical_chain_id {
+        return Err(SupervisorError::KagamiInvocation(format!(
+            "`kagami` emitted non-canonical chain id `{raw_chain_id}`; expected `{canonical_chain_id}`"
+        )));
+    }
+    if canonical_chain_id != expected_chain_id {
+        return Err(SupervisorError::KagamiInvocation(format!(
+            "`kagami` emitted chain id `{canonical_chain_id}` instead of requested `{expected_chain_id}`"
+        )));
+    }
     Ok(())
 }
 fn parse_table_u32(table: &toml::Table, key: &str, label: &str) -> Result<Option<u32>> {
@@ -2440,6 +2204,11 @@ impl LaneCatalogSummary {
                     "nexus.lane_catalog[{idx}] must be a table"
                 )));
             };
+            if !matches!(table.get("metadata"), Some(toml::Value::Table(_))) {
+                return Err(SupervisorError::Config(format!(
+                    "nexus.lane_catalog[{idx}].metadata must be an explicit table"
+                )));
+            }
             let index = match table.get("index") {
                 Some(toml::Value::Integer(raw)) => {
                     if *raw < 0 {
@@ -2481,21 +2250,22 @@ struct PeerConfigOverrides {
 }
 impl std::fmt::Debug for PeerConfigOverrides {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut torii = self.torii.clone();
-        if let Some(torii) = torii.as_mut()
-            && torii.contains_key("account_onboarding")
-        {
-            torii.insert(
-                "account_onboarding".to_owned(),
-                toml::Value::String("[REDACTED managed account onboarding]".to_owned()),
-            );
-        }
         formatter
             .debug_struct("PeerConfigOverrides")
-            .field("nexus", &self.nexus)
-            .field("sumeragi", &self.sumeragi)
-            .field("torii", &torii)
+            .field("nexus_present", &self.nexus.is_some())
+            .field("sumeragi_present", &self.sumeragi.is_some())
+            .field("torii_present", &self.torii.is_some())
             .finish()
+    }
+}
+impl Drop for PeerConfigOverrides {
+    fn drop(&mut self) {
+        for table in [&mut self.nexus, &mut self.sumeragi, &mut self.torii]
+            .into_iter()
+            .flatten()
+        {
+            zeroize_toml_table(table);
+        }
     }
 }
 /// Supervises a prepared set of peers for a local network.
@@ -2504,15 +2274,14 @@ pub struct Supervisor {
     profile: NetworkProfile,
     paths: NetworkPaths,
     chain_id: String,
+    genesis_profile: Option<GenesisProfile>,
+    vrf_seed_hex: Option<String>,
     genesis: GenesisMaterial,
     peers: Vec<PeerHandle>,
     signers: Vec<SigningAuthority>,
     onboarding: OnboardingRuntimeBundle,
     binaries: BinaryPaths,
     peer_config_overrides: PeerConfigOverrides,
-    compatibility: Option<CompatibilityReport>,
-    irohad_ready: bool,
-    iroha_cli_ready: bool,
     _ownership_lock: Arc<SupervisorOwnershipLock>,
 }
 impl Supervisor {
@@ -2520,37 +2289,11 @@ impl Supervisor {
     pub fn nexus_config_overrides(&self) -> Option<&toml::Table> {
         self.peer_config_overrides.nexus.as_ref()
     }
-    /// Access the Sumeragi config overrides applied when rendering peer configs.
-    pub fn sumeragi_config_overrides(&self) -> Option<&toml::Table> {
-        self.peer_config_overrides.sumeragi.as_ref()
-    }
-    /// Access the Torii config overrides applied when rendering peer configs.
-    pub fn torii_config_overrides(&self) -> Option<&toml::Table> {
-        self.peer_config_overrides.torii.as_ref()
-    }
     fn ensure_irohad(&mut self) -> Result<&Path> {
-        if !self.irohad_ready {
-            let path = self.binaries.ensure_irohad_ready()?;
-            // Store the resolved path back so subsequent calls reuse it.
-            self.irohad_ready = true;
-            return Ok(path);
-        }
-        Ok(self.binaries.irohad_executable())
+        self.binaries.ensure_irohad_ready()
     }
     fn irohad_path(&mut self) -> Result<PathBuf> {
         self.ensure_irohad().map(|path| path.to_path_buf())
-    }
-    fn ensure_iroha_cli(&mut self) -> Result<&Path> {
-        if !self.iroha_cli_ready {
-            let path = self.binaries.ensure_iroha_cli_ready()?;
-            self.iroha_cli_ready = true;
-            return Ok(path);
-        }
-        Ok(self.binaries.iroha_cli_executable())
-    }
-    /// Resolve the path to the configured `iroha_cli` binary, verifying it if necessary.
-    pub fn iroha_cli_path(&mut self) -> Result<PathBuf> {
-        self.ensure_iroha_cli().map(|path| path.to_path_buf())
     }
     fn refresh_peer_states_with(&mut self, irohad: &Path) {
         let ownership_lock = Arc::clone(&self._ownership_lock);
@@ -2670,9 +2413,9 @@ impl Supervisor {
         Ok((selected, selection_lease))
     }
     fn retain_ownership_lock_indefinitely(&self) {
-        // A failed stop can leave an unmanaged child alive. Keep the advisory
-        // ownership lock held until this process exits so no replacement can
-        // start against that possibly-live runtime.
+        // An unresolved child or filesystem commit can leave runtime ownership
+        // ambiguous. Keep the advisory lock held until this process exits so no
+        // replacement can start before deterministic recovery completes.
         std::mem::forget(Arc::clone(&self._ownership_lock));
     }
     /// Path to the generated genesis manifest.
@@ -2683,21 +2426,9 @@ impl Supervisor {
     pub fn genesis_block_file(&self) -> &Path {
         &self.genesis.block_path
     }
-    /// Optional verification report emitted by `kagami verify` when a profile is selected.
-    pub fn genesis_verify_report(&self) -> Option<&KagamiVerifyReport> {
-        self.genesis.verify_report.as_ref()
-    }
-    /// Cached compatibility summary for the configured binaries and genesis.
-    pub fn compatibility(&self) -> Option<&CompatibilityReport> {
-        self.compatibility.as_ref()
-    }
     /// Returns the prepared peers in their current states.
     pub fn peers(&self) -> &[PeerHandle] {
         &self.peers
-    }
-    /// Mutable access to the managed peers (primarily for UI refresh logic).
-    pub fn peers_mut(&mut self) -> &mut [PeerHandle] {
-        &mut self.peers
     }
     /// Available signing authorities for local transactions.
     pub fn signers(&self) -> &[SigningAuthority] {
@@ -2708,16 +2439,11 @@ impl Supervisor {
     pub fn signer_vault(&self) -> SignerVault {
         SignerVault::new(&self.paths)
     }
-    /// Reload signing authorities from disk, applying fallback keys when necessary.
-    pub fn reload_signers(&mut self) {
-        let vault = SignerVault::new(&self.paths);
-        self.signers = vault.load_with_fallback();
-    }
     /// Persist new signing authorities and refresh the in-memory cache.
     pub fn save_signers(&mut self, signers: &[SigningAuthority]) -> Result<()> {
         let vault = SignerVault::new(&self.paths);
         vault.save(signers)?;
-        self.signers = vault.load_with_fallback();
+        self.signers = signers.to_vec();
         Ok(())
     }
     /// Build a readiness smoke plan using the genesis signing authority.
@@ -2799,8 +2525,6 @@ impl Supervisor {
             torii_url,
             mcp_url,
             account_id: signer.map(|entry| entry.account_id().to_string()),
-            private_key: signer
-                .map(|entry| ExposedPrivateKey(entry.key_pair().private_key().clone()).to_string()),
             onboarding_credential_id: LOCAL_ONBOARDING_CREDENTIAL_ID.to_owned(),
             onboarding_signer_file: self.onboarding.private_key_file.clone(),
             onboarding_token_file: self.onboarding.token_file.clone(),
@@ -2855,41 +2579,9 @@ impl Supervisor {
     pub fn binaries(&self) -> &BinaryPaths {
         &self.binaries
     }
-    fn run_compatibility_checks(&mut self) -> Result<()> {
-        let versions = self.binaries.probe_versions()?;
-        if self.genesis.profile.is_some()
-            && let Some(report) = &self.genesis.verify_report
-        {
-            if let Some(chain_id) = &report.chain_id
-                && chain_id != &self.chain_id
-            {
-                return Err(SupervisorError::KagamiVerify(format!(
-                    "kagami verify reported chain `{chain_id}` but supervisor is configured for `{}`",
-                    self.chain_id
-                )));
-            }
-            if let Some(expected_seed) = &self.genesis.vrf_seed_hex
-                && let Some(observed_seed) = &report.vrf_seed_hex
-                && observed_seed != expected_seed
-            {
-                return Err(SupervisorError::KagamiVerify(format!(
-                    "kagami verify reported vrf seed `{observed_seed}` but `{expected}` was configured",
-                    expected = expected_seed
-                )));
-            }
-        }
-        self.compatibility = Some(CompatibilityReport {
-            versions,
-            verify: self.genesis.verify_report.clone(),
-            chain_id: self.chain_id.clone(),
-            profile: self.genesis.profile,
-        });
-        Ok(())
-    }
     /// Start all peers managed by the supervisor.
     pub fn start_all(&mut self) -> Result<()> {
         let (_selected, _selection_lease) = self.selected_generation_with_lease()?;
-        self.run_compatibility_checks()?;
         let irohad_path = self.irohad_path()?;
         self.refresh_peer_states_with(&irohad_path);
         let mut started = Vec::new();
@@ -2931,7 +2623,6 @@ impl Supervisor {
     /// Start a single peer by alias.
     pub fn start_peer(&mut self, alias: &str) -> Result<()> {
         let (_selected, _selection_lease) = self.selected_generation_with_lease()?;
-        self.run_compatibility_checks()?;
         let index = self
             .peers
             .iter()
@@ -2968,7 +2659,11 @@ impl Supervisor {
     /// The snapshot contains peer storage directories, rendered configs, and the latest genesis
     /// manifest so users can quickly restore the network to its present state.
     pub fn export_snapshot(&mut self, label: Option<&str>) -> Result<PathBuf> {
-        self.export_snapshot_inner(label, || {})
+        self.export_snapshot_inner(
+            label,
+            #[cfg(test)]
+            || {},
+        )
     }
     #[cfg(test)]
     pub(super) fn export_snapshot_with_selection_hook<F>(
@@ -2981,15 +2676,13 @@ impl Supervisor {
     {
         self.export_snapshot_inner(label, selection_hook)
     }
-    fn export_snapshot_inner<F>(
+    fn export_snapshot_inner(
         &mut self,
         label: Option<&str>,
-        selection_hook: F,
-    ) -> Result<PathBuf>
-    where
-        F: FnOnce(),
-    {
+        #[cfg(test)] selection_hook: impl FnOnce(),
+    ) -> Result<PathBuf> {
         let (_verified, _selection_lease) = self.selected_generation_with_lease()?;
+        #[cfg(test)]
         selection_hook();
         if let Ok(path) = self.irohad_path() {
             self.refresh_peer_states_with(&path);
@@ -3108,7 +2801,17 @@ impl Supervisor {
     /// Snapshots are bound to one immutable generation. Configuration and
     /// genesis artifacts are verified but never overwritten during restore.
     pub fn restore_snapshot<P: AsRef<Path>>(&mut self, snapshot: P) -> Result<PathBuf> {
-        self.restore_snapshot_inner(snapshot, || {})
+        self.restore_snapshot_inner(
+            snapshot,
+            #[cfg(test)]
+            || {},
+            #[cfg(test)]
+            |_| Ok(()),
+            #[cfg(test)]
+            |supervisor, aliases| supervisor.restore_captured_running_peers(aliases),
+            #[cfg(test)]
+            SnapshotRestoreTransaction::commit,
+        )
     }
     #[cfg(test)]
     pub(super) fn restore_snapshot_with_selection_hook<P, F>(
@@ -3120,12 +2823,83 @@ impl Supervisor {
         P: AsRef<Path>,
         F: FnOnce(),
     {
-        self.restore_snapshot_inner(snapshot, selection_hook)
+        self.restore_snapshot_inner(
+            snapshot,
+            selection_hook,
+            |_| Ok(()),
+            |supervisor, aliases| supervisor.restore_captured_running_peers(aliases),
+            SnapshotRestoreTransaction::commit,
+        )
     }
-    fn restore_snapshot_inner<P, F>(&mut self, snapshot: P, selection_hook: F) -> Result<PathBuf>
+    #[cfg(test)]
+    fn restore_snapshot_with_swap_hook<P, F>(
+        &mut self,
+        snapshot: P,
+        swap_hook: F,
+    ) -> Result<PathBuf>
     where
         P: AsRef<Path>,
-        F: FnOnce(),
+        F: FnMut(usize) -> Result<()>,
+    {
+        self.restore_snapshot_inner(
+            snapshot,
+            || {},
+            swap_hook,
+            |supervisor, aliases| supervisor.restore_captured_running_peers(aliases),
+            SnapshotRestoreTransaction::commit,
+        )
+    }
+    #[cfg(test)]
+    fn restore_snapshot_with_restart_hook<P, F>(
+        &mut self,
+        snapshot: P,
+        restart_hook: F,
+    ) -> Result<PathBuf>
+    where
+        P: AsRef<Path>,
+        F: FnOnce(&mut Self, &[String]) -> Result<()>,
+    {
+        self.restore_snapshot_inner(
+            snapshot,
+            || {},
+            |_| Ok(()),
+            restart_hook,
+            SnapshotRestoreTransaction::commit,
+        )
+    }
+    #[cfg(test)]
+    fn restore_snapshot_with_commit_hook<P, F>(
+        &mut self,
+        snapshot: P,
+        commit_hook: F,
+    ) -> Result<PathBuf>
+    where
+        P: AsRef<Path>,
+        F: FnOnce(
+            &mut SnapshotRestoreTransaction,
+        ) -> std::result::Result<(), SnapshotRestoreCommitFailure>,
+    {
+        self.restore_snapshot_inner(
+            snapshot,
+            || {},
+            |_| Ok(()),
+            |supervisor, aliases| supervisor.restore_captured_running_peers(aliases),
+            commit_hook,
+        )
+    }
+    fn restore_snapshot_inner<P>(
+        &mut self,
+        snapshot: P,
+        #[cfg(test)] selection_hook: impl FnOnce(),
+        #[cfg(test)] mut swap_hook: impl FnMut(usize) -> Result<()>,
+        #[cfg(test)] restart_hook: impl FnOnce(&mut Self, &[String]) -> Result<()>,
+        #[cfg(test)] commit_hook: impl FnOnce(
+            &mut SnapshotRestoreTransaction,
+        )
+            -> std::result::Result<(), SnapshotRestoreCommitFailure>,
+    ) -> Result<PathBuf>
+    where
+        P: AsRef<Path>,
     {
         let candidate = snapshot.as_ref();
         let snapshot_root = if candidate.is_absolute() {
@@ -3151,8 +2925,10 @@ impl Supervisor {
             )));
         }
         let (verified_generation, _selection_lease) = self.selected_generation_with_lease()?;
+        #[cfg(test)]
         selection_hook();
-        let metadata = load_snapshot_metadata(&snapshot_root)?;
+        let expected_peer_aliases = self.peers.iter().map(PeerHandle::alias).collect::<Vec<_>>();
+        let metadata = load_snapshot_metadata(&snapshot_root, &expected_peer_aliases)?;
         if metadata.chain_id != self.chain_id {
             return Err(SupervisorError::Config(format!(
                 "snapshot `{}` targets chain `{}` but the supervisor is configured for `{}`",
@@ -3262,25 +3038,13 @@ impl Supervisor {
                     .join("config.toml"),
                 &format!("config for peer `{}`", peer.alias()),
             )?;
-            let expected_hash = metadata.kura_hashes.get(peer.alias()).ok_or_else(|| {
-                SupervisorError::Config(format!(
-                    "snapshot `{}` metadata missing kura hash for peer `{}`",
-                    snapshot_root.display(),
-                    peer.alias()
-                ))
-            })?;
-            let storage_src = alias_dir.join("storage");
-            let actual_hash = hash_directory(&storage_src)?;
-            if &actual_hash != expected_hash {
-                return Err(SupervisorError::Config(format!(
-                    "snapshot `{}` storage for peer `{}` failed integrity check: expected {} but found {}",
-                    snapshot_root.display(),
-                    peer.alias(),
-                    expected_hash,
-                    actual_hash
-                )));
-            }
         }
+        let mut restore_transaction = SnapshotRestoreTransaction::stage(
+            self.paths.root(),
+            &peers_root,
+            &self.peers,
+            &metadata.kura_hashes,
+        )?;
         if let Ok(path) = self.irohad_path() {
             self.refresh_peer_states_with(&path);
         }
@@ -3288,22 +3052,87 @@ impl Supervisor {
         if let Err(primary) = self.stop_captured_running_peers(&previously_running) {
             return Err(self.restore_running_set_after_error(&previously_running, primary));
         }
-        let restore = (|| -> Result<()> {
-            for peer in &mut self.peers {
-                let alias_dir = peers_root.join(peer.alias());
-                peer.wipe_storage()?;
-                copy_dir_recursive(&alias_dir.join("storage"), peer.storage_dir())?;
-                copy_file_if_exists(&alias_dir.join("latest.log"), peer.log_path())?;
-            }
-            Ok(())
-        })();
-        match restore {
-            Ok(()) => {
-                self.restore_captured_running_peers(&previously_running)?;
-                Ok(snapshot_root)
-            }
-            Err(primary) => Err(self.restore_running_set_after_error(&previously_running, primary)),
+        #[cfg(test)]
+        let restore = restore_transaction.apply(&mut swap_hook);
+        #[cfg(not(test))]
+        let restore = restore_transaction.apply(|_| Ok(()));
+        if let Err(failure) = restore {
+            return match failure {
+                SnapshotRestoreApplyFailure::RolledBack(primary) => {
+                    Err(self.restore_running_set_after_error(&previously_running, primary))
+                }
+                SnapshotRestoreApplyFailure::RollbackFailed { primary, rollback } => {
+                    self.retain_ownership_lock_indefinitely();
+                    Err(SupervisorError::Config(format!(
+                        "snapshot restore failed: {primary}; rollback also failed: {rollback}; peers remain stopped and recovery artifacts were retained"
+                    )))
+                }
+            };
         }
+        #[cfg(test)]
+        let restarted = restart_hook(self, &previously_running);
+        #[cfg(not(test))]
+        let restarted = self.restore_captured_running_peers(&previously_running);
+        if let Err(primary) = restarted {
+            return Err(self.abort_applied_snapshot_restore(
+                &mut restore_transaction,
+                &previously_running,
+                primary,
+            ));
+        }
+        if let Err(primary) = self.verify_captured_peers_survive(
+            &previously_running,
+            SNAPSHOT_RESTORE_RESTART_SURVIVAL_GRACE,
+        ) {
+            return Err(self.abort_applied_snapshot_restore(
+                &mut restore_transaction,
+                &previously_running,
+                primary,
+            ));
+        }
+        #[cfg(test)]
+        let commit = commit_hook(&mut restore_transaction);
+        #[cfg(not(test))]
+        let commit = restore_transaction.commit();
+        if let Err(error) = commit {
+            return match error {
+                SnapshotRestoreCommitFailure::NotPublished { source } => Err(self
+                    .abort_applied_snapshot_restore(
+                        &mut restore_transaction,
+                        &previously_running,
+                        source.into(),
+                    )),
+                error @ SnapshotRestoreCommitFailure::PublicationUncertain { .. } => {
+                    restore_transaction.preserve_installed_state();
+                    self.retain_ownership_lock_indefinitely();
+                    Err(SupervisorError::Config(format!(
+                        "{error}; restored state, the commit journal, and original backups were retained for deterministic startup reconciliation"
+                    )))
+                }
+            };
+        }
+        Ok(snapshot_root)
+    }
+    fn abort_applied_snapshot_restore(
+        &mut self,
+        transaction: &mut SnapshotRestoreTransaction,
+        previously_running: &[String],
+        primary: SupervisorError,
+    ) -> SupervisorError {
+        if let Err(stop_error) = self.stop_running_captured_peers(previously_running) {
+            transaction.preserve_installed_state();
+            self.retain_ownership_lock_indefinitely();
+            return SupervisorError::Config(format!(
+                "snapshot restore could not commit: {primary}; restored peers could not be stopped for rollback: {stop_error}; restored state and original backups were retained"
+            ));
+        }
+        if let Err(rollback) = transaction.rollback() {
+            self.retain_ownership_lock_indefinitely();
+            return SupervisorError::Config(format!(
+                "snapshot restore could not commit: {primary}; storage rollback also failed: {rollback}; peers remain stopped and recovery artifacts were retained"
+            ));
+        }
+        self.restore_running_set_after_error(previously_running, primary)
     }
 }
 impl Drop for Supervisor {
@@ -3383,19 +3212,6 @@ impl PeerHandle {
     }
     pub(crate) fn kura_store_dir(&self) -> &Path {
         &self.spec.kura_dir
-    }
-    fn wipe_storage(&self) -> Result<()> {
-        if self.is_running() {
-            return Err(SupervisorError::PeerStillRunning {
-                alias: self.spec.alias.clone(),
-            });
-        }
-        if self.storage_dir().exists() {
-            fs::remove_dir_all(self.storage_dir())?;
-        }
-        fs::create_dir_all(self.storage_dir())?;
-        fs::create_dir_all(self.snapshot_dir().join(SNAPSHOT_GENERATIONS_DIR_NAME))?;
-        Ok(())
     }
     fn replace_spec(&mut self, spec: PeerSpec) {
         self.spec = spec;
@@ -3924,7 +3740,7 @@ impl PeerSpec {
             .as_ref()
             .and_then(|torii| torii.get("account_onboarding"))
             .cloned();
-        let mut root = toml::Table::new();
+        let mut root = SecretTomlTable::default();
         root.insert("chain".into(), toml::Value::String(chain_id.to_owned()));
         root.insert(
             "chain_discriminant".into(),
@@ -4015,6 +3831,19 @@ impl PeerSpec {
                 toml::Value::Table(soranet_handshake),
             );
         }
+        let vpn_operator_account = AccountId::new(self.keys.identity_public_key.clone())
+            .to_i105_for_discriminant(genesis.chain_discriminant)
+            .map_err(|error| {
+                SupervisorError::Config(format!(
+                    "failed to encode the managed VPN operator account: {error}"
+                ))
+            })?;
+        let mut soranet_vpn = toml::Table::new();
+        soranet_vpn.insert(
+            "operator_account_id".into(),
+            toml::Value::String(vpn_operator_account),
+        );
+        network.insert("soranet_vpn".into(), toml::Value::Table(soranet_vpn));
         root.insert("network".into(), toml::Value::Table(network));
         let torii_bind = socket_addr_literal(&self.torii_bind, "torii.address")?;
         let mut torii = toml::Table::new();
@@ -4068,13 +3897,10 @@ impl PeerSpec {
             }
         }
         root.insert("torii".into(), toml::Value::Table(torii));
-        // Streaming components persist sessions and provisioned routes even
-        // when a developer does not exercise streaming. Give every peer its
-        // own absolute state tree instead of inheriting process-wide relative
-        // defaults from Mochi's launcher directory.
+        // Streaming persists sessions even when a developer does not exercise
+        // it. Give every peer its own absolute state tree instead of inheriting
+        // process-wide relative defaults from Mochi's launcher directory.
         let streaming_dir = self.storage_dir.canonicalize()?.join("streaming");
-        let soranet_spool_dir = streaming_dir.join("soranet_routes");
-        let soravpn_spool_dir = streaming_dir.join("soravpn_routes");
         let mut streaming = toml::Table::new();
         streaming.insert(
             "identity_public_key".into(),
@@ -4094,23 +3920,6 @@ impl PeerSpec {
             toml::Value::String(self.rans_tables_path.display().to_string()),
         );
         streaming.insert("codec".into(), toml::Value::Table(codec));
-        let mut soranet = toml::Table::new();
-        // Automatic route provisioning is optional and unused by Mochi's
-        // local/NEVO profile. An explicit overlay can opt in without changing
-        // ownership of the provision spool.
-        restore_streaming_soranet_defaults(&mut soranet);
-        soranet.insert(
-            "provision_spool_dir".into(),
-            toml::Value::String(soranet_spool_dir.display().to_string()),
-        );
-        streaming.insert("soranet".into(), toml::Value::Table(soranet));
-        let mut soravpn = toml::Table::new();
-        restore_streaming_soravpn_defaults(&mut soravpn);
-        soravpn.insert(
-            "provision_spool_dir".into(),
-            toml::Value::String(soravpn_spool_dir.display().to_string()),
-        );
-        streaming.insert("soravpn".into(), toml::Value::Table(soravpn));
         root.insert("streaming".into(), toml::Value::Table(streaming));
         let mut genesis_table = toml::Table::new();
         genesis_table.insert(
@@ -4255,8 +4064,6 @@ impl PeerSpec {
         // validating that the overlay did not try to redirect it.
         sorafs_storage.insert("data_dir".into(), toml::Value::String(expected_sorafs_dir));
         let expected_streaming_dir = streaming_dir.display().to_string();
-        let expected_soranet_spool_dir = soranet_spool_dir.display().to_string();
-        let expected_soravpn_spool_dir = soravpn_spool_dir.display().to_string();
         let streaming = root
             .entry("streaming")
             .or_insert_with(|| toml::Value::Table(toml::Table::new()))
@@ -4273,9 +4080,9 @@ impl PeerSpec {
             "session_store_dir".into(),
             toml::Value::String(expected_streaming_dir),
         );
-        // A shallow `[streaming.soranet]` overlay replaces the generated
-        // top-level streaming table. Restore required peer identity fields
-        // only when absent, while retaining any explicit overlay values.
+        // A shallow `[streaming]` overlay replaces the generated table. Restore
+        // required peer identity fields only when absent, while retaining any
+        // explicit overlay values.
         streaming
             .entry("identity_public_key")
             .or_insert_with(|| toml::Value::String(self.keys.identity_public_key.to_string()));
@@ -4317,55 +4124,14 @@ impl PeerSpec {
             "rans_tables_path".into(),
             toml::Value::String(expected_rans_tables_path),
         );
-        let soranet = streaming
-            .entry("soranet")
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .ok_or_else(|| {
-                SupervisorError::Config("streaming.soranet must be a table".to_owned())
-            })?;
-        if let Some(configured) = soranet.get("provision_spool_dir")
-            && configured.as_str() != Some(expected_soranet_spool_dir.as_str())
-        {
-            return Err(SupervisorError::Config(format!(
-                "temporary config overlays must preserve Mochi's managed SoraNet provision spool `{expected_soranet_spool_dir}`"
-            )));
-        }
-        soranet.insert(
-            "provision_spool_dir".into(),
-            toml::Value::String(expected_soranet_spool_dir),
-        );
-        soranet
-            .entry("enabled")
-            .or_insert(toml::Value::Boolean(false));
-        restore_streaming_soranet_defaults(soranet);
-        let soravpn = streaming
-            .entry("soravpn")
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .ok_or_else(|| {
-                SupervisorError::Config("streaming.soravpn must be a table".to_owned())
-            })?;
-        if let Some(configured) = soravpn.get("provision_spool_dir")
-            && configured.as_str() != Some(expected_soravpn_spool_dir.as_str())
-        {
-            return Err(SupervisorError::Config(format!(
-                "temporary config overlays must preserve Mochi's managed SoraVPN provision spool `{expected_soravpn_spool_dir}`"
-            )));
-        }
-        soravpn.insert(
-            "provision_spool_dir".into(),
-            toml::Value::String(expected_soravpn_spool_dir),
-        );
-        restore_streaming_soravpn_defaults(soravpn);
         let header = Self::config_header(
             chain_id,
             genesis,
             &self.kura_dir,
             config_overrides.nexus.as_ref(),
         );
-        let config_str = toml::to_string_pretty(&toml::Value::Table(root))?;
-        let rendered = format!("{header}\n\n{config_str}");
+        let config_str = Zeroizing::new(toml::to_string_pretty(&*root)?);
+        let rendered = Zeroizing::new(format!("{header}\n\n{}", config_str.as_str()));
         self.write_owner_only_config(rendered.as_bytes())?;
         Ok(())
     }
@@ -4477,9 +4243,6 @@ struct GenesisMaterial {
     public_key_path: PathBuf,
     expected_hash: Option<HashOf<BlockHeader>>,
     chain_discriminant: u16,
-    profile: Option<GenesisProfile>,
-    vrf_seed_hex: Option<String>,
-    verify_report: Option<KagamiVerifyReport>,
     consensus_fingerprint: Option<String>,
 }
 #[derive(Clone, Copy)]
@@ -4521,7 +4284,8 @@ impl TemporaryGenesisKeyFile {
                 Err(error) => return Err(error.into()),
             };
             let guard = Self { path };
-            let canonical = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
+            let canonical =
+                Zeroizing::new(ExposedPrivateKey(key_pair.private_key().clone()).to_string());
             file.write_all(canonical.as_bytes())?;
             file.write_all(b"\n")?;
             file.sync_all()?;
@@ -4670,9 +4434,6 @@ impl GenesisMaterial {
             public_key_path,
             expected_hash: None,
             chain_discriminant: manifest.chain_discriminant(),
-            profile: genesis_profile,
-            vrf_seed_hex: vrf_seed_hex.map(|value| value.to_owned()),
-            verify_report: None,
             consensus_fingerprint: None,
         };
         let primary = peers.first().ok_or_else(|| {
@@ -4688,35 +4449,23 @@ impl GenesisMaterial {
         let (manifest, expected_hash) = material.sign_manifest_with_kagami(
             binaries,
             primary.config_path.as_path(),
+            #[cfg(any(test, feature = "test"))]
             consensus_mode,
         )?;
         material.expected_hash = Some(expected_hash);
-        let verify_report = if let Some(profile) = genesis_profile {
-            Some(Self::verify_manifest_with_kagami(
+        if let Some(profile) = genesis_profile {
+            Self::verify_manifest_with_kagami(
                 binaries,
                 &material.manifest_path,
                 profile,
                 vrf_seed_hex,
-            )?)
-        } else {
-            None
-        };
-        let consensus_fingerprint = verify_report
-            .as_ref()
-            .and_then(|report| report.fingerprint.clone())
-            .or_else(|| {
-                manifest
-                    .consensus_fingerprint()
-                    .map(|value| value.to_string())
-            })
-            .or_else(|| {
-                let normalized = manifest.clone().with_consensus_meta();
-                normalized
-                    .consensus_fingerprint()
-                    .map(|value| value.to_string())
-            });
-        material.verify_report = verify_report;
-        material.consensus_fingerprint = consensus_fingerprint;
+            )?;
+        }
+        material.consensus_fingerprint = manifest
+            .clone()
+            .with_consensus_meta()
+            .consensus_fingerprint()
+            .map(|value| value.to_string());
         Ok(material)
     }
     fn copy_into_generation(&self, generation_id: &str, generation_root: &Path) -> Result<Self> {
@@ -4739,9 +4488,6 @@ impl GenesisMaterial {
             public_key_path,
             expected_hash: self.expected_hash,
             chain_discriminant: self.chain_discriminant,
-            profile: self.profile,
-            vrf_seed_hex: self.vrf_seed_hex.clone(),
-            verify_report: self.verify_report.clone(),
             consensus_fingerprint: self.consensus_fingerprint.clone(),
         })
     }
@@ -4749,7 +4495,7 @@ impl GenesisMaterial {
         &self,
         binaries: &mut BinaryPaths,
         config_path: &Path,
-        consensus_mode: SumeragiConsensusMode,
+        #[cfg(any(test, feature = "test"))] consensus_mode: SumeragiConsensusMode,
     ) -> Result<(RawGenesisTransaction, HashOf<BlockHeader>)> {
         let kagami = binaries.ensure_kagami_ready()?;
         let genesis_dir = self.manifest_path.parent().ok_or_else(|| {
@@ -4775,11 +4521,6 @@ impl GenesisMaterial {
             .arg(private_key_file.path())
             .arg("--config")
             .arg(config_path)
-            .arg("--consensus-mode")
-            .arg(match consensus_mode {
-                SumeragiConsensusMode::Permissioned => "permissioned",
-                SumeragiConsensusMode::Npos => "npos",
-            })
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -5010,45 +4751,7 @@ impl GenesisMaterial {
         genesis_profile: Option<GenesisProfile>,
         vrf_seed_hex: Option<&str>,
     ) -> Result<RawGenesisTransaction> {
-        if std::env::var_os("MOCHI_TEST_USE_INTERNAL_GENESIS").is_some() {
-            if let Some(profile) = genesis_profile {
-                return Err(SupervisorError::KagamiInvocation(format!(
-                    "MOCHI_TEST_USE_INTERNAL_GENESIS cannot satisfy genesis profile {profile:?}; unset the override to invoke kagami"
-                )));
-            }
-            // Test-only escape hatch so integration harnesses can reuse the internal
-            // genesis helper without shelling out to Kagami.
-            let chain = chain_id.parse::<ChainId>().map_err(|error| {
-                SupervisorError::KagamiInvocation(format!(
-                    "configured chain id must be canonical: {error}"
-                ))
-            })?;
-            return crate::genesis::default_manifest(
-                chain,
-                genesis_public_key,
-                genesis_dir.to_path_buf(),
-                consensus_mode,
-                None,
-            )
-            .map_err(|err| {
-                SupervisorError::KagamiInvocation(format!(
-                    "failed to generate internal genesis manifest: {err}"
-                ))
-            });
-        }
-        if let Some(profile) = genesis_profile
-            && profile.requires_seed()
-            && vrf_seed_hex.is_none()
-        {
-            return Err(SupervisorError::KagamiInvocation(format!(
-                "profile {profile:?} requires `--vrf-seed-hex <hex>` when generating genesis"
-            )));
-        }
-        if genesis_profile.is_none() && vrf_seed_hex.is_some() {
-            return Err(SupervisorError::KagamiInvocation(
-                "`--vrf-seed-hex` requires a genesis profile (NPoS mode)".into(),
-            ));
-        }
+        validate_genesis_profile_inputs(genesis_profile, vrf_seed_hex)?;
         let kagami = binaries.ensure_kagami_ready()?;
         let mut command = Command::new(kagami);
         command
@@ -5093,15 +4796,12 @@ impl GenesisMaterial {
                 "`kagami` did not emit genesis JSON".into(),
             ));
         }
-        let mut value: Value = norito::json::from_slice(&output.stdout).map_err(|err| {
+        let value: Value = norito::json::from_slice(&output.stdout).map_err(|err| {
             SupervisorError::KagamiInvocation(format!(
                 "failed to parse `kagami` JSON output: {err}"
             ))
         })?;
-        let object = value.as_object_mut().ok_or_else(|| {
-            SupervisorError::KagamiInvocation("`kagami` JSON payload must be an object".into())
-        })?;
-        object.insert("chain".into(), Value::String(chain_id.to_owned()));
+        validate_kagami_manifest_chain(&value, chain_id)?;
         let manifest: RawGenesisTransaction = norito::json::from_value(value).map_err(|err| {
             SupervisorError::KagamiInvocation(format!(
                 "failed to decode genesis manifest from `kagami` output: {err}"
@@ -5114,7 +4814,7 @@ impl GenesisMaterial {
         manifest_path: &Path,
         profile: GenesisProfile,
         vrf_seed_hex: Option<&str>,
-    ) -> Result<KagamiVerifyReport> {
+    ) -> Result<()> {
         let kagami = binaries.ensure_kagami_ready()?;
         let mut command = Command::new(kagami);
         command
@@ -5128,12 +4828,11 @@ impl GenesisMaterial {
         }
         command
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped());
         let output = command.output().map_err(|err| {
             SupervisorError::KagamiInvocation(format!("failed to invoke `kagami verify`: {err}"))
         })?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if !output.status.success() {
             return Err(SupervisorError::KagamiInvocation(format!(
@@ -5141,15 +4840,7 @@ impl GenesisMaterial {
                 output.status
             )));
         }
-        let mut combined = stdout.trim_end().to_owned();
-        let stderr_trimmed = stderr.trim_end();
-        if !stderr_trimmed.is_empty() {
-            if !combined.is_empty() {
-                combined.push('\n');
-            }
-            combined.push_str(stderr_trimmed);
-        }
-        Ok(parse_kagami_verify_output(profile, vrf_seed_hex, &combined))
+        Ok(())
     }
     fn public_key(&self) -> &PublicKey {
         self.key_pair.public_key()
@@ -5214,22 +4905,6 @@ fn validate_managed_peer_paths_against(
             streaming_dir.clone(),
         ),
         (
-            "streaming.soranet.provision_spool_dir",
-            config
-                .managed_paths
-                .streaming_soranet_provision_spool_dir
-                .clone(),
-            streaming_dir.join("soranet_routes"),
-        ),
-        (
-            "streaming.soravpn.provision_spool_dir",
-            config
-                .managed_paths
-                .streaming_soravpn_provision_spool_dir
-                .clone(),
-            streaming_dir.join("soravpn_routes"),
-        ),
-        (
             "streaming.codec.rans_tables_path",
             config.managed_paths.streaming_rans_tables_path.clone(),
             rans_tables_path.to_path_buf(),
@@ -5279,6 +4954,1054 @@ struct SnapshotMetadata {
     genesis_hash: Hash,
     kura_hashes: HashMap<String, Hash>,
 }
+struct StagedPeerRestore {
+    alias: String,
+    live_storage: PathBuf,
+    staged_storage: PathBuf,
+    backup_storage: PathBuf,
+    live_log: PathBuf,
+    staged_log: Option<PathBuf>,
+    backup_log: PathBuf,
+    original_log_present: bool,
+    log_touched: bool,
+    storage_backed_up: bool,
+    storage_installed: bool,
+    log_backed_up: bool,
+    log_installed: bool,
+}
+struct SnapshotRestoreTransaction {
+    network_root: PathBuf,
+    journal_path: PathBuf,
+    commit_marker_path: PathBuf,
+    peers: Vec<StagedPeerRestore>,
+    committed: bool,
+    preserve_backups: bool,
+}
+enum SnapshotRestoreApplyFailure {
+    RolledBack(SupervisorError),
+    RollbackFailed {
+        primary: SupervisorError,
+        rollback: io::Error,
+    },
+}
+#[derive(Debug, thiserror::Error)]
+enum SnapshotRestoreCommitFailure {
+    #[error("snapshot restore commit marker was not published: {source}")]
+    NotPublished {
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "snapshot restore commit marker publication at `{path}` is uncertain: {source}; marker cleanup could not be made durable: {cleanup}"
+    )]
+    PublicationUncertain {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+        cleanup: io::Error,
+    },
+}
+fn restore_relative_path(network_root: &Path, path: &Path) -> Result<String> {
+    let relative = path.strip_prefix(network_root).map_err(|_| {
+        SupervisorError::Config(format!(
+            "snapshot restore path `{}` escapes network root `{}`",
+            path.display(),
+            network_root.display()
+        ))
+    })?;
+    if relative.as_os_str().is_empty()
+        || !relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(SupervisorError::Config(format!(
+            "snapshot restore path `{}` is not a canonical relative path",
+            path.display()
+        )));
+    }
+    normalized_relative_path(network_root, path).map_err(Into::into)
+}
+fn write_pending_restore_journal(transaction: &SnapshotRestoreTransaction) -> Result<()> {
+    for path in [&transaction.journal_path, &transaction.commit_marker_path] {
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(_) => {
+                return Err(SupervisorError::Config(format!(
+                    "unfinished snapshot restore marker `{}` already exists",
+                    path.display()
+                )));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let mut peers = Vec::with_capacity(transaction.peers.len());
+    for peer in &transaction.peers {
+        let mut object = Map::new();
+        object.insert("alias".to_owned(), Value::String(peer.alias.clone()));
+        for (field, path) in [
+            ("live_storage", &peer.live_storage),
+            ("staged_storage", &peer.staged_storage),
+            ("backup_storage", &peer.backup_storage),
+            ("live_log", &peer.live_log),
+            ("backup_log", &peer.backup_log),
+        ] {
+            object.insert(
+                field.to_owned(),
+                Value::String(restore_relative_path(&transaction.network_root, path)?),
+            );
+        }
+        object.insert(
+            "staged_log".to_owned(),
+            match peer.staged_log.as_ref() {
+                Some(path) => {
+                    Value::String(restore_relative_path(&transaction.network_root, path)?)
+                }
+                None => Value::Null,
+            },
+        );
+        object.insert(
+            "original_log_present".to_owned(),
+            Value::Bool(peer.original_log_present),
+        );
+        peers.push(Value::Object(object));
+    }
+    let mut journal = Map::new();
+    journal.insert("version".to_owned(), Value::Number(1_u64.into()));
+    journal.insert("peers".to_owned(), Value::Array(peers));
+    let encoded = json::to_json_bounded(
+        &Value::Object(journal),
+        SNAPSHOT_RESTORE_JOURNAL_MAX_BYTES_V1,
+    )
+    .map_err(|error| {
+        SupervisorError::Config(format!(
+            "snapshot restore journal exceeds its first-release byte budget: {error}"
+        ))
+    })?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&transaction.journal_path)?;
+    let write = (|| -> io::Result<()> {
+        file.write_all(encoded.as_bytes())?;
+        file.sync_all()?;
+        sync_managed_directory(&transaction.network_root)
+    })();
+    if write.is_err() {
+        let _ = fs::remove_file(&transaction.journal_path);
+        let _ = sync_managed_directory(&transaction.network_root);
+    }
+    write.map_err(Into::into)
+}
+fn write_restore_commit_marker(
+    path: &Path,
+    network_root: &Path,
+) -> std::result::Result<(), SnapshotRestoreCommitFailure> {
+    write_restore_commit_marker_with(
+        path,
+        network_root,
+        |marker| fs::remove_file(marker),
+        sync_managed_directory,
+    )
+}
+fn write_restore_commit_marker_with(
+    path: &Path,
+    network_root: &Path,
+    mut remove_marker: impl FnMut(&Path) -> io::Result<()>,
+    mut sync_directory: impl FnMut(&Path) -> io::Result<()>,
+) -> std::result::Result<(), SnapshotRestoreCommitFailure> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut marker = match options.open(path) {
+        Ok(marker) => marker,
+        Err(source) => {
+            return match fs::symlink_metadata(path) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    Err(SnapshotRestoreCommitFailure::NotPublished { source })
+                }
+                Ok(_) => Err(SnapshotRestoreCommitFailure::PublicationUncertain {
+                    path: path.to_path_buf(),
+                    source,
+                    cleanup: io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "a filesystem entry occupies the commit marker path after create_new failed",
+                    ),
+                }),
+                Err(cleanup) => Err(SnapshotRestoreCommitFailure::PublicationUncertain {
+                    path: path.to_path_buf(),
+                    source,
+                    cleanup,
+                }),
+            };
+        }
+    };
+    let write = (|| {
+        marker.write_all(b"committed\n")?;
+        marker.sync_all()?;
+        sync_directory(network_root)
+    })();
+    drop(marker);
+    let Err(source) = write else {
+        return Ok(());
+    };
+    let cleanup = match remove_marker(path) {
+        Ok(()) => sync_directory(network_root),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => sync_directory(network_root),
+        Err(error) => Err(error),
+    };
+    match cleanup {
+        Ok(()) => Err(SnapshotRestoreCommitFailure::NotPublished { source }),
+        Err(cleanup) => Err(SnapshotRestoreCommitFailure::PublicationUncertain {
+            path: path.to_path_buf(),
+            source,
+            cleanup,
+        }),
+    }
+}
+fn exact_restore_journal_object<'a>(
+    value: &'a Value,
+    label: &str,
+    expected_fields: &[&str],
+) -> Result<&'a Map> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| SupervisorError::Config(format!("{label} must be a JSON object")))?;
+    if object.len() != expected_fields.len()
+        || !expected_fields
+            .iter()
+            .all(|field| object.contains_key(*field))
+    {
+        return Err(SupervisorError::Config(format!(
+            "{label} must contain exactly: {}",
+            expected_fields.join(", ")
+        )));
+    }
+    Ok(object)
+}
+fn decode_restore_journal_path(network_root: &Path, value: &Value, label: &str) -> Result<PathBuf> {
+    let raw = value
+        .as_str()
+        .ok_or_else(|| SupervisorError::Config(format!("{label} must be a string")))?;
+    let relative = Path::new(raw);
+    if raw.is_empty()
+        || relative.is_absolute()
+        || !relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(SupervisorError::Config(format!(
+            "{label} must be a canonical relative path"
+        )));
+    }
+    Ok(network_root.join(relative))
+}
+fn restore_sibling_matches(live: &Path, candidate: &Path, role: &str) -> bool {
+    if candidate.parent() != live.parent() {
+        return false;
+    }
+    let Some(live_name) = live.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    let Some(candidate_name) = candidate.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    candidate_name.starts_with(&format!(".{live_name}.mochi-restore-{role}."))
+}
+fn is_canonical_restore_generation_id(value: &OsStr) -> bool {
+    value.to_str().is_some_and(|value| {
+        value.len() == 32
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+fn require_restore_directory(path: &Path, label: &str) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            Err(SupervisorError::Config(format!(
+                "{label} `{}` must be a real directory",
+                path.display()
+            )))
+        }
+        Ok(_) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+fn validate_restore_peer_ancestors(network_root: &Path, alias: &str) -> Result<()> {
+    let peers = network_root.join("peers");
+    let peer = peers.join(alias);
+    let storage_generations = peer.join("storage-generations");
+    let logs = network_root.join("logs");
+    for (path, label) in [
+        (&peers, "snapshot restore peers ancestor"),
+        (&peer, "snapshot restore peer ancestor"),
+        (
+            &storage_generations,
+            "snapshot restore storage-generations ancestor",
+        ),
+        (&logs, "snapshot restore logs ancestor"),
+    ] {
+        require_restore_directory(path, label)?;
+    }
+    Ok(())
+}
+fn validate_recovered_restore_peer(network_root: &Path, peer: &StagedPeerRestore) -> Result<()> {
+    if peer.alias.is_empty()
+        || Path::new(&peer.alias).components().count() != 1
+        || !matches!(
+            Path::new(&peer.alias).components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
+        return Err(SupervisorError::Config(
+            "snapshot restore journal contains an invalid peer alias".to_owned(),
+        ));
+    }
+    validate_restore_peer_ancestors(network_root, &peer.alias)?;
+    let storage_relative = peer.live_storage.strip_prefix(network_root).map_err(|_| {
+        SupervisorError::Config("snapshot restore storage escapes the network root".to_owned())
+    })?;
+    let storage_components = storage_relative.components().collect::<Vec<_>>();
+    if storage_components.len() != 4
+        || storage_components[0].as_os_str() != "peers"
+        || storage_components[1].as_os_str() != peer.alias.as_str()
+        || storage_components[2].as_os_str() != "storage-generations"
+        || !is_canonical_restore_generation_id(storage_components[3].as_os_str())
+        || !restore_sibling_matches(&peer.live_storage, &peer.staged_storage, "staged-storage")
+        || !restore_sibling_matches(&peer.live_storage, &peer.backup_storage, "backup-storage")
+    {
+        return Err(SupervisorError::Config(format!(
+            "snapshot restore journal contains invalid storage paths for peer `{}`",
+            peer.alias
+        )));
+    }
+    let log_relative = peer.live_log.strip_prefix(network_root).map_err(|_| {
+        SupervisorError::Config("snapshot restore log escapes the network root".to_owned())
+    })?;
+    let log_components = log_relative.components().collect::<Vec<_>>();
+    let expected_log = format!("{}.log", peer.alias);
+    if log_components.len() != 2
+        || log_components[0].as_os_str() != "logs"
+        || log_components[1].as_os_str() != expected_log.as_str()
+        || !restore_sibling_matches(&peer.live_log, &peer.backup_log, "backup-log")
+        || peer
+            .staged_log
+            .as_ref()
+            .is_some_and(|path| !restore_sibling_matches(&peer.live_log, path, "staged-log"))
+    {
+        return Err(SupervisorError::Config(format!(
+            "snapshot restore journal contains invalid log paths for peer `{}`",
+            peer.alias
+        )));
+    }
+    Ok(())
+}
+fn read_restore_journal(
+    network_root: &Path,
+    journal_path: &Path,
+) -> Result<Vec<StagedPeerRestore>> {
+    let bytes = read_snapshot_file_bounded(journal_path, SNAPSHOT_RESTORE_JOURNAL_MAX_BYTES_V1)?;
+    let value: Value = json::from_slice(&bytes).map_err(|error| {
+        SupervisorError::Config(format!(
+            "snapshot restore journal `{}` is invalid JSON: {error}",
+            journal_path.display()
+        ))
+    })?;
+    let root =
+        exact_restore_journal_object(&value, "snapshot restore journal", &["peers", "version"])?;
+    if !matches!(
+        root.get("version"),
+        Some(Value::Number(number)) if number.as_u64() == Some(1)
+    ) {
+        return Err(SupervisorError::Config(
+            "snapshot restore journal version must be 1".to_owned(),
+        ));
+    }
+    let values = root.get("peers").and_then(Value::as_array).ok_or_else(|| {
+        SupervisorError::Config("snapshot restore journal peers must be an array".to_owned())
+    })?;
+    if values.is_empty() || values.len() > 7 {
+        return Err(SupervisorError::Config(
+            "snapshot restore journal must contain between 1 and 7 peers".to_owned(),
+        ));
+    }
+    let mut aliases = HashSet::with_capacity(values.len());
+    let mut peers = Vec::with_capacity(values.len());
+    for (index, value) in values.iter().enumerate() {
+        let label = format!("snapshot restore journal peer[{index}]");
+        let object = exact_restore_journal_object(
+            value,
+            &label,
+            &[
+                "alias",
+                "backup_log",
+                "backup_storage",
+                "live_log",
+                "live_storage",
+                "original_log_present",
+                "staged_log",
+                "staged_storage",
+            ],
+        )?;
+        let alias = object
+            .get("alias")
+            .and_then(Value::as_str)
+            .ok_or_else(|| SupervisorError::Config(format!("{label}.alias must be a string")))?
+            .to_owned();
+        if !aliases.insert(alias.clone()) {
+            return Err(SupervisorError::Config(format!(
+                "snapshot restore journal repeats peer alias `{alias}`"
+            )));
+        }
+        let staged_log = match object.get("staged_log") {
+            Some(Value::Null) => None,
+            Some(value) => Some(decode_restore_journal_path(
+                network_root,
+                value,
+                &format!("{label}.staged_log"),
+            )?),
+            None => unreachable!("exact field check requires staged_log"),
+        };
+        let original_log_present = object
+            .get("original_log_present")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                SupervisorError::Config(format!("{label}.original_log_present must be a boolean"))
+            })?;
+        let mut peer = StagedPeerRestore {
+            alias,
+            live_storage: decode_restore_journal_path(
+                network_root,
+                &object["live_storage"],
+                &format!("{label}.live_storage"),
+            )?,
+            staged_storage: decode_restore_journal_path(
+                network_root,
+                &object["staged_storage"],
+                &format!("{label}.staged_storage"),
+            )?,
+            backup_storage: decode_restore_journal_path(
+                network_root,
+                &object["backup_storage"],
+                &format!("{label}.backup_storage"),
+            )?,
+            live_log: decode_restore_journal_path(
+                network_root,
+                &object["live_log"],
+                &format!("{label}.live_log"),
+            )?,
+            staged_log,
+            backup_log: decode_restore_journal_path(
+                network_root,
+                &object["backup_log"],
+                &format!("{label}.backup_log"),
+            )?,
+            original_log_present,
+            log_touched: false,
+            storage_backed_up: false,
+            storage_installed: false,
+            log_backed_up: false,
+            log_installed: false,
+        };
+        validate_recovered_restore_peer(network_root, &peer)?;
+        peer.log_touched = false;
+        peers.push(peer);
+    }
+    Ok(peers)
+}
+fn restore_directory_exists(path: &Path, label: &str) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            Err(SupervisorError::Config(format!(
+                "{label} `{}` must be a real directory",
+                path.display()
+            )))
+        }
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+fn restore_file_exists(path: &Path, label: &str) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(SupervisorError::Config(format!(
+                "{label} `{}` must be a regular non-symlink file",
+                path.display()
+            )))
+        }
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+fn rename_restore_path(from: &Path, to: &Path) -> Result<()> {
+    fs::rename(from, to)?;
+    let parent = from
+        .parent()
+        .ok_or_else(|| SupervisorError::Config("snapshot restore path has no parent".to_owned()))?;
+    sync_managed_directory(parent)?;
+    Ok(())
+}
+fn remove_restore_directory(path: &Path, label: &str) -> Result<()> {
+    if restore_directory_exists(path, label)? {
+        fs::remove_dir_all(path)?;
+        sync_managed_directory(path.parent().ok_or_else(|| {
+            SupervisorError::Config("snapshot restore directory has no parent".to_owned())
+        })?)?;
+    }
+    Ok(())
+}
+fn remove_restore_file(path: &Path, label: &str) -> Result<()> {
+    if restore_file_exists(path, label)? {
+        fs::remove_file(path)?;
+        sync_managed_directory(path.parent().ok_or_else(|| {
+            SupervisorError::Config("snapshot restore file has no parent".to_owned())
+        })?)?;
+    }
+    Ok(())
+}
+fn recover_pending_restore_peer(peer: &StagedPeerRestore) -> Result<()> {
+    let live_storage = restore_directory_exists(&peer.live_storage, "live restore storage")?;
+    let staged_storage = restore_directory_exists(&peer.staged_storage, "staged restore storage")?;
+    let backup_storage = restore_directory_exists(&peer.backup_storage, "backup restore storage")?;
+    if backup_storage {
+        if live_storage {
+            if staged_storage {
+                return Err(SupervisorError::Config(format!(
+                    "snapshot restore storage for peer `{}` has ambiguous live, staged, and backup directories",
+                    peer.alias
+                )));
+            }
+            rename_restore_path(&peer.live_storage, &peer.staged_storage)?;
+        }
+        rename_restore_path(&peer.backup_storage, &peer.live_storage)?;
+        remove_restore_directory(&peer.staged_storage, "rolled-back staged storage")?;
+    } else {
+        if !live_storage {
+            return Err(SupervisorError::Config(format!(
+                "snapshot restore journal for peer `{}` has neither live nor backup storage",
+                peer.alias
+            )));
+        }
+        remove_restore_directory(&peer.staged_storage, "unused staged storage")?;
+    }
+
+    let live_log = restore_file_exists(&peer.live_log, "live restore log")?;
+    let backup_log = restore_file_exists(&peer.backup_log, "backup restore log")?;
+    if backup_log {
+        if live_log {
+            remove_restore_file(&peer.live_log, "uncommitted restored log")?;
+        }
+        rename_restore_path(&peer.backup_log, &peer.live_log)?;
+    } else if peer.original_log_present {
+        if !live_log {
+            return Err(SupervisorError::Config(format!(
+                "snapshot restore journal for peer `{}` lost its original log",
+                peer.alias
+            )));
+        }
+    } else if live_log {
+        remove_restore_file(&peer.live_log, "uncommitted restored log")?;
+    }
+    if let Some(staged_log) = peer.staged_log.as_ref() {
+        remove_restore_file(staged_log, "unused staged restore log")?;
+    }
+    Ok(())
+}
+fn recover_committed_restore_peer(peer: &StagedPeerRestore) -> Result<()> {
+    if !restore_directory_exists(&peer.live_storage, "committed live restore storage")? {
+        return Err(SupervisorError::Config(format!(
+            "committed snapshot restore for peer `{}` is missing live storage",
+            peer.alias
+        )));
+    }
+    remove_restore_directory(&peer.staged_storage, "committed staged storage")?;
+    remove_restore_directory(&peer.backup_storage, "committed backup storage")?;
+    if restore_file_exists(&peer.live_log, "committed live restore log")? {
+        // Validation is the only required action for the authoritative live log.
+    }
+    if let Some(staged_log) = peer.staged_log.as_ref() {
+        remove_restore_file(staged_log, "committed staged restore log")?;
+    }
+    remove_restore_file(&peer.backup_log, "committed backup restore log")?;
+    Ok(())
+}
+fn validate_restore_commit_marker(path: &Path) -> Result<()> {
+    let bytes = read_snapshot_file_bounded(path, b"committed\n".len())?;
+    if bytes != b"committed\n" {
+        return Err(SupervisorError::Config(format!(
+            "snapshot restore commit marker `{}` is invalid",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+fn recover_snapshot_restore_if_needed(network_root: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(network_root)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(SupervisorError::Config(format!(
+            "snapshot restore network root `{}` must be a real directory",
+            network_root.display()
+        )));
+    }
+    let network_root = fs::canonicalize(network_root)?;
+    let journal_path = network_root.join(SNAPSHOT_RESTORE_JOURNAL_FILE_NAME);
+    let commit_marker_path = network_root.join(SNAPSHOT_RESTORE_COMMIT_FILE_NAME);
+    let journal_exists = restore_file_exists(&journal_path, "snapshot restore journal")?;
+    let commit_exists = restore_file_exists(&commit_marker_path, "snapshot restore commit marker")?;
+    if !journal_exists {
+        if commit_exists {
+            validate_restore_commit_marker(&commit_marker_path)?;
+            fs::remove_file(&commit_marker_path)?;
+            sync_managed_directory(&network_root)?;
+        }
+        return Ok(());
+    }
+    let peers = read_restore_journal(&network_root, &journal_path)?;
+    if commit_exists {
+        validate_restore_commit_marker(&commit_marker_path)?;
+        for peer in &peers {
+            recover_committed_restore_peer(peer)?;
+        }
+    } else {
+        for peer in peers.iter().rev() {
+            recover_pending_restore_peer(peer)?;
+        }
+    }
+    fs::remove_file(&journal_path)?;
+    sync_managed_directory(&network_root)?;
+    if commit_exists {
+        fs::remove_file(&commit_marker_path)?;
+        sync_managed_directory(&network_root)?;
+    }
+    Ok(())
+}
+impl SnapshotRestoreTransaction {
+    fn stage(
+        network_root: &Path,
+        peers_root: &Path,
+        peers: &[PeerHandle],
+        expected_hashes: &HashMap<String, Hash>,
+    ) -> Result<Self> {
+        let network_root = fs::canonicalize(network_root)?;
+        let mut transaction = Self {
+            network_root: network_root.clone(),
+            journal_path: network_root.join(SNAPSHOT_RESTORE_JOURNAL_FILE_NAME),
+            commit_marker_path: network_root.join(SNAPSHOT_RESTORE_COMMIT_FILE_NAME),
+            peers: Vec::with_capacity(peers.len()),
+            committed: false,
+            preserve_backups: false,
+        };
+        for peer in peers {
+            let live_storage = peer.storage_dir().to_path_buf();
+            let live_metadata = fs::symlink_metadata(&live_storage)?;
+            if live_metadata.file_type().is_symlink() || !live_metadata.is_dir() {
+                return Err(SupervisorError::Config(format!(
+                    "managed storage for peer `{}` must be a real directory",
+                    peer.alias()
+                )));
+            }
+            let staged_storage = unused_restore_sibling(&live_storage, "staged-storage")?;
+            let backup_storage = unused_restore_sibling(&live_storage, "backup-storage")?;
+            let live_log_parent = peer.log_path().parent().ok_or_else(|| {
+                SupervisorError::Config(format!(
+                    "managed log `{}` has no parent directory",
+                    peer.log_path().display()
+                ))
+            })?;
+            let live_log = fs::canonicalize(live_log_parent)?.join(
+                peer.log_path().file_name().ok_or_else(|| {
+                    SupervisorError::Config(format!(
+                        "managed log `{}` has no file name",
+                        peer.log_path().display()
+                    ))
+                })?,
+            );
+            let backup_log = unused_restore_sibling(&live_log, "backup-log")?;
+            let snapshot_log = peers_root.join(peer.alias()).join("latest.log");
+            let staged_log = match fs::symlink_metadata(&snapshot_log) {
+                Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                    return Err(SupervisorError::Config(format!(
+                        "snapshot log `{}` must be a regular non-symlink file",
+                        snapshot_log.display()
+                    )));
+                }
+                Ok(_) => Some(unused_restore_sibling(&live_log, "staged-log")?),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            let original_log_present = match fs::symlink_metadata(&live_log) {
+                Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                    return Err(SupervisorError::Config(format!(
+                        "managed log for peer `{}` must be a regular non-symlink file",
+                        peer.alias()
+                    )));
+                }
+                Ok(_) => true,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+                Err(error) => return Err(error.into()),
+            };
+            transaction.peers.push(StagedPeerRestore {
+                alias: peer.alias().to_owned(),
+                live_storage,
+                staged_storage,
+                backup_storage,
+                live_log,
+                staged_log,
+                backup_log,
+                original_log_present,
+                log_touched: false,
+                storage_backed_up: false,
+                storage_installed: false,
+                log_backed_up: false,
+                log_installed: false,
+            });
+        }
+        write_pending_restore_journal(&transaction)?;
+        for staged in &transaction.peers {
+            copy_dir_recursive(
+                &peers_root.join(&staged.alias).join("storage"),
+                &staged.staged_storage,
+            )?;
+            let staged_hash = hash_directory(&staged.staged_storage)?;
+            let expected_hash = expected_hashes.get(&staged.alias).ok_or_else(|| {
+                SupervisorError::Config(format!(
+                    "snapshot metadata missing storage hash for peer `{}`",
+                    staged.alias
+                ))
+            })?;
+            if &staged_hash != expected_hash {
+                return Err(SupervisorError::Config(format!(
+                    "staged snapshot storage for peer `{}` failed integrity check: expected {expected_hash} but found {staged_hash}",
+                    staged.alias
+                )));
+            }
+            if let Some(staged_log) = staged.staged_log.as_ref() {
+                if let Some(parent) = staged_log.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                copy_snapshot_file(
+                    &peers_root.join(&staged.alias).join("latest.log"),
+                    staged_log,
+                )?;
+            }
+        }
+        Ok(transaction)
+    }
+    fn apply<F>(
+        &mut self,
+        mut after_peer: F,
+    ) -> std::result::Result<(), SnapshotRestoreApplyFailure>
+    where
+        F: FnMut(usize) -> Result<()>,
+    {
+        for index in 0..self.peers.len() {
+            let result = apply_staged_peer_restore(&mut self.peers[index]);
+            if let Err(primary) = result {
+                return Err(self.rollback_after(primary));
+            }
+            if let Err(primary) = after_peer(index + 1) {
+                return Err(self.rollback_after(primary));
+            }
+        }
+        Ok(())
+    }
+    fn rollback_after(&mut self, primary: SupervisorError) -> SnapshotRestoreApplyFailure {
+        match self.rollback() {
+            Ok(()) => SnapshotRestoreApplyFailure::RolledBack(primary),
+            Err(rollback) => SnapshotRestoreApplyFailure::RollbackFailed { primary, rollback },
+        }
+    }
+    fn rollback(&mut self) -> io::Result<()> {
+        let mut first_error = None;
+        for peer in self.peers.iter_mut().rev() {
+            capture_cleanup_error(&mut first_error, rollback_staged_peer_log(peer));
+            if peer.storage_installed {
+                let result = fs::rename(&peer.live_storage, &peer.staged_storage);
+                if result.is_ok() {
+                    if let Some(parent) = peer.live_storage.parent() {
+                        capture_cleanup_error(&mut first_error, sync_managed_directory(parent));
+                    }
+                    peer.storage_installed = false;
+                }
+                capture_cleanup_error(&mut first_error, result);
+            }
+            if peer.storage_backed_up {
+                let result = fs::rename(&peer.backup_storage, &peer.live_storage);
+                if result.is_ok() {
+                    if let Some(parent) = peer.live_storage.parent() {
+                        capture_cleanup_error(&mut first_error, sync_managed_directory(parent));
+                    }
+                    peer.storage_backed_up = false;
+                }
+                capture_cleanup_error(&mut first_error, result);
+            }
+            for parent in [peer.live_storage.parent(), peer.live_log.parent()]
+                .into_iter()
+                .flatten()
+            {
+                capture_cleanup_error(&mut first_error, sync_managed_directory(parent));
+            }
+        }
+        if first_error.is_none() {
+            self.cleanup_staged_best_effort();
+            match self.recovery_artifacts_remain() {
+                Ok(false) => self.remove_pending_journal_best_effort(),
+                Ok(true) => {}
+                Err(error) => first_error = Some(error),
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+    fn commit(&mut self) -> std::result::Result<(), SnapshotRestoreCommitFailure> {
+        write_restore_commit_marker(&self.commit_marker_path, &self.network_root)?;
+        self.committed = true;
+        self.cleanup_committed_artifacts_best_effort();
+        if matches!(self.recovery_artifacts_remain(), Ok(false)) {
+            self.remove_committed_journal_best_effort();
+        }
+        Ok(())
+    }
+    fn preserve_installed_state(&mut self) {
+        self.committed = true;
+        self.preserve_backups = true;
+    }
+    fn cleanup_staged_best_effort(&self) {
+        for peer in &self.peers {
+            if peer.staged_storage.exists() {
+                let _ = fs::remove_dir_all(&peer.staged_storage);
+            }
+            if let Some(staged_log) = peer.staged_log.as_ref()
+                && staged_log.exists()
+            {
+                let _ = fs::remove_file(staged_log);
+            }
+        }
+    }
+    fn cleanup_committed_artifacts_best_effort(&self) {
+        self.cleanup_staged_best_effort();
+        for peer in &self.peers {
+            if peer.backup_storage.exists() {
+                let _ = fs::remove_dir_all(&peer.backup_storage);
+            }
+            if peer.backup_log.exists() {
+                let _ = fs::remove_file(&peer.backup_log);
+            }
+        }
+        for parent in self.peers.iter().flat_map(|peer| {
+            [peer.live_storage.parent(), peer.live_log.parent()]
+                .into_iter()
+                .flatten()
+        }) {
+            let _ = sync_managed_directory(parent);
+        }
+    }
+    fn recovery_artifacts_remain(&self) -> io::Result<bool> {
+        for path in self.peers.iter().flat_map(|peer| {
+            [
+                Some(peer.staged_storage.as_path()),
+                Some(peer.backup_storage.as_path()),
+                peer.staged_log.as_deref(),
+                Some(peer.backup_log.as_path()),
+            ]
+            .into_iter()
+            .flatten()
+        }) {
+            match fs::symlink_metadata(path) {
+                Ok(_) => return Ok(true),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(false)
+    }
+    fn remove_pending_journal_best_effort(&self) {
+        if self.journal_path.exists() {
+            let _ = fs::remove_file(&self.journal_path);
+            let _ = sync_managed_directory(&self.network_root);
+        }
+    }
+    fn remove_committed_journal_best_effort(&self) {
+        self.remove_committed_journal_with(|path| {
+            remove_restore_control_file_and_sync(path, &self.network_root)
+        });
+    }
+    fn remove_committed_journal_with(
+        &self,
+        mut remove_and_sync: impl FnMut(&Path) -> io::Result<()>,
+    ) {
+        if remove_and_sync(&self.journal_path).is_err() {
+            return;
+        }
+        let _ = remove_and_sync(&self.commit_marker_path);
+    }
+}
+impl Drop for SnapshotRestoreTransaction {
+    fn drop(&mut self) {
+        if self.committed {
+            if !self.preserve_backups {
+                self.cleanup_committed_artifacts_best_effort();
+                if matches!(self.recovery_artifacts_remain(), Ok(false)) {
+                    self.remove_committed_journal_best_effort();
+                }
+            }
+        } else {
+            let _ = self.rollback();
+        }
+        self.cleanup_staged_best_effort();
+    }
+}
+fn remove_restore_control_file_and_sync(path: &Path, network_root: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "snapshot restore control file `{}` must be a regular non-symlink file",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(_) => fs::remove_file(path)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    sync_managed_directory(network_root)
+}
+fn apply_staged_peer_restore(peer: &mut StagedPeerRestore) -> Result<()> {
+    fs::rename(&peer.live_storage, &peer.backup_storage)?;
+    peer.storage_backed_up = true;
+    sync_managed_directory(
+        peer.live_storage
+            .parent()
+            .expect("managed storage always has a parent"),
+    )?;
+    fs::rename(&peer.staged_storage, &peer.live_storage)?;
+    peer.storage_installed = true;
+    sync_managed_directory(
+        peer.live_storage
+            .parent()
+            .expect("managed storage always has a parent"),
+    )?;
+    peer.log_touched = true;
+    match fs::symlink_metadata(&peer.live_log) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(SupervisorError::Config(format!(
+                "managed log for peer `{}` must be a regular non-symlink file",
+                peer.alias
+            )));
+        }
+        Ok(_) => {
+            fs::rename(&peer.live_log, &peer.backup_log)?;
+            peer.log_backed_up = true;
+            sync_managed_directory(
+                peer.live_log
+                    .parent()
+                    .expect("managed log always has a parent"),
+            )?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    if let Some(staged_log) = peer.staged_log.as_ref() {
+        fs::rename(staged_log, &peer.live_log)?;
+        peer.log_installed = true;
+        sync_managed_directory(
+            peer.live_log
+                .parent()
+                .expect("managed log always has a parent"),
+        )?;
+    }
+    Ok(())
+}
+fn rollback_staged_peer_log(peer: &mut StagedPeerRestore) -> io::Result<()> {
+    if !peer.log_touched {
+        return Ok(());
+    }
+    if peer.log_installed {
+        let staged_log = peer
+            .staged_log
+            .as_ref()
+            .expect("installed restore log always has a staged path");
+        fs::rename(&peer.live_log, staged_log)?;
+        sync_managed_directory(
+            peer.live_log
+                .parent()
+                .expect("managed log always has a parent"),
+        )?;
+        peer.log_installed = false;
+    } else if peer.staged_log.is_none() {
+        remove_restore_log_if_present(&peer.live_log)?;
+        sync_managed_directory(
+            peer.live_log
+                .parent()
+                .expect("managed log always has a parent"),
+        )?;
+    }
+    if peer.log_backed_up {
+        fs::rename(&peer.backup_log, &peer.live_log)?;
+        sync_managed_directory(
+            peer.live_log
+                .parent()
+                .expect("managed log always has a parent"),
+        )?;
+        peer.log_backed_up = false;
+    }
+    peer.log_touched = false;
+    Ok(())
+}
+fn capture_cleanup_error(first_error: &mut Option<io::Error>, result: io::Result<()>) {
+    if let Err(error) = result
+        && first_error.is_none()
+    {
+        *first_error = Some(error);
+    }
+}
+fn remove_restore_log_if_present(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "restore-created log `{}` must be a regular non-symlink file",
+                    path.display()
+                ),
+            ))
+        }
+        Ok(_) => fs::remove_file(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+fn unused_restore_sibling(path: &Path, role: &str) -> io::Result<PathBuf> {
+    static NEXT_RESTORE_ID: AtomicU64 = AtomicU64::new(0);
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "managed restore path has no parent directory",
+        )
+    })?;
+    let file_name = path.file_name().unwrap_or_else(|| OsStr::new("managed"));
+    for _ in 0..64 {
+        let id = NEXT_RESTORE_ID.fetch_add(1, Ordering::Relaxed);
+        let mut candidate_name = OsString::from(".");
+        candidate_name.push(file_name);
+        candidate_name.push(format!(".mochi-restore-{role}.{}.{id}", std::process::id()));
+        let candidate = parent.join(candidate_name);
+        match fs::symlink_metadata(&candidate) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(candidate),
+            Ok(_) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a unique snapshot restore path",
+    ))
+}
 fn verify_snapshot_artifact_matches_selected(
     snapshot_root: &Path,
     snapshot_path: &Path,
@@ -5316,7 +6039,7 @@ fn verify_snapshot_artifact_matches_selected(
     }
     Ok(())
 }
-fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
+fn load_snapshot_metadata(root: &Path, expected_peer_aliases: &[&str]) -> Result<SnapshotMetadata> {
     let metadata_path = root.join("metadata.json");
     let bytes = read_snapshot_file_bounded(&metadata_path, SNAPSHOT_METADATA_MAX_BYTES_V1)
         .map_err(|err| {
@@ -5337,6 +6060,25 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
             metadata_path.display()
         ))
     })?;
+    const SNAPSHOT_METADATA_FIELDS_V1: [&str; 8] = [
+        "chain_id",
+        "created_at_ms",
+        "generation_id",
+        "genesis_hash",
+        "kura_hashes",
+        "peer_count",
+        "snapshot",
+        "storage_layout",
+    ];
+    if let Some(field) = object
+        .keys()
+        .find(|field| !SNAPSHOT_METADATA_FIELDS_V1.contains(&field.as_str()))
+    {
+        return Err(SupervisorError::Config(format!(
+            "snapshot metadata `{}` contains unknown V1 field `{field}`",
+            metadata_path.display()
+        )));
+    }
     let chain_id = object
         .get("chain_id")
         .and_then(Value::as_str)
@@ -5346,6 +6088,18 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
                 metadata_path.display()
             ))
         })?;
+    let parsed_chain_id = chain_id.parse::<ChainId>().map_err(|error| {
+        SupervisorError::Config(format!(
+            "snapshot metadata `{}` has invalid `chain_id`: {error}",
+            metadata_path.display()
+        ))
+    })?;
+    if parsed_chain_id.to_string() != chain_id {
+        return Err(SupervisorError::Config(format!(
+            "snapshot metadata `{}` has a noncanonical `chain_id`",
+            metadata_path.display()
+        )));
+    }
     let generation_id = object
         .get("generation_id")
         .and_then(Value::as_str)
@@ -5364,12 +6118,50 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
                 metadata_path.display()
             ))
         })?;
+    if peer_count != expected_peer_aliases.len() as u64 {
+        return Err(SupervisorError::Config(format!(
+            "snapshot metadata `{}` records {peer_count} peers but exactly {} are expected",
+            metadata_path.display(),
+            expected_peer_aliases.len()
+        )));
+    }
+    let _created_at_ms = object
+        .get("created_at_ms")
+        .and_then(Value::as_u64)
+        .filter(|created_at_ms| *created_at_ms > 0)
+        .ok_or_else(|| {
+            SupervisorError::Config(format!(
+                "snapshot metadata `{}` requires a positive `created_at_ms` integer",
+                metadata_path.display()
+            ))
+        })?;
+    let snapshot_name = object
+        .get("snapshot")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            SupervisorError::Config(format!(
+                "snapshot metadata `{}` missing `snapshot` string",
+                metadata_path.display()
+            ))
+        })?;
+    let expected_snapshot_name = root.file_name().and_then(OsStr::to_str).ok_or_else(|| {
+        SupervisorError::Config(format!(
+            "snapshot root `{}` must have a UTF-8 basename",
+            root.display()
+        ))
+    })?;
+    if snapshot_name != expected_snapshot_name {
+        return Err(SupervisorError::Config(format!(
+            "snapshot metadata `{}` names snapshot `{snapshot_name}` instead of directory `{expected_snapshot_name}`",
+            metadata_path.display()
+        )));
+    }
     let storage_layout = object
         .get("storage_layout")
         .and_then(Value::as_str)
         .ok_or_else(|| {
             SupervisorError::Config(format!(
-                "snapshot metadata `{}` missing `storage_layout` string; legacy aggregate Kura snapshots cannot be restored safely",
+                "snapshot metadata `{}` missing required `storage_layout` string; aggregate Kura snapshots cannot be restored safely",
                 metadata_path.display()
             ))
         })?;
@@ -5379,7 +6171,7 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
             metadata_path.display()
         )));
     }
-    let genesis_hash = object
+    let genesis_hash_literal = object
         .get("genesis_hash")
         .and_then(Value::as_str)
         .ok_or_else(|| {
@@ -5387,15 +6179,19 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
                 "snapshot metadata `{}` missing `genesis_hash` string",
                 metadata_path.display()
             ))
-        })
-        .and_then(|value| {
-            Hash::from_str(value).map_err(|err| {
-                SupervisorError::Config(format!(
-                    "snapshot metadata `{}` has invalid `genesis_hash`: {err}",
-                    metadata_path.display()
-                ))
-            })
         })?;
+    let genesis_hash = Hash::from_str(genesis_hash_literal).map_err(|err| {
+        SupervisorError::Config(format!(
+            "snapshot metadata `{}` has invalid `genesis_hash`: {err}",
+            metadata_path.display()
+        ))
+    })?;
+    if genesis_hash.to_string() != genesis_hash_literal {
+        return Err(SupervisorError::Config(format!(
+            "snapshot metadata `{}` has a noncanonical `genesis_hash`",
+            metadata_path.display()
+        )));
+    }
     let kura_hashes_value = object
         .get("kura_hashes")
         .and_then(Value::as_object)
@@ -5406,6 +6202,16 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
             ))
         })?;
     let mut kura_hashes = HashMap::new();
+    if kura_hashes_value.len() != expected_peer_aliases.len()
+        || expected_peer_aliases
+            .iter()
+            .any(|alias| !kura_hashes_value.contains_key(*alias))
+    {
+        return Err(SupervisorError::Config(format!(
+            "snapshot metadata `{}` must contain exactly the managed peer aliases in `kura_hashes`",
+            metadata_path.display()
+        )));
+    }
     for (alias, value) in kura_hashes_value {
         let hash_str = value.as_str().ok_or_else(|| {
             SupervisorError::Config(format!(
@@ -5419,6 +6225,12 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
                 metadata_path.display()
             ))
         })?;
+        if hash.to_string() != hash_str {
+            return Err(SupervisorError::Config(format!(
+                "snapshot metadata `{}` has a noncanonical hash for `{alias}`",
+                metadata_path.display()
+            )));
+        }
         kura_hashes.insert(alias.clone(), hash);
     }
     Ok(SnapshotMetadata {

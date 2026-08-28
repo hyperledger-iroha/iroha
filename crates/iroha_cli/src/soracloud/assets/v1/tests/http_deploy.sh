@@ -4,4 +4,5 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 printf '%s' "${TORII_URL:-}" > "$SCRIPT_DIR/deploy-torii.txt"
 printf '%s' "${API_TOKEN:-}" > "$SCRIPT_DIR/deploy-token.txt"
+printf '%s' "${SORAFS_RETENTION_EPOCH:-}" > "$SCRIPT_DIR/deploy-retention-epoch.txt"
 printf '%s\n' "$@" > "$SCRIPT_DIR/deploy-args.txt"

@@ -111,7 +111,7 @@ FROM ${IROHA_CROSS_RUNTIME_IMAGE}
 
 COPY --from=xx-build /app/bins/* /usr/local/bin/
 
-# NOTE: jq & curl support `kagami swarm`; bubblewrap isolates attachment parsing.
+# NOTE: jq & curl support `kagami docker`; bubblewrap isolates attachment parsing.
 RUN apk add jq curl bubblewrap \
   && adduser --disabled-password --gecos '' iroha \
   && mkdir -p /data/iroha /config/iroha \

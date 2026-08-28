@@ -526,8 +526,7 @@ fn multiple_parsing_errors_in_multiple_sources() {
         │
         ├─▶ Failed to parse parameter `torii.address`
         │
-        ╰─▶ failed to deserialize config value: unexpected character `f` at byte 0 (line 1, col 1)
-            ╰╴actual value: false"#]]
+        ╰─▶ failed to deserialize config value: unexpected character `f` at byte 0 (line 1, col 1)"#]]
     .assert_eq_report(&report);
 }
 #[test]
@@ -691,7 +690,6 @@ fn multiple_env_parsing_errors() {
         │
         ├─▶ Failed to parse parameter `logger.level` from `LOG_LEVEL`
         │
-        ╰─▶ Matching variant not found
-            ╰╴value: LOG_LEVEL=error or whatever"#]]
+        ╰─▶ Matching variant not found"#]]
     .assert_eq_report(&report);
 }

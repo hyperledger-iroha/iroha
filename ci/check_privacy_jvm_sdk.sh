@@ -7,8 +7,8 @@ PYTHON_BIN="${PRIVACY_JVM_SDK_PYTHON_BIN:-python3}"
 CARGO_BIN="${PRIVACY_JVM_SDK_CARGO_BIN:-cargo}"
 RUSTC_BIN="${PRIVACY_JVM_SDK_RUSTC_BIN:-rustc}"
 FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
-ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
+TRACKED_ROOT_CARGO_LOCK_SHA256="d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
+ABI23_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py"
 JAVA_OUT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-java-sdk-test.XXXXXX")"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-jvm-native.XXXXXX")"
 
@@ -83,30 +83,30 @@ esac
 [[ -f "${NATIVE_LIBRARY}" && ! -L "${NATIVE_LIBRARY}" ]] \
   || fail "fresh ABI23 privacy JVM bridge is unavailable: ${NATIVE_LIBRARY}"
 NATIVE_LIBRARY_DIR="$(cd "$(dirname "${NATIVE_LIBRARY}")" && pwd -P)"
-NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi22.json"
-CSHARP_NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi22-csharp.json"
+NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi23.json"
+CSHARP_NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi23-csharp.json"
 
 # Native evidence binds the clean source tree, including the tracked root lock.
 # The distinct frozen privacy-release lock remains selected externally for all
 # wrapped Cargo invocations and is authenticated independently above.
 
-"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" record \
+"${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" record \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --sdk c-jni \
   --target "${HOST_TRIPLE}"
-"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \
+"${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" verify \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}"
-"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" record \
+"${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" record \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${CSHARP_NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --sdk csharp \
   --target "${HOST_TRIPLE}"
-"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \
+"${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" verify \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${CSHARP_NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}"
@@ -226,11 +226,11 @@ java -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" \
   -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}:${NORITO_RUNTIME_CLASSPATH}" \
   org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests
 
-"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \
+"${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" verify \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}"
-"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \
+"${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" verify \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${CSHARP_NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}"
@@ -247,17 +247,17 @@ if [[ -n "${PRIVACY_JVM_NATIVE_EXPORT_DIR:-}" ]]; then
   EXPORTED_LIBRARY="${PRIVACY_JVM_NATIVE_EXPORT_DIR}/$(basename "${NATIVE_LIBRARY}")"
   install -m 500 "${NATIVE_LIBRARY}" "${EXPORTED_LIBRARY}"
   install -m 400 "${NATIVE_MANIFEST}" \
-    "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi22-c-jni.json"
+    "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi23-c-jni.json"
   install -m 400 "${CSHARP_NATIVE_MANIFEST}" \
-    "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi22-csharp.json"
+    "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi23-csharp.json"
   install -m 400 "${SELECTED_CARGO_LOCK}" \
     "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/Cargo.lock"
-  "${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \
+  "${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" verify \
     --artifact "${EXPORTED_LIBRARY}" \
-    --manifest "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi22-c-jni.json" \
+    --manifest "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi23-c-jni.json" \
     --source-root "${ROOT_DIR}"
-  "${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \
+  "${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" verify \
     --artifact "${EXPORTED_LIBRARY}" \
-    --manifest "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi22-csharp.json" \
+    --manifest "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi23-csharp.json" \
     --source-root "${ROOT_DIR}"
 fi

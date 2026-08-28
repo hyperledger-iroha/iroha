@@ -16,6 +16,7 @@ import { verifyEd25519Strict as verifyEd25519 } from "./ed25519Strict.js";
 import { crc64Xz } from "./crc64Xz.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import {
+  encodeAccountIdNoritoValue,
   noritoDecodeInstructionBoxArchive,
   noritoEncodeInstructionBoxArchive,
   validateNoritoFrame,
@@ -102,6 +103,7 @@ const MAX_BROWSER_INSTRUCTIONS = 64;
 const MAX_CONTRACT_ARGUMENT_RECORD_BYTES = 1024 * 1024;
 const MAX_CONTRACT_ENTRYPOINT_BYTES = 1024;
 const DEFAULT_TRANSACTION_TTL_MS = 100_000;
+const TRANSACTION_ADMISSION_ORDINARY_TAG = 0;
 const TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1;
 const SMART_CONTRACT_DEPLOYMENT_WIRE_IDS = new Set([
   "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk",
@@ -1787,9 +1789,12 @@ function validateTransactionAdmissionIntentArchive(payload, expectedTag, context
   const tag = reader.readU32("intent");
   reader.assertEof();
   if (tag !== expectedTag) {
+    const expected = expectedTag === TRANSACTION_ADMISSION_ORDINARY_TAG
+      ? "Ordinary"
+      : "QueuePlanSynced";
     fail(
       UNSUPPORTED_PAYLOAD,
-      `${context} must be TransactionAdmissionIntent::QueuePlanSynced`,
+      `${context} must be TransactionAdmissionIntent::${expected}`,
     );
   }
 }
@@ -2299,6 +2304,98 @@ function validateTransactionPayloadEnvelope(
   }
   reader.assertEof();
   return assertedAuthority ?? { publicKey: authorityPublicKey };
+}
+
+/**
+ * Inspect the signature-bound fields shared by every canonical transaction
+ * payload without interpreting its executable.
+ *
+ * This is internal Torii response-validation plumbing. It deliberately keeps
+ * the fee archive opaque so callers can compare it byte-for-byte with the
+ * exact response DTO encoding.
+ *
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} payloadBytes
+ * @param {string | null} expectedAuthority
+ * @returns {{
+ *   networkId: Buffer,
+ *   creationTimeMs: bigint,
+ *   ttlMs: bigint,
+ *   executableArchive: Buffer,
+ *   feePaymentArchive: Buffer,
+ *   metadataArchive: Buffer,
+ * }}
+ */
+export function inspectCanonicalTransactionPayloadBindings(
+  payloadBytes,
+  expectedAuthority = null,
+) {
+  const payload = bytes(payloadBytes, "transaction payload", {
+    maxBytes: MAX_PAYLOAD_BYTES,
+  });
+  if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
+    fail(
+      BOUNDS_EXCEEDED,
+      `transaction payload must contain 1..=${MAX_PAYLOAD_BYTES} bytes`,
+    );
+  }
+  const reader = new Reader(payload, "transaction payload");
+  const networkId = validateNetworkTransactionDomainArchive(
+    reader.readField("domain"),
+    "transaction payload.domain",
+  );
+  const authorityArchive = reader.readField("authority");
+  if (expectedAuthority !== null) {
+    const expectedAuthorityArchive = Buffer.from(
+      encodeAccountIdNoritoValue(
+        expectedAuthority,
+        "transaction payload expected authority",
+      ),
+    );
+    if (!authorityArchive.equals(expectedAuthorityArchive)) {
+      fail(
+        AUTHORITY_MISMATCH,
+        "transaction payload authority does not match the requested signer",
+      );
+    }
+  }
+  const creationTimeArchive = reader.readField("creationTimeMs");
+  if (creationTimeArchive.length !== 8) {
+    fail(MALFORMED_PAYLOAD, "transaction payload.creationTimeMs must be a u64");
+  }
+  const executableArchive = reader.readField("executable");
+  const ttlMs = validateOption(
+    reader.readField("ttlMs"),
+    8,
+    "transaction payload.ttlMs",
+    { nonZero: true },
+  );
+  if (validateOption(reader.readField("nonce"), 4, "transaction payload.nonce", {
+    nonZero: true,
+  }) !== null) {
+    fail(UNSUPPORTED_PAYLOAD, "transaction payload.nonce must be absent");
+  }
+  const feePaymentArchive = reader.readField("feePayment");
+  validateTransactionAdmissionIntentArchive(
+    reader.readField("admissionIntent"),
+    TRANSACTION_ADMISSION_ORDINARY_TAG,
+    "transaction payload.admissionIntent",
+  );
+  const metadataArchive = reader.readField("metadata");
+  rejectLegacyFeeMetadata(
+    validateMetadataArchive(metadataArchive, "transaction payload.metadata"),
+  );
+  if (!reader.readField("attachments").equals(Buffer.of(0))) {
+    fail(UNSUPPORTED_PAYLOAD, PROOF_ATTACHMENT_UNSUPPORTED_MESSAGE);
+  }
+  reader.assertEof();
+  return {
+    networkId: Buffer.from(networkId),
+    creationTimeMs: creationTimeArchive.readBigUInt64LE(0),
+    ttlMs,
+    executableArchive: Buffer.from(executableArchive),
+    feePaymentArchive: Buffer.from(feePaymentArchive),
+    metadataArchive: Buffer.from(metadataArchive),
+  };
 }
 
 /**

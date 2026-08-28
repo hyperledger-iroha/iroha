@@ -11,8 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQUIREMENTS_LOCKFILE="${ROOT_DIR}/python/iroha_python/requirements-ci.lock"
 CHECKOUT_NATIVE_DIR="${ROOT_DIR}/python/iroha_python/src"
 FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
-ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
+TRACKED_ROOT_CARGO_LOCK_SHA256="d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
+ABI23_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py"
 WHEEL_PATH=""
 WHEEL_SEAL=""
 TEMPORARY_WORKSPACE_LOCK=0
@@ -1110,17 +1110,17 @@ case "${INSTALLED_NATIVE_PATH}" in
 esac
 assert_privacy_sdk_inputs_unchanged
 
-NATIVE_ABI22_MANIFEST="${PRIVATE_CARGO_WRAPPER_DIR}/python-native-abi22.json"
-"${VENV_DIR}/bin/python" -I -S "${ABI22_CHECKER}" record \
+NATIVE_ABI23_MANIFEST="${PRIVATE_CARGO_WRAPPER_DIR}/python-native-abi23.json"
+"${VENV_DIR}/bin/python" -I -S "${ABI23_CHECKER}" record \
   --artifact "${INSTALLED_NATIVE_PATH}" \
-  --manifest "${NATIVE_ABI22_MANIFEST}" \
+  --manifest "${NATIVE_ABI23_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --python "${VENV_DIR}/bin/python" \
   --sdk python \
   --target "${AUTHENTICATED_RUST_HOST_TRIPLE}-py312"
-"${VENV_DIR}/bin/python" -I -S "${ABI22_CHECKER}" verify \
+"${VENV_DIR}/bin/python" -I -S "${ABI23_CHECKER}" verify \
   --artifact "${INSTALLED_NATIVE_PATH}" \
-  --manifest "${NATIVE_ABI22_MANIFEST}" \
+  --manifest "${NATIVE_ABI23_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --python "${VENV_DIR}/bin/python"
 assert_privacy_sdk_inputs_unchanged
@@ -1141,9 +1141,9 @@ export PYTHONPATH="${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"
   "${ROOT_DIR}/scripts/tests/check_privacy_python_witness_boundary_test.py"
 assert_privacy_sdk_inputs_unchanged
 
-"${VENV_DIR}/bin/python" -I -S "${ABI22_CHECKER}" verify \
+"${VENV_DIR}/bin/python" -I -S "${ABI23_CHECKER}" verify \
   --artifact "${INSTALLED_NATIVE_PATH}" \
-  --manifest "${NATIVE_ABI22_MANIFEST}" \
+  --manifest "${NATIVE_ABI23_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --python "${VENV_DIR}/bin/python"
 assert_privacy_sdk_inputs_unchanged

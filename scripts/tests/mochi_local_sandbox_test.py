@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import subprocess
+import sys
+import tempfile
 import unittest
+import json
+import os
 from pathlib import Path
 
 
@@ -58,6 +62,37 @@ class MochiLocalSandboxSafetyTest(unittest.TestCase):
         self.assertIn('"$PYTHON_BIN" - "$root"', text)
         self.assertIn('pid="$("$PYTHON_BIN" - "$REPO_ROOT"', text)
         self.assertNotIn("python3 - ", text)
+
+    def test_env_reads_private_key_only_from_owner_only_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            sandbox = workspace / ".mochi" / "sandbox" / "four-peer-bft"
+            sandbox.mkdir(parents=True)
+            session = {
+                "api_base": "http://127.0.0.1:8080",
+                "torii_url": "http://127.0.0.1:8080",
+                "chain_id": "mochi-local",
+                "mcp_url": "http://127.0.0.1:8080/v1/mcp",
+                "account_id": "alice",
+            }
+            (sandbox / "session.json").write_text(json.dumps(session), encoding="utf-8")
+            env_file = workspace / ".env.local"
+            env_file.write_text('IROHA_PRIVATE_KEY="private key value"\n', encoding="utf-8")
+            os.chmod(env_file, 0o600)
+
+            result = subprocess.run(
+                ["bash", str(SCRIPT), "env"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "MOCHI_WORKSPACE_ROOT": str(workspace),
+                    "MOCHI_PYTHON": sys.executable,
+                },
+            )
+            self.assertIn("export IROHA_PRIVATE_KEY='private key value'", result.stdout)
+            self.assertNotIn("private_key", (sandbox / "session.json").read_text())
 
 
 if __name__ == "__main__":

@@ -85,7 +85,7 @@ instead of Kagami's ambient working directory. The generator cannot silently
 produce a roster different from the one signed into genesis:
 
 ```bash
-kagami localnet --fresh-random-keys --peers 4 --out-dir ./localnet
+kagami localnet --peers 4 --out-dir ./localnet
 kagami docker \
     --peers 4 \
     --config-dir ./localnet \
@@ -124,7 +124,7 @@ custody path.
 - `-i, --image <NAME>`: Specifies the Docker image used by the peer services. 
   - By default, the image is pulled from Docker Hub if not cached. 
   - Pass the `--build` option to build the image from a Dockerfile instead. 
-  - **Note:** Kagami only guarantees that the Docker Compose configuration it generates is compatible with the same Git revision it is built from itself. Therefore, if the specified image is not compatible with the version of Kagami you are running, the generated configuration might not work.
+  - The image must be built from the same Git revision as Kagami.
 
 - `-b, --build <DIR>`: Builds the image from the Dockerfile in the specified directory. 
   - Do not rebuild if the image has been cached. 
@@ -132,9 +132,11 @@ custody path.
 
 - `    --no-cache`: Always pull or rebuild the image even if it is cached locally.
 
-- `-o, --out-file <FILE>`: Sets the path to the target Compose configuration file. 
-  - If the file exists, the app will prompt its overwriting. 
-  - If the TTY is not interactive, the app will stop execution with a non-zero exit code. 
+- `-o, --out-file <FILE>`: Sets the path to the target Compose configuration file.
+  - The output must be outside `--config-dir`, is rendered beside its destination,
+    and is published atomically only after serialization succeeds.
+  - If the file exists, the app will prompt its overwriting.
+  - If the TTY is not interactive, the app will stop execution with a non-zero exit code.
   - To overwrite the file anyway, pass the `--force` flag.
 
 - `-P, --print`: Print the generated configuration to stdout instead of writing it to the target file.
@@ -142,7 +144,6 @@ custody path.
 - `-F, --force`: Overwrites the target file if it already exists.
 
 - `    --no-banner`: Do not include the banner with the generation notice in the file.
-  - The banner includes the passed arguments in order to help with reproducibility.
 
 ## Examples
 
@@ -181,7 +182,6 @@ kagami docker \
 
    ```bash
    kagami localnet \
-       --fresh-random-keys \
        --peers 4 \
        --consensus-mode npos \
        --out-dir ./cfg

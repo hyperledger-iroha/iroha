@@ -27,6 +27,9 @@ const CODEC_TEXT = 1;
 const CODEC_TRON21 = 5;
 const ROUTE_REVISION = 7;
 const SCALE = 1_000_000_000n;
+const MAX_U128 = (1n << 128n) - 1n;
+const MAX_OUTSTANDING_LIABILITY = 1_000_000_000_000n;
+const MAX_WRAPPED_SUPPLY = MAX_OUTSTANDING_LIABILITY * SCALE;
 const FEE_LIMIT = 15_000_000_000;
 const METHOD_FEE_LIMIT = 1_000_000_000;
 const SEMANTIC_PROOF_PROFILE_HASH =
@@ -151,6 +154,7 @@ function validateManifest(manifest) {
     "destinationBindingHash",
     "destinationLaneHash",
     "finalizeFromTaira",
+    "maxWrappedSupply",
     "routeConfigHash",
     "sccpDestinationMessageId",
     "sccpPayloadHash",
@@ -279,17 +283,17 @@ function vec(value) {
   return Buffer.concat([le(bytes.length, 4), bytes]);
 }
 
-function inboundTransferPayload(recipient) {
+function inboundTransferPayload(recipient, amount = 3n, nonce = 23n) {
   return Buffer.concat([
     Buffer.from([2, 1]),
     le(DOMAIN_TAIRA, 4),
     le(DOMAIN_TRON, 4),
-    le(23, 8),
+    le(nonce, 8),
     le(ROUTE_REVISION, 4),
     le(DOMAIN_TAIRA, 4),
     Buffer.from([CODEC_TEXT]),
     vec(Buffer.from("xor", "utf8")),
-    le(3, 16),
+    le(amount, 16),
     Buffer.from([CODEC_TEXT]),
     vec(Buffer.from(CANONICAL_TAIRA_I105, "utf8")),
     Buffer.from([CODEC_TRON21]),
@@ -461,6 +465,7 @@ function exactRouteConfig({
   destinationBinding,
   sourceLaneHash,
   destinationLaneHash,
+  maxWrappedSupply,
 }) {
   const deploymentConfigHash = encodedHash(
     ["bytes32", "bytes32", "bytes32", "bytes32", "bytes32", "bytes32", "bytes32", "bytes32"],
@@ -476,8 +481,14 @@ function exactRouteConfig({
     ],
   );
   const assetRouteConfigHash = encodedHash(
-    ["bytes32", "bytes32", "uint32", "uint256"],
-    [sha3Utf8("xor"), sha3Utf8("taira_tron_xor"), ROUTE_REVISION, String(SCALE)],
+    ["bytes32", "bytes32", "uint32", "uint256", "uint256"],
+    [
+      sha3Utf8("xor"),
+      sha3Utf8("taira_tron_xor"),
+      ROUTE_REVISION,
+      String(SCALE),
+      String(maxWrappedSupply),
+    ],
   );
   return encodedHash(
     ["bytes32", "uint32", "uint8", "bytes32", "bytes32", "bytes32", "bytes32", "bytes32"],
@@ -749,7 +760,7 @@ await expectConfirmedTvmFailure(
     deploy(
       bridgeClient,
       artifacts.bridge,
-      [prebinding.tokenAddress, policy, 11, ROUTE_REVISION],
+      [prebinding.tokenAddress, policy, 11, ROUTE_REVISION, String(MAX_WRAPPED_SUPPLY)],
       "wrong-chain bridge",
     ),
   "bridge deployment for the Nile profile",
@@ -765,6 +776,7 @@ await expectConfirmedTvmFailure(
         [verifierAddress, wrongCodeHash, ...policy.slice(2)],
         TRON_MAINNET_PROFILE,
         ROUTE_REVISION,
+        String(MAX_WRAPPED_SUPPLY),
       ],
       "wrong-code-hash bridge",
     ),
@@ -775,16 +787,48 @@ await expectConfirmedTvmFailure(
     deploy(
       bridgeClient,
       artifacts.bridge,
-      [prebinding.tokenAddress, policy, TRON_MAINNET_PROFILE, 0],
+      [prebinding.tokenAddress, policy, TRON_MAINNET_PROFILE, 0, String(MAX_WRAPPED_SUPPLY)],
       "zero-revision bridge",
     ),
   "bridge deployment with a zero route revision",
+);
+await expectConfirmedTvmFailure(
+  () =>
+    deploy(
+      bridgeClient,
+      artifacts.bridge,
+      [prebinding.tokenAddress, policy, TRON_MAINNET_PROFILE, ROUTE_REVISION, "0"],
+      "zero-cap bridge",
+    ),
+  "bridge deployment with a zero wrapped-supply cap",
+);
+await expectConfirmedTvmFailure(
+  () =>
+    deploy(
+      bridgeClient,
+      artifacts.bridge,
+      [
+        prebinding.tokenAddress,
+        policy,
+        TRON_MAINNET_PROFILE,
+        ROUTE_REVISION,
+        String(MAX_U128 + 1n),
+      ],
+      "oversized-cap bridge",
+    ),
+  "bridge deployment with a wrapped-supply cap above u128",
 );
 
 const bridge = await deploy(
   bridgeClient,
   artifacts.bridge,
-  [prebinding.tokenAddress, policy, TRON_MAINNET_PROFILE, ROUTE_REVISION],
+  [
+    prebinding.tokenAddress,
+    policy,
+    TRON_MAINNET_PROFILE,
+    ROUTE_REVISION,
+    String(MAX_WRAPPED_SUPPLY),
+  ],
   "production TRON bridge",
 );
 assert.equal(
@@ -795,6 +839,7 @@ assert.equal(
 assert.equal(asInteger(await bridge.tronProfile().call()), BigInt(TRON_MAINNET_PROFILE));
 assert.equal(bytes32(await bridge.networkId().call()), networkId);
 assert.equal(asInteger(await bridge.routeRevision().call()), BigInt(ROUTE_REVISION));
+assert.equal(asInteger(await bridge.maxWrappedSupply().call()), MAX_WRAPPED_SUPPLY);
 assert.equal(
   tronHexAddress(bridgeClient, await bridge.verifier().call()),
   tronHexAddress(bridgeClient, verifier.address),
@@ -880,6 +925,7 @@ const expectedRouteConfigHash = exactRouteConfig({
   destinationBinding: expectedDestinationBinding,
   sourceLaneHash: expectedSourceLaneHash,
   destinationLaneHash: expectedDestinationLaneHash,
+  maxWrappedSupply: MAX_WRAPPED_SUPPLY,
 });
 assert.equal(bytes32(await bridge.routeConfigHash().call()), expectedRouteConfigHash);
 
@@ -978,6 +1024,42 @@ await expectConfirmedTvmFailure(
   "destination replay",
 );
 assert.equal(asInteger(await token.balanceOf(ownerAddress).call()), 3n * SCALE);
+
+const capPayload = inboundTransferPayload(recipient, MAX_OUTSTANDING_LIABILITY, 990n);
+const capPayloadHex = `0x${capPayload.toString("hex")}`;
+const capMessageId = bytes32(await bridge.sccpDestinationMessageId(capPayloadHex).call());
+const capPublicInputs = [
+  capMessageId,
+  bytes32(await bridge.sccpPayloadHash(capPayloadHex).call()),
+  word(DOMAIN_TRON),
+  sha3Utf8("tvm-cap-commitment-root"),
+  word(990),
+  sha3Utf8("tvm-cap-finality-block"),
+];
+const capStatementHash = sha3Utf8("tvm-cap-statement");
+const capProof = acceptingProof(
+  capPublicInputs,
+  capStatementHash,
+  destinationBinding,
+  routeConfigHash,
+);
+await expectConfirmedTvmFailure(
+  () =>
+    sendAndConfirmTvm(
+      bridgeClient,
+      bridge.finalizeFromTaira(
+        capProof,
+        capPublicInputs,
+        capStatementHash,
+        capPayloadHex,
+      ),
+      { feeLimit: METHOD_FEE_LIMIT },
+      "wrapped-supply cap",
+    ),
+  "destination mint above the wrapped-supply cap",
+);
+assert.equal(await bridge.usedDestinationMessages(capMessageId).call(), false);
+assert.equal(asInteger(await token.totalSupply().call()), 3n * SCALE);
 
 const nonceBeforeFailedBurns = asInteger(
   await bridge.transferNonces(ownerAddress).call(),

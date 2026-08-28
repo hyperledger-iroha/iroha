@@ -52,9 +52,12 @@ const BASE_KAIGI_LEAVE: u64 = 150;
 const BASE_KAIGI_END: u64 = 220;
 const BASE_KAIGI_USAGE: u64 = 240;
 const BASE_KAIGI_RELAY_MANIFEST: u64 = 220;
-/// Worst-case bounded work for loading one retained native Kaigi metadata value.
-const KAIGI_METADATA_READ_ESCROW: u64 =
-    iroha_data_model::kaigi::KAIGI_METADATA_VALUE_MAX_JSON_BYTES_V1 as u64;
+/// Calibrated gas for one bounded pass over a native Kaigi metadata value.
+///
+/// V1 independently caps each value at 1 MiB. Charging raw bytes as gas would make bounded Kaigi
+/// lifecycle operations exceed the shipped 1.68M block limit, so the schedule prices one complete
+/// parse/validation pass as a 32 Ki-gas work unit while retaining proportional pass counts.
+const KAIGI_METADATA_READ_ESCROW: u64 = 32 * 1024;
 /// Worst-case bounded work for loading one retained Kaigi record.
 const KAIGI_RECORD_READ_ESCROW: u64 = KAIGI_METADATA_READ_ESCROW;
 /// Worst-case bounded work for two independent retained Kaigi metadata reads.
@@ -701,7 +704,9 @@ mod tests {
         zk::test_utils::halo2_fixture_envelope,
     };
     use iroha_config::parameters::actual as cfg;
-    use iroha_data_model::governance::types::{BallotAttemptId, GovernanceAttemptId};
+    use iroha_data_model::governance::types::{
+        BallotAttemptId, GovernanceAttemptId, PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+    };
     use iroha_data_model::prelude::*;
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
@@ -981,19 +986,16 @@ mod tests {
     }
     #[test]
     fn maximum_timed_ovn_chunk_fits_standard_default_genesis_block_gas_limit() {
-        let transition = parliament_corpus_instruction(
-            dm_isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
-        );
+        let transition =
+            parliament_corpus_instruction(PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1);
         let encoded = transition.encode().len();
         let expected = parliament_encoded_input_gas(encoded)
             .saturating_add(PARLIAMENT_PROOF_UNIT)
             .saturating_add(PARLIAMENT_BALLOT_OR_VERIFY)
             .saturating_add(
                 PER_PARLIAMENT_CACHED_RECORD.saturating_mul(
-                    u64::try_from(
-                        dm_isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
-                    )
-                    .expect("chunk bound fits u64"),
+                    u64::try_from(PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1)
+                        .expect("chunk bound fits u64"),
                 ),
             );
         let instruction = InstructionBox::from(transition);
@@ -1011,7 +1013,7 @@ mod tests {
     fn timed_ovn_chunk_gas_is_monotonic_in_record_count() {
         let one = InstructionBox::from(parliament_corpus_instruction(1));
         let maximum = InstructionBox::from(parliament_corpus_instruction(
-            dm_isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+            PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
         ));
         assert!(meter_instruction(&maximum) > meter_instruction(&one));
     }
@@ -1423,11 +1425,6 @@ mod tests {
             KAIGI_RELAY_STATE_READ_ESCROW,
             KAIGI_METADATA_READ_ESCROW.saturating_mul(2)
         );
-        assert!(
-            KAIGI_RECORD_MUTATION_ESCROW + BASE_KAIGI_USAGE < 4_000_000,
-            "one maximum-size proofless record mutation must fit the default block gas limit"
-        );
-
         let host = sample_account();
         let participant = sample_account();
         let call_id = KaigiId::new(
@@ -1535,6 +1532,167 @@ mod tests {
             meter_instruction(&health),
             BASE_KAIGI_RELAY_HEALTH + KAIGI_RELAY_STATE_READ_ESCROW
         );
+    }
+    #[test]
+    fn proofless_kaigi_max_paths_fit_shipped_block_gas() {
+        use iroha_data_model::{
+            isi::kaigi::{
+                CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage, RegisterKaigiRelay,
+                ReportKaigiRelayHealth, SetKaigiRelayManifest, UnregisterKaigiRelay,
+            },
+            kaigi::{
+                KAIGI_RECORD_MAX_JSON_BYTES_V1, KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
+                KAIGI_RELAY_MANIFEST_MAX_HOPS_V1, KaigiId, KaigiRecord, KaigiRelayHealthStatus,
+                KaigiRelayHop, KaigiRelayManifest, KaigiRelayRegistration, NewKaigi,
+            },
+        };
+
+        const SHIPPED_BLOCK_GAS_LIMIT: u64 = 1_680_000;
+
+        let host = sample_account();
+        let participant = sample_account();
+        let call_id = KaigiId::new(
+            DomainId::try_new("kaigi-shipped-gas", "universal").expect("valid domain id"),
+            "max-proofless".parse().expect("valid call name"),
+        );
+        let manifest = KaigiRelayManifest {
+            hops: (0..KAIGI_RELAY_MANIFEST_MAX_HOPS_V1)
+                .map(|index| KaigiRelayHop {
+                    relay_id: sample_account(),
+                    hpke_public_key: vec![
+                        u8::try_from(index).expect("hop index fits u8");
+                        KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1
+                    ],
+                    weight: 1,
+                })
+                .collect(),
+            expiry_ms: u64::MAX,
+        };
+        let mut call = NewKaigi::with_defaults(call_id.clone(), host.clone());
+        call.relay_manifest = Some(manifest.clone());
+        let fixed_record_len = Json::try_new(KaigiRecord::from_new(&call, 0))
+            .expect("bounded fixed record")
+            .as_ref()
+            .len();
+        let description_len = KAIGI_RECORD_MAX_JSON_BYTES_V1
+            .checked_sub(fixed_record_len.saturating_add(128))
+            .expect("maximum relay manifest leaves room for a description");
+        call.description = Some("x".repeat(description_len));
+        let near_limit_record = Json::try_new(KaigiRecord::from_new(&call, 0))
+            .expect("near-limit protocol-valid record");
+        assert!(near_limit_record.as_ref().len() <= KAIGI_RECORD_MAX_JSON_BYTES_V1);
+        assert!(
+            near_limit_record.as_ref().len() > KAIGI_RECORD_MAX_JSON_BYTES_V1 - 512,
+            "fixture must exercise the record byte ceiling"
+        );
+
+        let relay_id = manifest.hops[0].relay_id.clone();
+        let cases: [(&str, InstructionBox); 9] = [
+            (
+                "create with eight-hop near-limit record",
+                CreateKaigi {
+                    call,
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                }
+                .into(),
+            ),
+            (
+                "join",
+                JoinKaigi {
+                    call_id: call_id.clone(),
+                    participant: participant.clone(),
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                }
+                .into(),
+            ),
+            (
+                "leave",
+                LeaveKaigi {
+                    call_id: call_id.clone(),
+                    participant,
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                }
+                .into(),
+            ),
+            (
+                "end",
+                EndKaigi {
+                    call_id: call_id.clone(),
+                    ended_at_ms: None,
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                }
+                .into(),
+            ),
+            (
+                "usage",
+                RecordKaigiUsage {
+                    call_id: call_id.clone(),
+                    duration_ms: 1,
+                    billed_gas: 1,
+                    usage_commitment: None,
+                    proof: None,
+                }
+                .into(),
+            ),
+            (
+                "set eight-hop manifest",
+                SetKaigiRelayManifest {
+                    call_id: call_id.clone(),
+                    relay_manifest: Some(manifest),
+                }
+                .into(),
+            ),
+            (
+                "register maximum-size relay descriptor",
+                RegisterKaigiRelay {
+                    relay: KaigiRelayRegistration {
+                        relay_id: relay_id.clone(),
+                        hpke_public_key: vec![0xA5; KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1],
+                        bandwidth_class: 1,
+                    },
+                }
+                .into(),
+            ),
+            (
+                "unregister relay",
+                UnregisterKaigiRelay {
+                    relay_id: relay_id.clone(),
+                }
+                .into(),
+            ),
+            (
+                "report health with maximum character count",
+                ReportKaigiRelayHealth {
+                    call_id,
+                    relay_id,
+                    status: KaigiRelayHealthStatus::Healthy,
+                    reported_at_ms: 0,
+                    notes: Some("🦀".repeat(512)),
+                }
+                .into(),
+            ),
+        ];
+        for (label, instruction) in cases {
+            let gas = meter_instruction(&instruction);
+            assert!(
+                gas < SHIPPED_BLOCK_GAS_LIMIT,
+                "proofless {label} costs {gas}, exceeding shipped block gas {SHIPPED_BLOCK_GAS_LIMIT}"
+            );
+        }
+        // Proof-bearing variants add the configured proof schedule and may intentionally require a
+        // higher operator-selected block budget; this test only covers proofless native bounds.
     }
     #[test]
     fn account_lifecycle_changes_reserve_kaigi_dependency_reads() {

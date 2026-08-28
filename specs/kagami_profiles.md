@@ -5,8 +5,8 @@ genesis manifests without juggling per-network knobs.
 
 - Profiles: `iroha3-dev` uses chain `iroha3-dev.local` and derives its VRF seed
   from the chain id when NPoS is selected. `iroha3-taira` uses the live chain
-  `fc56984b-2be7-431d-840e-21514d1883f0`; `iroha3-nexus` uses chain
-  `iroha3-nexus`. Both public profiles require NPoS and an explicit
+  `fc56984b-2be7-431d-840e-21514d1883f0`; `iroha3-nexus` uses the public
+  Minamoto/Nexus chain `00000000-0000-0000-0000-000000000753`. Both public profiles require NPoS and an explicit
   `--vrf-seed-hex`. Profile chain identities are immutable: an explicit
   `--chain-id` is accepted only when it exactly repeats the profile's pinned id.
 - Consensus: Sora profile networks (Nexus + dataspaces) require NPoS and disallow staged cutovers; permissioned Iroha3 deployments must run without a Sora profile.
@@ -26,7 +26,7 @@ genesis manifests without juggling per-network knobs.
   `defaults/kagami/iroha3-{dev,nexus}/` (genesis.json, config.toml,
   docker-compose.yml, verify.txt, README). Regenerate them with
   `cargo xtask kagami-profiles [--profile <name>|all] [--out <dir>] [--kagami <bin>] [--nexus-xor-asset-definition-id <BASE58>]`; the Nexus flag is required when generating `iroha3-nexus` or `all`.
-- Mochi: `mochi`/`mochi-genesis` accept `--genesis-profile <profile>` and `--vrf-seed-hex <hex>` (NPoS only), forward them to Kagami, and print the same Kagami summary to stdout/stderr when a profile is used.
+- Mochi: `mochi` accepts `--genesis-profile <profile>` and `--vrf-seed-hex <hex>` (NPoS only) and forwards them to Kagami for generation, signing, and verification.
 
 The bundles embed BLS PoPs alongside topology entries so `kagami verify` succeeds
 out of the box; adjust the trusted peers/ports in the configs as needed for local

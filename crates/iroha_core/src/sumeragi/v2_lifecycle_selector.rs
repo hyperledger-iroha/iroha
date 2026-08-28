@@ -1707,6 +1707,9 @@ impl PreparedLifecycleIngressSelector {
         coordinator: &LifecycleCoordinator,
         registry: &mut LifecycleWorkRegistryHolder,
     ) -> Result<LifecycleIngressSchedulerFetchSeal, LifecycleIngressSchedulerCarrierError> {
+        // Capacity capture moves the exact I/O target into its live
+        // reservation and leaves a consumed marker in the selector. Authenticate
+        // both halves so a moved-from selector cannot attest unrelated capacity.
         if !capacity.matches_captured_certified_fetch_target(self) {
             return Err(LifecycleIngressSchedulerCarrierError::UnsupportedCarrier);
         }

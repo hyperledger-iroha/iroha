@@ -62,14 +62,13 @@ signals exported by Torii and the SoraFS orchestrator.
   selectors and panels for p95/p99 ingest latency, live-edge drift, segment
   error rates, CEK rotation age, and viewer alert rollups. Import into Grafana
   or reference the managed folder to review JSON edits.
-- **Grafana — `dashboards/grafana/taikai_cache.json`:** monitors hot/warm/cold
-  cache tiers. Use this when alias rotations trigger cache promotion spikes or
-  QoS denials. Panels reference `sorafs_taikai_cache_*` and
-  `sorafs_taikai_qos_denied_total` metrics.
 - **Alertmanager rules — `dashboards/alerts/taikai_viewer_rules.yml`:** define
   the paging criteria for drift, ingest failures, CEK rotation lag, and SoraFS
   proof-health penalties. Confirm every production cluster wires these rules
   into Alertmanager before enabling automatic alias rotation.
+
+Taikai V1 has no dedicated cache dashboard or cache/queue telemetry. Viewer
+retrieval uses the normal bounded multi-provider SoraFS fetch path.
 
 ## Runbook procedures
 
@@ -210,9 +209,8 @@ The SN13-C readiness gate requires two recurring actions: keeping public Taikai
 operator guidance current in `iroha-docs` and exercising the evidence drill on
 a predictable cadence.
 
-1. **Public documentation.** After each dashboard JSON update
-   (`dashboards/grafana/taikai_viewer.json` and
-   `dashboards/grafana/taikai_cache.json`), coordinate the public highlights in
+1. **Public documentation.** After each viewer dashboard JSON update
+   (`dashboards/grafana/taikai_viewer.json`), coordinate the public highlights in
    the sibling `iroha-docs` repository. Include the SHA-256 digest of the JSON
    bundle in that PR and call out any new panels or thresholds so governance
    reviewers can diff the managed Grafana folder against the repository version.
@@ -229,9 +227,8 @@ a predictable cadence.
    Program and NetOps. Note false positives, alert latency, and remediation
    follow-ups in the drill log entry so the next iteration can adjust thresholds.
 
-These steps keep the roadmap requirement (“viewer/cache dashboards mirrored in
-the portal and rehearsed evidence drills”) continuously satisfied even as the
-dashboards evolve.
+These steps keep the viewer dashboard mirrored in the portal and the evidence
+drills rehearsed even as the dashboard evolves.
 
 ## Useful commands
 
@@ -250,6 +247,6 @@ jq '.error_context | select(.reason == "lineage_replay")' \
   "$MANIFEST_DIR/taikai/taikai-ssm-20260405T153000Z.norito"
 ```
 
-Keep this document alongside the Taikai cache and viewer dashboards when
-running SN13-C rehearsals so operators can capture deterministic telemetry
-records for every anchor rotation.
+Keep this document alongside the Taikai viewer dashboard when running SN13-C
+rehearsals so operators can capture deterministic telemetry records for every
+anchor rotation.

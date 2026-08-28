@@ -1521,11 +1521,9 @@ impl crate::NodeHandle {
                     .ok_or(
                         ProviderIngestCompletedMusubiReconcileErrorV1::AdmittedPlanUnavailable,
                     )?;
-            let plan = stored
-                .try_to_car_plan_with_hint(profile, None)
-                .map_err(|_| {
-                    ProviderIngestCompletedMusubiReconcileErrorV1::AdmittedPlanUnavailable
-                })?;
+            let plan = stored.try_to_car_plan(profile).map_err(|_| {
+                ProviderIngestCompletedMusubiReconcileErrorV1::AdmittedPlanUnavailable
+            })?;
             if !candidate.matches_completed_musubi_store_instance(completed_musubi_store_instance) {
                 return Err(ProviderIngestCompletedMusubiReconcileErrorV1::VerificationFailed);
             }

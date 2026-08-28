@@ -91,6 +91,22 @@ fn sample_peer_id(seed: u8) -> String {
         .expect("fixture seed derives Ed25519 peer keypair");
     PeerId::from(keypair.public_key().clone()).to_string()
 }
+fn sample_bls_peer_id(seed: u8) -> String {
+    let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+        .expect("fixture seed derives BLS peer keypair");
+    PeerId::from(keypair.public_key().clone()).to_string()
+}
+fn sample_inrou_placement_targets(count: u16) -> BTreeSet<SoraInrouPlacementTargetV1> {
+    (0..count)
+        .map(|index| {
+            let index = u8::try_from(index).expect("fixture target index fits u8");
+            SoraInrouPlacementTargetV1 {
+                validator_account_id: sample_account_id(0xA0_u8.wrapping_add(index)),
+                peer_id: sample_bls_peer_id(0xC0_u8.wrapping_add(index)),
+            }
+        })
+        .collect()
+}
 fn sample_ed25519_keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("fixture seed derives Ed25519 keypair")

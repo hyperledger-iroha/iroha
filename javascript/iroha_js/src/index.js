@@ -20,6 +20,10 @@ export {
 export { normalizeIdentifierInput } from "./normalizers.js";
 export { NetworkId } from "./networkId.js";
 export {
+  TAIRA_TESTNET_PROFILE,
+  createTairaLocalSigningContext,
+} from "./tairaTestnetProfile.js";
+export {
   AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
   AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
   AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1,
@@ -66,6 +70,17 @@ export {
   normalizeValidationFeeLedgerBindingV1,
   verifyValidationFeeCurrentPolicyProofV1,
 } from "./validationFeeConsensus.js";
+export {
+  VALIDATION_FEE_HIJIRI_QUOTE_ASSURANCE,
+  VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES,
+  VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
+  VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS,
+  VALIDATION_FEE_HIJIRI_QUOTE_PATH,
+  VALIDATION_FEE_HIJIRI_QUOTE_REQUIRED_BRIDGE_ABI_VERSION,
+  VALIDATION_FEE_HIJIRI_QUOTE_SCHEMA,
+  encodeValidationFeeHijiriQuoteRequestV1,
+  verifyValidationFeeHijiriQuoteResponseV1,
+} from "./validationFeeHijiriQuote.js";
 export {
   computeValidationFeePayoutLifecycleProposalFingerprintV1,
   computeValidationFeePolicyProposalFingerprintV1,

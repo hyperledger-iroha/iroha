@@ -4,7 +4,8 @@ The main tool here is [`read::ConfigReader`]. It is built around these key conce
 
 - Read config from TOML files;
 - Identify each configuration parameter by its path in the file;
-- Parameter might have an environment variable alias, which overwrites value from files;
+- Parameter may have an explicitly enabled environment-variable alias, which overwrites values
+  from files;
 - Parameter might have a default value, applied if nothing was found in files/env.
 
 The reader's goal is to:
@@ -17,6 +18,11 @@ File-backed TOML loading is fail-closed and allocation-bounded. Each source must
 regular file, and `extends` traversal rejects cycles, duplicate diamond loads, excessive
 depth/source fanout, and excessive aggregate encoded bytes. The exact first-release ceilings are
 exposed by [`toml::MAX_TOML_SOURCE_BYTES`] and the `MAX_TOML_EXTENDS_*` constants in [`read`].
+Artifact-backed readers can disable ambient process variables with
+[`read::ConfigReader::without_env`]. Typed TOML values use one authoritative Norito
+`JsonDeserialize::json_from_value` path, and diagnostics never echo raw parameter values. Callers
+must finish every reader with [`read::ConfigReader::into_result`], including after successfully
+loading an `extends` graph.
 
 ## Example: raw usage
 
@@ -24,7 +30,7 @@ Let's say we want to read the following config:
 
 ```toml
 [foo]
-bar = "example" # has env alias BAR
+bar = "example" # has the opt-in env alias BAR
 baz = 42
 more = { foo = 24 }
 ```

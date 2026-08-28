@@ -510,7 +510,7 @@ fn read_bounded(path: &Path, max_bytes: u64, description: &str) -> color_eyre::R
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     let file = options
         .open(path)

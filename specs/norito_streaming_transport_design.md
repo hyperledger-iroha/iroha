@@ -132,8 +132,15 @@ requesting bits outside the advertised mask MUST be rejected by the handshake.
   the session ID are inserted when needed to preserve determinism.
 - When falling back to streams, publishers open a single unidirectional stream
   per segment window. Chunks and parity shards are framed in-order with a
-  deterministic header (`chunk_id`, `is_parity`, `payload_len`). Stream offsets
-  remain strictly increasing so retransmissions are QUIC-managed.
+  deterministic header (`chunk_id: u16 LE`, `is_parity: u8`, `payload_len: u32
+  LE`). Each stream starts with `NSM/1`, the `segment_number: u64 LE`, and the
+  `frame_count: u16 LE`; it ends at QUIC FIN with no trailing bytes. Chunk IDs
+  and segment numbers are strictly increasing, and all source chunks precede
+  parity shards. A window carries at most 12 source plus 6 parity frames, with a
+  4 MiB per-frame and 16 MiB aggregate payload bound. Stream offsets remain
+  strictly increasing so retransmissions are QUIC-managed. The transport
+  advertises 16 unidirectional streams: one permanent control stream and at
+  most 15 unfinished media windows.
 - Control messages (`KeyUpdate`, `FeedbackHint`, `ReceiverReport`) travel on a
   dedicated bidirectional stream with priority weight 256. Media streams use
   weight 128, and archival/manifest streams use weight 64. This hierarchy keeps

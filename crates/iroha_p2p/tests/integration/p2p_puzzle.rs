@@ -32,7 +32,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for EmptyMsg {
     }
 }
 fn puzzle_handshake(difficulty: u8, memory_kib: u32) -> ActualSoranetHandshake {
-    let mut handshake = super::mandatory_test_soranet_handshake();
+    let mut handshake = super::low_cost_test_soranet_handshake();
     handshake.pow.difficulty = difficulty;
     handshake.pow.max_future_skew = Duration::from_secs(300);
     handshake.pow.min_ticket_ttl = Duration::from_secs(60);

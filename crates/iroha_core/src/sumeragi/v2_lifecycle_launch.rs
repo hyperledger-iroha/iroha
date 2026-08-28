@@ -668,8 +668,8 @@ impl LaunchedProductionLifecycleV1 {
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Owner);
         };
         let key = completion.completion().dispatch_key();
-        let wait_source =
-            super::projection::certified_fetch_wait_source(completion.completion().request_hash());
+        let request_hash = completion.completion().request_hash();
+        let wait_source = super::projection::certified_fetch_wait_source(request_hash);
         let response_hash = completion.completion().response_hash();
         let physical_ordinal = completion.completion().physical_admission_ordinal();
         let Some(body) = completion.completion().project_store_body_authority() else {
@@ -780,12 +780,33 @@ impl LaunchedProductionLifecycleV1 {
             }
         };
         let output_guard = services.lifecycle_output_guard();
+        let request_output_retirement = match services
+            .prepare_recovered_decision_fetch_request_output_retirement(request_hash)
+        {
+            Ok(retirement) => retirement,
+            Err(reason) => {
+                iroha_logger::error!(
+                    %reason,
+                    "recovered Fetch request-output retirement preflight failed closed"
+                );
+                drop(transition);
+                drop(locked_dequeue);
+                output_guard.close_admission_for_restart();
+                assert!(pending_lifecycle_completion.is_none());
+                *pending_lifecycle_completion = Some(
+                    PendingLifecycleCompletionV1::RecoveredDecisionFetch(completion),
+                );
+                return ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired;
+            }
+        };
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            drop(request_output_retirement);
             drop(transition);
             drop(locked_dequeue);
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::OutputClosed);
         };
         if transition.persist_exact_successor().is_err() {
+            drop(request_output_retirement);
             drop(transition);
             owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
             assert!(pending_lifecycle_completion.is_none());
@@ -798,6 +819,7 @@ impl LaunchedProductionLifecycleV1 {
         }
         transition.commit_after_publication();
         executor.commit_published_lifecycle_store_retry_marker(retry_marker);
+        request_output_retirement.commit_after_publication(operation.permit());
         executor.commit_recovered_decision_fetch_owner_retirement(retirement);
         locked_dequeue.commit();
         completion.acknowledge_after_publication();

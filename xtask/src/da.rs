@@ -386,7 +386,8 @@ fn load_replication_policy(path: &Path) -> Result<DaReplicationPolicy, Box<dyn E
     let reader = ConfigReader::new()
         .read_toml_with_extends(path)
         .map_err(|err| format!("failed to read config {path:?}: {err}"))?;
-    let config = user::Root::read_and_complete(reader)
+    let config = reader
+        .read_and_complete::<user::Root>()
         .map_err(|err| format!("failed to complete config {path:?}: {err}"))?
         .parse()
         .map_err(|err| format!("failed to parse config {path:?}: {err}"))?;
@@ -1148,7 +1149,8 @@ fn load_da_ingest_config(path: &Path) -> Result<DaIngest, Box<dyn Error>> {
             .map_err(|err| -> Box<dyn Error> {
                 format!("failed to read config {path:?}: {err}").into()
             })?;
-    user::Root::read_and_complete(reader)
+    reader
+        .read_and_complete::<user::Root>()
         .map_err(|err| -> Box<dyn Error> {
             format!("failed to complete config {path:?}: {err}").into()
         })?

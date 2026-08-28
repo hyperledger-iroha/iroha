@@ -92,22 +92,14 @@ fn sponsored_account_tools_reject_flat_and_dual_request_shapes() {
     );
 }
 #[test]
-fn sponsored_prepare_tools_are_read_only_and_submit_tools_are_write() {
+fn sponsored_signing_and_submit_tools_are_not_read_only() {
     assert_eq!(iroha_accounts_onboard_plan_tool().effect, ToolEffect::Read);
     assert_eq!(
         iroha_accounts_onboard_prepare_tool().effect,
-        ToolEffect::Read
-    );
-    assert_eq!(
-        iroha_accounts_onboard_submit_tool().effect,
         ToolEffect::Write
     );
     assert_eq!(
-        iroha_accounts_faucet_prepare_tool().effect,
-        ToolEffect::Read
-    );
-    assert_eq!(
-        iroha_accounts_faucet_submit_tool().effect,
+        iroha_accounts_onboard_submit_tool().effect,
         ToolEffect::Write
     );
 }
@@ -117,8 +109,6 @@ fn sponsored_account_tool_descriptors_require_one_exact_body_shape() {
         iroha_accounts_onboard_plan_tool(),
         iroha_accounts_onboard_prepare_tool(),
         iroha_accounts_onboard_submit_tool(),
-        iroha_accounts_faucet_prepare_tool(),
-        iroha_accounts_faucet_submit_tool(),
     ] {
         let schema = tool.input_schema.as_object().expect("tool input object");
         assert!(schema.get("oneOf").is_none(), "{} has a union", tool.name);
@@ -155,27 +145,11 @@ fn sponsored_account_tool_descriptors_require_v1_permissions_fee_and_pow_fields(
             .iter()
             .any(|field| field == "permissions")
     );
-    for tool in [
-        iroha_accounts_onboard_prepare_tool(),
-        iroha_accounts_faucet_prepare_tool(),
-    ] {
+    for tool in [iroha_accounts_onboard_prepare_tool()] {
         assert!(
             required_body_fields(tool)
                 .iter()
                 .any(|field| field == "fee_payment")
-        );
-    }
-    let faucet = iroha_accounts_faucet_prepare_tool();
-    let claim_required =
-        faucet.input_schema["properties"]["body"]["properties"]["claim"]["required"]
-            .as_array()
-            .expect("faucet claim required array");
-    for field in ["account_id", "pow_anchor_height", "pow_nonce_hex"] {
-        assert!(
-            claim_required
-                .iter()
-                .any(|required| required.as_str() == Some(field)),
-            "faucet claim descriptor omitted {field}"
         );
     }
 }
@@ -231,8 +205,6 @@ fn sponsored_account_tool_descriptors_close_nested_v1_objects() {
     for tool in [
         iroha_accounts_onboard_prepare_tool(),
         iroha_accounts_onboard_submit_tool(),
-        iroha_accounts_faucet_prepare_tool(),
-        iroha_accounts_faucet_submit_tool(),
     ] {
         let binding = &tool.input_schema["properties"]["body"]["properties"]["binding"];
         assert_closed_object(binding, &binding_fields, &format!("{} binding", tool.name));
@@ -263,15 +235,6 @@ fn sponsored_account_tool_descriptors_close_nested_v1_objects() {
             &receipt_body_fields,
             &format!("{} receipt body", tool.name),
         );
-    }
-
-    let claim_fields = ["account_id", "pow_anchor_height", "pow_nonce_hex"];
-    for tool in [
-        iroha_accounts_faucet_prepare_tool(),
-        iroha_accounts_faucet_submit_tool(),
-    ] {
-        let claim = &tool.input_schema["properties"]["body"]["properties"]["claim"];
-        assert_closed_object(claim, &claim_fields, &format!("{} claim", tool.name));
     }
 }
 #[test]
@@ -328,8 +291,6 @@ fn prepared_account_tool_descriptors_have_no_untyped_schema_holes() {
     for tool in [
         iroha_accounts_onboard_prepare_tool(),
         iroha_accounts_onboard_submit_tool(),
-        iroha_accounts_faucet_prepare_tool(),
-        iroha_accounts_faucet_submit_tool(),
     ] {
         assert_eq!(
             tool.input_schema[MCP_STRICT_BODY_SCHEMA_EXTENSION].as_bool(),
@@ -386,8 +347,6 @@ fn prepared_account_tool_descriptors_encode_tagged_unions_and_required_null_slot
     for tool in [
         iroha_accounts_onboard_prepare_tool(),
         iroha_accounts_onboard_submit_tool(),
-        iroha_accounts_faucet_prepare_tool(),
-        iroha_accounts_faucet_submit_tool(),
     ] {
         let fee = &tool.input_schema["properties"]["body"]["properties"]["fee_payment"];
         let branches = fee["oneOf"].as_array().expect("fee payer union");
@@ -496,57 +455,71 @@ fn build_accounts_onboard_prepare_requires_schema_binding_receipt_and_fee() {
     let old = norito::json!({ "receipt": {} });
     let error = build_accounts_onboard_prepare_body(old.as_object().expect("object"))
         .expect_err("old one-shot shape");
-    assert!(error.contains("schema") || error.contains("binding"));
+    assert!(error.contains("only in `body`"));
 }
 #[test]
 fn prepared_submit_builders_reject_old_one_shot_shapes() {
     let old_onboarding = norito::json!({ "receipt": {} });
     let error = build_accounts_onboard_submit_body(old_onboarding.as_object().expect("object"))
         .expect_err("old onboarding apply shape");
-    assert!(error.contains("schema"));
+    assert!(error.contains("only in `body`"));
 
-    let old_faucet = norito::json!({ "account_id": TEST_ACCOUNT_I105 });
+    let old_faucet = norito::json!({ "claim": {} });
     let error = build_accounts_faucet_submit_body(old_faucet.as_object().expect("object"))
-        .expect_err("old faucet claim shape");
-    assert!(error.contains("unsupported") || error.contains("schema"));
+        .expect_err("old faucet apply shape");
+    assert!(error.contains("only in `body`"));
 }
 #[test]
-fn build_accounts_faucet_prepare_requires_closed_shape() {
-    let args = norito::json!({
+fn faucet_body_builders_require_exact_prepare_and_submit_envelopes() {
+    let prepare = norito::json!({
         "body": {
             "schema": "iroha.accounts.faucet.prepare.v1",
             "binding": {},
-            "claim": {
-                "account_id": TEST_ACCOUNT_I105,
-                "pow_anchor_height": 7,
-                "pow_nonce_hex": "0000000000000000"
-            },
+            "claim": {},
             "fee_payment": {}
         }
     });
-    let body = build_accounts_faucet_prepare_body(args.as_object().expect("object"))
-        .expect("faucet prepare body");
-    let body = materialize_borrowed_body(&body);
-    assert!(body.as_object().is_some_and(|body| {
-        body.contains_key("schema")
-            && body.contains_key("binding")
-            && body.contains_key("claim")
-            && body.contains_key("fee_payment")
-    }));
-    let missing_fee = norito::json!({
-        "body": {
-            "schema": "iroha.accounts.faucet.prepare.v1",
-            "binding": {},
-            "claim": {
-                "account_id": TEST_ACCOUNT_I105,
-                "pow_anchor_height": 7,
-                "pow_nonce_hex": "0000000000000000"
-            }
-        }
-    });
+    build_accounts_faucet_prepare_body(prepare.as_object().expect("object"))
+        .expect("complete prepare body");
+    let mut missing_fee = prepare.clone();
+    missing_fee
+        .get_mut("body")
+        .and_then(Value::as_object_mut)
+        .expect("body")
+        .remove("fee_payment");
     let error = build_accounts_faucet_prepare_body(missing_fee.as_object().expect("object"))
         .expect_err("missing fee payment");
     assert!(error.contains("fee_payment"));
+
+    let submit = norito::json!({
+        "body": {
+            "schema": "iroha.taira.prepared-transaction.v1",
+            "binding": {},
+            "operation": "faucet",
+            "claim": {},
+            "semantic_hash_hex": ("ab".repeat(32)),
+            "account_id": TEST_ACCOUNT_I105,
+            "asset_definition_id": "xor#wonderland",
+            "asset_id": "xor#wonderland#alice",
+            "amount": "1",
+            "transaction_hash_hex": ("cd".repeat(32)),
+            "signed_transaction_wire_hex": "00",
+            "signed_transaction_wire_sha256": ("ef".repeat(32)),
+            "fee_payment": {},
+            "server_signature": "AA"
+        }
+    });
+    build_accounts_faucet_submit_body(submit.as_object().expect("object"))
+        .expect("complete submit body");
+    let mut extra = submit;
+    extra
+        .get_mut("body")
+        .and_then(Value::as_object_mut)
+        .expect("body")
+        .insert("private_key".to_owned(), Value::String("secret".to_owned()));
+    let error = build_accounts_faucet_submit_body(extra.as_object().expect("object"))
+        .expect_err("secret field");
+    assert!(error.contains("private_key"));
 }
 #[test]
 fn build_object_body_or_default_uses_empty_object_when_missing() {

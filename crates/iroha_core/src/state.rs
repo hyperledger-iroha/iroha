@@ -44,7 +44,7 @@ use iroha_data_model::{
     bridge::{
         SccpGovernedRouteV1, SccpInboundAnchorHighWaterKeyV1, SccpOutboundMessageIndexKeyV1,
         SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpOutboundPendingUsageV1,
-        SccpOutboundProofRecordV1,
+        SccpOutboundProofRecordV1, SccpRouteKeyV1, SccpRouteLiabilityV1,
         sccp::{SccpInboundMessageKeyV1, SccpInboundMessageRecordV1},
     },
     confidential::ConfidentialFeatureDigest,
@@ -216,7 +216,7 @@ use std::{
     cell::OnceCell,
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     fmt::Write,
-    io, mem,
+    mem,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
@@ -794,23 +794,6 @@ enum ResolvedIvmTriggerProgram {
     Contract(Arc<ivm::PreparedContract>),
     Generic(crate::smartcontracts::ivm::cache::GenericProgramSummary),
 }
-#[derive(Clone)]
-struct StreamingStoragePaths {
-    soranet_provision_spool_dir: PathBuf,
-    soravpn_provision_spool_dir: PathBuf,
-}
-impl Default for StreamingStoragePaths {
-    fn default() -> Self {
-        Self {
-            soranet_provision_spool_dir:
-                iroha_config::parameters::actual::StreamingSoranet::from_defaults()
-                    .provision_spool_dir,
-            soravpn_provision_spool_dir:
-                iroha_config::parameters::actual::StreamingSoravpn::from_defaults()
-                    .provision_spool_dir,
-        }
-    }
-}
 pub(crate) fn account_label_is_pii(label: &AccountAlias) -> bool {
     let raw = label.label.as_ref();
     if raw.is_empty() {
@@ -997,6 +980,7 @@ macro_rules! with_world_overlay_fields {
             axt_replay_ledger,
             axt_handle_budget_ledger,
             sccp_registry,
+            sccp_route_liabilities,
             sccp_outbound_pending_usage,
             sccp_outbound_pending_messages,
             sccp_outbound_message_locator,
@@ -4140,6 +4124,8 @@ pub struct World {
     pub(crate) axt_handle_budget_ledger: Storage<AxtHandleBudgetKey, AxtHandleBudgetRecord>,
     /// First-class typed SCCP governance registry.
     pub(crate) sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1>,
+    /// Exact nonzero outstanding SORA liability keyed by immutable SCCP route revision.
+    pub(crate) sccp_route_liabilities: Storage<SccpRouteKeyV1, SccpRouteLiabilityV1>,
     /// Exact consensus-accounted usage of payload-bearing pending outbox entries.
     pub(crate) sccp_outbound_pending_usage: Cell<SccpOutboundPendingUsageV1>,
     /// Payload-bearing pending outbox registry.
@@ -4830,6 +4816,8 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, AxtHandleBudgetKey, AxtHandleBudgetRecord>,
     /// First-class typed SCCP governance registry for this block scope.
     pub(crate) sccp_registry: CellBlock<'world, iroha_data_model::bridge::SccpRegistryV1>,
+    /// Outstanding SCCP route liabilities for this block scope.
+    pub(crate) sccp_route_liabilities: StorageBlock<'world, SccpRouteKeyV1, SccpRouteLiabilityV1>,
     /// Exact pending outbox usage for this block scope.
     pub(crate) sccp_outbound_pending_usage: CellBlock<'world, SccpOutboundPendingUsageV1>,
     /// Payload-bearing pending outbox registry for this block scope.
@@ -5418,6 +5406,7 @@ impl WorldBlock<'_> {
         collect_reverts!(self.axt_asset_incarnations, AxtAssetIncarnation);
         collect_reverts!(self.axt_replay_ledger, AxtReplay);
         collect_reverts!(self.axt_handle_budget_ledger, AxtHandleBudget);
+        collect_reverts!(self.sccp_route_liabilities, SccpRouteLiability);
         collect_reverts!(self.nfts, Nft);
         collect_reverts!(self.rwas, Rwa);
         collect_reverts!(self.roles, Role);
@@ -5509,6 +5498,7 @@ impl WorldBlock<'_> {
         collect_payload!(self.axt_asset_incarnations, AxtAssetIncarnation);
         collect_payload!(self.axt_replay_ledger, AxtReplay);
         collect_payload!(self.axt_handle_budget_ledger, AxtHandleBudget);
+        collect_payload!(self.sccp_route_liabilities, SccpRouteLiability);
         collect_payload!(self.nfts, Nft);
         collect_payload!(self.rwas, Rwa);
         collect_payload!(self.roles, Role);
@@ -5700,6 +5690,7 @@ impl WorldBlock<'_> {
             axt_asset_incarnations,
             axt_replay_ledger,
             axt_handle_budget_ledger,
+            sccp_route_liabilities,
             sccp_outbound_pending_messages,
             sccp_outbound_message_locator,
             sccp_outbound_message_index,
@@ -6094,6 +6085,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// First-class typed SCCP governance registry for this transaction.
     pub(crate) sccp_registry:
         CellTransaction<'block, 'world, iroha_data_model::bridge::SccpRegistryV1>,
+    /// Outstanding SCCP route liabilities for this transaction.
+    pub(crate) sccp_route_liabilities:
+        StorageTransaction<'block, 'world, SccpRouteKeyV1, SccpRouteLiabilityV1>,
     /// Exact pending outbox usage for this transaction.
     pub(crate) sccp_outbound_pending_usage:
         CellTransaction<'block, 'world, SccpOutboundPendingUsageV1>,
@@ -8281,6 +8275,8 @@ pub struct WorldView<'world> {
         StorageView<'world, AxtHandleBudgetKey, AxtHandleBudgetRecord>,
     /// First-class typed SCCP governance registry view.
     pub(crate) sccp_registry: CellView<'world, iroha_data_model::bridge::SccpRegistryV1>,
+    /// Outstanding SCCP route liability view.
+    pub(crate) sccp_route_liabilities: StorageView<'world, SccpRouteKeyV1, SccpRouteLiabilityV1>,
     /// Exact pending outbox usage view.
     pub(crate) sccp_outbound_pending_usage: CellView<'world, SccpOutboundPendingUsageV1>,
     /// Payload-bearing pending outbox registry view.
@@ -10418,8 +10414,6 @@ pub struct State {
     pipeline_ivm_prepared_cache: parking_lot::RwLock<PreparedContractCache>,
     /// Oracle aggregation configuration.
     pub oracle: iroha_config::parameters::actual::Oracle,
-    /// Process-local streaming spool paths used by storage-budget enforcement.
-    streaming_storage_paths: StreamingStoragePaths,
     /// Cryptography configuration (enabled algorithms, defaults).
     pub crypto: parking_lot::RwLock<Arc<iroha_config::parameters::actual::Crypto>>,
     /// Nexus configuration snapshot (lanes, fusion, DA policies).
@@ -18631,6 +18625,8 @@ macro_rules! world_ro_accessors {
             storage axt_replay_ledger: AxtHandleReplayKey => AxtReplayRecord;
             /// Cumulative spend keyed by the complete issuer-signed handle family.
             storage axt_handle_budget_ledger: AxtHandleBudgetKey => AxtHandleBudgetRecord;
+            /// Exact nonzero outstanding liability keyed by immutable SCCP route revision.
+            storage sccp_route_liabilities: SccpRouteKeyV1 => SccpRouteLiabilityV1;
             /// Consensus-accounted usage of payload-bearing pending SCCP entries.
             cell_copy sccp_outbound_pending_usage: SccpOutboundPendingUsageV1;
             /// Pending outbound SCCP payload registry keyed by exact lane and lane-bound message id.
@@ -20387,6 +20383,7 @@ impl<'world> WorldBlock<'world> {
             axt_replay_ledger,
             axt_handle_budget_ledger,
             sccp_registry,
+            sccp_route_liabilities,
             sccp_outbound_pending_usage,
             sccp_outbound_pending_messages,
             sccp_outbound_message_locator,
@@ -20739,6 +20736,7 @@ impl<'world> WorldBlock<'world> {
         axt_replay_ledger.commit();
         axt_handle_budget_ledger.commit();
         sccp_registry.commit();
+        sccp_route_liabilities.commit();
         sccp_outbound_pending_usage.commit();
         sccp_outbound_pending_messages.commit();
         sccp_outbound_message_locator.commit();
@@ -22539,6 +22537,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             axt_replay_ledger,
             axt_handle_budget_ledger,
             sccp_registry,
+            sccp_route_liabilities,
             sccp_outbound_pending_usage,
             sccp_outbound_pending_messages,
             sccp_outbound_message_locator,
@@ -22939,6 +22938,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         axt_replay_ledger.apply();
         axt_handle_budget_ledger.apply();
         sccp_registry.apply();
+        sccp_route_liabilities.apply();
         sccp_outbound_pending_usage.apply();
         sccp_outbound_pending_messages.apply();
         sccp_outbound_message_locator.apply();
@@ -23713,6 +23713,13 @@ impl State {
             ),
         );
     }
+    #[cfg(test)]
+    pub(crate) fn set_snapshot_v2_bootstrap_candidate_for_testing(
+        &mut self,
+        record: SnapshotV2BootstrapRecord,
+    ) {
+        self.snapshot_v2_bootstrap_candidate = Some(record);
+    }
     pub(crate) fn has_snapshot_v2_bootstrap_candidate(&self) -> bool {
         self.snapshot_v2_bootstrap_candidate.is_some()
     }
@@ -23832,7 +23839,17 @@ impl State {
                 ));
             }
         }
-        self.authenticated_snapshot_v2_bootstrap = self.snapshot_v2_bootstrap_candidate.take();
+        let promoted = self
+            .snapshot_v2_bootstrap_candidate
+            .take()
+            .expect("validated snapshot bootstrap candidate must remain available");
+        let previous_authenticated = self.authenticated_snapshot_v2_bootstrap.replace(promoted);
+        if let Err(error) = self.validate_kaigi_account_dependencies_at_authenticated_time() {
+            let rejected = self.authenticated_snapshot_v2_bootstrap.take();
+            self.authenticated_snapshot_v2_bootstrap = previous_authenticated;
+            self.snapshot_v2_bootstrap_candidate = rejected;
+            return Err(error);
+        }
         Ok(())
     }
     fn disable_nexus_fees_for_testing(&mut self) {
@@ -25305,16 +25322,23 @@ impl State {
         &self.telemetry
     }
     pub(crate) fn rebuild_derived_state_indexes(&mut self) -> core::result::Result<(), String> {
+        let kaigi_retained_timestamp_ceiling = self.latest_block_creation_time_ms_fast();
         crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut self.world)
             .map_err(|error| format!("failed to rebuild Kaigi relay registry: {error}"))?;
-        crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies(&mut self.world)
-            .map_err(|error| format!("failed to rebuild Kaigi account dependencies: {error}"))?;
+        crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies_at(
+            &mut self.world,
+            kaigi_retained_timestamp_ceiling,
+        )
+        .map_err(|error| format!("failed to rebuild Kaigi account dependencies: {error}"))?;
         let nexus = self.nexus_snapshot();
         let world = self.world_view_with_nexus(&nexus);
         crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_relay_registry(&world)
             .map_err(|error| format!("failed to validate Kaigi relay registry: {error}"))?;
-        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies(&world)
-            .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies_at(
+            &world,
+            kaigi_retained_timestamp_ceiling,
+        )
+        .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
         drop(world);
         self.world
             .rebuild_asset_definition_alias_indexes()
@@ -25357,12 +25381,16 @@ impl State {
             );
             return Ok(());
         }
+        let kaigi_retained_timestamp_ceiling = self.latest_block_creation_time_ms_fast();
         let nexus = self.nexus_snapshot();
         let world = self.world_view_with_nexus(&nexus);
         crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_relay_registry(&world)
             .map_err(|error| format!("failed to validate Kaigi relay registry: {error}"))?;
-        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies(&world)
-            .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies_at(
+            &world,
+            kaigi_retained_timestamp_ceiling,
+        )
+        .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
         drop(world);
         let leases = self.world.vpn_leases.view();
         for (_, record) in leases.iter() {
@@ -25370,6 +25398,21 @@ impl State {
         }
         drop(leases);
         self.rebuild_snapshot_root_indexes()
+    }
+
+    fn validate_kaigi_account_dependencies_at_authenticated_time(
+        &self,
+    ) -> core::result::Result<(), String> {
+        let kaigi_retained_timestamp_ceiling = self.latest_block_creation_time_ms_fast();
+        let nexus = self.nexus_snapshot();
+        let world = self.world_view_with_nexus(&nexus);
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies_at(
+            &world,
+            kaigi_retained_timestamp_ceiling,
+        )
+        .map_err(|error| {
+            format!("failed to validate authenticated snapshot Kaigi account dependencies: {error}")
+        })
     }
 
     fn rebuild_snapshot_root_indexes(&mut self) -> core::result::Result<(), String> {
@@ -25598,7 +25641,6 @@ impl State {
             .copied()
             .map(|lane_id| (lane_id, 0))
             .collect();
-        let streaming_storage_paths = StreamingStoragePaths::default();
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
         let LoadedStateJournals {
             query_index: query_index_journal,
@@ -25735,7 +25777,6 @@ impl State {
                 PreparedContractCache::with_capacity(pipeline_cache_size),
             ),
             oracle: default_oracle(),
-            streaming_storage_paths,
             nexus: parking_lot::RwLock::new(nexus),
             lane_incarnations: parking_lot::RwLock::new(lane_incarnations),
             lane_incarnation_lineage: parking_lot::RwLock::new(lane_incarnation_lineage),
@@ -28000,6 +28041,10 @@ impl State {
     /// Override the latest committed block-header cache in tests.
     pub fn update_latest_block_header_cache_for_tests(&self, header: BlockHeader) {
         self.update_latest_block_header_cache(header);
+    }
+    #[cfg(test)]
+    pub(crate) fn clear_latest_block_header_cache_for_testing(&self) {
+        *self.latest_block_header.write() = None;
     }
     /// Produce Merkle proofs for an entrypoint hash at the given block height.
     ///
@@ -41482,7 +41527,6 @@ impl State {
             .store(block_height, Ordering::Relaxed);
         true
     }
-    #[allow(clippy::too_many_lines)]
     fn enforce_nexus_storage_budget(&self, block_height: u64) {
         if self.kura.emergency_fast_startup_enabled() {
             return;
@@ -41503,41 +41547,11 @@ impl State {
         if !self.should_enforce_nexus_storage_budget(block_height, interval_blocks) {
             return;
         }
-        let soranet_spool_dir = self
-            .streaming_storage_paths
-            .soranet_provision_spool_dir
-            .clone();
-        let soravpn_spool_dir = self
-            .streaming_storage_paths
-            .soravpn_provision_spool_dir
-            .clone();
         let mut kura_used = match self.kura.disk_usage_bytes() {
             Ok(bytes) => bytes,
             Err(err) => {
                 warn!(?err, "nexus storage eviction: failed to measure Kura usage");
                 return;
-            }
-        };
-        let mut soranet_used = match dir_size(&soranet_spool_dir) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %soranet_spool_dir.display(),
-                    "nexus storage eviction: failed to measure SoraNet spool usage"
-                );
-                0
-            }
-        };
-        let mut soravpn_used = match dir_size(&soravpn_spool_dir) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %soravpn_spool_dir.display(),
-                    "nexus storage eviction: failed to measure SoraVPN spool usage"
-                );
-                0
             }
         };
         let mut cold_used = {
@@ -41550,52 +41564,11 @@ impl State {
                 }
             }
         };
-        let mut total = kura_used
-            .saturating_add(cold_used)
-            .saturating_add(soranet_used)
-            .saturating_add(soravpn_used);
+        let mut total = kura_used.saturating_add(cold_used);
         if total <= max_disk {
             return;
         }
         let mut excess = total.saturating_sub(max_disk);
-        if excess > 0 && !soranet_spool_dir.as_os_str().is_empty() {
-            match prune_spool_dir(&soranet_spool_dir, excess) {
-                Ok((remaining, freed)) => {
-                    excess = remaining;
-                    soranet_used = soranet_used.saturating_sub(freed);
-                    #[cfg(feature = "telemetry")]
-                    if freed > 0 {
-                        self.telemetry.inc_storage_budget_exceeded("soranet_spool");
-                    }
-                }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        path = %soranet_spool_dir.display(),
-                        "nexus storage eviction: failed to prune SoraNet spool"
-                    );
-                }
-            }
-        }
-        if excess > 0 && !soravpn_spool_dir.as_os_str().is_empty() {
-            match prune_spool_dir(&soravpn_spool_dir, excess) {
-                Ok((remaining, freed)) => {
-                    excess = remaining;
-                    soravpn_used = soravpn_used.saturating_sub(freed);
-                    #[cfg(feature = "telemetry")]
-                    if freed > 0 {
-                        self.telemetry.inc_storage_budget_exceeded("soravpn_spool");
-                    }
-                }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        path = %soravpn_spool_dir.display(),
-                        "nexus storage eviction: failed to prune SoraVPN spool"
-                    );
-                }
-            }
-        }
         if excess > 0 && cold_used > 0 {
             let target = cold_used.saturating_sub(excess);
             let backend = self.tiered_backend.lock();
@@ -41618,10 +41591,7 @@ impl State {
                     warn!(?err, "tiered-state: failed to remeasure cold store bytes");
                 }
             }
-            total = kura_used
-                .saturating_add(cold_used)
-                .saturating_add(soranet_used)
-                .saturating_add(soravpn_used);
+            total = kura_used.saturating_add(cold_used);
             excess = total.saturating_sub(max_disk);
         }
         if excess > 0 {
@@ -41650,10 +41620,7 @@ impl State {
                     );
                 }
             }
-            total = kura_used
-                .saturating_add(cold_used)
-                .saturating_add(soranet_used)
-                .saturating_add(soravpn_used);
+            total = kura_used.saturating_add(cold_used);
             excess = total.saturating_sub(max_disk);
         }
         if excess > 0 {
@@ -41682,10 +41649,7 @@ impl State {
                     );
                 }
             }
-            total = kura_used
-                .saturating_add(cold_used)
-                .saturating_add(soranet_used)
-                .saturating_add(soravpn_used);
+            total = kura_used.saturating_add(cold_used);
             excess = total.saturating_sub(max_disk);
         }
         if excess > 0 {
@@ -41694,8 +41658,6 @@ impl State {
                 max_disk,
                 kura_used,
                 cold_used,
-                soranet_used,
-                soravpn_used,
                 "nexus storage eviction could not reclaim enough space"
             );
         }
@@ -41753,91 +41715,6 @@ impl State {
         }
         self.gov = gov;
     }
-}
-struct SpoolEntry {
-    key: String,
-    path: PathBuf,
-    size: u64,
-}
-fn spool_entries_sorted(spool_dir: &Path) -> io::Result<Vec<SpoolEntry>> {
-    if spool_dir.as_os_str().is_empty() || !spool_dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut files = Vec::new();
-    let mut stack = vec![spool_dir.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            let file_type = entry.file_type()?;
-            let path = entry.path();
-            if file_type.is_dir() {
-                stack.push(path);
-            } else if file_type.is_file() {
-                if path.extension().and_then(|ext| ext.to_str()) == Some("tmp") {
-                    continue;
-                }
-                let size = entry.metadata()?.len();
-                let rel = path.strip_prefix(spool_dir).unwrap_or(&path);
-                let mut key = String::new();
-                for (idx, component) in rel.components().enumerate() {
-                    if idx > 0 {
-                        key.push('/');
-                    }
-                    key.push_str(&component.as_os_str().to_string_lossy());
-                }
-                files.push(SpoolEntry { key, path, size });
-            }
-        }
-    }
-    files.sort_by(|a, b| a.key.cmp(&b.key));
-    Ok(files)
-}
-fn prune_spool_dir(spool_dir: &Path, mut bytes_to_free: u64) -> io::Result<(u64, u64)> {
-    if bytes_to_free == 0 {
-        return Ok((0, 0));
-    }
-    let entries = spool_entries_sorted(spool_dir)?;
-    let mut freed = 0u64;
-    for entry in entries {
-        if bytes_to_free == 0 {
-            break;
-        }
-        match std::fs::remove_file(&entry.path) {
-            Ok(()) => {
-                freed = freed.saturating_add(entry.size);
-                bytes_to_free = bytes_to_free.saturating_sub(entry.size);
-            }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %entry.path.display(),
-                    "failed to remove spool file during eviction"
-                );
-            }
-        }
-    }
-    Ok((bytes_to_free, freed))
-}
-fn dir_size(path: &Path) -> io::Result<u64> {
-    if path.as_os_str().is_empty() || !path.exists() {
-        return Ok(0);
-    }
-    let mut total = 0u64;
-    let mut stack = vec![path.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            let file_type = entry.file_type()?;
-            let entry_path = entry.path();
-            if file_type.is_dir() {
-                stack.push(entry_path);
-            } else if file_type.is_file() {
-                total = total.saturating_add(entry.metadata()?.len());
-            }
-        }
-    }
-    Ok(total)
 }
 include!("state/lane_lifecycle_support.rs");
 fn prepare_lane_lifecycle_update(
@@ -43183,12 +43060,14 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(iroha_data_model::ChainId, iroha_data_
                     config_path.display()
                 )
             });
-        let user_config = user::Root::read_and_complete(reader).unwrap_or_else(|err| {
-            panic!(
-                "default testing config `{}` is incomplete: {err:?}",
-                config_path.display()
-            )
-        });
+        let user_config = reader
+            .read_and_complete::<user::Root>()
+            .unwrap_or_else(|err| {
+                panic!(
+                    "default testing config `{}` is incomplete: {err:?}",
+                    config_path.display()
+                )
+            });
         let config: iroha_config::parameters::actual::Root =
             user_config.parse().unwrap_or_else(|err| {
                 panic!(
@@ -44442,14 +44321,88 @@ fn recompute_sccp_pending_usage<'a>(
         },
     )
 }
+fn sccp_liability_quantity_v1(
+    outstanding_liability: u128,
+    payload_amount_scale: u32,
+) -> core::result::Result<Quantity, String> {
+    let numeric = Numeric::try_new(outstanding_liability, payload_amount_scale).map_err(|error| {
+        format!(
+            "SCCP route liability {outstanding_liability} is not representable at governed scale {payload_amount_scale}: {error}"
+        )
+    })?;
+    Quantity::from_canonical_numeric(numeric).map_err(|error| {
+        format!("SCCP route liability is outside the non-negative quantity domain: {error}")
+    })
+}
+fn validate_sccp_route_liabilities_v1(
+    world: &impl WorldReadOnly,
+    registry: &ValidatedSccpRegistryV1,
+    network_id: &iroha_data_model::NetworkId,
+) -> core::result::Result<(), String> {
+    for (key, liability) in world.sccp_route_liabilities().iter() {
+        if !liability.is_well_formed() {
+            return Err(format!(
+                "SCCP route liability for revision {} stores a noncanonical zero row",
+                key.revision
+            ));
+        }
+        let route = registry.route(key).ok_or_else(|| {
+            format!(
+                "SCCP route liability for revision {} has no retained governed route",
+                key.revision
+            )
+        })?;
+        if liability.outstanding_liability > route.settlement.max_outstanding_liability {
+            return Err(format!(
+                "SCCP route liability {} exceeds immutable maximum {} for revision {}",
+                liability.outstanding_liability,
+                route.settlement.max_outstanding_liability,
+                key.revision
+            ));
+        }
+    }
+    for lane in registry.lanes() {
+        for route in &lane.routes {
+            let route_key = route.key();
+            let outstanding_liability = world
+                .sccp_route_liabilities()
+                .get(&route_key)
+                .map_or(0, |record| record.outstanding_liability);
+            let expected = sccp_liability_quantity_v1(
+                outstanding_liability,
+                route.settlement.payload_amount_scale,
+            )?;
+            let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+                network_id,
+                &route_key,
+                &route.settlement.asset_definition_id,
+            );
+            let escrow_asset = AssetId::new(route.settlement.asset_definition_id.clone(), escrow);
+            let actual = world
+                .assets()
+                .get(&escrow_asset)
+                .map(|value| value.as_ref().clone())
+                .unwrap_or_else(Quantity::zero);
+            if actual != expected {
+                return Err(format!(
+                    "SCCP route escrow balance differs from outstanding liability for revision {}: balance={actual}, liability={expected}",
+                    route.revision
+                ));
+            }
+        }
+    }
+    Ok(())
+}
 fn validate_sccp_state_view(
     world: &impl WorldReadOnly,
     registry: &ValidatedSccpRegistryV1,
     chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     committed_height: usize,
     kura: &Kura,
     config: Option<&iroha_config::parameters::actual::Sccp>,
 ) -> core::result::Result<(), String> {
+    validate_sccp_route_liabilities_v1(world, registry, network_id)?;
     if kura.emergency_fast_startup_enabled() {
         warn!(
             "emergency Fast mode deferred historical SCCP archive-to-WSV reconciliation until a Strict restart"
@@ -44468,6 +44421,7 @@ fn validate_sccp_state_view(
     let pending_usage = world.sccp_outbound_pending_usage();
     let has_sccp_state = !retained_archive_inventory.is_empty()
         || !registry.lanes().is_empty()
+        || world.sccp_route_liabilities().iter().next().is_some()
         || pending_usage != SccpOutboundPendingUsageV1::default()
         || world
             .sccp_outbound_pending_messages()
@@ -44902,6 +44856,7 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
         &world,
         registry.as_ref(),
         &state.chain_id,
+        &state.network_id,
         state.committed_height(),
         state.kura(),
         None,
@@ -44923,6 +44878,7 @@ pub(crate) fn validate_sccp_snapshot_revert_candidate(
         &reverted_world,
         reverted_registry.as_ref(),
         &state.chain_id,
+        &state.network_id,
         state.committed_height().saturating_sub(1),
         state.kura(),
         Some(&state.zk.sccp),
@@ -55593,7 +55549,6 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
     *isolated.pipeline_ivm_prepared_cache.write() =
         PreparedContractCache::with_capacity(isolated.pipeline.cache_size);
     isolated.oracle = state.oracle.clone();
-    isolated.streaming_storage_paths = state.streaming_storage_paths.clone();
     isolated.settlement = state.settlement.clone();
     isolated.settlement_engine = state.settlement_engine.clone();
     *isolated.crypto.write() = state.crypto();

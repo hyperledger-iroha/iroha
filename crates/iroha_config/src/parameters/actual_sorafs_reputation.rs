@@ -78,9 +78,9 @@ pub struct SorafsReputationRuntime {
     /// Maximum external-delivery failures retained before dead-lettering.
     pub max_material_delivery_failures: u32,
     /// Maximum canonical projector checkpoint size.
-    pub ingest_checkpoint_max_bytes: Bytes<u64>,
+    pub ingest_checkpoint_max_bytes: Bytes,
     /// Maximum canonical publication checkpoint size.
-    pub publication_checkpoint_max_bytes: Bytes<u64>,
+    pub publication_checkpoint_max_bytes: Bytes,
     /// Governed PoR-success weight.
     pub por_success_bps: u16,
     /// Governed PDP-success weight.
@@ -112,5 +112,5 @@ pub struct SorafsReserveTransparencyRuntime {
     /// Maximum immutable pages consumed by one scanner tick.
     pub max_pages_per_tick: u32,
     /// Maximum canonical bytes accepted for the local scanner checkpoint.
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
 }

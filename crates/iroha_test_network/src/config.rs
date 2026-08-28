@@ -26,6 +26,7 @@ use iroha_data_model::{
     consensus::HsmBinding,
     da::commitment::DaProofPolicyBundle,
     domain::{Domain, DomainId},
+    hijiri::HijiriParametersV1,
     isi::{
         Grant, InstructionBox, Mint, SetParameter,
         register::{Register, RegisterPeerWithPop},
@@ -849,6 +850,9 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         confidential_metadata::registry_root_id(),
         Json::new(norito::json::Value::Object(confidential_root)),
     ));
+    builder = builder.append_parameter(Parameter::Custom(
+        HijiriParametersV1::first_release_genesis().into_custom_parameter(),
+    ));
     builder = builder.append_parameter(conf_param);
     let raw_genesis = builder.build_raw().with_consensus_mode(consensus_mode);
     let block = raw_genesis
@@ -1383,6 +1387,44 @@ mod tests {
         assert!(
             block.0.results().all(|result| result.as_ref().is_ok()),
             "genesis transactions should execute successfully"
+        );
+    }
+    #[test]
+    fn minimal_genesis_seeds_neutral_first_release_hijiri_parameters() {
+        init_instruction_registry();
+        let (block, _, _, _) = build_minimal_genesis_unexecuted(
+            Vec::new(),
+            UniqueVec::new(),
+            Vec::new(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+        );
+        let mut hijiri_parameters = Vec::new();
+        for transaction in block.0.external_transactions() {
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                continue;
+            };
+            for instruction in instructions {
+                let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
+                else {
+                    continue;
+                };
+                let Parameter::Custom(custom) = set_parameter.inner() else {
+                    continue;
+                };
+                if custom.id() != &HijiriParametersV1::parameter_id() {
+                    continue;
+                }
+                hijiri_parameters.push(
+                    HijiriParametersV1::from_custom_parameter(custom)
+                        .expect("decode test-network genesis Hijiri parameters")
+                        .expect("test-network genesis must preserve the reserved Hijiri identity"),
+                );
+            }
+        }
+        assert_eq!(
+            hijiri_parameters,
+            vec![HijiriParametersV1::first_release_genesis()],
+            "test-network genesis must seed exactly one neutral first-release Hijiri snapshot"
         );
     }
     #[test]
@@ -2183,9 +2225,15 @@ mod tests {
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
         let block = genesis(Vec::new(), topology, vec![entry]);
+        let alice_id = sanitize_account_id(&ALICE_ID);
+        let genesis_id = sanitize_account_id(&AccountId::new(
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+        ));
         let mut saw_soracloud_permission = false;
         let mut saw_parliament_permission = false;
         let mut saw_read_all_permission = false;
+        let mut saw_alice_hijiri_permission = false;
+        let mut saw_genesis_hijiri_permission = false;
         for tx in block.0.external_transactions() {
             let Executable::Instructions(instrs) = tx.instructions() else {
                 continue;
@@ -2195,17 +2243,26 @@ mod tests {
                 else {
                     continue;
                 };
-                if grant.destination == *ALICE_ID && grant.object.name() == "CanManageSoracloud" {
+                if grant.destination == alice_id && grant.object.name() == "CanManageSoracloud" {
                     saw_soracloud_permission = true;
                 }
-                if grant.destination == *ALICE_ID && grant.object.name() == "CanManageParliament" {
+                if grant.destination == alice_id && grant.object.name() == "CanManageParliament" {
                     saw_parliament_permission = true;
                 }
-                if grant.destination == *ALICE_ID && grant.object.name() == "CanReadAllLedgerData" {
+                if grant.destination == alice_id && grant.object.name() == "CanReadAllLedgerData" {
                     saw_read_all_permission = true;
                 }
+                if grant.object.name() == "CanSetHijiriParameters" {
+                    saw_alice_hijiri_permission |= grant.destination == alice_id;
+                    saw_genesis_hijiri_permission |= grant.destination == genesis_id;
+                }
             }
-            if saw_soracloud_permission && saw_parliament_permission && saw_read_all_permission {
+            if saw_soracloud_permission
+                && saw_parliament_permission
+                && saw_read_all_permission
+                && saw_alice_hijiri_permission
+                && saw_genesis_hijiri_permission
+            {
                 break;
             }
         }
@@ -2220,6 +2277,14 @@ mod tests {
         assert!(
             saw_read_all_permission,
             "default test-network genesis should grant ALICE_ID CanReadAllLedgerData"
+        );
+        assert!(
+            saw_alice_hijiri_permission,
+            "default test-network genesis should grant ALICE_ID CanSetHijiriParameters"
+        );
+        assert!(
+            saw_genesis_hijiri_permission,
+            "default test-network genesis should grant the genesis authority CanSetHijiriParameters"
         );
     }
     #[test]

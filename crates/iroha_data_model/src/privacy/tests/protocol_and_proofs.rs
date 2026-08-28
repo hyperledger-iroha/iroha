@@ -2619,3 +2619,48 @@ fn protocol_limit_schedule_rejects_bad_timing_mismatch_increase_and_noop() {
         ))
     ));
 }
+
+#[test]
+fn goldilocks_digest384_wire_is_six_canonical_little_endian_words() {
+    let words = [
+        0x0a08_4d27_65a9_990b,
+        0xd59f_602c_37b6_9e1b,
+        0xde9b_b335_7209_fa18,
+        0x3faf_16ba_65a6_7ba3,
+        0xe68c_cc7d_9933_b79d,
+        0xcad6_6b94_7931_4d52,
+    ];
+    let digest = GoldilocksDigest384V1::new(words).expect("canonical digest words");
+    let expected = hex!(
+        "0b99a965274d080a1b9eb6372c609fd5"
+        "18fa097235b39bdea37ba665ba16af3f"
+        "9db733997dcc8ce6524d3179946bd6ca"
+    );
+    assert_eq!(digest.to_le_bytes(), expected);
+    assert_eq!(digest.encode(), expected);
+    assert_eq!(
+        GoldilocksDigest384V1::decode(&mut expected.as_slice()).expect("decode canonical digest"),
+        digest
+    );
+
+    let mut noncanonical = expected;
+    noncanonical[16..24].copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
+    assert!(GoldilocksDigest384V1::decode(&mut noncanonical.as_slice()).is_err());
+    assert!(GoldilocksDigest384V1::from_le_bytes(noncanonical).is_none());
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn goldilocks_digest384_json_rejects_noncanonical_words() {
+    let digest = GoldilocksDigest384V1::new([1, 2, 3, 4, 5, 6]).expect("canonical words");
+    let json = norito::json::to_json(&digest).expect("serialize digest");
+    assert_eq!(
+        norito::json::from_str::<GoldilocksDigest384V1>(&json).expect("decode digest"),
+        digest
+    );
+
+    let mut bytes = [0_u8; GoldilocksDigest384V1::BYTES];
+    bytes[..8].copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
+    let invalid_json = norito::json::to_json(&bytes.to_vec()).expect("serialize invalid bytes");
+    assert!(norito::json::from_str::<GoldilocksDigest384V1>(&invalid_json).is_err());
+}

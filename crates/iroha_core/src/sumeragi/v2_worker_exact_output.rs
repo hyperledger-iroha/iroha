@@ -183,6 +183,12 @@ fn certified_sidecar_prefix_covers_occurrence(
 #[derive(Debug)]
 struct PendingExactOutput {
     fanouts: VecDeque<PendingExactFanout>,
+    /// Kura-verified authority observed only after State committed this height.
+    ///
+    /// This never relaxes ordinary exact-output ownership. It only proves that
+    /// a ticketless GlobalV2 topology target is superseded by the exact durable
+    /// finality artifact when a committed roster transition removes that target.
+    applied_height_finality: Option<wire::finality::V2FinalityArtifact>,
     /// Writer-flushed sidecar cursor receipts not yet applied by lane work.
     admitted_sidecar_chunks: VecDeque<CertifiedMergeSidecarChunkAdmission>,
     /// Separate byte-free control-queue bound for sidecar admission receipts.
@@ -301,6 +307,7 @@ impl PendingExactOutput {
             .ok_or_else(|| "Sumeragi v2 outbound drive budget overflowed".to_owned())?;
         Ok(Self {
             fanouts: VecDeque::new(),
+            applied_height_finality: None,
             admitted_sidecar_chunks: VecDeque::new(),
             sidecar_admission_capacity,
             next_fanout_index: 0,
@@ -912,6 +919,64 @@ impl PendingExactOutput {
                     .validate_fanout(&fanout.messages, &fanout.semantic_peers())
             },
             "certified merge-sidecar request cancellation",
+        )
+    }
+    fn cancel_obsolete_certified_merge_sidecar_generation_hints(
+        &mut self,
+        hints: &[CertifiedMergeSidecarGenerationHintV1],
+    ) -> Result<usize, String> {
+        if hints.is_empty() {
+            return Ok(0);
+        }
+        if hints.iter().any(|hint| {
+            hint.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1
+                || hint.current_generation <= hint.observed_generation
+                || hint.hint_id != hint.canonical_hint_id()
+        }) {
+            return Err(
+                "Sumeragi v2 generation-fence cancellation has an invalid authenticated hint"
+                    .to_owned(),
+            );
+        }
+        self.remove_fanouts_matching(
+            |fanout| {
+                let [NetworkMessage::CertifiedMergeSidecar(message)] = fanout.messages.as_slice()
+                else {
+                    return false;
+                };
+                hints
+                    .iter()
+                    .any(|hint| match (&fanout.rollover_claim, message.as_ref()) {
+                        (
+                            ExactOutputRolloverClaim::CertifiedSidecarRequest { .. },
+                            CertifiedMergeSidecarMessage::Request(request),
+                        ) => {
+                            request.version == hint.version
+                                && request.request_id == request.canonical_request_id()
+                                && request.requester == hint.requester
+                                && request.responder == hint.responder
+                                && request.service_generation < hint.current_generation
+                        }
+                        (
+                            ExactOutputRolloverClaim::CertifiedSidecarControl { .. },
+                            CertifiedMergeSidecarMessage::Close(close),
+                        ) => {
+                            close.version == hint.version
+                                && close.closed_through != 0
+                                && close.close_id == close.canonical_close_id()
+                                && close.requester == hint.requester
+                                && close.responder == hint.responder
+                                && close.service_generation < hint.current_generation
+                        }
+                        _ => false,
+                    })
+            },
+            |fanout| {
+                fanout
+                    .rollover_claim
+                    .validate_fanout(&fanout.messages, &fanout.semantic_peers())
+            },
+            "certified merge-sidecar generation-fence cancellation",
         )
     }
     fn cancel_acknowledged_certified_merge_sidecar_closes(
@@ -3092,23 +3157,52 @@ impl PendingExactOutput {
                             "Sumeragi v2 network actor changed an exact output target".to_owned()
                         );
                     }
-                    let release_to_discovery = ticket.is_none()
-                        && matches!(&route, ExactTargetRoute::Topology)
-                        && self.fanouts.get(fanout_index).is_some_and(
-                            PendingExactFanout::is_commit_certificate_acquisition_topology_fanout,
-                        );
-                    if release_to_discovery {
+                    let ticketless_topology_target =
+                        ticket.is_none() && matches!(&route, ExactTargetRoute::Topology);
+                    let release_to_reconstruction_source = ticketless_topology_target
+                        && self
+                            .fanouts
+                            .get(fanout_index)
+                            .is_some_and(PendingExactFanout::is_reconstructible_topology_fanout);
+                    let release_to_applied_height_finality = ticketless_topology_target
+                        && self
+                            .applied_height_finality
+                            .as_ref()
+                            .is_some_and(|artifact| {
+                                self.fanouts.get(fanout_index).is_some_and(|fanout| {
+                                    matches!(
+                                        &fanout.rollover_claim,
+                                        ExactOutputRolloverClaim::GlobalV2(_)
+                                    ) && applied_height_reconstruction_covers(
+                                        &fanout.messages,
+                                        &fanout.semantic_peers(),
+                                        &fanout.rollover_claim,
+                                        artifact,
+                                        None,
+                                        None,
+                                    )
+                                    .is_ok()
+                                })
+                            });
+                    if release_to_reconstruction_source || release_to_applied_height_finality {
                         // No actor ticket means this target owns no FIFO rank:
                         // its live-topology membership may have disappeared, or
-                        // the bounded waiter table may be full. The discovery
-                        // tracker still owns the immutable request and retries
-                        // it on a rotating archive batch. Retaining this
-                        // ticketless worker copy would reject every rotated
-                        // batch as SourceRetained forever.
+                        // the bounded waiter table may be full. The fetch,
+                        // discovery, autonomous/historical lane, or certified-
+                        // sidecar owner can reconstruct the occurrence;
+                        // historical responses are rebuilt when the requester
+                        // retries and the durable sidecar stream retries
+                        // cumulative Close.
+                        // Retaining this ticketless worker copy could consume
+                        // the only shared non-roster slot forever. Exact durable
+                        // finality also supersedes a same-height GlobalV2
+                        // occurrence after a committed roster transition; its
+                        // typed creation scope prevents unrelated ticketless
+                        // topology traffic from taking that release path.
                         drop(message);
                         self.fanouts
                             .get_mut(fanout_index)
-                            .expect("released discovery fanout must remain present")
+                            .expect("released reconstructible fanout must remain present")
                             .mark_admitted(target_index)?;
                         self.advance_after_attempt(
                             fanout_index,

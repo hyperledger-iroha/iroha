@@ -34,9 +34,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TrustTestMessage {
     }
 }
 fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
-    // Keep mandatory admission inexpensive and replay-state isolated so this
-    // suite continues to measure trust-gossip behavior.
-    let mut soranet_handshake = super::mandatory_test_soranet_handshake();
+    // Keep admission inexpensive so this suite continues to measure
+    // trust-gossip behavior. `test_network_config` isolates replay state.
+    let mut soranet_handshake = super::low_cost_test_soranet_handshake();
     soranet_handshake.trust_gossip = trust_gossip;
     Config {
         happy_eyeballs_stagger: Duration::from_millis(50),

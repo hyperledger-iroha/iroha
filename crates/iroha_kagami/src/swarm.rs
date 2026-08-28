@@ -39,9 +39,10 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use zeroize::{Zeroize as _, Zeroizing};
 /// Docker Compose configuration generator for Iroha.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(ClapArgs, Debug, Clone)]
+#[derive(ClapArgs)]
 pub struct Args {
     /// Number of peer services in the configuration.
     ///
@@ -94,10 +95,7 @@ pub struct Args {
     /// By default, the image is pulled from Docker Hub if not cached.
     /// Pass the `--build` option to build the image from a Dockerfile instead.
     ///
-    /// **Note**: Swarm only guarantees that the Docker Compose configuration it generates
-    /// is compatible with the same Git revision it is built from itself. Therefore, if the
-    /// specified image is not compatible with the version of Swarm you are running,
-    /// the generated configuration might not work.
+    /// The image must be built from the same Git revision as Kagami.
     #[arg(long, short, value_name = "NAME")]
     image: String,
     /// Build the image from the Dockerfile in the specified directory.
@@ -110,6 +108,8 @@ pub struct Args {
     #[arg(long)]
     no_cache: bool,
     /// Path to the target Compose configuration file.
+    ///
+    /// The file must be outside `--config-dir` and is published atomically.
     ///
     /// If the file exists, the app will prompt its overwriting. If the TTY is not
     /// interactive, the app will stop execution with a non-zero exit code.
@@ -125,8 +125,6 @@ pub struct Args {
     #[arg(long, short = 'F')]
     force: bool,
     /// Do not include the banner with the generation notice in the file.
-    ///
-    /// The banner includes the seed to help with reproducibility.
     #[arg(long)]
     no_banner: bool,
 }
@@ -156,7 +154,7 @@ struct PreparedBundle {
 }
 struct AdmittedPreparedValidator {
     config: actual::Root,
-    table: toml::Table,
+    table: crate::secret_toml::Table,
     key_pair: iroha_crypto::KeyPair,
     pop: Vec<u8>,
 }
@@ -167,6 +165,9 @@ struct PreparedRuntimePeer {
     public_key: PublicKey,
 }
 const GENESIS_EXPECTED_HASH_RUNTIME_TARGET: &str = "/run/secrets/iroha_genesis_expected_hash";
+const MAX_PEER_OVERRIDE_BYTES_V1: u64 = 64 * 1024;
+#[cfg(unix)]
+const CONTAINER_PROJECTION_FILE_MODE: u16 = 0o444;
 fn read_exact_record(path: &Path, label: &str) -> color_eyre::Result<String> {
     const MAX_EXACT_RECORD_BYTES: u64 = 64 * 1024;
     let record = read_runtime_file_bounded(path, label, MAX_EXACT_RECORD_BYTES)?;
@@ -307,16 +308,31 @@ fn prepared_peer_config_paths(
 }
 struct ParsedPreparedPeerConfig {
     actual: actual::Root,
-    table: toml::Table,
+    table: crate::secret_toml::Table,
 }
 fn parse_prepared_peer_config(path: &Path) -> color_eyre::Result<ParsedPreparedPeerConfig> {
     const MAX_PREPARED_CONFIG_BYTES: u64 = 8 * 1024 * 1024;
-    let raw = read_runtime_file_bounded(path, "validator config", MAX_PREPARED_CONFIG_BYTES)?;
-    let raw = String::from_utf8(raw)
-        .wrap_err_with(|| format!("read UTF-8 prepared validator config {}", path.display()))?;
-    let table = raw
-        .parse::<toml::Table>()
-        .wrap_err_with(|| format!("parse prepared validator config {}", path.display()))?;
+    let mut raw = Zeroizing::new(read_owner_only_runtime_file_bounded(
+        path,
+        "validator config",
+        MAX_PREPARED_CONFIG_BYTES,
+    )?);
+    let raw = match String::from_utf8(std::mem::take(&mut *raw)) {
+        Ok(raw) => raw,
+        Err(error) => {
+            let utf8_error = error.utf8_error();
+            let mut bytes = error.into_bytes();
+            bytes.zeroize();
+            return Err(eyre!(
+                "prepared validator config {} is not UTF-8: {utf8_error}",
+                path.display()
+            ));
+        }
+    };
+    let raw = Zeroizing::new(raw);
+    let description = format!("prepared validator config {}", path.display());
+    let table =
+        crate::secret_toml::Table::new(crate::secret_toml::parse_table(&raw, &description)?);
     ensure!(
         !table.contains_key("extends"),
         "prepared validator config {} must be flattened and cannot use `extends`",
@@ -330,13 +346,13 @@ fn parse_prepared_peer_config(path: &Path) -> color_eyre::Result<ParsedPreparedP
     // Keep parsing and projection bound to the exact bytes read above. Reopening
     // the path here would leave a swap interval between the admitted table and
     // the table from which validator identity/policy is derived.
-    let source = TomlSource::new(path.to_path_buf(), table.clone());
-    let actual = actual::Root::from_toml_source(source).map_err(|error| {
-        eyre!(
-            "prepared validator config {} is invalid: {error:?}",
-            path.display()
-        )
-    })?;
+    let source = TomlSource::new_sensitive(
+        path.to_path_buf(),
+        (*table).clone(),
+        crate::secret_toml::zeroize_table,
+    );
+    let actual = actual::Root::from_toml_source(source)
+        .map_err(|_| eyre!("prepared validator config {} is invalid", path.display()))?;
     Ok(ParsedPreparedPeerConfig { actual, table })
 }
 fn ensure_toml_table<'a>(
@@ -485,10 +501,6 @@ fn rewrite_container_network(
     );
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "network projection admission keeps every topology and trust-boundary rejection in one ordered audit surface"
-)]
 fn validate_prepared_network_projection(
     config: &actual::Root,
     path: &Path,
@@ -608,11 +620,37 @@ fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.len() == right.len()
         && left.modified().ok() == right.modified().ok()
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeFileCustody {
+    Public,
+    OwnerOnly,
+}
 fn read_runtime_file_bounded(
     path: &Path,
     label: &str,
     max_bytes: u64,
 ) -> color_eyre::Result<Vec<u8>> {
+    read_runtime_file_bounded_with_custody(path, label, max_bytes, RuntimeFileCustody::Public)
+}
+fn read_owner_only_runtime_file_bounded(
+    path: &Path,
+    label: &str,
+    max_bytes: u64,
+) -> color_eyre::Result<Vec<u8>> {
+    read_runtime_file_bounded_with_custody(path, label, max_bytes, RuntimeFileCustody::OwnerOnly)
+}
+fn read_runtime_file_bounded_with_custody(
+    path: &Path,
+    label: &str,
+    max_bytes: u64,
+    custody: RuntimeFileCustody,
+) -> color_eyre::Result<Vec<u8>> {
+    #[cfg(not(unix))]
+    ensure!(
+        custody == RuntimeFileCustody::Public,
+        "prepared {label} {} requires owner-only file custody, which Kagami cannot verify on this platform",
+        path.display()
+    );
     let lexical = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("inspect prepared {label} {}", path.display()))?;
     let mut options = fs::OpenOptions::new();
@@ -639,12 +677,22 @@ fn read_runtime_file_bounded(
     {
         use std::os::unix::fs::MetadataExt as _;
         ensure!(
-            before.uid() == rustix::process::geteuid().as_raw()
-                && before.nlink() == 1
-                && before.mode() & 0o022 == 0,
-            "prepared {label} {} must be owner-held, single-link, and not group/world writable",
+            before.uid() == rustix::process::geteuid().as_raw() && before.nlink() == 1,
+            "prepared {label} {} must be owner-held and single-link",
             path.display()
         );
+        match custody {
+            RuntimeFileCustody::Public => ensure!(
+                before.mode() & 0o022 == 0,
+                "prepared {label} {} must not be group/world writable",
+                path.display()
+            ),
+            RuntimeFileCustody::OwnerOnly => ensure!(
+                before.mode() & 0o777 == 0o600,
+                "prepared {label} {} must have exact owner-only mode 0600",
+                path.display()
+            ),
+        }
     }
     ensure!(
         before.len() <= max_bytes,
@@ -1191,10 +1239,150 @@ fn ensure_container_projection_directory(directory: &Path) -> color_eyre::Result
     }
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "content-addressed materialization keeps no-follow opening, byte verification, hardening, and path revalidation together"
-)]
+fn validate_read_only_projection(path: &Path, content: &[u8]) -> color_eyre::Result<()> {
+    let lexical = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("inspect prepared runtime projection {}", path.display()))?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options
+        .open(path)
+        .wrap_err_with(|| format!("open prepared runtime projection {}", path.display()))?;
+    let before = file.metadata().wrap_err_with(|| {
+        format!(
+            "inspect opened prepared runtime projection {}",
+            path.display()
+        )
+    })?;
+    ensure!(
+        !lexical.file_type().is_symlink()
+            && before.is_file()
+            && same_file_snapshot(&lexical, &before),
+        "prepared runtime projection {} changed while opening or is not a regular file",
+        path.display()
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        ensure!(
+            before.uid() == rustix::process::geteuid().as_raw() && before.nlink() == 1,
+            "prepared runtime projection {} must be owner-held single-link data",
+            path.display()
+        );
+    }
+    ensure!(
+        before.len() == u64::try_from(content.len()).unwrap_or(u64::MAX),
+        "content-addressed prepared runtime projection {} has a different length",
+        path.display()
+    );
+    let mut existing = Zeroizing::new(Vec::new());
+    existing
+        .try_reserve_exact(content.len())
+        .wrap_err("reserve prepared runtime projection verification buffer")?;
+    file.read_to_end(&mut existing)
+        .wrap_err_with(|| format!("read prepared runtime projection {}", path.display()))?;
+    let after_read = file
+        .metadata()
+        .wrap_err_with(|| format!("reinspect prepared runtime projection {}", path.display()))?;
+    ensure!(
+        existing.as_slice() == content && same_file_snapshot(&before, &after_read),
+        "content-addressed prepared runtime projection {} changed or has different bytes",
+        path.display()
+    );
+    #[cfg(unix)]
+    {
+        use rustix::fs::{Mode, fchmod};
+        use std::os::unix::fs::MetadataExt as _;
+        // Compose file-backed secrets and bind mounts retain host mode bits.
+        // Files therefore need read permission for the image's unprivileged
+        // UID. Confidentiality remains enforced by the owner-only 0700,
+        // single-link projection directories that contain these immutable
+        // 0444 files.
+        fchmod(&file, Mode::from_raw_mode(CONTAINER_PROJECTION_FILE_MODE))
+            .map_err(std::io::Error::from)
+            .wrap_err_with(|| format!("protect prepared runtime projection {}", path.display()))?;
+        file.sync_all()
+            .wrap_err_with(|| format!("sync prepared runtime projection {}", path.display()))?;
+        let protected = file.metadata().wrap_err_with(|| {
+            format!("reinspect protected runtime projection {}", path.display())
+        })?;
+        let linked = fs::symlink_metadata(path)
+            .wrap_err_with(|| format!("reinspect linked runtime projection {}", path.display()))?;
+        ensure!(
+            same_file_snapshot(&protected, &linked)
+                && protected.mode() & 0o777 == u32::from(CONTAINER_PROJECTION_FILE_MODE),
+            "prepared runtime projection {} changed while being protected",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn publish_read_only_projection(path: &Path, content: &[u8]) -> color_eyre::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre!("prepared runtime projection has no parent"))?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".kagami-projection-")
+        .tempfile_in(parent)
+        .wrap_err_with(|| {
+            format!(
+                "stage prepared runtime projection beside {}",
+                path.display()
+            )
+        })?;
+    temporary
+        .write_all(content)
+        .wrap_err("write staged prepared runtime projection")?;
+    temporary
+        .as_file()
+        .sync_all()
+        .wrap_err("sync staged prepared runtime projection")?;
+    #[cfg(unix)]
+    {
+        use rustix::fs::{Mode, fchmod};
+        fchmod(
+            temporary.as_file(),
+            Mode::from_raw_mode(CONTAINER_PROJECTION_FILE_MODE),
+        )
+        .map_err(std::io::Error::from)
+        .wrap_err("protect staged prepared runtime projection")?;
+        temporary
+            .as_file()
+            .sync_all()
+            .wrap_err("sync protected staged prepared runtime projection")?;
+    }
+    match temporary.persist_noclobber(path) {
+        Ok(published) => {
+            published
+                .sync_all()
+                .wrap_err("sync published prepared runtime projection")?;
+            #[cfg(unix)]
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .wrap_err_with(|| {
+                    format!(
+                        "sync prepared runtime projection directory {}",
+                        parent.display()
+                    )
+                })?;
+        }
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            drop(error.file);
+        }
+        Err(error) => {
+            return Err(error.error).wrap_err_with(|| {
+                format!("publish prepared runtime projection {}", path.display())
+            });
+        }
+    }
+    validate_read_only_projection(path, content)
+}
+
 fn materialize_read_only_file_at(
     projection_dir: &Path,
     name: &str,
@@ -1214,137 +1402,9 @@ fn materialize_read_only_file_at(
     ensure_container_projection_directory(projection_dir)?;
     let path = projection_dir.join(name);
     match fs::symlink_metadata(&path) {
-        Ok(lexical) => {
-            let mut options = fs::OpenOptions::new();
-            options.read(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt as _;
-                options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
-            }
-            let mut file = options
-                .open(&path)
-                .wrap_err_with(|| format!("open prepared runtime projection {}", path.display()))?;
-            let before = file.metadata().wrap_err_with(|| {
-                format!(
-                    "inspect opened prepared runtime projection {}",
-                    path.display()
-                )
-            })?;
-            ensure!(
-                !lexical.file_type().is_symlink()
-                    && before.is_file()
-                    && same_file_snapshot(&lexical, &before),
-                "prepared runtime projection {} changed while opening or is not a regular file",
-                path.display()
-            );
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt as _;
-                ensure!(
-                    before.uid() == rustix::process::geteuid().as_raw() && before.nlink() == 1,
-                    "prepared runtime projection {} must be owner-held single-link data",
-                    path.display()
-                );
-            }
-            ensure!(
-                before.len() == u64::try_from(content.len()).unwrap_or(u64::MAX),
-                "content-addressed prepared runtime projection {} has a different length",
-                path.display()
-            );
-            let mut existing = Vec::with_capacity(content.len());
-            file.read_to_end(&mut existing)
-                .wrap_err_with(|| format!("read prepared runtime projection {}", path.display()))?;
-            let after_read = file.metadata().wrap_err_with(|| {
-                format!("reinspect prepared runtime projection {}", path.display())
-            })?;
-            ensure!(
-                existing == content && same_file_snapshot(&before, &after_read),
-                "content-addressed prepared runtime projection {} changed or has different bytes",
-                path.display()
-            );
-            #[cfg(unix)]
-            {
-                use rustix::fs::{Mode, fchmod};
-                use std::os::unix::fs::MetadataExt as _;
-                fchmod(&file, Mode::from_raw_mode(0o400))
-                    .map_err(std::io::Error::from)
-                    .wrap_err_with(|| {
-                        format!("protect prepared runtime projection {}", path.display())
-                    })?;
-                file.sync_all().wrap_err_with(|| {
-                    format!("sync prepared runtime projection {}", path.display())
-                })?;
-                let protected = file.metadata().wrap_err_with(|| {
-                    format!("reinspect protected runtime projection {}", path.display())
-                })?;
-                let linked = fs::symlink_metadata(&path).wrap_err_with(|| {
-                    format!("reinspect linked runtime projection {}", path.display())
-                })?;
-                ensure!(
-                    same_file_snapshot(&protected, &linked) && protected.mode() & 0o777 == 0o400,
-                    "prepared runtime projection {} changed while being protected",
-                    path.display()
-                );
-            }
-        }
+        Ok(_) => validate_read_only_projection(&path, content)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let mut options = fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt as _;
-                options
-                    .mode(0o600)
-                    .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-            }
-            let mut file = options.open(&path).wrap_err_with(|| {
-                format!("create prepared runtime projection {}", path.display())
-            })?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt as _;
-                let created = file.metadata().wrap_err_with(|| {
-                    format!("inspect new prepared runtime projection {}", path.display())
-                })?;
-                ensure!(
-                    created.is_file()
-                        && created.uid() == rustix::process::geteuid().as_raw()
-                        && created.nlink() == 1,
-                    "new prepared runtime projection {} has unsafe custody",
-                    path.display()
-                );
-            }
-            file.write_all(content)
-                .wrap_err("write prepared runtime projection")?;
-            file.sync_all()
-                .wrap_err("sync prepared runtime projection")?;
-            #[cfg(unix)]
-            {
-                use rustix::fs::{Mode, fchmod};
-                use std::os::unix::fs::MetadataExt as _;
-                fchmod(&file, Mode::from_raw_mode(0o400))
-                    .map_err(std::io::Error::from)
-                    .wrap_err_with(|| {
-                        format!("protect new prepared runtime projection {}", path.display())
-                    })?;
-                file.sync_all()
-                    .wrap_err("sync protected prepared runtime projection")?;
-                let protected = file.metadata().wrap_err_with(|| {
-                    format!(
-                        "reinspect new prepared runtime projection {}",
-                        path.display()
-                    )
-                })?;
-                let linked = fs::symlink_metadata(&path).wrap_err_with(|| {
-                    format!("reinspect linked runtime projection {}", path.display())
-                })?;
-                ensure!(
-                    same_file_snapshot(&protected, &linked) && protected.mode() & 0o777 == 0o400,
-                    "new prepared runtime projection {} changed while being protected",
-                    path.display()
-                );
-            }
+            publish_read_only_projection(&path, content)?;
         }
         Err(error) => {
             return Err(error).wrap_err_with(|| {
@@ -1595,14 +1655,6 @@ fn ensure_fresh_prepared_state(
         &config.streaming.session_store_dir,
         "streaming session state",
     )?;
-    directory(
-        &config.streaming.soranet.provision_spool_dir,
-        "streaming SoraNet spool",
-    )?;
-    directory(
-        &config.streaming.soravpn.provision_spool_dir,
-        "streaming SoraVPN spool",
-    )?;
     if let Some(path) = config.telemetry_integrity.state_dir.as_deref() {
         directory(path, "telemetry-integrity state")?;
     }
@@ -1653,6 +1705,7 @@ type PreparedRuntimeProjection = (
     actual::Root,
 );
 #[expect(
+    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "runtime projection is one ordered security transformation from admitted host config to byte-exact container inputs"
 )]
@@ -1661,7 +1714,7 @@ fn project_prepared_runtime_config(
     projection_root: &Path,
     expected_hash_validation_path: &Path,
     index: usize,
-    mut table: toml::Table,
+    mut table: crate::secret_toml::Table,
     source: &actual::Root,
     metadata: &ConsensusHandshakeMetadata,
     peers: &[PreparedRuntimePeer],
@@ -1676,7 +1729,7 @@ fn project_prepared_runtime_config(
     const SORAFS_SALT_TARGET: &str = "/config/runtime/sorafs-salt-schedule";
     const KAGEMUSHA_ARTIFACT_TARGET: &str = "/config/runtime/kagemusha-artifacts";
     const SITE_BINDINGS_TARGET: &str = "/config/runtime/sorafs_sites.json";
-    let source_table = table.clone();
+    let source_table = crate::secret_toml::Table::new((*table).clone());
     let (effective_source, source_requires_sora) =
         effective_runtime_config(source.clone(), &source_table);
     let source = &effective_source;
@@ -1919,108 +1972,16 @@ fn project_prepared_runtime_config(
         "rans_tables_path",
         RANS_TARGET,
     )?;
-    {
-        let streaming = ensure_toml_table(&mut table, &["streaming"])?;
-        let mut soranet = match streaming.get("soranet") {
-            Some(toml::Value::Table(existing)) => existing.clone(),
-            Some(_) => {
-                return Err(eyre!(
-                    "prepared runtime projection expected `streaming.soranet` to be a TOML table"
-                ));
-            }
-            None => {
-                let source = &source.streaming.soranet;
-                let padding_budget_ms = source.padding_budget_ms.ok_or_else(|| {
-                    eyre!(
-                        "prepared runtime projection cannot encode an absent \
-                         streaming.soranet.padding_budget_ms in TOML"
-                    )
-                })?;
-                let mut complete = toml::Table::new();
-                complete.insert("enabled".into(), toml::Value::Boolean(source.enabled));
-                complete.insert(
-                    "exit_multiaddr".into(),
-                    toml::Value::String(source.exit_multiaddr.clone()),
-                );
-                complete.insert(
-                    "padding_budget_ms".into(),
-                    toml::Value::Integer(i64::from(padding_budget_ms)),
-                );
-                complete.insert(
-                    "access_kind".into(),
-                    toml::Value::String(source.access_kind.as_str().to_owned()),
-                );
-                complete.insert(
-                    "channel_salt".into(),
-                    toml::Value::String(source.channel_salt.clone()),
-                );
-                complete.insert(
-                    "provision_spool_max_bytes".into(),
-                    toml::Value::Integer(
-                        i64::try_from(source.provision_spool_max_bytes.get()).wrap_err(
-                            "streaming.soranet.provision_spool_max_bytes exceeds TOML integer range",
-                        )?,
-                    ),
-                );
-                complete.insert(
-                    "provision_window_segments".into(),
-                    toml::Value::Integer(
-                        i64::try_from(source.provision_window_segments).wrap_err(
-                            "streaming.soranet.provision_window_segments exceeds TOML integer range",
-                        )?,
-                    ),
-                );
-                complete.insert(
-                    "provision_queue_capacity".into(),
-                    toml::Value::Integer(i64::try_from(source.provision_queue_capacity).wrap_err(
-                        "streaming.soranet.provision_queue_capacity exceeds TOML integer range",
-                    )?),
-                );
-                complete
-            }
-        };
-        soranet.insert(
-            "provision_spool_dir".into(),
-            toml::Value::String("/storage/streaming/soranet".to_owned()),
-        );
-        streaming.insert("soranet".into(), toml::Value::Table(soranet));
-        let mut soravpn = match streaming.get("soravpn") {
-            Some(toml::Value::Table(existing)) => existing.clone(),
-            Some(_) => {
-                return Err(eyre!(
-                    "prepared runtime projection expected `streaming.soravpn` to be a TOML table"
-                ));
-            }
-            None => {
-                let mut complete = toml::Table::new();
-                complete.insert(
-                    "provision_spool_max_bytes".into(),
-                    toml::Value::Integer(
-                        i64::try_from(source.streaming.soravpn.provision_spool_max_bytes.get())
-                            .wrap_err(
-                                "streaming.soravpn.provision_spool_max_bytes exceeds TOML integer range",
-                            )?,
-                    ),
-                );
-                complete
-            }
-        };
-        soravpn.insert(
-            "provision_spool_dir".into(),
-            toml::Value::String("/storage/streaming/soravpn".to_owned()),
-        );
-        streaming.insert("soravpn".into(), toml::Value::Table(soravpn));
-    }
     let captured_onboarding_private_key = source
         .torii
         .account_onboarding
         .as_ref()
         .map(|onboarding| -> color_eyre::Result<_> {
-            let content = read_runtime_file_bounded(
+            let content = Zeroizing::new(read_owner_only_runtime_file_bounded(
                 &onboarding.private_key_file,
                 "account-onboarding private key",
                 64 * 1024,
-            )?;
+            )?);
             let captured = materialize_container_readable_file(
                 projection_root,
                 &format!("peer{index}-onboarding-secret"),
@@ -2046,11 +2007,11 @@ fn project_prepared_runtime_config(
         .faucet
         .as_ref()
         .map(|faucet| -> color_eyre::Result<_> {
-            let content = read_runtime_file_bounded(
+            let content = Zeroizing::new(read_owner_only_runtime_file_bounded(
                 &faucet.private_key_file,
                 "faucet private key",
                 64 * 1024,
-            )?;
+            )?);
             let captured = materialize_container_readable_file(
                 projection_root,
                 &format!("peer{index}-faucet-secret"),
@@ -2409,7 +2370,7 @@ fn project_prepared_runtime_config(
             SITE_BINDINGS_TARGET,
         )?;
     }
-    let mut validation_table = table.clone();
+    let mut validation_table = crate::secret_toml::Table::new((*table).clone());
     set_toml_string(
         &mut validation_table,
         &["genesis"],
@@ -2488,9 +2449,10 @@ fn project_prepared_runtime_config(
     }
     let _chain_discriminant =
         ChainDiscriminantGuard::enter(*source.common.chain_discriminant.value());
-    let projected = actual::Root::from_toml_source(TomlSource::new(
+    let projected = actual::Root::from_toml_source(TomlSource::new_sensitive(
         config_dir.join(format!("peer{index}.container-validation.toml")),
-        validation_table.clone(),
+        (*validation_table).clone(),
+        crate::secret_toml::zeroize_table,
     ))
     .map_err(|error| {
         eyre!("container runtime projection for prepared validator {index} is invalid: {error:?}")
@@ -2502,8 +2464,10 @@ fn project_prepared_runtime_config(
         "container runtime projection changed Sora profile requirements"
     );
     validate_runtime_projection_policy(source, &projected_effective, metadata)?;
-    let mut content = toml::to_string_pretty(&table)
-        .wrap_err("serialize container-safe prepared runtime projection")?;
+    let mut content = Zeroizing::new(
+        toml::to_string_pretty(&*table)
+            .wrap_err("serialize container-safe prepared runtime projection")?,
+    );
     if !content.ends_with('\n') {
         content.push('\n');
     }
@@ -2895,18 +2859,52 @@ fn load_prepared_bundle(
 impl<T: Write> RunArgs<T> for Args {
     #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        // let args: Args = <Args as clap::Parser>::parse();
-        let args = self;
+        let mut args = self;
+        let seed = args.seed.take().map(Zeroizing::new);
         ensure!(
             is_valid_committee_size(usize::from(args.peers.get())),
             "`--peers` ({}) must form an exact Sumeragi v2 `3f + 1` validator committee \
              in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}",
             args.peers
         );
+        // Prepared mode materializes runtime projections beside the nominal output even with
+        // `--print`, so it must stay outside the authoritative bundle. Deterministic development
+        // mode has no projection and may render tracked fixtures inside `config_dir`.
+        args.out_file = if seed.is_none() {
+            crate::atomic_output::resolve_outside_directory(
+                &args.config_dir,
+                &args.out_file,
+                "config directory",
+            )?
+        } else {
+            crate::atomic_output::resolve_output_file(&args.out_file)?
+        };
+        let compose_handoff_path = (!args.print)
+            .then(|| crate::shell::quote_path(&args.out_file))
+            .transpose()
+            .wrap_err("validate Compose output path for shell handoff command")?;
+        let genesis_path = args.config_dir.join("genesis.json");
+        let genesis_path = fs::canonicalize(&genesis_path).wrap_err_with(|| {
+            format!("resolve genesis manifest input {}", genesis_path.display())
+        })?;
+        ensure!(
+            args.out_file != genesis_path,
+            "Compose output must not replace its genesis manifest input: {}",
+            genesis_path.display()
+        );
+        if let Some(peer_config) = args.peer_config.as_deref() {
+            let peer_config = fs::canonicalize(peer_config).wrap_err_with(|| {
+                format!("resolve peer override input {}", peer_config.display())
+            })?;
+            ensure!(
+                args.out_file != peer_config,
+                "Compose output must not replace its peer override input: {}",
+                peer_config.display()
+            );
+        }
         if !args.print && !args.user_allows_overwrite()? {
             return Ok(());
         }
-        let genesis_path = args.config_dir.join("genesis.json");
         let manifest_raw = read_runtime_file_bounded(
             &genesis_path,
             "genesis manifest",
@@ -2932,7 +2930,7 @@ impl<T: Write> RunArgs<T> for Args {
         };
         tui::status("Composing Docker deployment manifest");
         let prepared_artifacts;
-        let swarm = if let Some(seed) = args.seed.as_deref() {
+        let swarm = if let Some(seed) = seed.as_deref() {
             prepared_artifacts = None;
             iroha_swarm::Swarm::deterministic_dev(
                 args.peers,
@@ -2977,34 +2975,24 @@ impl<T: Write> RunArgs<T> for Args {
             swarm
         };
         let schema = swarm.build();
-        let mut file;
-        let manifest_writer: &mut dyn Write = if args.print {
-            writer
-        } else {
-            use color_eyre::eyre::Context;
-            file = std::fs::File::create(&args.out_file)
-                .wrap_err("Could not open the target file.")?;
-            &mut file
-        };
-        let banner = if args.no_banner {
-            None
-        } else {
-            let mut lines = vec![
+        let banner = (!args.no_banner).then(|| {
+            vec![
                 "Generated by `kagami docker`.".to_owned(),
                 "You should not edit this manually.".to_owned(),
-            ];
-            if let Some(seed) = args.seed.as_ref() {
-                lines.push(format!("Seed: {seed}"));
-            }
-            Some(lines)
-        };
+            ]
+        });
         let banner_refs = banner
             .as_ref()
             .map(|lines| lines.iter().map(String::as_str).collect::<Vec<_>>());
-        schema.write(
-            &mut std::io::BufWriter::new(manifest_writer),
-            banner_refs.as_deref(),
-        )?;
+        if args.print {
+            schema.write(&mut *writer, banner_refs.as_deref())?;
+        } else {
+            crate::atomic_output::write_file(&args.out_file, ".kagami-compose-", |writer| {
+                schema
+                    .write(writer, banner_refs.as_deref())
+                    .map_err(Into::into)
+            })?;
+        }
         if !args.print {
             writeln!(
                 writer,
@@ -3037,7 +3025,9 @@ impl<T: Write> RunArgs<T> for Args {
             writeln!(
                 writer,
                 "next: docker compose -f {} up",
-                args.out_file.display()
+                compose_handoff_path
+                    .as_deref()
+                    .expect("file output precomputes its shell handoff path")
             )?;
         }
         tui::success("Compose manifest ready");
@@ -3045,24 +3035,21 @@ impl<T: Write> RunArgs<T> for Args {
     }
 }
 fn load_peer_overrides(path: &Path) -> color_eyre::Result<Vec<PeerOverride>> {
-    ensure!(
-        path.exists(),
-        "peer configuration {} does not exist",
-        path.display()
-    );
-    ensure!(
-        path.is_file(),
-        "peer configuration {} is not a file",
-        path.display()
-    );
-    let contents = fs::read_to_string(path)
-        .wrap_err_with(|| eyre!("failed to read peer configuration at {}", path.display()))?;
+    let contents = read_runtime_file_bounded(
+        path,
+        "peer override configuration",
+        MAX_PEER_OVERRIDE_BYTES_V1,
+    )?;
+    let contents = String::from_utf8(contents)
+        .wrap_err_with(|| eyre!("peer configuration is not UTF-8: {}", path.display()))?;
     parse_peer_override_toml(&contents)
         .wrap_err_with(|| eyre!("failed to parse peer configuration at {}", path.display()))
 }
 fn parse_peer_override_toml(input: &str) -> color_eyre::Result<Vec<PeerOverride>> {
-    let value: toml::Value =
-        toml::from_str(input).wrap_err("peer configuration is not valid TOML")?;
+    let value = toml::Value::Table(crate::secret_toml::parse_table(
+        input,
+        "peer override configuration",
+    )?);
     let peers = value
         .get("peers")
         .ok_or_else(|| eyre!("peer configuration must define [[peers]] entries"))?
@@ -3104,11 +3091,15 @@ fn parse_port(table: &toml::Table, field: &str) -> color_eyre::Result<u16> {
 }
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::CONTAINER_PROJECTION_FILE_MODE;
     use super::{
-        Args, GENESIS_EXPECTED_HASH_RUNTIME_TARGET, load_peer_overrides, load_prepared_bundle,
-        parse_peer_override_toml, parse_prepared_peer_config, read_runtime_file_bounded,
-        signed_genesis_consensus_metadata, tx_history_mandatory_alias_source,
-        validate_prepared_genesis, validate_runtime_projection_policy,
+        Args, GENESIS_EXPECTED_HASH_RUNTIME_TARGET, MAX_PEER_OVERRIDE_BYTES_V1,
+        load_peer_overrides, load_prepared_bundle, materialize_read_only_file_at,
+        parse_peer_override_toml, parse_prepared_peer_config, read_owner_only_runtime_file_bounded,
+        read_runtime_file_bounded, signed_genesis_consensus_metadata,
+        tx_history_mandatory_alias_source, validate_prepared_genesis,
+        validate_runtime_projection_policy,
     };
     use crate::{RunArgs, localnet::LocalnetOptions};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_pop_prove};
@@ -3157,6 +3148,92 @@ mod tests {
                 .is_err()
         );
     }
+    #[cfg(unix)]
+    #[test]
+    fn prepared_secret_inputs_require_exact_owner_only_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("private.key");
+        fs::write(&path, b"secret").expect("write secret fixture");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("set public-readable fixture mode");
+
+        assert_eq!(
+            read_runtime_file_bounded(&path, "public fixture", 6)
+                .expect("public inputs may be owner-written and world-readable"),
+            b"secret"
+        );
+        let error = read_owner_only_runtime_file_bounded(&path, "secret fixture", 6)
+            .expect_err("public-readable secrets must be rejected");
+        assert!(
+            error.to_string().contains("exact owner-only mode 0600"),
+            "unexpected custody diagnostic: {error:#}"
+        );
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("set owner-only fixture mode");
+        assert_eq!(
+            read_owner_only_runtime_file_bounded(&path, "secret fixture", 6)
+                .expect("owner-only secret input"),
+            b"secret"
+        );
+    }
+    #[cfg(not(unix))]
+    #[test]
+    fn prepared_secret_inputs_fail_closed_without_owner_only_custody_checks() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("private.key");
+        fs::write(&path, b"secret").expect("write secret fixture");
+        let error = read_owner_only_runtime_file_bounded(&path, "secret fixture", 6)
+            .expect_err("unsupported custody verification must fail closed");
+        assert!(error.to_string().contains("cannot verify"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn runtime_projection_is_atomically_published_read_only_and_never_clobbered() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("projection test root");
+        let directory = root.path().join("projection");
+        let content = b"secret-bearing runtime projection";
+        let path = materialize_read_only_file_at(&directory, "peer0.toml", content)
+            .expect("publish runtime projection");
+
+        assert_eq!(fs::read(&path).expect("read projection"), content);
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("projection metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            u32::from(CONTAINER_PROJECTION_FILE_MODE)
+        );
+        assert_eq!(
+            fs::metadata(&directory)
+                .expect("projection directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "world-readable container mount sources remain private through their owner-only parent"
+        );
+        assert_eq!(
+            fs::read_dir(&directory)
+                .expect("projection inventory")
+                .count(),
+            1,
+            "atomic publication must not leave a staging file"
+        );
+        assert_eq!(
+            materialize_read_only_file_at(&directory, "peer0.toml", content)
+                .expect("reuse exact content-addressed projection"),
+            path
+        );
+        let _error = materialize_read_only_file_at(&directory, "peer0.toml", b"different")
+            .expect_err("content-addressed projection must not be replaced");
+        assert_eq!(fs::read(path).expect("read preserved projection"), content);
+    }
     fn generate_prepared_bundle(root: &Path) -> PathBuf {
         let bundle = root.join("prepared-bundle");
         let options = LocalnetOptions {
@@ -3188,34 +3265,37 @@ mod tests {
         load_prepared_bundle(config_dir, projection_root, count, &manifest)
     }
     #[test]
-    fn run_succeeds_without_banner() {
+    fn banner_is_optional_and_never_discloses_the_development_seed() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let config_dir = temp_dir.path().join("cfg");
         fs::create_dir_all(&config_dir).expect("create config dir");
         write_minimal_genesis(&config_dir.join("genesis.json"));
-        let args = Args {
-            peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: Some("swarm-no-banner-dev".to_owned()),
-            healthcheck: false,
-            config_dir,
-            peer_config: None,
-            image: "hyperledger/iroha:dev".to_owned(),
-            build: None,
-            no_cache: false,
-            out_file: temp_dir.path().join("docker-compose.yml"),
-            print: true,
-            force: false,
-            no_banner: true,
-        };
-        let mut buffer = Vec::new();
-        let mut writer = BufWriter::new(&mut buffer);
-        args.run(&mut writer)
-            .expect("`Args::run` should succeed without banner");
-        writer.flush().expect("flush buffer");
-        drop(writer);
-        let output = String::from_utf8(buffer).expect("output should be UTF-8");
-        assert!(!output.contains("Generated by `kagami docker`."));
-        assert!(!output.contains("Seed:"));
+        let seed = "swarm-banner-secret-dev";
+        for (no_banner, expected_banner) in [(false, true), (true, false)] {
+            let args = Args {
+                peers: NonZeroU16::new(4).expect("non-zero"),
+                seed: Some(seed.to_owned()),
+                healthcheck: false,
+                config_dir: config_dir.clone(),
+                peer_config: None,
+                image: "hyperledger/iroha:dev".to_owned(),
+                build: None,
+                no_cache: false,
+                out_file: temp_dir.path().join("docker-compose.yml"),
+                print: true,
+                force: false,
+                no_banner,
+            };
+            let mut buffer = Vec::new();
+            args.run(&mut BufWriter::new(&mut buffer))
+                .expect("`Args::run` should render the requested banner mode");
+            let output = String::from_utf8(buffer).expect("output should be UTF-8");
+            assert_eq!(
+                output.contains("Generated by `kagami docker`."),
+                expected_banner
+            );
+            assert!(!output.contains(seed));
+        }
     }
     #[test]
     fn file_output_reports_required_runtime_genesis_artifacts() {
@@ -3223,7 +3303,7 @@ mod tests {
         let config_dir = temp_dir.path().join("cfg");
         fs::create_dir_all(&config_dir).expect("create config dir");
         write_minimal_genesis(&config_dir.join("genesis.json"));
-        let compose_path = temp_dir.path().join("docker-compose.yml");
+        let compose_path = temp_dir.path().join("docker compose's.yml");
         let args = Args {
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some("swarm-artifact-summary-dev".to_owned()),
@@ -3249,7 +3329,114 @@ mod tests {
             output.contains("genesis_expected_hash_file_env: IROHA_GENESIS_EXPECTED_HASH_FILE")
         );
         assert!(!output.contains("IROHA_GENESIS_PRIVATE_KEY_FILE"));
-        assert!(output.contains("next: docker compose"));
+        let quoted = crate::shell::quote_path(
+            &fs::canonicalize(&compose_path).expect("canonical Compose path"),
+        )
+        .expect("quote Compose path");
+        assert!(output.contains(&format!("next: docker compose -f {quoted} up")));
+    }
+    #[test]
+    fn compose_output_cannot_replace_config_bundle_input() {
+        let temp_dir = tempfile::tempdir().expect("compose safety directory");
+        let config_dir = temp_dir.path().join("cfg");
+        fs::create_dir_all(&config_dir).expect("create config directory");
+        let genesis_path = config_dir.join("genesis.json");
+        write_minimal_genesis(&genesis_path);
+        let original = fs::read(&genesis_path).expect("read original genesis");
+        let args = Args {
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("swarm-output-safety-dev".to_owned()),
+            healthcheck: false,
+            config_dir,
+            peer_config: None,
+            image: "hyperledger/iroha:dev".to_owned(),
+            build: None,
+            no_cache: false,
+            out_file: genesis_path.clone(),
+            print: false,
+            force: true,
+            no_banner: true,
+        };
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("config-bundle output must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("must not replace its genesis manifest input")
+        );
+        assert_eq!(
+            fs::read(genesis_path).expect("read preserved genesis"),
+            original
+        );
+    }
+    #[test]
+    fn deterministic_print_accepts_fixture_target_inside_config_directory() {
+        let temp_dir = tempfile::tempdir().expect("deterministic print directory");
+        let config_dir = temp_dir.path().join("cfg");
+        fs::create_dir_all(&config_dir).expect("create config directory");
+        write_minimal_genesis(&config_dir.join("genesis.json"));
+        let out_file = config_dir.join("docker-compose.yml");
+        let args = Args {
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("tracked-fixture".to_owned()),
+            healthcheck: false,
+            config_dir,
+            peer_config: None,
+            image: "hyperledger/iroha:dev".to_owned(),
+            build: None,
+            no_cache: false,
+            out_file: out_file.clone(),
+            print: true,
+            force: false,
+            no_banner: true,
+        };
+        let mut output = BufWriter::new(Vec::new());
+        args.run(&mut output)
+            .expect("deterministic fixture render inside config directory");
+        assert!(
+            !out_file.exists(),
+            "--print must not publish its nominal target"
+        );
+        assert!(
+            !output
+                .into_inner()
+                .expect("flush rendered Compose")
+                .is_empty()
+        );
+    }
+    #[test]
+    fn prepared_print_rejects_config_target_before_materializing_projection() {
+        let temp_dir = tempfile::tempdir().expect("prepared print safety directory");
+        let config_dir = generate_prepared_bundle(temp_dir.path());
+        let genesis_path = config_dir.join("genesis.json");
+        let original = fs::read(&genesis_path).expect("read original genesis");
+        let args = Args {
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: None,
+            healthcheck: false,
+            config_dir: config_dir.clone(),
+            peer_config: None,
+            image: "hyperledger/iroha:dev".to_owned(),
+            build: None,
+            no_cache: false,
+            out_file: genesis_path.clone(),
+            print: true,
+            force: false,
+            no_banner: true,
+        };
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("config-bundle target must be rejected before projection");
+        assert!(error.to_string().contains("inside the config directory"));
+        assert_eq!(
+            fs::read(genesis_path).expect("read preserved genesis"),
+            original
+        );
+        assert!(
+            !config_dir.join(".kagami-compose").exists(),
+            "invalid output placement must not create a runtime projection inside the bundle"
+        );
     }
     #[test]
     #[expect(
@@ -3879,6 +4066,14 @@ api_port = 9001
         assert_eq!(overrides[1].p2p_port, 2001);
         assert_eq!(overrides[1].api_port, 9001);
         Ok(())
+    }
+    #[test]
+    fn load_peer_overrides_rejects_oversized_file() {
+        let file = tempfile::NamedTempFile::new().expect("create peer override input");
+        let oversized = usize::try_from(MAX_PEER_OVERRIDE_BYTES_V1).expect("limit fits usize") + 1;
+        fs::write(file.path(), vec![b' '; oversized]).expect("write oversized peer overrides");
+        let error = load_peer_overrides(file.path()).expect_err("oversized input must fail");
+        assert!(format!("{error:#}").contains("exceeding"));
     }
     #[test]
     fn parse_peer_override_toml_rejects_empty_peer_list() {

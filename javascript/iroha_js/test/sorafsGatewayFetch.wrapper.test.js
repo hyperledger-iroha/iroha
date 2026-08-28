@@ -148,20 +148,6 @@ test("sorafsGatewayFetch normalises native gateway bindings", (_t) => {
       carBridge: { cacheDir: "/tmp/car", extension: "car", allowZst: false },
       kaigiBridge: { spoolDir: "/tmp/kaigi", extension: "norito", roomPolicy: "authenticated" },
     },
-    taikaiCache: {
-      hotCapacityBytes: 8_388_608,
-      hotRetentionSecs: 45,
-      warmCapacityBytes: 33_554_432,
-      warmRetentionSecs: 180,
-      coldCapacityBytes: 268_435_456,
-      coldRetentionSecs: 3_600,
-      qos: {
-        priorityRateBps: 83_886_080,
-        standardRateBps: 41_943_040,
-        bulkRateBps: 12_582_912,
-        burstMultiplier: 4,
-      },
-    },
     scoreboardOutPath: "/tmp/scoreboard.json",
     scoreboardNowUnixSecs: 1_700_000_000n,
     scoreboardTelemetryLabel: "ci-fixture",
@@ -220,9 +206,6 @@ test("sorafsGatewayFetch normalises native gateway bindings", (_t) => {
   assert(optionArg.local_proxy);
   assert.equal(optionArg.local_proxy.kaigi_bridge.spool_dir, "/tmp/kaigi");
   assert.equal(optionArg.local_proxy.kaigi_bridge.room_policy, "authenticated");
-  assert(optionArg.taikai_cache);
-  assert.equal(optionArg.taikai_cache.hot_capacity_bytes, 8_388_608);
-  assert.equal(optionArg.taikai_cache.qos.burst_multiplier, 4);
   assert.equal(optionArg.scoreboard_out_path, "/tmp/scoreboard.json");
   assert.equal(optionArg.scoreboard_now_unix_secs, 1_700_000_000n);
   assert.equal(optionArg.scoreboard_telemetry_label, "ci-fixture");
@@ -680,60 +663,6 @@ test("sorafsGatewayFetch rejects fractional scoreboardNowUnixSecs", () => {
   assert.equal(calls, 0);
 });
 
-test("sorafsGatewayFetch rejects fractional taikai cache burst multipliers", () => {
-  let calls = 0;
-  const stubBinding = {
-    sorafsGatewayFetch: () => {
-      calls += 1;
-      return createStubResult();
-    },
-  };
-  const providers = [
-    {
-      name: "alpha",
-      providerIdHex: PROVIDER_ID_HEX,
-      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
-      baseUrl: "https://gateway.test/",
-      streamTokenB64: "dG9rZW4=",
-    },
-    {
-      name: "beta",
-      providerIdHex: SECOND_PROVIDER_ID_HEX,
-      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
-      baseUrl: "https://beta-gateway.test/",
-      streamTokenB64: "bWV0cmljc19hY2Nlc3M=",
-    },
-  ];
-  assert.throws(
-    () =>
-      sorafsGatewayFetch(
-        MANIFEST_HEX,
-        "sorafs.sf1@1.0.0",
-        "[]",
-        providers,
-        {
-          taikaiCache: {
-            hotCapacityBytes: 8_388_608,
-            hotRetentionSecs: 45,
-            warmCapacityBytes: 33_554_432,
-            warmRetentionSecs: 180,
-            coldCapacityBytes: 268_435_456,
-            coldRetentionSecs: 3_600,
-            qos: {
-              priorityRateBps: 83_886_080,
-              standardRateBps: 41_943_040,
-              bulkRateBps: 12_582_912,
-              burstMultiplier: 1.5,
-            },
-          },
-          __nativeBinding: stubBinding,
-        },
-      ),
-    /taikaiCache\.qos\.burstMultiplier must be an integer/i,
-  );
-  assert.equal(calls, 0);
-});
-
 test("sorafsGatewayFetch forwards retryBudget zero to disable cap", () => {
   const calls = [];
   const stubResult = createStubResult();
@@ -814,48 +743,6 @@ test("sorafsGatewayFetch surfaces structured multi-source errors", () => {
       return true;
     },
   );
-});
-
-test("sorafsGatewayFetch validates Taikai cache options", () => {
-  const stubBinding = {
-    sorafsGatewayFetch: () => createStubResult(),
-  };
-  const providers = [
-    {
-      name: "alpha",
-      providerIdHex: PROVIDER_ID_HEX,
-      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
-      baseUrl: "https://gateway.test/",
-      streamTokenB64: "dG9rZW4=",
-    },
-    {
-      name: "beta",
-      providerIdHex: SECOND_PROVIDER_ID_HEX,
-      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
-      baseUrl: "https://beta-gateway.test/",
-      streamTokenB64: "Z2FsbG9w",
-    },
-  ];
-
-  assert.throws(() => {
-    sorafsGatewayFetch(MANIFEST_HEX, "sorafs.sf1@1.0.0", "[]", providers, {
-      taikaiCache: {
-        hotCapacityBytes: 0,
-        hotRetentionSecs: 45,
-        warmCapacityBytes: 1,
-        warmRetentionSecs: 1,
-        coldCapacityBytes: 1,
-        coldRetentionSecs: 1,
-        qos: {
-          priorityRateBps: 1,
-          standardRateBps: 1,
-          bulkRateBps: 1,
-          burstMultiplier: 0,
-        },
-      },
-      __nativeBinding: stubBinding,
-    });
-  }, /burstMultiplier/i);
 });
 
 test("sorafsGatewayFetch rejects single-provider sessions without override", () => {

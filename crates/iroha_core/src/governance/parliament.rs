@@ -36,10 +36,9 @@ use iroha_data_model::{
         parliament_ballot_result_root_v1, parliament_candidate_root_v1,
         parliament_execution_failure_root_v1, parliament_public_finding_endorsement_root_v1,
         parliament_quorum_seats_v1, parliament_roster_root_v1,
+        parliament_timed_ovn_required_chunk_blocks_v1,
     },
-    isi::governance::{
-        ParliamentSortitionRequestRegistrationV1, parliament_timed_ovn_required_chunk_blocks_v1,
-    },
+    isi::governance::ParliamentSortitionRequestRegistrationV1,
 };
 use norito::{
     codec::{Decode, Encode},

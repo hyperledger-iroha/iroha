@@ -338,7 +338,7 @@ fn apply_barriers_reconcile_current_serve_and_unadmitted_fetch_capacity_before_d
             "activated.with_runner_runtime(",
             "producer_claim.permits_decided_lane_recovery_ingress()",
             "settle_apply_barrier_runner_decision_handoff(",
-            "retry_decided_lane_recovery_exact_output(permit",
+            "reconcile_terminal_lane_output_handoffs(",
             "drain_decided_lane_recovery_ingress(",
         ],
     );

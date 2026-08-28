@@ -350,40 +350,6 @@ impl ApplySccpRouteGovernance {
         Self { action }
     }
 }
-isi! {
-    /// Fund one exact route-scoped SCCP protocol escrow.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    #[norito(deny_unknown_fields)]
-    pub struct FundSccpRouteEscrow {
-        /// Immutable governed route whose escrow receives the funds.
-        pub route_key: crate::bridge::SccpRouteKeyV1,
-        /// Exact governed settlement asset, repeated to bind signed intent.
-        pub asset_definition_id: AssetDefinitionId,
-        /// Positive amount transferred from the route's exact custody owner.
-        pub amount: Quantity,
-    }
-}
-impl crate::seal::Instruction for FundSccpRouteEscrow {}
-isi! {
-    /// Refund one exact inactive route-scoped SCCP protocol escrow.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    #[norito(deny_unknown_fields)]
-    pub struct RefundSccpRouteEscrow {
-        /// Immutable governed route whose escrow is debited.
-        pub route_key: crate::bridge::SccpRouteKeyV1,
-        /// Exact governed settlement asset, repeated to bind signed intent.
-        pub asset_definition_id: AssetDefinitionId,
-        /// Positive amount returned only to the route's exact custody owner.
-        pub amount: Quantity,
-    }
-}
-impl crate::seal::Instruction for RefundSccpRouteEscrow {}
 fn bridge_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
@@ -441,45 +407,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ApplySccpRouteGovernance {
         Ok((Self { action }, offset))
     }
 }
-macro_rules! impl_sccp_route_escrow_decode_from_slice {
-    ($ty:ty) => {
-        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
-            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-                let flags = bridge_decode_flags();
-                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                    return super::decode_packed_instruction_payload::<Self>(bytes);
-                }
-                let mut offset = 0usize;
-                let route_key = super::decode_aos_canonical_field::<crate::bridge::SccpRouteKeyV1>(
-                    super::read_aos_field(bytes, &mut offset, flags)?,
-                    flags,
-                )?;
-                let asset_definition_id = super::decode_aos_canonical_field::<AssetDefinitionId>(
-                    super::read_aos_field(bytes, &mut offset, flags)?,
-                    flags,
-                )?;
-                let amount = super::decode_aos_canonical_field::<Quantity>(
-                    super::read_aos_field(bytes, &mut offset, flags)?,
-                    flags,
-                )?;
-                if offset != bytes.len() {
-                    return Err(norito::core::Error::LengthMismatch);
-                }
-                norito::core::note_payload_access(bytes, offset);
-                Ok((
-                    Self {
-                        route_key,
-                        asset_definition_id,
-                        amount,
-                    },
-                    offset,
-                ))
-            }
-        }
-    };
-}
-impl_sccp_route_escrow_decode_from_slice!(FundSccpRouteEscrow);
-impl_sccp_route_escrow_decode_from_slice!(RefundSccpRouteEscrow);
 isi! {
     /// Record an SCCP message payload for block-level commitment anchoring.
     #[cfg_attr(

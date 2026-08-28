@@ -164,6 +164,25 @@ if [[ -z "$config_path" && $live_test -eq 1 && "${MOCK_MUTATE_TARGET_MODE_ON_LIV
   chmod 0666 "${MOCK_INSTALLED_TARGET:?}"
 fi
 
+if [[ -z "$config_path" && $live_test -eq 1 && "${MOCK_REPLACE_TARGET_WITH_SYMLINK_ON_LIVE_TEST:-0}" == "1" ]]; then
+  rm -f "${MOCK_INSTALLED_TARGET:?}"
+  ln -s "${MOCK_FOREIGN_TARGET:?}" "$MOCK_INSTALLED_TARGET"
+fi
+
+if [[ -z "$config_path" && $live_test -eq 1 && "${MOCK_REPLACE_TARGET_WITH_REGULAR_ON_LIVE_TEST:-0}" == "1" ]]; then
+  replacement="${MOCK_INSTALLED_TARGET:?}.foreign"
+  printf '# foreign replacement config\n' >"$replacement"
+  chmod 0644 "$replacement"
+  mv -f "$replacement" "$MOCK_INSTALLED_TARGET"
+fi
+
+if [[ -z "$config_path" && $live_test -eq 1 && -n "${MOCK_HOLD_LIVE_TEST:-}" ]]; then
+  : >"${MOCK_HOLD_LIVE_TEST}.entered"
+  while [[ ! -e "${MOCK_HOLD_LIVE_TEST}.release" ]]; do
+    sleep 0.02
+  done
+fi
+
 if [[ "$*" == "-s reload" && "${MOCK_NGINX_RELOAD_FAIL:-0}" == "1" ]]; then
   echo "nginx: reload failed" >&2
   exit 1
@@ -192,6 +211,9 @@ if [[ -n "$config_path" ]]; then
       echo 'nginx: [emerg] unknown directive "broken_nginx_directive"' >&2
       exit 1
     fi
+    if [[ "${MOCK_MUTATE_RENDERED_DURING_VALIDATION:-0}" == "1" ]]; then
+      printf '# changed after semantic validation\n' >"$include_path"
+    fi
   fi
 fi
 SH
@@ -218,6 +240,7 @@ run_fake_script() {
   PATH="${root}/mockbin:${PATH}" \
     MOCK_STATE_DIR="${root}/state" \
     MOCK_INSTALLED_TARGET="$target_conf" \
+    MOCK_FOREIGN_TARGET="${root}/state/foreign.conf" \
     bash "${root}/configs/soranexus/taira/install_taira_edge_nginx_conf.sh" "$@"
 }
 
@@ -243,6 +266,21 @@ file_owner() {
   stat -c '%u:%g' "$path" 2>/dev/null || stat -f '%u:%g' "$path"
 }
 
+assert_retained_recovery_copy() {
+  local expected="$2"
+  local recovery_copy
+  local stderr="$1"
+
+  assert_contains "$stderr" "failed to restore previous nginx config"
+  assert_contains "$stderr" "retained rollback copy after failed restoration"
+  recovery_copy="$(sed -n 's/^retained rollback copy after failed restoration: //p' "$stderr" | tail -n 1)"
+  [[ -n "$recovery_copy" && -f "$recovery_copy" ]] || {
+    echo "failed rollback did not retain its recovery copy" >&2
+    exit 1
+  }
+  assert_contains "$recovery_copy" "$expected"
+}
+
 test_dry_run_renders_and_checks_required_alias() {
   local root
   root="$(canonical_test_root)"
@@ -262,7 +300,7 @@ test_dry_run_renders_and_checks_required_alias() {
   assert_contains "${root}/state/nginx.calls" "-t"
   assert_contains "${root}/state/nginx.calls" "-c"
   assert_contains "${root}/state/nginx.calls" "-p"
-  assert_contains "${root}/state/nginx.rendered_targets" "${root}/dist/taira-edge/taira.sora.org.conf"
+  assert_contains "${root}/state/nginx.rendered_targets" "rendered.conf"
   [[ ! -e "${root}/nginx/servers/taira.sora.org.conf" ]] || {
     echo "dry run unexpectedly installed target config" >&2
     exit 1
@@ -286,9 +324,31 @@ test_dry_run_rejects_invalid_rendered_nginx() {
   fi
   assert_contains "${root}/state/stderr" "broken_nginx_directive"
   assert_contains "${root}/state/nginx.calls" "-c"
-  assert_contains "${root}/state/nginx.rendered_targets" "${root}/dist/taira-edge/taira.sora.org.conf"
+  assert_contains "${root}/state/nginx.rendered_targets" "rendered.conf"
   [[ ! -e "${root}/nginx/servers/taira.sora.org.conf" ]] || {
     echo "dry run unexpectedly installed target config" >&2
+    exit 1
+  }
+}
+
+test_install_rejects_rendered_source_drift_after_validation() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers"
+
+  if MOCK_MUTATE_RENDERED_DURING_VALIDATION=1 run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --install \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "install accepted rendered bytes changed during validation" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "nginx validation snapshot changed while it was checked"
+  [[ ! -e "${root}/nginx/servers/taira.sora.org.conf" ]] || {
+    echo "rendered-source drift unexpectedly published a target config" >&2
     exit 1
   }
 }
@@ -300,14 +360,18 @@ test_install_reload_copies_and_reloads() {
   make_fake_repo "$root"
   mkdir -p "${root}/nginx/servers"
 
-  run_fake_script "$root" \
+  if ! run_fake_script "$root" \
     --output "${root}/dist/taira-edge/taira.sora.org.conf" \
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
     --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
     --require-alias solswap-indexer.sora \
     --install \
     --reload \
-    >"${root}/state/stdout"
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "valid nginx installation unexpectedly failed" >&2
+    cat "${root}/state/stderr" >&2
+    exit 1
+  fi
 
   assert_contains "${root}/state/stdout" "installed nginx config"
   assert_contains "${root}/state/stdout" "nginx reloaded"
@@ -315,7 +379,7 @@ test_install_reload_copies_and_reloads() {
   assert_contains "${root}/state/nginx.calls" "-t"
   assert_contains "${root}/state/nginx.calls" "-c"
   assert_contains "${root}/state/nginx.calls" "-s reload"
-  assert_contains "${root}/state/nginx.rendered_targets" "${root}/dist/taira-edge/taira.sora.org.conf"
+  assert_contains "${root}/state/nginx.rendered_targets" "rendered.conf"
 }
 
 test_install_normalizes_metadata_and_leaves_no_candidate() {
@@ -343,10 +407,63 @@ test_install_normalizes_metadata_and_leaves_no_candidate() {
     echo "installed nginx config did not have the pinned owner/group" >&2
     exit 1
   }
-  if find "${root}/nginx/servers" -maxdepth 1 -name '.taira-edge-install.*' -print -quit | grep -q .; then
+  if find "${root}/nginx/servers" -maxdepth 1 -name '.taira-edge-install.??????' -print -quit | grep -q .; then
     echo "atomic publication left an install candidate behind" >&2
     exit 1
   fi
+  [[ "$(file_mode "${root}/nginx/servers/.taira-edge-install.lock")" == "600" ]] || {
+    echo "persistent installation lock did not have mode 0600" >&2
+    exit 1
+  }
+}
+
+test_install_serializes_target_mutation() {
+  local first_pid
+  local hold_path
+  local root
+  local reached_live_test=0
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers"
+  hold_path="${root}/state/held-live-test"
+
+  MOCK_HOLD_LIVE_TEST="$hold_path" run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/first.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --install \
+    >"${root}/state/first.stdout" 2>"${root}/state/first.stderr" &
+  first_pid=$!
+
+  for _ in {1..250}; do
+    if [[ -e "${hold_path}.entered" ]]; then
+      reached_live_test=1
+      break
+    fi
+    sleep 0.02
+  done
+  if [[ $reached_live_test -ne 1 ]]; then
+    : >"${hold_path}.release"
+    wait "$first_pid" || true
+    echo "first installer did not reach the held live nginx validation" >&2
+    exit 1
+  fi
+
+  if run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/second.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --install \
+    >"${root}/state/second.stdout" 2>"${root}/state/second.stderr"; then
+    : >"${hold_path}.release"
+    wait "$first_pid" || true
+    echo "concurrent Taira edge installer unexpectedly acquired the target lock" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/second.stderr" "another Taira edge installation is already running"
+
+  : >"${hold_path}.release"
+  wait "$first_pid"
+  assert_contains "${root}/state/first.stdout" "installed nginx config"
 }
 
 test_install_validation_failure_restores_existing_target() {
@@ -465,15 +582,15 @@ test_reload_failure_restores_existing_target() {
   assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# previous live config"
 }
 
-test_live_validation_detects_content_change_and_restores_target() {
+test_live_validation_detects_content_change_and_preserves_target() {
   local root
   root="$(canonical_test_root)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
-  mkdir -p "${root}/nginx/servers"
+  mkdir -p "${root}/nginx/servers" "${root}/state/tmp"
   printf '# previous live config\n' >"${root}/nginx/servers/taira.sora.org.conf"
 
-  if MOCK_MUTATE_TARGET_ON_LIVE_TEST=1 run_fake_script "$root" \
+  if TMPDIR="${root}/state/tmp" MOCK_MUTATE_TARGET_ON_LIVE_TEST=1 run_fake_script "$root" \
     --output "${root}/dist/taira-edge/taira.sora.org.conf" \
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
     --install \
@@ -482,19 +599,19 @@ test_live_validation_detects_content_change_and_restores_target() {
     exit 1
   fi
   assert_contains "${root}/state/stderr" "changed during live nginx validation"
-  assert_contains "${root}/state/stderr" "restored previous nginx config"
-  assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# previous live config"
+  assert_retained_recovery_copy "${root}/state/stderr" "# previous live config"
+  assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# mutated during live test"
 }
 
-test_live_validation_detects_mode_change_and_restores_target() {
+test_live_validation_detects_mode_change_and_preserves_target() {
   local root
   root="$(canonical_test_root)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
-  mkdir -p "${root}/nginx/servers"
+  mkdir -p "${root}/nginx/servers" "${root}/state/tmp"
   printf '# previous live config\n' >"${root}/nginx/servers/taira.sora.org.conf"
 
-  if MOCK_MUTATE_TARGET_MODE_ON_LIVE_TEST=1 run_fake_script "$root" \
+  if TMPDIR="${root}/state/tmp" MOCK_MUTATE_TARGET_MODE_ON_LIVE_TEST=1 run_fake_script "$root" \
     --output "${root}/dist/taira-edge/taira.sora.org.conf" \
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
     --install \
@@ -503,23 +620,22 @@ test_live_validation_detects_mode_change_and_restores_target() {
     exit 1
   fi
   assert_contains "${root}/state/stderr" "must be root-owned with mode 0644"
-  assert_contains "${root}/state/stderr" "restored previous nginx config"
-  assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# previous live config"
-  [[ "$(file_mode "${root}/nginx/servers/taira.sora.org.conf")" == "644" ]] || {
-    echo "rollback did not restore the fixed nginx config mode" >&2
+  assert_retained_recovery_copy "${root}/state/stderr" "# previous live config"
+  [[ "$(file_mode "${root}/nginx/servers/taira.sora.org.conf")" == "666" ]] || {
+    echo "failed rollback unexpectedly replaced the concurrently changed target mode" >&2
     exit 1
   }
 }
 
-test_reload_detects_content_change_and_restores_target() {
+test_reload_detects_content_change_and_preserves_target() {
   local root
   root="$(canonical_test_root)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
-  mkdir -p "${root}/nginx/servers"
+  mkdir -p "${root}/nginx/servers" "${root}/state/tmp"
   printf '# previous live config\n' >"${root}/nginx/servers/taira.sora.org.conf"
 
-  if MOCK_MUTATE_TARGET_ON_RELOAD=1 run_fake_script "$root" \
+  if TMPDIR="${root}/state/tmp" MOCK_MUTATE_TARGET_ON_RELOAD=1 run_fake_script "$root" \
     --output "${root}/dist/taira-edge/taira.sora.org.conf" \
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
     --install \
@@ -529,8 +645,61 @@ test_reload_detects_content_change_and_restores_target() {
     exit 1
   fi
   assert_contains "${root}/state/stderr" "changed during nginx reload"
-  assert_contains "${root}/state/stderr" "restored previous nginx config"
-  assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# previous live config"
+  assert_retained_recovery_copy "${root}/state/stderr" "# previous live config"
+  assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# mutated during reload"
+}
+
+test_failed_rollback_preserves_replaced_regular_target() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers" "${root}/state/tmp"
+  printf '# previous live config\n' >"${root}/nginx/servers/taira.sora.org.conf"
+
+  if TMPDIR="${root}/state/tmp" MOCK_REPLACE_TARGET_WITH_REGULAR_ON_LIVE_TEST=1 run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --install \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "install overwrote a concurrently replaced regular target" >&2
+    exit 1
+  fi
+  assert_retained_recovery_copy "${root}/state/stderr" "# previous live config"
+  assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# foreign replacement config"
+}
+
+test_failed_rollback_retains_recovery_copy() {
+  local recovery_copy
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers" "${root}/state/tmp"
+  printf '# previous live config\n' >"${root}/nginx/servers/taira.sora.org.conf"
+  printf '# foreign config\n' >"${root}/state/foreign.conf"
+
+  if TMPDIR="${root}/state/tmp" MOCK_REPLACE_TARGET_WITH_SYMLINK_ON_LIVE_TEST=1 run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --install \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "install unexpectedly recovered through a replaced target leaf" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "failed to restore previous nginx config"
+  assert_contains "${root}/state/stderr" "retained rollback copy after failed restoration"
+  [[ -L "${root}/nginx/servers/taira.sora.org.conf" ]] || {
+    echo "failed rollback unexpectedly replaced the unsafe target leaf" >&2
+    exit 1
+  }
+  assert_contains "${root}/state/foreign.conf" "# foreign config"
+  recovery_copy="$(sed -n 's/^retained rollback copy after failed restoration: //p' "${root}/state/stderr" | tail -n 1)"
+  [[ -n "$recovery_copy" && -f "$recovery_copy" ]] || {
+    echo "failed rollback did not retain its recovery copy" >&2
+    exit 1
+  }
+  assert_contains "$recovery_copy" "# previous live config"
 }
 
 test_install_rejects_symlink_and_hardlinked_targets() {
@@ -664,26 +833,52 @@ test_install_rejects_mutable_target_directory() {
     echo "mutable nginx include directory unexpectedly passed" >&2
     exit 1
   fi
-  assert_contains "${root}/state/stderr" "must be root-owned and non-writable"
+  assert_contains "${root}/state/stderr" "non-writable by group/other"
+}
+
+test_install_rejects_unsafe_existing_target_metadata() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers"
+  printf '# mutable existing config\n' >"${root}/nginx/servers/taira.sora.org.conf"
+  chmod 0666 "${root}/nginx/servers/taira.sora.org.conf"
+
+  if run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --install \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "unsafe existing nginx config unexpectedly passed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "existing target nginx config must be root-owned with mode 0644"
+  assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# mutable existing config"
 }
 
 test_dry_run_renders_and_checks_required_alias
 test_dry_run_rejects_invalid_rendered_nginx
+test_install_rejects_rendered_source_drift_after_validation
 test_install_reload_copies_and_reloads
 test_install_normalizes_metadata_and_leaves_no_candidate
+test_install_serializes_target_mutation
 test_install_validation_failure_restores_existing_target
 test_install_validation_failure_removes_new_target
 test_missing_required_alias_fails
 test_backup_confs_fail_before_install
 test_reload_failure_restores_existing_target
-test_live_validation_detects_content_change_and_restores_target
-test_live_validation_detects_mode_change_and_restores_target
-test_reload_detects_content_change_and_restores_target
+test_live_validation_detects_content_change_and_preserves_target
+test_live_validation_detects_mode_change_and_preserves_target
+test_reload_detects_content_change_and_preserves_target
+test_failed_rollback_preserves_replaced_regular_target
+test_failed_rollback_retains_recovery_copy
 test_install_rejects_symlink_and_hardlinked_targets
 test_validation_bypass_option_is_retired
 test_backup_conf_bypass_option_is_retired
 test_nginx_override_is_retired_and_environment_is_ignored
 test_rejects_mutable_nginx_binary
 test_install_rejects_mutable_target_directory
+test_install_rejects_unsafe_existing_target_metadata
 
 echo "install_taira_edge_nginx_conf mock tests passed"

@@ -1,49 +1,51 @@
 //! Shared fixtures for Kagami integration tests.
-use color_eyre::eyre::{Result, WrapErr, ensure, eyre};
+use color_eyre::eyre::{Result, WrapErr, ensure};
 use iroha_data_model::peer::PeerId;
 use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
 };
-/// Output of `kagami genesis pop --json`.
+/// Proof-of-possession fields from an owner-only `kagami keys --pop` bundle.
 #[derive(Clone, Debug)]
 pub struct PopFixture {
     pub peer_id: PeerId,
     pub pop_hex: String,
 }
-/// Run `kagami genesis pop` with the provided 32-byte hexadecimal seed.
+/// Run `kagami keys --pop --out-dir` with the provided 32-byte hexadecimal seed.
 pub fn generate_pop(seed: &str) -> Result<PopFixture> {
+    let directory = tempfile::tempdir().wrap_err("create PoP custody parent")?;
+    let custody = directory.path().join("custody");
     let output = Command::new(env!("CARGO_BIN_EXE_kagami"))
         .args([
-            "genesis",
-            "pop",
+            "keys",
             "--algorithm",
             "bls_normal",
             "--seed-hex",
             seed,
-            "--json",
+            "--pop",
+            "--out-dir",
         ])
+        .arg(&custody)
         .output()
-        .wrap_err_with(|| format!("failed to run `kagami genesis pop` for seed `{seed}`"))?;
+        .wrap_err_with(|| format!("failed to run `kagami keys --pop` for seed `{seed}`"))?;
     ensure!(
         output.status.success(),
-        "kagami pop for seed `{seed}` failed: {}",
+        "kagami keys --pop for seed `{seed}` failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let value: norito::json::Value = norito::json::from_slice(&output.stdout)
-        .wrap_err("parse `kagami genesis pop` JSON output")?;
-    let pk = value["public_key"]
-        .as_str()
-        .ok_or_else(|| eyre!("`public_key` missing in pop output"))?;
-    let pop_hex = value["pop_hex"]
-        .as_str()
-        .ok_or_else(|| eyre!("`pop_hex` missing in pop output"))?
-        .to_owned();
-    let peer_id: PeerId = pk
+    let public_key =
+        fs::read_to_string(custody.join("public.key")).wrap_err("read generated public key")?;
+    let pop_hex = fs::read_to_string(custody.join("pop.hex"))
+        .wrap_err("read generated proof of possession")?;
+    let peer_id: PeerId = public_key
+        .trim_end()
         .parse()
         .wrap_err("failed to parse peer public key into PeerId")?;
-    Ok(PopFixture { peer_id, pop_hex })
+    Ok(PopFixture {
+        peer_id,
+        pop_hex: pop_hex.trim_end().to_owned(),
+    })
 }
 /// Build a minimal raw genesis manifest with the provided topology.
 pub fn minimal_manifest_with_topology(

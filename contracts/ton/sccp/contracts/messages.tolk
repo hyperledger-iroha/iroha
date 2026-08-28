@@ -99,6 +99,20 @@ struct (0x53434351) SccpRetry {
     messageId: uint256
 }
 
+/// Route guardians permanently disable new mint admissions. Signatures are
+/// fixed to guardian slots, so a key cannot be counted twice.
+struct (0x53434344) SccpDisableMinting {
+    signature0: cell?
+    signature1: cell?
+    tail: Cell<SccpDisableMintingTail>
+}
+
+struct SccpDisableMintingTail {
+    signature2: cell?
+    signature3: cell?
+    signature4: cell?
+}
+
 /// Bridge-to-master mint request. Replay identity is the full message id.
 struct (0x5343434d) SccpMasterMint {
     queryId: uint64

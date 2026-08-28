@@ -6491,7 +6491,7 @@ fn sccp_historical_route_for_record<'a>(
 struct SccpExactProofMaterial {
     indexed: SccpIndexedOutboundRecord,
     bundle: TairaSccpMessageProofV1,
-    request: iroha_sccp::SccpGroth16Bn254ProofRequestV1,
+    request: iroha_sccp::SccpDestinationProofRequestV1,
 }
 fn sccp_exact_proof_material(
     state: &CoreState,
@@ -6505,7 +6505,7 @@ fn sccp_exact_proof_material(
     let registry = state.sccp_registry_snapshot();
     let governed_route = sccp_historical_route_for_record(registry.as_ref(), &indexed)?;
     let request =
-        iroha_core::bridge::build_sccp_groth16_bn254_proof_request_from_verified_finality_v1(
+        iroha_core::bridge::build_sccp_destination_proof_request_from_verified_finality_v1(
             &verified_finality,
             &bundle,
             governed_route,
@@ -7374,6 +7374,12 @@ mod sccp_first_release_api_tests {
                 iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet => {
                     SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0x93; 32] }
                 }
+                iroha_data_model::bridge::SccpNetworkV1::TonMainnet => {
+                    SccpNormalizedCodecValueV1::TonAccount36 {
+                        workchain: 0,
+                        account: [0x94; 32],
+                    }
+                }
                 _ => panic!("unsupported fixture target"),
             };
             SccpPayloadProjectionV1::Transfer(iroha_sccp::SccpTransferProjectionV1 {
@@ -7400,6 +7406,7 @@ mod sccp_first_release_api_tests {
             iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
             iroha_data_model::bridge::SccpNetworkV1::TronNile,
             iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
+            iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
         ] {
             let context = context_for(target);
             let projection = projection_for(target);
@@ -7675,7 +7682,7 @@ mod sccp_first_release_api_tests {
             .expect("bodyless bundle finality decodes");
         assert_eq!(finality.block_header.height().get(), 2);
         assert_eq!(
-            material.request.public_inputs.finality_block_hash,
+            material.request.public_inputs().finality_block_hash,
             <[u8; 32]>::from(Hash::from(finality.finality_artifact.block_hash))
         );
         let recent = collect_recent_sccp_messages(
@@ -7748,6 +7755,56 @@ mod sccp_first_release_api_tests {
             norito::decode_from_bytes::<iroha_data_model::bridge::SccpRegistryV1>(&norito_bytes)
                 .expect("typed registry Norito");
         assert_eq!(norito_registry, json_registry);
+    }
+    routing_test! { async ton_proof_request_response_uses_concrete_bls12381_wire_type
+        let fixture = iroha_sccp::sccp_exact_ton_outbound_test_fixture_v1();
+        let classified = iroha_sccp::SccpDestinationProofRequestV1::Groth16Bls12381(
+            fixture.request.clone(),
+        );
+        let response = sccp_proof_request_response(
+            &classified,
+            crate::utils::ResponseFormat::Norito,
+        )
+        .expect("TON proof-request response");
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(crate::utils::NORITO_MIME_TYPE)
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("TON proof-request body");
+        assert_eq!(
+            body.as_ref(),
+            norito::to_bytes(&fixture.request)
+                .expect("canonical concrete TON proof request")
+                .as_slice(),
+            "Torii must not add a local enum wrapper to the concrete prover wire type"
+        );
+        assert_eq!(
+            iroha_sccp::decode_canonical_sccp_destination_proof_request_v1(body.as_ref()),
+            Some(classified)
+        );
+    }
+    #[cfg(feature = "app_api")]
+    routing_test! { sync destination_submit_decoder_accepts_closed_ton_outer_envelope
+        use base64::Engine as _;
+        let fixture = iroha_sccp::sccp_exact_ton_outbound_test_fixture_v1();
+        let bytes = norito::to_bytes(&fixture.bridge_proof)
+            .expect("canonical closed TON destination envelope");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let (outer, parsed) = decode_sccp_destination_proof_b64(&encoded)
+            .expect("Torii accepts the closed TON destination envelope");
+        assert_eq!(outer, fixture.bridge_proof);
+        assert_eq!(
+            parsed.backend(),
+            iroha_data_model::bridge::BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381
+        );
+        assert!(parsed.matches_exact_request(
+            &iroha_sccp::SccpDestinationProofRequestV1::Groth16Bls12381(fixture.request)
+        ));
     }
     #[cfg(feature = "app_api")]
     routing_test! { sync submit_json_accepts_only_closed_first_release_fields
@@ -8368,6 +8425,11 @@ fn validate_recent_message_projection(
         | (
             iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
             SccpNormalizedCodecValueV1::SolanaPubkey32 { .. },
+        )
+        | (
+            iroha_data_model::bridge::SccpNetworkV1::TonMainnet
+            | iroha_data_model::bridge::SccpNetworkV1::TonTestnet,
+            SccpNormalizedCodecValueV1::TonAccount36 { .. },
         ) => true,
         _ => false,
     };
@@ -8664,7 +8726,7 @@ pub(crate) async fn handle_v1_sccp_sora_outbound_material(
     )
     .await
 }
-/// GET /v1/sccp/proof-requests/{message_id} — exact state-derived Groth16 request.
+/// GET /v1/sccp/proof-requests/{message_id} — exact state-derived, curve-specific Groth16 request.
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_sccp_proof_request(
     state: Arc<CoreState>,
@@ -8676,9 +8738,22 @@ pub(crate) async fn handle_v1_sccp_proof_request(
     run_admitted_blocking(admission, "SCCP proof-request worker failed", move || {
         let material =
             sccp_exact_proof_material(state.as_ref(), message_id)?.ok_or_else(sccp_not_found)?;
-        sccp_bundle_response_with_format(&material.request, format)
+        sccp_proof_request_response(&material.request, format)
     })
     .await
+}
+fn sccp_proof_request_response(
+    request: &iroha_sccp::SccpDestinationProofRequestV1,
+    format: crate::utils::ResponseFormat,
+) -> Result<Response> {
+    match request {
+        iroha_sccp::SccpDestinationProofRequestV1::Groth16Bn254(request) => {
+            sccp_bundle_response_with_format(request, format)
+        }
+        iroha_sccp::SccpDestinationProofRequestV1::Groth16Bls12381(request) => {
+            sccp_bundle_response_with_format(request, format)
+        }
+    }
 }
 /// GET /v1/sccp/capabilities — relay-operator SCCP capability discovery for proof backends, codecs, and routes.
 #[iroha_futures::telemetry_future]
@@ -10666,6 +10741,28 @@ mod zk_roots_selector_tests {
             )
                 .is_err()
         );
+        assert!(
+            normalize_validation_fee_policy_metadata(
+                None,
+                None,
+                Some("cd".repeat(32)),
+                None,
+                None,
+            )
+            .is_err()
+        );
+        for invalid_hijiri_hash in ["cd".repeat(31), "gg".repeat(32)] {
+            assert!(
+                normalize_validation_fee_policy_metadata(
+                    Some("7".to_owned()),
+                    Some("0".repeat(64)),
+                    Some(invalid_hijiri_hash),
+                    Some("1".to_owned()),
+                    None,
+                )
+                .is_err()
+            );
+        }
         assert!(
             normalize_validation_fee_policy_metadata(
                 Some("7".to_owned()),
@@ -17518,9 +17615,12 @@ fn build_exact_sccp_signed_transaction(
 }
 fn decode_sccp_destination_proof_b64(
     encoded: &str,
-) -> Result<iroha_sccp::SccpGroth16Bn254ProofArtifactV1> {
+) -> Result<(
+    iroha_data_model::bridge::BridgeSccpDestinationProofV1,
+    iroha_sccp::SccpParsedDestinationProofV1,
+)> {
     use base64::Engine as _;
-    let maximum = iroha_sccp::SCCP_GROTH16_BN254_MAX_BASE64_ARTIFACT_BYTES_V1;
+    let maximum = iroha_sccp::SCCP_DESTINATION_PROOF_MAX_BASE64_BYTES_V1;
     if encoded.is_empty() || encoded.len() > maximum {
         return Err(conversion_error(format!(
             "destination_proof_b64 length must be between 1 and {maximum} bytes"
@@ -17534,9 +17634,9 @@ fn decode_sccp_destination_proof_b64(
             "destination_proof_b64 must use canonical padded base64".to_owned(),
         ));
     }
-    iroha_sccp::decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&bytes).ok_or_else(|| {
+    iroha_sccp::decode_and_parse_canonical_sccp_destination_proof_v1(&bytes).ok_or_else(|| {
         conversion_error(
-            "destination_proof_b64 must contain one canonical, bounded, pairing-verified SCCP Groth16 artifact"
+            "destination_proof_b64 must contain one canonical, bounded closed SCCP destination-proof envelope"
                 .to_owned(),
         )
     })
@@ -17852,24 +17952,18 @@ fn prepare_bridge_proof_submit(
         transaction_payload_b64.as_deref(),
         creation_time_ms,
     )?;
-    let artifact = decode_sccp_destination_proof_b64(&destination_proof_b64)?;
-    let message_id = artifact.request.public_inputs.message_id;
+    let (destination_proof, parsed) =
+        decode_sccp_destination_proof_b64(&destination_proof_b64)?;
+    let message_id = parsed.bundle().commitment.message_id;
     let material = sccp_exact_proof_material(state.as_ref(), message_id)?.ok_or_else(|| {
         conversion_error("destination proof names no finalized outbound SCCP message".to_owned())
     })?;
-    if artifact.request != material.request {
+    if parsed.bundle() != &material.bundle || !parsed.matches_exact_request(&material.request) {
         return Err(conversion_error(
             "destination proof request does not equal the canonical request derived from the finalized message and historical governed route"
                 .to_owned(),
         ));
     }
-    let destination_proof =
-        iroha_sccp::bridge_sccp_destination_proof_v1(&artifact).ok_or_else(|| {
-            conversion_error(
-                "destination proof cannot be wrapped in the closed SCCP bridge container"
-                    .to_owned(),
-            )
-        })?;
     if destination_proof.route_configuration_hash
         != material.indexed.descriptor.route_configuration_hash
     {
@@ -17878,7 +17972,7 @@ fn prepare_bridge_proof_submit(
                 .to_owned(),
         ));
     }
-    let proof_height = material.request.public_inputs.finality_height;
+    let proof_height = material.request.public_inputs().finality_height;
     let bridge_proof = iroha_data_model::bridge::BridgeProof {
         range: iroha_data_model::bridge::BridgeProofRange {
             start_height: proof_height,
@@ -20568,6 +20662,12 @@ fn load_multisig_spec(
     multisig_account_id: &iroha_data_model::account::AccountId,
 ) -> Result<iroha_executor_data_model::isi::multisig::MultisigSpec> {
     let world = state.world_view();
+    load_multisig_spec_from_world(&world, multisig_account_id)
+}
+fn load_multisig_spec_from_world(
+    world: &impl WorldReadOnly,
+    multisig_account_id: &iroha_data_model::account::AccountId,
+) -> Result<iroha_executor_data_model::isi::multisig::MultisigSpec> {
     let account = world.account(multisig_account_id).map_err(|_| {
         multisig_selector_not_found_error(
             "multisig_account_not_found",
@@ -20612,6 +20712,28 @@ fn load_multisig_spec(
         }
     }
     Ok(account_state.spec)
+}
+/// Return whether `signer_account_id` is a direct member of the requested live multisig
+/// controller, validating its canonical native account state from the caller's exact snapshot.
+pub(crate) fn is_live_multisig_signatory_in_world(
+    world: &impl WorldReadOnly,
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    signer_account_id: &iroha_data_model::account::AccountId,
+) -> Result<bool> {
+    if world.account(multisig_account_id).is_err()
+        || world
+            .smart_contract_state()
+            .get(multisig_account_state_contract_key(multisig_account_id).as_ref())
+            .is_none()
+    {
+        return Ok(false);
+    }
+    let spec = load_multisig_spec_from_world(world, multisig_account_id)?;
+    let signer_subject = signer_account_id.subject_id();
+    Ok(spec
+        .signatories
+        .keys()
+        .any(|signatory| signatory.subject_id() == signer_subject))
 }
 fn validate_multisig_spec_account_binding(
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -29824,7 +29946,10 @@ pub struct BridgeProofSubmitDto {
     /// both fields to be absent. Torii never reconstructs a signed payload from current defaults.
     #[norito(default)]
     pub transaction_payload_b64: Option<String>,
-    /// Canonical padded-base64 Norito `SccpGroth16Bn254ProofArtifactV1`.
+    /// Canonical padded-base64 Norito `BridgeSccpDestinationProofV1`.
+    ///
+    /// The closed envelope selects either a BN254 destination or the TON
+    /// BLS12-381 destination backend.
     pub destination_proof_b64: String,
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
     #[norito(default)]
@@ -46115,7 +46240,7 @@ mod validation_fee_torii_ingress_tests {
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        account::AccountId,
+        account::{AccountId, MultisigMember, MultisigPolicy},
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::DomainId,
@@ -46144,14 +46269,17 @@ mod validation_fee_torii_ingress_tests {
             ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
         },
     };
-    use iroha_executor_data_model::isi::multisig::MultisigPropose;
+    use iroha_executor_data_model::isi::multisig::{
+        MultisigAccountState, MultisigPropose, MultisigSpec,
+    };
     use iroha_primitives::{
         json::Json,
         numeric::{NumericSpec, Quantity},
     };
     use sha2::{Digest as _, Sha256};
     use std::{
-        num::{NonZeroU64, NonZeroUsize},
+        collections::BTreeMap,
+        num::{NonZeroU16, NonZeroU64, NonZeroUsize},
         sync::Arc,
         time::Duration,
     };
@@ -46785,6 +46913,7 @@ mod validation_fee_torii_ingress_tests {
             GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
             ProposalContentId, RiskTierV1, SortitionRequestV1, parliament_candidate_root_v1,
         };
+        use iroha_data_model::isi::governance::ParliamentSortitionRequestRegistrationV1;
         let proposal_operator = match proposal_kind {
             iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(proposal) => {
                 proposal.proposal_operator.clone()
@@ -46826,6 +46955,7 @@ mod validation_fee_torii_ingress_tests {
         let candidate_count = u32::try_from(candidates.len()).expect("candidate count fits u32");
         let sortition_session = BeaconSessionId::new(parliament_test_root(0xB0));
         let mut request_ids = Vec::with_capacity(requirements.len());
+        let mut registrations = Vec::with_capacity(requirements.len());
         for requirement in &requirements {
             let election_attempt_id =
                 BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0);
@@ -46843,10 +46973,14 @@ mod validation_fee_torii_ingress_tests {
             )
             .expect("construct deterministic sortition request");
             request_ids.push(request.id);
-            attempt
-                .register_sortition_request(governance_attempt_id, 0, request, candidates.clone())
-                .expect("register deterministic sortition request");
+            registrations.push(ParliamentSortitionRequestRegistrationV1 {
+                sequence: 0,
+                request,
+            });
         }
+        attempt
+            .register_sortition_request_batch(governance_attempt_id, registrations, candidates)
+            .expect("register deterministic sortition request batch");
         request_ids.sort_unstable();
         let sortition_pulse_id = BeaconPulseId::new(parliament_test_root(0xB1));
         attempt
@@ -47516,6 +47650,240 @@ mod validation_fee_torii_ingress_tests {
             TEST_ACTIVE_VALIDATION_HEIGHT,
         );
         assert_eq!(exact_fee_result, "ok");
+    }
+    routing_test! { async hijiri_quote_handler_reads_the_committed_state_snapshot
+        use iroha_data_model::IntoKeyValue as _;
+        use iroha_data_model::hijiri::{
+            FeeMultiplierBand, HijiriAccountRiskV1, HijiriFeePolicy, HijiriParametersV1, Q16,
+        };
+        use iroha_torii_shared::validation_fee_api::{
+            VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1, ValidationFeeHijiriQuoteRequestV1,
+        };
+
+        let (app, user, user_key_pair, unrelated_account, policy) =
+            test_app_with_active_policy();
+        let multiplier = Q16::from_parts(1, 0x4000);
+        let parameters = HijiriParametersV1::try_new(
+            1,
+            None,
+            HijiriFeePolicy::new(
+                vec![
+                    FeeMultiplierBand::new(Q16::from_parts(0, 0x8000), Q16::ONE)
+                        .expect("canonical low-risk band"),
+                    FeeMultiplierBand::new(Q16::ONE, multiplier)
+                        .expect("canonical high-risk band"),
+                ],
+                multiplier,
+            )
+            .expect("canonical handler-test fee policy"),
+            Q16::ZERO,
+        )
+        .expect("canonical handler-test Hijiri parameters");
+        let account_risk = HijiriAccountRiskV1::try_new(user.clone(), 1, None, Q16::ONE)
+            .expect("canonical handler-test account risk");
+        let expected_quote_hash = parameters
+            .fee_quote_hash(&user, Some(&account_risk))
+            .expect("derive handler-test composite quote hash");
+        let multisig_policy = MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(user_key_pair.public_key().clone(), 1)
+                .expect("canonical handler-test multisig member")],
+        )
+        .expect("canonical handler-test multisig policy");
+        let multisig_account = AccountId::new_multisig(multisig_policy);
+        let multisig_spec = MultisigSpec {
+            signatories: BTreeMap::from([(user.clone(), 1_u8)]),
+            quorum: NonZeroU16::new(1).expect("nonzero handler-test multisig quorum"),
+            transaction_ttl_ms: NonZeroU64::new(60_000)
+                .expect("nonzero handler-test multisig TTL"),
+        };
+        let multisig_risk =
+            HijiriAccountRiskV1::try_new(multisig_account.clone(), 1, None, Q16::ONE)
+                .expect("canonical handler-test multisig account risk");
+        let expected_multisig_quote_hash = parameters
+            .fee_quote_hash(&multisig_account, Some(&multisig_risk))
+            .expect("derive handler-test multisig composite quote hash");
+        let unrelated_risk =
+            HijiriAccountRiskV1::try_new(unrelated_account.clone(), 1, None, Q16::ONE)
+                .expect("canonical handler-test unrelated account risk");
+
+        let evaluated_height = TEST_POLICY_EFFECTIVE_HEIGHT - 1;
+        let mut block = app.state.block(block_header(
+            evaluated_height,
+            1_700_000_003_000 + evaluated_height,
+        ));
+        let mut state_transaction = block.transaction();
+        for custom in [
+            parameters.clone().into_custom_parameter(),
+            account_risk
+                .clone()
+                .into_custom_parameter()
+                .expect("canonical account-risk custom parameter"),
+            multisig_risk
+                .clone()
+                .into_custom_parameter()
+                .expect("canonical multisig account-risk custom parameter"),
+            unrelated_risk
+                .into_custom_parameter()
+                .expect("canonical unrelated account-risk custom parameter"),
+        ] {
+            state_transaction
+                .world
+                .parameters_mut_for_testing()
+                .get_mut()
+                .set_parameter(Parameter::Custom(custom));
+        }
+        let (multisig_account_id, multisig_account_value) =
+            Account::new(multisig_account.clone()).build(&user).into_key_value();
+        state_transaction
+            .world
+            .insert_account_for_testing(multisig_account_id, multisig_account_value);
+        state_transaction
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                multisig_account_state_contract_key(&multisig_account),
+                norito::to_bytes(&MultisigAccountState::new(
+                    multisig_account.clone(),
+                    None,
+                    multisig_spec,
+                ))
+                .expect("encode handler-test native multisig account state"),
+            );
+        state_transaction.apply();
+        let committed_height = u64::try_from(block.block_hashes.len())
+            .expect("handler-test committed height fits u64");
+        for synthetic_height in committed_height
+            .checked_add(1)
+            .expect("handler-test committed height can advance")
+            ..=evaluated_height
+        {
+            block.block_hashes.push_for_tests(
+                block_header(
+                    synthetic_height,
+                    1_700_000_003_000 + synthetic_height,
+                )
+                .hash(),
+            );
+        }
+        block.transactions.insert_block(
+            std::collections::HashSet::new(),
+            NonZeroUsize::new(2).expect("handler-test policy block follows genesis"),
+        );
+        block
+            .commit()
+            .expect("commit quote handler Hijiri state snapshot");
+
+        let request = ValidationFeeHijiriQuoteRequestV1 {
+            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+            account_id: user.clone(),
+            qualifying_transfer_count: 3,
+        };
+        let signer = user_key_pair.public_key().clone();
+        let verified_request = || crate::app_auth::VerifiedCanonicalRequest {
+            account: user.clone(),
+            signer: signer.clone(),
+            verified_signers: vec![signer.clone()],
+        };
+        let response = crate::validation_fee_api::handler_hijiri_quote(
+            axum::extract::State(Arc::clone(&app)),
+            axum::extract::Extension(verified_request()),
+            axum::http::HeaderMap::new(),
+            crate::loopback_connect_info(),
+            crate::utils::extractors::NoritoOnly(request.clone()),
+        )
+        .await
+        .expect("committed Hijiri state must produce a quote")
+        .0;
+
+        response
+            .validate_for_request(&request)
+            .expect("handler quote must be coherent and request-bound");
+        assert_eq!(response.evaluated_state_height, evaluated_height.to_string());
+        assert_eq!(
+            response.quoted_execution_height,
+            TEST_POLICY_EFFECTIVE_HEIGHT.to_string()
+        );
+        assert_eq!(response.active_policy_version, policy.policy_version.to_string());
+        assert_eq!(response.effective_account_risk_q16, Q16::ONE.raw());
+        assert_eq!(response.account_risk_revision.as_deref(), Some("1"));
+        assert_eq!(
+            response.hijiri_fee_quote_hash,
+            hex::encode(expected_quote_hash)
+        );
+        assert_eq!(response.adjusted_per_transfer_fee_minor_units, "13");
+        assert_eq!(response.aggregate_base_fee_minor_units, "30");
+        assert_eq!(response.aggregate_adjusted_fee_minor_units, "38");
+
+        let multisig_request = ValidationFeeHijiriQuoteRequestV1 {
+            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+            account_id: multisig_account,
+            qualifying_transfer_count: 3,
+        };
+        let multisig_response = crate::validation_fee_api::handler_hijiri_quote(
+            axum::extract::State(Arc::clone(&app)),
+            axum::extract::Extension(verified_request()),
+            axum::http::HeaderMap::new(),
+            crate::loopback_connect_info(),
+            crate::utils::extractors::NoritoOnly(multisig_request.clone()),
+        )
+        .await
+        .expect("a direct live multisig member must be allowed to quote its controller")
+        .0;
+        multisig_response
+            .validate_for_request(&multisig_request)
+            .expect("member-authorized multisig quote must be request-bound");
+        assert_eq!(multisig_response.account_risk_revision.as_deref(), Some("1"));
+        assert_eq!(
+            multisig_response.hijiri_fee_quote_hash,
+            hex::encode(expected_multisig_quote_hash)
+        );
+
+        let (_, unrelated_key_pair) =
+            account(2, "derive validation-fee Torii unrelated quote signer key");
+        let unrelated_signer = unrelated_key_pair.public_key().clone();
+        let non_member_error = crate::validation_fee_api::handler_hijiri_quote(
+            axum::extract::State(Arc::clone(&app)),
+            axum::extract::Extension(crate::app_auth::VerifiedCanonicalRequest {
+                account: unrelated_account.clone(),
+                signer: unrelated_signer.clone(),
+                verified_signers: vec![unrelated_signer],
+            }),
+            axum::http::HeaderMap::new(),
+            crate::loopback_connect_info(),
+            crate::utils::extractors::NoritoOnly(multisig_request),
+        )
+        .await
+        .expect_err("a non-member must not quote a live multisig controller");
+        assert!(matches!(
+            non_member_error,
+            crate::Error::AppForbidden {
+                code: "validation_fee_hijiri_quote_account_mismatch",
+                ..
+            }
+        ));
+
+        let unrelated_request = ValidationFeeHijiriQuoteRequestV1 {
+            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+            account_id: unrelated_account,
+            qualifying_transfer_count: 3,
+        };
+        let error = crate::validation_fee_api::handler_hijiri_quote(
+            axum::extract::State(Arc::clone(&app)),
+            axum::extract::Extension(verified_request()),
+            axum::http::HeaderMap::new(),
+            crate::loopback_connect_info(),
+            crate::utils::extractors::NoritoOnly(unrelated_request),
+        )
+        .await
+        .expect_err("an unrelated authenticated account must not read another account's risk");
+        assert!(matches!(
+            error,
+            crate::Error::AppForbidden {
+                code: "validation_fee_hijiri_quote_account_mismatch",
+                ..
+            }
+        ));
     }
 }
 #[cfg(all(test, feature = "telemetry"))]
@@ -55037,8 +55405,10 @@ pub struct AccountFaucetPuzzleDto {
 }
 const FAUCET_CLAIM_HASH_DOMAIN_V1: &[u8] = b"iroha:accounts:faucet:claim:v1\0";
 const PREPARED_BINDING_METADATA_KEY_V1: &str = "taira_public_reset_binding";
-const PREPARED_OPERATION_METADATA_KEY_V1: &str = "taira_prepared_operation";
-const PREPARED_SEMANTIC_HASH_METADATA_KEY_V1: &str = "taira_prepared_semantic_hash";
+const PREPARED_OPERATION_METADATA_KEY_V1: &str =
+    iroha_data_model::transaction::PREPARED_OPERATION_METADATA_KEY;
+const PREPARED_SEMANTIC_HASH_METADATA_KEY_V1: &str =
+    iroha_data_model::transaction::PREPARED_SEMANTIC_HASH_METADATA_KEY;
 
 #[derive(Clone)]
 struct AccountOnboardingPreparedSignaturePayloadV1 {
@@ -55368,6 +55738,14 @@ fn prepared_transaction_metadata(
             .expect("static prepared semantic-hash metadata key"),
         IrohaJson::new(semantic_hash_hex.to_owned()),
     );
+    if operation == iroha_data_model::transaction::PREPARED_FAUCET_OPERATION {
+        metadata.insert(
+            iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
+                .parse()
+                .expect("static faucet claim marker version metadata key"),
+            IrohaJson::new(iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1),
+        );
+    }
     Ok(metadata)
 }
 

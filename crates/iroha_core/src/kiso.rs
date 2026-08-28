@@ -674,7 +674,7 @@ mod tests {
                 DataspaceGossip, FraudMonitoring, Genesis, Governance, IsoBridge, Ivm, Kura,
                 LiveQueryStore, Logger, Network, Nexus, Queue, Root, Settlement,
                 SoranetHandshake as ActualSoranetHandshake, SoranetPow, SoranetPrivacy, Streaming,
-                StreamingSoranet, Sumeragi, TieredState, Torii, TransactionGossiper, TrustedPeers,
+                Sumeragi, TieredState, Torii, TransactionGossiper, TrustedPeers,
             },
             defaults,
         },
@@ -886,6 +886,10 @@ mod tests {
                 p2p_proxy: None,
                 p2p_proxy_required: false,
                 p2p_no_proxy: Vec::new(),
+                outbound_dial_allow_cidrs: Vec::new(),
+                outbound_dial_deny_cidrs: Vec::new(),
+                outbound_dial_allow_dns_suffixes: Vec::new(),
+                outbound_dial_deny_dns_suffixes: Vec::new(),
                 p2p_proxy_tls_verify: true,
                 p2p_proxy_tls_pinned_cert_der_base64: None,
                 quic_enabled: false,
@@ -1069,6 +1073,10 @@ mod tests {
                     iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
                 attachments_per_tenant_max_bytes:
                     iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_BYTES,
+                attachments_global_max_count:
+                    iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT,
+                attachments_global_max_bytes:
+                    iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_BYTES,
                 attachments_allowed_mime_types:
                     iroha_config::parameters::defaults::torii::attachments_allowed_mime_types(),
                 attachments_max_expanded_bytes:
@@ -1891,8 +1899,6 @@ mod tests {
                     iroha_config::parameters::defaults::streaming::SESSION_STORE_DIR,
                 ),
                 feature_bits: iroha_config::parameters::defaults::streaming::FEATURE_BITS,
-                soranet: StreamingSoranet::from_defaults(),
-                soravpn: iroha_config::parameters::actual::StreamingSoravpn::from_defaults(),
                 sync: iroha_config::parameters::actual::StreamingSync::from_defaults(),
                 codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
             },

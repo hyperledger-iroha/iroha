@@ -331,8 +331,16 @@ impl<'a> FastFromJson<'a> for NetworkUpdate {
             w.expect_colon_resync()?;
             match kh {
                 x if x == kh_lane_profile && w.last_key() == "lane_profile" => {
-                    let label = w.parse_string_ref_inline(arena)?.to_string();
-                    lane_profile = Some(base::LaneProfile::from_label(&label));
+                    let label = w.parse_string_ref_inline(arena)?;
+                    let label = match label {
+                        json::StrRef::Borrowed(label) | json::StrRef::Owned(label) => label,
+                    };
+                    lane_profile =
+                        Some(base::LaneProfile::parse_label(label).ok_or_else(|| {
+                            NoritoError::Message(
+                                "lane_profile must be exactly `core` or `home`".into(),
+                            )
+                        })?);
                 }
                 x if x == kh_require && w.last_key() == "require_sm_handshake_match" => {
                     require_sm_handshake_match = Some(w.parse_bool_inline()?);
@@ -782,7 +790,7 @@ pub struct ConfigGetDTO {
     pub consensus: Consensus,
     /// Read-only confidential verification gas schedule committed by the ZK policy.
     pub confidential_gas: ConfidentialGas,
-    /// Transport-specific configuration summary (Norito-RPC, streaming).
+    /// Transport-specific configuration summary.
     pub transport: Transport,
     /// Nexus-specific configuration snapshot.
     pub nexus: Nexus,
@@ -826,8 +834,6 @@ pub struct ConfidentialGas {
 pub struct Transport {
     /// Norito-RPC rollout summary.
     pub norito_rpc: NoritoRpcSummary,
-    /// Streaming transport summary (e.g., `SoraNet` bridge defaults).
-    pub streaming: StreamingTransportSummary,
 }
 /// Nexus configuration summary exposed via the client API.
 #[derive(Debug, Clone, Copy)]
@@ -859,36 +865,6 @@ pub struct NoritoRpcSummary {
     /// Number of tokens currently allowlisted for canary access.
     pub canary_allowlist_size: usize,
 }
-/// Streaming transport summary exposed to clients.
-#[derive(Debug, Clone)]
-pub struct StreamingTransportSummary {
-    /// Default `SoraNet` bridge metadata applied to streaming routes.
-    pub soranet: SoranetStreamingSummary,
-}
-/// `SoraNet` streaming bridge defaults surfaced via the configuration endpoint.
-#[derive(Debug, Clone)]
-pub struct SoranetStreamingSummary {
-    /// Whether `SoraNet` provisioning for streaming routes is enabled.
-    pub enabled: bool,
-    /// Label used when opening `SoraNet` circuits for Norito streaming.
-    pub stream_tag: String,
-    /// Exit relay multiaddr used when manifests omit explicit routing metadata.
-    pub exit_multiaddr: String,
-    /// Optional padding budget (milliseconds) applied to low-latency circuits.
-    pub padding_budget_ms: Option<u16>,
-    /// Access posture enforced by exits (`read-only` vs `authenticated`).
-    pub access_kind: String,
-    /// GAR category implied by the configured access posture.
-    pub gar_category: String,
-    /// Domain-separated salt used to derive blinded channel identifiers.
-    pub channel_salt: String,
-    /// Filesystem spool where privacy-route updates are staged for exit relays.
-    pub provision_spool_dir: String,
-    /// Segment window (inclusive) used when provisioning privacy routes.
-    pub provision_window_segments: u64,
-    /// Maximum number of queued privacy-route provisioning jobs.
-    pub provision_queue_capacity: u64,
-}
 impl From<&'_ base::Root> for ConfigGetDTO {
     fn from(value: &'_ base::Root) -> Self {
         Self {
@@ -898,19 +874,15 @@ impl From<&'_ base::Root> for ConfigGetDTO {
             queue: (&value.queue).into(),
             consensus: Consensus::from(&value.sumeragi),
             confidential_gas: (&value.confidential.gas).into(),
-            transport: Transport::from_config(&value.torii.transport, &value.streaming.soranet),
+            transport: Transport::from_config(&value.torii.transport),
             nexus: Nexus::from(&value.nexus),
         }
     }
 }
 impl Transport {
-    fn from_config(
-        transport: &'_ base::ToriiTransport,
-        soranet: &'_ base::StreamingSoranet,
-    ) -> Self {
+    fn from_config(transport: &'_ base::ToriiTransport) -> Self {
         Self {
             norito_rpc: NoritoRpcSummary::from(&transport.norito_rpc),
-            streaming: StreamingTransportSummary::from(soranet),
         }
     }
 }
@@ -938,36 +910,6 @@ impl From<&'_ base::NoritoRpcTransport> for NoritoRpcSummary {
             stage: value.stage.label().to_string(),
             require_mtls: value.require_mtls,
             canary_allowlist_size: value.allowed_clients.len(),
-        }
-    }
-}
-impl From<&'_ base::StreamingSoranet> for StreamingTransportSummary {
-    fn from(value: &'_ base::StreamingSoranet) -> Self {
-        Self {
-            soranet: SoranetStreamingSummary::from(value),
-        }
-    }
-}
-impl From<&'_ base::StreamingSoranet> for SoranetStreamingSummary {
-    fn from(value: &'_ base::StreamingSoranet) -> Self {
-        let access_kind = value.access_kind.as_str().to_string();
-        let gar_category = match value.access_kind {
-            base::StreamingSoranetAccessKind::Authenticated => {
-                "stream.norito.authenticated".to_string()
-            }
-            base::StreamingSoranetAccessKind::ReadOnly => "stream.norito.read_only".to_string(),
-        };
-        Self {
-            enabled: value.enabled,
-            stream_tag: "norito-stream".to_string(),
-            exit_multiaddr: value.exit_multiaddr.clone(),
-            padding_budget_ms: value.padding_budget_ms,
-            access_kind,
-            gar_category,
-            channel_salt: value.channel_salt.clone(),
-            provision_spool_dir: value.provision_spool_dir.to_string_lossy().into_owned(),
-            provision_window_segments: value.provision_window_segments,
-            provision_queue_capacity: value.provision_queue_capacity,
         }
     }
 }
@@ -1018,9 +960,6 @@ impl FastJsonWrite for Transport {
         out.push('{');
         out.push_str("\"norito_rpc\":");
         self.norito_rpc.write_json(out);
-        out.push(',');
-        out.push_str("\"streaming\":");
-        self.streaming.write_json(out);
         out.push('}');
     }
 }
@@ -1064,60 +1003,6 @@ impl FastJsonWrite for NoritoRpcSummary {
         out.push(',');
         out.push_str("\"canary_allowlist_size\":");
         let _ = write!(out, "{}", self.canary_allowlist_size);
-        out.push('}');
-    }
-}
-impl FastJsonWrite for StreamingTransportSummary {
-    fn write_json(&self, out: &mut String) {
-        out.push('{');
-        out.push_str("\"soranet\":");
-        self.soranet.write_json(out);
-        out.push('}');
-    }
-}
-impl FastJsonWrite for SoranetStreamingSummary {
-    fn write_json(&self, out: &mut String) {
-        out.push('{');
-        out.push_str("\"enabled\":");
-        let _ = write!(out, "{}", self.enabled);
-        out.push(',');
-        out.push_str("\"stream_tag\":\"");
-        out.push_str(&self.stream_tag);
-        out.push('"');
-        out.push(',');
-        out.push_str("\"exit_multiaddr\":\"");
-        out.push_str(&self.exit_multiaddr);
-        out.push('"');
-        out.push(',');
-        out.push_str("\"padding_budget_ms\":");
-        match self.padding_budget_ms {
-            Some(value) => {
-                let _ = write!(out, "{value}");
-            }
-            None => out.push_str("null"),
-        }
-        out.push(',');
-        out.push_str("\"access_kind\":\"");
-        out.push_str(&self.access_kind);
-        out.push('"');
-        out.push(',');
-        out.push_str("\"gar_category\":\"");
-        out.push_str(&self.gar_category);
-        out.push('"');
-        out.push(',');
-        out.push_str("\"channel_salt\":\"");
-        out.push_str(&self.channel_salt);
-        out.push('"');
-        out.push(',');
-        out.push_str("\"provision_spool_dir\":\"");
-        out.push_str(&self.provision_spool_dir);
-        out.push('"');
-        out.push(',');
-        out.push_str("\"provision_window_segments\":");
-        let _ = write!(out, "{}", self.provision_window_segments);
-        out.push(',');
-        out.push_str("\"provision_queue_capacity\":");
-        let _ = write!(out, "{}", self.provision_queue_capacity);
         out.push('}');
     }
 }
@@ -1185,18 +1070,13 @@ impl<'a> FastFromJson<'a> for Transport {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
         let kh_nr = norito::json::key_hash_const("norito_rpc");
-        let kh_streaming = norito::json::key_hash_const("streaming");
         let mut norito_rpc: Option<NoritoRpcSummary> = None;
-        let mut streaming: Option<StreamingTransportSummary> = None;
         while !w.peek_object_end()? {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
             match kh {
                 x if x == kh_nr && w.last_key() == "norito_rpc" => {
                     norito_rpc = Some(NoritoRpcSummary::parse(w, arena)?);
-                }
-                x if x == kh_streaming && w.last_key() == "streaming" => {
-                    streaming = Some(StreamingTransportSummary::parse(w, arena)?);
                 }
                 _ => w.skip_value()?,
             }
@@ -1206,7 +1086,6 @@ impl<'a> FastFromJson<'a> for Transport {
         Ok(Self {
             norito_rpc: norito_rpc
                 .ok_or_else(|| NoritoError::Message("missing norito_rpc".into()))?,
-            streaming: streaming.ok_or_else(|| NoritoError::Message("missing streaming".into()))?,
         })
     }
 }
@@ -1254,131 +1133,6 @@ impl<'a> FastFromJson<'a> for NoritoRpcSummary {
             stage: stage.ok_or_else(|| NoritoError::Message("missing stage".into()))?,
             require_mtls: require_mtls.unwrap_or(false),
             canary_allowlist_size: allow_size.unwrap_or(0),
-        })
-    }
-}
-impl<'a> FastFromJson<'a> for StreamingTransportSummary {
-    fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
-        w.expect_object_start()?;
-        let kh_soranet = norito::json::key_hash_const("soranet");
-        let mut soranet: Option<SoranetStreamingSummary> = None;
-        while !w.peek_object_end()? {
-            let kh = w.read_key_hash()?;
-            w.expect_colon_resync()?;
-            match kh {
-                x if x == kh_soranet && w.last_key() == "soranet" => {
-                    soranet = Some(SoranetStreamingSummary::parse(w, arena)?);
-                }
-                _ => w.skip_value()?,
-            }
-            let _ = w.consume_comma_if_present()?;
-        }
-        w.expect_object_end()?;
-        Ok(Self {
-            soranet: soranet.ok_or_else(|| NoritoError::Message("missing soranet".into()))?,
-        })
-    }
-}
-impl<'a> FastFromJson<'a> for SoranetStreamingSummary {
-    fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
-        w.expect_object_start()?;
-        let kh_enabled = norito::json::key_hash_const("enabled");
-        let kh_stream_tag = norito::json::key_hash_const("stream_tag");
-        let kh_exit = norito::json::key_hash_const("exit_multiaddr");
-        let kh_padding = norito::json::key_hash_const("padding_budget_ms");
-        let kh_access = norito::json::key_hash_const("access_kind");
-        let kh_gar = norito::json::key_hash_const("gar_category");
-        let kh_salt = norito::json::key_hash_const("channel_salt");
-        let kh_spool = norito::json::key_hash_const("provision_spool_dir");
-        let kh_window = norito::json::key_hash_const("provision_window_segments");
-        let kh_queue = norito::json::key_hash_const("provision_queue_capacity");
-        let mut enabled: Option<bool> = None;
-        let mut stream_tag: Option<String> = None;
-        let mut exit_multiaddr: Option<String> = None;
-        let mut padding_budget_ms: Option<Option<u16>> = None;
-        let mut access_kind: Option<String> = None;
-        let mut gar_category: Option<String> = None;
-        let mut channel_salt: Option<String> = None;
-        let mut provision_spool_dir: Option<String> = None;
-        let mut provision_window_segments: Option<u64> = None;
-        let mut provision_queue_capacity: Option<u64> = None;
-        while !w.peek_object_end()? {
-            let kh = w.read_key_hash()?;
-            w.expect_colon_resync()?;
-            match kh {
-                x if x == kh_enabled && w.last_key() == "enabled" => {
-                    enabled = Some(w.parse_bool_inline()?);
-                }
-                x if x == kh_stream_tag && w.last_key() == "stream_tag" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    stream_tag = Some(sref.to_string());
-                }
-                x if x == kh_exit && w.last_key() == "exit_multiaddr" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    exit_multiaddr = Some(sref.to_string());
-                }
-                x if x == kh_padding && w.last_key() == "padding_budget_ms" => {
-                    w.skip_ws();
-                    let bytes = w.input().as_bytes();
-                    let cursor = w.raw_pos();
-                    if cursor + 4 <= bytes.len() && &bytes[cursor..cursor + 4] == b"null" {
-                        w.sync_to_raw(cursor + 4);
-                        padding_budget_ms = Some(None);
-                    } else {
-                        let raw = w.parse_u64_inline()?;
-                        let converted = u16::try_from(raw).map_err(|_| {
-                            NoritoError::Message("padding_budget_ms exceeds u16".into())
-                        })?;
-                        padding_budget_ms = Some(Some(converted));
-                    }
-                }
-                x if x == kh_access && w.last_key() == "access_kind" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    access_kind = Some(sref.to_string());
-                }
-                x if x == kh_gar && w.last_key() == "gar_category" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    gar_category = Some(sref.to_string());
-                }
-                x if x == kh_salt && w.last_key() == "channel_salt" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    channel_salt = Some(sref.to_string());
-                }
-                x if x == kh_spool && w.last_key() == "provision_spool_dir" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    provision_spool_dir = Some(sref.to_string());
-                }
-                x if x == kh_window && w.last_key() == "provision_window_segments" => {
-                    provision_window_segments = Some(w.parse_u64_inline()?);
-                }
-                x if x == kh_queue && w.last_key() == "provision_queue_capacity" => {
-                    provision_queue_capacity = Some(w.parse_u64_inline()?);
-                }
-                _ => w.skip_value()?,
-            }
-            let _ = w.consume_comma_if_present()?;
-        }
-        w.expect_object_end()?;
-        Ok(Self {
-            enabled: enabled.ok_or_else(|| NoritoError::Message("missing enabled".into()))?,
-            stream_tag: stream_tag
-                .ok_or_else(|| NoritoError::Message("missing stream_tag".into()))?,
-            exit_multiaddr: exit_multiaddr
-                .ok_or_else(|| NoritoError::Message("missing exit_multiaddr".into()))?,
-            padding_budget_ms: padding_budget_ms
-                .ok_or_else(|| NoritoError::Message("missing padding_budget_ms".into()))?,
-            access_kind: access_kind
-                .ok_or_else(|| NoritoError::Message("missing access_kind".into()))?,
-            gar_category: gar_category
-                .ok_or_else(|| NoritoError::Message("missing gar_category".into()))?,
-            channel_salt: channel_salt
-                .ok_or_else(|| NoritoError::Message("missing channel_salt".into()))?,
-            provision_spool_dir: provision_spool_dir
-                .ok_or_else(|| NoritoError::Message("missing provision_spool_dir".into()))?,
-            provision_window_segments: provision_window_segments
-                .ok_or_else(|| NoritoError::Message("missing provision_window_segments".into()))?,
-            provision_queue_capacity: provision_queue_capacity
-                .ok_or_else(|| NoritoError::Message("missing provision_queue_capacity".into()))?,
         })
     }
 }
@@ -1622,8 +1376,16 @@ impl<'a> FastFromJson<'a> for Network {
                     soranet_vpn_summary = Some(SoranetVpnSummary::parse(w, arena)?);
                 }
                 x if x == kh_lane_profile && w.last_key() == "lane_profile" => {
-                    let label = w.parse_string_ref_inline(arena)?.to_string();
-                    lane_profile = Some(base::LaneProfile::from_label(&label));
+                    let label = w.parse_string_ref_inline(arena)?;
+                    let label = match label {
+                        json::StrRef::Borrowed(label) | json::StrRef::Owned(label) => label,
+                    };
+                    lane_profile =
+                        Some(base::LaneProfile::parse_label(label).ok_or_else(|| {
+                            NoritoError::Message(
+                                "lane_profile must be exactly `core` or `home`".into(),
+                            )
+                        })?);
                 }
                 x if x == kh_require_sm_match && w.last_key() == "require_sm_handshake_match" => {
                     require_sm_handshake_match = Some(w.parse_bool_inline()?);
@@ -3067,7 +2829,7 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
             outbound_mint_capacity: outbound_mint_capacity.unwrap_or(0),
             inbound_verify_capacity: inbound_verify_capacity.unwrap_or(0),
             puzzle: puzzle.ok_or_else(|| {
-                NoritoError::Message("missing mandatory SoraNet puzzle summary".into())
+                NoritoError::Message("missing puzzle: mandatory SoraNet puzzle summary".into())
             })?,
         })
     }
@@ -3357,8 +3119,6 @@ mod test {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn snapshot_serialized_form() {
-        let soranet_streaming =
-            StreamingTransportSummary::from(&base::StreamingSoranet::from_defaults());
         let soranet_vpn = SoranetVpnSummary::from(&base::SoranetVpn::default());
         let value = ConfigGetDTO {
             public_key: KeyPair::try_from_seed(vec![1, 2, 3], <_>::default())
@@ -3444,7 +3204,6 @@ mod test {
                     require_mtls: true,
                     canary_allowlist_size: 2,
                 },
-                streaming: soranet_streaming,
             },
             nexus: Nexus {
                 axt: Axt {
@@ -3496,7 +3255,11 @@ mod test {
                     ticket_ttl_secs: Some(120),
                     outbound_mint_capacity: Some(2),
                     inbound_verify_capacity: Some(3),
-                    puzzle: None,
+                    puzzle: Some(SoranetHandshakePuzzleUpdate {
+                        memory_kib: Some(32 * 1024),
+                        time_cost: Some(2),
+                        lanes: Some(1),
+                    }),
                 }),
             }),
             transport: None,
@@ -3523,6 +3286,10 @@ mod test {
         assert_eq!(pow.ticket_ttl_secs, Some(120));
         assert_eq!(pow.outbound_mint_capacity, Some(2));
         assert_eq!(pow.inbound_verify_capacity, Some(3));
+        let puzzle = pow.puzzle.expect("puzzle update should roundtrip");
+        assert_eq!(puzzle.memory_kib, Some(32 * 1024));
+        assert_eq!(puzzle.time_cost, Some(2));
+        assert_eq!(puzzle.lanes, Some(1));
         let network = parsed.network.expect("network update should roundtrip");
         assert_eq!(network.require_sm_handshake_match, Some(false));
         assert_eq!(network.require_sm_openssl_preview_match, Some(true));
@@ -3587,6 +3354,15 @@ mod test {
         assert_eq!(puzzle.memory_kib, pow.puzzle.memory_kib.get());
         assert_eq!(puzzle.time_cost, pow.puzzle.time_cost.get());
         assert_eq!(puzzle.lanes, pow.puzzle.lanes.get());
+    }
+    #[test]
+    fn soranet_pow_summary_requires_puzzle_parameters() {
+        let error = norito::json::from_json::<SoranetHandshakePowSummary>(r#"{}"#)
+            .expect_err("mandatory puzzle summary must be present");
+        assert!(
+            error.to_string().contains("missing puzzle"),
+            "unexpected error: {error}"
+        );
     }
     #[test]
     fn config_update_rejects_confidential_gas_override() {

@@ -32,12 +32,12 @@ pub struct StorageConfig {
     enabled: bool,
     provider_id: Option<ProviderId>,
     data_dir: PathBuf,
-    max_capacity_bytes: iroha_config::base::util::Bytes<u64>,
+    max_capacity_bytes: iroha_config::base::util::Bytes,
     max_parallel_fetches: usize,
     max_pins: usize,
     por_sample_interval_secs: u64,
     pdp_sample_window: u16,
-    pdp_tree_memory_limit_bytes: iroha_config::base::util::Bytes<u64>,
+    pdp_tree_memory_limit_bytes: iroha_config::base::util::Bytes,
     moderation_screening_enabled: bool,
     moderation_screening_authority_bundle_path: Option<PathBuf>,
     moderation_screening_authority_bundle_digest: Option<[u8; 32]>,
@@ -218,7 +218,7 @@ impl StorageConfig {
     }
     /// Maximum allowed on-disk footprint (bytes).
     #[must_use]
-    pub fn max_capacity_bytes(&self) -> iroha_config::base::util::Bytes<u64> {
+    pub fn max_capacity_bytes(&self) -> iroha_config::base::util::Bytes {
         self.max_capacity_bytes
     }
     /// Maximum number of concurrent fetch streams.
@@ -243,7 +243,7 @@ impl StorageConfig {
     }
     /// Aggregate in-memory budget for canonical PDP tree indexes.
     #[must_use]
-    pub fn pdp_tree_memory_limit_bytes(&self) -> iroha_config::base::util::Bytes<u64> {
+    pub fn pdp_tree_memory_limit_bytes(&self) -> iroha_config::base::util::Bytes {
         self.pdp_tree_memory_limit_bytes
     }
     /// Whether authenticated moderation-screening admission is enabled.
@@ -605,7 +605,7 @@ impl StorageConfigBuilder {
     }
     /// Set the capacity ceiling (bytes).
     #[must_use]
-    pub fn max_capacity_bytes(mut self, bytes: iroha_config::base::util::Bytes<u64>) -> Self {
+    pub fn max_capacity_bytes(mut self, bytes: iroha_config::base::util::Bytes) -> Self {
         self.inner.max_capacity_bytes = bytes;
         self
     }
@@ -635,10 +635,7 @@ impl StorageConfigBuilder {
     }
     /// Set the aggregate memory budget for canonical PDP tree indexes.
     #[must_use]
-    pub fn pdp_tree_memory_limit_bytes(
-        mut self,
-        bytes: iroha_config::base::util::Bytes<u64>,
-    ) -> Self {
+    pub fn pdp_tree_memory_limit_bytes(mut self, bytes: iroha_config::base::util::Bytes) -> Self {
         self.inner.pdp_tree_memory_limit_bytes = bytes;
         self
     }

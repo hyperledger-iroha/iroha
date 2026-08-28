@@ -17,6 +17,7 @@ use std::{
     io::{BufWriter, Write, stdout},
     process::ExitCode,
 };
+mod atomic_output;
 mod client_configs;
 mod codec;
 mod crypto;
@@ -28,7 +29,9 @@ pub mod localnet;
 mod localnet_tui;
 mod privacy_bootstrap;
 mod schema;
+mod secret_toml;
 mod secure_fs;
+mod shell;
 mod swarm;
 mod tui;
 mod verify;
@@ -38,18 +41,19 @@ pub mod json_macros {
     pub use norito::derive::{FastJson, FastJsonWrite, JsonDeserialize, JsonSerialize};
 }
 /// Outcome shorthand used throughout this crate
-// Note: migrate Kagami CLI to `error_stack` once modules no longer depend on `color_eyre` convenience macros.
+// TODO: Migrate Kagami CLI to `error_stack` once modules no longer depend on
+// `color_eyre` convenience macros.
 pub(crate) type Outcome = color_eyre::Result<()>;
 /// Build-time source identity embedded for release artifact validation.
 const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
 const TOP_LEVEL_HELP: &str = concat!(
     "Common tasks:\n",
     "  kagami localnet-wizard\n",
-    "  kagami wizard --profile nexus\n",
+    "  kagami wizard\n",
     "  kagami localnet --out-dir ./localnet\n",
     "  kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml\n",
     "  kagami keys --out-dir ./key-custody\n",
-    "  kagami keys --algorithm bls_normal --pop --json\n",
+    "  kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody\n",
     "  kagami advanced markdown-help\n",
 );
 /// Error requesting one deliberate non-default CLI exit status.
@@ -115,7 +119,7 @@ trait RunArgs<T: Write> {
     /// if inner command fails.
     fn run(self, writer: &mut BufWriter<T>) -> Outcome;
 }
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[command(
     name = "kagami",
     version,
@@ -131,9 +135,9 @@ struct Cli {
 }
 /// Kagami is a task-first Iroha operator toolbox with guided flows for node setup and local
 /// devnets, plus advanced low-level helpers.
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 enum Command {
-    /// Guided node/bootstrap flow for configuring a peer against an existing network profile
+    /// Guided onboarding flow for staging a Sora Nexus observer configuration
     Wizard(wizard::Args),
     /// Guided disposable local devnet flow for generating peers, configs, genesis, and scripts
     LocalnetWizard(localnet_tui::LocalnetWizardArgs),
@@ -156,7 +160,7 @@ enum Command {
     #[clap(subcommand)]
     Advanced(AdvancedCommand),
 }
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 enum AdvancedCommand {
     /// Generate per-client CLI configs from a base client.toml
     #[command(name = "client-configs")]
@@ -478,10 +482,40 @@ mod tests {
         )
     }
     #[test]
-    fn keys_owner_only_output_is_a_distinct_format() {
+    fn keys_requires_owner_only_custody_output() {
         assert!(parse("kagami keys --out-dir ./custody").is_ok());
+        assert!(parse("kagami keys").is_err());
         assert!(parse("kagami keys --out-dir ./custody --compact").is_err());
         assert!(parse("kagami keys --out-dir ./custody --json").is_err());
+        assert!(parse("kagami keys --out-dir ./custody --private-key deadbeef").is_err());
+        assert!(parse("kagami keys --json --json-mh-prefixed").is_err());
+    }
+    #[test]
+    fn genesis_sign_accepts_only_file_backed_private_keys() {
+        assert!(
+            parse("kagami genesis sign ./genesis.json --private-key-file ./genesis.private_key")
+                .is_ok()
+        );
+        assert!(
+            parse("kagami genesis sign ./genesis.json --private-key deadbeef").is_err(),
+            "raw private-key argv input must remain retired"
+        );
+        assert!(
+            parse("kagami genesis sign ./genesis.json --seed-hex 1111111111111111111111111111111111111111111111111111111111111111")
+                .is_err(),
+            "raw signing seeds must remain retired"
+        );
+        assert!(
+            parse("kagami genesis sign ./genesis.json --private-key-file ./genesis.private_key --algorithm ed25519")
+                .is_err(),
+            "the canonical private-key record must be the only algorithm source"
+        );
+        assert!(
+            parse("kagami genesis sign ./genesis.json --private-key-file ./genesis.private_key --consensus-mode npos")
+                .is_err(),
+            "the canonical manifest must be the only consensus-mode source"
+        );
+        assert!(parse("kagami genesis sign ./genesis.json").is_err());
     }
     #[test]
     fn advanced_subcommands_parse() {
@@ -515,6 +549,7 @@ mod tests {
         assert!(parse("kagami kura ./store print").is_err());
         assert!(parse("kagami client-configs --base-config ./client.toml --names alice").is_err());
         assert!(parse("kagami markdown-help").is_err());
+        assert!(parse("kagami genesis pop --algorithm bls_normal").is_err());
     }
     #[test]
     fn checked_in_markdown_help_matches_generated_help() {

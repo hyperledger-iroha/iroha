@@ -17,7 +17,6 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami genesis generate synthetic`↴](#kagami-genesis-generate-synthetic)
 * [`kagami genesis validate`↴](#kagami-genesis-validate)
 * [`kagami genesis validate-prepared`↴](#kagami-genesis-validate-prepared)
-* [`kagami genesis pop`↴](#kagami-genesis-pop)
 * [`kagami genesis embed-pop`↴](#kagami-genesis-embed-pop)
 * [`kagami genesis normalize`↴](#kagami-genesis-normalize)
 * [`kagami kagemusha`↴](#kagami-kagemusha)
@@ -57,17 +56,17 @@ Task-first Iroha operator tooling for guided setup, local devnets, genesis work,
 
 Common tasks:
   kagami localnet-wizard
-  kagami wizard --profile nexus
+  kagami wizard
   kagami localnet --out-dir ./localnet
   kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml
   kagami keys --out-dir ./key-custody
-  kagami keys --algorithm bls_normal --pop --json
+  kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody
   kagami advanced markdown-help
 
 
 ###### **Subcommands:**
 
-* `wizard` — Guided node/bootstrap flow for configuring a peer against an existing network profile
+* `wizard` — Guided onboarding flow for staging a Sora Nexus observer configuration
 * `localnet-wizard` — Guided disposable local devnet flow for generating peers, configs, genesis, and scripts
 * `localnet` — Generate a bare-metal local network: genesis, per-peer configs, client config, and scripts
 * `docker` — Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
@@ -91,35 +90,25 @@ Common tasks:
 
 ## `kagami wizard`
 
-Guided node/bootstrap flow for configuring a peer against an existing network profile
+Guided onboarding flow for staging a Sora Nexus observer configuration
 
 **Usage:** `kagami wizard [OPTIONS]`
 
 ###### **Options:**
 
-* `--profile <PROFILE>` — Optional preset profile; if omitted, the wizard prompts for one
-
-  Possible values:
-  - `local`:
-    Canonical local single-lane profile
-  - `nexus`:
-    Sora Nexus (mainnet)
-
 * `--output-dir <PATH>` — Directory where generated config/genesis files will be written
 
   Default value: `wizard-output`
 * `--non-interactive` — Run non-interactively, accepting defaults for prompts that are not supplied via flags
-* `--chain-id <CHAIN>` — Override the default chain identifier
-* `--p2p-host <HOST>` — Override the public P2P host/IP advertised for this peer
+* `--p2p-host <HOST>` — Override the public P2P host/IP advertised for this generated observer
 * `--p2p-port <PORT>` — Override the public P2P port for this peer
-* `--torii-host <HOST>` — Override the Torii host/IP advertised for this peer
-* `--torii-port <PORT>` — Override the Torii port for this peer
+* `--torii-port <PORT>` — Override the local Torii listener port for this peer
 * `--relay-mode <RELAY_MODE>` — Override the relay mode instead of prompting interactively
 
   Possible values: `disabled`, `hub`, `spoke`, `assist`
 
 * `--relay-hub-address <HOST:PORT>` — Relay hub addresses (`host:port`), repeat once per hub when relay mode uses them
-* `--trusted-peers <PEERS>` — Override the bootstrap peer (`pubkey@host:port`). Comma-separated for multiple entries
+* `--trusted-peers <PEERS>` — Trusted roster (`pubkey` or `pubkey@host:port`); include a reachable address without a relay
 * `--trusted-peers-pop <POPS>` — Comma-separated PoP entries for trusted peers (`pubkey=pop_hex`)
 
 
@@ -143,10 +132,9 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 * `-p`, `--peers <COUNT>` — Number of peers to generate (minimum four)
 
   Default value: `4`
-* `-s`, `--seed <SEED>` — Optional UTF-8 seed for deterministic keys
-* `--fresh-random-keys` — Generate every private key from a fresh OS-random, process-local seed.
+* `-s`, `--seed <SEED>` — Optional UTF-8 seed for deterministic development keys.
 
-   The seed is never accepted through argv, written to the generated bundle, or printed. This mode is intended for real first-release custody; use `--seed` only for reproducible development fixtures.
+   Omit this option to generate independent keys from operating-system entropy.
 * `--chain-id <CHAIN_ID>` — Canonical chain identifier written into genesis, peer configs, and the client config
 
   Default value: `00000000-0000-0000-0000-000000000000`
@@ -187,7 +175,7 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
   Default value: `false`
 * `--asset-definition-id <ASSET_DEFINITION_ID>` — Register additional asset definition IDs owned by the generated client signer. Repeat the flag to register more than one asset definition. A localnet reserve is minted to the generated client signer for each requested asset definition
 * `--block-cadence-ms <MILLISECONDS>` — Override the immutable signed block cadence in milliseconds. Leave unset to use the one-second localnet cadence
-* `--consensus-mode <MODE>` — Consensus mode to emit in genesis/configs. Defaults to `permissioned` for generic localnets. Sora profile localnets and perf profiles require `npos`. Sora profile localnets require `npos` because the global merge ledger is NPoS
+* `--consensus-mode <MODE>` — Consensus mode to emit in genesis/configs. Defaults to `permissioned` for generic localnets. Sora profile localnets and perf profiles require `npos`
 
   Possible values: `permissioned`, `npos`
 
@@ -225,21 +213,21 @@ Generate validator-only Docker Compose from a prepared bundle or explicit dev se
 
    By default, the image is pulled from Docker Hub if not cached. Pass the `--build` option to build the image from a Dockerfile instead.
 
-   **Note**: Swarm only guarantees that the Docker Compose configuration it generates is compatible with the same Git revision it is built from itself. Therefore, if the specified image is not compatible with the version of Swarm you are running, the generated configuration might not work.
+   The image must be built from the same Git revision as Kagami.
 * `-b`, `--build <DIR>` — Build the image from the Dockerfile in the specified directory. Do not rebuild if the image has been cached.
 
    The provided path is resolved relative to the current working directory.
 * `--no-cache` — Always pull or rebuild the image even if it is cached locally
 * `-o`, `--out-file <FILE>` — Path to the target Compose configuration file.
 
+   The file must be outside `--config-dir` and is published atomically.
+
    If the file exists, the app will prompt its overwriting. If the TTY is not interactive, the app will stop execution with a non-zero exit code. To overwrite the file anyway, pass the `--force` flag.
 * `-P`, `--print` — Print the generated configuration to stdout instead of writing it to the target file.
 
    Note that the target path still needs to be provided, as it is used to resolve paths.
 * `-F`, `--force` — Overwrite the target file if it already exists
-* `--no-banner` — Do not include the banner with the generation notice in the file.
-
-   The banner includes the seed to help with reproducibility.
+* `--no-banner` — Do not include the banner with the generation notice in the file
 
 
 
@@ -247,7 +235,7 @@ Generate validator-only Docker Compose from a prepared bundle or explicit dev se
 
 Generate cryptographic key pairs and optional validator Proofs-of-Possession
 
-**Usage:** `kagami keys [OPTIONS]`
+**Usage:** `kagami keys [OPTIONS] --out-dir <DIR>`
 
 ###### **Options:**
 
@@ -257,19 +245,13 @@ Generate cryptographic key pairs and optional validator Proofs-of-Possession
 
   Possible values: `ed25519`, `secp256k1`, `ml-dsa`, `bls_normal`, `bls_small`
 
-* `-p`, `--private-key <PRIVATE_KEY>` — A private key to generate the key-pair from
-
-   `--private-key` specifies the payload of the private key, while `--algorithm` specifies its algorithm.
 * `--seed-hex <HEX>` — A 32-byte secret key-generation seed encoded as 64 hexadecimal characters.
 
    This is for reproducible fixtures. Omit it for OS-random production keys.
-* `-j`, `--json` — Output the key-pair in JSON format
-* `--json-mh-prefixed` — Use algorithm-prefixed multihash strings in JSON (e.g., "ml-dsa:...")
-* `-c`, `--compact` — Output the key-pair without additional text
 * `--out-dir <DIR>` — Write the key pair into a new owner-only custody directory.
 
    The directory must not contain any existing entries. Files are written as `public.key` and `private.key`; `--pop` also writes `pop.hex`. The private key never passes through standard output.
-* `--pop` — Also output a BLS Proof-of-Possession (PoP) for this key (BLS-normal only). Printed as hex in JSON or plain hex in compact mode
+* `--pop` — Also output a BLS Proof-of-Possession (PoP) for this key (BLS-normal only). Written as `pop.hex` in the custody directory
 
 
 
@@ -285,7 +267,6 @@ Commands related to genesis
 * `generate` — Generate a genesis configuration and standard-output in JSON format
 * `validate` — Validate a genesis JSON file and report invalid identifiers
 * `validate-prepared` — Verify one exact bound-manifest/signed-genesis/signer/hash bundle
-* `pop` — Produce a BLS PoP (Proof-of-Possession) for a consensus key (BLS-normal)
 * `embed-pop` — Embed one or more PoPs into a genesis JSON manifest (inline `topology` entries carrying `pop_hex`)
 * `normalize` — Expand a genesis manifest and show the final ordered transactions
 
@@ -295,7 +276,7 @@ Commands related to genesis
 
 Sign the genesis block
 
-**Usage:** `kagami genesis sign [OPTIONS] <GENESIS_FILE>`
+**Usage:** `kagami genesis sign [OPTIONS] --private-key-file <PATH> <GENESIS_FILE>`
 
 ###### **Arguments:**
 
@@ -303,7 +284,7 @@ Sign the genesis block
 
 ###### **Options:**
 
-* `-o`, `--out-file <PATH>` — Path to signed genesis output file in Norito format (stdout by default)
+* `-o`, `--out-file <PATH>` — Path to signed genesis output file in canonical Norito wire format (stdout by default)
 * `--bound-manifest-out <PATH>` — Persist the exact config-bound genesis manifest used to build the signed block. May point to `GENESIS_FILE` to replace the input only after binding succeeds
 * `--expected-hash-out <PATH>` — Write the canonical checked NetworkId derived from the exact signed consensus-header hash as one line.
 
@@ -312,25 +293,14 @@ Sign the genesis block
 
    The final unique topology must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31.
 * `--peer-pop <PEER_POPS>` — Embed one or more PoPs into the same transaction as `--topology`. Repeatable flag: `--peer-pop <public_key=pop_hex>`
-* `--private-key <HEX>` — Private key hex (multihash payload, not prefixed) that matches the genesis public key
 * `--private-key-file <PATH>` — Owner-held mode-0600 file containing one canonical private-key multihash
 * `--expected-public-key <PUBLIC_KEY>` — Public key that the selected private key must derive.
 
    Use this when the verifier key is distributed separately from the owner-held signing key, such as through container secrets.
-* `--seed-hex <HEX>` — A 32-byte secret genesis key-generation seed encoded as 64 hexadecimal characters.
-
-   This is a testing convenience. Production operators should prefer an owner-held private-key file.
 * `--creation-time-ms <MILLISECONDS>` — Deterministic genesis transaction creation-time base in Unix milliseconds.
 
    Omit this for a fresh wall-clock timestamp. Fixture generators should set it so repeated signing produces identical canonical wire bytes.
-* `--algorithm <ALGORITHM>` — Algorithm of the genesis key (must match the genesis public key)
-
-  Default value: `ed25519`
 * `--config <PATH>` — Optional peer config TOML used to derive the DA proof-policy bundle embedded into genesis
-* `--consensus-mode <MODE>` — Select the consensus mode to stamp into the manifest (optional override)
-
-  Possible values: `permissioned`, `npos`
-
 
 
 
@@ -440,26 +410,6 @@ Verify one exact bound-manifest/signed-genesis/signer/hash bundle
 * `--peer-config <PATH>` — Effective validator configs whose complete roster and policy must reproduce the signed context. Repeat exactly four times in `taira-validator-1` through `-4` order
 * `--genesis-public-key <PUBLIC_KEY>` — Public key of the independently provisioned genesis signer
 * `--expected-hash <HASH>` — Exact signed genesis block-header hash
-
-
-
-## `kagami genesis pop`
-
-Produce a BLS PoP (Proof-of-Possession) for a consensus key (BLS-normal)
-
-**Usage:** `kagami genesis pop [OPTIONS]`
-
-###### **Options:**
-
-* `--algorithm <ALGORITHM>` — Algorithm to use; must be `bls_normal` for consensus PoP
-
-  Default value: `bls_normal`
-* `--private-key <PRIVATE_KEY>` — Private key hex (multihash payload, not prefixed)
-* `--seed-hex <HEX>` — A 32-byte secret key-generation seed encoded as 64 hexadecimal characters.
-
-   This is for reproducible fixtures. Omit it for OS-random validator keys.
-* `--json` — Output JSON instead of plain text
-* `--expose-private-key` — Print the private key in plain-text output (disabled by default)
 
 
 

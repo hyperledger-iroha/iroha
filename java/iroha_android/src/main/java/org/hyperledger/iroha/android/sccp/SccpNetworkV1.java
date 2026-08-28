@@ -15,7 +15,9 @@ public enum SccpNetworkV1 {
   // Tags 6 through 9 are permanently reserved for retired prerelease profiles.
   TRON_MAINNET("tron-mainnet", 10, 5, true),
   TRON_NILE("tron-nile", 11, 5, false),
-  TRON_SHASTA("tron-shasta", 12, 5, false);
+  TRON_SHASTA("tron-shasta", 12, 5, false),
+  TON_MAINNET("ton-mainnet", 14, 4, true),
+  TON_TESTNET("ton-testnet", 15, 4, false);
 
   private static final Map<String, SccpNetworkV1> BY_PROFILE;
   private static final Map<Integer, SccpNetworkV1> BY_TAG;

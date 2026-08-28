@@ -2059,7 +2059,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "ci/check_privacy_js_sdk.sh",
         "ci/check_privacy_jvm_sdk.sh",
         "ci/check_privacy_swift_sdk.sh",
-        "scripts/check_native_sdk_abi22_artifact.py",
+        "scripts/check_native_sdk_abi23_artifact.py",
         "scripts/check_privacy_python_witness_boundary.py",
         "scripts/compute_workspace_source_manifest.py",
         "scripts/tests/check_privacy_jvm_native_gate_test.py",

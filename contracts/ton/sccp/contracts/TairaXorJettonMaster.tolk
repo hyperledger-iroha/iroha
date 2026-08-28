@@ -37,6 +37,9 @@ fun assertMasterConfiguration(storage: MasterStorage): BridgeConfig {
         config.routeRevision != 0 && config.tairaToTonMultiplier == SCCP_TAIRA_TO_TON_MULTIPLIER
     ) throw SccpErrors.InvalidConfiguration;
     assert (
+        config.maxWrappedSupply > 0 && storage.totalSupply <= config.maxWrappedSupply
+    ) throw SccpErrors.InvalidConfiguration;
+    assert (
         hashes.sourceLaneHash == sccpLaneHash(config.sourceLaneBytes) &&
         hashes.destinationLaneHash == sccpLaneHash(config.destinationLaneBytes) &&
         finalityTail.verifyingKey.hash() == finalityTail.verifyingKeyCellHash &&
@@ -48,7 +51,7 @@ fun assertMasterConfiguration(storage: MasterStorage): BridgeConfig {
 fun dispatchWalletMint(record: MasterMintRecord, messageId: uint256) {
     val walletCode = tairaXorJettonWalletCompiledCode();
     val mint = createMessage({
-        bounce: BounceMode.Only256BitsOfBody,
+        bounce: BounceMode.RichBounce,
         dest: calcDeployedJettonWallet(record.recipient, contract.getAddress(), walletCode),
         value: SCCP_OPERATION_VALUE,
         body: SccpWalletMint {
@@ -62,40 +65,46 @@ fun dispatchWalletMint(record: MasterMintRecord, messageId: uint256) {
     mint.send(SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
 }
 
-fun sendMintAck(destination: address, record: MasterMintRecord, messageId: uint256) {
+fun sendMintAck(
+    destination: address,
+    record: MasterMintRecord,
+    messageId: uint256,
+    requestQueryId: uint64,
+) {
     val ack = createMessage({
         bounce: BounceMode.NoBounce,
         dest: destination,
         value: 0,
-        body: SccpMasterMintAck {
-            queryId: record.queryId,
-            messageId,
-            recipient: record.recipient,
-            jettonAmount: record.jettonAmount,
-            payloadHash: record.payloadHash,
-        },
+        body: sccpMasterMintAckForRequest(record, messageId, requestQueryId),
     });
     ack.send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS);
 }
 
 fun onBouncedMessage(in: InMessageBounced) {
-    in.bouncedBody.skipBouncedPrefix();
-    val msg = lazy SccpWalletMint.fromSlice(in.bouncedBody);
-    var storage = MasterStorage.load();
-    var replay = storage.replay.load();
+    val rich = lazy RichBounceBody.fromSlice(in.bouncedBody);
+    val msg = lazy SccpWalletMint.fromSlice(rich.originalBody.beginParse());
+    val storage = MasterStorage.load();
+    val replay = storage.replay.load();
     assert (replay.mints.exists(msg.messageId)) throw SccpErrors.UnknownPendingOperation;
     val record = replay.mints.mustGet(msg.messageId).load();
-    if (
-        record.status == SCCP_PENDING_MINT && record.queryId == msg.queryId &&
+    assert (
+        in.senderAddress ==
+        calcAddressOfJettonWallet(
+            record.recipient,
+            contract.getAddress(),
+            tairaXorJettonWalletCompiledCode(),
+        )
+    ) throw SccpErrors.InvalidCallback;
+    assert (
+        (record.status == SCCP_PENDING_MINT || record.status == SCCP_COMPLETED) &&
+        record.queryId == msg.queryId &&
+        record.bridgeAddress == msg.bridgeAddress &&
         record.jettonAmount == msg.jettonAmount &&
         record.payloadHash == msg.payloadHash
-    ) {
-        assert (storage.totalSupply >= msg.jettonAmount) throw SccpErrors.BalanceError;
-        storage.totalSupply -= msg.jettonAmount;
-        replay.mints.delete(msg.messageId);
-        storage.replay = replay.toCell();
-        storage.save();
-    }
+    ) throw SccpErrors.InvalidCallback;
+    // A bounce proves only that one asynchronous attempt failed. Another exact
+    // retry may already have succeeded, so supply and replay state remain
+    // reserved until an authenticated wallet acknowledgement completes them.
 }
 
 fun onInternalMessage(in: InMessage) {
@@ -141,6 +150,13 @@ fun onInternalMessage(in: InMessage) {
 
             var replay = storage.replay.load();
             if (!replay.mints.exists(messageId)) {
+                assert (
+                    sccpMintFitsSupplyCap(
+                        storage.totalSupply,
+                        msg.jettonAmount,
+                        config.maxWrappedSupply,
+                    )
+                ) throw SccpErrors.SupplyCapExceeded;
                 val record: MasterMintRecord = {
                     status: SCCP_PENDING_MINT,
                     queryId: msg.queryId,
@@ -162,7 +178,7 @@ fun onInternalMessage(in: InMessage) {
                     record.payloadHash == tail.payloadHash
                 ) throw SccpErrors.Replay;
                 if (record.status == SCCP_COMPLETED) {
-                    sendMintAck(in.senderAddress, record, messageId);
+                    sendMintAck(in.senderAddress, record, messageId, msg.queryId);
                 } else {
                     dispatchWalletMint(record, messageId);
                 }
@@ -190,7 +206,7 @@ fun onInternalMessage(in: InMessage) {
             replay.mints.set(msg.messageId, record.toCell());
             storage.replay = replay.toCell();
             storage.save();
-            sendMintAck(msg.bridgeAddress, record, msg.messageId);
+            sendMintAck(msg.bridgeAddress, record, msg.messageId, record.queryId);
         }
 
         SccpMasterBurn => {
@@ -205,8 +221,9 @@ fun onInternalMessage(in: InMessage) {
                 )
             ) throw SccpErrors.NotValidWallet;
             val tail = msg.tail.load();
+            val replayId = sccpMasterBurnReplayId(msg.bridgeAddress, msg.messageId);
             var replay = storage.replay.load();
-            if (!replay.burns.exists(msg.messageId)) {
+            if (!replay.burns.exists(replayId)) {
                 assert (storage.totalSupply >= msg.jettonAmount) throw SccpErrors.BalanceError;
                 val record: MasterBurnRecord = {
                     status: SCCP_COMPLETED,
@@ -217,11 +234,11 @@ fun onInternalMessage(in: InMessage) {
                     sourceEventDigest: tail.sourceEventDigest,
                 };
                 storage.totalSupply -= msg.jettonAmount;
-                replay.burns.set(msg.messageId, record.toCell());
+                replay.burns.set(replayId, record.toCell());
                 storage.replay = replay.toCell();
                 storage.save();
             } else {
-                val record = replay.burns.mustGet(msg.messageId).load();
+                val record = replay.burns.mustGet(replayId).load();
                 assert (
                     record.status == SCCP_COMPLETED && record.bridgeAddress == msg.bridgeAddress &&
                     record.jettonAmount == msg.jettonAmount &&

@@ -1,13 +1,18 @@
 //! Runtime orchestration for the relay daemon.
 #![allow(unexpected_cfgs)]
 use bytes::Bytes;
-#[cfg(test)]
-use iroha_crypto::soranet::pow::Parameters as PowParameters;
 use iroha_crypto::{
     Algorithm, KeyPair, PrivateKey, PublicKey,
     soranet::{
         certificate::{
             RelayCertificateBundleV2, leaf_certificate_spki_sha256, select_vpn_endpoint,
+        },
+        constant_rate::{
+            CONSTANT_RATE_CELL_BYTES, CONSTANT_RATE_MAX_PAYLOAD_BYTES,
+            CellClass as AuthenticatedCellClass, ConstantRateError, ConstantRateOpener,
+            ConstantRateSealer, FixedRateScheduler as AuthenticatedFixedRateScheduler, MuxChannel,
+            MuxFlags, MuxFrame, QueueDepths as AuthenticatedQueueDepths,
+            codec as constant_rate_codec,
         },
         handshake::{
             ClientHelloMetadata, DEFAULT_TLS_SERVER_NAME, HandshakeSuite,
@@ -16,8 +21,8 @@ use iroha_crypto::{
             SessionSecrets, inspect_client_hello, process_client_hello, update_suite_list,
         },
         pow::{
-            self, SignedTicket, Ticket as PowTicket, TicketRevocationStore,
-            TicketRevocationStoreLimits,
+            self, SignedTicket, Ticket as PowTicket, TicketRevocationInsertStatus,
+            TicketRevocationStore, TicketRevocationStoreLimits,
         },
         puzzle::{self, ChallengeBinding as PuzzleBinding},
         record::{RecordEndpoint, RecordLayer, RecordStreamContext, RecordStreamKind},
@@ -28,17 +33,19 @@ use iroha_crypto::{
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt::{self, Write as _},
     fs,
     io::{self, Write as _},
     net::SocketAddr,
     path::{Path, PathBuf},
+    pin::Pin,
     str::FromStr,
     sync::{
         Arc, LazyLock, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
     },
+    task::{Context, Poll},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
@@ -118,10 +125,13 @@ use sha2::{Digest as _, Sha256};
 use soranet_record_io::{RecordReader, RecordWriter};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{
+        AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf,
+        ReadHalf as TokioReadHalf, WriteHalf as TokioWriteHalf,
+    },
     net::{TcpListener, UnixStream},
-    sync::{Mutex, OwnedSemaphorePermit, Semaphore},
-    task::JoinHandle,
+    sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc},
+    task::{JoinHandle, JoinSet},
     time::{Instant as TokioInstant, MissedTickBehavior, interval, sleep, timeout},
 };
 use tracing::{debug, info, warn};
@@ -146,6 +156,65 @@ struct VpnBackendBridgeContext<'a> {
     expected_circuit_id: [u8; 16],
     expected_flow_label: VpnFlowLabelV1,
     mtu: usize,
+}
+
+enum VpnTunnelWriter {
+    Quic(RecordWriter<SendStream>),
+    Strict(tokio::io::WriteHalf<DuplexStream>),
+}
+
+impl VpnTunnelWriter {
+    fn quic_send(&self) -> Option<&SendStream> {
+        match self {
+            Self::Quic(writer) => Some(writer.get_ref()),
+            Self::Strict(_) => None,
+        }
+    }
+}
+
+impl AsyncWrite for VpnTunnelWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            Self::Quic(writer) => Pin::new(writer).poll_write(context, buffer),
+            Self::Strict(writer) => Pin::new(writer).poll_write(context, buffer),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Quic(writer) => Pin::new(writer).poll_flush(context),
+            Self::Strict(writer) => Pin::new(writer).poll_flush(context),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Quic(writer) => Pin::new(writer).poll_shutdown(context),
+            Self::Strict(writer) => Pin::new(writer).poll_shutdown(context),
+        }
+    }
+}
+
+enum VpnTunnelReader {
+    Quic(RecordReader<RecvStream>),
+    Strict(tokio::io::ReadHalf<DuplexStream>),
+}
+
+impl AsyncRead for VpnTunnelReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Quic(reader) => Pin::new(reader).poll_read(context, buffer),
+            Self::Strict(reader) => Pin::new(reader).poll_read(context, buffer),
+        }
+    }
 }
 #[derive(Clone)]
 struct AdminResources {
@@ -549,6 +618,270 @@ fn abort_constant_rate_task(task: Option<JoinHandle<()>>) {
     if let Some(handle) = task {
         handle.abort();
     }
+}
+
+const STRICT_CONSTANT_RATE_CLOSE_CODE: u32 = 0x534e_01;
+const STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS: u32 = 8;
+const QUIC_DEPENDENCY_BLOCK_REASON: &str = "SoraNet relay QUIC is unavailable with locked quinn-proto 0.11.15: released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 or later and requalify QUIC before re-enabling it";
+
+fn validate_shipping_quinn_dependency() -> Result<(), RelayError> {
+    Err(RelayError::Quic(QUIC_DEPENDENCY_BLOCK_REASON.to_owned()))
+}
+
+struct StrictMuxTransport {
+    outbound: mpsc::Sender<MuxFrame>,
+    inbound: mpsc::Receiver<MuxFrame>,
+    maximum_lanes: usize,
+}
+
+type StrictLaneKey = (MuxChannel, u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StrictMuxConsumer {
+    Measurement,
+    Exit,
+    Vpn,
+}
+
+fn strict_mux_consumer(channel: MuxChannel) -> Option<(AuthenticatedCellClass, StrictMuxConsumer)> {
+    match channel {
+        MuxChannel::Cover => None,
+        MuxChannel::Measurement => Some((
+            AuthenticatedCellClass::Control,
+            StrictMuxConsumer::Measurement,
+        )),
+        MuxChannel::Vpn => Some((AuthenticatedCellClass::Interactive, StrictMuxConsumer::Vpn)),
+        MuxChannel::Application | MuxChannel::Exit => {
+            Some((AuthenticatedCellClass::Bulk, StrictMuxConsumer::Exit))
+        }
+    }
+}
+
+fn strict_lane_task_budget(maximum_lanes: usize) -> usize {
+    maximum_lanes.saturating_mul(2)
+}
+
+#[derive(Debug, Error)]
+enum StrictLaneTaskError {
+    #[error("strict constant-rate lane worker failed: {0}")]
+    Join(#[from] tokio::task::JoinError),
+    #[error("strict constant-rate lane worker lost ownership for {channel:?} lane {lane_id}")]
+    Ownership { channel: MuxChannel, lane_id: u64 },
+}
+
+fn reap_completed_strict_lane_tasks(
+    tasks: &mut JoinSet<StrictLaneKey>,
+    task_owners: &mut HashMap<StrictLaneKey, usize>,
+) -> Result<(), StrictLaneTaskError> {
+    while let Some(result) = tasks.try_join_next() {
+        let key = result?;
+        let remove = {
+            let Some(remaining) = task_owners.get_mut(&key) else {
+                return Err(StrictLaneTaskError::Ownership {
+                    channel: key.0,
+                    lane_id: key.1,
+                });
+            };
+            let Some(next) = remaining.checked_sub(1) else {
+                return Err(StrictLaneTaskError::Ownership {
+                    channel: key.0,
+                    lane_id: key.1,
+                });
+            };
+            *remaining = next;
+            next == 0
+        };
+        if remove {
+            task_owners.remove(&key);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Error)]
+enum StrictConstantRateRuntimeError {
+    #[error("QUIC DATAGRAM support is unavailable or smaller than the 1024-byte strict cell")]
+    DatagramUnavailable,
+    #[error("strict constant-rate codec or scheduler rejected a frame: {0}")]
+    Protocol(#[from] ConstantRateError),
+    #[error("strict constant-rate outgoing producer queue closed")]
+    OutgoingQueueClosed,
+    #[error("strict constant-rate incoming consumer queue is full or closed")]
+    IncomingQueueUnavailable,
+    #[error("strict constant-rate DATAGRAM send failed: {0}")]
+    Send(#[from] quinn::SendDatagramError),
+    #[error("strict constant-rate DATAGRAM receive failed: {0}")]
+    Receive(#[from] quinn::ConnectionError),
+    #[error("strict constant-rate receiver observed no cell within {deadline:?}")]
+    ReceiveTickMissing { deadline: Duration },
+    #[error("strict constant-rate sender missed a fixed-rate tick by {lateness:?}")]
+    TickMissed { lateness: Duration },
+}
+
+fn ensure_strict_datagram_available(
+    connection: &Connection,
+) -> Result<(), StrictConstantRateRuntimeError> {
+    if connection
+        .max_datagram_size()
+        .is_none_or(|maximum| maximum < CONSTANT_RATE_CELL_BYTES)
+    {
+        return Err(StrictConstantRateRuntimeError::DatagramUnavailable);
+    }
+    Ok(())
+}
+
+fn spawn_strict_constant_rate_transport(
+    connection: Connection,
+    spec: ConstantRateProfileSpec,
+    metrics: Arc<Metrics>,
+    record_layer: &RecordLayer,
+) -> Result<(JoinHandle<()>, StrictMuxTransport), StrictConstantRateRuntimeError> {
+    ensure_strict_datagram_available(&connection)?;
+    let (sealer, opener) = constant_rate_codec(record_layer)?;
+    let maximum_lanes = usize::from(spec.lane_cap.max(1));
+    let tick_duration = milliseconds_to_duration(spec.tick_millis);
+    let receive_deadline = strict_constant_rate_receive_deadline(tick_duration);
+    let queue_capacity = maximum_lanes.saturating_mul(4);
+    let (outbound, outbound_rx) = mpsc::channel(queue_capacity);
+    let (inbound_tx, inbound) = mpsc::channel(queue_capacity);
+    let supervisor_connection = connection.clone();
+    let task = tokio::spawn(async move {
+        let send = run_strict_constant_rate_sender(
+            connection.clone(),
+            spec,
+            Arc::clone(&metrics),
+            sealer,
+            outbound_rx,
+        );
+        let receive = run_strict_constant_rate_receiver(
+            connection.clone(),
+            opener,
+            inbound_tx,
+            maximum_lanes,
+            receive_deadline,
+        );
+        tokio::pin!(send);
+        tokio::pin!(receive);
+        let error = tokio::select! {
+            result = &mut send => result.err(),
+            result = &mut receive => result.err(),
+        };
+        if let Some(error) = error {
+            warn!(%error, "strict constant-rate transport failed closed");
+        }
+        supervisor_connection.close(
+            VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+            b"strict constant-rate transport failure",
+        );
+    });
+    Ok((
+        task,
+        StrictMuxTransport {
+            outbound,
+            inbound,
+            maximum_lanes,
+        },
+    ))
+}
+
+async fn run_strict_constant_rate_sender(
+    connection: Connection,
+    spec: ConstantRateProfileSpec,
+    metrics: Arc<Metrics>,
+    mut sealer: ConstantRateSealer,
+    mut outbound: mpsc::Receiver<MuxFrame>,
+) -> Result<(), StrictConstantRateRuntimeError> {
+    let tick_duration = milliseconds_to_duration(spec.tick_millis);
+    let queue_capacity = usize::from(spec.lane_cap.max(1)).saturating_mul(4);
+    let mut scheduler =
+        AuthenticatedFixedRateScheduler::new(queue_capacity, usize::from(spec.lane_cap.max(1)));
+    let mut ticker = interval(tick_duration);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut cover_sent = 0_u64;
+    let mut total_sent = 0_u64;
+    loop {
+        tokio::select! {
+            biased;
+            scheduled = ticker.tick() => {
+                let lateness = TokioInstant::now().saturating_duration_since(scheduled);
+                if lateness >= tick_duration {
+                    return Err(StrictConstantRateRuntimeError::TickMissed { lateness });
+                }
+                if connection.datagram_send_buffer_space() < CONSTANT_RATE_CELL_BYTES {
+                    return Err(StrictConstantRateRuntimeError::DatagramUnavailable);
+                }
+                let depths = scheduler.queue_depths();
+                let frame = scheduler.next_frame();
+                let is_cover = frame.channel == MuxChannel::Cover;
+                let payload = sealer.seal(&frame)?.encode();
+                connection.send_datagram(Bytes::copy_from_slice(&payload))?;
+                total_sent = total_sent.saturating_add(1);
+                if is_cover {
+                    cover_sent = cover_sent.saturating_add(1);
+                }
+                record_authenticated_constant_rate_metrics(
+                    metrics.as_ref(),
+                    depths,
+                    cover_sent,
+                    total_sent,
+                );
+            }
+            frame = outbound.recv() => {
+                let Some(frame) = frame else {
+                    return Err(StrictConstantRateRuntimeError::OutgoingQueueClosed);
+                };
+                scheduler.enqueue(frame)?;
+            }
+        }
+    }
+}
+
+fn record_authenticated_constant_rate_metrics(
+    metrics: &Metrics,
+    queues: AuthenticatedQueueDepths,
+    cover_sent: u64,
+    total_sent: u64,
+) {
+    metrics.set_constant_rate_queue_depth(queues.total() as u64);
+    metrics.set_constant_rate_queue_depths(
+        queues.control as u64,
+        queues.interactive as u64,
+        queues.bulk as u64,
+    );
+    let cover_ratio = if total_sent == 0 {
+        1.0
+    } else {
+        cover_sent as f64 / total_sent as f64
+    };
+    metrics.set_constant_rate_dummy_ratio(cover_ratio);
+}
+
+async fn run_strict_constant_rate_receiver(
+    connection: Connection,
+    mut opener: ConstantRateOpener,
+    inbound: mpsc::Sender<MuxFrame>,
+    maximum_lanes: usize,
+    receive_deadline: Duration,
+) -> Result<(), StrictConstantRateRuntimeError> {
+    let mut lifecycle = iroha_crypto::soranet::constant_rate::MuxLifecycle::new(maximum_lanes);
+    loop {
+        let datagram = timeout(receive_deadline, connection.read_datagram())
+            .await
+            .map_err(|_| StrictConstantRateRuntimeError::ReceiveTickMissing {
+                deadline: receive_deadline,
+            })??;
+        let frame = opener.open(&datagram)?;
+        lifecycle.accept(&frame)?;
+        if frame.channel == MuxChannel::Cover {
+            continue;
+        }
+        inbound
+            .try_send(frame)
+            .map_err(|_| StrictConstantRateRuntimeError::IncomingQueueUnavailable)?;
+    }
+}
+fn strict_constant_rate_receive_deadline(tick_duration: Duration) -> Duration {
+    tick_duration.saturating_mul(STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS)
 }
 fn milliseconds_to_duration(millis: f64) -> Duration {
     let clamped = millis.max(1.0);
@@ -2349,17 +2682,6 @@ fn record_route_open_ingress_metrics(
             .record_vpn_control_ingress(bytes);
     }
 }
-fn record_route_open_egress_metrics(
-    vpn_adapter: Option<&VpnAdapter>,
-    vpn_session: Option<&VpnSessionHandle>,
-) {
-    let bytes = RouteOpenFrame::length() as u64;
-    if let Some(adapter) = vpn_adapter {
-        adapter.session().metrics().record_vpn_control_egress(bytes);
-    } else if let Some(session) = vpn_session {
-        session.session().metrics().record_vpn_control_egress(bytes);
-    }
-}
 /// Fully configured relay runtime ready to serve traffic.
 pub struct RelayRuntime {
     config: RelayConfig,
@@ -2696,10 +3018,29 @@ fn verify_and_consume_ticket(
     let mut state = replay_state
         .lock()
         .map_err(|_| HandshakeError::ReplayStore("ticket replay lock poisoned".to_owned()))?;
-    let consumed = pow::record_revocation(ticket, Some(&mut state.persisted), SystemTime::now())
-        .map_err(|error| match error {
-            pow::Error::RevocationStore(message) => HandshakeError::ReplayStore(message),
-            other => HandshakeError::Pow(other),
+    let now = SystemTime::now();
+    let consumed = state
+        .persisted
+        .revoke_ticket_payload(ticket, now)
+        .map_err(|error| HandshakeError::ReplayStore(error.to_string()))
+        .and_then(|outcome| match outcome.status {
+            TicketRevocationInsertStatus::Accepted => Ok(()),
+            TicketRevocationInsertStatus::Duplicate => Err(HandshakeError::Pow(pow::Error::Replay)),
+            TicketRevocationInsertStatus::Expired => {
+                let now_secs = now
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|error| HandshakeError::Puzzle(puzzle::Error::Clock(error)))?;
+                Err(HandshakeError::Puzzle(puzzle::Error::Expired(
+                    ticket.expires_at,
+                    now_secs.as_secs(),
+                )))
+            }
+            TicketRevocationInsertStatus::TtlExceeded => Err(HandshakeError::ReplayStore(
+                "revocation ttl exceeded configured maximum".to_owned(),
+            )),
+            TicketRevocationInsertStatus::Capacity => Err(HandshakeError::ReplayStore(
+                "ticket replay store at capacity".to_owned(),
+            )),
         });
     state.pending.remove(&fingerprint);
     consumed
@@ -3447,6 +3788,9 @@ impl RelayRuntime {
     }
     /// Start the relay control/data planes until shutdown is requested.
     pub async fn run(self) -> Result<(), RelayError> {
+        // Reject before constructing the endpoint so vulnerable Quinn cannot
+        // bind a socket or receive unauthenticated traffic.
+        validate_shipping_quinn_dependency()?;
         let listen_addr = self.config.listen_addr()?;
         let admin_addr = self.config.admin_addr()?;
         let mode = self.config.mode;
@@ -4158,21 +4502,56 @@ impl RelayRuntime {
                     Some(active_len),
                 );
                 let lease = reservation.take().map(|res| res.into_lease());
-                let padding_task = spawn_padding_task(
-                    connection.clone(),
-                    negotiated.padding,
-                    padding.max_idle_millis,
-                    remote,
-                    Arc::clone(&context.metrics),
-                    context.padding_budget.clone(),
-                );
-                let constant_rate_task = negotiated.constant_rate.map(|_| {
-                    spawn_constant_rate_task(
+                let strict_constant_rate = negotiated
+                    .constant_rate
+                    .is_some_and(|capability| capability.mode == ConstantRateMode::Strict);
+                // Strict fixed-rate cells subsume the older independent padding
+                // loop. Running both would make packet timing payload-dependent.
+                let padding_task = if strict_constant_rate {
+                    None
+                } else {
+                    spawn_padding_task(
+                        connection.clone(),
+                        negotiated.padding,
+                        padding.max_idle_millis,
+                        remote,
+                        Arc::clone(&context.metrics),
+                        context.padding_budget.clone(),
+                    )
+                };
+                let (constant_rate_task, strict_mux) = if strict_constant_rate {
+                    match spawn_strict_constant_rate_transport(
                         connection.clone(),
                         context.lane_manager.profile_spec(),
                         Arc::clone(&context.metrics),
+                        record_layer.as_ref(),
+                    ) {
+                        Ok((task, transport)) => (Some(task), Some(transport)),
+                        Err(error) => {
+                            metrics.record_failure();
+                            warn!(%error, "strict constant-rate transport failed during circuit setup");
+                            abort_padding_task(padding_task);
+                            let _ = registry.remove(circuit_id);
+                            drop(lease);
+                            connection.close(
+                                VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                                b"strict constant-rate transport unavailable",
+                            );
+                            return;
+                        }
+                    }
+                } else {
+                    (
+                        negotiated.constant_rate.map(|_| {
+                            spawn_constant_rate_task(
+                                connection.clone(),
+                                context.lane_manager.profile_spec(),
+                                Arc::clone(&context.metrics),
+                            )
+                        }),
+                        None,
                     )
-                });
+                };
                 let performance = Arc::clone(&context.performance);
                 let incentives = context.incentives.clone();
                 let relay_id = context.relay_id;
@@ -4197,6 +4576,7 @@ impl RelayRuntime {
                     circuit_id,
                     padding_task,
                     constant_rate_task,
+                    strict_mux,
                     lease,
                     resources,
                     vpn_session,
@@ -4280,7 +4660,9 @@ impl RelayRuntime {
                 let millis = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
                 let pow_detail = match &error {
                     HandshakeError::Pow(pow_error) => Some(pow_failure_reason(pow_error)),
-                    HandshakeError::Puzzle(_) => Some(SoranetPowFailureReasonV1::InvalidSolution),
+                    HandshakeError::Puzzle(puzzle_error) => {
+                        Some(puzzle_failure_reason(puzzle_error))
+                    }
                     _ => None,
                 };
                 let reason = match &error {
@@ -4379,6 +4761,7 @@ impl RelayRuntime {
         circuit_id: u64,
         padding_task: Option<JoinHandle<()>>,
         constant_rate_task: Option<JoinHandle<()>>,
+        strict_mux: Option<StrictMuxTransport>,
         congestion_lease: Option<CongestionLease>,
         resources: MonitorCircuitResources,
         vpn_session: Option<VpnSessionHandle>,
@@ -4408,35 +4791,59 @@ impl RelayRuntime {
             connection.close(0u32.into(), b"vpn replay protection unavailable");
             return;
         }
-        let measurement_task = tokio::spawn(Self::ingest_measurement_streams(
-            connection.clone(),
-            measurement_resources,
-            remote,
-            Arc::clone(&record_layer),
-        ));
-        let exit_task = match (
-            resources.vpn.clone(),
-            vpn_session.clone(),
-            vpn_helper_ticket,
-        ) {
-            (Some(vpn), Some(session), Some(helper_ticket)) => {
-                tokio::spawn(Self::serve_vpn_backend_tunnel(
-                    connection.clone(),
-                    remote,
-                    vpn,
-                    session,
-                    helper_ticket,
-                    Arc::clone(&record_layer),
-                    resources.vpn_settlement_store.clone(),
-                ))
-            }
-            _ => tokio::spawn(Self::serve_exit_streams(
+        let (measurement_task, exit_task) = if let Some(strict_mux) = strict_mux {
+            let strict_connection = connection.clone();
+            let task = tokio::spawn(Self::serve_strict_mux(
+                strict_mux,
                 connection.clone(),
+                measurement_resources,
                 exit_resources,
                 remote,
+                resources.vpn.clone(),
                 vpn_session.clone(),
-                record_layer,
-            )),
+                vpn_helper_ticket,
+                resources.vpn_settlement_store.clone(),
+                Arc::clone(&record_layer),
+            ));
+            (
+                task,
+                tokio::spawn(async move {
+                    let _ = strict_connection.closed().await;
+                }),
+            )
+        } else {
+            let measurement_task = tokio::spawn(Self::ingest_measurement_streams(
+                connection.clone(),
+                measurement_resources,
+                remote,
+                Arc::clone(&record_layer),
+            ));
+            let exit_task = match (
+                resources.vpn.clone(),
+                vpn_session.clone(),
+                vpn_helper_ticket,
+            ) {
+                (Some(vpn), Some(session), Some(helper_ticket)) => {
+                    tokio::spawn(Self::serve_vpn_backend_tunnel(
+                        connection.clone(),
+                        remote,
+                        vpn,
+                        session,
+                        helper_ticket,
+                        Arc::clone(&record_layer),
+                        None,
+                        resources.vpn_settlement_store.clone(),
+                    ))
+                }
+                _ => tokio::spawn(Self::serve_exit_streams(
+                    connection.clone(),
+                    exit_resources,
+                    remote,
+                    vpn_session.clone(),
+                    record_layer,
+                )),
+            };
+            (measurement_task, exit_task)
         };
         let reason = connection.closed().await;
         abort_padding_task(padding_task);
@@ -4558,6 +4965,289 @@ impl RelayRuntime {
         }
         debug!(?reason, "SoraNet connection closed");
     }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn serve_strict_mux(
+        mut transport: StrictMuxTransport,
+        connection: Connection,
+        measurement_resources: MonitorCircuitResources,
+        exit_resources: ExitStreamResources,
+        remote: SocketAddr,
+        mut vpn: Option<Arc<VpnOverlay>>,
+        mut vpn_session: Option<VpnSessionHandle>,
+        mut vpn_helper_ticket: Option<VpnHelperTicketV1>,
+        vpn_settlement_store: Option<Arc<VpnSettlementStore>>,
+        record_layer: Arc<RecordLayer>,
+    ) {
+        let mut lanes: HashMap<(MuxChannel, u64), TokioWriteHalf<DuplexStream>> = HashMap::new();
+        let lane_task_budget = strict_lane_task_budget(transport.maximum_lanes);
+        let mut lane_tasks = JoinSet::new();
+        let mut lane_task_owners = HashMap::new();
+        loop {
+            let frame = tokio::select! {
+                frame = transport.inbound.recv() => {
+                    let Some(frame) = frame else {
+                        break;
+                    };
+                    frame
+                }
+                stream = connection.accept_bi() => {
+                    if let Ok((mut send, mut recv)) = stream {
+                        let _ = send.reset(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
+                        let _ = recv.stop(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
+                    }
+                    warn!("strict constant-rate peer attempted an unscheduled bidirectional stream");
+                    connection.close(
+                        VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                        b"unscheduled stream forbidden in strict mode",
+                    );
+                    break;
+                }
+                stream = connection.accept_uni() => {
+                    if let Ok(mut recv) = stream {
+                        let _ = recv.stop(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
+                    }
+                    warn!("strict constant-rate peer attempted an unscheduled unidirectional stream");
+                    connection.close(
+                        VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                        b"unscheduled stream forbidden in strict mode",
+                    );
+                    break;
+                }
+            };
+            if let Err(error) =
+                reap_completed_strict_lane_tasks(&mut lane_tasks, &mut lane_task_owners)
+            {
+                warn!(%error, "strict constant-rate lane worker failed");
+                connection.close(
+                    VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                    b"strict constant-rate lane worker failed",
+                );
+                break;
+            }
+            let key = (frame.channel, frame.lane_id);
+            if frame.flags.is_open() {
+                let Some((expected_class, consumer)) = strict_mux_consumer(frame.channel) else {
+                    unreachable!("cover is consumed by the transport")
+                };
+                if frame.class != expected_class
+                    || lanes.contains_key(&key)
+                    || lane_task_owners.contains_key(&key)
+                {
+                    warn!(
+                        channel = ?frame.channel,
+                        lane_id = frame.lane_id,
+                        class = ?frame.class,
+                        "strict constant-rate lane has invalid class or duplicate routing state"
+                    );
+                    connection.close(
+                        VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                        b"invalid strict constant-rate lane",
+                    );
+                    break;
+                }
+                if lane_tasks.len().saturating_add(2) > lane_task_budget {
+                    warn!(
+                        retained_tasks = lane_tasks.len(),
+                        task_budget = lane_task_budget,
+                        "strict constant-rate lane worker budget exhausted"
+                    );
+                    connection.close(
+                        VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                        b"strict constant-rate lane worker budget exhausted",
+                    );
+                    break;
+                }
+                if lane_task_owners.try_reserve(1).is_err() {
+                    connection.close(
+                        VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                        b"strict constant-rate lane ownership allocation failed",
+                    );
+                    break;
+                }
+                let (handler_io, mux_io) = tokio::io::duplex(CONSTANT_RATE_CELL_BYTES * 64);
+                let (mux_reader, mux_writer) = tokio::io::split(mux_io);
+                lanes.insert(key, mux_writer);
+                lane_task_owners.insert(key, 2);
+                let pump_key = key;
+                let pump_outbound = transport.outbound.clone();
+                let pump_connection = connection.clone();
+                let pump_channel = frame.channel;
+                let pump_class = frame.class;
+                let pump_lane_id = frame.lane_id;
+                lane_tasks.spawn(async move {
+                    Self::pump_strict_lane_outbound(
+                        mux_reader,
+                        pump_outbound,
+                        pump_connection,
+                        pump_channel,
+                        pump_class,
+                        pump_lane_id,
+                    )
+                    .await;
+                    pump_key
+                });
+                match consumer {
+                    StrictMuxConsumer::Measurement => {
+                        let resources = measurement_resources.clone();
+                        lane_tasks.spawn(async move {
+                            if let Err(error) = Self::process_measurement_stream(
+                                handler_io,
+                                resources.performance,
+                                resources.relay_id,
+                                resources.incentives,
+                                resources.privacy,
+                                resources.privacy_events,
+                                resources.mode,
+                                resources.compliance,
+                                remote,
+                            )
+                            .await
+                            {
+                                warn!(
+                                    ?error,
+                                    "failed to ingest strict constant-rate measurement lane"
+                                );
+                            }
+                            key
+                        });
+                    }
+                    StrictMuxConsumer::Exit => {
+                        let resources = exit_resources.clone();
+                        let session = vpn_session.clone();
+                        lane_tasks.spawn(async move {
+                            let (mut recv, mut send) = tokio::io::split(handler_io);
+                            if let Err(error) = Self::process_exit_stream(
+                                &resources, &mut send, &mut recv, remote, session,
+                            )
+                            .await
+                            {
+                                warn!(?error, "failed to process strict constant-rate exit lane");
+                            }
+                            key
+                        });
+                    }
+                    StrictMuxConsumer::Vpn => {
+                        let (Some(overlay), Some(session), Some(helper_ticket)) =
+                            (vpn.take(), vpn_session.take(), vpn_helper_ticket.take())
+                        else {
+                            warn!("strict VPN lane lacks authenticated helper admission state");
+                            connection.close(
+                                VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                                b"strict VPN lane is not authorized",
+                            );
+                            break;
+                        };
+                        let vpn_connection = connection.clone();
+                        let vpn_record_layer = Arc::clone(&record_layer);
+                        let settlement_store = vpn_settlement_store.clone();
+                        lane_tasks.spawn(async move {
+                            Self::serve_vpn_backend_tunnel(
+                                vpn_connection,
+                                remote,
+                                overlay,
+                                session,
+                                helper_ticket,
+                                vpn_record_layer,
+                                Some(handler_io),
+                                settlement_store,
+                            )
+                            .await;
+                            key
+                        });
+                    }
+                }
+            }
+
+            let Some(writer) = lanes.get_mut(&key) else {
+                warn!(
+                    channel = ?frame.channel,
+                    lane_id = frame.lane_id,
+                    "strict constant-rate payload has no routed lane"
+                );
+                connection.close(
+                    VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                    b"strict constant-rate lane routing failure",
+                );
+                break;
+            };
+            if !frame.payload.is_empty() && writer.write_all(&frame.payload).await.is_err() {
+                connection.close(
+                    VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                    b"strict constant-rate lane consumer failed",
+                );
+                break;
+            }
+            if frame.flags.is_fin() {
+                let _ = writer.shutdown().await;
+                lanes.remove(&key);
+            } else if frame.flags.is_reset() {
+                lanes.remove(&key);
+            }
+        }
+        lane_tasks.abort_all();
+        while lane_tasks.join_next().await.is_some() {}
+    }
+
+    async fn pump_strict_lane_outbound(
+        mut source: TokioReadHalf<DuplexStream>,
+        outbound: mpsc::Sender<MuxFrame>,
+        connection: Connection,
+        channel: MuxChannel,
+        class: AuthenticatedCellClass,
+        lane_id: u64,
+    ) {
+        let mut buffer = vec![0_u8; CONSTANT_RATE_MAX_PAYLOAD_BYTES];
+        let mut first = true;
+        loop {
+            let read = match source.read(&mut buffer).await {
+                Ok(read) => read,
+                Err(error) => {
+                    warn!(%error, ?channel, lane_id, "strict lane producer read failed");
+                    connection.close(
+                        VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                        b"strict constant-rate producer failed",
+                    );
+                    return;
+                }
+            };
+            let flags = if read == 0 {
+                MuxFlags::new(if first {
+                    MuxFlags::OPEN | MuxFlags::FIN
+                } else {
+                    MuxFlags::FIN
+                })
+            } else {
+                MuxFlags::new(if first { MuxFlags::OPEN } else { 0 })
+            };
+            let frame = flags.and_then(|flags| {
+                MuxFrame::new(channel, class, lane_id, flags, buffer[..read].to_vec())
+            });
+            let frame = match frame {
+                Ok(frame) => frame,
+                Err(error) => {
+                    warn!(%error, ?channel, lane_id, "strict lane producer encoded an invalid frame");
+                    connection.close(
+                        VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                        b"strict constant-rate producer frame failed",
+                    );
+                    return;
+                }
+            };
+            if outbound.try_send(frame).is_err() {
+                connection.close(
+                    VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+                    b"strict constant-rate producer queue full",
+                );
+                return;
+            }
+            first = false;
+            if read == 0 {
+                return;
+            }
+        }
+    }
+
     async fn ingest_measurement_streams(
         connection: Connection,
         resources: MonitorCircuitResources,
@@ -4688,6 +5378,7 @@ impl RelayRuntime {
         vpn_session: VpnSessionHandle,
         helper_ticket: VpnHelperTicketV1,
         record_layer: Arc<RecordLayer>,
+        strict_io: Option<DuplexStream>,
         settlement_store: Option<Arc<VpnSettlementStore>>,
     ) {
         let Some(backend_endpoint) = overlay.config().backend_endpoint() else {
@@ -4695,8 +5386,15 @@ impl RelayRuntime {
             connection.close(0u32.into(), b"vpn backend unavailable");
             return;
         };
-        let (mut send, mut recv) =
-            match timeout(HANDSHAKE_STREAM_TIMEOUT, connection.accept_bi()).await {
+        let (mut protected_send, mut protected_recv) = if let Some(strict_io) = strict_io {
+            let (reader, writer) = tokio::io::split(strict_io);
+            (
+                VpnTunnelWriter::Strict(writer),
+                VpnTunnelReader::Strict(reader),
+            )
+        } else {
+            let (send, recv) = match timeout(HANDSHAKE_STREAM_TIMEOUT, connection.accept_bi()).await
+            {
                 Ok(Ok(streams)) => streams,
                 Ok(Err(error)) => {
                     warn!(%error, "failed to accept vpn helper tunnel stream");
@@ -4709,6 +5407,19 @@ impl RelayRuntime {
                     return;
                 }
             };
+            let record_stream = match record_layer.stream(record_stream_context(send.id())) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    warn!(%error, "failed to derive vpn tunnel record keys");
+                    connection.close(0u32.into(), b"vpn record key failure");
+                    return;
+                }
+            };
+            (
+                VpnTunnelWriter::Quic(RecordWriter::new(send, record_stream.sealer)),
+                VpnTunnelReader::Quic(RecordReader::new(recv, record_stream.opener)),
+            )
+        };
         let now_ms = unix_time_ms(SystemTime::now());
         if helper_ticket.expires_at_ms <= now_ms {
             connection.close(0u32.into(), b"vpn helper ticket expired");
@@ -4725,16 +5436,6 @@ impl RelayRuntime {
             }
         };
         let mtu = bridge.max_payload_len();
-        let record_stream = match record_layer.stream(record_stream_context(send.id())) {
-            Ok(stream) => stream,
-            Err(error) => {
-                warn!(%error, "failed to derive vpn tunnel record keys");
-                connection.close(0u32.into(), b"vpn record key failure");
-                return;
-            }
-        };
-        let mut protected_send = RecordWriter::new(&mut send, record_stream.sealer);
-        let mut protected_recv = RecordReader::new(&mut recv, record_stream.opener);
         let Some(settlement_store) = settlement_store else {
             warn!("vpn settlement persistence is unavailable before prepaid admission");
             connection.close(0u32.into(), b"vpn settlement persistence unavailable");
@@ -4875,24 +5576,26 @@ impl RelayRuntime {
                 false
             }
         };
-        drop(protected_send);
-        drop(protected_recv);
         if finish_queued {
-            match timeout(
-                HANDSHAKE_STREAM_TIMEOUT,
-                wait_for_finished_quic_send_stream(&send),
-            )
-            .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    debug!(%error, "peer did not acknowledge the finished vpn tunnel stream")
-                }
-                Err(error) => {
-                    debug!(%error, "timed out awaiting vpn tunnel stream acknowledgement")
+            if let Some(send) = protected_send.quic_send() {
+                match timeout(
+                    HANDSHAKE_STREAM_TIMEOUT,
+                    wait_for_finished_quic_send_stream(send),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        debug!(%error, "peer did not acknowledge the finished vpn tunnel stream")
+                    }
+                    Err(error) => {
+                        debug!(%error, "timed out awaiting vpn tunnel stream acknowledgement")
+                    }
                 }
             }
         }
+        drop(protected_send);
+        drop(protected_recv);
         connection.close(0u32.into(), close_reason);
     }
     #[expect(
@@ -6416,9 +7119,6 @@ impl RelayRuntime {
             bearer_token: token,
         })
     }
-    fn admin_bearer_token(request: &str) -> Option<&str> {
-        Self::parse_admin_request(request)?.bearer_token
-    }
     async fn render_admin_request(
         request: &str,
         authorization: &AdminAuthorization,
@@ -6787,9 +7487,11 @@ impl RelayRuntime {
             .receive_window(VarInt::from_u32(QUIC_CONNECTION_RECEIVE_WINDOW_BYTES_V1))
             .send_window(QUIC_SEND_WINDOW_BYTES_V1)
             .crypto_buffer_size(QUIC_CRYPTO_BUFFER_BYTES_V1)
-            // Padding and constant-rate cover traffic use QUIC datagrams, so
-            // retain the extension with fixed per-connection queue bounds.
-            .datagram_receive_buffer_size(Some(QUIC_DATAGRAM_BUFFER_BYTES_V1))
+            // The reachable best-effort path only sends cover DATAGRAMs. Do
+            // not advertise receive support: Quinn 0.11.9 / quinn-proto 0.11.15 charges
+            // payload bytes but no fixed amount per queued entry, so a peer
+            // could otherwise enqueue unbounded zero-length DATAGRAMs.
+            .datagram_receive_buffer_size(None)
             .datagram_send_buffer_size(QUIC_DATAGRAM_BUFFER_BYTES_V1)
             // The spin bit leaks an otherwise unnecessary RTT signal.
             .allow_spin(false);
@@ -6888,23 +7590,26 @@ fn preflight_client_hello(
         .map_err(HandshakeError::Capability)?;
     let negotiated =
         negotiate_capabilities(&client_caps, server_caps).map_err(HandshakeError::Capability)?;
-    // Configuration rejects strict advertisements, but keep the live boundary fail-closed for
-    // programmatic capabilities and future callers. A strict claim must never reach the relay
-    // response while payload bypasses the DATAGRAM scheduler.
-    ensure_constant_rate_runtime_available(&negotiated)?;
     validate_client_selection(&negotiated, metadata.kem_id(), metadata.sig_id())?;
+    ensure_constant_rate_runtime_available(&negotiated)?;
     Ok(RelayClientHelloPreflight {
         metadata,
         negotiated,
     })
 }
+
 fn ensure_constant_rate_runtime_available(
     negotiated: &NegotiatedCapabilities,
 ) -> Result<(), HandshakeError> {
     if negotiated
         .constant_rate
-        .is_some_and(|capability| matches!(capability.mode, ConstantRateMode::Strict))
+        .is_some_and(|capability| capability.mode == ConstantRateMode::Strict)
     {
+        // Quinn 0.11.9 / quinn-proto 0.11.15 charges only payload bytes against its
+        // DATAGRAM receive buffer. Zero-length entries can therefore grow the
+        // queue without consuming the configured byte budget. The strict mux
+        // must remain unreachable until the locked transport has per-entry
+        // accounting and the end-to-end path is requalified.
         return Err(HandshakeError::StrictConstantRateUnavailable);
     }
     Ok(())

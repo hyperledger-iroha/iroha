@@ -13,6 +13,7 @@ use eyre::{Report, Result, WrapErr, eyre};
 #[cfg(test)]
 use iroha::data_model::{
     nexus::{DataSpaceId, FeeDebitSource},
+    peer::PeerId,
     soracloud::{
         CanonicalRequestSignatureWitnessV1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
         SoraUploadedModelPackageFormatV1, SoracloudTxInstruction,
@@ -46,7 +47,8 @@ use iroha::{
             SORA_APP_INFRA_SERVICE_REF_VERSION_V1, SORA_APP_ROUTE_PROJECTION_VERSION_V1,
             SORA_APP_STATIC_SITE_BINDING_VERSION_V1, SORA_CONTAINER_MANIFEST_VERSION_V1,
             SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_INROU_MANIFEST_VERSION_V1,
-            SORA_SERVICE_CONFIG_ENTRY_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
+            SORA_SERVICE_AUDIT_EVENT_VERSION_V1, SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+            SORA_SERVICE_ROLLOUT_STATE_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
             SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraAgentRuntimeStatusV1,
             SoraAppInfraAuditEventV1, SoraAppInfraExactCurrentRevisionPreconditionV1,
             SoraAppInfraManifestV1, SoraAppInfraMutationPreconditionV1, SoraAppInfraServiceRefV1,
@@ -55,17 +57,21 @@ use iroha::{
             SoraCertifiedResponsePolicyV1, SoraConfigExportV1, SoraContainerManifestV1,
             SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfSharedLeaseAuditEventV1,
             SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSourceRecordV1,
-            SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraInrouManifestV1,
-            SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
-            SoraMailboxContractV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
-            SoraPublishedInrouGuestImageArtifactV1, SoraResourceLimitsV1, SoraRouteTargetV1,
-            SoraRouteVisibilityV1, SoraRuntimeDeterministicValidatorHostV1,
-            SoraServiceConfigEntryV1, SoraServiceExactCurrentRevisionPreconditionV1,
-            SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-            SoraServiceLeaseReportingEpochRolloverV1, SoraServiceLeaseStatusV1,
-            SoraServiceManifestV1, SoraServiceMutationPreconditionV1, SoraStateBindingV1,
-            SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
-            SoraTrainingJobStatusV1, SoraUploadedModelBundleV1, SoracloudMutationDraftResponse,
+            SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1,
+            SoraInrouManifestV1, SoraInrouPlacementTargetV1, SoraLeaseVolumeBindingV1,
+            SoraLeaseVolumeKindV1, SoraLifecycleHooksV1, SoraMailboxContractV1,
+            SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
+            SoraPublishedInrouGuestImageArtifactV1, SoraResourceLimitsV1, SoraRolloutStageV1,
+            SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeDeterministicValidatorHostV1,
+            SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceConfigMutationV1,
+            SoraServiceExactCurrentRevisionPreconditionV1, SoraServiceExecutionPlaneV1,
+            SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+            SoraServiceLeaseReportingEpochRolloverV1, SoraServiceLeaseStateV1,
+            SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1, SoraServiceLifecycleActionV1,
+            SoraServiceManifestV1, SoraServiceMutationPreconditionV1, SoraServiceRolloutStateV1,
+            SoraServiceSecretMutationV1, SoraStateBindingV1, SoraStateEncryptionV1,
+            SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1, SoraTrainingJobStatusV1,
+            SoraUploadedModelBundleV1, SoracloudMutationDraftResponse,
             encode_agent_artifact_allow_provenance_payload, encode_agent_deploy_provenance_payload,
             encode_agent_lease_renew_provenance_payload,
             encode_agent_message_ack_provenance_payload,
@@ -93,12 +99,19 @@ use iroha::{
             is_canonical_agent_wallet_request_id_v1, is_canonical_hf_commit_oid_v1,
             is_canonical_hf_repo_id_v1,
         },
-        sorafs::pin_registry::StorageClass,
+        sorafs::pin_registry::{
+            ManifestDigest, ManifestRootCid, PinManifestFinalizedRecordV1, PinStatus, StorageClass,
+        },
         transaction::{
             Executable, FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent,
             TransactionBuilder,
         },
     },
+};
+#[cfg(unix)]
+use iroha_config::{
+    base::toml::{MAX_TOML_SOURCE_BYTES, TomlSource},
+    parameters::{actual, defaults},
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
 use iroha_primitives::{json::Json, numeric::Quantity};
@@ -127,7 +140,14 @@ use sorafs_car::{
 use sorafs_manifest::{
     ChunkingProfileV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
     MetadataEntry, PinPolicy, PinPolicyConstraints, StorageClass as ManifestStorageClass,
-    chunker_registry, validate_manifest,
+    chunker_registry,
+    operator_preseed::{
+        OPERATOR_PRESEED_SESSION_MAX_ARTIFACTS_V1, OPERATOR_PRESEED_SESSION_MAX_STORES_V1,
+        OPERATOR_PRESEED_SESSION_RECEIPT_VERSION_V1, OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1,
+        OperatorPreseedArtifactReceiptV1, OperatorPreseedSessionReceiptV1,
+        OperatorPreseedTargetReceiptV1,
+    },
+    validate_manifest,
 };
 use std::{
     cell::RefCell,
@@ -136,10 +156,13 @@ use std::{
     io::{self, Read as _, Seek as _, SeekFrom, Write as _},
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
-    process::Command as ProcessCommand,
+    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command as ProcessCommand, Stdio},
+    str::FromStr,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tiny_keccak::{Hasher as _, Sha3};
+#[cfg(unix)]
+use zeroize::{Zeroize as _, Zeroizing};
 
 /// CLI-only source image metadata. The explicit unit field forces the workspace
 /// JSON key to be exactly `null`; published objects belong only to admitted
@@ -454,7 +477,12 @@ macro_rules! define_torii_args {
             #[arg(long, value_name = "TOKEN")]
             api_token: Option<String>,
             #[doc = $timeout_doc]
-            #[arg(long, value_name = "SECS", default_value_t = 10)]
+            #[arg(
+                long,
+                value_name = "SECS",
+                default_value_t = 10,
+                value_parser = clap::value_parser!(u64).range(1..)
+            )]
             timeout_secs: u64,
         }
     };
@@ -474,7 +502,7 @@ const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
 const PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1: u16 = 1;
 const APP_STATIC_SITE_INDEX_DOCUMENT: &str = "index.html";
 const PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT: &str = "index.json";
-const SORAFS_DEFAULT_PIN_RETENTION_EPOCHS: u64 = 86_400;
+const SORAFS_RELEASE_RETENTION_EPOCH_METADATA_KEY_V1: &str = "soracloud.retention_epoch";
 const TAIRA_INROU_STAGE_SCHEMA_VERSION_V1: u16 = 1;
 const TAIRA_INROU_WORKSPACE_SCHEMA_VERSION_V1: u16 = 1;
 const TAIRA_INROU_WORKSPACE_CONTAINER_FILE_V1: &str = "container_manifest.json";
@@ -488,15 +516,18 @@ const TAIRA_INROU_STAGE_CONTAINER_FILE_V1: &str = "container.json";
 const TAIRA_INROU_STAGE_SERVICE_FILE_V1: &str = "service.json";
 const TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1: &str = "payloads/bundle.bin";
 const TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1: &str = "payloads/guest";
+const TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1: &str = "payloads/discovery";
+const TAIRA_INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1: &str = "payloads/discovery/index.json";
 const TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1: &str = "manifests/bundle.to";
 const TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1: &str = "manifests/aarch64.to";
+const TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1: &str = "manifests/discovery.to";
 const TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1: u64 = 1024 * 1024;
 const TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
 const TAIRA_INROU_STAGE_STREAM_BUFFER_BYTES: usize = 1024 * 1024;
 const TAIRA_INROU_CANARY_SERVICE_NAME_V1: &str = "taira_inrou_canary";
 const TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1: &str = "artifact-";
-const TAIRA_INROU_CANARY_ROUTE_HOST_V1: &str = "taira-inrou-canary.sora";
-const TAIRA_INROU_CANARY_ROUTE_PREFIX_V1: &str = "/api/v1";
+const TAIRA_INROU_CANARY_ROUTE_HOST_V1: &str = "taira.sora.org";
+const TAIRA_INROU_CANARY_ROUTE_PREFIX_V1: &str = "/api/v1/inrou-canary";
 const TAIRA_INROU_CANARY_SERVICE_PORT_V1: u16 = 8787;
 const TAIRA_INROU_CANARY_ENTRYPOINT_V1: &str = "/app/server.py";
 const TAIRA_INROU_CANARY_HEALTHCHECK_V1: &str = "/health";
@@ -522,6 +553,7 @@ const TAIRA_INROU_CANARY_MAX_TASKS_V1: u16 = 64;
 const INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES: u64 = BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES;
 const INROU_BUNDLE_PACK_MAX_SOURCE_BYTES: u64 = INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES - 1024 * 1024;
 const INROU_BUNDLE_PACK_TEMP_ATTEMPTS: usize = 16;
+const SORACLOUD_ARTIFACT_MIN_REPLICAS_V1: usize = 3;
 const HEADER_IROHA_ACCOUNT: &str = "X-Iroha-Account";
 const HEADER_IROHA_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 const HEADER_IROHA_NONCE: &str = "X-Iroha-Nonce";
@@ -589,6 +621,9 @@ pub enum ServiceCommand {
     UpgradeWorkspace(WorkspaceMutationArgs),
     /// Recompute Soracloud manifest hashes after local edits or bundle rebuilds.
     SyncManifests(SyncManifestsArgs),
+    /// Qualify exact Inrou artifacts in offline validator stores and emit a durable receipt.
+    #[command(name = "preseed")]
+    Preseed(InrouServicePreseedArgs),
     /// Validate manifests and register a new service deployment.
     Deploy(DeployArgs),
     /// Show authoritative Soracloud service state (all services or one service).
@@ -718,6 +753,9 @@ pub enum AppCommand {
     BuildAndSync(AppBuildAndSyncArgs),
     /// Simulate a prod-like release locally without live Torii mutation.
     Simulate(AppSimulateArgs),
+    /// Qualify every hosted Inrou artifact offline and emit one durable app receipt.
+    #[command(name = "preseed")]
+    Preseed(InrouAppPreseedArgs),
     /// Build, validate, deploy, and live-verify every service referenced by an app manifest.
     Release(AppReleaseArgs),
     /// Show app-scoped Soracloud service status from the control plane.
@@ -744,6 +782,10 @@ impl AppCommand {
             Self::BuildAndSync(args) => context.print_data(&args.run()?),
             Self::Simulate(args) => {
                 let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Self::Preseed(args) => {
+                let output = args.run(&context.config().key_pair)?;
                 context.print_data(&output)
             }
             Self::Release(args) => {
@@ -799,6 +841,10 @@ impl ServiceCommand {
             Self::DeployWorkspace(args) => context.print_data(&args.run(MutationMode::Deploy)?),
             Self::UpgradeWorkspace(args) => context.print_data(&args.run(MutationMode::Upgrade)?),
             Self::SyncManifests(args) => context.print_data(&args.run()?),
+            Self::Preseed(args) => {
+                let output = args.run(&context.config().key_pair)?;
+                context.print_data(&output)
+            }
             Self::Deploy(args) => {
                 let output = args.run(
                     MutationMode::Deploy,
@@ -1459,6 +1505,10 @@ pub struct WorkspaceMutationArgs {
     /// Path to a `SoraServiceManifestV1` JSON document.
     #[arg(long, value_name = "PATH", default_value = DEFAULT_SERVICE_MANIFEST)]
     service: PathBuf,
+    /// Exact Unix-second retention boundary forwarded unchanged to the workspace release script.
+    /// Reuse the same value for every retry of one release.
+    #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
+    sorafs_retention_epoch: NonZeroU64,
     /// Optional JSON file containing a map of inline config values committed atomically with deploy or upgrade.
     #[arg(long, value_name = "PATH")]
     initial_configs: Option<PathBuf>,
@@ -1509,6 +1559,7 @@ impl WorkspaceMutationArgs {
             canonicalize_cli_arg_path(self.initial_configs.as_deref(), "--initial-configs")?;
         let initial_secrets =
             canonicalize_cli_arg_path(self.initial_secrets.as_deref(), "--initial-secrets")?;
+        let sorafs_retention_epoch = self.sorafs_retention_epoch.get().to_string();
         let command = build_service_workspace_mutation_command(
             script_name,
             self.timeout_secs,
@@ -1517,8 +1568,9 @@ impl WorkspaceMutationArgs {
         );
         let mut notes = plan_notes;
         notes.push(format!(
-            "{} will run through the manifest-adjacent root script after exporting TORII_URL",
-            mode.label_lowercase()
+            "{} will run through the manifest-adjacent root script after exporting TORII_URL and the exact SoraFS retention epoch {}",
+            mode.label_lowercase(),
+            self.sorafs_retention_epoch
         ));
         if self.api_token.is_some() {
             notes.push(
@@ -1556,7 +1608,8 @@ impl WorkspaceMutationArgs {
         let mut process = ProcessCommand::new(&script_path);
         process
             .current_dir(&working_dir)
-            .env("TORII_URL", &torii_url);
+            .env("TORII_URL", &torii_url)
+            .env("SORAFS_RETENTION_EPOCH", &sorafs_retention_epoch);
         if let Some(api_token) = self.api_token.as_deref() {
             process.env("API_TOKEN", api_token);
         }
@@ -1891,12 +1944,19 @@ impl AppInitArgs {
 define_torii_args! {
     " Torii base URL for the canonical app-infra release mutation.",
     " Optional API token sent as `x-api-token` when mutating live control-plane APIs.",
-    " HTTP timeout for Torii mutation requests.";
+    " Positive timeout for each Torii request; the durable Inrou qualification is reread before online side effects.";
     /// Internal canonical app-infra mutation arguments used by `app release`.
     pub struct AppReleaseMutationArgs {
         /// Path to a `SoracloudAppManifestV1` JSON document.
         #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
         manifest: PathBuf,
+        /// Exact Unix-second retention boundary embedded in every SoraFS manifest in this release.
+        /// Reuse the same value for every retry; it must remain ahead of consensus time.
+        #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
+        sorafs_retention_epoch: NonZeroU64,
+        /// Absolute owner-only ingest qualification produced by `soracloud app preseed`.
+        #[arg(long = "inrou-preseed-receipt", value_name = "PATH")]
+        inrou_preseed_receipt: Option<PathBuf>,
     }
 }
 impl AppReleaseMutationArgs {
@@ -1906,6 +1966,7 @@ impl AppReleaseMutationArgs {
         authority: &AccountId,
         key_pair: &KeyPair,
     ) -> Result<AppMutationOutput> {
+        let release_identity = SorafsReleaseIdentityV1::new(self.sorafs_retention_epoch);
         let manifest_path = self.manifest.clone();
         let manifest_dir = manifest_path
             .parent()
@@ -1940,6 +2001,58 @@ impl AppReleaseMutationArgs {
                     "live app deploy/upgrade requires an explicit `app_version` so the authoritative app preflight can reject replays before artifact publication"
                 )
             })?;
+        let mut planned_service_mutations = manifest
+            .services
+            .iter()
+            .map(|service| {
+                let container_manifest =
+                    resolve_manifest_path(&manifest_dir, &service.container_manifest);
+                let service_manifest =
+                    resolve_manifest_path(&manifest_dir, &service.service_manifest);
+                let container: UnpublishedContainerManifestV1 = load_json(&container_manifest)?;
+                let service_manifest_payload: SoraServiceManifestV1 = load_json(&service_manifest)?;
+                ensure_app_service_ref_matches_manifest_name(
+                    &service.service_name,
+                    &service_manifest,
+                    &service_manifest_payload,
+                )?;
+                let bundle = UnpublishedDeploymentBundleV1 {
+                    container,
+                    service: service_manifest_payload,
+                };
+                Ok((service, container_manifest, service_manifest, bundle))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        validate_inrou_preseed_artifact_count(
+            planned_service_mutations
+                .iter()
+                .map(|(_, _, _, bundle)| bundle),
+        )?;
+        let required_preseed_store_count = required_inrou_preseed_store_count(
+            planned_service_mutations
+                .iter()
+                .map(|(_, _, _, bundle)| bundle),
+        );
+        let preseed_qualification = load_inrou_preseed_qualification(
+            required_preseed_store_count,
+            self.inrou_preseed_receipt.as_deref(),
+        )?;
+        if let Some(qualification) = preseed_qualification.as_ref() {
+            let placement_targets = qualification.placement_targets();
+            for (_, _, _, bundle) in &mut planned_service_mutations {
+                if bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+                    && bundle.container.runtime == SoraContainerRuntimeV1::Inrou
+                {
+                    bind_exact_inrou_placement_targets(&mut bundle.service, &placement_targets)?;
+                }
+            }
+        }
+        for (_, container_manifest, service_manifest, bundle) in &planned_service_mutations {
+            validate_unpublished_deployment_source(bundle)?;
+            let service_workspace_dir =
+                app_service_workspace_dir(container_manifest, service_manifest);
+            validate_local_inrou_guest_image_sources(service_workspace_dir.as_deref(), bundle)?;
+        }
         let (_, app_preflight_status) = fetch_torii_soracloud_app_infra_status(
             &torii_url,
             None,
@@ -1959,66 +2072,21 @@ impl AppReleaseMutationArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        let planned_service_mutations = manifest
-            .services
-            .iter()
-            .map(|service| {
-                let container_manifest =
-                    resolve_manifest_path(&manifest_dir, &service.container_manifest);
-                let service_manifest =
-                    resolve_manifest_path(&manifest_dir, &service.service_manifest);
-                let container: UnpublishedContainerManifestV1 = load_json(&container_manifest)?;
-                let service_manifest_payload: SoraServiceManifestV1 = load_json(&service_manifest)?;
-                ensure_app_service_ref_matches_manifest_name(
-                    &service.service_name,
-                    &service_manifest,
-                    &service_manifest_payload,
-                )?;
-                let bundle = UnpublishedDeploymentBundleV1 {
-                    container,
-                    service: service_manifest_payload,
-                };
-                validate_unpublished_deployment_source(&bundle)?;
-                let precondition = derive_service_mutation_precondition(
-                    &service_preflight_status,
-                    &service.service_name,
-                    &bundle.service.service_version,
-                    mode,
-                    "Soracloud app service",
-                )?;
-                preflight_service_upgrade_identity(
-                    &service_preflight_status,
-                    &bundle.service,
-                    bundle.container.runtime,
-                    mode,
-                    "Soracloud app service",
-                )?;
-                Ok((
-                    service,
-                    container_manifest,
-                    service_manifest,
-                    bundle,
-                    precondition,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
         let mode_label = match mode {
             MutationMode::Deploy => "deploy",
             MutationMode::Upgrade => "upgrade",
         }
         .to_owned();
-        let static_site_publication = manifest
+        let prepared_static_site_publication = manifest
             .static_site
             .as_ref()
             .map(|static_site| {
-                publish_app_static_site(
+                prepare_app_static_site(
                     &manifest,
                     &manifest_dir,
                     static_site,
-                    &torii_url,
-                    authority,
                     key_pair,
-                    self.timeout_secs,
+                    release_identity,
                 )
             })
             .transpose()?;
@@ -2026,17 +2094,29 @@ impl AppReleaseMutationArgs {
             &manifest.app_name,
             &manifest.public_url,
             manifest.static_site.as_ref(),
-            static_site_publication.as_ref(),
+            prepared_static_site_publication
+                .as_ref()
+                .map(|(publication, _)| publication),
         )?;
         let mut static_site_binding_attached = false;
-        let mut services = Vec::with_capacity(manifest.services.len());
-        let mut signed_service_requests = Vec::with_capacity(manifest.services.len());
-        let mut app_infra_bundles = Vec::with_capacity(manifest.services.len());
+        let mut prepared_service_publications = Vec::with_capacity(manifest.services.len());
         let mut hosted_http_service_count = 0_u32;
         let mut deterministic_service_count = 0_u32;
-        for (service, container_manifest, service_manifest, bundle, precondition) in
-            planned_service_mutations
-        {
+        for (service, container_manifest, service_manifest, bundle) in planned_service_mutations {
+            let precondition = derive_service_mutation_precondition(
+                &service_preflight_status,
+                &service.service_name,
+                &bundle.service.service_version,
+                mode,
+                "Soracloud app service",
+            )?;
+            preflight_service_upgrade_identity(
+                &service_preflight_status,
+                &bundle.service,
+                bundle.container.runtime,
+                mode,
+                "Soracloud app service",
+            )?;
             let is_hosted_http = bundle.service.execution_plane
                 == SoraServiceExecutionPlaneV1::HttpService
                 && bundle.container.runtime == SoraContainerRuntimeV1::Inrou;
@@ -2051,29 +2131,6 @@ impl AppReleaseMutationArgs {
             }
             let service_workspace_dir =
                 app_service_workspace_dir(&container_manifest, &service_manifest);
-            let workspace_dir = service_workspace_dir
-                .clone()
-                .unwrap_or_else(|| manifest_dir.clone())
-                .to_string_lossy()
-                .into_owned();
-            let workspace_scripts = app_service_workspace_scripts(service_workspace_dir.as_deref());
-            let execution_plane = format!("{:?}", bundle.service.execution_plane);
-            let runtime = format!("{:?}", bundle.container.runtime);
-            let route_host = bundle
-                .service
-                .route
-                .as_ref()
-                .map(|route| route.host.clone());
-            let route_path_prefix = bundle
-                .service
-                .route
-                .as_ref()
-                .map(|route| route.path_prefix.clone());
-            let route_visibility = bundle
-                .service
-                .route
-                .as_ref()
-                .map(|route| format!("{:?}", route.visibility));
             let mut initial_service_configs = load_initial_service_configs(
                 service
                     .initial_configs
@@ -2098,26 +2155,21 @@ impl AppReleaseMutationArgs {
                         service.service_name
                     )
                 })?;
-            let published_artifacts = publish_service_artifacts(
+            let service_artifacts = prepare_service_artifacts(
                 &bundle_file,
                 service_workspace_dir.as_deref(),
                 bundle,
-                &torii_url,
-                authority,
                 key_pair,
-                self.timeout_secs,
+                release_identity,
             )?;
-            let bundle = published_artifacts.admitted_bundle;
-            let published_bundle = published_artifacts.published_bundle;
-            let published_inrou_guest_images = published_artifacts.inrou_guest_images;
-            let published_public_discovery = attach_public_service_discovery_config(
-                &bundle,
-                &mut initial_service_configs,
+            let public_discovery = prepare_public_service_discovery_config(
+                &service_artifacts.admitted_bundle,
+                &initial_service_configs,
                 &torii_url,
                 self.api_token.as_deref(),
                 self.timeout_secs,
-                authority,
                 key_pair,
+                release_identity,
             )?;
             let initial_service_secrets = load_initial_service_secrets(
                 service
@@ -2125,6 +2177,127 @@ impl AppReleaseMutationArgs {
                     .as_deref()
                     .map(|path| resolve_manifest_path(&manifest_dir, path))
                     .as_deref(),
+            )?;
+            prepared_service_publications.push(PreparedAppServiceMutation {
+                service,
+                container_manifest,
+                service_manifest,
+                precondition,
+                initial_service_configs,
+                initial_service_secrets,
+                is_hosted_http,
+                is_deterministic,
+                service_artifacts,
+                public_discovery,
+            });
+        }
+        ensure_app_static_site_root_binding_attached(
+            static_site_root_binding.as_ref(),
+            static_site_binding_attached,
+        )?;
+        let mut inrou_artifacts = Vec::new();
+        for prepared in &prepared_service_publications {
+            if prepared.is_hosted_http {
+                inrou_artifacts.extend(prepared.service_artifacts.artifacts.iter());
+                if let Some(discovery) = prepared.public_discovery.as_ref() {
+                    inrou_artifacts.push(&discovery.artifact);
+                }
+            }
+        }
+        let inrou_artifacts = distinct_prepared_sorafs_artifacts(inrou_artifacts);
+        if let Some(qualification) = preseed_qualification.as_ref() {
+            qualification.require_exact_artifacts(&inrou_artifacts)?;
+            qualification.revalidate()?;
+            let (_, current_host_status) = fetch_torii_soracloud_status(
+                &torii_url,
+                None,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            let (_, current_host_status) =
+                decode_network_control_plane_snapshot(&current_host_status)?;
+            require_active_inrou_qualification_targets(
+                qualification,
+                &current_host_status.active_inrou_hosts,
+            )?;
+        }
+        if let Some((_, artifact)) = prepared_static_site_publication.as_ref() {
+            register_prepared_sorafs_artifact(
+                artifact,
+                &torii_url,
+                authority,
+                key_pair,
+                self.timeout_secs,
+            )?;
+        }
+        for prepared in &prepared_service_publications {
+            register_prepared_sorafs_artifacts(
+                prepared.service_artifacts.artifacts.iter(),
+                &torii_url,
+                authority,
+                key_pair,
+                self.timeout_secs,
+            )?;
+            if let Some(discovery) = prepared.public_discovery.as_ref() {
+                register_prepared_sorafs_artifact(
+                    &discovery.artifact,
+                    &torii_url,
+                    authority,
+                    key_pair,
+                    self.timeout_secs,
+                )?;
+            }
+        }
+        let mut services = Vec::with_capacity(manifest.services.len());
+        let mut signed_service_requests = Vec::with_capacity(manifest.services.len());
+        let mut app_infra_bundles = Vec::with_capacity(manifest.services.len());
+        for prepared in prepared_service_publications {
+            let PreparedAppServiceMutation {
+                service,
+                container_manifest,
+                service_manifest,
+                precondition,
+                mut initial_service_configs,
+                initial_service_secrets,
+                is_hosted_http,
+                is_deterministic,
+                service_artifacts,
+                public_discovery,
+            } = prepared;
+            let service_workspace_dir =
+                app_service_workspace_dir(&container_manifest, &service_manifest);
+            let workspace_dir = service_workspace_dir
+                .clone()
+                .unwrap_or_else(|| manifest_dir.clone())
+                .to_string_lossy()
+                .into_owned();
+            let workspace_scripts = app_service_workspace_scripts(service_workspace_dir.as_deref());
+            let PreparedServiceArtifacts {
+                admitted_bundle: bundle,
+                published_bundle,
+                inrou_guest_images: published_inrou_guest_images,
+                artifacts: _,
+            } = service_artifacts;
+            let execution_plane = format!("{:?}", bundle.service.execution_plane);
+            let runtime = format!("{:?}", bundle.container.runtime);
+            let route_host = bundle
+                .service
+                .route
+                .as_ref()
+                .map(|route| route.host.clone());
+            let route_path_prefix = bundle
+                .service
+                .route
+                .as_ref()
+                .map(|route| route.path_prefix.clone());
+            let route_visibility = bundle
+                .service
+                .route
+                .as_ref()
+                .map(|route| format!("{:?}", route.visibility));
+            let published_public_discovery = attach_prepared_public_service_discovery_config(
+                &mut initial_service_configs,
+                public_discovery,
             )?;
             let request = signed_bundle_request(
                 bundle,
@@ -2150,7 +2323,7 @@ impl AppReleaseMutationArgs {
             }
             if !published_inrou_guest_images.is_empty() {
                 notes.push(
-                    "Inrou guest image members were published to SoraFS and will hydrate from their exact immutable artifact refs"
+                    "Inrou bundle, guest-image, and discovery bytes were operator-preseeded into every selected offline SoraFS replica before pin registration"
                         .to_owned(),
                 );
             }
@@ -2174,15 +2347,13 @@ impl AppReleaseMutationArgs {
                 notes,
             });
         }
-        ensure_app_static_site_root_binding_attached(
-            static_site_root_binding.as_ref(),
-            static_site_binding_attached,
-        )?;
         let has_mixed_planes = hosted_http_service_count > 0 && deterministic_service_count > 0;
         let mut notes = Vec::new();
         let app_infra_manifest = build_app_infra_manifest(
             &manifest,
-            static_site_publication.as_ref(),
+            prepared_static_site_publication
+                .as_ref()
+                .map(|(publication, _)| publication),
             &app_infra_bundles,
         )?;
         let app_infra_manifest_hash = app_infra_manifest.manifest_hash();
@@ -2193,6 +2364,20 @@ impl AppReleaseMutationArgs {
             app_precondition,
             key_pair,
         )?;
+        if let Some(qualification) = preseed_qualification.as_ref() {
+            qualification.revalidate()?;
+            let (_, current_status) = fetch_torii_soracloud_status(
+                &torii_url,
+                None,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+            )?;
+            let (_, current_status) = decode_network_control_plane_snapshot(&current_status)?;
+            require_active_inrou_qualification_targets(
+                qualification,
+                &current_status.active_inrou_hosts,
+            )?;
+        }
         let app_infra_response = run_app_infra_mutation(
             mode,
             &app_infra_request,
@@ -2208,7 +2393,7 @@ impl AppReleaseMutationArgs {
             "app mutation submitted the canonical app-level Soracloud infra request".to_owned(),
         );
         let app_infra_response = Some(app_infra_response);
-        if static_site_publication.is_some() {
+        if prepared_static_site_publication.is_some() {
             notes.push(
                 "app mutation published the configured static site before mutating services"
                     .to_owned(),
@@ -2232,7 +2417,8 @@ impl AppReleaseMutationArgs {
             hosted_http_service_count,
             deterministic_service_count,
             static_site: manifest.static_site,
-            published_static_site: static_site_publication,
+            published_static_site: prepared_static_site_publication
+                .map(|(publication, _)| publication),
             frontend,
             synced_manifests,
             app_infra_manifest_hash: Some(app_infra_manifest_hash),
@@ -2803,23 +2989,288 @@ impl AppDoctorArgs {
     }
 }
 /// Arguments for `soracloud app release`.
+#[derive(Clone, Debug, JsonSerialize)]
+struct InrouPreseedQualificationOutput {
+    status: String,
+    receipt_path: String,
+    receipt: OperatorPreseedSessionReceiptV1,
+}
+
+/// Arguments for the separate offline `soracloud service preseed` phase.
+#[derive(clap::Args, Debug)]
+pub struct InrouServicePreseedArgs {
+    /// Path to an unpublished Soracloud container workspace JSON document.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
+    container: PathBuf,
+    /// Path to a `SoraServiceManifestV1` JSON document.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_SERVICE_MANIFEST)]
+    service: PathBuf,
+    /// Canonical service bundle bytes to qualify in every target store.
+    #[arg(long, value_name = "PATH")]
+    bundle_file: PathBuf,
+    /// Exact Unix-second retention identity reused by the later online publication.
+    #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
+    sorafs_retention_epoch: NonZeroU64,
+    /// Exact validator account, active peer identity, and offline SoraFS store root.
+    #[arg(long = "inrou-preseed-target", value_name = "VALIDATOR,PEER,PATH")]
+    inrou_preseed_targets: Vec<InrouOperatorPreseedTargetArg>,
+    /// Exact common configured capacity of every selected store.
+    #[arg(long = "inrou-preseed-max-capacity-bytes", value_name = "BYTES")]
+    inrou_preseed_max_capacity_bytes: Option<NonZeroU64>,
+    /// Absolute path to the exact offline `sorafs-node` helper.
+    #[arg(long = "inrou-preseed-helper", value_name = "PATH")]
+    inrou_preseed_helper: Option<PathBuf>,
+    /// Lowercase SHA-256 of the exact offline helper.
+    #[arg(long = "inrou-preseed-helper-sha256", value_name = "HEX")]
+    inrou_preseed_helper_sha256: Option<String>,
+    /// Absolute owner-only output path for the immutable online qualification.
+    #[arg(long = "receipt-out", value_name = "PATH")]
+    receipt_out: PathBuf,
+    /// Positive helper readiness/release timeout.
+    #[arg(
+        long,
+        value_name = "SECS",
+        default_value_t = 10,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    timeout_secs: u64,
+}
+
+impl InrouServicePreseedArgs {
+    fn run(self, key_pair: &KeyPair) -> Result<InrouPreseedQualificationOutput> {
+        let release_identity = SorafsReleaseIdentityV1::new(self.sorafs_retention_epoch);
+        let container: UnpublishedContainerManifestV1 = load_json(&self.container)?;
+        let service: SoraServiceManifestV1 = load_json(&self.service)?;
+        let mut bundle = UnpublishedDeploymentBundleV1 { container, service };
+        validate_inrou_preseed_artifact_count([&bundle])?;
+        let required_count = required_inrou_preseed_store_count([&bundle]).ok_or_else(|| {
+            eyre!("soracloud service preseed requires an HttpService + Inrou manifest pair")
+        })?;
+        let config = validate_inrou_operator_preseed(
+            Some(required_count),
+            &self.inrou_preseed_targets,
+            self.inrou_preseed_max_capacity_bytes,
+            self.inrou_preseed_helper.as_deref(),
+            self.inrou_preseed_helper_sha256.as_deref(),
+        )?
+        .expect("required Inrou preseed returns a configuration");
+        bind_exact_inrou_placement_targets(&mut bundle.service, &config.placement_targets())?;
+        let workspace_dir = direct_service_artifact_workspace_dir(
+            &self.container,
+            &self.service,
+            &self.bundle_file,
+        );
+        validate_unpublished_deployment_source(&bundle)?;
+        validate_local_inrou_guest_image_sources(workspace_dir.as_deref(), &bundle)?;
+        let mut prepared = prepare_service_artifacts(
+            &self.bundle_file,
+            workspace_dir.as_deref(),
+            bundle,
+            key_pair,
+            release_identity,
+        )?;
+        if service_uses_public_inrou_http_route(&prepared.admitted_bundle) {
+            let (_, _, discovery) = prepare_public_service_discovery(
+                &prepared.admitted_bundle,
+                key_pair,
+                release_identity,
+            )?;
+            prepared.artifacts.push(discovery);
+        }
+        let artifact_refs = distinct_prepared_sorafs_artifacts(prepared.artifacts.iter());
+        let session =
+            start_inrou_operator_preseed_session(Some(&config), &artifact_refs, self.timeout_secs)?
+                .expect("required Inrou preseed starts a session");
+        let receipt = session.receipt.clone();
+        let (receipt_path, _) =
+            write_inrou_preseed_qualification_file(&self.receipt_out, &receipt)?;
+        if session.finish()? != receipt {
+            return Err(eyre!(
+                "released Inrou preseed helper returned a different durable qualification"
+            ));
+        }
+        Ok(InrouPreseedQualificationOutput {
+            status: "qualified_offline".to_owned(),
+            receipt_path: receipt_path.to_string_lossy().into_owned(),
+            receipt,
+        })
+    }
+}
+
+/// Arguments for the separate offline `soracloud app preseed` phase.
+#[derive(clap::Args, Debug)]
+pub struct InrouAppPreseedArgs {
+    /// Path to a `SoracloudAppManifestV1` JSON document.
+    #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
+    manifest: PathBuf,
+    /// Exact Unix-second retention identity reused by the later online release.
+    #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
+    sorafs_retention_epoch: NonZeroU64,
+    /// Exact validator account, active peer identity, and offline SoraFS store root.
+    #[arg(long = "inrou-preseed-target", value_name = "VALIDATOR,PEER,PATH")]
+    inrou_preseed_targets: Vec<InrouOperatorPreseedTargetArg>,
+    /// Exact common configured capacity of every selected store.
+    #[arg(long = "inrou-preseed-max-capacity-bytes", value_name = "BYTES")]
+    inrou_preseed_max_capacity_bytes: Option<NonZeroU64>,
+    /// Absolute path to the exact offline `sorafs-node` helper.
+    #[arg(long = "inrou-preseed-helper", value_name = "PATH")]
+    inrou_preseed_helper: Option<PathBuf>,
+    /// Lowercase SHA-256 of the exact offline helper.
+    #[arg(long = "inrou-preseed-helper-sha256", value_name = "HEX")]
+    inrou_preseed_helper_sha256: Option<String>,
+    /// Absolute owner-only output path for the immutable online qualification.
+    #[arg(long = "receipt-out", value_name = "PATH")]
+    receipt_out: PathBuf,
+    /// Positive helper readiness/release timeout.
+    #[arg(
+        long,
+        value_name = "SECS",
+        default_value_t = 10,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    timeout_secs: u64,
+}
+
+impl InrouAppPreseedArgs {
+    fn run(self, key_pair: &KeyPair) -> Result<InrouPreseedQualificationOutput> {
+        AppBuildAndSyncArgs {
+            manifest: self.manifest.clone(),
+            dry_run: false,
+        }
+        .run()
+        .wrap_err("build and synchronize exact app artifacts before offline Inrou preseed")?;
+        let release_identity = SorafsReleaseIdentityV1::new(self.sorafs_retention_epoch);
+        let manifest: SoracloudAppManifestV1 = load_json(&self.manifest)?;
+        manifest.validate()?;
+        let manifest_dir = self
+            .manifest
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let mut bundles = Vec::with_capacity(manifest.services.len());
+        for service in &manifest.services {
+            let container_path = resolve_manifest_path(&manifest_dir, &service.container_manifest);
+            let service_path = resolve_manifest_path(&manifest_dir, &service.service_manifest);
+            let container: UnpublishedContainerManifestV1 = load_json(&container_path)?;
+            let service_manifest: SoraServiceManifestV1 = load_json(&service_path)?;
+            ensure_app_service_ref_matches_manifest_name(
+                &service.service_name,
+                &service_path,
+                &service_manifest,
+            )?;
+            bundles.push((
+                service,
+                container_path,
+                service_path,
+                UnpublishedDeploymentBundleV1 {
+                    container,
+                    service: service_manifest,
+                },
+            ));
+        }
+        validate_inrou_preseed_artifact_count(bundles.iter().map(|(_, _, _, bundle)| bundle))?;
+        let required_count =
+            required_inrou_preseed_store_count(bundles.iter().map(|(_, _, _, bundle)| bundle))
+                .ok_or_else(|| {
+                    eyre!("soracloud app preseed requires at least one HttpService + Inrou service")
+                })?;
+        let config = validate_inrou_operator_preseed(
+            Some(required_count),
+            &self.inrou_preseed_targets,
+            self.inrou_preseed_max_capacity_bytes,
+            self.inrou_preseed_helper.as_deref(),
+            self.inrou_preseed_helper_sha256.as_deref(),
+        )?
+        .expect("required Inrou app preseed returns a configuration");
+        let placement_targets = config.placement_targets();
+        let mut artifacts = Vec::new();
+        for (service, container_path, service_path, mut bundle) in bundles {
+            if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
+                || bundle.container.runtime != SoraContainerRuntimeV1::Inrou
+            {
+                continue;
+            }
+            bind_exact_inrou_placement_targets(&mut bundle.service, &placement_targets)?;
+            let workspace_dir = app_service_workspace_dir(&container_path, &service_path);
+            validate_unpublished_deployment_source(&bundle)?;
+            validate_local_inrou_guest_image_sources(workspace_dir.as_deref(), &bundle)?;
+            let bundle_file = service
+                .bundle_file
+                .as_deref()
+                .map(|path| resolve_manifest_path(&manifest_dir, path))
+                .ok_or_else(|| {
+                    eyre!(
+                        "app service `{}` must declare bundle_file for offline Inrou preseed",
+                        service.service_name
+                    )
+                })?;
+            let mut prepared = prepare_service_artifacts(
+                &bundle_file,
+                workspace_dir.as_deref(),
+                bundle,
+                key_pair,
+                release_identity,
+            )?;
+            if service_uses_public_inrou_http_route(&prepared.admitted_bundle) {
+                let (_, _, discovery) = prepare_public_service_discovery(
+                    &prepared.admitted_bundle,
+                    key_pair,
+                    release_identity,
+                )?;
+                prepared.artifacts.push(discovery);
+            }
+            artifacts.extend(prepared.artifacts);
+        }
+        let artifact_refs = distinct_prepared_sorafs_artifacts(artifacts.iter());
+        let session =
+            start_inrou_operator_preseed_session(Some(&config), &artifact_refs, self.timeout_secs)?
+                .expect("required Inrou app preseed starts a session");
+        let receipt = session.receipt.clone();
+        let (receipt_path, _) =
+            write_inrou_preseed_qualification_file(&self.receipt_out, &receipt)?;
+        if session.finish()? != receipt {
+            return Err(eyre!(
+                "released Inrou preseed helper returned a different durable qualification"
+            ));
+        }
+        Ok(InrouPreseedQualificationOutput {
+            status: "qualified_offline".to_owned(),
+            receipt_path: receipt_path.to_string_lossy().into_owned(),
+            receipt,
+        })
+    }
+}
+
+/// Arguments for `soracloud app release`.
 #[derive(clap::Args, Debug)]
 pub struct AppReleaseArgs {
     /// Path to a `SoracloudAppManifestV1` JSON document.
     #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
     manifest: PathBuf,
+    /// Exact Unix-second retention boundary embedded in every SoraFS manifest in this release.
+    /// Reuse the same value for every retry; it must remain ahead of consensus time.
+    #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
+    sorafs_retention_epoch: NonZeroU64,
     /// Torii base URL for the canonical app-infra release mutation.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
     /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
     #[arg(long, value_name = "TOKEN")]
     api_token: Option<String>,
-    /// HTTP timeout for Torii mutation requests.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    /// Positive timeout for Torii requests.
+    #[arg(
+        long,
+        value_name = "SECS",
+        default_value_t = 10,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
     timeout_secs: u64,
     /// Print the resolved release plan without executing it.
     #[arg(long, default_value_t = false)]
     dry_run: bool,
+    /// Absolute owner-only ingest qualification from `soracloud app preseed`.
+    #[arg(long = "inrou-preseed-receipt", value_name = "PATH")]
+    inrou_preseed_receipt: Option<PathBuf>,
 }
 impl AppReleaseArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<AppReleaseOutput> {
@@ -2893,6 +3344,8 @@ impl AppReleaseArgs {
         }
         let mutation_args = AppReleaseMutationArgs {
             manifest: self.manifest.clone(),
+            sorafs_retention_epoch: self.sorafs_retention_epoch,
+            inrou_preseed_receipt: self.inrou_preseed_receipt.clone(),
             torii_url: Some(torii_url.clone()),
             api_token: self.api_token.clone(),
             timeout_secs: self.timeout_secs,
@@ -2995,9 +3448,13 @@ pub struct AppSimulateArgs {
     /// Path to a `SoracloudAppManifestV1` JSON document.
     #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
     manifest: PathBuf,
+    /// Exact Unix-second retention boundary used to reproduce release manifest identities.
+    #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
+    sorafs_retention_epoch: NonZeroU64,
 }
 impl AppSimulateArgs {
     fn run(self, _authority: &AccountId, key_pair: &KeyPair) -> Result<AppSimulateOutput> {
+        let release_identity = SorafsReleaseIdentityV1::new(self.sorafs_retention_epoch);
         let manifest_path = self.manifest.clone();
         let manifest_dir = manifest_path
             .parent()
@@ -3012,7 +3469,13 @@ impl AppSimulateArgs {
             .static_site
             .as_ref()
             .map(|static_site| {
-                plan_app_static_site_publication(&manifest, &manifest_dir, static_site, key_pair)
+                plan_app_static_site_publication(
+                    &manifest,
+                    &manifest_dir,
+                    static_site,
+                    key_pair,
+                    release_identity,
+                )
             })
             .transpose()?;
         let notes = vec![
@@ -4103,7 +4566,7 @@ macro_rules! post_live_mutation {
 define_torii_args! {
     " Torii base URL to execute deploy against authoritative control-plane APIs.",
     " Optional API token sent as `x-api-token` when mutating live control-plane APIs.",
-    " HTTP timeout for Torii mutation requests.";
+    " Positive timeout for each Torii request; the durable Inrou qualification is reread before online side effects.";
     /// Arguments for `soracloud service deploy`.
     pub struct DeployArgs {
         /// Path to an unpublished Soracloud container workspace JSON document.
@@ -4115,12 +4578,19 @@ define_torii_args! {
         /// Canonical service bundle bytes to publish before submitting the deployment.
         #[arg(long, value_name = "PATH")]
         bundle_file: PathBuf,
+        /// Exact Unix-second retention boundary embedded in every SoraFS manifest in this release.
+        /// Reuse the same value for every retry; it must remain ahead of consensus time.
+        #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
+        sorafs_retention_epoch: NonZeroU64,
         /// Optional JSON file containing a map of inline config values committed atomically with deploy.
         #[arg(long, value_name = "PATH")]
         initial_configs: Option<PathBuf>,
         /// Optional JSON file containing a map of inline secret envelopes committed atomically with deploy.
         #[arg(long, value_name = "PATH")]
         initial_secrets: Option<PathBuf>,
+        /// Absolute owner-only ingest qualification produced by `soracloud service preseed`.
+        #[arg(long = "inrou-preseed-receipt", value_name = "PATH")]
+        inrou_preseed_receipt: Option<PathBuf>,
     }
 }
 macro_rules! impl_service_bundle_mutation {
@@ -4132,11 +4602,29 @@ macro_rules! impl_service_bundle_mutation {
                 authority: &AccountId,
                 key_pair: &KeyPair,
             ) -> Result<ServiceMutationOutput> {
+                let release_identity = SorafsReleaseIdentityV1::new(self.sorafs_retention_epoch);
                 let plan = build_service_workspace_plan(&self.container, &self.service)?;
                 let container: UnpublishedContainerManifestV1 = load_json(&self.container)?;
                 let service: SoraServiceManifestV1 = load_json(&self.service)?;
-                let bundle = UnpublishedDeploymentBundleV1 { container, service };
+                let mut bundle = UnpublishedDeploymentBundleV1 { container, service };
+                let workspace_dir = direct_service_artifact_workspace_dir(
+                    &self.container,
+                    &self.service,
+                    &self.bundle_file,
+                );
+                validate_inrou_preseed_artifact_count([&bundle])?;
+                let preseed_qualification = load_inrou_preseed_qualification(
+                    required_inrou_preseed_store_count([&bundle]),
+                    self.inrou_preseed_receipt.as_deref(),
+                )?;
+                if let Some(qualification) = preseed_qualification.as_ref() {
+                    bind_exact_inrou_placement_targets(
+                        &mut bundle.service,
+                        &qualification.placement_targets(),
+                    )?;
+                }
                 validate_unpublished_deployment_source(&bundle)?;
+                validate_local_inrou_guest_image_sources(workspace_dir.as_deref(), &bundle)?;
                 let mut initial_service_configs =
                     load_initial_service_configs(self.initial_configs.as_deref())?;
                 let initial_service_secrets =
@@ -4163,30 +4651,87 @@ macro_rules! impl_service_bundle_mutation {
                     mode,
                     "Soracloud service",
                 )?;
-                let workspace_dir = direct_service_artifact_workspace_dir(
-                    &self.container,
-                    &self.service,
-                    &self.bundle_file,
-                );
-                let published_artifacts = publish_service_artifacts(
+                let prepared_artifacts = prepare_service_artifacts(
                     &self.bundle_file,
                     workspace_dir.as_deref(),
                     bundle,
-                    &torii_url,
-                    authority,
                     key_pair,
-                    self.timeout_secs,
+                    release_identity,
                 )?;
-                let bundle = published_artifacts.admitted_bundle;
-                let published_public_discovery = attach_public_service_discovery_config(
-                    &bundle,
-                    &mut initial_service_configs,
+                let prepared_public_discovery = prepare_public_service_discovery_config(
+                    &prepared_artifacts.admitted_bundle,
+                    &initial_service_configs,
                     &torii_url,
                     self.api_token.as_deref(),
                     self.timeout_secs,
+                    key_pair,
+                    release_identity,
+                )?;
+                let mut inrou_artifacts = Vec::new();
+                if preseed_qualification.is_some() {
+                    inrou_artifacts.extend(prepared_artifacts.artifacts.iter());
+                    if let Some(discovery) = prepared_public_discovery.as_ref() {
+                        inrou_artifacts.push(&discovery.artifact);
+                    }
+                }
+                let inrou_artifacts = distinct_prepared_sorafs_artifacts(inrou_artifacts);
+                if let Some(qualification) = preseed_qualification.as_ref() {
+                    qualification.require_exact_artifacts(&inrou_artifacts)?;
+                    qualification.revalidate()?;
+                    let (_, current_host_status) = fetch_torii_soracloud_status(
+                        &torii_url,
+                        Some(&service_name),
+                        self.api_token.as_deref(),
+                        self.timeout_secs,
+                    )?;
+                    let (_, current_host_status) =
+                        decode_network_control_plane_snapshot(&current_host_status)?;
+                    require_active_inrou_qualification_targets(
+                        qualification,
+                        &current_host_status.active_inrou_hosts,
+                    )?;
+                }
+                register_prepared_sorafs_artifacts(
+                    prepared_artifacts.artifacts.iter(),
+                    &torii_url,
                     authority,
                     key_pair,
+                    self.timeout_secs,
                 )?;
+                if let Some(discovery) = prepared_public_discovery.as_ref() {
+                    register_prepared_sorafs_artifact(
+                        &discovery.artifact,
+                        &torii_url,
+                        authority,
+                        key_pair,
+                        self.timeout_secs,
+                    )?;
+                }
+                let PreparedServiceArtifacts {
+                    admitted_bundle: bundle,
+                    published_bundle,
+                    inrou_guest_images,
+                    artifacts: _,
+                } = prepared_artifacts;
+                let published_public_discovery = attach_prepared_public_service_discovery_config(
+                    &mut initial_service_configs,
+                    prepared_public_discovery,
+                )?;
+                if let Some(qualification) = preseed_qualification.as_ref() {
+                    qualification.revalidate()?;
+                    let (_, current_status) = fetch_torii_soracloud_status(
+                        &torii_url,
+                        Some(&service_name),
+                        self.api_token.as_deref(),
+                        self.timeout_secs,
+                    )?;
+                    let (_, current_status) =
+                        decode_network_control_plane_snapshot(&current_status)?;
+                    require_active_inrou_qualification_targets(
+                        qualification,
+                        &current_status.active_inrou_hosts,
+                    )?;
+                }
                 let response = run_service_bundle_mutation(
                     mode,
                     bundle,
@@ -4207,8 +4752,8 @@ macro_rules! impl_service_bundle_mutation {
                     &torii_url,
                     self.api_token.is_some(),
                     published_public_discovery,
-                    published_artifacts.published_bundle,
-                    published_artifacts.inrou_guest_images,
+                    published_bundle,
+                    inrou_guest_images,
                     response,
                 ))
             }
@@ -4219,7 +4764,7 @@ impl_service_bundle_mutation!(DeployArgs);
 define_torii_args! {
     " Torii base URL to execute upgrade against authoritative control-plane APIs.",
     " Optional API token sent as `x-api-token` when mutating live control-plane APIs.",
-    " HTTP timeout for Torii mutation requests.";
+    " Positive timeout for each Torii request; the durable Inrou qualification is reread before online side effects.";
     /// Arguments for `soracloud service upgrade`.
     pub struct UpgradeArgs {
         /// Path to an unpublished Soracloud container workspace JSON document.
@@ -4231,12 +4776,19 @@ define_torii_args! {
         /// Canonical service bundle bytes to publish before submitting the upgrade.
         #[arg(long, value_name = "PATH")]
         bundle_file: PathBuf,
+        /// Exact Unix-second retention boundary embedded in every SoraFS manifest in this release.
+        /// Reuse the same value for every retry; it must remain ahead of consensus time.
+        #[arg(long = "sorafs-retention-epoch", value_name = "UNIX_SECONDS")]
+        sorafs_retention_epoch: NonZeroU64,
         /// Optional JSON file containing a map of inline config values committed atomically with upgrade.
         #[arg(long, value_name = "PATH")]
         initial_configs: Option<PathBuf>,
         /// Optional JSON file containing a map of inline secret envelopes committed atomically with upgrade.
         #[arg(long, value_name = "PATH")]
         initial_secrets: Option<PathBuf>,
+        /// Absolute owner-only ingest qualification produced by `soracloud service preseed`.
+        #[arg(long = "inrou-preseed-receipt", value_name = "PATH")]
+        inrou_preseed_receipt: Option<PathBuf>,
     }
 }
 impl_service_bundle_mutation!(UpgradeArgs);
@@ -6179,6 +6731,8 @@ impl From<crate::taira::InrouCanaryMode> for MutationMode {
 #[norito(deny_unknown_fields)]
 pub(crate) struct TairaInrouStageReceiptV1 {
     pub schema_version: u16,
+    pub sorafs_retention_epoch: u64,
+    pub placement_targets: BTreeSet<SoraInrouPlacementTargetV1>,
     pub mutation_mode: String,
     pub service_name: String,
     pub service_version: String,
@@ -6194,6 +6748,13 @@ pub(crate) struct TairaInrouStageReceiptV1 {
     pub guest_manifest_file: String,
     pub guest_content_cid: String,
     pub guest_manifest_digest_hex: String,
+    pub discovery_payload_dir: String,
+    pub discovery_manifest_file: String,
+    pub discovery_document_hash: String,
+    pub discovery_content_cid: String,
+    pub discovery_manifest_digest_hex: String,
+    pub public_discovery_url: String,
+    pub public_discovery_cid_host_url: String,
     pub container_manifest_hash: String,
     pub service_manifest_hash: String,
 }
@@ -6217,6 +6778,8 @@ struct VerifiedTairaInrouStage {
     bundle: SoraDeploymentBundleV1,
     bundle_manifest: BuiltSorafsManifest,
     guest_manifest: BuiltSorafsManifest,
+    discovery: SoracloudPublicServiceDiscoveryV1,
+    discovery_manifest: BuiltSorafsManifest,
 }
 fn canonical_taira_inrou_canary_bundle_payload() -> Result<Vec<u8>> {
     write_gzip_ustar(
@@ -7458,7 +8021,6 @@ fn taira_streaming_directory_plan(
                     length: u32::try_from(boundary.length)
                         .map_err(|_| eyre!("Taira guest-image chunk length exceeds u32"))?,
                     digest: blake3::hash(bytes).into(),
-                    taikai_segment_hint: None,
                 });
                 emitted_offset = emitted_offset
                     .checked_add(boundary.length)
@@ -7486,7 +8048,6 @@ fn taira_streaming_directory_plan(
                     length: u32::try_from(boundary.length)
                         .map_err(|_| eyre!("Taira guest-image chunk length exceeds u32"))?,
                     digest: blake3::hash(&pending).into(),
-                    taikai_segment_hint: None,
                 });
                 emitted_offset = emitted_offset
                     .checked_add(boundary.length)
@@ -7526,6 +8087,7 @@ fn taira_stage_manifest(
     plan: &CarBuildPlan,
     payload: &[u8],
     key_pair: &KeyPair,
+    release_identity: SorafsReleaseIdentityV1,
     description: &str,
 ) -> Result<BuiltSorafsManifest> {
     let descriptor = chunker_registry::default_descriptor();
@@ -7542,6 +8104,7 @@ fn taira_stage_manifest(
         payload,
         descriptor,
         key_pair,
+        release_identity,
         SorafsManifestBuildLabels {
             writer: &writer_error,
             metadata: &metadata_error,
@@ -7558,6 +8121,7 @@ fn taira_stage_directory_manifest(
     plan: &CarBuildPlan,
     payload_dir: &Path,
     key_pair: &KeyPair,
+    release_identity: SorafsReleaseIdentityV1,
     description: &str,
 ) -> Result<BuiltSorafsManifest> {
     let descriptor = chunker_registry::default_descriptor();
@@ -7593,7 +8157,6 @@ fn taira_stage_directory_manifest(
             "staged {description} CAR must produce exactly one root CID"
         ));
     }
-    let retention_epoch = sorafs_pin_retention_epoch()?;
     let manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(car_stats.dag_codec))
@@ -7604,15 +8167,17 @@ fn taira_stage_directory_manifest(
         .car_digest(*car_stats.car_archive_digest.as_bytes())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
-            min_replicas: 3,
+            min_replicas: u16::try_from(SORACLOUD_ARTIFACT_MIN_REPLICAS_V1)
+                .expect("first-release artifact replica count fits u16"),
             storage_class: ManifestStorageClass::Hot,
-            retention_epoch,
+            retention_epoch: release_identity.retention_epoch(),
         })
         .governance(GovernanceProofs::default())
         .build()
         .wrap_err_with(|| format!("build staged {description} manifest"))?;
-    let manifest = attach_sorafs_release_governance(manifest, key_pair)
+    let manifest = attach_sorafs_release_governance(manifest, key_pair, release_identity)
         .wrap_err_with(|| format!("attach staged {description} governance proof"))?;
+    validate_sorafs_release_identity(&manifest, release_identity, description)?;
     let policy = PinPolicyConstraints {
         require_council_signatures: true,
         ..PinPolicyConstraints::default()
@@ -7718,7 +8283,10 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
     bundle_file: &Path,
     stage_dir: &Path,
     key_pair: &KeyPair,
+    sorafs_retention_epoch: NonZeroU64,
+    placement_targets: BTreeSet<SoraInrouPlacementTargetV1>,
 ) -> Result<TairaInrouStageReceiptV1> {
+    let release_identity = SorafsReleaseIdentityV1::new(sorafs_retention_epoch);
     let mode = MutationMode::from(requested_mode);
     let workspace_dir = taira_inrou_source_workspace(container_path, service_path, bundle_file)?;
     let container_bytes = taira_stage_regular_file_bytes(
@@ -7734,11 +8302,21 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
     let container: UnpublishedContainerManifestV1 =
         decode_taira_stage_json(&container_bytes, container_path)?;
     let service: SoraServiceManifestV1 = decode_taira_stage_json(&service_bytes, service_path)?;
-    let bundle = UnpublishedDeploymentBundleV1 { container, service };
+    let mut bundle = UnpublishedDeploymentBundleV1 { container, service };
     // The source carries only the canonical staging sentinel. The stage owns
     // the revision identity so callers cannot smuggle an arbitrary version
     // label into the release canary.
     validate_taira_inrou_canary_source_bundle(&bundle)?;
+    if placement_targets.len() != 4 {
+        return Err(eyre!(
+            "Taira Inrou staging requires exactly four distinct placement targets"
+        ));
+    }
+    for target in &placement_targets {
+        target.validate()?;
+    }
+    bundle.service.placement_targets = placement_targets;
+    validate_unpublished_deployment_source(&bundle)?;
     let bundle_bytes = taira_stage_regular_file_bytes(
         bundle_file,
         "Taira service bundle",
@@ -7757,9 +8335,11 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
         let manifests_dir = stage_dir.join("manifests");
         let payloads_dir = stage_dir.join("payloads");
         let guest_payload_dir = stage_dir.join(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1);
+        let discovery_payload_dir = stage_dir.join(TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1);
         create_taira_stage_subdirectory(&manifests_dir)?;
         create_taira_stage_subdirectory(&payloads_dir)?;
         create_taira_stage_subdirectory(&guest_payload_dir)?;
+        create_taira_stage_subdirectory(&discovery_payload_dir)?;
         let staged_bundle_path = stage_dir.join(TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1);
         write_taira_stage_file(&staged_bundle_path, &bundle_bytes)?;
         let bundle_plan = CarBuildPlan::single_file_with_profile(
@@ -7767,8 +8347,13 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
             chunker_registry::default_descriptor().profile,
         )
         .map_err(|error| eyre!("build staged Taira bundle plan: {error}"))?;
-        let bundle_manifest =
-            taira_stage_manifest(&bundle_plan, &bundle_bytes, key_pair, "Taira bundle")?;
+        let bundle_manifest = taira_stage_manifest(
+            &bundle_plan,
+            &bundle_bytes,
+            key_pair,
+            release_identity,
+            "Taira bundle",
+        )?;
         write_taira_stage_file(
             &stage_dir.join(TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1),
             &bundle_manifest.bytes,
@@ -7844,6 +8429,7 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
             &guest_plan,
             &guest_payload_dir,
             key_pair,
+            release_identity,
             "Taira guest image",
         )?;
         write_taira_stage_file(
@@ -7862,6 +8448,33 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
         validate_taira_inrou_canary_bundle(&bundle)?;
         let container_manifest_hash = bundle.container_manifest_hash().to_string();
         let service_manifest_hash = bundle.service_manifest_hash().to_string();
+        let (discovery, discovery_publication, discovery_artifact) =
+            prepare_public_service_discovery(&bundle, key_pair, release_identity)?;
+        let [discovery_file] = discovery_artifact.plan.files.as_slice() else {
+            return Err(eyre!(
+                "Taira public discovery must contain exactly one logical file"
+            ));
+        };
+        if discovery_file.path != [PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT.to_owned()]
+            || discovery_file.first_chunk != 0
+            || discovery_file.size != discovery_artifact.plan.content_length
+            || discovery_artifact.plan.content_length
+                != u64::try_from(discovery_artifact.payload.len())
+                    .wrap_err("Taira public discovery payload length exceeds u64")?
+            || Hash::new(&discovery_artifact.payload) != discovery.document_hash
+        {
+            return Err(eyre!(
+                "Taira public discovery is not the exact canonical one-file document"
+            ));
+        }
+        write_taira_stage_file(
+            &discovery_payload_dir.join(PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT),
+            &discovery_artifact.payload,
+        )?;
+        write_taira_stage_file(
+            &stage_dir.join(TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1),
+            &discovery_artifact.built.bytes,
+        )?;
         write_taira_stage_json(
             &stage_dir.join(TAIRA_INROU_STAGE_CONTAINER_FILE_V1),
             &bundle.container,
@@ -7872,6 +8485,8 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
         )?;
         let receipt = TairaInrouStageReceiptV1 {
             schema_version: TAIRA_INROU_STAGE_SCHEMA_VERSION_V1,
+            sorafs_retention_epoch: release_identity.retention_epoch(),
+            placement_targets: bundle.service.placement_targets.clone(),
             mutation_mode: mode.label_lowercase().to_owned(),
             service_name: bundle.service.service_name.to_string(),
             service_version: bundle.service.service_version.clone(),
@@ -7887,6 +8502,13 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
             guest_manifest_file: TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1.to_owned(),
             guest_content_cid,
             guest_manifest_digest_hex: guest_manifest.digest_hex,
+            discovery_payload_dir: TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1.to_owned(),
+            discovery_manifest_file: TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1.to_owned(),
+            discovery_document_hash: discovery.document_hash.to_string(),
+            discovery_content_cid: discovery.content_cid.clone(),
+            discovery_manifest_digest_hex: discovery.manifest_digest_hex.clone(),
+            public_discovery_url: discovery_publication.public_discovery_url,
+            public_discovery_cid_host_url: discovery_publication.public_discovery_cid_host_url,
             container_manifest_hash,
             service_manifest_hash,
         };
@@ -7898,6 +8520,1042 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
     }
     stage_result
 }
+
+#[cfg(unix)]
+const TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1: usize = 4;
+
+#[cfg(unix)]
+struct SensitiveTairaTomlTable(toml::Table);
+
+#[cfg(unix)]
+impl Drop for SensitiveTairaTomlTable {
+    fn drop(&mut self) {
+        zeroize_taira_toml_table(&mut self.0);
+    }
+}
+
+#[cfg(unix)]
+fn zeroize_taira_toml_table(table: &mut toml::Table) {
+    table
+        .iter_mut()
+        .for_each(|(_, value)| zeroize_taira_toml_value(value));
+}
+
+#[cfg(unix)]
+fn zeroize_taira_toml_value(value: &mut toml::Value) {
+    match value {
+        toml::Value::String(value) => value.zeroize(),
+        toml::Value::Array(values) => values.iter_mut().for_each(zeroize_taira_toml_value),
+        toml::Value::Table(table) => zeroize_taira_toml_table(table),
+        toml::Value::Integer(_)
+        | toml::Value::Float(_)
+        | toml::Value::Boolean(_)
+        | toml::Value::Datetime(_) => {}
+    }
+}
+
+#[cfg(unix)]
+fn taira_toml_table_at<'a>(
+    root: &'a toml::Table,
+    path: &[&str],
+    description: &str,
+) -> Result<&'a toml::Table> {
+    let mut table = root;
+    for component in path {
+        table = table
+            .get(*component)
+            .and_then(toml::Value::as_table)
+            .ok_or_else(|| eyre!("{description} is missing the required TOML table"))?;
+    }
+    Ok(table)
+}
+
+#[cfg(unix)]
+fn taira_toml_required_string(table: &toml::Table, key: &str, description: &str) -> Result<String> {
+    table
+        .get(key)
+        .and_then(toml::Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| eyre!("{description} must be one TOML string"))
+}
+
+#[cfg(unix)]
+fn taira_validator_placement_from_table(
+    table: &toml::Table,
+    peer_index: usize,
+) -> Result<SoraInrouPlacementTargetV1> {
+    let peer_id = taira_toml_required_string(
+        table,
+        "public_key",
+        &format!("peer{peer_index}.toml top-level public_key"),
+    )?;
+    let signer = taira_toml_table_at(
+        table,
+        &["soracloud_runtime", "submission", "signer"],
+        &format!("peer{peer_index}.toml Soracloud runtime signer"),
+    )?;
+    let validator_account = taira_toml_required_string(
+        signer,
+        "authority",
+        &format!("peer{peer_index}.toml Soracloud runtime signer authority"),
+    )?;
+    let target = SoraInrouPlacementTargetV1 {
+        validator_account_id: parse_canonical_inrou_validator_account(&validator_account).map_err(
+            |error| eyre!("peer{peer_index}.toml has an invalid validator account: {error}"),
+        )?,
+        peer_id,
+    };
+    target.validate().map_err(|error| {
+        eyre!("peer{peer_index}.toml has an invalid placement identity: {error}")
+    })?;
+    Ok(target)
+}
+
+#[cfg(unix)]
+fn taira_toml_integer(value: u64, field: &str) -> Result<toml::Value> {
+    i64::try_from(value)
+        .map(toml::Value::Integer)
+        .map_err(|_| eyre!("Taira Inrou {field} exceeds the TOML integer range"))
+}
+
+#[cfg(unix)]
+fn taira_inrou_validator_slot(peer_index: usize) -> Result<NonZeroU32> {
+    let slot = u32::try_from(peer_index)
+        .ok()
+        .and_then(|index| defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE.checked_add(index))
+        .filter(|slot| *slot < defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE)
+        .ok_or_else(|| eyre!("Taira Inrou validator index {peer_index} has no V1 identity slot"))?;
+    NonZeroU32::new(slot)
+        .ok_or_else(|| eyre!("Taira Inrou validator index {peer_index} resolved to a zero uid/gid"))
+}
+
+#[cfg(unix)]
+fn taira_inrou_validator_table(
+    peer_index: usize,
+    receipt: &TairaInrouStageReceiptV1,
+) -> Result<toml::Table> {
+    let slot = taira_inrou_validator_slot(peer_index)?;
+    let mut table = toml::Table::new();
+    table.insert("enabled".to_owned(), toml::Value::Boolean(true));
+    table.insert(
+        "portable_vm_uid".to_owned(),
+        taira_toml_integer(u64::from(slot.get()), "portable_vm_uid")?,
+    );
+    table.insert(
+        "portable_vm_gid".to_owned(),
+        taira_toml_integer(u64::from(slot.get()), "portable_vm_gid")?,
+    );
+    table.insert(
+        "trusted_guest_manifest_digest_hex".to_owned(),
+        toml::Value::String(receipt.guest_manifest_digest_hex.clone()),
+    );
+    table.insert(
+        "trusted_guest_content_cid".to_owned(),
+        toml::Value::String(receipt.guest_content_cid.clone()),
+    );
+    table.insert(
+        "guest_image_max_bytes".to_owned(),
+        taira_toml_integer(
+            TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1,
+            "guest_image_max_bytes",
+        )?,
+    );
+    table.insert(
+        "max_cpu_millis".to_owned(),
+        taira_toml_integer(
+            u64::from(defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS.get()),
+            "max_cpu_millis",
+        )?,
+    );
+    table.insert(
+        "max_memory_bytes".to_owned(),
+        taira_toml_integer(
+            defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES.get(),
+            "max_memory_bytes",
+        )?,
+    );
+    table.insert(
+        "max_storage_bytes".to_owned(),
+        taira_toml_integer(
+            defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES.get(),
+            "max_storage_bytes",
+        )?,
+    );
+    table.insert(
+        "start_grace_ms".to_owned(),
+        taira_toml_integer(
+            defaults::soracloud_runtime::INROU_START_GRACE_MS,
+            "start_grace_ms",
+        )?,
+    );
+    table.insert(
+        "stop_grace_ms".to_owned(),
+        taira_toml_integer(
+            defaults::soracloud_runtime::INROU_STOP_GRACE_MS,
+            "stop_grace_ms",
+        )?,
+    );
+    Ok(table)
+}
+
+#[cfg(unix)]
+fn expected_taira_inrou_validator_config(
+    peer_index: usize,
+    receipt: &TairaInrouStageReceiptV1,
+) -> Result<actual::SoracloudRuntimeInrou> {
+    let slot = taira_inrou_validator_slot(peer_index)?;
+    Ok(actual::SoracloudRuntimeInrou {
+        enabled: true,
+        portable_vm_uid: Some(slot),
+        portable_vm_gid: Some(slot),
+        trusted_guest_artifact: Some(SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: receipt.guest_manifest_digest_hex.clone(),
+            content_cid: receipt.guest_content_cid.clone(),
+        }),
+        guest_image_max_bytes: NonZeroU64::new(TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1)
+            .expect("Taira guest-image limit is nonzero"),
+        max_cpu_millis: defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS,
+        max_memory_bytes: defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES,
+        max_storage_bytes: defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES,
+        bundle_archive_max_compressed_bytes:
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
+        bundle_archive_max_decoded_bytes:
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES,
+        bundle_archive_max_entries: defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES,
+        bundle_archive_max_file_bytes:
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES,
+        bundle_archive_max_total_file_bytes:
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES,
+        start_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS),
+        stop_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_STOP_GRACE_MS),
+    })
+}
+
+#[cfg(unix)]
+fn insert_taira_inrou_validator_table(
+    root: &mut toml::Table,
+    peer_index: usize,
+    receipt: &TairaInrouStageReceiptV1,
+) -> Result<()> {
+    let runtime = root
+        .get_mut("soracloud_runtime")
+        .and_then(toml::Value::as_table_mut)
+        .ok_or_else(|| {
+            eyre!("peer{peer_index}.toml is missing the required [soracloud_runtime] table")
+        })?;
+    if runtime.contains_key("inrou") {
+        return Err(eyre!(
+            "peer{peer_index}.toml already contains soracloud_runtime.inrou; first-release binding never reuses or upgrades an existing Inrou profile"
+        ));
+    }
+    runtime.insert(
+        "inrou".to_owned(),
+        toml::Value::Table(taira_inrou_validator_table(peer_index, receipt)?),
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_taira_inrou_config_receipt(receipt: &TairaInrouStageReceiptV1) -> Result<()> {
+    if receipt.schema_version != TAIRA_INROU_STAGE_SCHEMA_VERSION_V1
+        || receipt.placement_targets.len() != TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1
+    {
+        return Err(eyre!(
+            "Taira Inrou validator binding requires one exact four-placement V1 stage receipt"
+        ));
+    }
+    let trusted_guest = SoraPublishedInrouGuestImageArtifactV1 {
+        manifest_digest_hex: receipt.guest_manifest_digest_hex.clone(),
+        content_cid: receipt.guest_content_cid.clone(),
+    };
+    trusted_guest.validate().map_err(|error| {
+        eyre!("Taira Inrou stage has an invalid trusted guest artifact: {error}")
+    })?;
+    let validator_count = receipt
+        .placement_targets
+        .iter()
+        .map(|target| &target.validator_account_id)
+        .collect::<BTreeSet<_>>()
+        .len();
+    let peer_count = receipt
+        .placement_targets
+        .iter()
+        .map(|target| target.peer_id.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
+    if validator_count != TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1
+        || peer_count != TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1
+    {
+        return Err(eyre!(
+            "Taira Inrou stage placements must bind four distinct validator accounts and peer IDs"
+        ));
+    }
+    for target in &receipt.placement_targets {
+        target
+            .validate()
+            .map_err(|error| eyre!("Taira Inrou stage has an invalid placement target: {error}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TairaOwnedDirectoryIdentity {
+    dev: u64,
+    ino: u64,
+    uid: u32,
+    mode: u32,
+}
+
+#[cfg(unix)]
+fn taira_owned_directory_identity(metadata: &fs::Metadata) -> TairaOwnedDirectoryIdentity {
+    use std::os::unix::fs::MetadataExt as _;
+
+    TairaOwnedDirectoryIdentity {
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+        uid: metadata.uid(),
+        mode: metadata.mode() & 0o7777,
+    }
+}
+
+#[cfg(unix)]
+struct TairaValidatorConfigDirectory {
+    path: PathBuf,
+    file: fs::File,
+    identity: TairaOwnedDirectoryIdentity,
+}
+
+#[cfg(unix)]
+fn validate_taira_validator_config_directory_metadata(
+    metadata: &fs::Metadata,
+    description: &str,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o7777 != 0o700
+    {
+        return Err(eyre!(
+            "{description} must be one direct directory owned by the effective user with mode 0700"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_taira_validator_config_directory(
+    config_dir: &Path,
+) -> Result<TairaValidatorConfigDirectory> {
+    if !config_dir.is_absolute() {
+        return Err(eyre!(
+            "--bind-validator-config-dir must be an absolute owner-private directory"
+        ));
+    }
+    validate_taira_path_ancestors(config_dir, "Taira validator config directory")?;
+    let named_before = fs::symlink_metadata(config_dir).wrap_err_with(|| {
+        format!(
+            "inspect Taira validator config directory {}",
+            config_dir.display()
+        )
+    })?;
+    validate_taira_validator_config_directory_metadata(
+        &named_before,
+        "Taira validator config directory",
+    )?;
+    let file = fs::File::from(
+        rustix::fs::open(
+            config_dir,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(io::Error::from)
+        .wrap_err_with(|| {
+            format!(
+                "open Taira validator config directory {}",
+                config_dir.display()
+            )
+        })?,
+    );
+    let opened = file.metadata().wrap_err_with(|| {
+        format!(
+            "inspect opened Taira validator config directory {}",
+            config_dir.display()
+        )
+    })?;
+    validate_taira_validator_config_directory_metadata(
+        &opened,
+        "opened Taira validator config directory",
+    )?;
+    let named_after = fs::symlink_metadata(config_dir).wrap_err_with(|| {
+        format!(
+            "reinspect Taira validator config directory {}",
+            config_dir.display()
+        )
+    })?;
+    validate_taira_validator_config_directory_metadata(
+        &named_after,
+        "Taira validator config directory",
+    )?;
+    let identity = taira_owned_directory_identity(&opened);
+    if taira_owned_directory_identity(&named_before) != identity
+        || taira_owned_directory_identity(&named_after) != identity
+    {
+        return Err(eyre!(
+            "Taira validator config directory changed while opening its retained descriptor"
+        ));
+    }
+    Ok(TairaValidatorConfigDirectory {
+        path: config_dir.to_path_buf(),
+        file,
+        identity,
+    })
+}
+
+#[cfg(unix)]
+fn require_taira_validator_config_directory_identity(
+    directory: &TairaValidatorConfigDirectory,
+) -> Result<()> {
+    let opened = directory.file.metadata().wrap_err_with(|| {
+        format!(
+            "reinspect opened Taira validator config directory {}",
+            directory.path.display()
+        )
+    })?;
+    let named = fs::symlink_metadata(&directory.path).wrap_err_with(|| {
+        format!(
+            "reinspect named Taira validator config directory {}",
+            directory.path.display()
+        )
+    })?;
+    validate_taira_validator_config_directory_metadata(
+        &opened,
+        "opened Taira validator config directory",
+    )?;
+    validate_taira_validator_config_directory_metadata(
+        &named,
+        "named Taira validator config directory",
+    )?;
+    if taira_owned_directory_identity(&opened) != directory.identity
+        || taira_owned_directory_identity(&named) != directory.identity
+    {
+        return Err(eyre!(
+            "Taira validator config directory changed after its descriptor was retained"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn taira_file_identity_from_stat(stat: &rustix::fs::Stat) -> Result<TairaFileIdentity> {
+    Ok(TairaFileIdentity {
+        dev: u64::try_from(stat.st_dev)
+            .map_err(|_| eyre!("Taira validator config device identity is out of range"))?,
+        ino: u64::try_from(stat.st_ino)
+            .map_err(|_| eyre!("Taira validator config inode identity is out of range"))?,
+        len: u64::try_from(stat.st_size)
+            .map_err(|_| eyre!("Taira validator config length is out of range"))?,
+        mtime: i64::try_from(stat.st_mtime)
+            .map_err(|_| eyre!("Taira validator config modification time is out of range"))?,
+        mtime_nsec: i64::try_from(stat.st_mtime_nsec).map_err(|_| {
+            eyre!("Taira validator config modification nanoseconds are out of range")
+        })?,
+        ctime: i64::try_from(stat.st_ctime)
+            .map_err(|_| eyre!("Taira validator config change time is out of range"))?,
+        ctime_nsec: i64::try_from(stat.st_ctime_nsec)
+            .map_err(|_| eyre!("Taira validator config change nanoseconds are out of range"))?,
+        mode: u32::try_from(stat.st_mode)
+            .map_err(|_| eyre!("Taira validator config mode is out of range"))?,
+        uid: u32::try_from(stat.st_uid)
+            .map_err(|_| eyre!("Taira validator config owner is out of range"))?,
+        nlink: u64::try_from(stat.st_nlink)
+            .map_err(|_| eyre!("Taira validator config link count is out of range"))?,
+    })
+}
+
+#[cfg(unix)]
+fn validate_taira_validator_config_stat(
+    stat: &rustix::fs::Stat,
+    description: &str,
+    max_bytes: u64,
+) -> Result<TairaFileIdentity> {
+    let identity = taira_file_identity_from_stat(stat)?;
+    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile
+        || identity.uid != rustix::process::geteuid().as_raw()
+        || identity.mode & 0o7777 != 0o600
+        || identity.nlink != 1
+        || identity.len == 0
+        || identity.len > max_bytes
+    {
+        return Err(eyre!(
+            "{description} must be a nonempty singly-linked owner-private regular file of at most {max_bytes} bytes"
+        ));
+    }
+    Ok(identity)
+}
+
+#[cfg(unix)]
+fn taira_validator_config_stat_at(
+    directory: &TairaValidatorConfigDirectory,
+    name: &str,
+    description: &str,
+    max_bytes: u64,
+) -> Result<TairaFileIdentity> {
+    let stat = rustix::fs::statat(&directory.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(io::Error::from)
+        .wrap_err_with(|| format!("inspect {description} {name}"))?;
+    validate_taira_validator_config_stat(&stat, description, max_bytes)
+}
+
+#[cfg(unix)]
+#[derive(Clone, Debug)]
+struct TairaValidatorConfigEntry {
+    peer_index: usize,
+    name: String,
+    identity: TairaFileIdentity,
+}
+
+#[cfg(unix)]
+fn exact_taira_validator_config_entries(
+    directory: &TairaValidatorConfigDirectory,
+) -> Result<[TairaValidatorConfigEntry; TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1]> {
+    require_taira_validator_config_directory_identity(directory)?;
+    let expected = (0..TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1)
+        .map(|index| format!("peer{index}.toml"))
+        .collect::<BTreeSet<_>>();
+    let mut present = BTreeSet::new();
+    let mut entries = rustix::fs::Dir::read_from(&directory.file)
+        .map_err(io::Error::from)
+        .wrap_err_with(|| {
+            format!(
+                "read retained Taira validator config directory {}",
+                directory.path.display()
+            )
+        })?;
+    for entry in &mut entries {
+        let entry = entry.map_err(io::Error::from).wrap_err_with(|| {
+            format!(
+                "read entry in retained Taira validator config directory {}",
+                directory.path.display()
+            )
+        })?;
+        let name = entry.file_name();
+        let bytes = name.to_bytes();
+        if bytes.starts_with(b"peer") && bytes.ends_with(b".toml") {
+            let name = std::str::from_utf8(bytes).map_err(|_| {
+                eyre!("Taira validator config directory contains a non-UTF-8 peer TOML name")
+            })?;
+            present.insert(name.to_owned());
+        }
+    }
+    if present != expected {
+        return Err(eyre!(
+            "Taira validator config directory must contain exactly peer0.toml through peer3.toml as peer TOML files"
+        ));
+    }
+    let mut inode_identities = BTreeSet::new();
+    let mut exact = Vec::with_capacity(TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1);
+    for peer_index in 0..TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1 {
+        let name = format!("peer{peer_index}.toml");
+        let identity = taira_validator_config_stat_at(
+            directory,
+            &name,
+            "Taira validator config",
+            MAX_TOML_SOURCE_BYTES,
+        )?;
+        if !inode_identities.insert((identity.dev, identity.ino)) {
+            return Err(eyre!(
+                "Taira validator configs must be four distinct direct inodes under the owner-private directory"
+            ));
+        }
+        exact.push(TairaValidatorConfigEntry {
+            peer_index,
+            name,
+            identity,
+        });
+    }
+    require_taira_validator_config_directory_identity(directory)?;
+    exact
+        .try_into()
+        .map_err(|_| eyre!("Taira validator config count changed during validation"))
+}
+
+#[cfg(unix)]
+fn read_sensitive_taira_validator_config_at(
+    directory: &TairaValidatorConfigDirectory,
+    name: &str,
+    description: &str,
+    max_bytes: u64,
+) -> Result<(Zeroizing<Vec<u8>>, TairaFileIdentity)> {
+    let named_before = taira_validator_config_stat_at(directory, name, description, max_bytes)?;
+    let mut file = fs::File::from(
+        rustix::fs::openat(
+            &directory.file,
+            name,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(io::Error::from)
+        .wrap_err_with(|| format!("open {description} {name}"))?,
+    );
+    let opened_before_metadata = file
+        .metadata()
+        .wrap_err_with(|| format!("inspect opened {description} {name}"))?;
+    let opened_before = taira_metadata_identity(&opened_before_metadata);
+    if opened_before != named_before {
+        return Err(eyre!("{description} {name} changed while it was opened"));
+    }
+    let capacity = usize::try_from(opened_before.len)
+        .map_err(|_| eyre!("{description} {name} length cannot be represented in memory"))?;
+    let mut bytes = Zeroizing::new(Vec::new());
+    bytes
+        .try_reserve_exact(capacity.saturating_add(1))
+        .map_err(|_| eyre!("reserve bounded sensitive buffer for {description} {name}"))?;
+    std::io::Read::by_ref(&mut file)
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| eyre!("read bounded sensitive bytes from {description} {name}"))?;
+    let bytes_read = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if bytes_read > max_bytes || bytes_read != opened_before.len {
+        return Err(eyre!(
+            "{description} {name} changed length during its bounded sensitive read"
+        ));
+    }
+    let opened_after_metadata = file
+        .metadata()
+        .wrap_err_with(|| format!("reinspect opened {description} {name}"))?;
+    let opened_after = taira_metadata_identity(&opened_after_metadata);
+    let named_after = taira_validator_config_stat_at(directory, name, description, max_bytes)?;
+    if opened_after != opened_before || named_after != opened_after {
+        return Err(eyre!(
+            "{description} {name} changed identity during its bounded sensitive read"
+        ));
+    }
+    Ok((bytes, opened_after))
+}
+
+#[cfg(unix)]
+struct PreparedTairaValidatorConfig {
+    peer_index: usize,
+    name: String,
+    identity: TairaFileIdentity,
+    rendered: Zeroizing<String>,
+    temporary: Option<StagedTairaValidatorConfig>,
+}
+
+#[cfg(unix)]
+struct StagedTairaValidatorConfig {
+    name: String,
+    file: fs::File,
+    identity: TairaFileIdentity,
+}
+
+#[cfg(unix)]
+fn prepare_taira_validator_config(
+    directory: &TairaValidatorConfigDirectory,
+    entry: TairaValidatorConfigEntry,
+    receipt: &TairaInrouStageReceiptV1,
+) -> Result<(SoraInrouPlacementTargetV1, PreparedTairaValidatorConfig)> {
+    let TairaValidatorConfigEntry {
+        peer_index,
+        name,
+        identity: expected_identity,
+    } = entry;
+    let (source, identity) = read_sensitive_taira_validator_config_at(
+        directory,
+        &name,
+        "Taira validator config",
+        MAX_TOML_SOURCE_BYTES,
+    )?;
+    if identity != expected_identity {
+        return Err(eyre!(
+            "peer{peer_index}.toml changed after exact directory validation"
+        ));
+    }
+    let source_text = std::str::from_utf8(source.as_slice())
+        .map_err(|_| eyre!("peer{peer_index}.toml is not UTF-8"))?;
+    let mut table = SensitiveTairaTomlTable(
+        toml::from_str(source_text)
+            .map_err(|_| eyre!("peer{peer_index}.toml is not valid TOML"))?,
+    );
+    let placement = taira_validator_placement_from_table(&table.0, peer_index)?;
+    insert_taira_inrou_validator_table(&mut table.0, peer_index, receipt)?;
+    let mut rendered = Zeroizing::new(toml::to_string_pretty(&table.0).map_err(|_| {
+        eyre!("failed to serialize peer{peer_index}.toml after exact V1 Inrou binding")
+    })?);
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    if u64::try_from(rendered.as_bytes().len()).unwrap_or(u64::MAX) > MAX_TOML_SOURCE_BYTES {
+        return Err(eyre!(
+            "rendered peer{peer_index}.toml exceeds the {MAX_TOML_SOURCE_BYTES}-byte configuration-source limit"
+        ));
+    }
+    let validation_table = toml::from_str(rendered.as_str()).map_err(|_| {
+        eyre!("rendered peer{peer_index}.toml is not valid TOML after V1 Inrou binding")
+    })?;
+    let validated = actual::Root::from_toml_source(TomlSource::new_sensitive(
+        directory.path.join(&name),
+        validation_table,
+        zeroize_taira_toml_table,
+    ))
+    .map_err(|_| {
+        eyre!(
+            "rendered peer{peer_index}.toml does not satisfy the current Iroha configuration schema"
+        )
+    })?;
+    if validated.soracloud_runtime.inrou
+        != expected_taira_inrou_validator_config(peer_index, receipt)?
+    {
+        return Err(eyre!(
+            "rendered peer{peer_index}.toml does not project to the exact PortableVM V1 defaults"
+        ));
+    }
+    Ok((
+        placement,
+        PreparedTairaValidatorConfig {
+            peer_index,
+            name,
+            identity,
+            rendered,
+            temporary: None,
+        },
+    ))
+}
+
+#[cfg(unix)]
+fn require_taira_validator_config_identity_at(
+    directory: &TairaValidatorConfigDirectory,
+    prepared: &PreparedTairaValidatorConfig,
+) -> Result<()> {
+    let identity = taira_validator_config_stat_at(
+        directory,
+        &prepared.name,
+        "Taira validator config",
+        MAX_TOML_SOURCE_BYTES,
+    )?;
+    if identity != prepared.identity {
+        return Err(eyre!(
+            "peer{}.toml changed before atomic V1 Inrou binding",
+            prepared.peer_index
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn stage_taira_validator_config_replacement(
+    directory: &TairaValidatorConfigDirectory,
+    prepared: &PreparedTairaValidatorConfig,
+) -> Result<StagedTairaValidatorConfig> {
+    require_taira_validator_config_directory_identity(directory)?;
+    for _ in 0..128 {
+        let mut suffix = [0_u8; 16];
+        OsRng
+            .try_fill_bytes(&mut suffix)
+            .map_err(|_| eyre!("OS randomness failed while staging a Taira validator config"))?;
+        let name = format!(
+            ".peer{}.inrou-v1-{}",
+            prepared.peer_index,
+            hex::encode(suffix)
+        );
+        let mut file = match rustix::fs::openat(
+            &directory.file,
+            &name,
+            rustix::fs::OFlags::RDWR
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        ) {
+            Ok(file) => fs::File::from(file),
+            Err(rustix::io::Errno::EXIST) => continue,
+            Err(error) => {
+                return Err(io::Error::from(error)).wrap_err_with(|| {
+                    format!(
+                        "create descriptor-relative temporary peer{}.toml",
+                        prepared.peer_index
+                    )
+                });
+            }
+        };
+        let created =
+            taira_metadata_identity(&file.metadata().wrap_err_with(|| {
+                format!("inspect new temporary peer{}.toml", prepared.peer_index)
+            })?);
+        let prepare = (|| -> Result<TairaFileIdentity> {
+            rustix::fs::fchmod(&file, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)
+                .map_err(io::Error::from)
+                .wrap_err_with(|| {
+                    format!(
+                        "set owner-only temporary peer{}.toml mode",
+                        prepared.peer_index
+                    )
+                })?;
+            let named_created_stat = rustix::fs::statat(
+                &directory.file,
+                &name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(io::Error::from)
+            .wrap_err_with(|| format!("inspect new temporary peer{}.toml", prepared.peer_index))?;
+            let named_created = taira_file_identity_from_stat(&named_created_stat)?;
+            let opened_created = taira_metadata_identity(&file.metadata().wrap_err_with(|| {
+                format!("reinspect new temporary peer{}.toml", prepared.peer_index)
+            })?);
+            if named_created != opened_created
+                || opened_created.dev != created.dev
+                || opened_created.ino != created.ino
+                || rustix::fs::FileType::from_raw_mode(named_created_stat.st_mode)
+                    != rustix::fs::FileType::RegularFile
+                || opened_created.uid != rustix::process::geteuid().as_raw()
+                || opened_created.mode & 0o7777 != 0o600
+                || opened_created.nlink != 1
+            {
+                return Err(eyre!(
+                    "temporary peer{}.toml changed identity while it was opened",
+                    prepared.peer_index
+                ));
+            }
+            file.write_all(prepared.rendered.as_bytes())
+                .map_err(|_| eyre!("write bounded temporary peer{}.toml", prepared.peer_index))?;
+            file.sync_all().map_err(|_| {
+                eyre!(
+                    "synchronize bounded temporary peer{}.toml",
+                    prepared.peer_index
+                )
+            })?;
+            let opened = taira_metadata_identity(&file.metadata().wrap_err_with(|| {
+                format!(
+                    "inspect synchronized temporary peer{}.toml",
+                    prepared.peer_index
+                )
+            })?);
+            let named = taira_validator_config_stat_at(
+                directory,
+                &name,
+                "temporary Taira validator config",
+                MAX_TOML_SOURCE_BYTES,
+            )?;
+            if opened != named
+                || opened.dev != created.dev
+                || opened.ino != created.ino
+                || opened.len != u64::try_from(prepared.rendered.len()).unwrap_or(u64::MAX)
+            {
+                return Err(eyre!(
+                    "temporary peer{}.toml did not retain its exact descriptor-bound identity",
+                    prepared.peer_index
+                ));
+            }
+            Ok(opened)
+        })();
+        match prepare {
+            Ok(identity) => {
+                return Ok(StagedTairaValidatorConfig {
+                    name,
+                    file,
+                    identity,
+                });
+            }
+            Err(error) => {
+                remove_taira_validator_config_temp_at(directory, &name, created);
+                return Err(error);
+            }
+        }
+    }
+    Err(eyre!(
+        "failed to allocate an exclusive descriptor-relative Taira validator config staging file"
+    ))
+}
+
+#[cfg(unix)]
+fn require_staged_taira_validator_config_identity_at(
+    directory: &TairaValidatorConfigDirectory,
+    staged: &StagedTairaValidatorConfig,
+    peer_index: usize,
+) -> Result<()> {
+    let opened = taira_metadata_identity(
+        &staged
+            .file
+            .metadata()
+            .wrap_err_with(|| format!("reinspect opened temporary peer{peer_index}.toml"))?,
+    );
+    let named = taira_validator_config_stat_at(
+        directory,
+        &staged.name,
+        "temporary Taira validator config",
+        MAX_TOML_SOURCE_BYTES,
+    )?;
+    if opened != staged.identity || named != opened {
+        return Err(eyre!(
+            "temporary peer{peer_index}.toml changed before atomic publication"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn remove_taira_validator_config_temp_at(
+    directory: &TairaValidatorConfigDirectory,
+    name: &str,
+    expected: TairaFileIdentity,
+) {
+    let current = rustix::fs::statat(&directory.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW);
+    if current
+        .ok()
+        .and_then(|stat| taira_file_identity_from_stat(&stat).ok())
+        .is_some_and(|identity| identity.dev == expected.dev && identity.ino == expected.ino)
+    {
+        let _ = rustix::fs::unlinkat(&directory.file, name, rustix::fs::AtFlags::empty());
+        let _ = directory.file.sync_all();
+    }
+}
+
+#[cfg(unix)]
+fn cleanup_taira_validator_config_temps(
+    directory: &TairaValidatorConfigDirectory,
+    prepared: &[PreparedTairaValidatorConfig],
+) {
+    for projected in prepared {
+        if let Some(staged) = projected.temporary.as_ref() {
+            remove_taira_validator_config_temp_at(directory, &staged.name, staged.identity);
+        }
+    }
+}
+
+/// Bind four freshly generated validator configs to one exact staged Inrou guest artifact.
+///
+/// This is a first-release transition: an existing Inrou table is always an error and no
+/// idempotent or compatibility path is accepted.
+#[cfg(unix)]
+pub(crate) fn bind_taira_inrou_validator_configs(
+    config_dir: &Path,
+    receipt: &TairaInrouStageReceiptV1,
+) -> Result<()> {
+    validate_taira_inrou_config_receipt(receipt)?;
+    let directory = open_taira_validator_config_directory(config_dir)?;
+    let entries = exact_taira_validator_config_entries(&directory)?;
+    let mut placements = BTreeSet::new();
+    let mut validator_accounts = BTreeSet::new();
+    let mut peer_ids = BTreeSet::new();
+    let mut prepared = Vec::with_capacity(TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1);
+    for entry in entries {
+        let (placement, projected) = prepare_taira_validator_config(&directory, entry, receipt)?;
+        validator_accounts.insert(placement.validator_account_id.clone());
+        peer_ids.insert(placement.peer_id.clone());
+        placements.insert(placement);
+        prepared.push(projected);
+    }
+    if placements != receipt.placement_targets
+        || validator_accounts.len() != TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1
+        || peer_ids.len() != TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1
+    {
+        return Err(eyre!(
+            "Taira validator config placements do not match the exact staged Inrou placement set"
+        ));
+    }
+    let binding = (|| -> Result<()> {
+        for projected in &mut prepared {
+            require_taira_validator_config_directory_identity(&directory)?;
+            require_taira_validator_config_identity_at(&directory, projected)?;
+            projected.temporary = Some(stage_taira_validator_config_replacement(
+                &directory, projected,
+            )?);
+        }
+        for projected in &prepared {
+            require_taira_validator_config_identity_at(&directory, projected)?;
+        }
+        for projected in &mut prepared {
+            require_taira_validator_config_directory_identity(&directory)?;
+            let staged = projected
+                .temporary
+                .as_ref()
+                .expect("every validated Taira config has one staged replacement");
+            require_staged_taira_validator_config_identity_at(
+                &directory,
+                staged,
+                projected.peer_index,
+            )?;
+            // Keep this identity check directly adjacent to `renameat`: the target must not
+            // change between the final comparison and descriptor-relative publication.
+            require_taira_validator_config_identity_at(&directory, projected)?;
+            rustix::fs::renameat(
+                &directory.file,
+                &staged.name,
+                &directory.file,
+                &projected.name,
+            )
+            .map_err(io::Error::from)
+            .wrap_err_with(|| {
+                format!(
+                    "atomically replace peer{}.toml with its V1 Inrou binding",
+                    projected.peer_index
+                )
+            })?;
+            let installed_opened =
+                taira_metadata_identity(&staged.file.metadata().wrap_err_with(|| {
+                    format!("inspect installed peer{}.toml", projected.peer_index)
+                })?);
+            let installed_named = taira_validator_config_stat_at(
+                &directory,
+                &projected.name,
+                "installed Taira validator config",
+                MAX_TOML_SOURCE_BYTES,
+            )?;
+            if installed_opened != installed_named
+                || installed_opened.dev != staged.identity.dev
+                || installed_opened.ino != staged.identity.ino
+            {
+                return Err(eyre!(
+                    "installed peer{}.toml changed identity during atomic publication",
+                    projected.peer_index
+                ));
+            }
+            directory.file.sync_all().wrap_err_with(|| {
+                format!(
+                    "synchronize retained Taira validator config directory after peer{}.toml replacement",
+                    projected.peer_index
+                )
+            })?;
+            let (installed_bytes, installed_identity) = read_sensitive_taira_validator_config_at(
+                &directory,
+                &projected.name,
+                "installed Taira validator config",
+                MAX_TOML_SOURCE_BYTES,
+            )?;
+            if installed_identity != installed_opened
+                || installed_bytes.as_slice() != projected.rendered.as_bytes()
+            {
+                return Err(eyre!(
+                    "installed peer{}.toml differs from its validated V1 Inrou projection",
+                    projected.peer_index
+                ));
+            }
+        }
+        Ok(())
+    })();
+    if binding.is_err() {
+        cleanup_taira_validator_config_temps(&directory, &prepared);
+    }
+    binding
+}
+
+#[cfg(not(unix))]
+pub(crate) fn bind_taira_inrou_validator_configs(
+    _config_dir: &Path,
+    _receipt: &TairaInrouStageReceiptV1,
+) -> Result<()> {
+    Err(eyre!(
+        "Taira Inrou validator config binding requires owner-only Unix file custody"
+    ))
+}
+
 fn validate_taira_stage_layout(
     receipt: &TairaInrouStageReceiptV1,
     expected_mode: MutationMode,
@@ -7933,6 +9591,16 @@ fn validate_taira_stage_layout(
             receipt.guest_manifest_file.as_str(),
             TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1,
         ),
+        (
+            "discovery_payload_dir",
+            receipt.discovery_payload_dir.as_str(),
+            TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1,
+        ),
+        (
+            "discovery_manifest_file",
+            receipt.discovery_manifest_file.as_str(),
+            TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+        ),
     ];
     for (field, actual, canonical) in expected {
         if actual != canonical {
@@ -7947,6 +9615,19 @@ fn validate_taira_stage_layout(
             TAIRA_INROU_STAGE_SCHEMA_VERSION_V1,
             receipt.schema_version
         ));
+    }
+    if receipt.sorafs_retention_epoch == 0 {
+        return Err(eyre!(
+            "Taira Inrou stage SoraFS retention epoch must be nonzero"
+        ));
+    }
+    if receipt.placement_targets.len() != 4 {
+        return Err(eyre!(
+            "Taira Inrou stage receipt requires exactly four distinct placement targets"
+        ));
+    }
+    for target in &receipt.placement_targets {
+        target.validate()?;
     }
     if receipt.mutation_mode != expected_mode.label_lowercase()
         || !is_taira_inrou_canary_service_version(&receipt.service_version)
@@ -8016,6 +9697,7 @@ fn validate_exact_taira_stage_tree(stage_dir: &Path, member_paths: &[String]) ->
         PathBuf::from("manifests"),
         PathBuf::from("payloads"),
         PathBuf::from(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1),
+        PathBuf::from(TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1),
     ] {
         expected.insert(directory, true);
     }
@@ -8026,6 +9708,8 @@ fn validate_exact_taira_stage_tree(stage_dir: &Path, member_paths: &[String]) ->
         TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
         TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
         TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1,
+        TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+        TAIRA_INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
     ] {
         expected.insert(PathBuf::from(file), false);
     }
@@ -8287,7 +9971,8 @@ fn load_verified_taira_inrou_stage(
         )?,
     ];
     validate_exact_taira_stage_tree(stage_dir, &member_paths)?;
-    if bundle.service.service_name.as_ref() != receipt.service_name
+    if bundle.service.placement_targets != receipt.placement_targets
+        || bundle.service.service_name.as_ref() != receipt.service_name
         || bundle.service.service_version != receipt.service_version
         || bundle.container_manifest_hash().to_string() != receipt.container_manifest_hash
         || bundle.service_manifest_hash().to_string() != receipt.service_manifest_hash
@@ -8322,6 +10007,15 @@ fn load_verified_taira_inrou_stage(
         &expected_signer,
         "Taira bundle",
     )?;
+    let release_identity = SorafsReleaseIdentityV1::new(
+        NonZeroU64::new(receipt.sorafs_retention_epoch)
+            .expect("validated Taira stage retention epoch is nonzero"),
+    );
+    validate_sorafs_release_identity(
+        &bundle_manifest.manifest,
+        release_identity,
+        "staged Taira bundle manifest",
+    )?;
     let guest_payload_dir = stage_dir.join(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1);
     let guest_plan =
         taira_streaming_directory_plan(&guest_payload_dir, &member_paths, descriptor.profile)?;
@@ -8333,6 +10027,11 @@ fn load_verified_taira_inrou_stage(
         &receipt.guest_content_cid,
         &expected_signer,
         "Taira guest image",
+    )?;
+    validate_sorafs_release_identity(
+        &guest_manifest.manifest,
+        release_identity,
+        "staged Taira guest-image manifest",
     )?;
     let published = bundle
         .container
@@ -8348,11 +10047,77 @@ fn load_verified_taira_inrou_stage(
             "Taira Inrou staged AArch64 ref does not match the exact staged manifest"
         ));
     }
+    let discovery_payload_dir = stage_dir.join(TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1);
+    let discovery_document_path = stage_dir.join(TAIRA_INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1);
+    let discovery_document_bytes = taira_stage_owned_file_bytes(
+        &discovery_document_path,
+        "Taira staged public discovery document",
+        TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1,
+    )?;
+    let decoded_discovery_document: SoracloudPublicServiceDiscoveryDocumentV1 =
+        json::from_slice(&discovery_document_bytes)
+            .wrap_err("decode canonical staged Taira public discovery document")?;
+    if json::to_vec(&decoded_discovery_document)
+        .wrap_err("re-encode canonical staged Taira public discovery document")?
+        != discovery_document_bytes
+    {
+        return Err(eyre!(
+            "Taira public discovery document must be canonical compact V1 JSON"
+        ));
+    }
+    let (discovery, discovery_publication, expected_discovery_artifact) =
+        prepare_public_service_discovery(&bundle, key_pair, release_identity)?;
+    if expected_discovery_artifact.payload != discovery_document_bytes
+        || Hash::new(&discovery_document_bytes).to_string() != receipt.discovery_document_hash
+        || discovery.document_hash.to_string() != receipt.discovery_document_hash
+        || discovery.content_cid != receipt.discovery_content_cid
+        || discovery.manifest_digest_hex != receipt.discovery_manifest_digest_hex
+        || discovery.public_discovery_url != receipt.public_discovery_url
+        || discovery.public_discovery_cid_host_url != receipt.public_discovery_cid_host_url
+        || discovery_publication.public_discovery_url != receipt.public_discovery_url
+        || discovery_publication.public_discovery_cid_host_url
+            != receipt.public_discovery_cid_host_url
+    {
+        return Err(eyre!(
+            "Taira public discovery document or projection differs from its exact staged receipt"
+        ));
+    }
+    let (discovery_plan, discovery_payload) =
+        CarBuildPlan::from_directory_with_profile(&discovery_payload_dir, descriptor.profile)
+            .map_err(|error| eyre!("rebuild staged Taira public discovery plan: {error}"))?;
+    if discovery_plan != expected_discovery_artifact.plan
+        || discovery_payload != discovery_document_bytes
+    {
+        return Err(eyre!(
+            "Taira public discovery directory differs from its exact canonical one-file plan"
+        ));
+    }
+    let discovery_manifest = load_and_verify_taira_stage_directory_manifest(
+        &stage_dir.join(TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1),
+        &discovery_plan,
+        &discovery_payload_dir,
+        &receipt.discovery_manifest_digest_hex,
+        &receipt.discovery_content_cid,
+        &expected_signer,
+        "Taira public discovery",
+    )?;
+    validate_sorafs_release_identity(
+        &discovery_manifest.manifest,
+        release_identity,
+        "staged Taira public-discovery manifest",
+    )?;
+    if discovery_manifest.bytes != expected_discovery_artifact.built.bytes {
+        return Err(eyre!(
+            "Taira public-discovery manifest differs from the deterministic staged authority"
+        ));
+    }
     Ok(VerifiedTairaInrouStage {
         receipt,
         bundle,
         bundle_manifest,
         guest_manifest,
+        discovery,
+        discovery_manifest,
     })
 }
 /// Immutable identity recovered by fully revalidating one retained Taira Inrou stage.
@@ -8365,12 +10130,20 @@ pub(crate) struct TairaInrouStageIdentity {
     pub healthcheck_path: String,
     pub stage_mode: String,
     pub bundle_hash: String,
+    pub deployment_bundle_hash: String,
     pub bundle_content_cid: String,
     pub bundle_manifest_digest_hex: String,
     pub guest_content_cid: String,
     pub guest_manifest_digest_hex: String,
+    pub discovery_payload_dir: String,
+    pub discovery_document_hash: String,
+    pub discovery_content_cid: String,
+    pub discovery_manifest_digest_hex: String,
+    pub public_discovery_url: String,
+    pub public_discovery_cid_host_url: String,
     pub container_manifest_hash: String,
     pub service_manifest_hash: String,
+    pub placement_targets: BTreeSet<SoraInrouPlacementTargetV1>,
 }
 /// Revalidate a retained Taira Inrou stage without registering artifacts or submitting a mutation.
 pub(crate) fn load_taira_inrou_stage_identity(
@@ -8393,6 +10166,7 @@ pub(crate) fn load_taira_inrou_stage_identity(
         .healthcheck_path
         .clone()
         .expect("verified Taira Inrou stage has /health");
+    let deployment_bundle_hash = Hash::new(Encode::encode(&staged.bundle)).to_string();
     Ok(TairaInrouStageIdentity {
         service_name: staged.bundle.service.service_name.to_string(),
         service_version: staged.receipt.service_version,
@@ -8401,12 +10175,20 @@ pub(crate) fn load_taira_inrou_stage_identity(
         healthcheck_path,
         stage_mode: mode.label_lowercase().to_owned(),
         bundle_hash: staged.receipt.bundle_hash,
+        deployment_bundle_hash,
         bundle_content_cid: staged.receipt.bundle_content_cid,
         bundle_manifest_digest_hex: staged.receipt.bundle_manifest_digest_hex,
         guest_content_cid: staged.receipt.guest_content_cid,
         guest_manifest_digest_hex: staged.receipt.guest_manifest_digest_hex,
+        discovery_payload_dir: staged.receipt.discovery_payload_dir,
+        discovery_document_hash: staged.receipt.discovery_document_hash,
+        discovery_content_cid: staged.receipt.discovery_content_cid,
+        discovery_manifest_digest_hex: staged.receipt.discovery_manifest_digest_hex,
+        public_discovery_url: staged.receipt.public_discovery_url,
+        public_discovery_cid_host_url: staged.receipt.public_discovery_cid_host_url,
         container_manifest_hash: staged.receipt.container_manifest_hash,
         service_manifest_hash: staged.receipt.service_manifest_hash,
+        placement_targets: staged.receipt.placement_targets,
     })
 }
 
@@ -8741,8 +10523,21 @@ pub(crate) enum TairaInrouCanaryPreparedOperationV1 {
     BundlePin,
     /// Register the canonical guest-image manifest.
     GuestPin,
-    /// Deploy or upgrade the canary service after both manifests are registered.
+    /// Register the canonical public-discovery manifest.
+    DiscoveryPin,
+    /// Deploy or upgrade the canary service after all manifests are registered.
     ServiceMutation,
+}
+
+/// Exact finalized-governance readiness of one Taira Inrou canary pin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TairaInrouCanaryPinReadinessV1 {
+    /// The exact manifest is absent from the finalized pin registry.
+    Missing,
+    /// The exact manifest exists but has not reached governance approval.
+    Pending,
+    /// The exact manifest is approved at the bound finalized epoch.
+    Approved(u64),
 }
 
 impl TairaInrouCanaryPreparedOperationV1 {
@@ -8751,6 +10546,7 @@ impl TairaInrouCanaryPreparedOperationV1 {
         match self {
             Self::BundlePin => "bundle_pin",
             Self::GuestPin => "guest_pin",
+            Self::DiscoveryPin => "discovery_pin",
             Self::ServiceMutation => "service_mutation",
         }
     }
@@ -8760,6 +10556,7 @@ impl TairaInrouCanaryPreparedOperationV1 {
         match self {
             Self::BundlePin => "inrou_bundle_pin",
             Self::GuestPin => "inrou_guest_pin",
+            Self::DiscoveryPin => "inrou_discovery_pin",
             Self::ServiceMutation => "inrou_canary",
         }
     }
@@ -8792,7 +10589,8 @@ pub(crate) fn verify_taira_inrou_prepared_transaction_identity_v1(
     };
     match operation {
         TairaInrouCanaryPreparedOperationV1::BundlePin
-        | TairaInrouCanaryPreparedOperationV1::GuestPin => {
+        | TairaInrouCanaryPreparedOperationV1::GuestPin
+        | TairaInrouCanaryPreparedOperationV1::DiscoveryPin => {
             let registration = instruction
                 .as_any()
                 .downcast_ref::<iroha::data_model::isi::sorafs::RegisterPinManifest>()
@@ -8854,6 +10652,10 @@ pub(crate) fn verify_taira_inrou_prepared_transaction_identity_v1(
                     stage.guest_manifest_digest_hex.as_str(),
                     stage.guest_content_cid.as_str(),
                 ),
+                TairaInrouCanaryPreparedOperationV1::DiscoveryPin => (
+                    stage.discovery_manifest_digest_hex.as_str(),
+                    stage.discovery_content_cid.as_str(),
+                ),
                 TairaInrouCanaryPreparedOperationV1::ServiceMutation => unreachable!(),
             };
             if digest_hex != expected_digest || content_cid != expected_cid {
@@ -8871,11 +10673,11 @@ pub(crate) fn verify_taira_inrou_prepared_transaction_identity_v1(
                 })?;
             validate_taira_inrou_canary_bundle(&deployment.bundle)
                 .wrap_err("prepared Inrou deployment bundle is not the canonical canary")?;
-            let expected_configs = BTreeMap::from([(
-                "public_reset_idempotency_v1".to_owned(),
-                Json::new(expected_idempotency_key.to_owned()),
-            )]);
-            if deployment.initial_service_configs != expected_configs
+            if deployment.initial_service_configs.len() != 2
+                || deployment
+                    .initial_service_configs
+                    .get("public_reset_idempotency_v1")
+                    != Some(&Json::new(expected_idempotency_key.to_owned()))
                 || !deployment.initial_service_secrets.is_empty()
                 || deployment.precondition != SoraServiceMutationPreconditionV1::ServiceAbsent
             {
@@ -8883,6 +10685,18 @@ pub(crate) fn verify_taira_inrou_prepared_transaction_identity_v1(
                     "prepared Inrou deployment material or precondition is outside exact V1"
                 ));
             }
+            validate_taira_inrou_canary_public_discovery_config(
+                deployment
+                    .initial_service_configs
+                    .get(PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME)
+                    .ok_or_else(|| {
+                        eyre!(
+                            "prepared Inrou deployment omits its authoritative public-discovery registry"
+                        )
+                    })?,
+                &deployment.bundle,
+                stage,
+            )?;
             let provenance_payload = encode_bundle_with_materials_provenance_payload(
                 &deployment.bundle,
                 &deployment.initial_service_configs,
@@ -8984,12 +10798,29 @@ pub(crate) fn prepare_taira_inrou_canary_operation(
                 timeout_secs,
             );
         }
+        TairaInrouCanaryPreparedOperationV1::DiscoveryPin => {
+            return prepare_built_sorafs_manifest_registration(
+                &staged.discovery_manifest,
+                operation.operation_label(),
+                fee_payment,
+                binding,
+                torii_url,
+                config,
+                timeout_secs,
+            );
+        }
         TairaInrouCanaryPreparedOperationV1::ServiceMutation => {}
     }
-    let initial_service_configs = BTreeMap::from([(
-        "public_reset_idempotency_v1".to_owned(),
-        Json::new(binding.idempotency_key.clone()),
-    )]);
+    let initial_service_configs = BTreeMap::from([
+        (
+            "public_reset_idempotency_v1".to_owned(),
+            Json::new(binding.idempotency_key.clone()),
+        ),
+        (
+            PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_owned(),
+            taira_inrou_canary_public_discovery_config_value(&staged.discovery)?,
+        ),
+    ]);
     let service_name = staged.bundle.service.service_name.to_string();
     let (_, status) =
         fetch_torii_soracloud_status(torii_url, Some(&service_name), api_token, timeout_secs)?;
@@ -9086,7 +10917,31 @@ enum SoracloudAction {
     DecryptionRequest,
     CiphertextQuery,
     Rollout,
+    LeaseUsage,
     LeaseReportingEpochRollover,
+}
+impl SoracloudAction {
+    fn authoritative(self) -> SoraServiceLifecycleActionV1 {
+        match self {
+            Self::Deploy => SoraServiceLifecycleActionV1::Deploy,
+            Self::Upgrade => SoraServiceLifecycleActionV1::Upgrade,
+            Self::Rollback => SoraServiceLifecycleActionV1::Rollback,
+            Self::ConfigMutation => SoraServiceLifecycleActionV1::ConfigMutation,
+            Self::SecretMutation => SoraServiceLifecycleActionV1::SecretMutation,
+            Self::StateMutation => SoraServiceLifecycleActionV1::StateMutation,
+            Self::FheJobRun => SoraServiceLifecycleActionV1::FheJobRun,
+            Self::FhePolicyRegister => SoraServiceLifecycleActionV1::FhePolicyRegister,
+            Self::FhePolicyRotate => SoraServiceLifecycleActionV1::FhePolicyRotate,
+            Self::FhePolicyRevoke => SoraServiceLifecycleActionV1::FhePolicyRevoke,
+            Self::DecryptionRequest => SoraServiceLifecycleActionV1::DecryptionRequest,
+            Self::CiphertextQuery => SoraServiceLifecycleActionV1::CiphertextQuery,
+            Self::Rollout => SoraServiceLifecycleActionV1::Rollout,
+            Self::LeaseUsage => SoraServiceLifecycleActionV1::LeaseUsage,
+            Self::LeaseReportingEpochRollover => {
+                SoraServiceLifecycleActionV1::LeaseReportingEpochRollover
+            }
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "stage", content = "value")]
@@ -9100,8 +10955,7 @@ enum RolloutStage {
 #[norito(deny_unknown_fields)]
 struct RolloutRuntimeState {
     rollout_handle: String,
-    #[norito(required)]
-    baseline_version: Option<String>,
+    baseline_version: String,
     candidate_version: String,
     canary_percent: u8,
     traffic_percent: u8,
@@ -9111,6 +10965,28 @@ struct RolloutRuntimeState {
     health_window_secs: u32,
     created_sequence: u64,
     updated_sequence: u64,
+}
+impl RolloutRuntimeState {
+    fn authoritative(&self) -> SoraServiceRolloutStateV1 {
+        SoraServiceRolloutStateV1 {
+            schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+            rollout_handle: self.rollout_handle.clone(),
+            baseline_version: self.baseline_version.clone(),
+            candidate_version: self.candidate_version.clone(),
+            canary_percent: self.canary_percent,
+            traffic_percent: self.traffic_percent,
+            stage: match self.stage {
+                RolloutStage::Canary => SoraRolloutStageV1::Canary,
+                RolloutStage::Promoted => SoraRolloutStageV1::Promoted,
+                RolloutStage::RolledBack => SoraRolloutStageV1::RolledBack,
+            },
+            health_failures: self.health_failures,
+            max_health_failures: self.max_health_failures,
+            health_window_secs: self.health_window_secs,
+            created_sequence: self.created_sequence,
+            updated_sequence: self.updated_sequence,
+        }
+    }
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -9248,15 +11124,7 @@ struct ServiceStatusOutput {
     config_entry_count: u32,
     secret_entry_count: u32,
     #[norito(required)]
-    quota_class: Option<String>,
-    #[norito(required)]
-    service_lease_status: Option<SoraServiceLeaseStatusV1>,
-    #[norito(required)]
-    lease_expires_height: Option<u64>,
-    #[norito(required)]
-    prepaid_runtime_balance: Option<Quantity>,
-    #[norito(required)]
-    remaining_runtime_balance: Option<Quantity>,
+    service_lease: Option<ServiceLeaseStatusOutput>,
     #[norito(required)]
     public_discovery_content_cid: Option<String>,
     #[norito(required)]
@@ -9270,12 +11138,20 @@ struct ServiceStatusOutput {
     #[norito(required)]
     last_rollout: Option<RolloutRuntimeState>,
 }
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ServiceLeaseStatusOutput {
+    authoritative_state: SoraServiceLeaseStateV1,
+    effective_status: SoraServiceLeaseStatusV1,
+    remaining_runtime_balance: Quantity,
+}
 #[derive(Clone, Debug, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct NetworkControlPlaneSnapshotV1 {
     schema_version: u16,
     service_count: u32,
     audit_event_count: u32,
+    active_inrou_hosts: Vec<SoraInrouHostCapabilityRecordV1>,
     services: Vec<ServiceStatusOutput>,
     recent_audit_events: Vec<NetworkControlPlaneAuditEventV1>,
 }
@@ -9290,18 +11166,21 @@ struct NetworkControlPlaneAuditEventV1 {
     to_version: String,
     service_manifest_hash: Hash,
     container_manifest_hash: Hash,
+    process_generation: u64,
+    config_generation: u64,
+    secret_generation: u64,
+    config_snapshot_hash: Hash,
+    secret_snapshot_hash: Hash,
     #[norito(required)]
     binding_name: Option<String>,
     #[norito(required)]
     state_key: Option<String>,
-    #[norito(required)]
-    config_name: Option<String>,
-    #[norito(required)]
-    secret_name: Option<String>,
+    config_mutations: Vec<SoraServiceConfigMutationV1>,
+    secret_mutations: Vec<SoraServiceSecretMutationV1>,
     #[norito(required)]
     governance_tx_hash: Option<Hash>,
     #[norito(required)]
-    rollout_handle: Option<String>,
+    rollout_state: Option<RolloutRuntimeState>,
     #[norito(required)]
     policy_name: Option<String>,
     #[norito(required)]
@@ -9315,8 +11194,88 @@ struct NetworkControlPlaneAuditEventV1 {
     #[norito(required)]
     break_glass_reason: Option<String>,
     #[norito(required)]
+    lease_usage: Option<SoraServiceLeaseUsageAuditV1>,
+    #[norito(required)]
+    service_lease_commitment: Option<Hash>,
+    #[norito(required)]
     lease_reporting_epoch_rollover: Option<SoraServiceLeaseReportingEpochRolloverV1>,
     signed_by: String,
+}
+impl NetworkControlPlaneAuditEventV1 {
+    fn validate(&self) -> Result<()> {
+        let parse_exact_name = |field: &str, value: &str| -> Result<Name> {
+            let name = value
+                .parse::<Name>()
+                .wrap_err_with(|| format!("invalid Soracloud control-plane audit `{field}`"))?;
+            if name.as_ref() != value {
+                return Err(eyre!(
+                    "Soracloud control-plane audit `{field}` must use exact canonical V1 spelling"
+                ));
+            }
+            Ok(name)
+        };
+        let service_name = parse_exact_name("service_name", &self.service_name)?;
+        let binding_name = self
+            .binding_name
+            .as_deref()
+            .map(|value| parse_exact_name("binding_name", value))
+            .transpose()?;
+        let policy_name = self
+            .policy_name
+            .as_deref()
+            .map(|value| parse_exact_name("policy_name", value))
+            .transpose()?;
+        let signer = self
+            .signed_by
+            .parse::<PublicKey>()
+            .wrap_err("invalid Soracloud control-plane audit `signed_by`")?;
+        if signer.to_string() != self.signed_by {
+            return Err(eyre!(
+                "Soracloud control-plane audit `signed_by` must use exact canonical V1 spelling"
+            ));
+        }
+        SoraServiceAuditEventV1 {
+            schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+            sequence: self.sequence,
+            // Torii's control-plane projection intentionally omits the already-committed
+            // block coordinates. Positive sentinels let the authoritative validator check
+            // every invariant retained by this public projection.
+            block_height: 1,
+            block_timestamp_ms: 1,
+            action: self.action.authoritative(),
+            service_name,
+            from_version: self.from_version.clone(),
+            to_version: self.to_version.clone(),
+            service_manifest_hash: self.service_manifest_hash,
+            container_manifest_hash: self.container_manifest_hash,
+            process_generation: self.process_generation,
+            config_generation: self.config_generation,
+            secret_generation: self.secret_generation,
+            config_snapshot_hash: self.config_snapshot_hash,
+            secret_snapshot_hash: self.secret_snapshot_hash,
+            governance_tx_hash: self.governance_tx_hash,
+            binding_name,
+            state_key: self.state_key.clone(),
+            config_mutations: self.config_mutations.clone(),
+            secret_mutations: self.secret_mutations.clone(),
+            rollout_state: self
+                .rollout_state
+                .as_ref()
+                .map(RolloutRuntimeState::authoritative),
+            policy_name,
+            policy_snapshot_hash: self.policy_snapshot_hash,
+            jurisdiction_tag: self.jurisdiction_tag.clone(),
+            consent_evidence_hash: self.consent_evidence_hash,
+            break_glass: self.break_glass,
+            break_glass_reason: self.break_glass_reason.clone(),
+            lease_usage: self.lease_usage.clone(),
+            service_lease_commitment: self.service_lease_commitment,
+            lease_reporting_epoch_rollover: self.lease_reporting_epoch_rollover.clone(),
+            signer,
+        }
+        .validate()
+        .map_err(|error| eyre!("invalid Soracloud control-plane audit event V1: {error}"))
+    }
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -10592,13 +12551,13 @@ fn decode_network_control_plane_snapshot(
             "unsupported Soracloud status schema version {schema_version}; expected {SORACLOUD_STATUS_SCHEMA_VERSION_V1}"
         ));
     }
-    let control_plane: NetworkControlPlaneSnapshotV1 = json::from_value(
-        network_status
-            .get("control_plane")
-            .cloned()
-            .ok_or_else(|| eyre!("Soracloud network status is missing `control_plane`"))?,
-    )
-    .wrap_err("failed to decode canonical Soracloud `control_plane` status")?;
+    let control_plane_value = network_status
+        .get("control_plane")
+        .cloned()
+        .ok_or_else(|| eyre!("Soracloud network status is missing `control_plane`"))?;
+    let control_plane: NetworkControlPlaneSnapshotV1 =
+        json::from_value(control_plane_value.clone())
+            .wrap_err("failed to decode canonical Soracloud `control_plane` status")?;
     if control_plane.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
         return Err(eyre!(
             "unsupported Soracloud control-plane schema version {}; expected {}",
@@ -10615,6 +12574,21 @@ fn decode_network_control_plane_snapshot(
             decoded_service_count
         ));
     }
+    let mut previous_active_validator: Option<&AccountId> = None;
+    for (index, capability) in control_plane.active_inrou_hosts.iter().enumerate() {
+        capability
+            .validate()
+            .map_err(|error| eyre!(error))
+            .wrap_err_with(|| format!("invalid active Inrou host at index {index}"))?;
+        if previous_active_validator
+            .is_some_and(|previous| previous >= &capability.validator_account_id)
+        {
+            return Err(eyre!(
+                "active Inrou host capabilities must be strictly ordered by validator account"
+            ));
+        }
+        previous_active_validator = Some(&capability.validator_account_id);
+    }
     let recent_audit_count = u32::try_from(control_plane.recent_audit_events.len())
         .wrap_err("Soracloud control-plane audit list exceeds the V1 count range")?;
     if recent_audit_count > control_plane.audit_event_count {
@@ -10622,6 +12596,28 @@ fn decode_network_control_plane_snapshot(
             "Soracloud control-plane recent audit count {recent_audit_count} exceeds total audit_event_count {}",
             control_plane.audit_event_count
         ));
+    }
+    let encoded_audit_events = control_plane_value
+        .get("recent_audit_events")
+        .and_then(json::Value::as_array)
+        .ok_or_else(|| eyre!("Soracloud control-plane audit history must be a V1 array"))?;
+    for (index, (event, encoded)) in control_plane
+        .recent_audit_events
+        .iter()
+        .zip(encoded_audit_events)
+        .enumerate()
+    {
+        event.validate().wrap_err_with(|| {
+            format!("invalid Soracloud control-plane recent audit event at index {index}")
+        })?;
+        let canonical = json::to_value(event).wrap_err_with(|| {
+            format!("failed to re-encode Soracloud control-plane audit event at index {index}")
+        })?;
+        if &canonical != encoded {
+            return Err(eyre!(
+                "Soracloud control-plane audit event at index {index} is not exact canonical V1 JSON"
+            ));
+        }
     }
     Ok((schema_version, control_plane))
 }
@@ -11295,6 +13291,25 @@ struct AppStaticSiteRootBindingPlan {
     target_host: String,
     binding_value: Json,
 }
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SoracloudPublicServiceDiscoveryDocumentV1 {
+    schema_version: u16,
+    service_name: String,
+    service_version: String,
+    execution_plane: String,
+    runtime: String,
+    route_host: String,
+    path_prefix: String,
+    base_url: String,
+    #[norito(required)]
+    healthcheck_path: Option<String>,
+    #[norito(required)]
+    healthcheck_url: Option<String>,
+    service_manifest_hash: Hash,
+    container_manifest_hash: Hash,
+    deployment_bundle_hash: Hash,
+}
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct SoracloudPublicServiceDiscoveryV1 {
@@ -11313,10 +13328,30 @@ struct SoracloudPublicServiceDiscoveryV1 {
     service_manifest_hash: Hash,
     container_manifest_hash: Hash,
     deployment_bundle_hash: Hash,
+    document_hash: Hash,
     content_cid: String,
     public_discovery_url: String,
     public_discovery_cid_host_url: String,
     manifest_digest_hex: String,
+}
+fn public_service_discovery_document_from_projection(
+    discovery: &SoracloudPublicServiceDiscoveryV1,
+) -> SoracloudPublicServiceDiscoveryDocumentV1 {
+    SoracloudPublicServiceDiscoveryDocumentV1 {
+        schema_version: discovery.schema_version,
+        service_name: discovery.service_name.clone(),
+        service_version: discovery.service_version.clone(),
+        execution_plane: discovery.execution_plane.clone(),
+        runtime: discovery.runtime.clone(),
+        route_host: discovery.route_host.clone(),
+        path_prefix: discovery.path_prefix.clone(),
+        base_url: discovery.base_url.clone(),
+        healthcheck_path: discovery.healthcheck_path.clone(),
+        healthcheck_url: discovery.healthcheck_url.clone(),
+        service_manifest_hash: discovery.service_manifest_hash,
+        container_manifest_hash: discovery.container_manifest_hash,
+        deployment_bundle_hash: discovery.deployment_bundle_hash,
+    }
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -11325,6 +13360,108 @@ struct SoracloudPublicServiceDiscoveryRegistryV1 {
     service_name: String,
     current_version: String,
     revisions: BTreeMap<String, SoracloudPublicServiceDiscoveryV1>,
+}
+
+fn taira_inrou_canary_public_discovery_config_value(
+    discovery: &SoracloudPublicServiceDiscoveryV1,
+) -> Result<Json> {
+    let registry = SoracloudPublicServiceDiscoveryRegistryV1 {
+        schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
+        service_name: discovery.service_name.clone(),
+        current_version: discovery.service_version.clone(),
+        revisions: BTreeMap::from([(discovery.service_version.clone(), discovery.clone())]),
+    };
+    Ok(Json::from(json::to_value(&registry).wrap_err(
+        "encode canonical Taira public-discovery registry config",
+    )?))
+}
+
+fn validate_taira_inrou_canary_public_discovery_config(
+    config: &Json,
+    bundle: &SoraDeploymentBundleV1,
+    stage: &TairaInrouStageIdentity,
+) -> Result<()> {
+    let registry: SoracloudPublicServiceDiscoveryRegistryV1 = json::from_str(config.as_ref())
+        .wrap_err("decode exact Taira public-discovery registry config")?;
+    if registry.schema_version != PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1
+        || registry.service_name != stage.service_name
+        || registry.current_version != stage.service_version
+        || registry.revisions.len() != 1
+    {
+        return Err(eyre!(
+            "Taira public-discovery registry must contain exactly the current canary revision"
+        ));
+    }
+    let discovery = registry
+        .revisions
+        .get(&stage.service_version)
+        .ok_or_else(|| {
+            eyre!("Taira public-discovery registry omits the current canary revision")
+        })?;
+    let route = bundle
+        .service
+        .route
+        .as_ref()
+        .ok_or_else(|| eyre!("Taira public-discovery bundle omits its public route"))?;
+    let base_url = normalize_public_service_base_url(bundle)?;
+    let healthcheck_path = bundle.container.lifecycle.healthcheck_path.clone();
+    let healthcheck_url = healthcheck_path.as_ref().map(|path| {
+        let mut url = base_url.clone();
+        url.set_path(&join_service_route_path(&route.path_prefix, path));
+        url.set_query(None);
+        url.set_fragment(None);
+        url.to_string()
+    });
+    let expected_document = SoracloudPublicServiceDiscoveryDocumentV1 {
+        schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
+        service_name: bundle.service.service_name.to_string(),
+        service_version: bundle.service.service_version.clone(),
+        execution_plane: format!("{:?}", bundle.service.execution_plane),
+        runtime: format!("{:?}", bundle.container.runtime),
+        route_host: route.host.clone(),
+        path_prefix: route.path_prefix.clone(),
+        base_url: base_url.to_string(),
+        healthcheck_path,
+        healthcheck_url,
+        service_manifest_hash: bundle.service_manifest_hash(),
+        container_manifest_hash: bundle.container_manifest_hash(),
+        deployment_bundle_hash: Hash::new(Encode::encode(bundle)),
+    };
+    let expected_document_hash = Hash::new(
+        json::to_vec(&expected_document)
+            .wrap_err("encode exact Taira public-discovery document")?,
+    );
+    let mut expected_public_url = base_url.clone();
+    expected_public_url.set_path(&format!(
+        "/sorafs/cid/{}/{PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT}",
+        stage.discovery_content_cid
+    ));
+    let cid_host_suffix = sorafs_cid_host_suffix_for_hostname(&route.host);
+    if cid_host_suffix != "sorafs.taira.sora.org" {
+        return Err(eyre!(
+            "Taira public-discovery route did not resolve to the authoritative public CID-host suffix"
+        ));
+    }
+    let expected_cid_host_url = format!(
+        "https://{}.{cid_host_suffix}/{PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT}",
+        stage.discovery_content_cid
+    );
+    if public_service_discovery_document_from_projection(discovery) != expected_document
+        || expected_document.deployment_bundle_hash.to_string() != stage.deployment_bundle_hash
+        || discovery.document_hash != expected_document_hash
+        || discovery.document_hash.to_string() != stage.discovery_document_hash
+        || discovery.content_cid != stage.discovery_content_cid
+        || discovery.manifest_digest_hex != stage.discovery_manifest_digest_hex
+        || discovery.public_discovery_url != stage.public_discovery_url
+        || discovery.public_discovery_url != expected_public_url.to_string()
+        || discovery.public_discovery_cid_host_url != stage.public_discovery_cid_host_url
+        || discovery.public_discovery_cid_host_url != expected_cid_host_url
+    {
+        return Err(eyre!(
+            "Taira public-discovery registry differs from the exact retained canary stage"
+        ));
+    }
+    Ok(())
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -11335,6 +13472,7 @@ struct PublicServiceDiscoveryPublishOutput {
     base_url: String,
     #[norito(required)]
     healthcheck_url: Option<String>,
+    document_hash: Hash,
     content_cid: String,
     public_discovery_url: String,
     public_discovery_cid_host_url: String,
@@ -11854,7 +13992,13 @@ impl SoracloudTempDir {
                 eyre!("Soracloud temporary directory suffix OS RNG failed: {error}")
             })?;
             let path = std::env::temp_dir().join(format!("{prefix}-{}", hex::encode(suffix)));
-            match fs::create_dir(&path) {
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt as _;
+                builder.mode(0o700);
+            }
+            match builder.create(&path) {
                 Ok(()) => return Ok(Self { path }),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => {
@@ -12325,21 +14469,26 @@ fn signed_manifest_provenance(key_pair: &KeyPair, payload: &[u8]) -> Result<Mani
         signature: sign_soracloud_payload(key_pair, payload)?,
     })
 }
-fn sorafs_release_nonce_unix_nanos(now: SystemTime) -> Result<String> {
-    Ok(now
-        .duration_since(UNIX_EPOCH)
-        .wrap_err("SoraFS release governance clock precedes the Unix epoch")?
-        .as_nanos()
-        .to_string())
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SorafsReleaseIdentityV1 {
+    retention_epoch: NonZeroU64,
+}
+impl SorafsReleaseIdentityV1 {
+    const fn new(retention_epoch: NonZeroU64) -> Self {
+        Self { retention_epoch }
+    }
+    const fn retention_epoch(self) -> u64 {
+        self.retention_epoch.get()
+    }
 }
 fn attach_sorafs_release_governance(
     mut manifest: ManifestV1,
     key_pair: &KeyPair,
+    release_identity: SorafsReleaseIdentityV1,
 ) -> Result<ManifestV1> {
-    let release_nonce = sorafs_release_nonce_unix_nanos(SystemTime::now())?;
     manifest.metadata.push(MetadataEntry {
-        key: "soracloud.release_nonce_unix_nanos".to_owned(),
-        value: release_nonce,
+        key: SORAFS_RELEASE_RETENTION_EPOCH_METADATA_KEY_V1.to_owned(),
+        value: release_identity.retention_epoch().to_string(),
     });
     let (_unsigned_manifest_bytes, unsigned_manifest_digest) =
         encode_sorafs_manifest_for_storage(&manifest)?;
@@ -12362,15 +14511,124 @@ fn attach_sorafs_release_governance(
     };
     Ok(manifest)
 }
-fn sorafs_pin_manifest_registered(client: &Client, manifest_digest_hex: &str) -> Result<bool> {
+fn validate_sorafs_release_identity(
+    manifest: &ManifestV1,
+    release_identity: SorafsReleaseIdentityV1,
+    description: &str,
+) -> Result<()> {
+    if manifest.pin_policy.retention_epoch != release_identity.retention_epoch() {
+        return Err(eyre!(
+            "{description} retention epoch {} differs from the release identity {}",
+            manifest.pin_policy.retention_epoch,
+            release_identity.retention_epoch()
+        ));
+    }
+    let expected = release_identity.retention_epoch().to_string();
+    let [identity] = manifest.metadata.as_slice() else {
+        return Err(eyre!(
+            "{description} must carry only the deterministic `{SORAFS_RELEASE_RETENTION_EPOCH_METADATA_KEY_V1}` metadata entry"
+        ));
+    };
+    if identity.key != SORAFS_RELEASE_RETENTION_EPOCH_METADATA_KEY_V1 || identity.value != expected
+    {
+        return Err(eyre!(
+            "{description} must carry the deterministic `{SORAFS_RELEASE_RETENTION_EPOCH_METADATA_KEY_V1}` metadata value {expected}"
+        ));
+    }
+    Ok(())
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExpectedSorafsPinManifest {
+    digest: ManifestDigest,
+    root_cid: ManifestRootCid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SorafsPinManifestReadiness {
+    Missing,
+    Pending,
+    Approved(u64),
+}
+
+fn expected_sorafs_pin_manifest(
+    args: iroha::client::SorafsPinRegisterArgs<'_>,
+    manifest_digest_hex: &str,
+) -> Result<ExpectedSorafsPinManifest> {
+    let manifest = sorafs_manifest::decode_manifest_v1_canonical(args.manifest_payload)
+        .wrap_err("failed to decode the exact SoraFS manifest before pin registration")?;
+    let digest = ManifestDigest::from_manifest(&manifest)
+        .wrap_err("failed to derive the exact SoraFS manifest digest before pin registration")?;
+    let canonical_digest_hex = hex::encode(digest.as_bytes());
+    if manifest_digest_hex != canonical_digest_hex {
+        return Err(eyre!(
+            "SoraFS pin registration digest `{manifest_digest_hex}` does not match the exact manifest digest `{canonical_digest_hex}`"
+        ));
+    }
+    let root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)
+        .wrap_err("failed to decode the exact SoraFS manifest root CID before pin registration")?;
+    Ok(ExpectedSorafsPinManifest { digest, root_cid })
+}
+
+fn decode_sorafs_pin_manifest_readiness(
+    response_body: &[u8],
+    expected: ExpectedSorafsPinManifest,
+) -> Result<SorafsPinManifestReadiness> {
+    let finalized: PinManifestFinalizedRecordV1 = json::from_slice(response_body)
+        .wrap_err("failed to decode the finalized SoraFS pin registry record")?;
+    if finalized.manifest.digest != expected.digest {
+        return Err(eyre!(
+            "finalized SoraFS pin registry record returned digest {}, expected {}",
+            hex::encode(finalized.manifest.digest.as_bytes()),
+            hex::encode(expected.digest.as_bytes())
+        ));
+    }
+    if finalized.manifest.root_cid != expected.root_cid {
+        return Err(eyre!(
+            "finalized SoraFS pin registry record returned a root CID that does not match manifest {}",
+            hex::encode(expected.digest.as_bytes())
+        ));
+    }
+    match finalized.manifest.status {
+        PinStatus::Pending => {
+            if finalized.manifest.approved_epoch.is_some() {
+                return Err(eyre!(
+                    "pending SoraFS pin registry record {} carries an approval epoch",
+                    hex::encode(expected.digest.as_bytes())
+                ));
+            }
+            Ok(SorafsPinManifestReadiness::Pending)
+        }
+        PinStatus::Approved(approved_epoch) => {
+            if finalized.manifest.approved_epoch != Some(approved_epoch) {
+                return Err(eyre!(
+                    "approved SoraFS pin registry record {} does not bind status epoch {approved_epoch} to approved_epoch",
+                    hex::encode(expected.digest.as_bytes())
+                ));
+            }
+            Ok(SorafsPinManifestReadiness::Approved(approved_epoch))
+        }
+        PinStatus::Retired(retired_epoch) => Err(eyre!(
+            "SoraFS pin registry record {} retired at epoch {retired_epoch} and is not replication-eligible",
+            hex::encode(expected.digest.as_bytes())
+        )),
+    }
+}
+
+fn sorafs_pin_manifest_readiness(
+    client: &Client,
+    expected: ExpectedSorafsPinManifest,
+) -> Result<SorafsPinManifestReadiness> {
+    let manifest_digest_hex = hex::encode(expected.digest.as_bytes());
     let response = client
-        .get_sorafs_pin_manifest(manifest_digest_hex)
+        .get_sorafs_pin_manifest(&manifest_digest_hex)
         .wrap_err_with(|| {
             format!("failed to query SoraFS pin registry for {manifest_digest_hex}")
         })?;
     match response.status() {
-        iroha::http::StatusCode::OK => Ok(true),
-        iroha::http::StatusCode::NOT_FOUND => Ok(false),
+        iroha::http::StatusCode::OK => {
+            decode_sorafs_pin_manifest_readiness(response.body(), expected)
+        }
+        iroha::http::StatusCode::NOT_FOUND => Ok(SorafsPinManifestReadiness::Missing),
         status => Err(eyre!(
             "failed to query SoraFS pin registry for {manifest_digest_hex}: {} {}",
             status,
@@ -12378,22 +14636,73 @@ fn sorafs_pin_manifest_registered(client: &Client, manifest_digest_hex: &str) ->
         )),
     }
 }
+
+/// Revalidate a retained Taira stage and read exact finalized pin-governance readiness.
+///
+/// A globally applied registration transaction is deliberately insufficient: only a
+/// finalized record whose digest, root CID, status epoch, and `approved_epoch` all match
+/// the retained stage is returned as [`TairaInrouCanaryPinReadinessV1::Approved`].
+pub(crate) fn taira_inrou_canary_pin_readiness_v1(
+    config: &ClientConfig,
+    stage_dir: &Path,
+    torii_url: &str,
+    timeout_secs: u64,
+    requested_mode: crate::taira::InrouCanaryMode,
+    operation: TairaInrouCanaryPreparedOperationV1,
+) -> Result<TairaInrouCanaryPinReadinessV1> {
+    let staged = load_verified_taira_inrou_stage(
+        stage_dir,
+        &config.key_pair,
+        MutationMode::from(requested_mode),
+    )?;
+    let built = match operation {
+        TairaInrouCanaryPreparedOperationV1::BundlePin => &staged.bundle_manifest,
+        TairaInrouCanaryPreparedOperationV1::GuestPin => &staged.guest_manifest,
+        TairaInrouCanaryPreparedOperationV1::DiscoveryPin => &staged.discovery_manifest,
+        TairaInrouCanaryPreparedOperationV1::ServiceMutation => {
+            return Err(eyre!(
+                "Taira Inrou service mutation has no SoraFS pin-governance readiness"
+            ));
+        }
+    };
+    let expected = expected_sorafs_pin_manifest(
+        iroha::client::SorafsPinRegisterArgs {
+            manifest_payload: &built.bytes,
+            alias: None,
+            successor_of: None,
+        },
+        &built.digest_hex,
+    )?;
+    let client = soracloud_transaction_client(config, torii_url, timeout_secs)?;
+    Ok(match sorafs_pin_manifest_readiness(&client, expected)? {
+        SorafsPinManifestReadiness::Missing => TairaInrouCanaryPinReadinessV1::Missing,
+        SorafsPinManifestReadiness::Pending => TairaInrouCanaryPinReadinessV1::Pending,
+        SorafsPinManifestReadiness::Approved(epoch) => {
+            TairaInrouCanaryPinReadinessV1::Approved(epoch)
+        }
+    })
+}
+
 fn wait_for_sorafs_pin_manifest(
     client: &Client,
-    manifest_digest_hex: &str,
+    expected: ExpectedSorafsPinManifest,
     description: &str,
     timeout_secs: u64,
 ) -> Result<()> {
+    let manifest_digest_hex = hex::encode(expected.digest.as_bytes());
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let deadline = Instant::now() + timeout;
     loop {
-        if sorafs_pin_manifest_registered(client, manifest_digest_hex)? {
+        if matches!(
+            sorafs_pin_manifest_readiness(client, expected)?,
+            SorafsPinManifestReadiness::Approved(_)
+        ) {
             return Ok(());
         }
         let now = Instant::now();
         if now >= deadline {
             return Err(eyre!(
-                "timed out waiting for {description} pin registry record {manifest_digest_hex}"
+                "timed out waiting for {description} pin registry record {manifest_digest_hex} to reach Approved"
             ));
         }
         std::thread::sleep((deadline - now).min(Duration::from_secs(2)));
@@ -12406,22 +14715,17 @@ fn register_sorafs_pin_manifest_and_wait(
     description: &str,
     timeout_secs: u64,
 ) -> Result<()> {
-    if sorafs_pin_manifest_registered(client, manifest_digest_hex)? {
-        return Ok(());
+    let expected = expected_sorafs_pin_manifest(args, manifest_digest_hex)?;
+    match sorafs_pin_manifest_readiness(client, expected)? {
+        SorafsPinManifestReadiness::Approved(_) => return Ok(()),
+        SorafsPinManifestReadiness::Pending => {}
+        SorafsPinManifestReadiness::Missing => {
+            client
+                .post_sorafs_pin_register(args)
+                .wrap_err_with(|| format!("failed to register {description} manifest"))?;
+        }
     }
-    client
-        .post_sorafs_pin_register(args)
-        .wrap_err_with(|| format!("failed to register {description} manifest"))?;
-    wait_for_sorafs_pin_manifest(client, manifest_digest_hex, description, timeout_secs)
-}
-fn sorafs_pin_retention_epoch() -> Result<u64> {
-    let current_epoch = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .wrap_err("system clock is before the Unix epoch")?
-        .as_secs();
-    current_epoch
-        .checked_add(SORAFS_DEFAULT_PIN_RETENTION_EPOCHS)
-        .ok_or_else(|| eyre!("SoraFS pin retention epoch overflow"))
+    wait_for_sorafs_pin_manifest(client, expected, description, timeout_secs)
 }
 struct SorafsManifestBuildLabels<'a> {
     writer: &'a str,
@@ -12438,11 +14742,1614 @@ struct BuiltSorafsManifest {
     bytes: Vec<u8>,
     digest_hex: String,
 }
+
+struct PreparedSorafsArtifact {
+    description: String,
+    plan: CarBuildPlan,
+    payload: Vec<u8>,
+    built: BuiltSorafsManifest,
+}
+
+const INROU_PRESEED_RECEIPT_MAX_BYTES: u64 = 1024 * 1024;
+const INROU_PRESEED_STDERR_MAX_BYTES: u64 = 1024 * 1024;
+const INROU_PRESEED_HELPER_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+const INROU_PRESEED_PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+fn parse_canonical_inrou_validator_account(value: &str) -> std::result::Result<AccountId, String> {
+    if value.trim() != value {
+        return Err("validator account must not contain surrounding whitespace".to_owned());
+    }
+    let account = AccountId::parse_encoded(value)
+        .map_err(|error| format!("invalid validator account: {error}"))?;
+    if account.to_string() != value {
+        return Err("validator account must use its exact canonical V1 spelling".to_owned());
+    }
+    Ok(account)
+}
+
+/// One CLI-supplied validator/peer/store binding for offline Inrou preseed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InrouOperatorPreseedTargetArg {
+    validator_account_id: String,
+    peer_id: String,
+    data_dir: PathBuf,
+}
+
+impl InrouOperatorPreseedTargetArg {
+    fn canonical_placement(&self) -> std::result::Result<SoraInrouPlacementTargetV1, String> {
+        let placement = SoraInrouPlacementTargetV1 {
+            validator_account_id: parse_canonical_inrou_validator_account(
+                &self.validator_account_id,
+            )?,
+            peer_id: self.peer_id.clone(),
+        };
+        placement
+            .validate()
+            .map_err(|error| format!("invalid validator/peer binding: {error}"))?;
+        Ok(placement)
+    }
+}
+
+impl FromStr for InrouOperatorPreseedTargetArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        let mut fields = value.splitn(3, ',');
+        let validator_account_id = fields
+            .next()
+            .filter(|field| !field.is_empty())
+            .ok_or_else(|| {
+                "expected <validator-account-id>,<peer-id>,<absolute-data-dir>".to_owned()
+            })?
+            .to_owned();
+        let peer_id = fields
+            .next()
+            .filter(|field| !field.is_empty())
+            .ok_or_else(|| {
+                "expected <validator-account-id>,<peer-id>,<absolute-data-dir>".to_owned()
+            })?
+            .to_owned();
+        let data_dir = fields
+            .next()
+            .filter(|field| !field.is_empty())
+            .ok_or_else(|| {
+                "expected <validator-account-id>,<peer-id>,<absolute-data-dir>".to_owned()
+            })?;
+        Ok(Self {
+            validator_account_id,
+            peer_id,
+            data_dir: PathBuf::from(data_dir),
+        })
+    }
+}
+
+pub(crate) fn parse_inrou_placement_target_identity(
+    value: &str,
+) -> std::result::Result<SoraInrouPlacementTargetV1, String> {
+    let mut fields = value.split(',');
+    let validator_account_id = fields
+        .next()
+        .filter(|field| !field.is_empty())
+        .ok_or_else(|| "expected <validator-account-id>,<peer-id>".to_owned())
+        .and_then(parse_canonical_inrou_validator_account)?;
+    let peer_id = fields
+        .next()
+        .filter(|field| !field.is_empty())
+        .ok_or_else(|| "expected <validator-account-id>,<peer-id>".to_owned())?
+        .to_owned();
+    if fields.next().is_some() {
+        return Err("expected exactly <validator-account-id>,<peer-id>".to_owned());
+    }
+    let target = SoraInrouPlacementTargetV1 {
+        validator_account_id,
+        peer_id,
+    };
+    target
+        .validate()
+        .map_err(|error| format!("invalid validator/peer binding: {error}"))?;
+    Ok(target)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ValidatedInrouOperatorPreseedTarget {
+    placement: SoraInrouPlacementTargetV1,
+    store_root: PathBuf,
+}
+
+struct ValidatedInrouOperatorPreseed {
+    targets: Vec<ValidatedInrouOperatorPreseedTarget>,
+    max_capacity_bytes: NonZeroU64,
+    helper_path: PathBuf,
+    helper_sha256: String,
+}
+
+impl ValidatedInrouOperatorPreseed {
+    fn placement_targets(&self) -> BTreeSet<SoraInrouPlacementTargetV1> {
+        self.targets
+            .iter()
+            .map(|target| target.placement.clone())
+            .collect()
+    }
+}
+
+fn bind_exact_inrou_placement_targets(
+    service: &mut SoraServiceManifestV1,
+    qualified_targets: &BTreeSet<SoraInrouPlacementTargetV1>,
+) -> Result<()> {
+    if service.placement_targets.is_empty() {
+        service.placement_targets = qualified_targets.clone();
+        return Ok(());
+    }
+    if &service.placement_targets != qualified_targets {
+        return Err(eyre!(
+            "source service placement_targets differ from the exact durable Inrou qualification"
+        ));
+    }
+    Ok(())
+}
+
+/// Offline helper process holding every target store lock until qualification is durable.
+///
+/// The originating CLI timeout independently bounds readiness, release, and cleanup phases.
+struct InrouOperatorPreseedSession {
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+    stdout: Option<ChildStdout>,
+    stderr: Option<ChildStderr>,
+    stderr_bytes: Vec<u8>,
+    stdout_eof: bool,
+    stderr_eof: bool,
+    timeout: Duration,
+    receipt: OperatorPreseedSessionReceiptV1,
+    _stage: SoracloudTempDir,
+}
+
+fn inrou_preseed_phase_deadline(timeout: Duration, phase: &str) -> Result<Instant> {
+    if timeout.is_zero() {
+        return Err(eyre!(
+            "Inrou operator-preseed {phase} timeout must be positive"
+        ));
+    }
+    Instant::now().checked_add(timeout).ok_or_else(|| {
+        eyre!("Inrou operator-preseed {phase} timeout exceeds the monotonic clock domain")
+    })
+}
+
+#[cfg(unix)]
+fn make_inrou_preseed_pipe_nonblocking(pipe: &impl std::os::fd::AsFd, label: &str) -> Result<()> {
+    let descriptor = pipe.as_fd();
+    let flags = rustix::fs::fcntl_getfl(descriptor)
+        .wrap_err_with(|| format!("failed to inspect Inrou operator-preseed {label}"))?;
+    rustix::fs::fcntl_setfl(descriptor, flags | rustix::fs::OFlags::NONBLOCK)
+        .wrap_err_with(|| format!("failed to make Inrou operator-preseed {label} nonblocking"))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_inrou_preseed_pipe_nonblocking<T>(_pipe: &T, _label: &str) -> Result<()> {
+    Err(eyre!(
+        "offline Inrou operator-preseed sessions require Unix nonblocking pipes"
+    ))
+}
+
+fn drain_inrou_preseed_pipe(
+    pipe: &mut impl io::Read,
+    output: &mut Vec<u8>,
+    eof: &mut bool,
+    label: &str,
+    max_bytes: u64,
+) -> Result<()> {
+    if *eof {
+        return Ok(());
+    }
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        match pipe.read(&mut buffer) {
+            Ok(0) => {
+                *eof = true;
+                return Ok(());
+            }
+            Ok(count) => {
+                let next_len = output
+                    .len()
+                    .checked_add(count)
+                    .ok_or_else(|| eyre!("Inrou operator-preseed {label} length overflow"))?;
+                if u64::try_from(next_len).unwrap_or(u64::MAX) > max_bytes {
+                    return Err(eyre!(
+                        "Inrou operator-preseed {label} exceeded its V1 byte limit"
+                    ));
+                }
+                output.extend_from_slice(&buffer[..count]);
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                return Err(error)
+                    .wrap_err_with(|| format!("failed to read Inrou operator-preseed {label}"));
+            }
+        }
+    }
+}
+
+fn drain_inrou_preseed_stdout(
+    stdout: &mut ChildStdout,
+    output: &mut Vec<u8>,
+    eof: &mut bool,
+) -> Result<()> {
+    drain_inrou_preseed_pipe(
+        stdout,
+        output,
+        eof,
+        "stdout",
+        INROU_PRESEED_RECEIPT_MAX_BYTES,
+    )
+}
+
+fn drain_inrou_preseed_stderr(
+    stderr: &mut ChildStderr,
+    output: &mut Vec<u8>,
+    eof: &mut bool,
+) -> Result<()> {
+    drain_inrou_preseed_pipe(
+        stderr,
+        output,
+        eof,
+        "stderr",
+        INROU_PRESEED_STDERR_MAX_BYTES,
+    )
+}
+
+fn wait_for_inrou_preseed_child_exit(child: &mut Child, deadline: Instant) -> Result<()> {
+    loop {
+        match child
+            .try_wait()
+            .wrap_err("failed to poll Inrou operator-preseed helper during cleanup")?
+        {
+            Some(_) => return Ok(()),
+            None if Instant::now() >= deadline => {
+                return Err(eyre!(
+                    "Inrou operator-preseed helper did not exit before its cleanup deadline"
+                ));
+            }
+            None => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                std::thread::sleep(INROU_PRESEED_PROCESS_POLL_INTERVAL.min(remaining));
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn signal_inrou_preseed_process_group(child: &mut Child) -> Result<()> {
+    let process_group = rustix::process::Pid::from_child(child);
+    match rustix::process::kill_process_group(process_group, rustix::process::Signal::KILL) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(error) => {
+            let _ = child.kill();
+            Err(error).wrap_err("failed to terminate owned Inrou operator-preseed process group")
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn signal_inrou_preseed_process_group(child: &mut Child) -> Result<()> {
+    child
+        .kill()
+        .wrap_err("failed to terminate owned Inrou operator-preseed helper")
+}
+
+fn terminate_inrou_preseed_child(child: &mut Child, timeout: Duration, phase: &str) -> Result<()> {
+    let signal_error = signal_inrou_preseed_process_group(child).err();
+    let wait_result = inrou_preseed_phase_deadline(timeout, phase)
+        .and_then(|deadline| wait_for_inrou_preseed_child_exit(child, deadline));
+    match (signal_error, wait_result) {
+        (None, Ok(())) => Ok(()),
+        (Some(error), Ok(())) => Err(error),
+        (None, Err(error)) => Err(error),
+        (Some(signal_error), Err(wait_error)) => Err(eyre!(
+            "{wait_error:#}; process-group termination also failed: {signal_error:#}"
+        )),
+    }
+}
+
+fn inrou_preseed_error_after_cleanup(
+    mut child: Child,
+    timeout: Duration,
+    phase: &str,
+    error: Report,
+) -> Report {
+    match terminate_inrou_preseed_child(&mut child, timeout, phase) {
+        Ok(()) => error,
+        Err(cleanup_error) => {
+            eyre!("{error:#}; Inrou operator-preseed cleanup also failed: {cleanup_error:#}")
+        }
+    }
+}
+
+impl InrouOperatorPreseedSession {
+    #[cfg(test)]
+    fn ensure_alive(&mut self) -> Result<()> {
+        let mut trailing = Vec::new();
+        drain_inrou_preseed_stdout(
+            self.stdout
+                .as_mut()
+                .expect("live preseed session owns its stdout"),
+            &mut trailing,
+            &mut self.stdout_eof,
+        )?;
+        drain_inrou_preseed_stderr(
+            self.stderr
+                .as_mut()
+                .expect("live preseed session owns its stderr"),
+            &mut self.stderr_bytes,
+            &mut self.stderr_eof,
+        )?;
+        if !trailing.is_empty() {
+            return Err(eyre!(
+                "offline Inrou operator-preseed helper emitted trailing stdout before lock release"
+            ));
+        }
+        if let Some(status) = self
+            .child
+            .as_mut()
+            .expect("live preseed session owns its child")
+            .try_wait()
+            .wrap_err("failed to query offline Inrou operator-preseed helper")?
+        {
+            return Err(eyre!(
+                "offline Inrou operator-preseed helper exited with {status} before lock release was authorized"
+            ));
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<OperatorPreseedSessionReceiptV1> {
+        let deadline = inrou_preseed_phase_deadline(self.timeout, "release")?;
+        drop(self.stdin.take());
+        let mut trailing = Vec::new();
+        let mut status = None;
+        let result = (|| -> Result<()> {
+            loop {
+                if Instant::now() >= deadline {
+                    return Err(eyre!(
+                        "Inrou operator-preseed helper exceeded its release deadline"
+                    ));
+                }
+                drain_inrou_preseed_stdout(
+                    self.stdout
+                        .as_mut()
+                        .expect("live preseed session owns its stdout"),
+                    &mut trailing,
+                    &mut self.stdout_eof,
+                )?;
+                drain_inrou_preseed_stderr(
+                    self.stderr
+                        .as_mut()
+                        .expect("live preseed session owns its stderr"),
+                    &mut self.stderr_bytes,
+                    &mut self.stderr_eof,
+                )?;
+                if !OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1.starts_with(&trailing) {
+                    return Err(eyre!(
+                        "offline Inrou operator-preseed helper emitted a noncanonical release acknowledgment"
+                    ));
+                }
+                if status.is_none() {
+                    status = self
+                        .child
+                        .as_mut()
+                        .expect("live preseed session owns its child")
+                        .try_wait()
+                        .wrap_err("failed to poll offline Inrou operator-preseed helper")?;
+                }
+                if status.is_some() && self.stdout_eof && self.stderr_eof {
+                    break;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                std::thread::sleep(INROU_PRESEED_PROCESS_POLL_INTERVAL.min(remaining));
+            }
+            let status = status.expect("preseed release completes only after child exit");
+            if !status.success() {
+                return Err(eyre!(
+                    "offline Inrou operator-preseed helper exited with {status} after lock release"
+                ));
+            }
+            if trailing != OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1 {
+                return Err(eyre!(
+                    "offline Inrou operator-preseed helper did not emit the exact EOF release acknowledgment"
+                ));
+            }
+            Ok(())
+        })();
+        drop(self.stdout.take());
+        drop(self.stderr.take());
+        let child = self
+            .child
+            .take()
+            .expect("live preseed session owns its child");
+        match result {
+            Ok(()) => Ok(self.receipt.clone()),
+            Err(error) => Err(inrou_preseed_error_after_cleanup(
+                child,
+                self.timeout,
+                "release cleanup",
+                error,
+            )),
+        }
+    }
+}
+
+impl Drop for InrouOperatorPreseedSession {
+    fn drop(&mut self) {
+        drop(self.stdin.take());
+        drop(self.stdout.take());
+        drop(self.stderr.take());
+        if let Some(mut child) = self.child.take()
+            && let Err(error) =
+                terminate_inrou_preseed_child(&mut child, self.timeout, "drop cleanup")
+        {
+            let _ = writeln!(
+                io::stderr().lock(),
+                "failed to clean up Inrou operator-preseed helper: {error:#}"
+            );
+        }
+    }
+}
+
+fn required_inrou_preseed_store_count<B>(bundles: impl IntoIterator<Item = B>) -> Option<usize>
+where
+    B: std::borrow::Borrow<UnpublishedDeploymentBundleV1>,
+{
+    bundles
+        .into_iter()
+        .filter(|bundle| {
+            let bundle = <B as std::borrow::Borrow<UnpublishedDeploymentBundleV1>>::borrow(bundle);
+            bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+                && bundle.container.runtime == SoraContainerRuntimeV1::Inrou
+        })
+        .map(|bundle| {
+            let bundle = <B as std::borrow::Borrow<UnpublishedDeploymentBundleV1>>::borrow(&bundle);
+            usize::from(bundle.service.replicas.get())
+        })
+        .max()
+        .map(|replicas: usize| replicas.max(SORACLOUD_ARTIFACT_MIN_REPLICAS_V1))
+}
+
+fn validate_inrou_preseed_artifact_count<B>(bundles: impl IntoIterator<Item = B>) -> Result<()>
+where
+    B: std::borrow::Borrow<UnpublishedDeploymentBundleV1>,
+{
+    let mut artifact_count = 0_usize;
+    for bundle in bundles {
+        let bundle = <B as std::borrow::Borrow<UnpublishedDeploymentBundleV1>>::borrow(&bundle);
+        if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
+            || bundle.container.runtime != SoraContainerRuntimeV1::Inrou
+        {
+            continue;
+        }
+        let guest_image_count = bundle
+            .container
+            .inrou
+            .as_ref()
+            .ok_or_else(|| {
+                eyre!(
+                    "service `{}` selects Inrou without its mandatory guest-image manifest",
+                    bundle.service.service_name
+                )
+            })?
+            .guest_images
+            .len();
+        let public_discovery_count = usize::from(
+            bundle
+                .service
+                .route
+                .as_ref()
+                .is_some_and(|route| route.visibility == SoraRouteVisibilityV1::Public),
+        );
+        artifact_count = artifact_count
+            .checked_add(1)
+            .and_then(|count| count.checked_add(guest_image_count))
+            .and_then(|count| count.checked_add(public_discovery_count))
+            .ok_or_else(|| eyre!("Inrou operator-preseed artifact count overflow"))?;
+        if artifact_count > OPERATOR_PRESEED_SESSION_MAX_ARTIFACTS_V1 {
+            return Err(eyre!(
+                "HttpService + Inrou publication requires {artifact_count} artifacts, exceeding the V1 operator-preseed session limit of {OPERATOR_PRESEED_SESSION_MAX_ARTIFACTS_V1}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn distinct_prepared_sorafs_artifacts<'a>(
+    artifacts: impl IntoIterator<Item = &'a PreparedSorafsArtifact>,
+) -> Vec<&'a PreparedSorafsArtifact> {
+    let mut manifest_digests = BTreeSet::new();
+    let mut artifacts = artifacts
+        .into_iter()
+        .filter(|artifact| manifest_digests.insert(artifact.built.digest_hex.clone()))
+        .collect::<Vec<_>>();
+    artifacts.sort_by(|left, right| left.built.digest_hex.cmp(&right.built.digest_hex));
+    artifacts
+}
+
+fn canonical_inrou_preseed_target(path: &Path) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        return Err(eyre!(
+            "--inrou-preseed-target data-dir must be an absolute path, got `{}`",
+            path.display()
+        ));
+    }
+    let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to inspect --inrou-preseed-target data-dir `{}`",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(eyre!(
+            "--inrou-preseed-target data-dir `{}` must be one existing real directory",
+            path.display()
+        ));
+    }
+    fs::canonicalize(path).wrap_err_with(|| {
+        format!(
+            "failed to canonicalize --inrou-preseed-target data-dir `{}`",
+            path.display()
+        )
+    })
+}
+
+fn sha256_file(path: &Path, label: &str, max_bytes: u64) -> Result<String> {
+    use sha2::{Digest as _, Sha256};
+
+    let metadata = fs::metadata(path)
+        .wrap_err_with(|| format!("failed to inspect {label} `{}`", path.display()))?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max_bytes {
+        return Err(eyre!(
+            "{label} `{}` must be a nonempty regular file no larger than {max_bytes} bytes",
+            path.display()
+        ));
+    }
+    let mut file = fs::File::open(path)
+        .wrap_err_with(|| format!("failed to open {label} `{}`", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .wrap_err_with(|| format!("failed to hash {label} `{}`", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn canonical_inrou_preseed_helper(path: &Path, expected_sha256: &str) -> Result<(PathBuf, String)> {
+    if !path.is_absolute() {
+        return Err(eyre!(
+            "--inrou-preseed-helper must be an absolute path, got `{}`",
+            path.display()
+        ));
+    }
+    let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to inspect --inrou-preseed-helper `{}`",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(eyre!(
+            "--inrou-preseed-helper `{}` must be one existing real file",
+            path.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(eyre!(
+                "--inrou-preseed-helper `{}` must be executable",
+                path.display()
+            ));
+        }
+    }
+    let canonical = fs::canonicalize(path).wrap_err_with(|| {
+        format!(
+            "failed to canonicalize --inrou-preseed-helper `{}`",
+            path.display()
+        )
+    })?;
+    let decoded = hex::decode(expected_sha256).map_err(|_| {
+        eyre!("--inrou-preseed-helper-sha256 must be exactly 32 lowercase hex bytes")
+    })?;
+    if decoded.len() != 32 || hex::encode(decoded) != expected_sha256 {
+        return Err(eyre!(
+            "--inrou-preseed-helper-sha256 must be exactly 32 lowercase hex bytes"
+        ));
+    }
+    let actual = sha256_file(
+        &canonical,
+        "offline Inrou operator-preseed helper",
+        INROU_PRESEED_HELPER_MAX_BYTES,
+    )?;
+    if actual != expected_sha256 {
+        return Err(eyre!(
+            "offline Inrou operator-preseed helper SHA-256 mismatch: expected {expected_sha256}, got {actual}"
+        ));
+    }
+    Ok((canonical, actual))
+}
+
+fn validate_inrou_operator_preseed(
+    required_count: Option<usize>,
+    target_args: &[InrouOperatorPreseedTargetArg],
+    max_capacity_bytes: Option<NonZeroU64>,
+    helper_path: Option<&Path>,
+    helper_sha256: Option<&str>,
+) -> Result<Option<ValidatedInrouOperatorPreseed>> {
+    let Some(required_count) = required_count else {
+        if !target_args.is_empty()
+            || max_capacity_bytes.is_some()
+            || helper_path.is_some()
+            || helper_sha256.is_some()
+        {
+            return Err(eyre!(
+                "Inrou operator-preseed arguments are valid only for an HttpService + Inrou mutation"
+            ));
+        }
+        return Ok(None);
+    };
+    let max_capacity_bytes = max_capacity_bytes.ok_or_else(|| {
+        eyre!(
+            "HttpService + Inrou publication requires --inrou-preseed-max-capacity-bytes matching every selected validator store"
+        )
+    })?;
+    if target_args.len() < required_count {
+        return Err(eyre!(
+            "HttpService + Inrou publication requires at least {required_count} explicit --inrou-preseed-target validator/peer/store bindings for its replica/pin policy; found {}",
+            target_args.len()
+        ));
+    }
+    if target_args.len() > OPERATOR_PRESEED_SESSION_MAX_STORES_V1 {
+        return Err(eyre!(
+            "HttpService + Inrou publication admits at most {OPERATOR_PRESEED_SESSION_MAX_STORES_V1} explicit --inrou-preseed-target bindings in V1; found {}",
+            target_args.len()
+        ));
+    }
+    let mut canonical_targets = Vec::with_capacity(target_args.len());
+    let mut distinct_roots = BTreeSet::new();
+    let mut distinct_validators = BTreeSet::new();
+    let mut distinct_peers = BTreeSet::new();
+    for target in target_args {
+        let placement = target
+            .canonical_placement()
+            .map_err(|error| eyre!(error))
+            .wrap_err("invalid --inrou-preseed-target validator/peer binding")?;
+        if !distinct_validators.insert(placement.validator_account_id.clone())
+            || !distinct_peers.insert(placement.peer_id.clone())
+        {
+            return Err(eyre!(
+                "--inrou-preseed-target validator and peer identities must each be distinct"
+            ));
+        }
+        let canonical = canonical_inrou_preseed_target(&target.data_dir)?;
+        if !distinct_roots.insert(canonical.clone()) {
+            return Err(eyre!(
+                "--inrou-preseed-target values must resolve to distinct storage roots; `{}` is repeated",
+                canonical.display()
+            ));
+        }
+        if let Some(overlap) =
+            canonical_targets
+                .iter()
+                .find(|existing: &&ValidatedInrouOperatorPreseedTarget| {
+                    canonical.starts_with(existing.store_root.as_path())
+                        || existing.store_root.starts_with(&canonical)
+                })
+        {
+            return Err(eyre!(
+                "--inrou-preseed-target storage roots must not overlap; `{}` and `{}` have an ancestor/descendant relationship",
+                overlap.store_root.display(),
+                canonical.display()
+            ));
+        }
+        canonical_targets.push(ValidatedInrouOperatorPreseedTarget {
+            placement,
+            store_root: canonical,
+        });
+    }
+    canonical_targets.sort_by(|left, right| {
+        (
+            left.placement.validator_account_id.to_string(),
+            left.placement.peer_id.as_str(),
+            left.store_root.as_path(),
+        )
+            .cmp(&(
+                right.placement.validator_account_id.to_string(),
+                right.placement.peer_id.as_str(),
+                right.store_root.as_path(),
+            ))
+    });
+    let helper_path = helper_path
+        .ok_or_else(|| eyre!("HttpService + Inrou publication requires --inrou-preseed-helper"))?;
+    let helper_sha256 = helper_sha256.ok_or_else(|| {
+        eyre!("HttpService + Inrou publication requires --inrou-preseed-helper-sha256")
+    })?;
+    let (helper_path, helper_sha256) = canonical_inrou_preseed_helper(helper_path, helper_sha256)?;
+    Ok(Some(ValidatedInrouOperatorPreseed {
+        targets: canonical_targets,
+        max_capacity_bytes,
+        helper_path,
+        helper_sha256,
+    }))
+}
+
+enum StagedInrouPreseedPayload {
+    File(PathBuf),
+    Directory(PathBuf),
+}
+
+fn stage_inrou_preseed_artifact(
+    stage_root: &Path,
+    index: usize,
+    artifact: &PreparedSorafsArtifact,
+) -> Result<(PathBuf, StagedInrouPreseedPayload)> {
+    if artifact.plan.content_length
+        != u64::try_from(artifact.payload.len())
+            .wrap_err("Inrou preseed payload length exceeds u64")?
+    {
+        return Err(eyre!(
+            "{} plan length does not match its exact prepared payload",
+            artifact.description
+        ));
+    }
+    let manifest_path = stage_root.join(format!("artifact-{index}.manifest.norito"));
+    fs::write(&manifest_path, &artifact.built.bytes).wrap_err_with(|| {
+        format!(
+            "failed to stage {} manifest at `{}`",
+            artifact.description,
+            manifest_path.display()
+        )
+    })?;
+    if artifact.plan.files.len() == 1 && artifact.plan.files[0].path.is_empty() {
+        let payload_path = stage_root.join(format!("artifact-{index}.payload"));
+        fs::write(&payload_path, &artifact.payload).wrap_err_with(|| {
+            format!(
+                "failed to stage exact {} payload at `{}`",
+                artifact.description,
+                payload_path.display()
+            )
+        })?;
+        return Ok((manifest_path, StagedInrouPreseedPayload::File(payload_path)));
+    }
+    let payload_dir = stage_root.join(format!("artifact-{index}.payload-dir"));
+    fs::create_dir(&payload_dir).wrap_err_with(|| {
+        format!(
+            "failed to create exact {} payload directory `{}`",
+            artifact.description,
+            payload_dir.display()
+        )
+    })?;
+    let mut offset = 0_usize;
+    for file in &artifact.plan.files {
+        if file.path.is_empty() {
+            return Err(eyre!(
+                "{} mixes an empty logical file path into a directory artifact",
+                artifact.description
+            ));
+        }
+        let size = usize::try_from(file.size)
+            .wrap_err_with(|| format!("convert {} file size", artifact.description))?;
+        let end = offset
+            .checked_add(size)
+            .ok_or_else(|| eyre!("{} staged file range overflow", artifact.description))?;
+        let bytes = artifact.payload.get(offset..end).ok_or_else(|| {
+            eyre!(
+                "{} staged logical file exceeds its exact payload",
+                artifact.description
+            )
+        })?;
+        let mut path = payload_dir.clone();
+        for component in &file.path {
+            path.push(component);
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).wrap_err_with(|| {
+                format!(
+                    "failed to create exact {} logical directory `{}`",
+                    artifact.description,
+                    parent.display()
+                )
+            })?;
+        }
+        fs::write(&path, bytes).wrap_err_with(|| {
+            format!(
+                "failed to stage exact {} logical file `{}`",
+                artifact.description,
+                path.display()
+            )
+        })?;
+        offset = end;
+    }
+    if offset != artifact.payload.len() {
+        return Err(eyre!(
+            "{} logical files do not cover its exact prepared payload",
+            artifact.description
+        ));
+    }
+    Ok((
+        manifest_path,
+        StagedInrouPreseedPayload::Directory(payload_dir),
+    ))
+}
+
+fn expected_inrou_preseed_receipt(
+    config: &ValidatedInrouOperatorPreseed,
+    artifacts: &[&PreparedSorafsArtifact],
+) -> Result<OperatorPreseedSessionReceiptV1> {
+    expected_inrou_preseed_receipt_from_parts(&config.targets, config.max_capacity_bytes, artifacts)
+}
+
+fn expected_inrou_preseed_receipt_from_parts(
+    targets: &[ValidatedInrouOperatorPreseedTarget],
+    max_capacity_bytes: NonZeroU64,
+    artifacts: &[&PreparedSorafsArtifact],
+) -> Result<OperatorPreseedSessionReceiptV1> {
+    let store_count =
+        u32::try_from(targets.len()).wrap_err("Inrou preseed store count exceeds u32")?;
+    let mut artifacts = artifacts
+        .iter()
+        .map(|artifact| OperatorPreseedArtifactReceiptV1 {
+            manifest_digest_blake3: artifact.built.digest_hex.clone(),
+            payload_digest_blake3: hex::encode(artifact.plan.payload_digest.as_bytes()),
+            content_length: artifact.plan.content_length,
+            store_count,
+        })
+        .collect::<Vec<_>>();
+    artifacts.sort_by(|left, right| {
+        left.manifest_digest_blake3
+            .cmp(&right.manifest_digest_blake3)
+    });
+    let targets = targets
+        .iter()
+        .map(|target| {
+            target
+                .store_root
+                .to_str()
+                .map(|store_root| OperatorPreseedTargetReceiptV1 {
+                    validator_account_id: target.placement.validator_account_id.to_string(),
+                    peer_id: target.placement.peer_id.clone(),
+                    store_root: store_root.to_owned(),
+                })
+                .ok_or_else(|| eyre!("Inrou preseed store roots must be valid UTF-8"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(OperatorPreseedSessionReceiptV1 {
+        schema_version: OPERATOR_PRESEED_SESSION_RECEIPT_VERSION_V1,
+        status: "ready".to_owned(),
+        mode: "ingest".to_owned(),
+        max_capacity_bytes: max_capacity_bytes.get(),
+        targets,
+        artifacts,
+    })
+}
+
+#[derive(Clone)]
+struct LoadedInrouPreseedQualification {
+    path: PathBuf,
+    receipt: OperatorPreseedSessionReceiptV1,
+    bytes: Vec<u8>,
+    targets: Vec<ValidatedInrouOperatorPreseedTarget>,
+    max_capacity_bytes: NonZeroU64,
+}
+
+impl LoadedInrouPreseedQualification {
+    fn placement_targets(&self) -> BTreeSet<SoraInrouPlacementTargetV1> {
+        self.targets
+            .iter()
+            .map(|target| target.placement.clone())
+            .collect()
+    }
+
+    fn require_exact_artifacts(&self, artifacts: &[&PreparedSorafsArtifact]) -> Result<()> {
+        let expected = expected_inrou_preseed_receipt_from_parts(
+            &self.targets,
+            self.max_capacity_bytes,
+            artifacts,
+        )?;
+        if self.receipt != expected {
+            return Err(eyre!(
+                "durable Inrou preseed qualification does not bind the exact prepared targets, capacity, and artifacts"
+            ));
+        }
+        Ok(())
+    }
+
+    fn revalidate(&self) -> Result<()> {
+        let loaded = read_inrou_preseed_qualification_file(&self.path)?;
+        if loaded != self.bytes {
+            return Err(eyre!(
+                "durable Inrou preseed qualification changed before online publication"
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn require_active_inrou_qualification_targets(
+    qualification: &LoadedInrouPreseedQualification,
+    active_hosts: &[SoraInrouHostCapabilityRecordV1],
+) -> Result<()> {
+    let mut active_by_validator = BTreeMap::new();
+    let mut previous_validator: Option<&AccountId> = None;
+    for (index, capability) in active_hosts.iter().enumerate() {
+        capability
+            .validate()
+            .map_err(|error| eyre!(error))
+            .wrap_err_with(|| format!("invalid active Inrou host at index {index}"))?;
+        if previous_validator.is_some_and(|previous| previous >= &capability.validator_account_id) {
+            return Err(eyre!(
+                "active Inrou host capabilities must be strictly ordered by validator account"
+            ));
+        }
+        previous_validator = Some(&capability.validator_account_id);
+        if active_by_validator
+            .insert(
+                capability.validator_account_id.clone(),
+                capability.peer_id.as_str(),
+            )
+            .is_some()
+        {
+            return Err(eyre!(
+                "active Inrou host capabilities repeat a validator account"
+            ));
+        }
+    }
+    for target in &qualification.targets {
+        let active_peer = active_by_validator
+            .get(&target.placement.validator_account_id)
+            .ok_or_else(|| {
+                eyre!(
+                    "qualified Inrou target `{}` is not an active advertised validator host",
+                    target.placement.validator_account_id
+                )
+            })?;
+        if *active_peer != target.placement.peer_id {
+            return Err(eyre!(
+                "qualified Inrou target `{}` binds peer `{}`, but the active capability binds `{}`",
+                target.placement.validator_account_id,
+                target.placement.peer_id,
+                active_peer
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn read_inrou_preseed_qualification_file(path: &Path) -> Result<Vec<u8>> {
+    if !path.is_absolute() {
+        return Err(eyre!(
+            "--inrou-preseed-receipt must be an absolute path, got `{}`",
+            path.display()
+        ));
+    }
+    validate_taira_stage_owned_entry(path, false, "Inrou preseed qualification")?;
+    taira_stage_owned_file_bytes(
+        path,
+        "Inrou preseed qualification",
+        INROU_PRESEED_RECEIPT_MAX_BYTES,
+    )
+}
+
+fn load_inrou_preseed_qualification(
+    required_count: Option<usize>,
+    receipt_path: Option<&Path>,
+) -> Result<Option<LoadedInrouPreseedQualification>> {
+    let Some(required_count) = required_count else {
+        if receipt_path.is_some() {
+            return Err(eyre!(
+                "--inrou-preseed-receipt is valid only for an HttpService + Inrou publication"
+            ));
+        }
+        return Ok(None);
+    };
+    let path = receipt_path.ok_or_else(|| {
+        eyre!(
+            "HttpService + Inrou publication requires the exact durable --inrou-preseed-receipt produced by the separate offline preseed command"
+        )
+    })?;
+    let path = fs::canonicalize(path).wrap_err_with(|| {
+        format!(
+            "failed to resolve --inrou-preseed-receipt `{}`",
+            path.display()
+        )
+    })?;
+    let bytes = read_inrou_preseed_qualification_file(&path)?;
+    let receipt: OperatorPreseedSessionReceiptV1 = json::from_slice(&bytes)
+        .wrap_err("failed to decode durable Inrou preseed qualification")?;
+    receipt
+        .validate()
+        .map_err(|error| eyre!(error))
+        .wrap_err("invalid durable Inrou preseed qualification")?;
+    if receipt.mode != "ingest"
+        || json::to_vec(&receipt).wrap_err("re-encode Inrou preseed qualification")? != bytes
+    {
+        return Err(eyre!(
+            "durable Inrou preseed qualification must be canonical JSON from an ingest session"
+        ));
+    }
+    if receipt.targets.len() < required_count {
+        return Err(eyre!(
+            "HttpService + Inrou publication requires at least {required_count} qualified targets; receipt contains {}",
+            receipt.targets.len()
+        ));
+    }
+    let max_capacity_bytes = NonZeroU64::new(receipt.max_capacity_bytes)
+        .ok_or_else(|| eyre!("Inrou preseed qualification capacity must be nonzero"))?;
+    let targets = receipt
+        .targets
+        .iter()
+        .map(|target| {
+            let placement = SoraInrouPlacementTargetV1 {
+                validator_account_id: parse_canonical_inrou_validator_account(
+                    &target.validator_account_id,
+                )
+                .map_err(|error| eyre!(error))?,
+                peer_id: target.peer_id.clone(),
+            };
+            placement
+                .validate()
+                .map_err(|error| eyre!(error))
+                .wrap_err("invalid placement target in Inrou preseed qualification")?;
+            Ok(ValidatedInrouOperatorPreseedTarget {
+                placement,
+                // The online phase never opens or canonicalizes target stores. The exact path is
+                // retained only to reconstruct and compare the offline qualification bytes.
+                store_root: PathBuf::from(&target.store_root),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some(LoadedInrouPreseedQualification {
+        path,
+        receipt,
+        bytes,
+        targets,
+        max_capacity_bytes,
+    }))
+}
+
+fn write_inrou_preseed_qualification_file(
+    destination: &Path,
+    receipt: &OperatorPreseedSessionReceiptV1,
+) -> Result<(PathBuf, Vec<u8>)> {
+    if !destination.is_absolute() {
+        return Err(eyre!(
+            "--receipt-out must be an absolute path, got `{}`",
+            destination.display()
+        ));
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| eyre!("--receipt-out must have a parent directory"))?;
+    validate_taira_stage_owned_entry(parent, true, "Inrou qualification output directory")?;
+    let bytes = json::to_vec(receipt).wrap_err("encode canonical Inrou preseed qualification")?;
+    let stage = parent.join(format!(
+        ".inrou-preseed-receipt-{}.tmp",
+        hex::encode(Hash::new(&bytes).as_ref())
+    ));
+    if stage.exists() {
+        validate_taira_stage_owned_entry(&stage, false, "staged Inrou qualification")?;
+        let staged = taira_stage_owned_file_bytes(
+            &stage,
+            "staged Inrou qualification",
+            INROU_PRESEED_RECEIPT_MAX_BYTES,
+        )?;
+        if staged != bytes {
+            return Err(eyre!(
+                "stale Inrou qualification staging file {} has different bytes",
+                stage.display()
+            ));
+        }
+        if let Ok(existing) = read_inrou_preseed_qualification_file(destination) {
+            if existing != bytes {
+                return Err(eyre!(
+                    "--receipt-out `{}` already exists with different bytes",
+                    destination.display()
+                ));
+            }
+            fs::remove_file(&stage).wrap_err("remove recovered Inrou qualification stage")?;
+        } else {
+            #[cfg(unix)]
+            rustix::fs::renameat_with(
+                rustix::fs::CWD,
+                &stage,
+                rustix::fs::CWD,
+                destination,
+                rustix::fs::RenameFlags::NOREPLACE,
+            )
+            .wrap_err("recover immutable Inrou qualification without replacement")?;
+            #[cfg(not(unix))]
+            return Err("Inrou qualification crash recovery requires Unix".into());
+        }
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .wrap_err("synchronize recovered Inrou qualification output directory")?;
+        let installed = read_inrou_preseed_qualification_file(destination)?;
+        if installed != bytes {
+            return Err(eyre!(
+                "recovered Inrou preseed qualification differs from its canonical bytes"
+            ));
+        }
+        return Ok((destination.to_path_buf(), bytes));
+    }
+    if let Ok(existing) = read_inrou_preseed_qualification_file(destination) {
+        if existing == bytes {
+            return Ok((destination.to_path_buf(), bytes));
+        }
+        return Err(eyre!(
+            "--receipt-out `{}` already exists with different bytes",
+            destination.display()
+        ));
+    }
+    write_taira_stage_file(&stage, &bytes)?;
+    #[cfg(unix)]
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        &stage,
+        rustix::fs::CWD,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(|error| {
+        eyre!(
+            "failed to install immutable Inrou qualification {}: {error}",
+            destination.display()
+        )
+    })?;
+    #[cfg(not(unix))]
+    return Err("Inrou qualification installation requires Unix".into());
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .wrap_err("synchronize Inrou qualification output directory")?;
+    let installed = read_inrou_preseed_qualification_file(destination)?;
+    if installed != bytes {
+        return Err(eyre!(
+            "installed Inrou preseed qualification differs from its canonical bytes"
+        ));
+    }
+    Ok((destination.to_path_buf(), bytes))
+}
+
+#[cfg(unix)]
+fn stage_verified_inrou_preseed_helper(
+    config: &ValidatedInrouOperatorPreseed,
+    stage_root: &Path,
+) -> Result<PathBuf> {
+    let captured = fs::symlink_metadata(&config.helper_path).wrap_err_with(|| {
+        format!(
+            "failed to inspect offline Inrou operator-preseed helper `{}` for descriptor-bound staging",
+            config.helper_path.display()
+        )
+    })?;
+    if captured.file_type().is_symlink()
+        || !captured.is_file()
+        || captured.len() == 0
+        || captured.len() > INROU_PRESEED_HELPER_MAX_BYTES
+    {
+        return Err(eyre!(
+            "offline Inrou operator-preseed helper `{}` changed before descriptor-bound staging",
+            config.helper_path.display()
+        ));
+    }
+    let staged = stage_root.join("sorafs-node-preseed-helper");
+    copy_taira_stage_source_file(&config.helper_path, &staged, &captured)
+        .wrap_err("failed to create the descriptor-bound Inrou preseed helper copy")?;
+    set_taira_stage_permissions(&staged, 0o500)?;
+    let staged_file = fs::File::open(&staged).wrap_err_with(|| {
+        format!(
+            "failed to reopen staged Inrou operator-preseed helper `{}`",
+            staged.display()
+        )
+    })?;
+    staged_file.sync_all().wrap_err_with(|| {
+        format!(
+            "failed to synchronize staged Inrou operator-preseed helper `{}`",
+            staged.display()
+        )
+    })?;
+    fs::File::open(stage_root)
+        .and_then(|directory| directory.sync_all())
+        .wrap_err_with(|| {
+            format!(
+                "failed to synchronize Inrou preseed stage `{}`",
+                stage_root.display()
+            )
+        })?;
+    let staged_sha256 = sha256_file(
+        &staged,
+        "staged offline Inrou operator-preseed helper",
+        INROU_PRESEED_HELPER_MAX_BYTES,
+    )?;
+    if staged_sha256 != config.helper_sha256 {
+        return Err(eyre!(
+            "staged offline Inrou operator-preseed helper SHA-256 mismatch: expected {}, got {staged_sha256}",
+            config.helper_sha256
+        ));
+    }
+    Ok(staged)
+}
+
+#[cfg(not(unix))]
+fn stage_verified_inrou_preseed_helper(
+    _config: &ValidatedInrouOperatorPreseed,
+    _stage_root: &Path,
+) -> Result<PathBuf> {
+    Err(eyre!(
+        "offline Inrou operator-preseed helper staging requires owner-only Unix file permissions"
+    ))
+}
+
+fn start_inrou_operator_preseed_session(
+    config: Option<&ValidatedInrouOperatorPreseed>,
+    artifacts: &[&PreparedSorafsArtifact],
+    timeout_secs: u64,
+) -> Result<Option<InrouOperatorPreseedSession>> {
+    let timeout = Duration::from_secs(timeout_secs);
+    if timeout.is_zero() {
+        return Err(eyre!(
+            "Inrou operator-preseed helper timeout must be positive"
+        ));
+    }
+    let Some(config) = config else {
+        if !artifacts.is_empty() {
+            return Err(eyre!(
+                "Inrou artifacts require a validated operator-preseed session"
+            ));
+        }
+        return Ok(None);
+    };
+    if artifacts.is_empty() {
+        return Err(eyre!(
+            "validated Inrou operator-preseed session has no artifacts"
+        ));
+    }
+    let stage = SoracloudTempDir::new("iroha-inrou-preseed-session")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(stage.path(), fs::Permissions::from_mode(0o700)).wrap_err_with(
+            || {
+                format!(
+                    "failed to restrict Inrou preseed stage `{}`",
+                    stage.path().display()
+                )
+            },
+        )?;
+    }
+    let staged_helper = stage_verified_inrou_preseed_helper(config, stage.path())?;
+    let expected = expected_inrou_preseed_receipt(config, artifacts)?;
+    let mut command = ProcessCommand::new(&staged_helper);
+    command.arg("preseed-session").arg(format!(
+        "--max-capacity-bytes={}",
+        config.max_capacity_bytes
+    ));
+    for target in &config.targets {
+        let root = target
+            .store_root
+            .to_str()
+            .ok_or_else(|| eyre!("Inrou preseed store roots must be valid UTF-8"))?;
+        command.arg(format!(
+            "--target={},{},{root}",
+            target.placement.validator_account_id, target.placement.peer_id
+        ));
+    }
+    for (index, artifact) in artifacts.iter().enumerate() {
+        let (manifest_path, payload) = stage_inrou_preseed_artifact(stage.path(), index, artifact)?;
+        let manifest_path = manifest_path
+            .to_str()
+            .ok_or_else(|| eyre!("Inrou preseed stage paths must be valid UTF-8"))?;
+        command.arg(format!("--manifest={manifest_path}"));
+        match payload {
+            StagedInrouPreseedPayload::File(path) => {
+                let path = path
+                    .to_str()
+                    .ok_or_else(|| eyre!("Inrou preseed stage paths must be valid UTF-8"))?;
+                command.arg(format!("--payload={path}"));
+            }
+            StagedInrouPreseedPayload::Directory(path) => {
+                let path = path
+                    .to_str()
+                    .ok_or_else(|| eyre!("Inrou preseed stage paths must be valid UTF-8"))?;
+                command.arg(format!("--payload-dir={path}"));
+            }
+        }
+    }
+    command
+        .current_dir(stage.path())
+        .env_clear()
+        .env("LC_ALL", "C")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+
+        command.process_group(0);
+    }
+    #[cfg(test)]
+    command.env(
+        "IROHA_TEST_INROU_PRESEED_RECEIPT",
+        String::from_utf8(
+            json::to_vec(&expected).wrap_err("encode test Inrou preseed ready receipt")?,
+        )
+        .wrap_err("test Inrou preseed ready receipt must be UTF-8")?,
+    );
+    #[cfg(test)]
+    command.env(
+        "IROHA_TEST_INROU_PRESEED_RELEASE_ACK",
+        std::str::from_utf8(OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1)
+            .expect("operator-preseed release acknowledgment is UTF-8"),
+    );
+    let staged_helper_sha256 = sha256_file(
+        &staged_helper,
+        "staged offline Inrou operator-preseed helper",
+        INROU_PRESEED_HELPER_MAX_BYTES,
+    )?;
+    if staged_helper_sha256 != config.helper_sha256 {
+        return Err(eyre!(
+            "staged offline Inrou operator-preseed helper changed before starting the session"
+        ));
+    }
+    // Descriptor-bound helper/artifact staging above uses regular-file copy, fsync, and
+    // write operations governed by fixed V1 byte/count limits. The caller timeout starts
+    // here and bounds only the spawned helper's readiness protocol; those synchronous
+    // local staging operations are intentionally outside this nonblocking process deadline.
+    let readiness_deadline = inrou_preseed_phase_deadline(timeout, "readiness")?;
+    let mut child = command.spawn().wrap_err_with(|| {
+        format!(
+            "failed to start exact offline Inrou operator-preseed helper `{}`",
+            staged_helper.display()
+        )
+    })?;
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => Some(stdin),
+        None => {
+            let error = eyre!("Inrou preseed helper stdin pipe was not created");
+            return Err(inrou_preseed_error_after_cleanup(
+                child,
+                timeout,
+                "startup cleanup",
+                error,
+            ));
+        }
+    };
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => Some(stdout),
+        None => {
+            drop(stdin.take());
+            let error = eyre!("Inrou preseed helper stdout pipe was not created");
+            return Err(inrou_preseed_error_after_cleanup(
+                child,
+                timeout,
+                "startup cleanup",
+                error,
+            ));
+        }
+    };
+    let mut stderr = match child.stderr.take() {
+        Some(stderr) => Some(stderr),
+        None => {
+            drop(stdin.take());
+            drop(stdout.take());
+            let error = eyre!("Inrou preseed helper stderr pipe was not created");
+            return Err(inrou_preseed_error_after_cleanup(
+                child,
+                timeout,
+                "startup cleanup",
+                error,
+            ));
+        }
+    };
+    let nonblocking_result = make_inrou_preseed_pipe_nonblocking(
+        stdout
+            .as_ref()
+            .expect("preseed startup owns its stdout before readiness"),
+        "stdout",
+    )
+    .and_then(|()| {
+        make_inrou_preseed_pipe_nonblocking(
+            stderr
+                .as_ref()
+                .expect("preseed startup owns its stderr before readiness"),
+            "stderr",
+        )
+    });
+    if let Err(error) = nonblocking_result {
+        drop(stdin.take());
+        drop(stdout.take());
+        drop(stderr.take());
+        return Err(inrou_preseed_error_after_cleanup(
+            child,
+            timeout,
+            "startup cleanup",
+            error,
+        ));
+    }
+    let mut stdout_eof = false;
+    let mut stderr_eof = false;
+    let mut stderr_bytes = Vec::new();
+    let readiness = (|| -> Result<OperatorPreseedSessionReceiptV1> {
+        let mut receipt_bytes = Vec::new();
+        loop {
+            if Instant::now() >= readiness_deadline {
+                return Err(eyre!(
+                    "Inrou preseed helper exceeded its deadline before the ready receipt"
+                ));
+            }
+            drain_inrou_preseed_stdout(
+                stdout
+                    .as_mut()
+                    .expect("live preseed startup owns its stdout"),
+                &mut receipt_bytes,
+                &mut stdout_eof,
+            )?;
+            drain_inrou_preseed_stderr(
+                stderr
+                    .as_mut()
+                    .expect("live preseed startup owns its stderr"),
+                &mut stderr_bytes,
+                &mut stderr_eof,
+            )?;
+            let status = child
+                .try_wait()
+                .wrap_err("failed to poll Inrou preseed helper before readiness")?;
+            if let Some(newline) = receipt_bytes.iter().position(|byte| *byte == b'\n') {
+                if newline + 1 != receipt_bytes.len()
+                    || receipt_bytes[..newline].contains(&b'\r')
+                    || status.is_some()
+                {
+                    return Err(eyre!(
+                        "Inrou preseed helper did not retain exactly one bounded newline-terminated ready receipt"
+                    ));
+                }
+                break;
+            }
+            if stdout_eof || status.is_some() {
+                return Err(eyre!(
+                    "Inrou preseed helper exited before emitting its ready receipt"
+                ));
+            }
+            let remaining = readiness_deadline.saturating_duration_since(Instant::now());
+            std::thread::sleep(INROU_PRESEED_PROCESS_POLL_INTERVAL.min(remaining));
+        }
+        if receipt_bytes.pop() != Some(b'\n')
+            || receipt_bytes.is_empty()
+            || receipt_bytes.contains(&b'\n')
+            || receipt_bytes.contains(&b'\r')
+        {
+            return Err(eyre!(
+                "Inrou preseed helper did not emit exactly one bounded newline-terminated ready receipt"
+            ));
+        }
+        let receipt: OperatorPreseedSessionReceiptV1 = json::from_slice(&receipt_bytes)
+            .wrap_err("failed to decode canonical Inrou preseed ready receipt")?;
+        receipt
+            .validate()
+            .map_err(|error| eyre!(error))
+            .wrap_err("invalid Inrou preseed ready receipt")?;
+        if json::to_vec(&receipt).wrap_err("re-encode Inrou preseed receipt")? != receipt_bytes {
+            return Err(eyre!("Inrou preseed ready receipt was not canonical JSON"));
+        }
+        if receipt != expected {
+            return Err(eyre!(
+                "Inrou preseed ready receipt did not bind the exact requested stores, capacity, and artifacts"
+            ));
+        }
+        if Instant::now() >= readiness_deadline {
+            return Err(eyre!(
+                "Inrou preseed helper exceeded its deadline while validating the ready receipt"
+            ));
+        }
+        let mut trailing = Vec::new();
+        drain_inrou_preseed_stdout(
+            stdout
+                .as_mut()
+                .expect("live preseed startup owns its stdout"),
+            &mut trailing,
+            &mut stdout_eof,
+        )?;
+        drain_inrou_preseed_stderr(
+            stderr
+                .as_mut()
+                .expect("live preseed startup owns its stderr"),
+            &mut stderr_bytes,
+            &mut stderr_eof,
+        )?;
+        if !trailing.is_empty() {
+            return Err(eyre!(
+                "Inrou preseed helper emitted trailing stdout while its ready receipt was validated"
+            ));
+        }
+        if let Some(status) = child
+            .try_wait()
+            .wrap_err("failed to query Inrou preseed helper readiness")?
+        {
+            return Err(eyre!(
+                "Inrou preseed helper exited with {status} instead of holding store locks"
+            ));
+        }
+        Ok(receipt)
+    })();
+    let receipt = match readiness {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            drop(stdin.take());
+            drop(stdout.take());
+            drop(stderr.take());
+            return Err(inrou_preseed_error_after_cleanup(
+                child,
+                timeout,
+                "startup cleanup",
+                error,
+            ));
+        }
+    };
+    Ok(Some(InrouOperatorPreseedSession {
+        child: Some(child),
+        stdin,
+        stdout,
+        stderr,
+        stderr_bytes,
+        stdout_eof,
+        stderr_eof,
+        timeout,
+        receipt,
+        _stage: stage,
+    }))
+}
+
+fn register_prepared_sorafs_artifact(
+    artifact: &PreparedSorafsArtifact,
+    torii_url: &str,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+    timeout_secs: u64,
+) -> Result<()> {
+    register_built_sorafs_manifest(
+        &artifact.built,
+        &artifact.description,
+        torii_url,
+        authority,
+        key_pair,
+        timeout_secs,
+    )
+}
+
+fn register_prepared_sorafs_artifacts<A>(
+    artifacts: impl IntoIterator<Item = A>,
+    torii_url: &str,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+    timeout_secs: u64,
+) -> Result<()>
+where
+    A: std::borrow::Borrow<PreparedSorafsArtifact>,
+{
+    for artifact in artifacts {
+        let artifact = <A as std::borrow::Borrow<PreparedSorafsArtifact>>::borrow(&artifact);
+        register_prepared_sorafs_artifact(artifact, torii_url, authority, key_pair, timeout_secs)?;
+    }
+    Ok(())
+}
 fn build_sorafs_artifact_manifest(
     plan: &CarBuildPlan,
     payload: &[u8],
     descriptor: &chunker_registry::ChunkerProfileDescriptor,
     key_pair: &KeyPair,
+    release_identity: SorafsReleaseIdentityV1,
     labels: SorafsManifestBuildLabels<'_>,
 ) -> Result<BuiltSorafsManifest> {
     let writer = CarWriter::new(plan, payload).wrap_err_with(|| labels.writer.to_owned())?;
@@ -12457,7 +16364,6 @@ fn build_sorafs_artifact_manifest(
         .ok_or_else(|| eyre!(labels.root.to_owned()))?;
     let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
     let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
-    let retention_epoch = sorafs_pin_retention_epoch()?;
     let manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(car_stats.dag_codec))
@@ -12468,15 +16374,17 @@ fn build_sorafs_artifact_manifest(
         .car_digest(car_archive_digest)
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
-            min_replicas: 3,
+            min_replicas: u16::try_from(SORACLOUD_ARTIFACT_MIN_REPLICAS_V1)
+                .expect("first-release artifact replica count fits u16"),
             storage_class: ManifestStorageClass::Hot,
-            retention_epoch,
+            retention_epoch: release_identity.retention_epoch(),
         })
         .governance(GovernanceProofs::default())
         .build()
         .wrap_err_with(|| labels.manifest.to_owned())?;
-    let manifest = attach_sorafs_release_governance(manifest, key_pair)
+    let manifest = attach_sorafs_release_governance(manifest, key_pair, release_identity)
         .wrap_err_with(|| labels.governance.to_owned())?;
+    validate_sorafs_release_identity(&manifest, release_identity, labels.manifest)?;
     let (bytes, _) = encode_sorafs_manifest_for_storage(&manifest)
         .wrap_err_with(|| labels.encoding.to_owned())?;
     let digest_hex = hex::encode(
@@ -12565,15 +16473,14 @@ fn prepare_built_sorafs_manifest_registration(
         .wrap_err("failed to sign exact SoraFS pin-registration payload")?;
     PreparedSoracloudTransactionV1::from_signed(operation, binding, quote, transaction)
 }
-fn publish_public_service_discovery(
+fn prepare_public_service_discovery(
     bundle: &SoraDeploymentBundleV1,
-    torii_url: &str,
-    authority: &AccountId,
     key_pair: &KeyPair,
-    timeout_secs: u64,
+    release_identity: SorafsReleaseIdentityV1,
 ) -> Result<(
     SoracloudPublicServiceDiscoveryV1,
     PublicServiceDiscoveryPublishOutput,
+    PreparedSorafsArtifact,
 )> {
     let base_url = normalize_public_service_base_url(bundle)?;
     let route = bundle.service.route.as_ref().ok_or_else(|| {
@@ -12592,7 +16499,7 @@ fn publish_public_service_discovery(
     });
     let tempdir = SoracloudTempDir::new("iroha-public-service-discovery")
         .wrap_err("failed to create temporary public discovery dir")?;
-    let discovery_stub = SoracloudPublicServiceDiscoveryV1 {
+    let discovery_document = SoracloudPublicServiceDiscoveryDocumentV1 {
         schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
         service_name: bundle.service.service_name.to_string(),
         service_version: bundle.service.service_version.clone(),
@@ -12606,16 +16513,15 @@ fn publish_public_service_discovery(
         service_manifest_hash: bundle.service_manifest_hash(),
         container_manifest_hash: bundle.container_manifest_hash(),
         deployment_bundle_hash: Hash::new(Encode::encode(bundle)),
-        content_cid: String::new(),
-        public_discovery_url: String::new(),
-        public_discovery_cid_host_url: String::new(),
-        manifest_digest_hex: String::new(),
     };
-    write_json(
-        &tempdir.path().join(PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT),
-        &discovery_stub,
+    let discovery_document_bytes = json::to_vec(&discovery_document)
+        .wrap_err("failed to encode canonical public discovery document")?;
+    let document_hash = Hash::new(&discovery_document_bytes);
+    fs::write(
+        tempdir.path().join(PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT),
+        discovery_document_bytes,
     )
-    .wrap_err("failed to write public discovery document")?;
+    .wrap_err("failed to write canonical public discovery document")?;
     let descriptor = chunker_registry::default_descriptor();
     let (plan, payload) =
         CarBuildPlan::from_directory_with_profile(tempdir.path(), descriptor.profile).map_err(
@@ -12631,6 +16537,7 @@ fn publish_public_service_discovery(
         &payload,
         descriptor,
         key_pair,
+        release_identity,
         SorafsManifestBuildLabels {
             writer: "failed to prepare public discovery CAR writer",
             metadata: "failed to compute public discovery CAR metadata",
@@ -12642,16 +16549,8 @@ fn publish_public_service_discovery(
             digest: "failed to compute public discovery canonical manifest digest",
         },
     )?;
-    register_built_sorafs_manifest(
-        &built,
-        "public discovery",
-        torii_url,
-        authority,
-        key_pair,
-        timeout_secs,
-    )?;
     let content_cid = encode_content_cid(&built.manifest.root_cid);
-    let manifest_digest_hex = built.digest_hex;
+    let manifest_digest_hex = built.digest_hex.clone();
     let mut public_discovery_url = base_url.clone();
     public_discovery_url.set_path(&format!(
         "/sorafs/cid/{content_cid}/{PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT}"
@@ -12661,11 +16560,24 @@ fn publish_public_service_discovery(
         "https://{content_cid}.{cid_host_suffix}/{PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT}"
     );
     let discovery = SoracloudPublicServiceDiscoveryV1 {
+        schema_version: discovery_document.schema_version,
+        service_name: discovery_document.service_name,
+        service_version: discovery_document.service_version,
+        execution_plane: discovery_document.execution_plane,
+        runtime: discovery_document.runtime,
+        route_host: discovery_document.route_host,
+        path_prefix: discovery_document.path_prefix,
+        base_url: discovery_document.base_url,
+        healthcheck_path: discovery_document.healthcheck_path,
+        healthcheck_url: discovery_document.healthcheck_url,
+        service_manifest_hash: discovery_document.service_manifest_hash,
+        container_manifest_hash: discovery_document.container_manifest_hash,
+        deployment_bundle_hash: discovery_document.deployment_bundle_hash,
+        document_hash,
         content_cid: content_cid.clone(),
         public_discovery_url: public_discovery_url.to_string(),
         public_discovery_cid_host_url: public_discovery_cid_host_url.clone(),
         manifest_digest_hex: manifest_digest_hex.clone(),
-        ..discovery_stub
     };
     let output = PublicServiceDiscoveryPublishOutput {
         service_name: discovery.service_name.clone(),
@@ -12673,22 +16585,39 @@ fn publish_public_service_discovery(
         route_host: discovery.route_host.clone(),
         base_url: discovery.base_url.clone(),
         healthcheck_url: discovery.healthcheck_url.clone(),
+        document_hash,
         content_cid,
         public_discovery_url: public_discovery_url.to_string(),
         public_discovery_cid_host_url,
         manifest_digest_hex,
     };
-    Ok((discovery, output))
+    Ok((
+        discovery,
+        output,
+        PreparedSorafsArtifact {
+            description: "public discovery".to_owned(),
+            plan,
+            payload,
+            built,
+        },
+    ))
 }
-fn attach_public_service_discovery_config(
+
+struct PreparedPublicServiceDiscovery {
+    artifact: PreparedSorafsArtifact,
+    config_value: Json,
+    publication: PublicServiceDiscoveryPublishOutput,
+}
+
+fn prepare_public_service_discovery_config(
     bundle: &SoraDeploymentBundleV1,
-    initial_service_configs: &mut BTreeMap<String, Json>,
+    initial_service_configs: &BTreeMap<String, Json>,
     torii_url: &str,
     api_token: Option<&str>,
     timeout_secs: u64,
-    authority: &AccountId,
     key_pair: &KeyPair,
-) -> Result<Option<PublicServiceDiscoveryPublishOutput>> {
+    release_identity: SorafsReleaseIdentityV1,
+) -> Result<Option<PreparedPublicServiceDiscovery>> {
     if initial_service_configs.contains_key(PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME) {
         return Err(eyre!(
             "service `{}` initial configs may not set reserved config `{PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME}`",
@@ -12704,8 +16633,8 @@ fn attach_public_service_discovery_config(
         api_token,
         timeout_secs,
     )?;
-    let (discovery, publication) =
-        publish_public_service_discovery(bundle, torii_url, authority, key_pair, timeout_secs)?;
+    let (discovery, publication, artifact) =
+        prepare_public_service_discovery(bundle, key_pair, release_identity)?;
     let mut revisions = existing_registry
         .as_ref()
         .map(|registry| registry.revisions.clone())
@@ -12717,26 +16646,51 @@ fn attach_public_service_discovery_config(
         current_version: discovery.service_version.clone(),
         revisions,
     };
-    initial_service_configs.insert(
-        PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_owned(),
-        Json::from(
-            json::to_value(&registry)
-                .wrap_err("failed to encode public service discovery registry JSON")?,
-        ),
+    let config_value = Json::from(
+        json::to_value(&registry)
+            .wrap_err("failed to encode public service discovery registry JSON")?,
     );
-    Ok(Some(publication))
+    Ok(Some(PreparedPublicServiceDiscovery {
+        artifact,
+        config_value,
+        publication,
+    }))
 }
-fn publish_app_static_site(
+
+fn attach_prepared_public_service_discovery_config(
+    initial_service_configs: &mut BTreeMap<String, Json>,
+    prepared: Option<PreparedPublicServiceDiscovery>,
+) -> Result<Option<PublicServiceDiscoveryPublishOutput>> {
+    let Some(prepared) = prepared else {
+        return Ok(None);
+    };
+    if initial_service_configs
+        .insert(
+            PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_owned(),
+            prepared.config_value,
+        )
+        .is_some()
+    {
+        return Err(eyre!(
+            "reserved config `{PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME}` was inserted after public discovery preparation"
+        ));
+    }
+    Ok(Some(prepared.publication))
+}
+fn prepare_app_static_site(
     app_manifest: &SoracloudAppManifestV1,
     manifest_dir: &Path,
     static_site: &SoracloudAppStaticSiteV1,
-    torii_url: &str,
-    authority: &AccountId,
     key_pair: &KeyPair,
-    timeout_secs: u64,
-) -> Result<AppStaticSitePublishOutput> {
-    let planned =
-        plan_app_static_site_publication(app_manifest, manifest_dir, static_site, key_pair)?;
+    release_identity: SorafsReleaseIdentityV1,
+) -> Result<(AppStaticSitePublishOutput, PreparedSorafsArtifact)> {
+    let planned = plan_app_static_site_publication(
+        app_manifest,
+        manifest_dir,
+        static_site,
+        key_pair,
+        release_identity,
+    )?;
     let dist_dir = resolve_manifest_path(manifest_dir, &static_site.dist_dir);
     let descriptor = chunker_registry::default_descriptor();
     let (plan, payload) = CarBuildPlan::from_directory_with_profile(&dist_dir, descriptor.profile)
@@ -12751,6 +16705,7 @@ fn publish_app_static_site(
         &payload,
         descriptor,
         key_pair,
+        release_identity,
         SorafsManifestBuildLabels {
             writer: "failed to prepare site CAR writer",
             metadata: "failed to compute site CAR metadata",
@@ -12762,21 +16717,22 @@ fn publish_app_static_site(
             digest: "failed to compute app static site canonical manifest digest",
         },
     )?;
-    register_built_sorafs_manifest(
-        &built,
-        "app static site",
-        torii_url,
-        authority,
-        key_pair,
-        timeout_secs,
-    )?;
-    Ok(planned)
+    Ok((
+        planned,
+        PreparedSorafsArtifact {
+            description: "app static site".to_owned(),
+            plan,
+            payload,
+            built,
+        },
+    ))
 }
 fn plan_app_static_site_publication(
     app_manifest: &SoracloudAppManifestV1,
     manifest_dir: &Path,
     static_site: &SoracloudAppStaticSiteV1,
     key_pair: &KeyPair,
+    release_identity: SorafsReleaseIdentityV1,
 ) -> Result<AppStaticSitePublishOutput> {
     if static_site.mount_path != "/" {
         return Err(eyre!(
@@ -12835,6 +16791,7 @@ fn plan_app_static_site_publication(
         &payload,
         descriptor,
         key_pair,
+        release_identity,
         SorafsManifestBuildLabels {
             writer: "failed to prepare site CAR writer",
             metadata: "failed to compute site CAR metadata",
@@ -12863,14 +16820,12 @@ fn plan_app_static_site_publication(
         manifest_digest_hex,
     })
 }
-fn publish_sorafs_directory_artifact(
+fn prepare_sorafs_directory_artifact(
     input_dir: &Path,
     description: &str,
-    torii_url: &str,
-    authority: &AccountId,
     key_pair: &KeyPair,
-    timeout_secs: u64,
-) -> Result<PublishedSorafsDirectoryArtifact> {
+    release_identity: SorafsReleaseIdentityV1,
+) -> Result<(PreparedSorafsArtifact, PublishedSorafsDirectoryArtifact)> {
     let metadata = fs::metadata(input_dir)
         .wrap_err_with(|| format!("failed to access {description} `{}`", input_dir.display()))?;
     if !metadata.is_dir() {
@@ -12900,6 +16855,7 @@ fn publish_sorafs_directory_artifact(
         &payload,
         descriptor,
         key_pair,
+        release_identity,
         SorafsManifestBuildLabels {
             writer: &writer_error,
             metadata: &metadata_error,
@@ -12911,28 +16867,27 @@ fn publish_sorafs_directory_artifact(
             digest: &digest_error,
         },
     )?;
-    register_built_sorafs_manifest(
-        &built,
-        description,
-        torii_url,
-        authority,
-        key_pair,
-        timeout_secs,
-    )?;
     let content_cid = encode_content_cid(&built.manifest.root_cid);
-    Ok(PublishedSorafsDirectoryArtifact {
+    let published = PublishedSorafsDirectoryArtifact {
         content_cid,
-        manifest_digest_hex: built.digest_hex,
-    })
+        manifest_digest_hex: built.digest_hex.clone(),
+    };
+    Ok((
+        PreparedSorafsArtifact {
+            description: description.to_owned(),
+            plan,
+            payload,
+            built,
+        },
+        published,
+    ))
 }
-fn publish_sorafs_file_artifact(
+fn prepare_sorafs_file_artifact(
     input_file: &Path,
     description: &str,
-    torii_url: &str,
-    authority: &AccountId,
     key_pair: &KeyPair,
-    timeout_secs: u64,
-) -> Result<PublishedSorafsFileArtifact> {
+    release_identity: SorafsReleaseIdentityV1,
+) -> Result<(PreparedSorafsArtifact, PublishedSorafsFileArtifact)> {
     let metadata = fs::metadata(input_file)
         .wrap_err_with(|| format!("failed to access {description} `{}`", input_file.display()))?;
     if !metadata.is_file() {
@@ -12965,6 +16920,7 @@ fn publish_sorafs_file_artifact(
         &payload,
         descriptor,
         key_pair,
+        release_identity,
         SorafsManifestBuildLabels {
             writer: &writer_error,
             metadata: &metadata_error,
@@ -12976,20 +16932,21 @@ fn publish_sorafs_file_artifact(
             digest: &digest_error,
         },
     )?;
-    register_built_sorafs_manifest(
-        &built,
-        description,
-        torii_url,
-        authority,
-        key_pair,
-        timeout_secs,
-    )?;
     let content_cid = encode_content_cid(&built.manifest.root_cid);
-    Ok(PublishedSorafsFileArtifact {
+    let published = PublishedSorafsFileArtifact {
         content_cid,
-        manifest_digest_hex: built.digest_hex,
+        manifest_digest_hex: built.digest_hex.clone(),
         payload_hash,
-    })
+    };
+    Ok((
+        PreparedSorafsArtifact {
+            description: description.to_owned(),
+            plan,
+            payload,
+            built,
+        },
+        published,
+    ))
 }
 fn inrou_member_path(path: &str) -> Result<String> {
     let trimmed = path.trim();
@@ -13054,30 +17011,40 @@ fn validate_local_inrou_guest_image_sources(
     }
     Ok(())
 }
-#[derive(Debug)]
-struct PublishedServiceArtifacts {
+struct PreparedServiceArtifacts {
     admitted_bundle: SoraDeploymentBundleV1,
     published_bundle: ServiceBundlePublishOutput,
     inrou_guest_images: Vec<InrouGuestImageArtifactPublishOutput>,
+    artifacts: Vec<PreparedSorafsArtifact>,
 }
-fn publish_service_artifacts(
+
+struct PreparedAppServiceMutation<'a> {
+    service: &'a SoracloudAppServiceRefV1,
+    container_manifest: PathBuf,
+    service_manifest: PathBuf,
+    precondition: SoraServiceMutationPreconditionV1,
+    initial_service_configs: BTreeMap<String, Json>,
+    initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    is_hosted_http: bool,
+    is_deterministic: bool,
+    service_artifacts: PreparedServiceArtifacts,
+    public_discovery: Option<PreparedPublicServiceDiscovery>,
+}
+
+fn prepare_service_artifacts(
     bundle_file: &Path,
     service_workspace_dir: Option<&Path>,
     bundle: UnpublishedDeploymentBundleV1,
-    torii_url: &str,
-    authority: &AccountId,
     key_pair: &KeyPair,
-    timeout_secs: u64,
-) -> Result<PublishedServiceArtifacts> {
+    release_identity: SorafsReleaseIdentityV1,
+) -> Result<PreparedServiceArtifacts> {
     validate_unpublished_deployment_source(&bundle)?;
     validate_local_inrou_guest_image_sources(service_workspace_dir, &bundle)?;
-    let published = publish_sorafs_file_artifact(
+    let (bundle_artifact, published) = prepare_sorafs_file_artifact(
         bundle_file,
         &format!("Soracloud service bundle ({})", bundle.service.service_name),
-        torii_url,
-        authority,
         key_pair,
-        timeout_secs,
+        release_identity,
     )?;
     if published.payload_hash != bundle.container.bundle_hash {
         return Err(eyre!(
@@ -13095,36 +17062,38 @@ fn publish_service_artifacts(
         bundle_hash: published.payload_hash.to_string(),
         note: "service bundle bytes were published to SoraFS for runtime hydration".to_owned(),
     };
-    let (inrou_guest_images, published_inrou_artifacts) = publish_inrou_guest_image_artifacts(
-        service_workspace_dir,
-        &bundle,
-        torii_url,
-        authority,
-        key_pair,
-        timeout_secs,
-    )?;
+    let (inrou_guest_images, published_inrou_artifacts, guest_artifacts) =
+        prepare_inrou_guest_image_artifacts(
+            service_workspace_dir,
+            &bundle,
+            key_pair,
+            release_identity,
+        )?;
     let admitted_bundle = bundle.into_admitted(published_inrou_artifacts)?;
-    Ok(PublishedServiceArtifacts {
+    let mut artifacts = Vec::with_capacity(1 + guest_artifacts.len());
+    artifacts.push(bundle_artifact);
+    artifacts.extend(guest_artifacts);
+    Ok(PreparedServiceArtifacts {
         admitted_bundle,
         published_bundle,
         inrou_guest_images,
+        artifacts,
     })
 }
-fn publish_inrou_guest_image_artifacts(
+fn prepare_inrou_guest_image_artifacts(
     service_workspace_dir: Option<&Path>,
     bundle: &UnpublishedDeploymentBundleV1,
-    torii_url: &str,
-    authority: &AccountId,
     key_pair: &KeyPair,
-    timeout_secs: u64,
+    release_identity: SorafsReleaseIdentityV1,
 ) -> Result<(
     Vec<InrouGuestImageArtifactPublishOutput>,
     BTreeMap<SoraInrouGuestIsaV1, SoraPublishedInrouGuestImageArtifactV1>,
+    Vec<PreparedSorafsArtifact>,
 )> {
     if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
         || bundle.container.runtime != SoraContainerRuntimeV1::Inrou
     {
-        return Ok((Vec::new(), BTreeMap::new()));
+        return Ok((Vec::new(), BTreeMap::new(), Vec::new()));
     }
     let inrou = bundle.container.inrou.as_ref().ok_or_else(|| {
         eyre!(
@@ -13141,6 +17110,7 @@ fn publish_inrou_guest_image_artifacts(
     let inrou_dir = workspace_dir.join("inrou");
     let mut outputs = Vec::new();
     let mut published_artifacts = BTreeMap::new();
+    let mut prepared_artifacts = Vec::new();
     for (guest_isa_name, image) in &inrou.guest_images {
         let guest_isa = parse_unpublished_inrou_guest_isa(guest_isa_name)?;
         let mut member_paths = vec![
@@ -13182,13 +17152,11 @@ fn publish_inrou_guest_image_artifacts(
                 )
             })?;
         }
-        let published = publish_sorafs_directory_artifact(
+        let (prepared, published) = prepare_sorafs_directory_artifact(
             staged_artifact.path(),
             &format!("Inrou guest-image artifact ({})", guest_isa.as_str()),
-            torii_url,
-            authority,
             key_pair,
-            timeout_secs,
+            release_identity,
         )?;
         let artifact = SoraPublishedInrouGuestImageArtifactV1 {
             manifest_digest_hex: published.manifest_digest_hex.clone(),
@@ -13210,8 +17178,9 @@ fn publish_inrou_guest_image_artifacts(
             manifest_digest_hex: published.manifest_digest_hex.clone(),
             note: "hosts hydrate these members from the exact authenticated SoraFS artifact reference in the admitted manifest".to_owned(),
         });
+        prepared_artifacts.push(prepared);
     }
-    Ok((outputs, published_artifacts))
+    Ok((outputs, published_artifacts, prepared_artifacts))
 }
 fn compute_chunk_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
     let mut hasher = Sha3::v256();
@@ -15187,9 +19156,9 @@ impl TairaMutationBindingV1 {
 
 fn validate_prepared_soracloud_operation(operation: &str) -> Result<()> {
     match operation {
-        "bundle_pin" | "guest_pin" | "service_mutation" => Ok(()),
+        "bundle_pin" | "guest_pin" | "discovery_pin" | "service_mutation" => Ok(()),
         _ => Err(eyre!(
-            "prepared Soracloud transaction operation must be bundle_pin, guest_pin, or service_mutation"
+            "prepared Soracloud transaction operation must be bundle_pin, guest_pin, discovery_pin, or service_mutation"
         )),
     }
 }
@@ -19347,7 +23316,6 @@ mod tests {
         net::{TcpListener, TcpStream},
         path::Path,
         process::Command,
-        str::FromStr as _,
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
@@ -19356,6 +23324,9 @@ mod tests {
         time::Duration,
         time::{Instant, SystemTime, UNIX_EPOCH},
     };
+    fn test_sorafs_retention_epoch() -> NonZeroU64 {
+        NonZeroU64::new(2_000_000_000).expect("test retention epoch is nonzero")
+    }
     fn sample_published_inrou_artifact(seed: u8) -> SoraPublishedInrouGuestImageArtifactV1 {
         SoraPublishedInrouGuestImageArtifactV1 {
             manifest_digest_hex: hex::encode([seed; 32]),
@@ -19369,7 +23340,10 @@ mod tests {
             .expect("build canonical Taira Inrou deploy bundle")
             .0
     }
-    fn admit_taira_inrou_source(source: UnpublishedDeploymentBundleV1) -> SoraDeploymentBundleV1 {
+    fn admit_taira_inrou_source(
+        mut source: UnpublishedDeploymentBundleV1,
+    ) -> SoraDeploymentBundleV1 {
+        source.service.placement_targets = test_inrou_placement_targets(4);
         let mut admitted = source
             .into_admitted(BTreeMap::from([(
                 SoraInrouGuestIsaV1::Aarch64,
@@ -19547,6 +23521,25 @@ mod tests {
         refresh_taira_source_container_reference(&mut missing_healthcheck);
         validate_unpublished_deployment_source(&missing_healthcheck)
             .expect_err("cross-manifest lifecycle validation must run before upload");
+    }
+    #[test]
+    fn inrou_preseed_artifact_count_enforces_single_session_boundary() {
+        let bundle = build_split_app_live_service_bundle(
+            "preseed_boundary",
+            "preseed-boundary.sora",
+            "1.0.0",
+        )
+        .expect("build dual-ISA public Inrou service");
+        let mut bundles = vec![bundle; OPERATOR_PRESEED_SESSION_MAX_ARTIFACTS_V1 / 4];
+        validate_inrou_preseed_artifact_count(bundles.iter())
+            .expect("64 dual-ISA public services produce exactly 256 artifacts");
+        bundles.push(bundles[0].clone());
+        let error = validate_inrou_preseed_artifact_count(bundles.iter())
+            .expect_err("65 dual-ISA public services exceed one bounded preseed session");
+        assert!(
+            error.to_string().contains("requires 260 artifacts"),
+            "{error}"
+        );
     }
     #[test]
     fn taira_inrou_canary_validator_accepts_exact_v1_bundle() {
@@ -19732,11 +23725,71 @@ mod tests {
             &output.join("bundle.tgz"),
             &stage_dir,
             &stage_key,
+            test_sorafs_retention_epoch(),
+            test_inrou_placement_targets(4),
         )
         .expect("consume strict-null Taira source into an admitted stage");
+        assert_eq!(
+            stage_receipt.sorafs_retention_epoch,
+            test_sorafs_retention_epoch().get()
+        );
         let staged = load_verified_taira_inrou_stage(&stage_dir, &stage_key, MutationMode::Deploy)
             .expect("verify admitted Taira stage");
+        assert_eq!(
+            staged.bundle_manifest.manifest.pin_policy.retention_epoch,
+            test_sorafs_retention_epoch().get()
+        );
+        assert_eq!(
+            staged.guest_manifest.manifest.pin_policy.retention_epoch,
+            test_sorafs_retention_epoch().get()
+        );
+        assert_eq!(
+            staged
+                .discovery_manifest
+                .manifest
+                .pin_policy
+                .retention_epoch,
+            test_sorafs_retention_epoch().get()
+        );
+        assert_eq!(
+            staged.discovery.document_hash.to_string(),
+            stage_receipt.discovery_document_hash
+        );
+        assert_eq!(
+            staged.discovery.content_cid,
+            stage_receipt.discovery_content_cid
+        );
+        let retry_stage_dir = temp.path().join("stage-retry");
+        let retry_receipt = stage_taira_inrou_canary_deployment(
+            crate::taira::InrouCanaryMode::Deploy,
+            &output.join("container_manifest.json"),
+            &output.join("service_manifest.json"),
+            &output.join("bundle.tgz"),
+            &retry_stage_dir,
+            &stage_key,
+            test_sorafs_retention_epoch(),
+            test_inrou_placement_targets(4),
+        )
+        .expect("retry the exact Taira stage with the retained release identity");
+        assert_eq!(
+            json::to_vec(&retry_receipt).expect("encode retried Taira receipt"),
+            json::to_vec(&stage_receipt).expect("encode initial Taira receipt"),
+            "the same explicit retention epoch must reproduce the entire Taira receipt"
+        );
+        for manifest_path in [
+            TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
+            TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1,
+            TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+        ] {
+            assert_eq!(
+                fs::read(stage_dir.join(manifest_path)).expect("read initial staged manifest"),
+                fs::read(retry_stage_dir.join(manifest_path))
+                    .expect("read retried staged manifest"),
+                "Taira stage retry must reproduce byte-identical {manifest_path}"
+            );
+        }
         let mut stage_config = crate::fallback_config();
+        stage_config.account = AccountId::new(stage_key.public_key().clone());
         stage_config.key_pair = stage_key.clone();
         let read_only_identity = load_taira_inrou_stage_identity(
             &stage_config,
@@ -19752,7 +23805,64 @@ mod tests {
             read_only_identity.service_manifest_hash,
             stage_receipt.service_manifest_hash
         );
+        assert_eq!(
+            read_only_identity.deployment_bundle_hash,
+            staged.discovery.deployment_bundle_hash.to_string()
+        );
+        let pin_server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/sorafs/pin/register".to_owned(),
+            MockHttpResponse::json(
+                json::to_vec(&norito::json!({ "ok": true }))
+                    .expect("encode mock staged pin response"),
+            ),
+        )]));
+        assert_eq!(
+            taira_inrou_canary_pin_readiness_v1(
+                &stage_config,
+                &stage_dir,
+                &pin_server.base_url,
+                5,
+                crate::taira::InrouCanaryMode::Deploy,
+                TairaInrouCanaryPreparedOperationV1::DiscoveryPin,
+            )
+            .expect("read missing staged discovery pin readiness"),
+            TairaInrouCanaryPinReadinessV1::Missing
+        );
+        install_mock_submission_config(&stage_config.account, &stage_key);
+        register_built_sorafs_manifest(
+            &staged.discovery_manifest,
+            "staged Taira public discovery",
+            &pin_server.base_url,
+            &stage_config.account,
+            &stage_key,
+            5,
+        )
+        .expect("register staged discovery manifest through mock finalized governance");
+        assert_eq!(
+            taira_inrou_canary_pin_readiness_v1(
+                &stage_config,
+                &stage_dir,
+                &pin_server.base_url,
+                5,
+                crate::taira::InrouCanaryMode::Deploy,
+                TairaInrouCanaryPreparedOperationV1::DiscoveryPin,
+            )
+            .expect("read approved staged discovery pin readiness"),
+            TairaInrouCanaryPinReadinessV1::Approved(2)
+        );
         assert_eq!(read_only_identity.stage_mode, "deploy");
+        assert_eq!(
+            read_only_identity.discovery_document_hash,
+            stage_receipt.discovery_document_hash
+        );
+        assert_eq!(
+            read_only_identity.public_discovery_url,
+            stage_receipt.public_discovery_url
+        );
+        assert_eq!(
+            read_only_identity.public_discovery_cid_host_url,
+            stage_receipt.public_discovery_cid_host_url
+        );
         let published = &staged
             .bundle
             .container
@@ -19769,6 +23879,20 @@ mod tests {
         assert_eq!(
             staged.bundle.service.container.manifest_hash,
             Hash::new(Encode::encode(&staged.bundle.container))
+        );
+
+        let retry_discovery_path =
+            retry_stage_dir.join(TAIRA_INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1);
+        let mut tampered_discovery =
+            fs::read(&retry_discovery_path).expect("read retried discovery document");
+        let tamper_index = tampered_discovery.len() / 2;
+        tampered_discovery[tamper_index] ^= 1;
+        fs::write(&retry_discovery_path, tampered_discovery)
+            .expect("tamper retried discovery document");
+        assert!(
+            load_verified_taira_inrou_stage(&retry_stage_dir, &stage_key, MutationMode::Deploy,)
+                .is_err(),
+            "one changed discovery byte must invalidate the retained stage"
         );
 
         #[cfg(unix)]
@@ -19855,7 +23979,9 @@ mod tests {
             .env_remove("PORT")
             .env_remove("HTTP_SERVICE_NAME")
             .env_remove("SORACLOUD_REPLICA_SLOT")
-            .env_remove("SORACLOUD_SERVICE_VERSION");
+            .env_remove("SORACLOUD_SERVICE_VERSION")
+            .env_remove("SORACLOUD_LEASE_VOLUME_APP_DATA_DIR")
+            .env_remove("SORACLOUD_LEASE_VOLUME_APP_DATA_MOUNT_PATH");
         command
     }
     #[test]
@@ -19881,33 +24007,232 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn taira_inrou_canary_python_server_requires_exact_app_data_projection() {
+        let mut command = taira_inrou_canary_python_command();
+        let output = command
+            .env("PORT", "8787")
+            .env("HTTP_SERVICE_NAME", TAIRA_INROU_CANARY_SERVICE_NAME_V1)
+            .env("SORACLOUD_REPLICA_SLOT", "1")
+            .env(
+                "SORACLOUD_SERVICE_VERSION",
+                format!(
+                    "{TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1}{}",
+                    "ab".repeat(32)
+                ),
+            )
+            .output()
+            .expect("run canonical Python server");
+        assert!(
+            !output.status.success(),
+            "missing app-data projection must fail startup"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("SORACLOUD_LEASE_VOLUME_APP_DATA_DIR"),
+            "unexpected startup failure: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    #[test]
+    fn taira_inrou_canary_python_server_rejects_noncanonical_app_data_path() {
+        let temp = taira_test_tempdir("taira-inrou-python-wrong-app-data-");
+        let noncanonical_path = temp.path().join("app-data");
+        let mut command = taira_inrou_canary_python_command();
+        let output = command
+            .env("PORT", "8787")
+            .env("HTTP_SERVICE_NAME", TAIRA_INROU_CANARY_SERVICE_NAME_V1)
+            .env("SORACLOUD_REPLICA_SLOT", "1")
+            .env(
+                "SORACLOUD_SERVICE_VERSION",
+                format!(
+                    "{TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1}{}",
+                    "ab".repeat(32)
+                ),
+            )
+            .env("SORACLOUD_LEASE_VOLUME_APP_DATA_DIR", &noncanonical_path)
+            .env(
+                "SORACLOUD_LEASE_VOLUME_APP_DATA_MOUNT_PATH",
+                &noncanonical_path,
+            )
+            .output()
+            .expect("run canonical Python server");
+        assert!(
+            !output.status.success(),
+            "a noncanonical app-data path must fail startup"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("app-data directory must be exactly /var/lib/soracloud/volumes/app_data"),
+            "unexpected startup failure: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    #[cfg(unix)]
+    fn run_taira_inrou_python_state_transition(
+        app_data_dir: &Path,
+        guest_boot_id: &str,
+    ) -> std::process::Output {
+        const HARNESS: &str = r#"
+import importlib.util
+import json
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("taira_inrou_canary_server_v1", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+state = module.load_or_create_health_state(
+    sys.argv[2], "taira_inrou_canary", "artifact-test-v1", 2, sys.argv[3]
+)
+sys.stdout.write(json.dumps(state, ensure_ascii=True, separators=(",", ":")))
+"#;
+        Command::new("python3")
+            .arg("-I")
+            .arg("-c")
+            .arg(HARNESS)
+            .arg(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("src/soracloud/taira_inrou_canary_server_v1.py"),
+            )
+            .arg(app_data_dir)
+            .arg(guest_boot_id)
+            .output()
+            .expect("run synthetic Taira Inrou durable-state transition")
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_inrou_canary_durable_state_advances_only_for_a_new_guest_boot() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = taira_test_tempdir("taira-inrou-python-state-");
+        let app_data_dir = temp.path().join("app-data");
+        fs::create_dir(&app_data_dir).expect("create synthetic app-data volume");
+        fs::set_permissions(&app_data_dir, fs::Permissions::from_mode(0o700))
+            .expect("set exact synthetic app-data mode");
+        let boot_a = "11111111-1111-1111-1111-111111111111";
+        let boot_b = "22222222-2222-2222-2222-222222222222";
+
+        let run = |boot_id| {
+            let output = run_taira_inrou_python_state_transition(&app_data_dir, boot_id);
+            assert!(
+                output.status.success(),
+                "synthetic state transition failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            json::from_slice::<Value>(&output.stdout).expect("decode synthetic durable state")
+        };
+        let first = run(boot_a);
+        let same_boot = run(boot_a);
+        assert_eq!(
+            first, same_boot,
+            "a service restart must not advance guest boot state"
+        );
+        assert_eq!(first.get("boot_sequence").and_then(Value::as_u64), Some(1));
+
+        let next_boot = run(boot_b);
+        assert_eq!(
+            next_boot.get("boot_sequence").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(next_boot.get("marker_hex"), first.get("marker_hex"));
+        assert_ne!(
+            next_boot.get("last_guest_boot_id_sha256"),
+            first.get("last_guest_boot_id_sha256")
+        );
+
+        let state_path = app_data_dir.join("taira-inrou-canary-state-v1.json");
+        let state_bytes = fs::read(&state_path).expect("read installed durable state");
+        let state: Value = json::from_slice(&state_bytes).expect("decode installed durable state");
+        assert_eq!(
+            state.as_object().map(|object| object.len()),
+            Some(7),
+            "durable state must have the exact V1 fields"
+        );
+        assert_eq!(
+            fs::metadata(&state_path)
+                .expect("stat installed durable state")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        let corrupt = br#"{"schema_version":1,"legacy_state":null}"#;
+        fs::write(&state_path, corrupt).expect("install corrupt state fixture");
+        let rejected = run_taira_inrou_python_state_transition(&app_data_dir, boot_b);
+        assert!(
+            !rejected.status.success(),
+            "corrupt durable state must fail closed"
+        );
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr).contains("durable state"),
+            "unexpected corruption failure: {}",
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("read rejected state"),
+            corrupt,
+            "startup must not repair or replace corrupt durable state"
+        );
+    }
     fn fetch_taira_inrou_python_health(port: u16) -> std::io::Result<Vec<u8>> {
         let mut stream = TcpStream::connect(("127.0.0.1", port))?;
         stream.set_read_timeout(Some(Duration::from_millis(250)))?;
         std::io::Write::write_all(
             &mut stream,
-            b"GET /health?taira_inrou_probe=1 HTTP/1.1\r\nHost: taira-inrou-canary.sora\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+            b"GET /health?taira_inrou_probe=1 HTTP/1.1\r\nHost: taira.sora.org\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
         )?;
         let mut response = Vec::new();
         std::io::Read::read_to_end(&mut stream, &mut response)?;
         Ok(response)
     }
+    #[cfg(target_os = "linux")]
     #[test]
     fn taira_inrou_canary_python_server_emits_exact_health_identity() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        const HANDLER_HARNESS: &str = r#"
+import importlib.util
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("taira_inrou_canary_server_v1", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+state = module.load_or_create_health_state(
+    sys.argv[2], "taira_inrou_canary", sys.argv[4], 3,
+    "33333333-3333-3333-3333-333333333333"
+)
+module.HealthHandler.payload = module.health_payload(
+    "taira_inrou_canary", sys.argv[4], 3, state
+)
+module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_forever()
+"#;
         let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve loopback port");
         let port = reserved.local_addr().expect("reserved address").port();
         drop(reserved);
+        let temp = taira_test_tempdir("taira-inrou-python-health-");
+        let app_data_dir = temp.path().join("app-data");
+        fs::create_dir(&app_data_dir).expect("create app-data volume");
+        fs::set_permissions(&app_data_dir, fs::Permissions::from_mode(0o700))
+            .expect("set exact app-data volume mode");
 
         let service_version = format!(
             "{TAIRA_INROU_CANARY_SERVICE_VERSION_PREFIX_V1}{}",
             "ab".repeat(32)
         );
-        let mut command = taira_inrou_canary_python_command();
+        let mut command = Command::new("python3");
         let mut child = command
-            .env("PORT", port.to_string())
-            .env("HTTP_SERVICE_NAME", TAIRA_INROU_CANARY_SERVICE_NAME_V1)
-            .env("SORACLOUD_REPLICA_SLOT", "3")
-            .env("SORACLOUD_SERVICE_VERSION", &service_version)
+            .arg("-I")
+            .arg("-c")
+            .arg(HANDLER_HARNESS)
+            .arg(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("src/soracloud/taira_inrou_canary_server_v1.py"),
+            )
+            .arg(&app_data_dir)
+            .arg(port.to_string())
+            .arg(&service_version)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -19953,7 +24278,11 @@ mod tests {
         let health: Value = json::from_slice(&response[body_offset..])
             .expect("decode canonical Taira health response");
         let object = health.as_object().expect("health response object");
-        assert_eq!(object.len(), 5, "health response must have exact fields");
+        assert_eq!(object.len(), 9, "health response must have exact fields");
+        assert_eq!(
+            object.get("schema_version").and_then(Value::as_u64),
+            Some(1)
+        );
         assert_eq!(
             object.get("service").and_then(Value::as_str),
             Some(TAIRA_INROU_CANARY_SERVICE_NAME_V1)
@@ -19967,6 +24296,25 @@ mod tests {
         assert_eq!(
             object.get("identity").and_then(Value::as_str),
             Some("taira_inrou_canary:replica:3")
+        );
+        assert!(
+            object
+                .get("app_data_marker_sha256")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.len() == 64
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        );
+        assert_eq!(object.get("boot_sequence").and_then(Value::as_u64), Some(1));
+        assert!(
+            object
+                .get("guest_boot_id_sha256")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.len() == 64
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
         );
     }
     #[test]
@@ -20207,6 +24555,8 @@ mod tests {
     fn canonical_taira_stage_receipt_fixture() -> TairaInrouStageReceiptV1 {
         TairaInrouStageReceiptV1 {
             schema_version: TAIRA_INROU_STAGE_SCHEMA_VERSION_V1,
+            sorafs_retention_epoch: test_sorafs_retention_epoch().get(),
+            placement_targets: test_inrou_placement_targets(4),
             mutation_mode: "deploy".to_owned(),
             service_name: "taira_inrou_canary".to_owned(),
             service_version: format!(
@@ -20225,9 +24575,453 @@ mod tests {
             guest_manifest_file: TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1.to_owned(),
             guest_content_cid: "guest-cid".to_owned(),
             guest_manifest_digest_hex: "22".repeat(32),
+            discovery_payload_dir: TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1.to_owned(),
+            discovery_manifest_file: TAIRA_INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1.to_owned(),
+            discovery_document_hash: "33".repeat(32),
+            discovery_content_cid: "discovery-cid".to_owned(),
+            discovery_manifest_digest_hex: "44".repeat(32),
+            public_discovery_url: "https://taira.sora.org/sorafs/cid/discovery-cid/index.json"
+                .to_owned(),
+            public_discovery_cid_host_url: "https://discovery-cid.sorafs.taira.sora.org/index.json"
+                .to_owned(),
             container_manifest_hash: "container-hash".to_owned(),
             service_manifest_hash: "service-hash".to_owned(),
         }
+    }
+    #[cfg(unix)]
+    const TAIRA_VALIDATOR_CONFIG_FIXTURES: [&str; TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1] = [
+        include_str!("../../../defaults/kagami/iroha3-dev/peer0.toml"),
+        include_str!("../../../defaults/kagami/iroha3-dev/peer1.toml"),
+        include_str!("../../../defaults/kagami/iroha3-dev/peer2.toml"),
+        include_str!("../../../defaults/kagami/iroha3-dev/peer3.toml"),
+    ];
+    #[cfg(unix)]
+    fn taira_validator_fixture_signer(seed: u8) -> toml::Table {
+        let key_pair = soracloud_fixture_key_pair(seed);
+        let (algorithm, public_key_bytes) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture signer public key must encode");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        let public_key_hex = hex::encode(public_key_bytes);
+        let authority = AccountId::new(key_pair.public_key().clone()).to_string();
+        let mut signer = toml::Table::new();
+        signer.insert(
+            "handle".to_owned(),
+            toml::Value::String(format!("software://taira/inrou/{public_key_hex}")),
+        );
+        signer.insert("authority".to_owned(), toml::Value::String(authority));
+        signer.insert(
+            "algorithm".to_owned(),
+            toml::Value::String("ed25519".to_owned()),
+        );
+        signer.insert(
+            "public_key_hex".to_owned(),
+            toml::Value::String(public_key_hex),
+        );
+        signer.insert("revision".to_owned(), toml::Value::Integer(1));
+        signer.insert(
+            "policy_digest_hex".to_owned(),
+            toml::Value::String("a7".repeat(32)),
+        );
+        signer
+    }
+    #[cfg(unix)]
+    fn install_taira_validator_fixture_runtime(root: &mut toml::Table, signer_seed: u8) {
+        let mut submission = toml::Table::new();
+        submission.insert(
+            "fee_payer".to_owned(),
+            toml::Value::String("authority".to_owned()),
+        );
+        submission.insert(
+            "signer".to_owned(),
+            toml::Value::Table(taira_validator_fixture_signer(signer_seed)),
+        );
+        let mut egress = toml::Table::new();
+        egress.insert("default_allow".to_owned(), toml::Value::Boolean(false));
+        egress.insert("allowed_hosts".to_owned(), toml::Value::Array(Vec::new()));
+        egress.insert(
+            "rate_per_minute".to_owned(),
+            toml::Value::Integer(i64::from(defaults::taira::INROU_EGRESS_RATE_PER_MINUTE)),
+        );
+        egress.insert(
+            "max_bytes_per_minute".to_owned(),
+            toml::Value::Integer(
+                i64::try_from(defaults::taira::INROU_EGRESS_MAX_BYTES_PER_MINUTE)
+                    .expect("Taira egress byte budget fits TOML integer"),
+            ),
+        );
+        let mut runtime = toml::Table::new();
+        runtime.insert("production_mode".to_owned(), toml::Value::Boolean(true));
+        runtime.insert("submission".to_owned(), toml::Value::Table(submission));
+        runtime.insert("egress".to_owned(), toml::Value::Table(egress));
+        root.insert("soracloud_runtime".to_owned(), toml::Value::Table(runtime));
+    }
+    #[cfg(unix)]
+    fn replace_taira_validator_fixture_signer(root: &mut toml::Table, signer_seed: u8) {
+        taira_toml_table_at(
+            root,
+            &["soracloud_runtime", "submission"],
+            "fixture submission",
+        )
+        .expect("fixture submission table");
+        root.get_mut("soracloud_runtime")
+            .and_then(toml::Value::as_table_mut)
+            .and_then(|runtime| runtime.get_mut("submission"))
+            .and_then(toml::Value::as_table_mut)
+            .expect("fixture submission table")
+            .insert(
+                "signer".to_owned(),
+                toml::Value::Table(taira_validator_fixture_signer(signer_seed)),
+            );
+    }
+    #[cfg(unix)]
+    fn parse_complete_taira_validator_fixture(path: &Path, source: &str) -> actual::Root {
+        let table = toml::from_str(source).expect("complete generated-like validator TOML");
+        actual::Root::from_toml_source(TomlSource::new_sensitive(
+            path.to_path_buf(),
+            table,
+            zeroize_taira_toml_table,
+        ))
+        .expect("complete generated-like validator config must parse")
+    }
+    #[cfg(unix)]
+    fn write_complete_taira_validator_fixtures(config_dir: &Path) -> TairaInrouStageReceiptV1 {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::create_dir(config_dir).expect("create validator fixture directory");
+        fs::set_permissions(config_dir, fs::Permissions::from_mode(0o700))
+            .expect("make validator fixture directory owner-private");
+        let mut placements = BTreeSet::new();
+        for (peer_index, source) in TAIRA_VALIDATOR_CONFIG_FIXTURES.iter().enumerate() {
+            let mut table = toml::from_str(source).expect("parse generated validator fixture");
+            install_taira_validator_fixture_runtime(
+                &mut table,
+                0xA0_u8
+                    .checked_add(u8::try_from(peer_index).expect("fixture index fits u8"))
+                    .expect("fixture signer seed"),
+            );
+            placements.insert(
+                taira_validator_placement_from_table(&table, peer_index)
+                    .expect("fixture validator placement"),
+            );
+            let rendered = toml::to_string_pretty(&table)
+                .expect("render complete generated-like validator fixture");
+            let path = config_dir.join(format!("peer{peer_index}.toml"));
+            let parsed = parse_complete_taira_validator_fixture(&path, &rendered);
+            assert!(parsed.soracloud_runtime.production_mode);
+            assert!(!parsed.soracloud_runtime.inrou.enabled);
+            fs::write(&path, rendered.as_bytes()).expect("write validator fixture");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .expect("make validator fixture owner-private");
+        }
+        let trusted_guest = sample_published_inrou_artifact(0x31);
+        let mut receipt = canonical_taira_stage_receipt_fixture();
+        receipt.guest_manifest_digest_hex = trusted_guest.manifest_digest_hex;
+        receipt.guest_content_cid = trusted_guest.content_cid;
+        receipt.placement_targets = placements;
+        validate_taira_inrou_config_receipt(&receipt).expect("valid binder fixture receipt");
+        receipt
+    }
+    #[cfg(unix)]
+    fn taira_validator_config_snapshots(
+        config_dir: &Path,
+    ) -> [(Vec<u8>, TairaFileIdentity); TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1] {
+        (0..TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1)
+            .map(|peer_index| {
+                let path = config_dir.join(format!("peer{peer_index}.toml"));
+                let bytes = fs::read(&path).expect("snapshot validator config bytes");
+                let identity = taira_metadata_identity(
+                    &fs::symlink_metadata(path).expect("snapshot validator config identity"),
+                );
+                (bytes, identity)
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("four validator config snapshots")
+    }
+    #[cfg(unix)]
+    fn assert_taira_validator_configs_unchanged(
+        config_dir: &Path,
+        expected: &[(Vec<u8>, TairaFileIdentity); TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1],
+    ) {
+        assert_eq!(&taira_validator_config_snapshots(config_dir), expected);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_validator_config_binding_installs_exact_typed_profiles_atomically() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let temp = taira_test_tempdir("taira-inrou-validator-config-bind-");
+        let config_dir = temp.path().join("configs");
+        let receipt = write_complete_taira_validator_fixtures(&config_dir);
+        let before = taira_validator_config_snapshots(&config_dir);
+
+        bind_taira_inrou_validator_configs(&config_dir, &receipt)
+            .expect("bind all four exact Taira Inrou validator configs");
+
+        for peer_index in 0..TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1 {
+            let path = config_dir.join(format!("peer{peer_index}.toml"));
+            let metadata = fs::symlink_metadata(&path).expect("inspect bound validator config");
+            assert!(metadata.is_file());
+            assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
+            assert_ne!(
+                (metadata.dev(), metadata.ino()),
+                (before[peer_index].1.dev, before[peer_index].1.ino)
+            );
+            let source = Zeroizing::new(
+                fs::read_to_string(&path).expect("read bound validator config for typed assertion"),
+            );
+            let parsed = parse_complete_taira_validator_fixture(&path, source.as_str());
+            assert!(parsed.soracloud_runtime.production_mode);
+            assert_eq!(
+                parsed.soracloud_runtime.inrou,
+                expected_taira_inrou_validator_config(peer_index, &receipt)
+                    .expect("exact expected typed Inrou profile")
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_validator_config_binding_mismatch_leaves_all_originals_unchanged() {
+        let temp = taira_test_tempdir("taira-inrou-validator-config-mismatch-");
+        let config_dir = temp.path().join("configs");
+        let receipt = write_complete_taira_validator_fixtures(&config_dir);
+        let fourth = config_dir.join("peer3.toml");
+        let mut table: toml::Table =
+            toml::from_str(&fs::read_to_string(&fourth).expect("read fourth validator fixture"))
+                .expect("parse fourth validator fixture");
+        replace_taira_validator_fixture_signer(&mut table, 0xD3);
+        let rendered = toml::to_string_pretty(&table).expect("render mismatched fourth config");
+        parse_complete_taira_validator_fixture(&fourth, &rendered);
+        fs::write(&fourth, rendered).expect("write mismatched fourth config");
+        let before = taira_validator_config_snapshots(&config_dir);
+
+        let error = bind_taira_inrou_validator_configs(&config_dir, &receipt)
+            .expect_err("mismatched fourth placement must fail before staging");
+        assert!(
+            error.to_string().contains("placements do not match"),
+            "{error}"
+        );
+        assert_taira_validator_configs_unchanged(&config_dir, &before);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_validator_config_binding_render_limit_leaves_all_originals_unchanged() {
+        let temp = taira_test_tempdir("taira-inrou-validator-config-limit-");
+        let config_dir = temp.path().join("configs");
+        let receipt = write_complete_taira_validator_fixtures(&config_dir);
+        let fourth = config_dir.join("peer3.toml");
+        let mut table: toml::Table =
+            toml::from_str(&fs::read_to_string(&fourth).expect("read fourth validator fixture"))
+                .expect("parse fourth validator fixture");
+        table
+            .get_mut("torii")
+            .and_then(toml::Value::as_table_mut)
+            .expect("generated fixture Torii table")
+            .insert("data_dir".to_owned(), toml::Value::String(String::new()));
+        let empty = toml::to_string_pretty(&table).expect("render unpadded fourth config");
+        let limit = usize::try_from(MAX_TOML_SOURCE_BYTES).expect("TOML limit fits usize");
+        let padding = limit
+            .checked_sub(empty.len().saturating_add(1))
+            .expect("fixture leaves room for near-limit path");
+        table
+            .get_mut("torii")
+            .and_then(toml::Value::as_table_mut)
+            .expect("generated fixture Torii table")
+            .insert(
+                "data_dir".to_owned(),
+                toml::Value::String("x".repeat(padding)),
+            );
+        let rendered = toml::to_string_pretty(&table).expect("render near-limit fourth config");
+        assert_eq!(rendered.len(), limit - 1);
+        parse_complete_taira_validator_fixture(&fourth, &rendered);
+        let mut projected = table.clone();
+        insert_taira_inrou_validator_table(&mut projected, 3, &receipt)
+            .expect("project fourth Inrou table for boundary assertion");
+        assert!(
+            toml::to_string_pretty(&projected)
+                .expect("render oversized projected config")
+                .len()
+                > limit
+        );
+        fs::write(&fourth, rendered).expect("write near-limit fourth config");
+        let before = taira_validator_config_snapshots(&config_dir);
+
+        let error = bind_taira_inrou_validator_configs(&config_dir, &receipt)
+            .expect_err("oversized rendered config must fail before staging");
+        assert!(
+            error.to_string().contains("configuration-source limit"),
+            "{error}"
+        );
+        assert_taira_validator_configs_unchanged(&config_dir, &before);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_validator_inrou_table_uses_only_exact_v1_defaults() {
+        let receipt = canonical_taira_stage_receipt_fixture();
+        let table = taira_inrou_validator_table(2, &receipt)
+            .expect("build exact Taira validator Inrou table");
+        assert_eq!(
+            table.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "enabled",
+                "guest_image_max_bytes",
+                "max_cpu_millis",
+                "max_memory_bytes",
+                "max_storage_bytes",
+                "portable_vm_gid",
+                "portable_vm_uid",
+                "start_grace_ms",
+                "stop_grace_ms",
+                "trusted_guest_content_cid",
+                "trusted_guest_manifest_digest_hex",
+            ])
+        );
+        assert_eq!(
+            table.get("enabled").and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            table
+                .get("portable_vm_uid")
+                .and_then(toml::Value::as_integer),
+            Some(i64::from(
+                defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE + 2
+            ))
+        );
+        assert_eq!(
+            table
+                .get("guest_image_max_bytes")
+                .and_then(toml::Value::as_integer),
+            Some(10 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(
+            table
+                .get("max_cpu_millis")
+                .and_then(toml::Value::as_integer),
+            Some(i64::from(
+                defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS.get()
+            ))
+        );
+        assert_eq!(
+            table
+                .get("max_memory_bytes")
+                .and_then(toml::Value::as_integer),
+            i64::try_from(defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES.get()).ok()
+        );
+        assert_eq!(
+            table
+                .get("max_storage_bytes")
+                .and_then(toml::Value::as_integer),
+            i64::try_from(defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES.get()).ok()
+        );
+        assert_eq!(
+            table
+                .get("start_grace_ms")
+                .and_then(toml::Value::as_integer),
+            i64::try_from(defaults::soracloud_runtime::INROU_START_GRACE_MS).ok()
+        );
+        assert_eq!(
+            table.get("stop_grace_ms").and_then(toml::Value::as_integer),
+            i64::try_from(defaults::soracloud_runtime::INROU_STOP_GRACE_MS).ok()
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_validator_config_binding_rejects_an_existing_inrou_table() {
+        let receipt = canonical_taira_stage_receipt_fixture();
+        let mut root = toml::Table::new();
+        let mut runtime = toml::Table::new();
+        runtime.insert("inrou".to_owned(), toml::Value::Table(toml::Table::new()));
+        root.insert("soracloud_runtime".to_owned(), toml::Value::Table(runtime));
+        let error = insert_taira_inrou_validator_table(&mut root, 0, &receipt)
+            .expect_err("an existing first-release Inrou table must never be reused");
+        assert!(
+            error.to_string().contains("never reuses or upgrades"),
+            "unexpected existing-table error: {error}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_validator_config_placement_comes_from_exact_typed_fields() {
+        let expected = test_inrou_placement_targets(1)
+            .into_iter()
+            .next()
+            .expect("one placement target");
+        let mut signer = toml::Table::new();
+        signer.insert(
+            "authority".to_owned(),
+            toml::Value::String(expected.validator_account_id.to_string()),
+        );
+        let mut submission = toml::Table::new();
+        submission.insert("signer".to_owned(), toml::Value::Table(signer));
+        let mut runtime = toml::Table::new();
+        runtime.insert("submission".to_owned(), toml::Value::Table(submission));
+        let mut root = toml::Table::new();
+        root.insert(
+            "public_key".to_owned(),
+            toml::Value::String(expected.peer_id.clone()),
+        );
+        root.insert("soracloud_runtime".to_owned(), toml::Value::Table(runtime));
+        assert_eq!(
+            taira_validator_placement_from_table(&root, 0)
+                .expect("read exact validator placement fields"),
+            expected
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_validator_config_paths_require_exact_private_custody() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = taira_test_tempdir("taira-inrou-validator-config-custody-");
+        let config_dir = temp.path().join("configs");
+        fs::create_dir(&config_dir).expect("create validator config directory");
+        fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700))
+            .expect("make validator config directory owner-private");
+        let paths = (0..TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1)
+            .map(|index| {
+                let path = config_dir.join(format!("peer{index}.toml"));
+                fs::write(&path, b"private_key = \"test\"\n")
+                    .expect("write validator config fixture");
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                    .expect("make validator config fixture owner-private");
+                path
+            })
+            .collect::<Vec<_>>();
+        let directory = open_taira_validator_config_directory(&config_dir)
+            .expect("retain private validator config directory");
+        assert_eq!(
+            exact_taira_validator_config_entries(&directory)
+                .expect("accept exact private validator configs")
+                .len(),
+            TAIRA_INROU_VALIDATOR_CONFIG_COUNT_V1
+        );
+
+        let extra = config_dir.join("peer4.toml");
+        fs::write(&extra, b"private_key = \"extra\"\n").expect("write unexpected validator config");
+        fs::set_permissions(&extra, fs::Permissions::from_mode(0o600))
+            .expect("make unexpected validator config owner-private");
+        exact_taira_validator_config_entries(&directory)
+            .expect_err("an additional peer TOML must be rejected");
+        fs::remove_file(extra).expect("remove unexpected validator config");
+
+        fs::set_permissions(&paths[0], fs::Permissions::from_mode(0o640))
+            .expect("weaken validator config custody");
+        exact_taira_validator_config_entries(&directory)
+            .expect_err("a group-readable validator config must be rejected");
+        fs::set_permissions(&paths[0], fs::Permissions::from_mode(0o600))
+            .expect("restore validator config custody");
+
+        fs::remove_file(&paths[1]).expect("remove second validator config fixture");
+        fs::hard_link(&paths[0], &paths[1]).expect("alias validator config inode");
+        let error = exact_taira_validator_config_entries(&directory)
+            .expect_err("hard-linked validator configs must be rejected");
+        assert!(
+            error.to_string().contains("singly-linked"),
+            "unexpected linked-config error: {error}"
+        );
     }
     #[test]
     fn taira_stage_receipt_rejects_noncanonical_or_legacy_layouts() {
@@ -20262,6 +25056,9 @@ mod tests {
         let mut traversal = canonical.clone();
         traversal.guest_payload_dir = "../guest".to_owned();
         assert!(validate_taira_stage_layout(&traversal, MutationMode::Deploy).is_err());
+        let mut zero_retention = canonical.clone();
+        zero_retention.sorafs_retention_epoch = 0;
+        assert!(validate_taira_stage_layout(&zero_retention, MutationMode::Deploy).is_err());
         let mut legacy_version = canonical;
         legacy_version.schema_version = 0;
         assert!(validate_taira_stage_layout(&legacy_version, MutationMode::Deploy).is_err());
@@ -20281,6 +25078,23 @@ mod tests {
             )
             .is_err(),
             "first-release stages must reject receipts without an explicit mutation mode"
+        );
+
+        let Value::Object(mut missing_retention) =
+            json::to_value(&canonical_taira_stage_receipt_fixture())
+                .expect("encode stage receipt fixture")
+        else {
+            panic!("stage receipt must encode as an object");
+        };
+        missing_retention.remove("sorafs_retention_epoch");
+        let bytes = json::to_vec(&Value::Object(missing_retention)).expect("encode stale receipt");
+        assert!(
+            decode_taira_stage_json::<TairaInrouStageReceiptV1>(
+                &bytes,
+                Path::new("stale-receipt.json"),
+            )
+            .is_err(),
+            "first-release stages must reject receipts without the exact retention identity"
         );
 
         let Value::Object(mut retired_selector) =
@@ -20473,6 +25287,162 @@ mod tests {
         let path = std::env::temp_dir().join(format!("iroha_soracloud_cli_{name}_{nanos}"));
         fs::create_dir_all(&path).expect("create temp dir");
         path
+    }
+    fn test_inrou_preseed_targets(root: &Path) -> Vec<InrouOperatorPreseedTargetArg> {
+        (0..SORACLOUD_ARTIFACT_MIN_REPLICAS_V1)
+            .map(|index| {
+                let path = root.join(format!("inrou-preseed-{index}"));
+                fs::create_dir_all(&path).expect("create offline Inrou preseed store");
+                let data_dir =
+                    fs::canonicalize(path).expect("canonical offline Inrou preseed store");
+                let seed = 0x70_u8
+                    .checked_add(u8::try_from(index).expect("test target index fits u8"))
+                    .expect("test target seed");
+                let validator_key_pair = soracloud_fixture_key_pair(seed);
+                let peer_key_pair = soracloud_fixture_key_pair(seed ^ 0x80);
+                InrouOperatorPreseedTargetArg {
+                    validator_account_id: AccountId::new(validator_key_pair.public_key().clone())
+                        .to_string(),
+                    peer_id: PeerId::from(peer_key_pair.public_key().clone()).to_string(),
+                    data_dir,
+                }
+            })
+            .collect()
+    }
+    fn test_inrou_placement_targets(count: usize) -> BTreeSet<SoraInrouPlacementTargetV1> {
+        (0..count)
+            .map(|index| {
+                let seed = 0x60_u8
+                    .checked_add(u8::try_from(index).expect("test target index fits u8"))
+                    .expect("test target seed");
+                let validator_key_pair = soracloud_fixture_key_pair(seed);
+                let peer_key_pair = soracloud_fixture_key_pair(seed ^ 0x80);
+                SoraInrouPlacementTargetV1 {
+                    validator_account_id: AccountId::new(validator_key_pair.public_key().clone()),
+                    peer_id: PeerId::from(peer_key_pair.public_key().clone()).to_string(),
+                }
+            })
+            .collect()
+    }
+    fn test_inrou_preseed_capacity() -> Option<NonZeroU64> {
+        Some(NonZeroU64::new(64 * 1024 * 1024).expect("nonzero test SoraFS capacity"))
+    }
+    fn write_test_inrou_preseed_helper(
+        root: &Path,
+        file_name: &str,
+        script: &str,
+    ) -> (PathBuf, String) {
+        let helper = root.join(file_name);
+        fs::write(&helper, script).expect("write test Inrou preseed helper");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&helper, fs::Permissions::from_mode(0o700))
+                .expect("make test Inrou preseed helper executable");
+        }
+        let helper = fs::canonicalize(helper).expect("canonical test Inrou preseed helper");
+        let digest = sha256_file(
+            &helper,
+            "test Inrou preseed helper",
+            INROU_PRESEED_HELPER_MAX_BYTES,
+        )
+        .expect("hash test Inrou preseed helper");
+        (helper, digest)
+    }
+    fn test_inrou_preseed_helper(root: &Path) -> (Option<PathBuf>, Option<String>) {
+        let (helper, digest) = write_test_inrou_preseed_helper(
+            root,
+            "test-sorafs-node-preseed-helper.sh",
+            concat!(
+                "#!/bin/sh\n",
+                "printf '%s\\n' \"$IROHA_TEST_INROU_PRESEED_RECEIPT\"\n",
+                "while IFS= read -r _line; do :; done\n",
+                "printf '%s' \"$IROHA_TEST_INROU_PRESEED_RELEASE_ACK\"\n",
+            ),
+        );
+        (Some(helper), Some(digest))
+    }
+    fn test_inrou_preseed_receipt_output(root: &Path, label: &str) -> PathBuf {
+        let directory = root.join(format!("{label}-inrou-qualification"));
+        fs::create_dir_all(&directory).expect("create test Inrou qualification directory");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+                .expect("make test Inrou qualification directory owner-only");
+        }
+        fs::canonicalize(directory)
+            .expect("canonical test Inrou qualification directory")
+            .join("qualification.json")
+    }
+    fn qualify_test_inrou_service(
+        root: &Path,
+        bundle_file: &Path,
+        key_pair: &KeyPair,
+        label: &str,
+    ) -> PathBuf {
+        let receipt_out = test_inrou_preseed_receipt_output(root, label);
+        let (inrou_preseed_helper, inrou_preseed_helper_sha256) = test_inrou_preseed_helper(root);
+        InrouServicePreseedArgs {
+            container: root.join("container_manifest.json"),
+            service: root.join("service_manifest.json"),
+            bundle_file: bundle_file.to_path_buf(),
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
+            inrou_preseed_targets: test_inrou_preseed_targets(root),
+            inrou_preseed_max_capacity_bytes: test_inrou_preseed_capacity(),
+            inrou_preseed_helper,
+            inrou_preseed_helper_sha256,
+            receipt_out: receipt_out.clone(),
+            timeout_secs: 5,
+        }
+        .run(key_pair)
+        .expect("offline service preseed must produce the exact qualification");
+        receipt_out
+    }
+    fn qualify_test_inrou_app(root: &Path, key_pair: &KeyPair, label: &str) -> PathBuf {
+        let receipt_out = test_inrou_preseed_receipt_output(root, label);
+        let (inrou_preseed_helper, inrou_preseed_helper_sha256) = test_inrou_preseed_helper(root);
+        InrouAppPreseedArgs {
+            manifest: root.join("app_manifest.json"),
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
+            inrou_preseed_targets: test_inrou_preseed_targets(root),
+            inrou_preseed_max_capacity_bytes: test_inrou_preseed_capacity(),
+            inrou_preseed_helper,
+            inrou_preseed_helper_sha256,
+            receipt_out: receipt_out.clone(),
+            timeout_secs: 5,
+        }
+        .run(key_pair)
+        .expect("offline app preseed must produce the exact qualification");
+        receipt_out
+    }
+    fn test_inrou_preseed_config(
+        root: &Path,
+        helper: &Path,
+        helper_digest: &str,
+    ) -> ValidatedInrouOperatorPreseed {
+        validate_inrou_operator_preseed(
+            Some(SORACLOUD_ARTIFACT_MIN_REPLICAS_V1),
+            &test_inrou_preseed_targets(root),
+            test_inrou_preseed_capacity(),
+            Some(helper),
+            Some(helper_digest),
+        )
+        .expect("validate exact test preseed helper")
+        .expect("test Inrou preseed config")
+    }
+    fn test_inrou_preseed_artifact(root: &Path, label: &str) -> PreparedSorafsArtifact {
+        let input = root.join(format!("{label}.bin"));
+        fs::write(&input, format!("exact {label} preseed artifact bytes"))
+            .expect("write test preseed artifact");
+        prepare_sorafs_file_artifact(
+            &input,
+            label,
+            &soracloud_fixture_key_pair(0x5C),
+            SorafsReleaseIdentityV1::new(test_sorafs_retention_epoch()),
+        )
+        .expect("prepare test preseed artifact")
+        .0
     }
     fn named_service_fixture(
         temp_name: &str,
@@ -22483,16 +27453,16 @@ mod tests {
         let key_pair = soracloud_fixture_key_pair(0x13);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        let publication = publish_app_static_site(
+        let (publication, artifact) = prepare_app_static_site(
             &manifest,
             &dir,
             static_site,
-            &server.base_url,
-            &authority,
             &key_pair,
-            5,
+            SorafsReleaseIdentityV1::new(test_sorafs_retention_epoch()),
         )
-        .expect("publish should register finalized provider ingest");
+        .expect("prepare static site publication");
+        register_prepared_sorafs_artifact(&artifact, &server.base_url, &authority, &key_pair, 5)
+            .expect("publish should register finalized provider ingest");
         assert_eq!(publication.hostname, "travel-ops.sora");
         assert_eq!(publication.public_url, "https://travel-ops.sora");
         assert!(publication.content_cid.starts_with('b'));
@@ -22536,6 +27506,843 @@ mod tests {
             *car_stats.car_payload_digest.as_bytes(),
             "CARv1 payload-section digest must not be published as ManifestV1.car_digest"
         );
+    }
+    #[test]
+    fn public_service_discovery_cross_binds_canonical_document_and_artifact_envelope() {
+        let bundle = canonical_taira_inrou_bundle_fixture();
+        let key_pair = soracloud_fixture_key_pair(0x14);
+        let (discovery, publication, artifact) = prepare_public_service_discovery(
+            &bundle,
+            &key_pair,
+            SorafsReleaseIdentityV1::new(test_sorafs_retention_epoch()),
+        )
+        .expect("prepare canonical public discovery document");
+
+        let document = public_service_discovery_document_from_projection(&discovery);
+        let document_bytes = json::to_vec(&document).expect("encode canonical discovery document");
+        assert_eq!(discovery.document_hash, Hash::new(&document_bytes));
+        assert_eq!(publication.document_hash, discovery.document_hash);
+        let document_json = json::to_value(&document).expect("encode discovery document JSON");
+        let document_object = document_json
+            .as_object()
+            .expect("discovery document JSON object");
+        for detached_field in [
+            "document_hash",
+            "content_cid",
+            "public_discovery_url",
+            "public_discovery_cid_host_url",
+            "manifest_digest_hex",
+        ] {
+            assert!(
+                !document_object.contains_key(detached_field),
+                "immutable index.json must omit publication-derived field `{detached_field}`"
+            );
+        }
+        json::from_value::<SoracloudPublicServiceDiscoveryDocumentV1>(
+            json::to_value(&discovery).expect("encode on-chain discovery projection"),
+        )
+        .expect_err("strict index document must reject the detached artifact envelope");
+
+        let staged = taira_test_tempdir("public-discovery-binding-");
+        fs::write(
+            staged.path().join(PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT),
+            &document_bytes,
+        )
+        .expect("stage reconstructed canonical discovery document");
+        let descriptor = chunker_registry::default_descriptor();
+        let (plan, payload) =
+            CarBuildPlan::from_directory_with_profile(staged.path(), descriptor.profile)
+                .expect("plan reconstructed discovery artifact");
+        let mut car_sink = io::sink();
+        let car_stats = CarWriter::new(&plan, &payload)
+            .expect("prepare reconstructed discovery CAR")
+            .write_to(&mut car_sink)
+            .expect("write reconstructed discovery CAR");
+        assert_eq!(car_stats.root_cids.len(), 1);
+
+        assert_eq!(artifact.payload, payload);
+        assert_eq!(artifact.plan, plan);
+        let published_manifest = &artifact.built.manifest;
+        assert_eq!(published_manifest.root_cid, car_stats.root_cids[0]);
+        assert_eq!(
+            discovery.content_cid,
+            encode_content_cid(&car_stats.root_cids[0])
+        );
+        assert_eq!(publication.content_cid, discovery.content_cid);
+        assert_eq!(
+            discovery.manifest_digest_hex,
+            hex::encode(
+                artifact
+                    .built
+                    .manifest
+                    .digest()
+                    .expect("digest prepared discovery manifest")
+                    .as_bytes()
+            )
+        );
+        assert_eq!(
+            discovery.public_discovery_url,
+            format!(
+                "https://taira.sora.org/sorafs/cid/{}/index.json",
+                discovery.content_cid
+            )
+        );
+        assert_eq!(
+            discovery.public_discovery_cid_host_url,
+            format!(
+                "https://{}.sorafs.taira.sora.org/index.json",
+                discovery.content_cid
+            )
+        );
+    }
+    #[test]
+    fn inrou_preseed_target_parsers_require_exact_canonical_identities() {
+        let validator_key = soracloud_fixture_key_pair(0x5A);
+        let peer_key = soracloud_fixture_key_pair(0x5B);
+        let validator_account_id = AccountId::new(validator_key.public_key().clone());
+        let peer_id = PeerId::from(peer_key.public_key().clone()).to_string();
+        let identity = format!("{validator_account_id},{peer_id}");
+        assert_eq!(
+            parse_inrou_placement_target_identity(&identity)
+                .expect("independently canonical validator and peer identities"),
+            SoraInrouPlacementTargetV1 {
+                validator_account_id: validator_account_id.clone(),
+                peer_id: peer_id.clone(),
+            }
+        );
+        let target = format!("{identity},/tmp/inrou-preseed-target");
+        let parsed = target
+            .parse::<InrouOperatorPreseedTargetArg>()
+            .expect("canonical identity-bound preseed target");
+        assert_eq!(
+            parsed.validator_account_id,
+            validator_account_id.to_string()
+        );
+        assert_eq!(parsed.peer_id, peer_id);
+        assert_eq!(
+            parsed
+                .canonical_placement()
+                .expect("parse the retained account under the active chain guard")
+                .validator_account_id,
+            validator_account_id
+        );
+
+        let taira_literal = {
+            let _guard = iroha::data_model::account::address::ChainDiscriminantGuard::enter(369);
+            validator_account_id.to_string()
+        };
+        let deferred = format!(
+            "{taira_literal},{},/tmp/taira-inrou-preseed",
+            parsed.peer_id
+        )
+        .parse::<InrouOperatorPreseedTargetArg>()
+        .expect("Clap retains a Taira account literal before config admission");
+        {
+            let _wrong_guard =
+                iroha::data_model::account::address::ChainDiscriminantGuard::enter(753);
+            deferred
+                .canonical_placement()
+                .expect_err("a foreign active chain must reject the retained Taira literal");
+        }
+        {
+            let _taira_guard =
+                iroha::data_model::account::address::ChainDiscriminantGuard::enter(369);
+            deferred
+                .canonical_placement()
+                .expect("the configured Taira guard admits the exact retained literal");
+        }
+
+        assert!(
+            parse_inrou_placement_target_identity(&format!(" {identity}"))
+                .expect_err("account whitespace aliases must fail")
+                .contains("surrounding whitespace")
+        );
+        assert!(
+            parse_inrou_placement_target_identity(&format!("{identity},extra"))
+                .expect_err("extra identity fields must fail")
+                .contains("expected exactly")
+        );
+    }
+    #[test]
+    fn inrou_preseed_requires_capacity_and_sufficient_explicit_targets() {
+        let root = temp_dir("inrou_preseed_required_targets");
+        let capacity = test_inrou_preseed_capacity();
+        let missing_targets = validate_inrou_operator_preseed(Some(3), &[], capacity, None, None)
+            .err()
+            .expect("missing preseed targets must fail");
+        assert!(missing_targets.to_string().contains("at least 3"));
+
+        let targets = test_inrou_preseed_targets(&root);
+        let missing_capacity = validate_inrou_operator_preseed(Some(3), &targets, None, None, None)
+            .err()
+            .expect("missing exact preseed capacity must fail");
+        assert!(
+            missing_capacity
+                .to_string()
+                .contains("--inrou-preseed-max-capacity-bytes")
+        );
+
+        let insufficient =
+            validate_inrou_operator_preseed(Some(3), &targets[..2], capacity, None, None)
+                .err()
+                .expect("insufficient preseed targets must fail");
+        assert!(insufficient.to_string().contains("at least 3"));
+
+        let mut excessive = targets.clone();
+        for index in 0..2 {
+            let extra = root.join(format!("extra-inrou-preseed-{index}"));
+            fs::create_dir(&extra).expect("create excessive preseed target");
+            let mut target = targets[0].clone();
+            let key_pair = soracloud_fixture_key_pair(0x79 + index);
+            target.validator_account_id = AccountId::new(key_pair.public_key().clone()).to_string();
+            target.peer_id = PeerId::from(key_pair.public_key().clone()).to_string();
+            target.data_dir = fs::canonicalize(extra).expect("canonical excessive target");
+            excessive.push(target);
+        }
+        let excessive = validate_inrou_operator_preseed(Some(3), &excessive, capacity, None, None)
+            .err()
+            .expect("excessive preseed targets must fail");
+        assert!(excessive.to_string().contains("at most 4"));
+    }
+    #[test]
+    fn inrou_preseed_rejects_duplicate_and_overlapping_storage_roots() {
+        let root = temp_dir("inrou_preseed_distinct_roots");
+        let targets = test_inrou_preseed_targets(&root);
+        let mut duplicate_root = targets[2].clone();
+        duplicate_root.data_dir = targets[0].data_dir.clone();
+        let duplicate = vec![targets[0].clone(), targets[1].clone(), duplicate_root];
+        let error = validate_inrou_operator_preseed(
+            Some(3),
+            &duplicate,
+            test_inrou_preseed_capacity(),
+            None,
+            None,
+        )
+        .err()
+        .expect("duplicate preseed roots must fail");
+        assert!(error.to_string().contains("distinct storage roots"));
+
+        let duplicate_identity = vec![
+            targets[0].clone(),
+            InrouOperatorPreseedTargetArg {
+                validator_account_id: targets[0].validator_account_id.clone(),
+                peer_id: targets[0].peer_id.clone(),
+                data_dir: targets[1].data_dir.clone(),
+            },
+            targets[2].clone(),
+        ];
+        let error = validate_inrou_operator_preseed(
+            Some(3),
+            &duplicate_identity,
+            test_inrou_preseed_capacity(),
+            None,
+            None,
+        )
+        .err()
+        .expect("duplicate placement identity must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("identities must each be distinct")
+        );
+
+        let nested = targets[0].data_dir.join("nested");
+        fs::create_dir_all(&nested).expect("create nested preseed root");
+        let mut nested_target = targets[2].clone();
+        nested_target.data_dir = nested;
+        let overlapping = vec![targets[0].clone(), nested_target, targets[1].clone()];
+        let error = validate_inrou_operator_preseed(
+            Some(3),
+            &overlapping,
+            test_inrou_preseed_capacity(),
+            None,
+            None,
+        )
+        .err()
+        .expect("overlapping preseed roots must fail");
+        assert!(error.to_string().contains("must not overlap"));
+    }
+    #[test]
+    fn inrou_preseed_never_reinterprets_populated_source_placement_targets() {
+        let exact_targets = test_inrou_placement_targets(3);
+        let mut empty = fixture_service();
+        empty.placement_targets.clear();
+        bind_exact_inrou_placement_targets(&mut empty, &exact_targets)
+            .expect("empty source placement targets may be bound once");
+        assert_eq!(empty.placement_targets, exact_targets);
+
+        bind_exact_inrou_placement_targets(&mut empty, &exact_targets)
+            .expect("an exact populated source placement set remains valid");
+        let original = empty.placement_targets.clone();
+        let mismatch = test_inrou_placement_targets(4);
+        let error = bind_exact_inrou_placement_targets(&mut empty, &mismatch)
+            .expect_err("a populated signed source placement set must never be overwritten");
+        assert!(
+            error
+                .to_string()
+                .contains("placement_targets differ from the exact durable Inrou qualification")
+        );
+        assert_eq!(empty.placement_targets, original);
+    }
+    #[test]
+    fn inrou_preseed_requires_exact_active_validator_peer_bindings() {
+        let root = temp_dir("inrou_preseed_active_host_bindings");
+        let (helper, helper_digest) = test_inrou_preseed_helper(&root);
+        let config = test_inrou_preseed_config(
+            &root,
+            helper.as_deref().expect("test preseed helper"),
+            helper_digest
+                .as_deref()
+                .expect("test preseed helper digest"),
+        );
+        let artifact = test_inrou_preseed_artifact(&root, "active-host-bindings");
+        let receipt = expected_inrou_preseed_receipt(&config, &[&artifact])
+            .expect("canonical test qualification");
+        let qualification = LoadedInrouPreseedQualification {
+            path: root.join("unused-qualification.json"),
+            receipt,
+            bytes: Vec::new(),
+            targets: config.targets.clone(),
+            max_capacity_bytes: config.max_capacity_bytes,
+        };
+
+        let active_hosts = mock_active_inrou_hosts();
+        require_active_inrou_qualification_targets(&qualification, &active_hosts)
+            .expect("every exact qualified validator/peer binding is active");
+
+        let mut missing = active_hosts.clone();
+        missing.pop();
+        let error = require_active_inrou_qualification_targets(&qualification, &missing)
+            .expect_err("a missing qualified validator must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("is not an active advertised validator host")
+        );
+
+        let mut wrong_peer = active_hosts.clone();
+        wrong_peer[0].peer_id = wrong_peer[1].peer_id.clone();
+        let error = require_active_inrou_qualification_targets(&qualification, &wrong_peer)
+            .expect_err("an active validator bound to another peer must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("but the active capability binds")
+        );
+
+        let mut reordered = active_hosts;
+        reordered.reverse();
+        let error = require_active_inrou_qualification_targets(&qualification, &reordered)
+            .expect_err("noncanonical active capability order must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("must be strictly ordered by validator account")
+        );
+    }
+    #[test]
+    fn inrou_preseed_rejects_a_changed_or_unbound_helper() {
+        let root = temp_dir("inrou_preseed_helper_binding");
+        let targets = test_inrou_preseed_targets(&root);
+        let (helper, helper_digest) = test_inrou_preseed_helper(&root);
+        fs::write(helper.as_ref().expect("test helper"), "#!/bin/sh\nexit 1\n")
+            .expect("change test helper after hashing");
+        let error = validate_inrou_operator_preseed(
+            Some(3),
+            &targets,
+            test_inrou_preseed_capacity(),
+            helper.as_deref(),
+            helper_digest.as_deref(),
+        )
+        .err()
+        .expect("changed preseed helper must fail");
+        assert!(
+            format!("{error:#}").contains("SHA-256 mismatch"),
+            "{error:#}"
+        );
+    }
+    #[test]
+    fn inrou_preseed_cli_rejects_zero_timeout() {
+        use clap::Parser as _;
+
+        #[derive(clap::Parser)]
+        struct ServiceParser {
+            #[command(subcommand)]
+            command: ServiceCommand,
+        }
+        #[derive(clap::Parser)]
+        struct AppParser {
+            #[command(subcommand)]
+            command: AppCommand,
+        }
+
+        assert!(
+            ServiceParser::try_parse_from([
+                "service",
+                "deploy",
+                "--bundle-file",
+                "bundle.tgz",
+                "--sorafs-retention-epoch",
+                "1",
+                "--timeout-secs",
+                "0",
+            ])
+            .is_err(),
+            "service deploy must reject a zero helper/request timeout"
+        );
+        assert!(
+            ServiceParser::try_parse_from([
+                "service",
+                "upgrade",
+                "--bundle-file",
+                "bundle.tgz",
+                "--sorafs-retention-epoch",
+                "1",
+                "--timeout-secs",
+                "0",
+            ])
+            .is_err(),
+            "service upgrade must reject a zero helper/request timeout"
+        );
+        assert!(
+            AppParser::try_parse_from([
+                "app",
+                "release",
+                "--sorafs-retention-epoch",
+                "1",
+                "--timeout-secs",
+                "0",
+            ])
+            .is_err(),
+            "app release must reject a zero helper/request timeout"
+        );
+        let error = start_inrou_operator_preseed_session(None, &[], 0)
+            .err()
+            .expect("operator-preseed startup must reject zero directly");
+        assert!(format!("{error:#}").contains("timeout must be positive"));
+    }
+    #[test]
+    fn online_inrou_publication_rejects_retired_one_shot_preseed_flags() {
+        use clap::Parser as _;
+
+        #[derive(clap::Parser)]
+        struct ServiceParser {
+            #[command(subcommand)]
+            command: ServiceCommand,
+        }
+        #[derive(clap::Parser)]
+        struct AppParser {
+            #[command(subcommand)]
+            command: AppCommand,
+        }
+
+        assert!(
+            ServiceParser::try_parse_from([
+                "service",
+                "deploy",
+                "--bundle-file",
+                "bundle.tgz",
+                "--sorafs-retention-epoch",
+                "1",
+                "--inrou-preseed-target",
+                "validator,peer,/tmp/store",
+            ])
+            .is_err(),
+            "online service publication must not accept the retired one-shot target flag"
+        );
+        assert!(
+            AppParser::try_parse_from([
+                "app",
+                "release",
+                "--sorafs-retention-epoch",
+                "1",
+                "--inrou-preseed-helper",
+                "/tmp/sorafs-node",
+            ])
+            .is_err(),
+            "online app publication must not accept the retired one-shot helper flag"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn inrou_preseed_executes_an_owner_private_verified_helper_copy() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let root = temp_dir("inrou_preseed_private_helper_copy");
+        let targets = test_inrou_preseed_targets(&root);
+        let (helper, helper_digest) = test_inrou_preseed_helper(&root);
+        let helper = helper.expect("test helper");
+        let config = validate_inrou_operator_preseed(
+            Some(3),
+            &targets,
+            test_inrou_preseed_capacity(),
+            Some(&helper),
+            helper_digest.as_deref(),
+        )
+        .expect("validate exact helper")
+        .expect("Inrou preseed config");
+        let stage = SoracloudTempDir::new("inrou-preseed-helper-copy-test")
+            .expect("create owner-private stage");
+        let staged = stage_verified_inrou_preseed_helper(&config, stage.path())
+            .expect("stage exact helper copy");
+        fs::write(&helper, "#!/bin/sh\nexit 1\n").expect("replace external helper after staging");
+
+        assert_eq!(
+            sha256_file(
+                &staged,
+                "staged test helper",
+                INROU_PRESEED_HELPER_MAX_BYTES
+            )
+            .expect("hash staged helper"),
+            config.helper_sha256
+        );
+        let staged_metadata = fs::symlink_metadata(&staged).expect("staged helper metadata");
+        let source_metadata = fs::symlink_metadata(&helper).expect("source helper metadata");
+        assert_eq!(staged_metadata.permissions().mode() & 0o777, 0o500);
+        assert_eq!(
+            fs::symlink_metadata(stage.path())
+                .expect("stage metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_ne!(staged_metadata.ino(), source_metadata.ino());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn inrou_preseed_noisy_stderr_is_bounded_and_cleaned_up() {
+        let _taira_chain = iroha::data_model::account::address::ChainDiscriminantGuard::enter(369);
+        let root = temp_dir("inrou_preseed_noisy_stderr");
+        let (helper, helper_digest) = write_test_inrou_preseed_helper(
+            &root,
+            "noisy-stderr-preseed-helper.sh",
+            concat!(
+                "#!/bin/sh\n",
+                "/bin/dd if=/dev/zero bs=1048576 count=2 1>&2 2>/dev/null\n",
+                "printf '%s\\n' \"$IROHA_TEST_INROU_PRESEED_RECEIPT\"\n",
+                "while IFS= read -r _line; do :; done\n",
+            ),
+        );
+        let config = test_inrou_preseed_config(&root, &helper, &helper_digest);
+        let artifact = test_inrou_preseed_artifact(&root, "noisy-stderr");
+
+        let started = Instant::now();
+        let error = start_inrou_operator_preseed_session(Some(&config), &[&artifact], 1)
+            .err()
+            .expect("noisy preseed stderr must be rejected");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "noisy preseed stderr exceeded its bounded cleanup window"
+        );
+        assert!(
+            format!("{error:#}").contains("stderr exceeded its V1 byte limit"),
+            "unexpected noisy-stderr error: {error:#}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn inrou_preseed_stalled_readiness_is_bounded_and_cleaned_up() {
+        let _taira_chain = iroha::data_model::account::address::ChainDiscriminantGuard::enter(369);
+        let root = temp_dir("inrou_preseed_stalled_readiness");
+        let (helper, helper_digest) = write_test_inrou_preseed_helper(
+            &root,
+            "stalled-readiness-preseed-helper.sh",
+            "#!/bin/sh\n/bin/sleep 60\n",
+        );
+        let config = test_inrou_preseed_config(&root, &helper, &helper_digest);
+        let artifact = test_inrou_preseed_artifact(&root, "stalled-readiness");
+
+        let started = Instant::now();
+        let error = start_inrou_operator_preseed_session(Some(&config), &[&artifact], 1)
+            .err()
+            .expect("stalled preseed readiness must time out");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "stalled preseed readiness exceeded its bounded cleanup window"
+        );
+        assert!(
+            format!("{error:#}").contains("deadline before the ready receipt"),
+            "unexpected stalled-readiness error: {error:#}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn inrou_preseed_stalled_release_is_bounded_and_cleaned_up() {
+        let _taira_chain = iroha::data_model::account::address::ChainDiscriminantGuard::enter(369);
+        let root = temp_dir("inrou_preseed_stalled_release");
+        let (helper, helper_digest) = write_test_inrou_preseed_helper(
+            &root,
+            "stalled-release-preseed-helper.sh",
+            concat!(
+                "#!/bin/sh\n",
+                "printf '%s\\n' \"$IROHA_TEST_INROU_PRESEED_RECEIPT\"\n",
+                "exec 1>&-\n",
+                "while IFS= read -r _line; do :; done\n",
+                "/bin/sleep 60\n",
+            ),
+        );
+        let config = test_inrou_preseed_config(&root, &helper, &helper_digest);
+        let artifact = test_inrou_preseed_artifact(&root, "stalled-release");
+        let session = start_inrou_operator_preseed_session(Some(&config), &[&artifact], 1)
+            .expect("start stalled-release helper")
+            .expect("live stalled-release preseed session");
+
+        let started = Instant::now();
+        let error = session
+            .finish()
+            .expect_err("stalled preseed release must time out");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "stalled preseed release exceeded its bounded cleanup window"
+        );
+        assert!(
+            format!("{error:#}").contains("exceeded its release deadline"),
+            "unexpected stalled-release error: {error:#}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn inrou_preseed_release_requires_exact_eof_acknowledgment() {
+        let _taira_chain = iroha::data_model::account::address::ChainDiscriminantGuard::enter(369);
+        let root = temp_dir("inrou_preseed_missing_release_ack");
+        let (helper, helper_digest) = write_test_inrou_preseed_helper(
+            &root,
+            "missing-release-ack-preseed-helper.sh",
+            concat!(
+                "#!/bin/sh\n",
+                "printf '%s\\n' \"$IROHA_TEST_INROU_PRESEED_RECEIPT\"\n",
+                "while IFS= read -r _line; do :; done\n",
+            ),
+        );
+        let config = test_inrou_preseed_config(&root, &helper, &helper_digest);
+        let artifact = test_inrou_preseed_artifact(&root, "missing-release-ack");
+        let session = start_inrou_operator_preseed_session(Some(&config), &[&artifact], 1)
+            .expect("start missing-release-ack helper")
+            .expect("live missing-release-ack preseed session");
+
+        let error = session
+            .finish()
+            .expect_err("release without the exact acknowledgment must fail");
+        assert!(
+            format!("{error:#}").contains("exact EOF release acknowledgment"),
+            "unexpected missing-release-ack error: {error:#}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn inrou_preseed_drop_cleanup_is_bounded() {
+        let _taira_chain = iroha::data_model::account::address::ChainDiscriminantGuard::enter(369);
+        let root = temp_dir("inrou_preseed_bounded_drop");
+        let survivor_marker = root.join("stalled-drop-descendant-survived");
+        let survivor_marker = survivor_marker
+            .to_str()
+            .expect("test survivor marker must be UTF-8");
+        assert!(!survivor_marker.contains('\''));
+        let script = format!(
+            concat!(
+                "#!/bin/sh\n",
+                "printf '%s\\n' \"$IROHA_TEST_INROU_PRESEED_RECEIPT\"\n",
+                "exec 1>&-\n",
+                "(exec 0<&- 1>&- 2>&-; /bin/sleep 1; /usr/bin/touch '{survivor_marker}') &\n",
+                "/bin/sleep 60\n",
+            ),
+            survivor_marker = survivor_marker,
+        );
+        let (helper, helper_digest) =
+            write_test_inrou_preseed_helper(&root, "stalled-drop-preseed-helper.sh", &script);
+        let config = test_inrou_preseed_config(&root, &helper, &helper_digest);
+        let artifact = test_inrou_preseed_artifact(&root, "stalled-drop");
+        let mut session = start_inrou_operator_preseed_session(Some(&config), &[&artifact], 5)
+            .expect("start stalled-drop helper")
+            .expect("live stalled-drop preseed session");
+        session
+            .ensure_alive()
+            .expect("stalled-drop helper must be live before cleanup");
+
+        let started = Instant::now();
+        drop(session);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "stalled preseed drop exceeded its bounded cleanup window"
+        );
+        thread::sleep(Duration::from_millis(1_500));
+        assert!(
+            !Path::new(survivor_marker).exists(),
+            "drop cleanup left an owned preseed descendant alive"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn inrou_preseed_cleanup_kills_descendant_after_group_leader_exit() {
+        let _taira_chain = iroha::data_model::account::address::ChainDiscriminantGuard::enter(369);
+        let root = temp_dir("inrou_preseed_exited_leader_cleanup");
+        let survivor_marker = root.join("exited-leader-descendant-survived");
+        let survivor_marker = survivor_marker
+            .to_str()
+            .expect("test survivor marker must be UTF-8");
+        assert!(!survivor_marker.contains('\''));
+        let script = format!(
+            concat!(
+                "#!/bin/sh\n",
+                "(exec 0<&- 1>&- 2>&-; /bin/sleep 1; /usr/bin/touch '{survivor_marker}') &\n",
+                "exit 0\n",
+            ),
+            survivor_marker = survivor_marker,
+        );
+        let (helper, helper_digest) =
+            write_test_inrou_preseed_helper(&root, "exited-leader-preseed-helper.sh", &script);
+        let config = test_inrou_preseed_config(&root, &helper, &helper_digest);
+        let artifact = test_inrou_preseed_artifact(&root, "exited-leader-cleanup");
+
+        let _ = start_inrou_operator_preseed_session(Some(&config), &[&artifact], 1)
+            .err()
+            .expect("exited preseed leader must fail readiness");
+        thread::sleep(Duration::from_millis(1_500));
+        assert!(
+            !Path::new(survivor_marker).exists(),
+            "cleanup skipped the owned process group after reaping its leader"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "requires a separately built, exact sorafs-node binary"]
+    fn inrou_preseed_cli_client_interoperates_with_real_sorafs_node() {
+        let _taira_chain = iroha::data_model::account::address::ChainDiscriminantGuard::enter(369);
+        let helper = std::env::var_os("IROHA_TEST_REAL_SORAFS_NODE")
+            .map(PathBuf::from)
+            .expect("set IROHA_TEST_REAL_SORAFS_NODE to the exact built sorafs-node binary");
+        let helper = fs::canonicalize(&helper).expect("canonical real sorafs-node path");
+        let helper_sha256 = sha256_file(
+            &helper,
+            "real sorafs-node interoperability helper",
+            INROU_PRESEED_HELPER_MAX_BYTES,
+        )
+        .expect("hash real sorafs-node interoperability helper");
+        let root = temp_dir("inrou_preseed_real_node_interoperability");
+        let targets = test_inrou_preseed_targets(&root);
+        let config = validate_inrou_operator_preseed(
+            Some(SORACLOUD_ARTIFACT_MIN_REPLICAS_V1),
+            &targets,
+            test_inrou_preseed_capacity(),
+            Some(&helper),
+            Some(&helper_sha256),
+        )
+        .expect("validate real identity-bound preseed helper")
+        .expect("real preseed configuration");
+        let input = root.join("exact-inrou-artifact.bin");
+        fs::write(&input, b"exact CLI to sorafs-node Inrou artifact bytes")
+            .expect("write exact interoperability artifact");
+        let key_pair = soracloud_fixture_key_pair(0x5C);
+        let (artifact, _) = prepare_sorafs_file_artifact(
+            &input,
+            "real CLI/node interoperability artifact",
+            &key_pair,
+            SorafsReleaseIdentityV1::new(test_sorafs_retention_epoch()),
+        )
+        .expect("prepare exact interoperability artifact");
+        let expected_receipt =
+            expected_inrou_preseed_receipt(&config, &[&artifact]).expect("expected ready receipt");
+
+        let mut session = start_inrou_operator_preseed_session(Some(&config), &[&artifact], 30)
+            .expect("start real sorafs-node preseed session")
+            .expect("live real sorafs-node preseed session");
+        session
+            .ensure_alive()
+            .expect("real sorafs-node must retain every lock after readiness");
+        assert_eq!(
+            fs::read(session._stage.path().join("artifact-0.manifest.norito"))
+                .expect("read staged exact manifest"),
+            artifact.built.bytes,
+        );
+        assert_eq!(
+            fs::read(session._stage.path().join("artifact-0.payload"))
+                .expect("read staged exact payload"),
+            artifact.payload,
+        );
+
+        let expected_manifest = root.join("expected.manifest.norito");
+        fs::write(&expected_manifest, &artifact.built.bytes)
+            .expect("write independent expected manifest");
+        let mut contending = Command::new(&helper);
+        contending.arg("preseed-session").arg(format!(
+            "--max-capacity-bytes={}",
+            config.max_capacity_bytes
+        ));
+        for target in &config.targets {
+            contending.arg(format!(
+                "--target={},{},{}",
+                target.placement.validator_account_id,
+                target.placement.peer_id,
+                target.store_root.display()
+            ));
+        }
+        let contention = contending
+            .arg(format!("--manifest={}", expected_manifest.display()))
+            .arg(format!("--payload={}", input.display()))
+            .stdin(Stdio::null())
+            .output()
+            .expect("run a contending real sorafs-node session");
+        assert!(!contention.status.success());
+        assert!(
+            String::from_utf8_lossy(&contention.stderr).contains("already in use"),
+            "unexpected contention error: {}",
+            String::from_utf8_lossy(&contention.stderr)
+        );
+
+        let durable_receipt = session
+            .finish()
+            .expect("persist the qualification and release every store lock");
+        assert_eq!(durable_receipt, expected_receipt);
+
+        fs::write(root.join("simulated-control-plane-mutation"), b"committed")
+            .expect("record an online mutation only after all store locks are released");
+
+        let mut verify = Command::new(&helper);
+        verify
+            .arg("preseed-session")
+            .arg(format!(
+                "--max-capacity-bytes={}",
+                config.max_capacity_bytes
+            ))
+            .arg("--verify-only");
+        for target in &config.targets {
+            verify.arg(format!(
+                "--target={},{},{}",
+                target.placement.validator_account_id,
+                target.placement.peer_id,
+                target.store_root.display()
+            ));
+        }
+        let verified = verify
+            .arg(format!("--manifest={}", expected_manifest.display()))
+            .arg(format!("--payload={}", input.display()))
+            .stdin(Stdio::null())
+            .output()
+            .expect("run real sorafs-node exact verification replay");
+        assert!(
+            verified.status.success(),
+            "verification replay failed: {}",
+            String::from_utf8_lossy(&verified.stderr)
+        );
+        let ready_end = verified
+            .stdout
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .expect("real verify receipt ends in one newline");
+        let (receipt_line, release) = verified.stdout.split_at(ready_end + 1);
+        assert_eq!(release, OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1);
+        let receipt_bytes = receipt_line
+            .strip_suffix(b"\n")
+            .expect("real verify receipt newline");
+        assert!(!receipt_bytes.is_empty());
+        assert!(!receipt_bytes.contains(&b'\n'));
+        assert!(!receipt_bytes.contains(&b'\r'));
+        let verified_receipt: OperatorPreseedSessionReceiptV1 =
+            json::from_slice(receipt_bytes).expect("decode real verification receipt");
+        let mut expected_verified_receipt = durable_receipt;
+        expected_verified_receipt.mode = "verify_only".to_owned();
+        assert_eq!(verified_receipt, expected_verified_receipt);
     }
     fn write_test_inrou_guest_images(inrou_dir: &Path, label: &str) {
         for isa in ["x86_64", "aarch64"] {
@@ -22622,7 +28429,7 @@ mod tests {
             let stop_flag = Arc::clone(&stop);
             let captured_requests = Arc::clone(&requests);
             let handle = thread::spawn(move || {
-                let mut registered_pin_manifests = BTreeSet::<String>::new();
+                let mut registered_pin_manifests = BTreeMap::<String, Vec<u8>>::new();
                 while !stop_flag.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
@@ -22684,10 +28491,11 @@ mod tests {
                                     )
                                 };
                             if status == "202 Accepted" {
+                                let registration = pin_registration
+                                    .expect("accepted pin registration was decoded");
                                 registered_pin_manifests.insert(
-                                    pin_registration
-                                        .expect("accepted pin registration was decoded")
-                                        .manifest_digest_hex,
+                                    registration.manifest_digest_hex,
+                                    registration.manifest_payload,
                                 );
                             }
                             if let Err(error) = write!(
@@ -22804,26 +28612,69 @@ mod tests {
     }
     fn mock_sorafs_pin_registry_response(
         path: &str,
-        registered_pin_manifests: &BTreeSet<String>,
+        registered_pin_manifests: &BTreeMap<String, Vec<u8>>,
     ) -> Option<MockHttpResponse> {
         let digest = mock_sorafs_pin_registry_path_is_registered(path, registered_pin_manifests)?;
+        let manifest =
+            sorafs_manifest::decode_manifest_v1_canonical(registered_pin_manifests.get(digest)?)
+                .ok()?;
+        let manifest_digest = ManifestDigest::from_manifest(&manifest).ok()?;
+        let root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid).ok()?;
+        let chunker = iroha::data_model::sorafs::pin_registry::ChunkerProfileHandle {
+            profile_id: manifest.chunking.profile_id.0,
+            namespace: manifest.chunking.namespace.clone(),
+            name: manifest.chunking.name.clone(),
+            semver: manifest.chunking.semver.clone(),
+            multihash_code: manifest.chunking.multihash_code,
+        };
+        let storage_class = match manifest.pin_policy.storage_class {
+            ManifestStorageClass::Hot => StorageClass::Hot,
+            ManifestStorageClass::Warm => StorageClass::Warm,
+            ManifestStorageClass::Cold => StorageClass::Cold,
+        };
+        let mut record = iroha::data_model::sorafs::pin_registry::PinManifestRecord::new(
+            manifest_digest,
+            root_cid,
+            chunker,
+            manifest.chunk_digest_sha3_256,
+            manifest.por_root,
+            manifest.content_length,
+            iroha::data_model::sorafs::pin_registry::PinPolicy {
+                min_replicas: manifest.pin_policy.min_replicas,
+                storage_class,
+                retention_epoch: manifest.pin_policy.retention_epoch,
+            },
+            AccountId::new(soracloud_fixture_key_pair(0x4B).public_key().clone()),
+            1,
+            None,
+            None,
+            Metadata::default(),
+        );
+        record.approve(2, None);
+        let finalized = PinManifestFinalizedRecordV1 {
+            finalized_cursor:
+                iroha::data_model::sorafs::pin_registry::PinManifestFinalizedCursorV1 {
+                    height: 2,
+                    block_hash: [0x4B; 32],
+                },
+            manifest: record,
+        };
         Some(MockHttpResponse {
             content_type: "application/json",
-            body: json::to_vec(&norito::json!({ "manifest_digest_hex": digest }))
-                .expect("encode mock SoraFS pin registry response"),
+            body: json::to_vec(&finalized).expect("encode mock SoraFS pin registry response"),
         })
     }
     fn mock_sorafs_pin_registry_path_is_registered<'a>(
         path: &'a str,
-        registered_pin_manifests: &'a BTreeSet<String>,
+        registered_pin_manifests: &'a BTreeMap<String, Vec<u8>>,
     ) -> Option<&'a str> {
         let digest = path.strip_prefix("/v1/sorafs/pin/")?;
         if digest.contains('/') || digest.contains('?') {
             return None;
         }
         registered_pin_manifests
-            .get(&digest.to_ascii_lowercase())
-            .map(String::as_str)
+            .get_key_value(&digest.to_ascii_lowercase())
+            .map(|(digest, _)| digest.as_str())
     }
     #[test]
     fn mock_http_server_quotes_the_exact_requested_fee_intent() {
@@ -22897,6 +28748,11 @@ mod tests {
                 "inrou_guest_pin",
             ),
             (
+                TairaInrouCanaryPreparedOperationV1::DiscoveryPin,
+                "discovery_pin",
+                "inrou_discovery_pin",
+            ),
+            (
                 TairaInrouCanaryPreparedOperationV1::ServiceMutation,
                 "service_mutation",
                 "inrou_canary",
@@ -22922,6 +28778,12 @@ mod tests {
             .expect("canonical Taira Inrou manifest")
             .guest_images[&SoraInrouGuestIsaV1::Aarch64]
             .published_artifact;
+        let (discovery, _, _) = prepare_public_service_discovery(
+            bundle,
+            &soracloud_fixture_key_pair(0x51),
+            SorafsReleaseIdentityV1::new(test_sorafs_retention_epoch()),
+        )
+        .expect("prepare canonical Taira discovery fixture");
         TairaInrouStageIdentity {
             service_name: bundle.service.service_name.to_string(),
             service_version: bundle.service.service_version.clone(),
@@ -22935,12 +28797,20 @@ mod tests {
                 .expect("canonical Taira healthcheck"),
             stage_mode: "deploy".to_owned(),
             bundle_hash: bundle.container.bundle_hash.to_string(),
+            deployment_bundle_hash: Hash::new(Encode::encode(bundle)).to_string(),
             bundle_content_cid: "bfixturebundle".to_owned(),
             bundle_manifest_digest_hex: "ab".repeat(32),
             guest_content_cid: guest.content_cid.clone(),
             guest_manifest_digest_hex: guest.manifest_digest_hex.clone(),
+            discovery_payload_dir: TAIRA_INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1.to_owned(),
+            discovery_document_hash: discovery.document_hash.to_string(),
+            discovery_content_cid: discovery.content_cid,
+            discovery_manifest_digest_hex: discovery.manifest_digest_hex,
+            public_discovery_url: discovery.public_discovery_url,
+            public_discovery_cid_host_url: discovery.public_discovery_cid_host_url,
             container_manifest_hash: bundle.container_manifest_hash().to_string(),
             service_manifest_hash: bundle.service_manifest_hash().to_string(),
+            placement_targets: bundle.service.placement_targets.clone(),
         }
     }
 
@@ -22975,8 +28845,14 @@ mod tests {
             chunker_registry::default_descriptor().profile,
         )
         .expect("plan pin fixture payload");
-        let built = taira_stage_manifest(&plan, payload, &key_pair, "pin fixture")
-            .expect("build governed pin fixture");
+        let built = taira_stage_manifest(
+            &plan,
+            payload,
+            &key_pair,
+            SorafsReleaseIdentityV1::new(test_sorafs_retention_epoch()),
+            "pin fixture",
+        )
+        .expect("build governed pin fixture");
         let mut stage =
             prepared_inrou_stage_identity_fixture(&canonical_taira_inrou_bundle_fixture());
         stage.bundle_content_cid = encode_content_cid(&built.manifest.root_cid);
@@ -23031,12 +28907,25 @@ mod tests {
             idempotency_key: "cd".repeat(32),
             execution_expires_at_unix_ms: u64::MAX,
         };
-        let configs = BTreeMap::from([(
-            "public_reset_idempotency_v1".to_owned(),
-            Json::new(binding.idempotency_key.clone()),
-        )]);
+        let (discovery, _, _) = prepare_public_service_discovery(
+            &bundle,
+            &soracloud_fixture_key_pair(0x51),
+            SorafsReleaseIdentityV1::new(test_sorafs_retention_epoch()),
+        )
+        .expect("prepare canonical Taira discovery fixture");
+        let configs = BTreeMap::from([
+            (
+                "public_reset_idempotency_v1".to_owned(),
+                Json::new(binding.idempotency_key.clone()),
+            ),
+            (
+                PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_owned(),
+                taira_inrou_canary_public_discovery_config_value(&discovery)
+                    .expect("encode canonical Taira discovery registry"),
+            ),
+        ]);
         let request = signed_bundle_request(
-            bundle,
+            bundle.clone(),
             configs,
             BTreeMap::new(),
             SoraServiceMutationPreconditionV1::ServiceAbsent,
@@ -23071,6 +28960,49 @@ mod tests {
             &"ef".repeat(32),
         )
         .expect_err("another public-reset idempotency value must fail closed");
+
+        let mut substituted_discovery = discovery;
+        substituted_discovery.public_discovery_url =
+            "https://taira.sora.org/sorafs/cid/substituted/index.json".to_owned();
+        let substituted_configs = BTreeMap::from([
+            (
+                "public_reset_idempotency_v1".to_owned(),
+                Json::new(binding.idempotency_key.clone()),
+            ),
+            (
+                PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_owned(),
+                taira_inrou_canary_public_discovery_config_value(&substituted_discovery)
+                    .expect("encode substituted discovery registry"),
+            ),
+        ]);
+        let substituted_request = signed_bundle_request(
+            bundle,
+            substituted_configs,
+            BTreeMap::new(),
+            SoraServiceMutationPreconditionV1::ServiceAbsent,
+            Some(&config.account),
+            &key_pair,
+        )
+        .expect("sign substituted discovery request");
+        let substituted_transaction = sign_prepared_inrou_instruction(
+            &config,
+            InstructionBox::from(iroha::data_model::isi::soracloud::DeploySoracloudService {
+                bundle: substituted_request.bundle,
+                initial_service_configs: substituted_request.initial_service_configs,
+                initial_service_secrets: substituted_request.initial_service_secrets,
+                precondition: substituted_request.precondition,
+                provenance: substituted_request.provenance,
+            }),
+            &binding,
+            "service_mutation",
+        );
+        verify_taira_inrou_prepared_transaction_identity_v1(
+            &substituted_transaction,
+            TairaInrouCanaryPreparedOperationV1::ServiceMutation,
+            &stage,
+            &binding.idempotency_key,
+        )
+        .expect_err("a substituted public-discovery registry must fail closed");
     }
 
     #[test]
@@ -23239,13 +29171,13 @@ mod tests {
             registration.tx_hash_hex,
             hex::encode(transaction.hash().as_ref())
         );
-        let mut registered_pin_manifests = BTreeSet::new();
+        let mut registered_pin_manifests = BTreeMap::new();
         let path = format!("/v1/sorafs/pin/{digest}");
         assert!(
             mock_sorafs_pin_registry_response(&path, &registered_pin_manifests).is_none(),
             "unregistered mock pin records should return 404"
         );
-        registered_pin_manifests.insert(digest.clone());
+        registered_pin_manifests.insert(digest.clone(), manifest_bytes);
         assert_eq!(
             mock_sorafs_pin_registry_path_is_registered(&path, &registered_pin_manifests),
             Some(digest.as_str())
@@ -23253,6 +29185,134 @@ mod tests {
         assert!(
             mock_sorafs_pin_registry_response(&path, &registered_pin_manifests).is_some(),
             "registered mock pin records should be visible to polling GETs"
+        );
+        let response = mock_sorafs_pin_registry_response(&path, &registered_pin_manifests)
+            .expect("build finalized mock pin record");
+        let expected = ExpectedSorafsPinManifest {
+            digest: ManifestDigest::from_manifest(&manifest).expect("derive expected digest"),
+            root_cid: ManifestRootCid::try_from_slice(&manifest.root_cid)
+                .expect("decode expected root CID"),
+        };
+        assert_eq!(
+            decode_sorafs_pin_manifest_readiness(&response.body, expected)
+                .expect("approved finalized record is deployment-ready"),
+            SorafsPinManifestReadiness::Approved(2)
+        );
+        let wrong_root = ExpectedSorafsPinManifest {
+            root_cid: ManifestRootCid::from_blake3_digest([0x7A; 32])
+                .expect("build distinct canonical root CID"),
+            ..expected
+        };
+        assert!(
+            decode_sorafs_pin_manifest_readiness(&response.body, wrong_root)
+                .expect_err("a mismatched root CID must not be deployment-ready")
+                .to_string()
+                .contains("does not match")
+        );
+
+        let mut finalized: PinManifestFinalizedRecordV1 =
+            json::from_slice(&response.body).expect("decode finalized mock record");
+        finalized.manifest.approved_epoch = Some(9);
+        assert!(
+            decode_sorafs_pin_manifest_readiness(
+                &json::to_vec(&finalized).expect("encode inconsistent approved record"),
+                expected,
+            )
+            .expect_err("an inconsistent approval epoch must be rejected")
+            .to_string()
+            .contains("does not bind")
+        );
+        finalized.manifest.status = PinStatus::Pending;
+        finalized.manifest.approved_epoch = None;
+        assert_eq!(
+            decode_sorafs_pin_manifest_readiness(
+                &json::to_vec(&finalized).expect("encode pending finalized record"),
+                expected,
+            )
+            .expect("pending finalized record remains waitable"),
+            SorafsPinManifestReadiness::Pending
+        );
+        finalized.manifest.status = PinStatus::Retired(3);
+        assert!(
+            decode_sorafs_pin_manifest_readiness(
+                &json::to_vec(&finalized).expect("encode retired finalized record"),
+                expected,
+            )
+            .expect_err("retired finalized record must not be deployment-ready")
+            .to_string()
+            .contains("not replication-eligible")
+        );
+    }
+    #[test]
+    fn pin_registration_waits_for_approved_without_reposting_pending_manifest() {
+        let manifest = ManifestBuilder::new()
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xA6; 32]))
+            .dag_codec(DagCodecId(0x71))
+            .chunking_profile(ChunkingProfileV1::from_descriptor(
+                chunker_registry::default_descriptor(),
+            ))
+            .chunk_digest_sha3_256([0xB6; 32])
+            .por_root([0xC6; 32])
+            .content_length(1)
+            .car_digest([0xD6; 32])
+            .car_size(1)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("build pending pin fixture manifest");
+        let manifest_bytes = manifest.encode().expect("encode pending pin fixture");
+        let digest = hex::encode(
+            manifest
+                .digest()
+                .expect("digest pending pin fixture")
+                .as_bytes(),
+        );
+        let path = format!("/v1/sorafs/pin/{digest}");
+        let registry = BTreeMap::from([(digest.clone(), manifest_bytes.clone())]);
+        let approved = mock_sorafs_pin_registry_response(&path, &registry)
+            .expect("build finalized pending fixture base");
+        let mut pending: PinManifestFinalizedRecordV1 =
+            json::from_slice(&approved.body).expect("decode finalized pending fixture base");
+        pending.manifest.status = PinStatus::Pending;
+        pending.manifest.approved_epoch = None;
+        let server = MockHttpServer::start(BTreeMap::from([
+            (
+                path,
+                MockHttpResponse::json(
+                    json::to_vec(&pending).expect("encode finalized pending fixture"),
+                ),
+            ),
+            (
+                "/v1/sorafs/pin/register".to_owned(),
+                MockHttpResponse::json(
+                    json::to_vec(&norito::json!({ "ok": true }))
+                        .expect("encode unexpected registration response"),
+                ),
+            ),
+        ]));
+        let key_pair = soracloud_fixture_key_pair(0x4C);
+        let mut config = crate::fallback_config();
+        config.account = AccountId::new(key_pair.public_key().clone());
+        config.key_pair = key_pair;
+        config.torii_api_url = server.base_url.parse().expect("mock Torii URL");
+        let error = register_sorafs_pin_manifest_and_wait(
+            &Client::new(config),
+            iroha::client::SorafsPinRegisterArgs {
+                manifest_payload: &manifest_bytes,
+                alias: None,
+                successor_of: None,
+            },
+            &digest,
+            "pending fixture",
+            1,
+        )
+        .expect_err("Pending must not be deployment-ready");
+        assert!(error.to_string().contains("reach Approved"), "{error}");
+        assert!(
+            server
+                .requests()
+                .iter()
+                .all(|request| request.method != "POST"),
+            "an existing Pending record must be polled rather than reposted"
         );
     }
     impl Drop for MockHttpServer {
@@ -23738,6 +29798,38 @@ mod tests {
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
     }
+    fn mock_active_inrou_hosts() -> Vec<SoraInrouHostCapabilityRecordV1> {
+        let mut hosts = (0..SORACLOUD_ARTIFACT_MIN_REPLICAS_V1)
+            .map(|index| {
+                let seed = 0x70_u8
+                    .checked_add(u8::try_from(index).expect("test host index fits u8"))
+                    .expect("test host seed");
+                let validator_key_pair = soracloud_fixture_key_pair(seed);
+                let peer_key_pair = soracloud_fixture_key_pair(seed ^ 0x80);
+                SoraInrouHostCapabilityRecordV1 {
+                    schema_version:
+                        iroha::data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+                    validator_account_id: AccountId::new(validator_key_pair.public_key().clone()),
+                    peer_id: PeerId::from(peer_key_pair.public_key().clone()).to_string(),
+                    supported_guest_isas: BTreeSet::from([SoraInrouGuestIsaV1::X8664]),
+                    trusted_guest_artifact: SoraPublishedInrouGuestImageArtifactV1 {
+                        manifest_digest_hex: "31".repeat(32),
+                        content_cid: "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
+                            .to_owned(),
+                    },
+                    max_hosted_replica_capacity:
+                        iroha::data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
+                    max_cpu_millis: 4_000,
+                    max_memory_bytes: 16 * 1024 * 1024 * 1024,
+                    max_storage_bytes: 64 * 1024 * 1024 * 1024,
+                    advertised_at_ms: 100_000,
+                    heartbeat_expires_at_ms: u64::MAX,
+                }
+            })
+            .collect::<Vec<_>>();
+        hosts.sort_by(|left, right| left.validator_account_id.cmp(&right.validator_account_id));
+        hosts
+    }
     fn mock_control_plane_status_payload(service_names: &[&str]) -> norito::json::Value {
         let services = service_names
             .iter()
@@ -23749,11 +29841,7 @@ mod tests {
                 secret_generation: 0,
                 config_entry_count: 0,
                 secret_entry_count: 0,
-                quota_class: None,
-                service_lease_status: None,
-                lease_expires_height: None,
-                prepaid_runtime_balance: None,
-                remaining_runtime_balance: None,
+                service_lease: None,
                 public_discovery_content_cid: None,
                 public_discovery_url: None,
                 public_discovery_cid_host_url: None,
@@ -23768,9 +29856,10 @@ mod tests {
             "schema_version": 1,
             "control_plane": {
                 "schema_version": 1,
-                "service_count": service_count,
+                "service_count": (service_count),
                 "audit_event_count": 0,
-                "services": services,
+                "active_inrou_hosts": (mock_active_inrou_hosts()),
+                "services": (services),
                 "recent_audit_events": []
             }
         })
@@ -24073,11 +30162,7 @@ mod tests {
             secret_generation: 0,
             config_entry_count: 0,
             secret_entry_count: 0,
-            quota_class: None,
-            service_lease_status: None,
-            lease_expires_height: None,
-            prepaid_runtime_balance: None,
-            remaining_runtime_balance: None,
+            service_lease: None,
             public_discovery_content_cid: Some("bafyteststatus".to_owned()),
             public_discovery_url: Some(
                 "https://taira.sora.org/sorafs/cid/bafyteststatus/index.json".to_owned(),
@@ -24133,7 +30218,7 @@ mod tests {
             }),
             active_rollout: Some(RolloutRuntimeState {
                 rollout_handle: "rollout-1".to_owned(),
-                baseline_version: Some("1.2.2".to_owned()),
+                baseline_version: "1.2.2".to_owned(),
                 candidate_version: "1.2.3".to_owned(),
                 canary_percent: 10,
                 traffic_percent: 10,
@@ -24155,20 +30240,27 @@ mod tests {
             to_version: "1.2.3".to_owned(),
             service_manifest_hash: Hash::new(b"status-output-service-manifest"),
             container_manifest_hash: Hash::new(b"status-output-container-manifest"),
+            process_generation: 1,
+            config_generation: 0,
+            secret_generation: 0,
+            config_snapshot_hash: Hash::new(b"status-output-config-snapshot"),
+            secret_snapshot_hash: Hash::new(b"status-output-secret-snapshot"),
             binding_name: None,
             state_key: None,
-            config_name: None,
-            secret_name: None,
+            config_mutations: Vec::new(),
+            secret_mutations: Vec::new(),
             governance_tx_hash: None,
-            rollout_handle: None,
+            rollout_state: None,
             policy_name: None,
             policy_snapshot_hash: None,
             jurisdiction_tag: None,
             consent_evidence_hash: None,
             break_glass: None,
             break_glass_reason: None,
+            lease_usage: None,
+            service_lease_commitment: None,
             lease_reporting_epoch_rollover: None,
-            signed_by: "validator".to_owned(),
+            signed_by: soracloud_fixture_key_pair(0x61).public_key().to_string(),
         })
         .expect("encode control-plane audit event");
         let payload = norito::json!({
@@ -24194,6 +30286,7 @@ mod tests {
         assert_eq!(output.services[0].service_name, "echo_console");
         assert_eq!(output.services[0].current_version, "1.2.3");
         assert_eq!(output.services[0].revision_count, 4);
+        assert!(output.services[0].service_lease.is_none());
         assert_eq!(
             output.services[0]
                 .latest_revision
@@ -24208,6 +30301,136 @@ mod tests {
                 .map(|rollout| rollout.rollout_handle.as_str()),
             Some("rollout-1")
         );
+    }
+    #[test]
+    fn status_output_audit_event_requires_current_v1_shape() {
+        let event = NetworkControlPlaneAuditEventV1 {
+            sequence: 9,
+            action: SoracloudAction::ConfigMutation,
+            service_name: "echo_console".to_owned(),
+            from_version: None,
+            to_version: "1.2.3".to_owned(),
+            service_manifest_hash: Hash::new(b"current-v1-service-manifest"),
+            container_manifest_hash: Hash::new(b"current-v1-container-manifest"),
+            process_generation: 3,
+            config_generation: 2,
+            secret_generation: 1,
+            config_snapshot_hash: Hash::new(b"current-v1-config-snapshot"),
+            secret_snapshot_hash: Hash::new(b"current-v1-secret-snapshot"),
+            binding_name: None,
+            state_key: None,
+            config_mutations: vec![SoraServiceConfigMutationV1::Delete(
+                "runtime/theme".to_owned(),
+            )],
+            secret_mutations: Vec::new(),
+            governance_tx_hash: None,
+            rollout_state: None,
+            policy_name: None,
+            policy_snapshot_hash: None,
+            jurisdiction_tag: None,
+            consent_evidence_hash: None,
+            break_glass: None,
+            break_glass_reason: None,
+            lease_usage: None,
+            service_lease_commitment: None,
+            lease_reporting_epoch_rollover: None,
+            signed_by: soracloud_fixture_key_pair(0x62).public_key().to_string(),
+        };
+        event
+            .validate()
+            .expect("current V1 audit event must satisfy authoritative semantics");
+        let canonical = json::to_value(&event).expect("encode current V1 audit event fixture");
+        let object = canonical.as_object().expect("audit event JSON object");
+        assert_eq!(object.len(), 28, "audit event must expose only V1 fields");
+        for required in [
+            "process_generation",
+            "config_generation",
+            "secret_generation",
+            "config_snapshot_hash",
+            "secret_snapshot_hash",
+            "config_mutations",
+            "secret_mutations",
+            "rollout_state",
+            "lease_usage",
+            "service_lease_commitment",
+        ] {
+            assert!(
+                object.contains_key(required),
+                "missing V1 field `{required}`"
+            );
+        }
+        let decoded: NetworkControlPlaneAuditEventV1 =
+            json::from_value(canonical.clone()).expect("decode current V1 audit event fixture");
+        assert!(matches!(
+            decoded.config_mutations.as_slice(),
+            [SoraServiceConfigMutationV1::Delete(name)] if name == "runtime/theme"
+        ));
+
+        for retired in ["config_name", "secret_name", "rollout_handle"] {
+            let mut retired_fixture = canonical.clone();
+            retired_fixture
+                .as_object_mut()
+                .expect("audit event JSON object")
+                .insert(retired.to_owned(), json::Value::Null);
+            json::from_value::<NetworkControlPlaneAuditEventV1>(retired_fixture)
+                .expect_err("retired audit fields must fail closed");
+        }
+
+        let status_with_event = |event| {
+            norito::json!({
+                "schema_version": 1,
+                "control_plane": {
+                    "schema_version": 1,
+                    "service_count": 0,
+                    "audit_event_count": 1,
+                    "services": [],
+                    "recent_audit_events": [event]
+                }
+            })
+        };
+        decode_network_control_plane_snapshot(&status_with_event(canonical.clone()))
+            .expect("canonical current V1 audit event must pass the status boundary");
+        for (label, field, replacement) in [
+            (
+                "config mutation with a previous version",
+                "from_version",
+                json::Value::from("1.2.2"),
+            ),
+            (
+                "config mutation with no exact delta",
+                "config_mutations",
+                json::Value::Array(Vec::new()),
+            ),
+            (
+                "config mutation with a lease commitment",
+                "service_lease_commitment",
+                json::to_value(&Hash::new(b"forbidden-service-lease-commitment"))
+                    .expect("encode forbidden lease commitment"),
+            ),
+            (
+                "persisted read-only action",
+                "action",
+                norito::json!({"action": "CiphertextQuery", "value": null}),
+            ),
+            (
+                "zero process generation",
+                "process_generation",
+                json::Value::from(0_u64),
+            ),
+            (
+                "non-key signer",
+                "signed_by",
+                json::Value::from("validator"),
+            ),
+        ] {
+            let mut invalid = canonical.clone();
+            invalid
+                .as_object_mut()
+                .expect("audit event JSON object")
+                .insert(field.to_owned(), replacement);
+            let _ = decode_network_control_plane_snapshot(&status_with_event(invalid))
+                .expect_err(label);
+        }
     }
     #[test]
     fn status_output_rejects_malformed_embedded_service_snapshot() {
@@ -24235,6 +30458,27 @@ mod tests {
             error
                 .to_string()
                 .contains("failed to decode canonical Soracloud `control_plane` status")
+        );
+    }
+    #[test]
+    fn status_output_rejects_retired_flattened_service_lease_fields() {
+        let mut payload = mock_control_plane_status_payload(&["echo_console"]);
+        payload
+            .pointer_mut("/control_plane/services/0")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("canonical service snapshot")
+            .insert("quota_class".to_owned(), norito::json::Value::Null);
+        let error = StatusOutput::from_network(
+            "http://127.0.0.1:8080/v1/soracloud/status".to_owned(),
+            payload,
+            None,
+        )
+        .expect_err("retired flattened lease fields must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to decode canonical Soracloud `control_plane` status"),
+            "unexpected retired-field error: {error:#}"
         );
     }
     #[test]
@@ -24317,20 +30561,31 @@ mod tests {
                 to_version: "1.0.0".to_owned(),
                 service_manifest_hash: Hash::new(service_name.as_bytes()),
                 container_manifest_hash: Hash::new(service_name.as_bytes()),
+                process_generation: 1,
+                config_generation: 0,
+                secret_generation: 0,
+                config_snapshot_hash: Hash::new(
+                    format!("{service_name}:config-snapshot").as_bytes(),
+                ),
+                secret_snapshot_hash: Hash::new(
+                    format!("{service_name}:secret-snapshot").as_bytes(),
+                ),
                 binding_name: None,
                 state_key: None,
-                config_name: None,
-                secret_name: None,
+                config_mutations: Vec::new(),
+                secret_mutations: Vec::new(),
                 governance_tx_hash: None,
-                rollout_handle: None,
+                rollout_state: None,
                 policy_name: None,
                 policy_snapshot_hash: None,
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+                service_lease_commitment: None,
                 lease_reporting_epoch_rollover: None,
-                signed_by: "fixture-signer".to_owned(),
+                signed_by: soracloud_fixture_key_pair(0x63).public_key().to_string(),
             })
             .collect::<Vec<_>>();
         let control_plane = payload
@@ -24620,7 +30875,7 @@ mod tests {
             "active_rollout".to_owned(),
             json::to_value(&RolloutRuntimeState {
                 rollout_handle: "echo_console:rollout:2".to_owned(),
-                baseline_version: Some("1.0.0".to_owned()),
+                baseline_version: "1.0.0".to_owned(),
                 candidate_version: "1.1.0".to_owned(),
                 canary_percent: 10,
                 traffic_percent: 50,
@@ -26218,7 +32473,7 @@ mod tests {
         );
     }
     #[test]
-    fn rollout_response_mirrors_are_closed_and_require_explicit_baseline() {
+    fn rollout_response_mirrors_are_closed_and_require_non_null_baseline() {
         macro_rules! assert_closed {
             ($value:expr, $ty:ty, $label:literal) => {{
                 let mut value =
@@ -26237,11 +32492,16 @@ mod tests {
             }};
         }
         assert_closed!(SoracloudAction::Deploy, SoracloudAction, "Soracloud action");
+        assert_closed!(
+            SoracloudAction::LeaseUsage,
+            SoracloudAction,
+            "lease-usage Soracloud action"
+        );
         assert_closed!(RolloutStage::Canary, RolloutStage, "rollout stage");
 
         let state = RolloutRuntimeState {
             rollout_handle: "web_portal:rollout:2".to_owned(),
-            baseline_version: None,
+            baseline_version: "1.0.0".to_owned(),
             candidate_version: "2.0.0".to_owned(),
             canary_percent: 10,
             traffic_percent: 10,
@@ -26254,10 +32514,11 @@ mod tests {
         };
         assert_closed!(state.clone(), RolloutRuntimeState, "rollout runtime state");
         let canonical = norito::json::to_value(&state).expect("serialize rollout runtime state");
-        assert!(
+        assert_eq!(
             canonical
                 .get("baseline_version")
-                .is_some_and(norito::json::Value::is_null)
+                .and_then(norito::json::Value::as_str),
+            Some("1.0.0")
         );
         let mut missing = canonical.clone();
         assert!(
@@ -26275,7 +32536,7 @@ mod tests {
             .expect("rollout runtime state JSON object")
             .insert("baseline_version".to_owned(), norito::json::Value::Null);
         norito::json::from_value::<RolloutRuntimeState>(explicit_null)
-            .expect("rollout runtime state must accept explicit null baseline_version");
+            .expect_err("rollout runtime state must reject explicit null baseline_version");
     }
     #[test]
     fn soracloud_cli_output_graph_rejects_unknown_fields() {
@@ -27405,21 +33666,144 @@ mod tests {
         assert!(error.to_string().contains("exceeds u64 milliseconds"));
     }
     #[test]
-    fn sorafs_release_nonce_fails_closed_before_unix_epoch() {
-        let before_epoch = UNIX_EPOCH
-            .checked_sub(Duration::from_nanos(1))
-            .expect("representable pre-epoch timestamp");
-        let error = sorafs_release_nonce_unix_nanos(before_epoch)
-            .expect_err("pre-epoch release governance nonce must fail");
-        assert!(error.to_string().contains("precedes the Unix epoch"));
+    fn sorafs_retry_after_partial_failure_reuses_exact_release_manifest_identities() {
+        fn manifests_for_release(
+            payloads: &[&[u8]],
+            key_pair: &KeyPair,
+            release_identity: SorafsReleaseIdentityV1,
+        ) -> Vec<BuiltSorafsManifest> {
+            let descriptor = chunker_registry::default_descriptor();
+            payloads
+                .iter()
+                .map(|payload| {
+                    let plan = CarBuildPlan::single_file_with_profile(payload, descriptor.profile)
+                        .expect("build test release CAR plan");
+                    build_sorafs_artifact_manifest(
+                        &plan,
+                        payload,
+                        descriptor,
+                        key_pair,
+                        release_identity,
+                        SorafsManifestBuildLabels {
+                            writer: "prepare test release CAR writer",
+                            metadata: "compute test release CAR metadata",
+                            root: "test release CAR root",
+                            por: "compute test release PoR root",
+                            manifest: "build test release manifest",
+                            governance: "attach test release governance",
+                            encoding: "encode test release manifest",
+                            digest: "digest test release manifest",
+                        },
+                    )
+                    .expect("build deterministic test release manifest")
+                })
+                .collect()
+        }
+
+        let payloads: [&[u8]; 3] = [
+            b"release-bundle-v1",
+            b"release-guest-v1",
+            b"release-discovery-v1",
+        ];
+        let key_pair = soracloud_fixture_key_pair(0x7D);
+        let release_identity = SorafsReleaseIdentityV1::new(test_sorafs_retention_epoch());
+        let first_attempt = manifests_for_release(&payloads, &key_pair, release_identity);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/sorafs/pin/register".to_owned(),
+            MockHttpResponse::json(
+                json::to_vec(&norito::json!({ "ok": true })).expect("encode retry pin response"),
+            ),
+        )]));
+        let failed_after = 2;
+        let first_error = first_attempt
+            .iter()
+            .enumerate()
+            .try_for_each(|(index, built)| {
+                if index == failed_after {
+                    return Err(eyre!("simulated release failure after {failed_after} pins"));
+                }
+                register_built_sorafs_manifest(
+                    built,
+                    "partial release fixture",
+                    &server.base_url,
+                    &authority,
+                    &key_pair,
+                    5,
+                )
+            })
+            .expect_err("first attempt must stop at the injected failure boundary");
+        assert!(
+            first_error
+                .to_string()
+                .contains("simulated release failure")
+        );
+
+        let retry = manifests_for_release(&payloads, &key_pair, release_identity);
         assert_eq!(
-            sorafs_release_nonce_unix_nanos(
-                UNIX_EPOCH
-                    .checked_add(Duration::from_nanos(1_234))
-                    .expect("representable timestamp"),
+            retry
+                .iter()
+                .map(|built| (&built.bytes, &built.digest_hex))
+                .collect::<Vec<_>>(),
+            first_attempt
+                .iter()
+                .map(|built| (&built.bytes, &built.digest_hex))
+                .collect::<Vec<_>>(),
+            "retry must reproduce byte-identical manifests and digests"
+        );
+        for built in &retry {
+            assert_eq!(
+                built.manifest.pin_policy.retention_epoch,
+                release_identity.retention_epoch()
+            );
+            validate_sorafs_release_identity(&built.manifest, release_identity, "retry fixture")
+                .expect("release metadata and pin policy must carry the same identity");
+        }
+        let mut extra_metadata = retry[0].manifest.clone();
+        extra_metadata.metadata.push(MetadataEntry {
+            key: "soracloud.unexpected_metadata".to_owned(),
+            value: "forbidden".to_owned(),
+        });
+        validate_sorafs_release_identity(
+            &extra_metadata,
+            release_identity,
+            "retry fixture with extra metadata",
+        )
+        .expect_err("first-release artifact metadata must be a closed deterministic projection");
+        for built in &retry {
+            register_built_sorafs_manifest(
+                built,
+                "retried release fixture",
+                &server.base_url,
+                &authority,
+                &key_pair,
+                5,
             )
-            .expect("canonical release nonce"),
-            "1234"
+            .expect("retry must reuse approved pins and finish only the missing pin");
+        }
+        let registrations = server
+            .requests()
+            .into_iter()
+            .filter(|request| request.method == "POST" && request.path == "/v1/sorafs/pin/register")
+            .map(|request| {
+                mock_sorafs_pin_registration(&request)
+                    .expect("retry pin request must be canonical")
+                    .manifest_digest_hex
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            registrations.len(),
+            first_attempt.len(),
+            "retry must not repost either manifest already accepted before failure"
+        );
+        assert_eq!(
+            registrations.into_iter().collect::<BTreeSet<_>>(),
+            first_attempt
+                .iter()
+                .map(|built| built.digest_hex.clone())
+                .collect::<BTreeSet<_>>(),
+            "retry may finish missing pins but must not create any new manifest identity"
         );
     }
     #[test]
@@ -27497,8 +33881,10 @@ mod tests {
             container: container_path,
             service: service_path,
             bundle_file: dir.join("service.tgz"),
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
             initial_configs: None,
             initial_secrets: None,
+            inrou_preseed_receipt: None,
             torii_url: None,
             api_token: None,
             timeout_secs: 10,
@@ -27523,12 +33909,16 @@ mod tests {
             "encode deploy response",
         );
         install_mock_submission_config(&authority, &key_pair);
+        let inrou_preseed_receipt =
+            qualify_test_inrou_service(&dir, &bundle_file, &key_pair, "deploy");
         let output = DeployArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
             bundle_file,
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
             initial_configs: None,
             initial_secrets: None,
+            inrou_preseed_receipt: Some(inrou_preseed_receipt),
             torii_url: Some(server.base_url.clone()),
             api_token: Some("token".to_owned()),
             timeout_secs: 5,
@@ -27610,8 +34000,10 @@ mod tests {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
             bundle_file,
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
             initial_configs: None,
             initial_secrets: None,
+            inrou_preseed_receipt: None,
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -27660,8 +34052,10 @@ mod tests {
             container: container_path,
             service: service_path,
             bundle_file,
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
             initial_configs: None,
             initial_secrets: None,
+            inrou_preseed_receipt: None,
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -27699,8 +34093,10 @@ mod tests {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
             bundle_file,
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
             initial_configs: None,
             initial_secrets: None,
+            inrou_preseed_receipt: None,
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -27732,12 +34128,16 @@ mod tests {
             "encode upgrade response",
         );
         install_mock_submission_config(&authority, &key_pair);
+        let inrou_preseed_receipt =
+            qualify_test_inrou_service(&dir, &bundle_file, &key_pair, "upgrade");
         let output = UpgradeArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
             bundle_file,
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
             initial_configs: None,
             initial_secrets: None,
+            inrou_preseed_receipt: Some(inrou_preseed_receipt),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -28037,6 +34437,7 @@ mod tests {
         let output = WorkspaceMutationArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
             initial_configs: None,
             initial_secrets: None,
             torii_url: Some("http://127.0.0.1:8080".to_owned()),
@@ -28065,7 +34466,7 @@ mod tests {
             ]
         );
         assert!(output.script_path.ends_with("deploy.sh"));
-        assert_notes_contain(&output.notes, "exporting TORII_URL");
+        assert_notes_contain(&output.notes, "exact SoraFS retention epoch 2000000000");
     }
     #[test]
     fn deploy_workspace_http_service_executes_manifest_adjacent_script() {
@@ -28090,6 +34491,7 @@ mod tests {
         let output = WorkspaceMutationArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
             initial_configs: Some(configs_path),
             initial_secrets: Some(secrets_path),
             torii_url: Some("http://127.0.0.1:8080".to_owned()),
@@ -28116,6 +34518,11 @@ mod tests {
             fs::read_to_string(dir.join("deploy-token.txt")).expect("read deploy token"),
             "top-secret"
         );
+        assert_eq!(
+            fs::read_to_string(dir.join("deploy-retention-epoch.txt"))
+                .expect("read deploy retention epoch"),
+            test_sorafs_retention_epoch().to_string()
+        );
         let args = fs::read_to_string(dir.join("deploy-args.txt")).expect("read deploy args");
         assert!(args.contains("--initial-configs"));
         assert!(args.contains(resolved_configs.to_string_lossy().as_ref()));
@@ -28140,6 +34547,7 @@ mod tests {
         let output = WorkspaceMutationArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
             initial_configs: None,
             initial_secrets: None,
             torii_url: Some("http://127.0.0.1:8080".to_owned()),
@@ -28157,6 +34565,11 @@ mod tests {
         assert_eq!(
             fs::read_to_string(dir.join("upgrade-torii.txt")).expect("read upgrade torii"),
             "http://127.0.0.1:8080"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("upgrade-retention-epoch.txt"))
+                .expect("read upgrade retention epoch"),
+            test_sorafs_retention_epoch().to_string()
         );
         let args = fs::read_to_string(dir.join("upgrade-args.txt")).expect("read upgrade args");
         assert!(args.contains("--timeout-secs"));
@@ -29190,10 +35603,12 @@ mod tests {
         let authority = AccountId::new(key_pair.public_key().clone());
         let output = AppReleaseArgs {
             manifest: dir.join("app_manifest.json"),
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
             torii_url: Some("http://127.0.0.1:8080".to_owned()),
             api_token: Some("token".to_owned()),
             timeout_secs: 41,
             dry_run: true,
+            inrou_preseed_receipt: None,
         }
         .run(&authority, &key_pair)
         .expect("release dry-run should succeed");
@@ -29230,12 +35645,15 @@ mod tests {
         );
         point_split_app_live_route_at_mock_server(&dir, &server.base_url);
         install_mock_submission_config(&authority, &key_pair);
+        let inrou_preseed_receipt = qualify_test_inrou_app(&dir, &key_pair, "release");
         let output = AppReleaseArgs {
             manifest: dir.join("app_manifest.json"),
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
             dry_run: false,
+            inrou_preseed_receipt: Some(inrou_preseed_receipt),
         }
         .run(&authority, &key_pair)
         .expect("release should succeed");
@@ -29341,10 +35759,12 @@ mod tests {
         install_mock_submission_config(&authority, &key_pair);
         let error = AppReleaseArgs {
             manifest: dir.join("app_manifest.json"),
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
             dry_run: false,
+            inrou_preseed_receipt: None,
         }
         .run(&authority, &key_pair)
         .expect_err("V1 release must reject prepublished guest images");
@@ -30413,6 +36833,8 @@ mod tests {
         install_mock_submission_config(&authority, &key_pair);
         let output = AppReleaseMutationArgs {
             manifest: dir.join("app_manifest.json"),
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
+            inrou_preseed_receipt: None,
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -30536,6 +36958,8 @@ mod tests {
         install_mock_submission_config(&authority, &key_pair);
         let error = AppReleaseMutationArgs {
             manifest: manifest_path,
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
+            inrou_preseed_receipt: None,
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -30582,6 +37006,8 @@ mod tests {
         install_mock_submission_config(&authority, &key_pair);
         let output = AppReleaseMutationArgs {
             manifest: manifest_path,
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
+            inrou_preseed_receipt: None,
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -30659,8 +37085,11 @@ mod tests {
             "encode deploy draft response",
         );
         install_mock_submission_config(&authority, &key_pair);
+        let inrou_preseed_receipt = qualify_test_inrou_app(&dir, &key_pair, "deploy");
         let output = AppReleaseMutationArgs {
             manifest: dir.join("app_manifest.json"),
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
+            inrou_preseed_receipt: Some(inrou_preseed_receipt),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -30828,8 +37257,11 @@ mod tests {
             "encode upgrade draft response",
         );
         install_mock_submission_config(&authority, &key_pair);
+        let inrou_preseed_receipt = qualify_test_inrou_app(&dir, &key_pair, "upgrade");
         let output = AppReleaseMutationArgs {
             manifest: dir.join("app_manifest.json"),
+            sorafs_retention_epoch: test_sorafs_retention_epoch(),
+            inrou_preseed_receipt: Some(inrou_preseed_receipt),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,

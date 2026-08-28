@@ -12,7 +12,6 @@ mod tests {
         pin::Pin,
         sync::Arc,
         task::{Context, Poll},
-        time::Duration,
     };
     use tokio::io::AsyncWrite;
     const TEST_SORANET_TRANSPORT_BINDING: [u8; iroha_crypto::Hash::LENGTH] =
@@ -383,38 +382,17 @@ mod tests {
         assert_ne!(transcript_a, transcript_b);
         let binding_config = SoranetHandshakeConfig::defaults();
         assert_ne!(
-            binding_config.pow_binding(&transcript_a),
-            binding_config.pow_binding(&transcript_b)
+            binding_config.puzzle_binding(&transcript_a),
+            binding_config.puzzle_binding(&transcript_b)
         );
-        let config = || {
-            SoranetHandshakeConfig::new(
-                iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
-                iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
-                iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
-                true,
-                1,
-                1,
-                None,
-                true,
-                iroha_crypto::soranet::pow::Parameters::new(
-                    1,
-                    Duration::from_secs(300),
-                    Duration::from_secs(30),
-                ),
-                None,
-                Duration::from_secs(60),
-                super::test_ticket_revocation_store(),
-            )
-            .expect("valid admission config")
-        };
+        let config = SoranetHandshakeConfig::defaults;
         let relay_a = config();
         let relay_b = config();
         let mut rng = rand::rngs::StdRng::from_seed([0x66; 32]);
         let mut minted = relay_a
             .mint_challenge_ticket(&transcript_a, &mut rng)
-            .expect("mint ticket")
-            .expect("admission enabled");
-        let mut ticket = minted.frames.pop().expect("ticket frame");
+            .expect("mint ticket");
+        let mut ticket = std::mem::take(&mut minted.credential);
         let result = relay_b.verify_challenge_ticket(&ticket, &transcript_b);
         super::clear_sensitive_vec(&mut ticket);
         result.expect_err("one presentation must not verify for a second server identity");
@@ -533,27 +511,7 @@ mod tests {
     }
     #[tokio::test(flavor = "current_thread")]
     async fn soranet_admission_rejects_plain_unbound_transport_before_ticket() {
-        let config = Arc::new(
-            SoranetHandshakeConfig::new(
-                iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
-                iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
-                iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
-                true,
-                1,
-                1,
-                None,
-                false,
-                iroha_crypto::soranet::pow::Parameters::new(
-                    1,
-                    Duration::from_secs(300),
-                    Duration::from_secs(30),
-                ),
-                None,
-                Duration::from_secs(60),
-                super::test_ticket_revocation_store(),
-            )
-            .expect("valid admission config"),
-        );
+        let config = Arc::new(SoranetHandshakeConfig::defaults());
         let network_id = test_network_id("plain-admission-rejected");
         let outbound_keys = delegation_test_key(0x91, Algorithm::BlsNormal);
         let inbound_keys = delegation_test_key(0x92, Algorithm::BlsNormal);

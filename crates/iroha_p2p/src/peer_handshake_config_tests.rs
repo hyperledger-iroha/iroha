@@ -18,7 +18,7 @@ fn test_puzzle_parameters(
     max_future_skew: Duration,
     min_ticket_ttl: Duration,
 ) -> PuzzleParameters {
-    PuzzleParameters::new(
+    PuzzleParameters::try_new(
         NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("minimum puzzle memory is non-zero"),
         NonZeroU32::new(1).expect("one Argon2 iteration is non-zero"),
         NonZeroU32::new(1).expect("one Argon2 lane is non-zero"),
@@ -26,13 +26,13 @@ fn test_puzzle_parameters(
         max_future_skew,
         min_ticket_ttl,
     )
+    .expect("test puzzle parameters must be valid")
 }
 fn minimal_puzzle_config(
     ticket_ttl: Duration,
     max_future_skew: Duration,
     min_ticket_ttl: Duration,
 ) -> Arc<SoranetHandshakeConfig> {
-    let pow_params = PowParameters::new(1, max_future_skew, min_ticket_ttl);
     let puzzle_params = test_puzzle_parameters(1, max_future_skew, min_ticket_ttl);
     Arc::new(
         SoranetHandshakeConfig::new(
@@ -43,17 +43,16 @@ fn minimal_puzzle_config(
             1,
             1,
             None,
-            true,
-            pow_params,
-            Some(puzzle_params),
+            puzzle_params,
             ticket_ttl,
             test_ticket_revocation_store(),
         )
         .expect("test SoraNet handshake config must be valid"),
     )
 }
-fn in_memory_pow_replay_config() -> Arc<SoranetHandshakeConfig> {
-    let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
+fn in_memory_puzzle_replay_config() -> Arc<SoranetHandshakeConfig> {
+    let puzzle_params =
+        test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(60));
     let limits =
         TicketRevocationStoreLimits::new(16, Duration::from_secs(900)).expect("valid limits");
     let store =
@@ -67,9 +66,7 @@ fn in_memory_pow_replay_config() -> Arc<SoranetHandshakeConfig> {
             1,
             1,
             None,
-            true,
-            pow_params,
-            None,
+            puzzle_params,
             Duration::from_secs(120),
             Arc::new(Mutex::new(store)),
         )
@@ -83,12 +80,8 @@ fn mint_test_admission_ticket(
 ) -> Vec<u8> {
     let mut minted = config
         .mint_challenge_ticket(transcript_hash, &mut StdRng::from_seed(seed))
-        .expect("test admission should mint")
-        .expect("admission should be enabled");
-    minted
-        .frames
-        .pop()
-        .expect("admission should produce a frame")
+        .expect("test admission should mint");
+    std::mem::take(&mut minted.credential)
 }
 struct FailingTryRng;
 struct ZeroTryRng;
@@ -177,7 +170,7 @@ fn soranet_transport_delegation_challenge_rejects_all_zero_entropy() {
 }
 #[test]
 fn rejects_invalid_kem_and_signature_ids() {
-    let params = PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30));
+    let params = test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(30));
     let kem_error = SoranetHandshakeConfig::new(
         iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
         iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
@@ -186,9 +179,7 @@ fn rejects_invalid_kem_and_signature_ids() {
         42,
         1,
         None,
-        false,
         params,
-        None,
         Duration::from_secs(60),
         test_ticket_revocation_store(),
     )
@@ -206,9 +197,7 @@ fn rejects_invalid_kem_and_signature_ids() {
         1,
         99,
         None,
-        false,
         params,
-        None,
         Duration::from_secs(60),
         test_ticket_revocation_store(),
     )
@@ -234,9 +223,7 @@ fn rejects_invalid_kem_and_signature_ids() {
             suite.kem_id(),
             1,
             None,
-            false,
             params,
-            None,
             Duration::from_secs(60),
             test_ticket_revocation_store(),
         )
@@ -254,9 +241,7 @@ fn rejects_selected_kem_missing_from_capability_vectors() {
         MlKemSuite::MlKem512.kem_id(),
         1,
         None,
-        false,
-        PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30)),
-        None,
+        test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(30)),
         Duration::from_secs(60),
         test_ticket_revocation_store(),
     )
@@ -265,6 +250,44 @@ fn rejects_selected_kem_missing_from_capability_vectors() {
         error,
         Error::HandshakeSoranet(message)
             if message.contains("does not advertise selected id 0x00")
+    ));
+}
+
+fn insert_strict_constant_rate_tlv(mut capabilities: Vec<u8>) -> Vec<u8> {
+    const STRICT_CONSTANT_RATE_TLV: [u8; 8] = [0x02, 0x03, 0x00, 0x04, 0x01, 0x01, 0x00, 0x04];
+    let grease_offset = capabilities
+        .windows(2)
+        .position(|window| window[0] == 0x7f)
+        .expect("default capabilities contain a trailing GREASE entry");
+    capabilities.splice(grease_offset..grease_offset, STRICT_CONSTANT_RATE_TLV);
+    capabilities
+}
+
+#[test]
+fn rejects_strict_constant_rate_claim_while_p2p_payload_bypasses_mux() {
+    let client_capabilities = insert_strict_constant_rate_tlv(
+        iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+    );
+    let relay_capabilities = insert_strict_constant_rate_tlv(
+        iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+    );
+    let error = SoranetHandshakeConfig::new(
+        iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+        client_capabilities,
+        relay_capabilities,
+        true,
+        1,
+        1,
+        None,
+        test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(30)),
+        Duration::from_secs(60),
+        test_ticket_revocation_store(),
+    )
+    .expect_err("strict traffic-shape claims must fail before peer payload is scheduler-bound");
+    assert!(matches!(
+        error,
+        Error::HandshakeSoranet(message)
+            if message.contains("strict SoraNet constant-rate capability is unavailable for iroha_p2p")
     ));
 }
 
@@ -278,9 +301,7 @@ fn rejects_descriptor_commitment_mismatching_relay_capability() {
         1,
         1,
         None,
-        false,
-        PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30)),
-        None,
+        test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(30)),
         Duration::from_secs(60),
         test_ticket_revocation_store(),
     )
@@ -302,9 +323,7 @@ fn admission_config_retains_the_mandatory_replay_store() {
         1,
         1,
         None,
-        true,
-        PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(30)),
-        None,
+        test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(30)),
         Duration::from_secs(60),
         Arc::clone(&replay_store),
     )
@@ -314,7 +333,7 @@ fn admission_config_retains_the_mandatory_replay_store() {
 }
 #[test]
 fn rejects_noncanonical_transcript_fields_and_capability_vectors_at_construction() {
-    let params = PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30));
+    let params = test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(30));
     let build =
         |descriptor_commit: Vec<u8>, client_capabilities: Vec<u8>, resume_hash: Option<Vec<u8>>| {
             SoranetHandshakeConfig::new(
@@ -325,9 +344,7 @@ fn rejects_noncanonical_transcript_fields_and_capability_vectors_at_construction
                 1,
                 1,
                 resume_hash,
-                false,
                 params,
-                None,
                 Duration::from_secs(60),
                 test_ticket_revocation_store(),
             )
@@ -426,15 +443,15 @@ fn admission_transcript_binds_resumption_presence_and_value() {
 }
 #[test]
 fn puzzle_ticket_mints_and_verifies() {
-    let pow_params = PowParameters::new(5, Duration::from_secs(900), Duration::from_secs(120));
-    let puzzle_params = puzzle::Parameters::new(
+    let puzzle_params = puzzle::Parameters::try_new(
         NonZeroU32::new(64 * 1024).expect("memory"),
         NonZeroU32::new(2).expect("time"),
         NonZeroU32::new(1).expect("lanes"),
         2,
         Duration::from_secs(900),
         Duration::from_secs(120),
-    );
+    )
+    .expect("test puzzle parameters must be valid");
     let config = SoranetHandshakeConfig::new(
         iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
         iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
@@ -443,46 +460,31 @@ fn puzzle_ticket_mints_and_verifies() {
         1,
         1,
         None,
-        true,
-        pow_params,
-        Some(puzzle_params),
+        puzzle_params,
         Duration::from_secs(240),
         test_ticket_revocation_store(),
     )
     .expect("test SoraNet handshake config must be valid");
-    assert_eq!(config.pow_parameters().difficulty(), 5);
-    assert_eq!(config.pow_ticket_ttl(), Duration::from_secs(240));
-    let configured_puzzle = config
-        .puzzle_parameters()
-        .expect("puzzle parameters available");
+    assert_eq!(config.ticket_ttl(), Duration::from_secs(240));
+    let configured_puzzle = config.puzzle_parameters();
     assert_eq!(configured_puzzle.memory_kib().get(), 64 * 1024);
-    let admission = config
-        .admission_summary()
-        .expect("admission summary present");
-    assert_eq!(admission.pow.difficulty(), 5);
+    let admission = config.admission_summary();
+    assert_eq!(admission.puzzle.difficulty(), 2);
     assert_eq!(admission.ticket_ttl, Duration::from_secs(240));
     let mut rng = StdRng::from_seed([7u8; 32]);
     let transcript = test_admission_transcript();
     let mut minted = config
         .mint_challenge_ticket(&transcript, &mut rng)
-        .expect("mint ticket")
-        .expect("ticket bytes present");
+        .expect("mint ticket");
     assert_eq!(
-        minted
-            .admission
-            .expect("admission present")
-            .pow
-            .difficulty(),
+        minted.admission.puzzle.difficulty(),
         puzzle_params.difficulty()
     );
     let verification = config
-        .verify_challenge_ticket(&minted.frames[0], &transcript)
+        .verify_challenge_ticket(&minted.credential, &transcript)
         .expect("verify ticket");
-    assert_eq!(
-        verification.expect("verification summary").pow.difficulty(),
-        puzzle_params.difficulty()
-    );
-    let mut corrupted = minted.frames.pop().expect("ticket frame present");
+    assert_eq!(verification.puzzle.difficulty(), puzzle_params.difficulty());
+    let mut corrupted = std::mem::take(&mut minted.credential);
     // Corrupt the version byte to guarantee a parse/verify failure.
     // Flipping solution bytes is probabilistic for low difficulties (it may still satisfy
     // the leading-zero predicate), so do not rely on it in tests.
@@ -496,11 +498,14 @@ fn puzzle_ticket_mints_and_verifies() {
 #[test]
 fn minted_challenge_explicitly_clears_sensitive_bytes() {
     let mut minted = MintedChallenge {
-        frames: vec![vec![0xA5; 32]],
-        admission: None,
+        credential: vec![0xA5; 32],
+        admission: ChallengeAdmission {
+            ticket_ttl: Duration::from_secs(60),
+            puzzle: test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(30)),
+        },
     };
     minted.clear_sensitive_bytes();
-    assert!(minted.frames.is_empty());
+    assert!(minted.credential.is_empty());
     assert!(std::mem::needs_drop::<MintedChallenge>());
 }
 #[test]
@@ -515,7 +520,8 @@ fn inbound_challenge_owner_redacts_and_scrubs_sensitive_bytes() {
 }
 #[test]
 fn mint_challenge_ticket_reports_rng_failure() {
-    let pow_params = PowParameters::new(5, Duration::from_secs(900), Duration::from_secs(120));
+    let puzzle_params =
+        test_puzzle_parameters(5, Duration::from_secs(900), Duration::from_secs(120));
     let config = SoranetHandshakeConfig::new(
         iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
         iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
@@ -524,9 +530,7 @@ fn mint_challenge_ticket_reports_rng_failure() {
         1,
         1,
         None,
-        true,
-        pow_params,
-        None,
+        puzzle_params,
         Duration::from_secs(240),
         test_ticket_revocation_store(),
     )
@@ -537,19 +541,20 @@ fn mint_challenge_ticket_reports_rng_failure() {
         .mint_challenge_ticket(&transcript, &mut rng)
         .expect_err("failing RNG must abort challenge minting");
     match err {
-        ChallengeMintError::Pow(pow::MintError::RandomBytes { operation, message }) => {
-            assert_eq!(operation, "minting PoW solution nonce");
+        puzzle::MintError::RandomBytes { operation, message } => {
+            assert_eq!(operation, "minting puzzle solution nonce");
             assert!(
                 message.contains("failing p2p ticket RNG"),
                 "unexpected message: {message}"
             );
         }
-        other => panic!("expected PoW RNG failure, got {other:?}"),
+        other => panic!("expected puzzle RNG failure, got {other:?}"),
     }
 }
 #[test]
-fn pow_ticket_replay_rejected_and_persisted() {
-    let pow_params = PowParameters::new(1, Duration::from_secs(900), Duration::from_secs(120));
+fn puzzle_ticket_replay_rejected_and_persisted() {
+    let puzzle_params =
+        test_puzzle_parameters(1, Duration::from_secs(900), Duration::from_secs(120));
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("revocations.norito");
     let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
@@ -562,9 +567,7 @@ fn pow_ticket_replay_rejected_and_persisted() {
         1,
         1,
         None,
-        true,
-        pow_params,
-        None,
+        puzzle_params,
         Duration::from_secs(240),
         Arc::new(Mutex::new(store)),
     )
@@ -573,9 +576,8 @@ fn pow_ticket_replay_rejected_and_persisted() {
     let transcript = test_admission_transcript();
     let mut minted = config
         .mint_challenge_ticket(&transcript, &mut rng)
-        .expect("mint")
-        .expect("ticket present");
-    let ticket = minted.frames.pop().expect("ticket frame");
+        .expect("mint");
+    let ticket = std::mem::take(&mut minted.credential);
     config
         .verify_challenge_ticket(&ticket, &transcript)
         .expect("first verify");
@@ -594,9 +596,7 @@ fn pow_ticket_replay_rejected_and_persisted() {
         1,
         1,
         None,
-        true,
-        pow_params,
-        None,
+        puzzle_params,
         Duration::from_secs(240),
         Arc::new(Mutex::new(reloaded)),
     )
@@ -608,7 +608,7 @@ fn pow_ticket_replay_rejected_and_persisted() {
 }
 #[test]
 fn pending_replay_reservations_release_the_store_lock_and_roll_back_on_drop() {
-    let config = in_memory_pow_replay_config();
+    let config = in_memory_puzzle_replay_config();
     let transcript = test_admission_transcript();
     let first_bytes = mint_test_admission_ticket(&config, &transcript, [0x22; 32]);
     let second_bytes = mint_test_admission_ticket(&config, &transcript, [0x23; 32]);
@@ -641,7 +641,7 @@ fn pending_replay_reservations_release_the_store_lock_and_roll_back_on_drop() {
 }
 #[test]
 fn concurrent_duplicate_ticket_verification_has_exactly_one_success() {
-    let config = in_memory_pow_replay_config();
+    let config = in_memory_puzzle_replay_config();
     let transcript = test_admission_transcript();
     let ticket = mint_test_admission_ticket(&config, &transcript, [0x24; 32]);
     let barrier = Arc::new(std::sync::Barrier::new(3));
@@ -661,7 +661,7 @@ fn concurrent_duplicate_ticket_verification_has_exactly_one_success() {
     let mut replays = 0;
     for worker in workers {
         match worker.join().expect("verification worker should not panic") {
-            Ok(Some(_)) => successes += 1,
+            Ok(_) => successes += 1,
             Err(ChallengeVerifyError::Replay) => replays += 1,
             other => panic!("unexpected concurrent verification result: {other:?}"),
         }
@@ -671,7 +671,8 @@ fn concurrent_duplicate_ticket_verification_has_exactly_one_success() {
 }
 #[test]
 fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
-    let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
+    let puzzle_params =
+        test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(60));
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("revocations.norito");
     let limits = TicketRevocationStoreLimits::new(1, Duration::from_secs(900)).expect("limits");
@@ -684,9 +685,7 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
         1,
         1,
         None,
-        true,
-        pow_params,
-        None,
+        puzzle_params,
         Duration::from_secs(120),
         Arc::new(Mutex::new(store)),
     )
@@ -695,18 +694,16 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
     let transcript = test_admission_transcript();
     let first = config
         .mint_challenge_ticket(&transcript, &mut rng)
-        .expect("mint")
-        .expect("ticket");
+        .expect("mint");
     let second = config
         .mint_challenge_ticket(&transcript, &mut rng)
-        .expect("mint second")
-        .expect("ticket");
+        .expect("mint second");
     config
-        .verify_challenge_ticket(&first.frames[0], &transcript)
+        .verify_challenge_ticket(&first.credential, &transcript)
         .expect("first verify");
     assert_eq!(config.active_revocations().expect("active count"), 1);
     let capacity_err = config
-        .verify_challenge_ticket(&second.frames[0], &transcript)
+        .verify_challenge_ticket(&second.credential, &transcript)
         .expect_err("full store must fail closed");
     assert!(matches!(
         capacity_err,
@@ -718,7 +715,7 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
         "capacity-one store must retain the first consumption record"
     );
     let replay_err = config
-        .verify_challenge_ticket(&first.frames[0], &transcript)
+        .verify_challenge_ticket(&first.credential, &transcript)
         .expect_err("first ticket must remain consumed");
     assert!(matches!(replay_err, ChallengeVerifyError::Replay));
     config.purge_expired_revocations().expect("purge succeeds");
@@ -730,7 +727,8 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
 }
 #[test]
 fn revocation_store_ttl_overflow_surfaces_store_error() {
-    let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
+    let puzzle_params =
+        test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(60));
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("revocations.norito");
     let limits = TicketRevocationStoreLimits::new(8, Duration::from_secs(10)).expect("limits");
@@ -743,9 +741,7 @@ fn revocation_store_ttl_overflow_surfaces_store_error() {
         1,
         1,
         None,
-        true,
-        pow_params,
-        None,
+        puzzle_params,
         Duration::from_secs(120),
         Arc::new(Mutex::new(store)),
     )
@@ -754,10 +750,9 @@ fn revocation_store_ttl_overflow_surfaces_store_error() {
     let transcript = test_admission_transcript();
     let minted = config
         .mint_challenge_ticket(&transcript, &mut rng)
-        .expect("mint")
-        .expect("ticket");
+        .expect("mint");
     let err = config
-        .verify_challenge_ticket(&minted.frames[0], &transcript)
+        .verify_challenge_ticket(&minted.credential, &transcript)
         .expect_err("revocation store ttl cap should reject ticket");
     assert!(matches!(err, ChallengeVerifyError::RevocationStore(_)));
 }
@@ -920,37 +915,6 @@ async fn closed_puzzle_work_gate_fails_closed_without_running_work() {
     assert!(!started.load(Ordering::Acquire));
 }
 #[tokio::test(flavor = "current_thread")]
-async fn ordinary_pow_verification_does_not_depend_on_the_puzzle_gate() {
-    let config = Arc::new(
-        SoranetHandshakeConfig::new(
-            iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
-            iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
-            iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
-            true,
-            1,
-            1,
-            None,
-            true,
-            PowParameters::new(1, Duration::from_secs(30), Duration::from_secs(1)),
-            None,
-            Duration::from_secs(5),
-            test_ticket_revocation_store(),
-        )
-        .expect("test SoraNet handshake config must be valid"),
-    );
-    let transcript_hash = test_admission_transcript();
-    let ticket = mint_test_admission_ticket(&config, &transcript_hash, [0x30; 32]);
-    let closed_gate = Arc::new(Semaphore::new(1));
-    closed_gate.close();
-    let admission =
-        verify_handshake_challenge_with_gate(config, ticket.into(), transcript_hash, closed_gate)
-            .await
-            .expect("ordinary PoW should preserve its direct verification path")
-            .expect("ordinary PoW should return admission policy");
-    assert_eq!(admission.pow.difficulty(), 1);
-    assert!(admission.puzzle.is_none());
-}
-#[tokio::test(flavor = "current_thread")]
 async fn inbound_puzzle_verification_accepts_a_fresh_valid_ticket() {
     let config = minimal_puzzle_config(
         Duration::from_secs(5),
@@ -970,10 +934,8 @@ async fn inbound_puzzle_verification_accepts_a_fresh_valid_ticket() {
     )
     .await
     .expect("inbound verification should complete")
-    .expect("fresh valid puzzle ticket should verify")
-    .expect("puzzle verification should return admission policy");
-    assert_eq!(admission.pow.difficulty(), 1);
-    assert!(admission.puzzle.is_some());
+    .expect("fresh valid puzzle ticket should verify");
+    assert_eq!(admission.puzzle.difficulty(), 1);
 }
 #[tokio::test(flavor = "current_thread")]
 async fn inbound_puzzle_verification_rejects_an_invalid_ticket() {

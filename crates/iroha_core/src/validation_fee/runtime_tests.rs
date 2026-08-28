@@ -2132,6 +2132,95 @@ fn multisig_proposal_signed_fee_coordinate_resolves_unique_nested_context() {
     );
 }
 #[test]
+fn multisig_hijiri_metadata_binds_the_explicit_nested_fee_context() {
+    let outer_signer = account(1);
+    let recipient = account(2);
+    let treasury = account(3);
+    let multisig = account(4);
+    let policy = policy(&treasury);
+    let fee_asset = policy_fee_asset(&policy);
+    let hijiri = HijiriParametersV1::first_release_genesis();
+    let outer_quote_hash = hijiri
+        .fee_quote_hash(&outer_signer, None)
+        .expect("outer signer quote hash");
+    let nested_quote_hash = hijiri
+        .fee_quote_hash(&multisig, None)
+        .expect("nested multisig quote hash");
+    assert_ne!(
+        outer_quote_hash, nested_quote_hash,
+        "Hijiri quote hashes must remain account-bound"
+    );
+
+    let transaction = |metadata_quote_hash, marker_quote_hash| {
+        tx(
+            1,
+            vec![
+                MultisigPropose::new(
+                    multisig.clone(),
+                    with_multisig_fee_marker_and_hijiri(
+                        &policy,
+                        Some(marker_quote_hash),
+                        vec![
+                            transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
+                            transfer(
+                                &multisig,
+                                &fee_asset,
+                                minor_units(TEST_VALIDATION_FEE_MINOR_UNITS),
+                                &treasury,
+                            ),
+                        ],
+                        1,
+                        None,
+                    ),
+                    None,
+                )
+                .into(),
+            ],
+            metadata_for_hijiri_fee_instruction(&policy, metadata_quote_hash, 1),
+        )
+    };
+
+    assert_eq!(
+        enforce_policy_with_credit_and_hijiri(
+            &transaction(nested_quote_hash, nested_quote_hash),
+            &policy,
+            Some(&hijiri),
+            &no_hijiri_account_risk,
+        )
+        .expect("nested-account metadata and marker hashes must validate"),
+        0,
+        "registering the nested proposal must not credit its deferred fee"
+    );
+    assert_eq!(
+        enforce_policy_with_credit_and_hijiri(
+            &transaction(outer_quote_hash, nested_quote_hash),
+            &policy,
+            Some(&hijiri),
+            &no_hijiri_account_risk,
+        ),
+        Err(
+            ValidationFeeAdmissionError::WrongHijiriFeeQuoteHashMetadata {
+                expected_hash_hex: hex::encode(nested_quote_hash),
+                observed_hash_hex: hex::encode(outer_quote_hash),
+            }
+        )
+    );
+    assert_eq!(
+        enforce_policy_with_credit_and_hijiri(
+            &transaction(nested_quote_hash, outer_quote_hash),
+            &policy,
+            Some(&hijiri),
+            &no_hijiri_account_risk,
+        ),
+        Err(
+            ValidationFeeAdmissionError::WrongMultisigFeeMarkerHijiriFeeQuoteHash {
+                expected_hash_hex: Some(hex::encode(nested_quote_hash)),
+                observed_hash_hex: Some(hex::encode(outer_quote_hash)),
+            }
+        )
+    );
+}
+#[test]
 fn nested_fee_coordinate_does_not_implicitly_designate_top_level_treasury_inflow() {
     let user = account(1);
     let recipient = account(2);

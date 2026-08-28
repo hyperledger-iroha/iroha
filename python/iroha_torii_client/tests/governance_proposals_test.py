@@ -37,6 +37,8 @@ PUBLIC_SIGNAL_SCHEMA_HASH = (
 TAIRA_CHAIN_ID_HASH = (
     "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7"
 )
+TEST_MAX_OUTSTANDING_LIABILITY = 1_000_000_000_000
+TEST_EVM_MAX_WRAPPED_SUPPLY = TEST_MAX_OUTSTANDING_LIABILITY * 1_000_000_000
 
 
 def _lane() -> dict[str, object]:
@@ -148,6 +150,7 @@ def _register_action() -> dict[str, object]:
                 "route_address": route_address,
                 "route_code_hash": route_code_hash,
                 "taira_to_token_multiplier": 1_000_000_000,
+                "max_wrapped_supply": TEST_EVM_MAX_WRAPPED_SUPPLY,
             },
         },
         "sora_outbound_execution_policy": {
@@ -166,6 +169,7 @@ def _register_action() -> dict[str, object]:
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
             "custody_owner": CANONICAL_OWNER,
             "payload_amount_scale": 9,
+            "max_outstanding_liability": TEST_MAX_OUTSTANDING_LIABILITY,
         },
     }
     return {
@@ -219,6 +223,7 @@ def _solana_register_action() -> dict[str, object]:
                 "verifier_key_hash": "4B" * 32,
                 "outbound_proof_policy": _outbound_proof_policy(),
                 "taira_to_token_multiplier": 1,
+                "max_wrapped_supply": TEST_MAX_OUTSTANDING_LIABILITY,
             },
         },
         "sora_outbound_execution_policy": {
@@ -237,6 +242,7 @@ def _solana_register_action() -> dict[str, object]:
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
             "custody_owner": CANONICAL_OWNER,
             "payload_amount_scale": 9,
+            "max_outstanding_liability": TEST_MAX_OUTSTANDING_LIABILITY,
         },
     }
     return {
@@ -475,8 +481,16 @@ def test_sccp_register_action_is_recursively_typed() -> None:
         GovernanceSccpEvmDestinationDeployment,
     )
     assert parsed.route.route.destination.deployment.outbound_proof_policy.version == 1
+    assert (
+        parsed.route.route.destination.deployment.max_wrapped_supply
+        == TEST_EVM_MAX_WRAPPED_SUPPLY
+    )
     assert parsed.route.route.sora_outbound_execution_policy.vk_ref.name == "sccp_route_v1"
     assert parsed.route.route.settlement.custody_owner == CANONICAL_OWNER
+    assert (
+        parsed.route.route.settlement.max_outstanding_liability
+        == TEST_MAX_OUTSTANDING_LIABILITY
+    )
 
 
 def test_sccp_solana_register_uses_the_exact_typed_deployment() -> None:
@@ -491,7 +505,11 @@ def test_sccp_solana_register_uses_the_exact_typed_deployment() -> None:
 
 @pytest.mark.parametrize(
     "field",
-    ["native_verifier_material_account", "native_verifier_config_hash"],
+    [
+        "native_verifier_material_account",
+        "native_verifier_config_hash",
+        "max_wrapped_supply",
+    ],
 )
 def test_sccp_solana_register_rejects_missing_closed_deployment_roles(field: str) -> None:
     action = _solana_register_action()
@@ -509,6 +527,29 @@ def test_sccp_solana_slots_reject_unsafe_json_integers() -> None:
 
     with pytest.raises(TypeError, match="integer"):
         GovernanceSccpRouteAction.from_payload(action)
+
+
+def test_sccp_register_requires_matching_positive_supply_and_liability_caps() -> None:
+    missing_supply = _register_action()
+    missing_supply["route"]["route"]["destination"]["deployment"].pop(  # type: ignore[index]
+        "max_wrapped_supply"
+    )
+    with pytest.raises(TypeError, match="max_wrapped_supply"):
+        GovernanceSccpRouteAction.from_payload(missing_supply)
+
+    missing_liability = _register_action()
+    missing_liability["route"]["route"]["settlement"].pop(  # type: ignore[index]
+        "max_outstanding_liability"
+    )
+    with pytest.raises(TypeError, match="max_outstanding_liability"):
+        GovernanceSccpRouteAction.from_payload(missing_liability)
+
+    mismatched = _register_action()
+    mismatched["route"]["route"]["destination"]["deployment"][  # type: ignore[index]
+        "max_wrapped_supply"
+    ] += 1
+    with pytest.raises(TypeError, match="must equal settlement.max_outstanding_liability"):
+        GovernanceSccpRouteAction.from_payload(mismatched)
 
 
 @pytest.mark.parametrize(

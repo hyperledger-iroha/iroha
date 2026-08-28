@@ -16,7 +16,7 @@ use iroha_config::parameters::actual::{
     SoranetHandshake as ActualSoranetHandshake, SoranetPow as ActualSoranetPow,
 };
 use iroha_crypto::soranet::{
-    pow::{Parameters as PowParameters, TicketRevocationStore, TicketRevocationStoreLimits},
+    pow::{TicketRevocationStore, TicketRevocationStoreLimits},
     puzzle,
 };
 
@@ -93,7 +93,6 @@ struct ValidatedSoranetHandshake {
     kem_id: u8,
     sig_id: u8,
     resume_hash: Option<Vec<u8>>,
-    pow_params: PowParameters,
     puzzle_params: puzzle::Parameters,
     ticket_ttl: std::time::Duration,
     owner: SoranetHandshakeOwnerConfig,
@@ -111,9 +110,7 @@ impl ValidatedSoranetHandshake {
             self.kem_id,
             self.sig_id,
             self.resume_hash,
-            true,
-            self.pow_params,
-            Some(self.puzzle_params),
+            self.puzzle_params,
             self.ticket_ttl,
             shared_state,
         )?))
@@ -126,8 +123,6 @@ pub(crate) struct SoranetHandshakeRuntime {
     policy: RwLock<Arc<SoranetHandshakeConfig>>,
     shared_state: SoranetHandshakeSharedState,
     owner: SoranetHandshakeOwnerConfig,
-    #[cfg(test)]
-    _test_revocation_dir: Option<tempfile::TempDir>,
 }
 impl SoranetHandshakeRuntime {
     /// Snapshot the policy for one new handshake attempt.
@@ -142,16 +137,10 @@ impl SoranetHandshakeRuntime {
             })
     }
 
-    /// Retain an owner-private revocation directory for this test runtime.
+    /// Return the active replay-store path for reload compatibility tests.
     #[cfg(test)]
-    pub(crate) fn retain_test_revocation_dir(&mut self, dir: tempfile::TempDir) {
-        self._test_revocation_dir = Some(dir);
-    }
-
-    /// Return the owner replay path for reload fixtures that must remain compatible.
-    #[cfg(test)]
-    pub(crate) fn test_replay_state_path(&self) -> String {
-        self.owner.replay_state_path.to_string_lossy().into_owned()
+    pub(crate) fn replay_state_path_for_tests(&self) -> &Path {
+        &self.owner.replay_state_path
     }
 
     /// Validate and atomically publish a policy that reuses the active owner.
@@ -175,42 +164,22 @@ impl SoranetHandshakeRuntime {
 pub(crate) fn runtime_from_handshake(
     handshake: ActualSoranetHandshake,
 ) -> Result<Arc<SoranetHandshakeRuntime>, Error> {
-    runtime_from_handshake_with_store(handshake, |owner| {
-        TicketRevocationStore::load(
-            &owner.replay_state_path,
-            owner.revocation_limits,
-            SystemTime::now(),
-        )
-        .map_err(|err| {
-            Error::HandshakeSoranet(format!(
-                "failed to load soranet revocation store at {}: {err}",
-                owner.replay_state_path.display()
-            ))
-        })
-    })
-}
-
-#[cfg(test)]
-pub(crate) fn runtime_from_handshake_in_memory(
-    handshake: ActualSoranetHandshake,
-) -> Result<Arc<SoranetHandshakeRuntime>, Error> {
-    runtime_from_handshake_with_store(handshake, |owner| {
-        TicketRevocationStore::in_memory(owner.revocation_limits).map_err(|err| {
-            Error::HandshakeSoranet(format!("invalid soranet revocation configuration: {err}"))
-        })
-    })
-}
-
-fn runtime_from_handshake_with_store(
-    handshake: ActualSoranetHandshake,
-    load_store: impl FnOnce(&SoranetHandshakeOwnerConfig) -> Result<TicketRevocationStore, Error>,
-) -> Result<Arc<SoranetHandshakeRuntime>, Error> {
     let validated = validate_handshake(handshake)?;
     let owner = validated.owner.clone();
     let puzzle_work_admission =
         process_wide_admission(owner.outbound_mint_capacity, owner.inbound_verify_capacity)
             .map_err(Error::HandshakeSoranet)?;
-    let revocation_store = load_store(&owner)?;
+    let revocation_store = TicketRevocationStore::load(
+        &owner.replay_state_path,
+        owner.revocation_limits,
+        SystemTime::now(),
+    )
+    .map_err(|err| {
+        Error::HandshakeSoranet(format!(
+            "failed to load soranet revocation store at {}: {err}",
+            owner.replay_state_path.display()
+        ))
+    })?;
     let shared_state = SoranetHandshakeSharedState::new(
         Arc::new(Mutex::new(revocation_store)),
         puzzle_work_admission,
@@ -220,8 +189,6 @@ fn runtime_from_handshake_with_store(
         policy: RwLock::new(policy),
         shared_state,
         owner,
-        #[cfg(test)]
-        _test_revocation_dir: None,
     }))
 }
 
@@ -252,10 +219,6 @@ fn validate_handshake(
     } = pow;
     validate_revocation_window(max_future_skew, revocation_max_ttl)?;
     validate_puzzle_work_capacities(outbound_mint_capacity, inbound_verify_capacity)?;
-    let pow_params =
-        PowParameters::try_new(difficulty, max_future_skew, min_ticket_ttl).map_err(|err| {
-            Error::HandshakeSoranet(format!("invalid soranet PoW configuration: {err}"))
-        })?;
     let puzzle_params = puzzle::Parameters::try_new(
         puzzle.memory_kib,
         puzzle.time_cost,
@@ -292,7 +255,6 @@ fn validate_handshake(
         kem_id,
         sig_id,
         resume_hash: resume_hash.map(iroha_config::base::WithOrigin::into_value),
-        pow_params,
         puzzle_params,
         ticket_ttl,
         owner: SoranetHandshakeOwnerConfig {

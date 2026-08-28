@@ -3887,6 +3887,46 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         "for",
         "SumeragiV2Adapter",
     )
+    runtime_future_prepare_blocker = qualified_item(
+        "runtime",
+        "pacemaker_progress_blocked_target_view",
+        runtime_driver_context,
+        "production future-PrepareQC blocker classifier",
+    )
+    require_order(
+        "runtime",
+        runtime_future_prepare_blocker,
+        "only an authenticated future-view PrepareQC may block ordinary Progress service",
+        (
+            "AdapterCommand::Authenticated(authenticated)",
+            "authenticated.payload()",
+            "wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)",
+            "certificate.phase == wire::GlobalPhase::Prepare",
+            "certificate.round.view > self.current_tag().view()",
+            "Some(certificate.round.view)",
+        ),
+    )
+    runtime_view_release = qualified_item(
+        "runtime",
+        "pacemaker_progress_releases_view_block",
+        runtime_driver_context,
+        "production current-round view-release classifier",
+    )
+    require_order(
+        "runtime",
+        runtime_view_release,
+        "view release must reject non-future targets and accept only strict authenticated current-round recovery",
+        (
+            "let current_view = self.current_tag().view()",
+            "if target_view <= current_view",
+            "return false",
+            "AdapterCommand::Authenticated(authenticated)",
+            "wire_payload_matches_current_strict_timeout_recovery_round(",
+            "authenticated.payload()",
+            "self.wire_context()",
+            "self.current_tag()",
+        ),
+    )
     runtime_target_binding = qualified_item(
         "runtime",
         "pre_timeout_locked_prepare_qc_target",
@@ -3944,6 +3984,107 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         "<",
         "D",
         ">",
+    )
+    bounded_ingress_context = (
+        "impl",
+        "<",
+        "C",
+        ":",
+        "ExactRuntimeCommandIdentity",
+        ">",
+        "BoundedIngress",
+        "<",
+        "C",
+        ">",
+    )
+    bounded_view_release_authorization = qualified_item(
+        "runtime",
+        "ordinary_view_blocked_progress_authorization",
+        bounded_ingress_context,
+        "bounded-ingress blocked-view authorization mint",
+    )
+    require_order(
+        "runtime",
+        bounded_view_release_authorization,
+        "blocked-view authorization must bind the exact ordinary-selected authenticated Progress minimum",
+        (
+            "select_bounded_service_class(",
+            "if selection.selected != SERVICE_CLASS_PROGRESS",
+            "minimum_lifecycle_for_class(CommandClass::Progress)",
+            "queued.lifecycle_ordinal == Some(oldest_progress_lifecycle_ordinal)",
+            "selected.validate_admission_identity()",
+            "selected.identity.kind != RuntimeCommandKind::Authenticated",
+            "selected.ingress_ownership.is_none()",
+            "blocked_target_view(selected)",
+            "cached_queue_occurrence_owner(&self.selection_source_identity)",
+            "RuntimeViewBlockedProgressAuthorization::new(",
+        ),
+    )
+    runtime_view_release_authorization = qualified_item(
+        "runtime",
+        "ordinary_view_blocked_progress_authorization",
+        runtime_generic_context,
+        "serialized runtime blocked-view authorization wrapper",
+    )
+    require_tokens(
+        "runtime",
+        runtime_view_release_authorization,
+        "runtime authorization target must come from the production queued-command classifier",
+        (
+            "self.ingress.ordinary_view_blocked_progress_authorization(",
+            "driver.pacemaker_progress_blocked_target_view(&queued.command)",
+        ),
+    )
+    runtime_ordinary_step = qualified_item(
+        "runtime",
+        "step",
+        runtime_generic_context,
+        "ordinary blocked-view release step",
+    )
+    require_order(
+        "runtime",
+        runtime_ordinary_step,
+        "ordinary blocked-view release may consume only the selected FIFO turn and otherwise falls through before schedule mutation",
+        (
+            "let (work, next_schedule) = self.schedule.select(",
+            "if work == ScheduledWork::Fifo",
+            "self.ordinary_view_blocked_progress_authorization()",
+            "self.dispatch_one_pacemaker_progress(",
+            "Some((arbitration.clone(), authorization))",
+            "return Ok(step)",
+            "self.schedule = next_schedule",
+        ),
+    )
+    runtime_view_release_dispatch = qualified_item(
+        "runtime",
+        "dispatch_one_pacemaker_progress",
+        runtime_generic_context,
+        "ordinary blocked-view release dispatcher",
+    )
+    require_order(
+        "runtime",
+        runtime_view_release_dispatch,
+        "ordinary release must filter exact current-round Progress, avoid no-candidate mutation, consume scheduler debt, fail closed on retry, and retain authorization",
+        (
+            "let view_release_target = ordinary_view_escape.as_ref()",
+            "pacemaker_progress_blocked_target_view(&queued.command)",
+            "return false",
+            "view_release_target.is_some_and(|target_view|",
+            "queued.class != CommandClass::Progress",
+            "queued.identity.kind != RuntimeCommandKind::Authenticated",
+            "queued.ingress_ownership.is_none()",
+            "pacemaker_progress_releases_view_block(",
+            "ordinary_view_escape_selected",
+            "let Some((command, candidate)) = selected else",
+            "return Ok(None)",
+            "let schedule_after = if let Some((arbitration, _)) = &ordinary_view_escape",
+            "if work != ScheduledWork::Fifo",
+            "self.schedule = next_schedule",
+            "RuntimeQueueSelectionKind::OrdinaryViewProgress",
+            "if ordinary_view_escape_selected && (retry_unadmitted || retained_deferred_ingress)",
+            "arbitration.view_blocked_progress_authorization = Some(authorization)",
+            "schedule_after",
+        ),
     )
     freeze_pre_timeout_cut = qualified_item(
         "runtime",
@@ -4033,8 +4174,11 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
             "queued.ingress_ownership.is_some()",
             "u128::from(physical.source_ordinal) < physical_cut",
             "driver.command_previews_pre_timeout_locked_prepare_qc(",
-            "|_| false",
-            "Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc)",
+            """
+|_| false,
+false,
+Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
+""",
             "candidate.selection_seal.kind",
             "RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc",
             "command.lifecycle_owner()",
@@ -4083,6 +4227,62 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
             "candidate.class == SERVICE_CLASS_PROGRESS",
             "candidate_is_pre_cut",
             "RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc",
+        ),
+    )
+    require_order(
+        "runtime",
+        scheduler_evidence,
+        "ordinary blocked-view evidence must validate exact authorization, FIFO schedule consumption, and ordinary Progress debt",
+        (
+            "RuntimeQueueSelectionKind::OrdinaryViewProgress",
+            "self.view_blocked_progress_authorization.is_some()",
+            "authorization.validates_retained_blocker(",
+            "scheduled == ScheduledWork::Fifo",
+            "self.fifo_owed_after == schedule_after.fifo_owed",
+            "!retry_retained",
+            "selected != authorization.blocker",
+            "service.selected == SERVICE_CLASS_PROGRESS",
+            "self.queue_after.service_cursor == service.next",
+            "self.queue_after.max_service_debt",
+            "self.queue_before.max_service_debt.saturating_add(1)",
+            "candidate.selection_seal.matches_scheduler_occurrence(",
+        ),
+    )
+
+    ordinary_view_release_regression = item(
+        "runtime",
+        "ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc",
+    )
+    require_order(
+        "runtime",
+        ordinary_view_release_regression,
+        "ordinary-step future-PrepareQC regression must retain the blocker, service only matching TC, accrue fair debt, reject tampering, and resume ordinary service",
+        (
+            "RuntimeSelectedOwnerKind::FifoRetryRetained",
+            "wire::ConsensusMessageV2Payload::QuorumCertificate(intervening_certificate)",
+            "signed_runtime_proposal(&context, &keys, 0xC2)",
+            "wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate)",
+            "runtime.schedule.fifo_owed = true",
+            "runtime.ingress.next_class = CommandClass::Progress",
+            "let normal_debt_before",
+            "runtime.step(now)",
+            "RuntimeSelectedOwnerKind::PacemakerProgress",
+            "tc_scheduler.view_blocked_progress_authorization.is_some()",
+            "tc_scheduler.fifo_owed_before",
+            "!tc_scheduler.fifo_owed_after",
+            "runtime.ingress.next_class, CommandClass::Normal",
+            "normal_debt_after, normal_debt_before + 1",
+            "RuntimeQueueSelectionKind::OrdinaryViewProgress",
+            "tc_scheduler.validate_exact(), Ok(())",
+            "authorization.target_view = selected_view",
+            "runtime_view_blocked_progress_authorization_projection_hash(authorization)",
+            "forged_target.validate_exact().is_err()",
+            "normal_scheduler.selected, RuntimeSelectedOwnerKind::Fifo",
+            "runtime.take_leader_wire_runtime_terminals().is_empty()",
+            "runtime.queued_commands(), 2",
+            "AdapterEffect::FetchBody",
+            "runtime.queued_commands(), 1",
+            "remaining == &intervening_certificate",
         ),
     )
 

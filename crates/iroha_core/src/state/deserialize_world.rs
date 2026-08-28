@@ -3411,6 +3411,7 @@ impl SoracloudInrouPersistedStateV1<'_> {
         }
 
         let mut inrou_reservation_usage = BTreeMap::<AccountId, (u32, u64, u64, u64)>::new();
+        let mut inrou_available_hosts = BTreeSet::<AccountId>::new();
         for (key, placement) in inrou_service_placements.iter() {
             placement.validate().map_err(|error| {
                 invalid_soracloud_state("soracloud_inrou_service_placements", error.to_string())
@@ -3549,38 +3550,60 @@ impl SoracloudInrouPersistedStateV1<'_> {
                         ),
                     ));
                 }
-                let capability = inrou_host_capabilities
-                    .get(&assignment.validator_account_id)
+                if !admitted_bundle
+                    .service
+                    .placement_targets
+                    .iter()
+                    .any(|target| {
+                        target.validator_account_id == assignment.validator_account_id
+                            && target.peer_id == assignment.peer_id
+                    })
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_inrou_service_placements",
+                        "Inrou assignment must match an exact admitted placement target",
+                    ));
+                }
+                let selected_guest_artifact = inrou
+                    .guest_images
+                    .get(&assignment.selected_guest_isa)
+                    .map(|image| &image.published_artifact)
                     .ok_or_else(|| {
                         invalid_soracloud_state(
                             "soracloud_inrou_service_placements",
-                            "Inrou assignment is missing its authoritative host capability",
+                            "Inrou assignment selected guest ISA is absent from its admitted revision",
                         )
                     })?;
-                if !inrou
-                    .guest_images
-                    .get(&assignment.selected_guest_isa)
-                    .is_some_and(|image| {
-                        image.published_artifact == capability.trusted_guest_artifact
-                    })
-                    || capability.peer_id != assignment.peer_id
-                    || !capability
-                        .supported_guest_isas
-                        .contains(&assignment.selected_guest_isa)
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_inrou_service_placements",
-                        "Inrou assignment must exactly match its retained capability peer and a guest ISA supported by both host and revision",
-                    ));
-                }
-                if per_replica_cpu_millis > u64::from(capability.max_cpu_millis)
-                    || per_replica_memory_bytes > capability.max_memory_bytes
-                    || per_replica_storage_bytes > capability.max_storage_bytes
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_inrou_service_placements",
-                        "Inrou assignment's per-replica resources exceed its retained host capability",
-                    ));
+                if assignment.host_availability.is_available() {
+                    inrou_available_hosts.insert(assignment.validator_account_id.clone());
+                    let capability = inrou_host_capabilities
+                        .get(&assignment.validator_account_id)
+                        .ok_or_else(|| {
+                            invalid_soracloud_state(
+                                "soracloud_inrou_service_placements",
+                                "available Inrou assignment is missing its exact authoritative host capability",
+                            )
+                        })?;
+                    if capability.peer_id != assignment.peer_id
+                        || !capability
+                            .supported_guest_isas
+                            .contains(&assignment.selected_guest_isa)
+                        || selected_guest_artifact != &capability.trusted_guest_artifact
+                    {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_inrou_service_placements",
+                            "available Inrou assignment must exactly match its retained capability peer, selected guest ISA, and trusted artifact",
+                        ));
+                    }
+                    if per_replica_cpu_millis > u64::from(capability.max_cpu_millis)
+                        || per_replica_memory_bytes > capability.max_memory_bytes
+                        || per_replica_storage_bytes > capability.max_storage_bytes
+                    {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_inrou_service_placements",
+                            "available Inrou assignment's per-replica resources exceed its retained host capability",
+                        ));
+                    }
                 }
                 let usage = inrou_reservation_usage
                     .entry(assignment.validator_account_id.clone())
@@ -3620,14 +3643,15 @@ impl SoracloudInrouPersistedStateV1<'_> {
         for (validator_account_id, (replicas, cpu_millis, memory_bytes, storage_bytes)) in
             inrou_reservation_usage
         {
-            let capability = inrou_host_capabilities
-                .get(&validator_account_id)
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_inrou_service_placements",
-                        "Inrou reservation aggregate has no retained host capability",
-                    )
-                })?;
+            if !inrou_available_hosts.contains(&validator_account_id) {
+                continue;
+            }
+            let Some(capability) = inrou_host_capabilities.get(&validator_account_id) else {
+                return Err(invalid_soracloud_state(
+                    "soracloud_inrou_service_placements",
+                    "available Inrou reservation aggregate has no retained host capability",
+                ));
+            };
             if replicas > u32::from(capability.max_hosted_replica_capacity)
                 || cpu_millis > u64::from(capability.max_cpu_millis)
                 || memory_bytes > capability.max_memory_bytes
@@ -7029,6 +7053,8 @@ fn parse_world(
         .validate_sccp_registry()?;
     let sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1> =
         take_required(&mut map, "sccp_registry")?;
+    let sccp_route_liabilities: Storage<SccpRouteKeyV1, SccpRouteLiabilityV1> =
+        take_required(&mut map, "sccp_route_liabilities")?;
     let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
     let sccp_outbound_pending_messages = take_required(&mut map, "sccp_outbound_pending_messages")?;
     let sccp_outbound_message_locator = take_required(&mut map, "sccp_outbound_message_locator")?;
@@ -7395,6 +7421,7 @@ fn parse_world(
         axt_replay_ledger,
         axt_handle_budget_ledger,
         sccp_registry,
+        sccp_route_liabilities,
         sccp_outbound_pending_usage,
         sccp_outbound_pending_messages,
         sccp_outbound_message_locator,
@@ -7939,7 +7966,6 @@ fn build_state(
     #[cfg(feature = "telemetry")]
     let telemetry_seed = telemetry.clone();
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
-    let streaming_storage_paths = StreamingStoragePaths::default();
     let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
     let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
     let restored_height = u64::try_from(block_hashes.committed_height()).map_err(|error| {
@@ -8066,7 +8092,6 @@ fn build_state(
         pipeline_ivm_prepared_cache: parking_lot::RwLock::new(
             PreparedContractCache::with_capacity(pipeline_cache_size),
         ),
-        streaming_storage_paths,
         crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
         nexus: parking_lot::RwLock::new(nexus),
         lane_incarnations: parking_lot::RwLock::new(lane_incarnations),

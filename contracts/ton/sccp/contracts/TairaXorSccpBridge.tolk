@@ -119,41 +119,29 @@ fun dispatchRefund(storage: BridgeStorage, refundId: uint256, pending: PendingRe
     request.send(SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
 }
 
-fun refundIdentity(queryId: uint64, owner: address, amount: coins): uint256 {
-    val ownerBytes = canonicalTonAddress36(owner);
-    val preimage = beginCell()
-        .storeSlice("sccp:ton:refund:v1".literalSlice())
-        .storeUint(queryId, 64)
-        .storeSlice(ownerBytes.beginParse())
-        .storeCoins(amount)
-        .endCell();
-    val id = keccak256One(preimage.beginParse());
-    assert (id != 0) throw SccpErrors.InvalidMessage;
-    return id;
-}
-
 fun reserveRefund(
     mutate storage: BridgeStorage,
     queryId: uint64,
     owner: address,
     amount: coins,
 ) {
-    val refundId = refundIdentity(queryId, owner, amount);
+    assert (storage.refundSequence != 0xffffffffffffffff) throw SccpErrors.NonceExhausted;
+    val refundId = sccpRefundIdentity(storage.refundSequence, queryId, owner, amount);
+    storage.refundSequence += 1;
     var pendingState = storage.pending.load();
-    if (!pendingState.refunds.exists(refundId)) {
-        pendingState
-            .refunds
-            .set(
-                refundId,
-                (PendingRefund {
-                    queryId,
-                    recipientOwner: owner,
-                    jettonAmount: amount,
-                }).toCell(),
-            );
-        storage.pending = pendingState.toCell();
-        storage.save();
-    }
+    assert (!pendingState.refunds.exists(refundId)) throw SccpErrors.Replay;
+    pendingState
+        .refunds
+        .set(
+            refundId,
+            (PendingRefund {
+                queryId,
+                recipientOwner: owner,
+                jettonAmount: amount,
+            }).toCell(),
+        );
+    storage.pending = pendingState.toCell();
+    storage.save();
     dispatchRefund(storage, refundId, pendingState.refunds.mustGet(refundId).load());
 }
 
@@ -168,6 +156,7 @@ fun onInternalMessage(in: InMessage) {
     match (msg) {
         SccpFinalizeFromTaira => {
             assert (in.valueCoins >= 2 * SCCP_OPERATION_VALUE) throw SccpErrors.NotEnoughGas;
+            assert (isCanonicalSccpMessageVersion(msg.version)) throw SccpErrors.InvalidMessage;
             var storage = BridgeStorage.load();
             val config = assertBridgeConfiguration(storage);
             val parsed = parseTairaToTonPayload(msg.canonicalPayload, config.routeRevision);
@@ -235,6 +224,7 @@ fun onInternalMessage(in: InMessage) {
         }
 
         TransferNotificationForRecipient => {
+            assert (in.valueCoins >= 2 * SCCP_OPERATION_VALUE) throw SccpErrors.NotEnoughGas;
             var storage = BridgeStorage.load();
             val config = assertBridgeConfiguration(storage);
             assert (
@@ -244,6 +234,10 @@ fun onInternalMessage(in: InMessage) {
                 msg.transferInitiator != null && msg.jettonAmount != 0
             ) throw SccpErrors.InvalidMessage;
             val owner = msg.transferInitiator!;
+            if (owner.getWorkchain() != SCCP_WORKCHAIN) {
+                reserveRefund(mutate storage, msg.queryId, owner, msg.jettonAmount);
+                return;
+            }
             val payloadSlice = decodeForwardPayload(msg.forwardPayload);
             val exactShape = payloadSlice.remainingBitsCount() == 32 + 16 + 64 &&
             payloadSlice.remainingRefsCount() == 1 &&
@@ -264,8 +258,10 @@ fun onInternalMessage(in: InMessage) {
             val currentNonce = storage.nonces.exists(owner)
                 ? storage.nonces.mustGet(owner)
                 : 0 as uint64;
-            assert (request.expectedNonce == currentNonce) throw SccpErrors.InvalidNonce;
-            assert (currentNonce != 0xffffffffffffffff) throw SccpErrors.NonceExhausted;
+            if (!sccpOutboundNonceCanAdvance(request.expectedNonce, currentNonce)) {
+                reserveRefund(mutate storage, msg.queryId, owner, msg.jettonAmount);
+                return;
+            }
             val canonical = buildTonToTairaPayload(
                 owner,
                 request.tairaRecipient,
@@ -278,7 +274,10 @@ fun onInternalMessage(in: InMessage) {
             val laneHash = config.routeHashes.load().sourceLaneHash;
             val sourceEventDigest = sccpSourceEventDigest(laneHash, messageId, payloadHash);
             var replay = storage.replay.load();
-            assert (!replay.outbound.exists(messageId)) throw SccpErrors.Replay;
+            if (replay.outbound.exists(messageId)) {
+                reserveRefund(mutate storage, msg.queryId, owner, msg.jettonAmount);
+                return;
+            }
             var pendingState = storage.pending.load();
             val canonicalCell = canonical.toCell();
             val pending: PendingBurn = {
@@ -382,6 +381,7 @@ fun onInternalMessage(in: InMessage) {
         }
 
         SccpRetry => {
+            assert (sccpRetryValueIsSufficient(in.valueCoins)) throw SccpErrors.NotEnoughGas;
             val storage = BridgeStorage.load();
             assertBridgeConfiguration(storage);
             val pendingState = storage.pending.load();

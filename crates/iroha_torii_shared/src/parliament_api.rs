@@ -8,8 +8,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::isi::governance::{
-    MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1,
-    PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1, PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1,
+    MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1, PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1,
     PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1, ParliamentLifecycleTransitionKindV1,
     ParliamentLifecycleTransitionV1,
 };
@@ -20,8 +19,9 @@ use iroha_data_model::{
     governance::types::{
         BallotAttemptId, BallotAttemptStatusV1, BodyInstanceId, BodyInstanceStatusV1,
         GovernanceAttemptId, GovernanceAttemptV1, GovernanceCertificateV1,
-        GovernanceExpectedHeadV1, MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1, ParliamentBody,
-        ParliamentNoResultKindV1, ProposalContentId, ProposalKind, TleKeySessionId,
+        GovernanceExpectedHeadV1, MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1,
+        PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1, ParliamentBody, ParliamentNoResultKindV1,
+        ProposalContentId, ProposalKind, TleKeySessionId,
     },
     parliament_casting::{
         ParliamentTimedOvnCastingContextBindingV1,

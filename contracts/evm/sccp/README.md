@@ -57,7 +57,9 @@ that address as its immutable `bridge`, and then deploys the route at the exact
 precomputed address with the exact token address. The route constructor rejects
 token/route readback, code, policy, or role drift before storing any binding.
 There is no privileged initialization window or mutable bridge setter. The
-revision is encoded
+constructor also requires one positive u128-sized `maxWrappedSupply`, stores it
+immutably, commits it to `routeConfigHash`, and rejects any mint that would make
+the wrapped token's total supply exceed that ceiling. The revision is encoded
 immediately after the Transfer nonce and is included in `routeConfigHash`, so
 nonce reuse by a replacement route cannot collide with an older route's
 message identity.
@@ -106,9 +108,10 @@ backend, verifier address, value-moving route address, verifier runtime
 code hash, verifying-key hash, audited semantic-profile hash, and governed SORA
 finality-anchor hash. The separate route-configuration signal also commits all
 of those policy roles plus the governed token identity, token runtime code
-hash, both lane hashes, network profile, and route revision. Proofs are
-therefore not portable between policy revisions, route contracts, or route
-revisions even if the verifier is shared. Route constructors take one typed
+hash, both lane hashes, network profile, route revision, and maximum wrapped
+supply. Proofs are therefore not portable between supply caps, policy
+revisions, route contracts, or route revisions even if the verifier is shared.
+Route constructors take one typed
 `VerifierPolicyV1` tuple and reject zero, aliased, or getter-mismatched roles.
 Governed destination deployment records carry the same tuple as required
 `outbound_proof_policy`; policy-less JSON and Norito records are invalid.

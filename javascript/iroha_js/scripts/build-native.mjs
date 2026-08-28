@@ -247,18 +247,27 @@ function canonicalBuildInputs(repoRoot, env) {
     join(repoRoot, "Cargo.toml"),
     "Native build root Cargo.toml",
   );
-  const expectedLock = join(repoRoot, "Cargo.lock");
-  if (env[NATIVE_BUILD_CARGO_LOCK_ENV] !== expectedLock) {
+  const configuredLock = env[NATIVE_BUILD_CARGO_LOCK_ENV];
+  if (typeof configuredLock !== "string" || configuredLock.length === 0) {
     throw new Error(
       "Native build requires " +
         NATIVE_BUILD_CARGO_LOCK_ENV +
-        " to name the root Cargo.lock.",
+        " to name an absolute canonical Cargo.lock.",
     );
   }
   const cargoLock = canonicalRegularFile(
-    env[NATIVE_BUILD_CARGO_LOCK_ENV],
-    "Native build root Cargo.lock",
+    configuredLock,
+    "Native build Cargo.lock",
   );
+  if (basename(cargoLock) !== "Cargo.lock") {
+    throw new Error("Native build Cargo lock path must end in Cargo.lock.");
+  }
+  const rootLock = join(repoRoot, "Cargo.lock");
+  if (cargoLock !== rootLock && isPathInside(repoRoot, cargoLock)) {
+    throw new Error(
+      "Native build external Cargo.lock must remain outside the source tree.",
+    );
+  }
   return Object.freeze({ cargoLock, cargoManifest });
 }
 

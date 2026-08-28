@@ -1046,6 +1046,23 @@ fn hijiri_quote_binding_is_mandatory_and_canonical_only_while_active() {
     );
 }
 #[test]
+fn hijiri_quote_hash_only_metadata_is_detected_and_rejected_as_incomplete() {
+    let policy = policy(&account(3));
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        Name::from_str(VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY).expect("metadata key"),
+        Json::new("ab".repeat(32)),
+    );
+    let transaction = tx(1, Vec::new(), metadata);
+
+    assert!(has_validation_fee_metadata(transaction.metadata()));
+    assert!(transaction_has_validation_fee_metadata(&transaction));
+    assert_eq!(
+        enforce_policy(&transaction, &policy),
+        Err(ValidationFeeAdmissionError::MissingPolicyVersionMetadata)
+    );
+}
+#[test]
 fn active_policy_rejects_raw_contract_and_ivm_executables_fail_closed() {
     let treasury = account(3);
     let policy = policy(&treasury);

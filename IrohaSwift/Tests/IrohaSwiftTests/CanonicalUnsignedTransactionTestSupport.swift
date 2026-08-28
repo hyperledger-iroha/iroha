@@ -11,7 +11,7 @@ enum CanonicalUnsignedTransactionTestSupport {
     timeToLiveMs: UInt64?,
     nonce: UInt32? = nil,
     feePayment: FeePaymentIntent,
-    admissionIntent: TransactionAdmissionIntentV1 = .queuePlanSynced,
+    admissionIntent: TransactionAdmissionIntentV1 = .ordinary,
     metadata: [String: ToriiJSONValue] = [:]
   ) throws -> Data {
     var domain = CompactNoritoWriter()
@@ -64,7 +64,10 @@ enum CanonicalUnsignedTransactionTestSupport {
     request: ToriiContractCallRequest,
     contractAddress: String,
     codeHashHex: String,
-    networkId: NetworkId
+    networkId: NetworkId,
+    feePayment: FeePaymentIntent? = nil,
+    admissionIntent: TransactionAdmissionIntentV1 = .ordinary,
+    additionalMetadata: [String: ToriiJSONValue] = [:]
   ) throws -> Data {
     var invocation = CompactNoritoWriter()
     invocation.writeField(CompactNorito.encodeString(contractAddress))
@@ -75,8 +78,12 @@ enum CanonicalUnsignedTransactionTestSupport {
     invocation.writeField(CompactNorito.encodeString(request.entrypoint))
 
     var arguments = CompactNoritoWriter()
-    if let payload = request.payload {
-      let bytes = Data(try CanonicalNorito.jsonString(from: payload).utf8)
+    if request.payload != nil {
+      guard let bytes = request.draftIntent?.invocation.arguments else {
+        throw ToriiClientError.invalidPayload(
+          "test parameterized contract request is missing draft-intent arguments"
+        )
+      }
       var record = CompactNoritoWriter()
       record.writeUInt64LE(UInt64(bytes.count))
       record.writeBytes(bytes)
@@ -91,26 +98,43 @@ enum CanonicalUnsignedTransactionTestSupport {
     executable.writeUInt32LE(1)
     executable.writeField(invocation.data)
 
-    var metadata: [String: ToriiJSONValue] = [
-      "contract_address": .string(contractAddress),
-      "contract_code_hash": .string(codeHashHex),
-      "contract_entrypoint": .string(request.entrypoint),
-    ]
+    var metadata = request.metadata
+    metadata["contract_address"] = .string(contractAddress)
+    metadata["contract_code_hash"] = .string(codeHashHex)
+    metadata["contract_entrypoint"] = .string(request.entrypoint)
     if let alias = request.contractAlias {
       metadata["contract_alias"] = .string(alias)
     }
     if let payload = request.payload {
       metadata["contract_payload"] = payload
     }
+    metadata.merge(additionalMetadata) { _, replacement in replacement }
     return try transactionPayload(
       networkId: networkId,
       authority: request.authority,
       creationTimeMs: request.creationTimeMs!,
       executable: executable.data,
       timeToLiveMs: request.transactionTtlMs,
-      feePayment: request.feePayment,
+      feePayment: feePayment ?? request.feePayment,
+      admissionIntent: admissionIntent,
       metadata: metadata
     )
+  }
+
+  static func contractArgumentRecord(for payload: ToriiJSONValue) throws -> Data {
+    Data(try CanonicalNorito.jsonString(from: payload).utf8)
+  }
+
+  static func instructionExecutable(_ instructionPairs: [Data]) -> Data {
+    var instructions = CompactNoritoWriter()
+    instructions.writeUInt64LE(UInt64(instructionPairs.count))
+    for instruction in instructionPairs {
+      instructions.writeField(instruction)
+    }
+    var executable = CompactNoritoWriter()
+    executable.writeUInt32LE(0)
+    executable.writeField(instructions.data)
+    return executable.data
   }
 
   static func assetPayload(

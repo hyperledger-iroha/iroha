@@ -40524,6 +40524,28 @@ impl BlockStore {
     pub fn new(store_path: impl AsRef<Path>) -> Self {
         Self::with_fsync(store_path, FsyncMode::Always, FSYNC_INTERVAL)
     }
+    /// Open an existing block store for inspection without creating or
+    /// requesting write access to any canonical journal.
+    ///
+    /// All three journals are opened eagerly so a missing or non-regular file
+    /// fails before an inspector consumes a partial store.
+    ///
+    /// # Errors
+    /// Returns an I/O error when a canonical journal cannot be opened read-only.
+    pub fn open_read_only(store_path: impl AsRef<Path>) -> Result<Self> {
+        let mut store = Self::with_fsync(store_path, FsyncMode::Always, FSYNC_INTERVAL);
+        store.read_only = true;
+        store.data_file = Some(FileWrap::open_read_only(
+            store.path_to_blockchain.join(DATA_FILE_NAME),
+        )?);
+        store.index_file = Some(FileWrap::open_read_only(
+            store.path_to_blockchain.join(INDEX_FILE_NAME),
+        )?);
+        store.hashes_file = Some(FileWrap::open_read_only(
+            store.path_to_blockchain.join(HASHES_FILE_NAME),
+        )?);
+        Ok(store)
+    }
     /// Create a new block store in `path` with an explicit fsync policy.
     pub fn with_fsync(
         store_path: impl AsRef<Path>,
@@ -40534,6 +40556,7 @@ impl BlockStore {
         Self {
             da_blocks_dir: path_to_blockchain.join(DA_BLOCKS_DIR_NAME),
             path_to_blockchain,
+            read_only: false,
             data_file: None,
             index_file: None,
             hashes_file: None,
@@ -42057,21 +42080,33 @@ impl BlockStore {
     fn ensure_data_file(&mut self) -> Result<&mut FileWrap> {
         if self.data_file.is_none() {
             let path = self.path_to_blockchain.join(DATA_FILE_NAME);
-            self.data_file = Some(FileWrap::open_read_write(path)?);
+            self.data_file = Some(if self.read_only {
+                FileWrap::open_read_only(path)?
+            } else {
+                FileWrap::open_read_write(path)?
+            });
         }
         Ok(self.data_file.as_mut().expect("handle just initialised"))
     }
     fn ensure_index_file(&mut self) -> Result<&mut FileWrap> {
         if self.index_file.is_none() {
             let path = self.path_to_blockchain.join(INDEX_FILE_NAME);
-            self.index_file = Some(FileWrap::open_read_write(path)?);
+            self.index_file = Some(if self.read_only {
+                FileWrap::open_read_only(path)?
+            } else {
+                FileWrap::open_read_write(path)?
+            });
         }
         Ok(self.index_file.as_mut().expect("handle just initialised"))
     }
     fn ensure_hashes_file(&mut self) -> Result<&mut FileWrap> {
         if self.hashes_file.is_none() {
             let path = self.path_to_blockchain.join(HASHES_FILE_NAME);
-            self.hashes_file = Some(FileWrap::open_read_write(path)?);
+            self.hashes_file = Some(if self.read_only {
+                FileWrap::open_read_only(path)?
+            } else {
+                FileWrap::open_read_write(path)?
+            });
         }
         Ok(self.hashes_file.as_mut().expect("handle just initialised"))
     }
@@ -43488,6 +43523,47 @@ impl BlockStore {
     #[allow(clippy::integer_division)]
     pub fn read_index_count(&mut self) -> Result<u64> {
         self.read_index_count_from_len()
+    }
+    /// Read pipeline recovery metadata for a canonical persisted block.
+    ///
+    /// This read-only tooling path uses Kura's current indexed-sidecar layout and
+    /// returns metadata only when its embedded height and block hash match the
+    /// canonical block journals. Missing, malformed, or stale sidecars return
+    /// `Ok(None)`.
+    ///
+    /// # Errors
+    /// Returns an error when the canonical block journals cannot be read.
+    pub fn read_pipeline_metadata(
+        &mut self,
+        height: u64,
+    ) -> Result<Option<PipelineRecoverySidecar>> {
+        if height == 0 || height > self.read_index_count()? {
+            return Ok(None);
+        }
+        let pipeline_dir = self.path_to_blockchain.join(PIPELINE_DIR_NAME);
+        let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+        let entry_byte_limit =
+            u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES).unwrap_or(u64::MAX);
+        let Some(sidecar) = Kura::read_indexed_sidecar_from_paths_with_recovery_and_limit(
+            height,
+            &data_path,
+            &index_path,
+            norito::decode_canonical::<PipelineRecoverySidecar>,
+            "pipeline sidecar",
+            false,
+            entry_byte_limit,
+        ) else {
+            return Ok(None);
+        };
+        if sidecar.height != height {
+            return Ok(None);
+        }
+        let expected_hash = self
+            .read_block_hashes(height.saturating_sub(1), 1)?
+            .into_iter()
+            .next();
+        Ok((expected_hash == Some(sidecar.block_hash)).then_some(sidecar))
     }
     /// Return the durable index count as recorded by the commit marker.
     ///

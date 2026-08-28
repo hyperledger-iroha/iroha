@@ -1,5 +1,5 @@
 # Sample config for iroha3-nexus (generated via cargo xtask kagami-profiles)
-chain = "iroha3-nexus"
+chain = "00000000-0000-0000-0000-000000000753"
 public_key = "ea0130B48BDF428DF3CCCA7347BD63FB81812CA09315AF56E867117236984D8F80477F8D909C9B1771032F04009AC96536FAC0"
 private_key_file = "/run/secrets/iroha/iroha3-nexus-peer-0-validator-private-key"
 soranet_transport_public_key = "ed01201F60DE7C82F77FF1EA9AA2DFC60166A0DF904A771DCBFF36186EFAE8AC8324D3"

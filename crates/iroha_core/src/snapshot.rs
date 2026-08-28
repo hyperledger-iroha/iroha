@@ -1584,6 +1584,10 @@ impl SnapshotBootstrapLineageAuthority {
             kind: SnapshotBootstrapLineageAuthorityKind::NormallySignedCarriedLineage,
         }
     }
+    #[cfg(test)]
+    pub(crate) fn normally_signed_for_testing() -> Self {
+        Self::normally_signed_carried_lineage()
+    }
     pub(crate) fn permits_carried_lineage(self) -> bool {
         self.kind == SnapshotBootstrapLineageAuthorityKind::NormallySignedCarriedLineage
     }

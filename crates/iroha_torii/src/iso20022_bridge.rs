@@ -2182,9 +2182,9 @@ impl Iso20022BridgeRuntime {
         &self,
         message_id: &str,
         detail: Option<String>,
-    ) -> Result<(), IsoStatusHistoryLimitError> {
+    ) -> Result<IsoMessageStatus, IsoStatusHistoryLimitError> {
         let now = Instant::now();
-        if let Some(mut existing) = self.records.get_mut(message_id) {
+        let status = if let Some(mut existing) = self.records.get_mut(message_id) {
             let old_hash = existing.transaction_hash.clone();
             existing.try_transition(|record| {
                 record.transaction_hash = None;
@@ -2198,11 +2198,13 @@ impl Iso20022BridgeRuntime {
                 record.change_reason_codes.clear();
                 record.rejection_reason_code = None;
             })?;
+            let status = Self::status_snapshot(message_id, &existing);
             drop(existing);
             if let Some(old_hash) = old_hash {
                 self.tx_hash_index
                     .remove_if(&old_hash, |_, owner| owner == message_id);
             }
+            status
         } else {
             let mut record = IsoMessageRecord::pending(now);
             record.try_transition(|candidate| {
@@ -2210,10 +2212,12 @@ impl Iso20022BridgeRuntime {
                 candidate.detail = detail;
                 candidate.status_history.clear();
             })?;
+            let status = Self::status_snapshot(message_id, &record);
             self.records.insert(message_id.to_owned(), record);
-        }
+            status
+        };
         self.persist_message(message_id);
-        Ok(())
+        Ok(status)
     }
     /// Mark the provided message as rejected and record the reason.
     ///
@@ -2317,6 +2321,27 @@ impl Iso20022BridgeRuntime {
             status_history: record.status_history.clone(),
         }
     }
+    /// Return the stable group-header identity for an inbound payment message.
+    ///
+    /// Both pacs.008 and pacs.009 lifecycle reports correlate through
+    /// `GrpHdr/MsgId`; the application-header `BizMsgIdr` remains a separate
+    /// replay identity in [`IsoMessageMetadata`].
+    pub(crate) fn payment_message_id(
+        message_type: &str,
+        parsed: &ParsedMessage,
+    ) -> Result<String, MsgError> {
+        if !matches!(message_type, "pacs.008" | "pacs.009") {
+            return Err(MsgError::UnknownMessageType);
+        }
+        let message_id = parsed
+            .field_text("MsgId")
+            .ok_or(MsgError::MissingField("MsgId"))?
+            .trim();
+        if message_id.is_empty() {
+            return Err(MsgError::MissingField("MsgId"));
+        }
+        Ok(message_id.to_owned())
+    }
     /// Determine the durable identifier for an inbound lifecycle message.
     pub(crate) fn lifecycle_message_id(
         message_type: &str,
@@ -2364,6 +2389,19 @@ impl Iso20022BridgeRuntime {
         message_type: &str,
         parsed: &ParsedMessage,
     ) -> Result<IsoLifecycleOutcome, MsgError> {
+        self.apply_inbound_lifecycle_message_with_status(message_id, message_type, parsed)
+            .map(|(outcome, _)| outcome)
+    }
+    /// Apply a lifecycle message and return its response snapshot atomically.
+    ///
+    /// The returned snapshot remains valid even if bounded durable compaction
+    /// evicts the rich lifecycle record immediately after this critical section.
+    pub(crate) fn apply_inbound_lifecycle_message_with_status(
+        &self,
+        message_id: &str,
+        message_type: &str,
+        parsed: &ParsedMessage,
+    ) -> Result<(IsoLifecycleOutcome, IsoMessageStatus), MsgError> {
         let _state_guard = self.state_lock.lock();
         let referenced_message_id = lifecycle_referenced_message_id(message_type, parsed)?
             .map(ToOwned::to_owned)
@@ -2403,23 +2441,27 @@ impl Iso20022BridgeRuntime {
                 return Err(MsgError::ValidationFailed);
             }
         }
-        self.mark_lifecycle_accepted(
-            message_id,
-            Some(format!(
-                "recorded inbound ISO 20022 {message_type} lifecycle message"
-            )),
-        )
-        .map_err(|error| {
-            self.report_status_history_limit(message_id, error);
-            MsgError::ValidationFailed
-        })?;
-        Ok(IsoLifecycleOutcome {
-            referenced_message_id,
-            referenced_message_known,
-            lifecycle_status_code: status_code,
-            lifecycle_reason_code: reason_code,
-            action,
-        })
+        let status = self
+            .mark_lifecycle_accepted(
+                message_id,
+                Some(format!(
+                    "recorded inbound ISO 20022 {message_type} lifecycle message"
+                )),
+            )
+            .map_err(|error| {
+                self.report_status_history_limit(message_id, error);
+                MsgError::ValidationFailed
+            })?;
+        Ok((
+            IsoLifecycleOutcome {
+                referenced_message_id,
+                referenced_message_known,
+                lifecycle_status_code: status_code,
+                lifecycle_reason_code: reason_code,
+                action,
+            },
+            status,
+        ))
     }
     /// Create the exact unsigned transfer payload for a validated pacs.008 message.
     pub fn build_pacs008_payload(

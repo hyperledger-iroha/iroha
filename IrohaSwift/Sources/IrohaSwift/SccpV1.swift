@@ -21,6 +21,8 @@ public enum SccpNetworkV1: String, CaseIterable, Sendable {
     case tronMainnet = "tron-mainnet"
     case tronNile = "tron-nile"
     case tronShasta = "tron-shasta"
+    case tonMainnet = "ton-mainnet"
+    case tonTestnet = "ton-testnet"
 
     public var tag: UInt8 {
         switch self {
@@ -32,6 +34,8 @@ public enum SccpNetworkV1: String, CaseIterable, Sendable {
         case .tronMainnet: 10
         case .tronNile: 11
         case .tronShasta: 12
+        case .tonMainnet: 14
+        case .tonTestnet: 15
         }
     }
 
@@ -40,6 +44,7 @@ public enum SccpNetworkV1: String, CaseIterable, Sendable {
         case .soraTaira: 0
         case .ethereumMainnet, .ethereumSepolia: 1
         case .bscMainnet, .bscTestnet: 2
+        case .tonMainnet, .tonTestnet: 4
         case .tronMainnet, .tronNile, .tronShasta: 5
         }
     }
@@ -74,12 +79,14 @@ public enum SccpCodecV1: UInt8, CaseIterable, Sendable {
     case canonicalText = 1
     case evmAddress20 = 2
     case tronAddress21 = 5
+    case tonAccount36 = 7
 
     public var wireKey: String {
         switch self {
         case .canonicalText: "canonical_text"
         case .evmAddress20: "evm_address20"
         case .tronAddress21: "tron_address21"
+        case .tonAccount36: "ton_account36"
         }
     }
 
@@ -106,6 +113,9 @@ public enum SccpCodecV1: UInt8, CaseIterable, Sendable {
             valid = value.count == 20 && value.contains { $0 != 0 }
         case .tronAddress21:
             valid = value.count == 21 && value.first == 0x41 && value.dropFirst().contains { $0 != 0 }
+        case .tonAccount36:
+            valid = value.count == 36 && value.prefix(4).allSatisfy { $0 == 0 }
+                && value.dropFirst(4).contains { $0 != 0 }
         }
         guard valid else {
             throw SccpV1Error.invalid("value does not match SCCP codec \(wireKey)")
@@ -119,12 +129,14 @@ public enum SccpNativeBackendV1: String, CaseIterable, Sendable {
     case ethereumBeacon = "ethereum_beacon_v1"
     case bscParlia = "bsc_parlia_v1"
     case tronDpos = "tron_dpos_v1"
+    case tonMasterchain = "ton_masterchain_v1"
 
     public var backendLabel: String {
         switch self {
         case .ethereumBeacon: "bridge/sccp/native/ethereum-beacon-v1"
         case .bscParlia: "bridge/sccp/native/bsc-parlia-v1"
         case .tronDpos: "bridge/sccp/native/tron-dpos-v1"
+        case .tonMasterchain: "bridge/sccp/native/ton-masterchain-v1"
         }
     }
 
@@ -133,7 +145,33 @@ public enum SccpNativeBackendV1: String, CaseIterable, Sendable {
         case .ethereumBeacon: network == .ethereumMainnet || network == .ethereumSepolia
         case .bscParlia: network == .bscMainnet || network == .bscTestnet
         case .tronDpos: network == .tronMainnet || network == .tronNile || network == .tronShasta
+        case .tonMasterchain: network == .tonMainnet || network == .tonTestnet
         }
+    }
+}
+
+/// Canonical raw TON account identity. SCCP value-moving V1 contracts use workchain zero.
+public struct SccpTonAddressV1: Equatable, Hashable, Sendable {
+    public let workchain: Int32
+    public let account: Data
+
+    public init(workchain: Int32, account: Data) throws {
+        guard account.count == 32, account.contains(where: { $0 != 0 }) else {
+            throw SccpV1Error.invalid("TON account must be a nonzero 32-byte value")
+        }
+        self.workchain = workchain
+        self.account = Data(account)
+    }
+
+    public var isSccpBasechainContract: Bool { workchain == 0 }
+
+    /// Signed big-endian workchain followed by the raw account id, as used by codec 7.
+    public func canonicalAccount36() throws -> Data {
+        guard isSccpBasechainContract else {
+            throw SccpV1Error.invalid("SCCP TON contracts must use basechain workchain 0")
+        }
+        var value = workchain.bigEndian
+        return withUnsafeBytes(of: &value) { Data($0) } + account
     }
 }
 
@@ -142,6 +180,7 @@ public enum SccpNativeBackendV1: String, CaseIterable, Sendable {
 public enum SccpSourceEmitterV1: Equatable, Sendable {
     case evm(address: Data, runtimeCodeHash: Data, routeConfigHash: Data)
     case tron(address: Data, runtimeCodeHash: Data, routeConfigHash: Data)
+    case ton(address: SccpTonAddressV1, codeHash: Data, routeConfigHash: Data)
 
     public static func validatedEvm(address: Data, runtimeCodeHash: Data, routeConfigHash: Data) throws -> Self {
         try requireRole(address, count: 20, name: "address")
@@ -157,6 +196,16 @@ public enum SccpSourceEmitterV1: Equatable, Sendable {
         try requireRole(routeConfigHash, count: 32, name: "route_config_hash")
         try requireDistinct([runtimeCodeHash, routeConfigHash], label: "TRON emitter hash roles")
         return .tron(address: Data(address), runtimeCodeHash: Data(runtimeCodeHash), routeConfigHash: Data(routeConfigHash))
+    }
+
+    public static func validatedTon(address: SccpTonAddressV1, codeHash: Data, routeConfigHash: Data) throws -> Self {
+        guard address.isSccpBasechainContract else {
+            throw SccpV1Error.invalid("SCCP TON source emitter must use basechain workchain 0")
+        }
+        try requireRole(codeHash, count: 32, name: "code_hash")
+        try requireRole(routeConfigHash, count: 32, name: "route_config_hash")
+        try requireDistinct([codeHash, routeConfigHash], label: "TON emitter hash roles")
+        return .ton(address: address, codeHash: Data(codeHash), routeConfigHash: Data(routeConfigHash))
     }
 
     private static func requireRole(_ value: Data, count: Int, name: String) throws {
@@ -207,6 +256,20 @@ public enum SccpV1 {
             appendUInt32LE(0xcd86_90dc, to: &out)
         case .tronShasta:
             appendUInt32LE(0x94a9_059e, to: &out)
+        case .tonMainnet:
+            appendInt32LE(-239, to: &out)
+            appendInt32LE(-1, to: &out)
+            appendUInt64LE(0x8000_0000_0000_0000, to: &out)
+            appendUInt32LE(0, to: &out)
+            out.append(try! decodeLowerHex("17a3a92992aabea785a7a090985a265cd31f323d849da51239737e321fb05569"))
+            out.append(try! decodeLowerHex("5e994fcf4d425c0a6ce6a792594b7173205f740a39cd56f537defd28b48a0f6e"))
+        case .tonTestnet:
+            appendInt32LE(-3, to: &out)
+            appendInt32LE(-1, to: &out)
+            appendUInt64LE(0x8000_0000_0000_0000, to: &out)
+            appendUInt32LE(0, to: &out)
+            out.append(try! decodeLowerHex("823f81f306ff02694f935cf5021548e3ce2b86b529812af6a12148879e95a128"))
+            out.append(try! decodeLowerHex("67e20ac184b9e039a62667acc3f9c00f90f359a76738233379efa47604980ce8"))
         }
         return out
     }
@@ -304,6 +367,11 @@ public enum SccpV1 {
     }
 
     private static func appendUInt32LE(_ value: UInt32, to out: inout Data) {
+        var little = value.littleEndian
+        withUnsafeBytes(of: &little) { out.append(contentsOf: $0) }
+    }
+
+    private static func appendInt32LE(_ value: Int32, to out: inout Data) {
         var little = value.littleEndian
         withUnsafeBytes(of: &little) { out.append(contentsOf: $0) }
     }

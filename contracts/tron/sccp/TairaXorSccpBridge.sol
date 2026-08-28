@@ -6,6 +6,9 @@ import "../../evm/sccp/SccpExactTransferCodec.sol";
 
 interface ITairaXorTronToken {
     function bridge() external view returns (address);
+    function decimals() external view returns (uint8);
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
     function mint(address to, uint256 value) external returns (bool);
     function burnFrom(address from, uint256 value) external returns (bool);
 }
@@ -42,6 +45,7 @@ contract TairaXorSccpBridge {
         VerifierPolicyV1 verifierPolicy;
         uint8 tronProfile;
         uint32 routeRevision;
+        uint256 maxWrappedSupply;
         bytes32 networkId;
         bytes32 sourceLaneHash;
         bytes32 destinationLaneHash;
@@ -69,6 +73,7 @@ contract TairaXorSccpBridge {
     uint8 public immutable tronProfile;
     bytes32 public immutable networkId;
     uint32 public immutable routeRevision;
+    uint256 public immutable maxWrappedSupply;
     bytes32 public immutable tokenCodeHash;
     bytes32 public immutable verifierCodeHash;
     bytes32 public immutable verifierKeyHash;
@@ -115,7 +120,8 @@ contract TairaXorSccpBridge {
         address tokenAddress,
         VerifierPolicyV1 memory configuredVerifierPolicy,
         uint8 configuredTronProfile,
-        uint32 configuredRouteRevision
+        uint32 configuredRouteRevision,
+        uint256 configuredMaxWrappedSupply
     ) {
         require(
             tokenAddress != address(0) && configuredVerifierPolicy.verifierAddress != address(0),
@@ -128,6 +134,10 @@ contract TairaXorSccpBridge {
         bytes32 configuredNetworkId = _networkIdWord(configuredTronProfile);
         require(bytes32(_chainId()) == configuredNetworkId, "Wrong TRON chain id");
         require(configuredRouteRevision != 0, "Route revision is required");
+        require(
+            configuredMaxWrappedSupply != 0 && configuredMaxWrappedSupply <= MAX_U128,
+            "Invalid wrapped supply cap"
+        );
         require(
             configuredVerifierPolicy.semanticProofProfileHash != bytes32(0),
             "Semantic proof profile hash is required"
@@ -169,6 +179,8 @@ contract TairaXorSccpBridge {
 
         ITairaXorTronToken configuredToken = ITairaXorTronToken(tokenAddress);
         require(configuredToken.bridge() == address(this), "Token route mismatch");
+        require(configuredToken.decimals() == 18, "Unexpected token decimals");
+        require(configuredToken.totalSupply() == 0, "Token supply must start at zero");
         bytes32 actualTokenCodeHash = _codeHash(tokenAddress);
         require(actualTokenCodeHash != bytes32(0) && actualTokenCodeHash != EMPTY_CODE_HASH,
             "Token contract is required");
@@ -186,6 +198,7 @@ contract TairaXorSccpBridge {
         deployment.verifierPolicy = configuredVerifierPolicy;
         deployment.tronProfile = configuredTronProfile;
         deployment.routeRevision = configuredRouteRevision;
+        deployment.maxWrappedSupply = configuredMaxWrappedSupply;
         deployment.networkId = configuredNetworkId;
         deployment.sourceLaneHash = inboundLaneHash;
         deployment.destinationLaneHash = outboundLaneHash;
@@ -197,6 +210,7 @@ contract TairaXorSccpBridge {
         tronProfile = configuredTronProfile;
         networkId = configuredNetworkId;
         routeRevision = configuredRouteRevision;
+        maxWrappedSupply = configuredMaxWrappedSupply;
         tokenCodeHash = actualTokenCodeHash;
         verifierCodeHash = configuredVerifierPolicy.verifierCodeHash;
         verifierKeyHash = configuredVerifierPolicy.verifierKeyHash;
@@ -227,7 +241,8 @@ contract TairaXorSccpBridge {
             keccak256(ASSET_ID),
             keccak256(ROUTE_ID),
             deployment.routeRevision,
-            TAIRA_TO_TOKEN_SCALE
+            TAIRA_TO_TOKEN_SCALE,
+            deployment.maxWrappedSupply
         ));
         return keccak256(abi.encode(
             ROUTE_CONFIG_SEPARATOR,
@@ -317,7 +332,7 @@ contract TairaXorSccpBridge {
 
         transferNonces[msg.sender] = nonce + 1;
         usedSourceMessages[messageId] = true;
-        require(token.burnFrom(msg.sender, tokenAmount), "Token burn failed");
+        _mutateTokenExact(msg.sender, tokenAmount, false);
         emit SccpTransfer(
             sourceLaneHash,
             messageId,
@@ -355,8 +370,34 @@ contract TairaXorSccpBridge {
         uint256 tokenAmount = tairaAmount * TAIRA_TO_TOKEN_SCALE;
 
         usedDestinationMessages[messageId] = true;
-        require(token.mint(recipient, tokenAmount), "Token mint failed");
+        _mutateTokenExact(recipient, tokenAmount, true);
         emit TairaXorMintFinalized(messageId, recipient, tokenAmount, canonicalPayloadHash);
+    }
+
+    function _mutateTokenExact(address account, uint256 amount, bool minting) private {
+        uint256 expectedSupply = token.totalSupply();
+        uint256 expectedBalance = token.balanceOf(account);
+        if (minting) {
+            require(
+                amount <= maxWrappedSupply
+                    && expectedSupply <= maxWrappedSupply - amount
+            );
+            require(
+                expectedSupply <= type(uint256).max - amount
+                    && expectedBalance <= type(uint256).max - amount
+            );
+            expectedSupply += amount;
+            expectedBalance += amount;
+            require(token.mint(account, amount));
+        } else {
+            require(expectedSupply >= amount && expectedBalance >= amount);
+            expectedSupply -= amount;
+            expectedBalance -= amount;
+            require(token.burnFrom(account, amount));
+        }
+        // Keep adapter failures reasonless: Solidity 0.7 has no custom errors,
+        // and the TVM production corridor enforces the 24 KiB runtime limit.
+        require(token.totalSupply() == expectedSupply && token.balanceOf(account) == expectedBalance);
     }
 
     /** Derive the exact source-event digest emitted by this route. */

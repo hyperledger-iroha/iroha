@@ -22,9 +22,11 @@ use sha2::Sha256;
 use std::{
     error::Error,
     fs,
+    io::Write as _,
     path::{Path, PathBuf},
     process::Command,
 };
+use zeroize::Zeroizing;
 #[derive(Debug, Clone)]
 pub(crate) struct KagamiProfileOptions {
     pub output: PathBuf,
@@ -417,16 +419,33 @@ fn bind_staged_context(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| format!("{} config filename is not UTF-8", spec.slug))?;
-    let private_key_hex = hex::encode(genesis_key.private_key().to_bytes().1);
+    let mut private_key_file = tempfile::Builder::new()
+        .prefix(".kagami-genesis-key-")
+        .tempfile_in(workdir)
+        .map_err(|err| {
+            format!(
+                "failed to create owner-only {} genesis signing key: {err}",
+                spec.slug
+            )
+        })?;
+    let private_key_record = Zeroizing::new(
+        format!("{}\n", ExposedPrivateKey(genesis_key.private_key().clone())).into_bytes(),
+    );
+    private_key_file
+        .write_all(private_key_record.as_slice())
+        .and_then(|()| private_key_file.as_file_mut().sync_all())
+        .map_err(|err| {
+            format!(
+                "failed to persist owner-only {} genesis signing key: {err}",
+                spec.slug
+            )
+        })?;
     let expected_public_key = genesis_key.public_key().to_string();
     let creation_time_ms = PROFILE_GENESIS_CREATION_TIME_MS.to_string();
     let output = Command::new(kagami_bin)
+        .args(["genesis", "sign", genesis_file, "--private-key-file"])
+        .arg(private_key_file.path())
         .args([
-            "genesis",
-            "sign",
-            genesis_file,
-            "--private-key",
-            &private_key_hex,
             "--expected-public-key",
             &expected_public_key,
             "--creation-time-ms",
@@ -1010,9 +1029,8 @@ fn write_peer_configs(
         );
         fs::write(
             bundle_root.join(peer_config_file_name(peer_index)),
-            &rendered,
+            rendered,
         )?;
-        fs::write(bundle_root.join(format!("peer{peer_index}.toml")), rendered)?;
     }
     Ok(())
 }
@@ -1088,11 +1106,7 @@ networks:
     )
 }
 fn peer_config_file_name(peer_index: usize) -> String {
-    if peer_index == 0 {
-        "config.toml".to_owned()
-    } else {
-        format!("config-peer-{peer_index}.toml")
-    }
+    format!("peer{peer_index}.toml")
 }
 fn render_readme(
     spec: &ProfileSpec,
@@ -1165,7 +1179,6 @@ Files:
 - genesis.public_key — canonical one-line verifier key for the signed genesis artifact
 - genesis.expected_hash — canonical checked `hash:<64 uppercase hex>#<CRC16>` NetworkId encoding the independently provisioned signed-header hash
 - verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json{verify_vrf_seed_arg}`
-- config.toml and config-peer-*.toml — compatibility names for the generated validator configs
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 - docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
 {runtime_key_note}Regenerate:
@@ -1354,7 +1367,7 @@ const PROFILES: &[ProfileSpec] = &[
     ProfileSpec {
         slug: "iroha3-nexus",
         profile_flag: "iroha3-nexus",
-        chain_id: "iroha3-nexus",
+        chain_id: "00000000-0000-0000-0000-000000000753",
         chain_discriminant: Some(753),
         min_peers: 4,
         requires_seed: true,
@@ -1846,7 +1859,7 @@ mod tests {
         }
     }
     #[test]
-    fn final_peer_configs_use_only_the_sibling_identity_file_and_prepared_names() {
+    fn final_peer_configs_use_only_canonical_prepared_names() {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("prepared-config-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
@@ -1861,16 +1874,23 @@ mod tests {
         )
         .expect("write prepared validator configs");
         for peer_index in 0..peers.len() {
-            let compatibility =
+            let prepared =
                 fs::read_to_string(bundle.path().join(peer_config_file_name(peer_index)))
-                    .expect("read compatibility config");
-            let prepared = fs::read_to_string(bundle.path().join(format!("peer{peer_index}.toml")))
-                .expect("read prepared config");
-            assert_eq!(compatibility, prepared);
+                    .expect("read prepared config");
             assert!(prepared.contains("expected_hash_file = \"genesis.expected_hash\""));
             assert!(!prepared.contains("expected_hash ="));
             assert!(!prepared.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
         }
+        assert!(
+            fs::read_dir(bundle.path())
+                .expect("list prepared config bundle")
+                .all(|entry| !entry
+                    .expect("read prepared entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("config")),
+            "compatibility config names must not be emitted"
+        );
     }
     #[test]
     fn readme_carries_profile_metadata() {
@@ -2169,7 +2189,7 @@ mod tests {
             rendered.matches("ipv4_address: 172.28.0.").count(),
             peers.len()
         );
-        assert!(rendered.contains("./config.toml:/config/config.toml:ro"));
+        assert!(rendered.contains("./peer0.toml:/config/config.toml:ro"));
         assert_eq!(
             rendered
                 .matches("./genesis.signed.nrt:/config/genesis.signed.nrt:ro")
@@ -2186,9 +2206,7 @@ mod tests {
         assert!(!rendered.contains("/run/iroha/genesis.expected_hash"));
         assert!(!rendered.contains("--genesis"));
         for peer_index in 1..peers.len() {
-            assert!(rendered.contains(&format!(
-                "./config-peer-{peer_index}.toml:/config/config.toml:ro"
-            )));
+            assert!(rendered.contains(&format!("./peer{peer_index}.toml:/config/config.toml:ro")));
         }
 
         let runtime_peers = build_peers(&PROFILES[1]).expect("build deterministic Nexus peers");

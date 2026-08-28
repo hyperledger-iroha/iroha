@@ -2,7 +2,7 @@
 
 use crate::{Outcome, RunArgs, tui};
 use clap::Parser;
-use color_eyre::eyre::{WrapErr as _, ensure};
+use color_eyre::eyre::{WrapErr as _, ensure, eyre};
 use iroha_config::parameters::actual;
 use iroha_crypto::{Hash, HashOf, PublicKey, sha256};
 use iroha_data_model::{
@@ -16,11 +16,19 @@ use iroha_genesis::{
 };
 use std::{
     collections::BTreeSet,
-    io::{BufWriter, Write},
+    fs::{self, OpenOptions},
+    io::{BufWriter, Read as _, Write},
     path::{Path, PathBuf},
 };
+use zeroize::Zeroizing;
 
 const TAIRA_VALIDATOR_COUNT: usize = 4;
+// Effective configs contain policy settings and paths, while large runtime artifacts remain
+// external files. Eight MiB leaves ample first-release policy headroom while bounding parser input.
+const MAX_VALIDATOR_CONFIG_BYTES_V1: usize = 8 * 1024 * 1024;
+// The first-release Taira roster is exactly four public identity/PoP rows. This permits 16 KiB per
+// validator while preventing an unauthenticated roster from consuming unbounded memory.
+const MAX_VALIDATOR_ROSTER_BYTES_V1: usize = 64 * 1024;
 
 /// Verify the exact semantic, signer, hash, and canonical-wire binding of a prepared genesis.
 #[derive(Clone, Debug, Parser)]
@@ -80,7 +88,147 @@ struct ValidatorBinding {
     pop_hex: String,
 }
 
-type LoadedValidatorConfigs = (Vec<Vec<u8>>, Vec<actual::Root>, Vec<ValidatorBinding>);
+type LoadedValidatorConfigs = (
+    Vec<Zeroizing<Vec<u8>>>,
+    Vec<actual::Root>,
+    Vec<ValidatorBinding>,
+);
+
+#[cfg(unix)]
+fn same_prepared_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.mode() == right.mode()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+        && left.nlink() == right.nlink()
+        && left.size() == right.size()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_prepared_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.is_file() == right.is_file()
+        && left.is_dir() == right.is_dir()
+        && left.len() == right.len()
+        && left.modified().ok() == right.modified().ok()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreparedFileCustody {
+    Public,
+    OwnerOnly,
+}
+
+fn read_prepared_file_bounded(
+    path: &Path,
+    max_bytes: usize,
+    label: &str,
+) -> color_eyre::Result<Vec<u8>> {
+    read_prepared_file_bounded_with_custody(path, max_bytes, label, PreparedFileCustody::Public)
+}
+
+fn read_owner_only_prepared_file_bounded(
+    path: &Path,
+    max_bytes: usize,
+    label: &str,
+) -> color_eyre::Result<Vec<u8>> {
+    read_prepared_file_bounded_with_custody(path, max_bytes, label, PreparedFileCustody::OwnerOnly)
+}
+
+fn read_prepared_file_bounded_with_custody(
+    path: &Path,
+    max_bytes: usize,
+    label: &str,
+    custody: PreparedFileCustody,
+) -> color_eyre::Result<Vec<u8>> {
+    #[cfg(not(unix))]
+    ensure!(
+        custody == PreparedFileCustody::Public,
+        "{label} requires owner-only file custody, which Kagami cannot verify on this platform"
+    );
+    let max_bytes_u64 = u64::try_from(max_bytes)
+        .map_err(|_| eyre!("{label} byte limit is not representable on this platform"))?;
+    let lexical = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("inspect {label} {}", path.display()))?;
+    ensure!(
+        lexical.is_file() && !lexical.file_type().is_symlink(),
+        "{label} must be a non-symlink regular file: {}",
+        path.display()
+    );
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options
+        .open(path)
+        .wrap_err_with(|| format!("open {label} {}", path.display()))?;
+    let before = file
+        .metadata()
+        .wrap_err_with(|| format!("inspect opened {label} {}", path.display()))?;
+    ensure!(
+        before.is_file() && same_prepared_file_snapshot(&lexical, &before),
+        "{label} changed while opening or is not a regular file: {}",
+        path.display()
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        ensure!(
+            before.uid() == rustix::process::geteuid().as_raw() && before.nlink() == 1,
+            "{label} must be owner-held and single-link: {}",
+            path.display()
+        );
+        match custody {
+            PreparedFileCustody::Public => ensure!(
+                before.mode() & 0o022 == 0,
+                "{label} must not be group/world writable: {}",
+                path.display()
+            ),
+            PreparedFileCustody::OwnerOnly => ensure!(
+                before.mode() & 0o777 == 0o600,
+                "{label} must have exact owner-only mode 0600: {}",
+                path.display()
+            ),
+        }
+    }
+    ensure!(
+        before.len() <= max_bytes_u64,
+        "{label} exceeds the first-release {max_bytes}-byte limit: {}",
+        path.display()
+    );
+    let capacity = usize::try_from(before.len())
+        .map_err(|_| eyre!("{label} length cannot be addressed on this platform"))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity.saturating_add(1))
+        .map_err(|error| eyre!("failed to reserve {label} input buffer: {error}"))?;
+    std::io::Read::by_ref(&mut file)
+        .take(max_bytes_u64.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() <= max_bytes,
+        "{label} exceeds the first-release {max_bytes}-byte limit: {}",
+        path.display()
+    );
+    let after = file.metadata()?;
+    ensure!(
+        same_prepared_file_snapshot(&before, &after)
+            && u64::try_from(bytes.len()).ok() == Some(before.len()),
+        "{label} changed while it was being read: {}",
+        path.display()
+    );
+    Ok(bytes)
+}
 
 fn config_slug(path: &Path, index: usize) -> color_eyre::Result<String> {
     let slug = path
@@ -113,8 +261,14 @@ fn load_validator_configs(
     let mut local_keys = BTreeSet::new();
     for (index, path) in paths.iter().enumerate() {
         let slug = config_slug(path, index)?;
-        let config_bytes = std::fs::read(path)
-            .wrap_err_with(|| format!("read effective validator config {}", path.display()))?;
+        let config_bytes = Zeroizing::new(
+            read_owner_only_prepared_file_bounded(
+                path,
+                MAX_VALIDATOR_CONFIG_BYTES_V1,
+                "validator config",
+            )
+            .wrap_err_with(|| format!("read effective validator config {}", path.display()))?,
+        );
         let config = super::sign::load_peer_config_bytes(path, &config_bytes)?;
         super::sign::ensure_peer_config_matches_manifest(&config, manifest)?;
         ensure!(
@@ -407,8 +561,12 @@ impl<T: Write> RunArgs<T> for Args {
             .wrap_err("read reviewed genesis manifest under fixed resource bounds")?;
         let reviewed = RawGenesisTransaction::from_json_slice(&reviewed_bytes)
             .wrap_err("parse exact reviewed genesis manifest")?;
-        let validator_roster_bytes =
-            std::fs::read(&self.validator_roster).wrap_err("read exact public validator roster")?;
+        let validator_roster_bytes = read_prepared_file_bounded(
+            &self.validator_roster,
+            MAX_VALIDATOR_ROSTER_BYTES_V1,
+            "public validator roster",
+        )
+        .wrap_err("read exact public validator roster")?;
         let manifest_bytes = read_genesis_manifest_bytes(&self.bound_manifest)
             .wrap_err("read bound genesis manifest under fixed resource bounds")?;
         let manifest = RawGenesisTransaction::from_json_slice(&manifest_bytes)
@@ -526,6 +684,69 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_genesis::GenesisBuilder;
 
+    #[test]
+    fn bounded_prepared_reader_accepts_exact_limit() {
+        let file = tempfile::NamedTempFile::new().expect("create exact-limit prepared input");
+        std::fs::write(file.path(), [0xA5; 32]).expect("write exact-limit prepared input");
+        assert_eq!(
+            read_prepared_file_bounded(file.path(), 32, "test prepared input")
+                .expect("accept exact-limit prepared input"),
+            vec![0xA5; 32]
+        );
+    }
+
+    #[test]
+    fn bounded_prepared_reader_rejects_limit_plus_one() {
+        let file = tempfile::NamedTempFile::new().expect("create oversized prepared input");
+        std::fs::write(file.path(), [0xA5; 33]).expect("write oversized prepared input");
+        let error = read_prepared_file_bounded(file.path(), 32, "test prepared input")
+            .expect_err("reject prepared input one byte over the limit");
+        assert!(error.to_string().contains("32-byte limit"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_validator_configs_require_exact_owner_only_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let file = tempfile::NamedTempFile::new().expect("create validator config input");
+        std::fs::write(file.path(), b"private_key = \"secret\"\n")
+            .expect("write validator config input");
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644))
+            .expect("set public-readable mode");
+        read_prepared_file_bounded(file.path(), 64, "public fixture")
+            .expect("public input may be world-readable");
+        let error = read_owner_only_prepared_file_bounded(file.path(), 64, "validator config")
+            .expect_err("public-readable validator config must fail");
+        assert!(error.to_string().contains("exact owner-only mode 0600"));
+
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o600))
+            .expect("set owner-only mode");
+        read_owner_only_prepared_file_bounded(file.path(), 64, "validator config")
+            .expect("owner-only validator config");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_prepared_reader_rejects_symlinks_and_special_files_without_blocking() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("create adversarial prepared-input directory");
+        let target = directory.path().join("target.toml");
+        let linked = directory.path().join("linked.toml");
+        std::fs::write(&target, b"value = 1\n").expect("seed prepared input target");
+        symlink(&target, &linked).expect("create prepared input symlink");
+        let error = read_prepared_file_bounded(&linked, 32, "test prepared input")
+            .expect_err("prepared input symlink must fail closed");
+        assert!(error.to_string().contains("non-symlink regular file"));
+
+        let fifo = directory.path().join("input.fifo");
+        crate::secure_fs::create_fifo_for_test(&fifo, 0o600).expect("create prepared input FIFO");
+        let error = read_prepared_file_bounded(&fifo, 32, "test prepared input")
+            .expect_err("prepared input FIFO must fail closed");
+        assert!(error.to_string().contains("non-symlink regular file"));
+    }
+
     struct Fixture {
         _directory: tempfile::TempDir,
         reviewed: PathBuf,
@@ -549,10 +770,10 @@ mod tests {
         let defaults = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../defaults/kagami/iroha3-dev");
         let sources = [
-            defaults.join("config.toml"),
-            defaults.join("config-peer-1.toml"),
-            defaults.join("config-peer-2.toml"),
-            defaults.join("config-peer-3.toml"),
+            defaults.join("peer0.toml"),
+            defaults.join("peer1.toml"),
+            defaults.join("peer2.toml"),
+            defaults.join("peer3.toml"),
         ];
         let mut config_tables = Vec::new();
         let mut config_paths = Vec::new();
@@ -579,13 +800,21 @@ mod tests {
                 toml::to_string_pretty(&table).expect("render prepared-verifier config"),
             )
             .expect("write prepared-verifier config");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                    .expect("protect prepared-verifier config");
+            }
             config_tables.push(table);
             config_paths.push(path);
         }
         let configs = config_paths
             .iter()
             .map(|path| {
-                super::super::sign::load_peer_config(path).expect("load prepared-verifier config")
+                let bytes = std::fs::read(path).expect("read prepared-verifier config");
+                super::super::sign::load_peer_config_bytes(path, &bytes)
+                    .expect("load prepared-verifier config")
             })
             .collect::<Vec<_>>();
         let _chain_discriminant =

@@ -34,6 +34,7 @@ use iroha_data_model::{
         TleKeySessionId, TleSessionId, ValidationFeePayoutLifecycleProposal,
         ValidationFeePolicyProposal, parliament_candidate_root_v1,
     },
+    hijiri::{FeeMultiplierBand, HijiriAccountRiskV1, HijiriFeePolicy, HijiriParametersV1, Q16},
     isi::{
         SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
         governance::ParliamentSortitionRequestRegistrationV1,
@@ -48,16 +49,19 @@ use iroha_data_model::{
     transaction::{Executable, IvmBytecode, IvmProved, SignedTransaction},
     trigger::action::Repeats,
     validation_fee::{
-        VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
+        VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY,
+        VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
         VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
         VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
         VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY,
         VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
-        ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutLifecycleReferenceV1,
-        ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
-        ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
+        ValidationFeeMultisigMarkerV1, ValidationFeeParliamentAuthorizationV1,
+        ValidationFeePayoutLifecycleReferenceV1, ValidationFeePolicyRegistryEntryV1,
+        ValidationFeePolicyRegistryV1, ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
+        ValidationFeeTreasuryPayoutRecipientV1,
     },
 };
+use iroha_executor_data_model::isi::multisig::MultisigPropose;
 use iroha_primitives::{json::Json, numeric::NumericSpec};
 use mv::storage::StorageReadOnly;
 use sha2::{Digest as _, Sha256};
@@ -979,6 +983,52 @@ fn metadata_for_policy(policy: &ValidationFeePolicyV1, fee_instruction_index: us
     );
     metadata
 }
+fn metadata_for_hijiri_policy(
+    policy: &ValidationFeePolicyV1,
+    hijiri_fee_quote_hash: [u8; 32],
+    fee_instruction_index: usize,
+) -> Metadata {
+    let mut metadata = metadata_for_policy(policy, fee_instruction_index);
+    metadata.insert(
+        VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY
+            .parse()
+            .expect("metadata key"),
+        Json::new(hex::encode(hijiri_fee_quote_hash)),
+    );
+    metadata
+}
+fn install_hijiri_state(
+    state: &State,
+    height: u64,
+    parameters: Option<&HijiriParametersV1>,
+    account_risk: Option<&HijiriAccountRiskV1>,
+) {
+    let mut block = state.block(block_header(height, 1_700_000_007_000 + height));
+    let mut state_transaction = block.transaction();
+    if let Some(parameters) = parameters {
+        state_transaction
+            .world
+            .parameters_mut_for_testing()
+            .get_mut()
+            .set_parameter(Parameter::Custom(
+                parameters.clone().into_custom_parameter(),
+            ));
+    }
+    if let Some(account_risk) = account_risk {
+        state_transaction
+            .world
+            .parameters_mut_for_testing()
+            .get_mut()
+            .set_parameter(Parameter::Custom(
+                account_risk
+                    .clone()
+                    .into_custom_parameter()
+                    .expect("canonical Hijiri account-risk parameter"),
+            ));
+    }
+    state_transaction.apply();
+    block.commit().expect("commit Hijiri test state");
+}
 fn metadata_for_batch_policy(
     policy: &ValidationFeePolicyV1,
     fee_instruction_index: usize,
@@ -1315,6 +1365,303 @@ fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
         ),
     );
     assert_eq!(exact_fee_result, "ok");
+}
+#[test]
+fn wsv_neutral_hijiri_binds_explicit_account_risk_presence() {
+    let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
+    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
+    install_canonical_post_enactment_validation_fee_state(
+        &state,
+        &user,
+        &user_key_pair,
+        policy.clone(),
+    );
+    let hijiri = HijiriParametersV1::first_release_genesis();
+    install_hijiri_state(
+        &state,
+        TEST_POLICY_ENACTMENT_HEIGHT + 1,
+        Some(&hijiri),
+        None,
+    );
+
+    let absent_risk_quote_hash = hijiri
+        .fee_quote_hash(&user, None)
+        .expect("derive absent-risk Hijiri quote hash");
+    let missing_binding = signed_transfer_with_fee_instruction(
+        &state,
+        &user,
+        &user_key_pair,
+        &recipient,
+        &fee_asset,
+        Some((policy.fee.clone(), policy_treasury_account(&policy))),
+        metadata_for_policy(&policy, 1),
+    );
+    let missing_binding_error =
+        validate_in_block(&state, TEST_POLICY_EFFECTIVE_HEIGHT, missing_binding);
+    assert!(
+        missing_binding_error.contains("missing signed validation-fee Hijiri quote hash metadata"),
+        "active neutral Hijiri state must still require its composite binding: {missing_binding_error}"
+    );
+
+    let absent_risk_exact = signed_transfer_with_fee_instruction(
+        &state,
+        &user,
+        &user_key_pair,
+        &recipient,
+        &fee_asset,
+        Some((policy.fee.clone(), policy_treasury_account(&policy))),
+        metadata_for_hijiri_policy(&policy, absent_risk_quote_hash, 1),
+    );
+    assert_eq!(
+        validate_in_block(&state, TEST_POLICY_EFFECTIVE_HEIGHT + 1, absent_risk_exact,),
+        "ok"
+    );
+
+    let explicit_risk = HijiriAccountRiskV1::try_new(user.clone(), 1, None, Q16::ZERO)
+        .expect("canonical explicit neutral account risk");
+    let explicit_risk_quote_hash = hijiri
+        .fee_quote_hash(&user, Some(&explicit_risk))
+        .expect("derive explicit-risk Hijiri quote hash");
+    assert_ne!(
+        absent_risk_quote_hash, explicit_risk_quote_hash,
+        "record presence must be part of the composite quote binding"
+    );
+    install_hijiri_state(
+        &state,
+        TEST_POLICY_ENACTMENT_HEIGHT + 2,
+        None,
+        Some(&explicit_risk),
+    );
+
+    let stale_absent_risk_binding = signed_transfer_with_fee_instruction(
+        &state,
+        &user,
+        &user_key_pair,
+        &recipient,
+        &fee_asset,
+        Some((policy.fee.clone(), policy_treasury_account(&policy))),
+        metadata_for_hijiri_policy(&policy, absent_risk_quote_hash, 1),
+    );
+    let stale_binding_error = validate_in_block(
+        &state,
+        TEST_POLICY_EFFECTIVE_HEIGHT + 2,
+        stale_absent_risk_binding,
+    );
+    assert!(
+        stale_binding_error.contains("wrong signed validation-fee Hijiri quote hash")
+            && stale_binding_error.contains(&hex::encode(explicit_risk_quote_hash))
+            && stale_binding_error.contains(&hex::encode(absent_risk_quote_hash)),
+        "the WSV account-risk record must invalidate an otherwise identical quote: {stale_binding_error}"
+    );
+
+    let explicit_risk_exact = signed_transfer_with_fee_instruction(
+        &state,
+        &user,
+        &user_key_pair,
+        &recipient,
+        &fee_asset,
+        Some((policy.fee.clone(), policy_treasury_account(&policy))),
+        metadata_for_hijiri_policy(&policy, explicit_risk_quote_hash, 1),
+    );
+    assert_eq!(
+        validate_in_block(
+            &state,
+            TEST_POLICY_EFFECTIVE_HEIGHT + 3,
+            explicit_risk_exact,
+        ),
+        "ok"
+    );
+}
+#[test]
+fn wsv_neutral_hijiri_binds_nested_multisig_execution_account() {
+    let (state, outer_signer, outer_key_pair, recipient, treasury, fee_asset) = test_state();
+    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
+    install_canonical_post_enactment_validation_fee_state(
+        &state,
+        &outer_signer,
+        &outer_key_pair,
+        policy.clone(),
+    );
+    let hijiri = HijiriParametersV1::first_release_genesis();
+    install_hijiri_state(
+        &state,
+        TEST_POLICY_ENACTMENT_HEIGHT + 1,
+        Some(&hijiri),
+        None,
+    );
+    let nested_multisig = account(4).0;
+    let outer_quote_hash = hijiri
+        .fee_quote_hash(&outer_signer, None)
+        .expect("derive outer-signer Hijiri quote hash");
+    let nested_quote_hash = hijiri
+        .fee_quote_hash(&nested_multisig, None)
+        .expect("derive nested-account Hijiri quote hash");
+    assert_ne!(
+        outer_quote_hash, nested_quote_hash,
+        "the composite Hijiri quote hash must bind the execution account"
+    );
+
+    let transaction = |metadata_quote_hash, marker_quote_hash| {
+        let nested_instructions = vec![
+            InstructionBox::from(Transfer::asset_quantity(
+                AssetId::new(fee_asset.clone(), nested_multisig.clone()),
+                1_u32,
+                recipient.clone(),
+            )),
+            InstructionBox::from(Transfer::asset_quantity(
+                AssetId::new(fee_asset.clone(), nested_multisig.clone()),
+                policy.fee.clone(),
+                treasury.clone(),
+            )),
+            ValidationFeeMultisigMarkerV1::new(
+                policy.policy_version,
+                policy.policy_hash().expect("policy hash"),
+                Some(marker_quote_hash),
+                1,
+                None,
+            )
+            .into_instruction(),
+        ];
+        TransactionBuilder::new(
+            *state.network_id_ref(),
+            outer_signer.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(MultisigPropose::new(
+            nested_multisig.clone(),
+            nested_instructions,
+            None,
+        ))])
+        .with_metadata(metadata_for_hijiri_policy(&policy, metadata_quote_hash, 1))
+        .sign(outer_key_pair.private_key())
+    };
+
+    let nested_binding_result = validate_in_block(
+        &state,
+        TEST_POLICY_EFFECTIVE_HEIGHT,
+        transaction(nested_quote_hash, nested_quote_hash),
+    );
+    assert!(
+        !nested_binding_result.contains("validation-fee admission rejected transaction"),
+        "metadata and marker bound to the nested execution account must pass WSV-backed fee admission: {nested_binding_result}"
+    );
+
+    let outer_metadata_error = validate_in_block(
+        &state,
+        TEST_POLICY_EFFECTIVE_HEIGHT + 1,
+        transaction(outer_quote_hash, nested_quote_hash),
+    );
+    assert!(
+        outer_metadata_error.contains("wrong signed validation-fee Hijiri quote hash")
+            && outer_metadata_error.contains(&hex::encode(nested_quote_hash))
+            && outer_metadata_error.contains(&hex::encode(outer_quote_hash)),
+        "outer-signer metadata must not substitute for the nested execution-account binding: {outer_metadata_error}"
+    );
+
+    let outer_marker_error = validate_in_block(
+        &state,
+        TEST_POLICY_EFFECTIVE_HEIGHT + 2,
+        transaction(nested_quote_hash, outer_quote_hash),
+    );
+    assert!(
+        outer_marker_error.contains("wrong multisig validation-fee marker Hijiri quote hash")
+            && outer_marker_error.contains(&hex::encode(nested_quote_hash))
+            && outer_marker_error.contains(&hex::encode(outer_quote_hash)),
+        "outer-signer marker hash must not substitute for the nested execution-account binding: {outer_marker_error}"
+    );
+}
+#[test]
+fn wsv_non_neutral_hijiri_applies_one_ceiling_after_aggregate() {
+    let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
+    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
+    install_canonical_post_enactment_validation_fee_state(
+        &state,
+        &user,
+        &user_key_pair,
+        policy.clone(),
+    );
+    let multiplier = Q16::from_parts(1, 0x4000);
+    let fee_policy = HijiriFeePolicy::new(
+        vec![
+            FeeMultiplierBand::new(Q16::ONE, multiplier)
+                .expect("canonical all-risk multiplier band"),
+        ],
+        multiplier,
+    )
+    .expect("canonical non-neutral Hijiri fee policy");
+    let hijiri = HijiriParametersV1::try_new(1, None, fee_policy, Q16::ZERO)
+        .expect("canonical non-neutral Hijiri parameters");
+    install_hijiri_state(
+        &state,
+        TEST_POLICY_ENACTMENT_HEIGHT + 1,
+        Some(&hijiri),
+        None,
+    );
+    let quote_hash = hijiri
+        .fee_quote_hash(&user, None)
+        .expect("derive default-risk Hijiri quote hash");
+    assert_eq!(
+        hijiri
+            .apply_fee_minor_units(&user, None, 30)
+            .expect("apply account multiplier"),
+        Some(38),
+        "three base fees must be aggregated before the one ceiling operation"
+    );
+    assert_eq!(
+        multiplier
+            .checked_mul_u64_ceil(10)
+            .expect("one-transfer fee")
+            * 3,
+        39,
+        "repeated per-transfer ceilings must remain observably different"
+    );
+
+    let transaction = |fee_amount: Quantity| {
+        let mut instructions = (0..3)
+            .map(|_| {
+                InstructionBox::from(Transfer::asset_quantity(
+                    AssetId::new(fee_asset.clone(), user.clone()),
+                    1_u32,
+                    recipient.clone(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        instructions.push(
+            Transfer::asset_quantity(
+                AssetId::new(fee_asset.clone(), user.clone()),
+                fee_amount,
+                policy_treasury_account(&policy),
+            )
+            .into(),
+        );
+        TransactionBuilder::new(
+            *state.network_id_ref(),
+            user.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .with_metadata(metadata_for_hijiri_policy(&policy, quote_hash, 3))
+        .sign(user_key_pair.private_key())
+    };
+
+    let repeatedly_rounded_error = validate_in_block(
+        &state,
+        TEST_POLICY_EFFECTIVE_HEIGHT,
+        transaction(quantity("0.39")),
+    );
+    assert!(
+        repeatedly_rounded_error
+            .contains("wrong validation-fee amount: expected 38 minor units, observed 39"),
+        "per-transfer rounded fee must be rejected: {repeatedly_rounded_error}"
+    );
+    assert_eq!(
+        validate_in_block(
+            &state,
+            TEST_POLICY_EFFECTIVE_HEIGHT + 1,
+            transaction(quantity("0.38")),
+        ),
+        "ok"
+    );
 }
 #[test]
 fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() {

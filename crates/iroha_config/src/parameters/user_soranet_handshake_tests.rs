@@ -86,7 +86,7 @@ fn parse_accepts_supported_handshake_suite_ids() {
             .iter()
             .find(|capability| capability.ty == 0x0101)
             .expect("default capabilities advertise snnet.pqkem");
-        assert_eq!(kem.value, [2]);
+        assert_eq!(kem.value, [2, 1]);
     }
 }
 

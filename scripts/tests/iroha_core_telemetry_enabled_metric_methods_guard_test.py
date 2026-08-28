@@ -141,16 +141,6 @@ EXPECTED_ROWS = (('StateTelemetry',
   'explicit',
   'adee6bd6fe85afe8afa71b971a50cde68dcc6e0e1279c475f70a82c62d2b1601'),
  ('StreamingTelemetry',
-  'inc_soranet_provision_failure',
-  'is_enabled_if',
-  'explicit',
-  '00ba28b874685c2e5ac35600b1cea81d53eed1e6d570a73e5015916bee390595'),
- ('StreamingTelemetry',
-  'inc_soranet_provision_queue_drop',
-  'is_enabled_if',
-  'explicit',
-  '4d02eb34ea506c436698aee1fe5625c4e0bb0f9d2e60d42fd6c1e372ba5a08f3'),
- ('StreamingTelemetry',
   'inc_privacy_redaction_failure',
   'is_enabled_if',
   'explicit',
@@ -892,7 +882,7 @@ EXPECTED_ROWS = (('StateTelemetry',
   '109b6ba3b68c7824434adcf5fcbf1822c543ab2ac7a3c7aeb6285b44afb16941'))
 
 EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (143, '9255adfece902c4c2630420c2a7710dd06c152dcec52f94ff90fcd829a4da132'),
- 'StreamingTelemetry': (21, '12cb286b009d23632d1d5cb6bb3a2416ea2e0e02fef8aecf629619befd78d747'),
+ 'StreamingTelemetry': (19, '7f230fc9f39377493aa958bac6e6540651ff1d45d77dfd0cdf429c13cb0afac3'),
  'Telemetry': (239, '8f171d39376ef7a64c2bbd6cfa348991b4b2e7308b75e96ba705ca50d2fe4010')}
 
 RETIRED_CONSENSUS_VRF_METHODS = (
@@ -1454,12 +1444,12 @@ class TelemetryEnabledMetricMethodsGuardTest(unittest.TestCase):
         self.assertEqual(
             validate_source(self.source, self.provider),
             {
-                "rows": 173,
+                "rows": 171,
                 "forward_rows": 61,
-                "source_lines": 12_857,
+                "source_lines": 12_859,
                 "provider_lines": 26,
-                "governed_lines": 12_883,
-                "net_reduction": 1_375,
+                "governed_lines": 12_885,
+                "net_reduction": 1_373,
             },
         )
         self.assertEqual(PREIMAGE_LINES - MAX_GOVERNED_LINES, 951)

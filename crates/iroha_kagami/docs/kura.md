@@ -1,6 +1,6 @@
 # Kura Inspector
 
-With Kura Inspector you can inspect blocks in disk storage regardless of the operating status of Iroha and print out block contents in a human-readabe format.
+With Kura Inspector you can inspect blocks in disk storage regardless of the operating status of Iroha and print block contents in a human-readable format. The path must name one exact lane directory containing `blocks.index`, `blocks.data`, and `blocks.hashes`; the inspector never guesses a lane from a store root.
 
 ## Usage
 
@@ -38,7 +38,7 @@ The `print` command reads data from the `block_store` and prints the results to 
 |      Option      |                                      Description                                      | Default value |       Type       |
 | ---------------- | ------------------------------------------------------------------------------------- | ------------- | ---------------- |
 | `-n`, `--length` | The number of blocks to print. The excess is truncated.                               | 1             | Positive integer |
-| `-o`, `--output` | Where to write the results of the inspection: valid data and [errors](#print-errors). | `/dev/stdout` | file             |
+| `-o`, `--output` | Where to atomically write the inspection result. The path must be outside the block store. | stdout | file |
 
 ### `print` errors
 
@@ -53,12 +53,13 @@ The `sidecar` command reads the pipeline recovery sidecar for a given block heig
 
 |      Option       |                          Description                          |  Default value  |  Type  |
 | ----------------- | -------------------------------------------------------------- | --------------- | ------ |
-| `-h`, `--height`  | The block height whose sidecar to print                        | required        | number |
-| `-o`, `--output`  | Where to write the sidecar JSON (stdout if not specified)      | `/dev/stdout`   | file   |
+| `-H`, `--height`  | The block height whose sidecar to print                        | required        | number |
+| `-o`, `--output`  | Where to atomically write the sidecar JSON; it must be outside the block store | stdout | file |
 
 Notes:
-- The sidecar is expected under `<store_dir>/pipeline/block_<height>.json`.
-- You can pass the block store directory, or a specific file path like `blocks.index`; the tool normalizes to the parent directory.
+- Sidecars use the canonical indexed pair `<lane_dir>/pipeline/sidecars.{norito,index}`.
+- A sidecar is returned only when its embedded height and block hash match the canonical block journals.
+- Pass the exact lane directory. File paths and multi-lane store roots are rejected instead of being normalized or searched.
 
 ### Examples
 
@@ -71,7 +72,7 @@ Notes:
 - Save the sidecar for height 42 to a file:
 
   ```bash
-  kagami advanced kura <path> sidecar -h 42 -o sidecar_42.json
+  kagami advanced kura <path> sidecar -H 42 -o sidecar_42.json
   ```
 
 ### `sidecar` errors

@@ -17,7 +17,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import check_native_sdk_abi22_artifact as artifact_checker  # noqa: E402
+import check_native_sdk_abi23_artifact as artifact_checker  # noqa: E402
 import package_csharp_native_artifacts as packager  # noqa: E402
 
 
@@ -252,6 +252,11 @@ class CSharpNativePackageTests(unittest.TestCase):
         consumer = (
             REPO_ROOT / "ci/check_csharp_sdk_package_consumer.sh"
         ).read_text(encoding="utf-8")
+        hijiri_quote = (
+            REPO_ROOT
+            / "csharp/src/Hyperledger.Iroha.Sdk/Torii/"
+            "ToriiClient.ValidationFeeHijiriQuote.cs"
+        ).read_text(encoding="utf-8")
 
         reviewed_rows = (
             (
@@ -338,7 +343,7 @@ class CSharpNativePackageTests(unittest.TestCase):
 
         self.assertNotIn("ubuntu-24.04-arm", native_job)
         self.assertNotIn("aarch64-unknown-linux-gnu", native_job)
-        self.assertEqual(native_job.count("check_native_sdk_abi22_artifact.py"), 2)
+        self.assertEqual(native_job.count("check_native_sdk_abi23_artifact.py"), 2)
         self.assertIn("--sdk csharp", native_job)
         self.assertIn('if [[ "$host_target" != "$target" ]]', native_job)
         self.assertIn('if [[ -e target ]]', native_job)
@@ -488,7 +493,7 @@ class CSharpNativePackageTests(unittest.TestCase):
             self.assertNotIn(
                 'cp "target/$target/release/$library_name" "$artifact"', arm_job
             )
-            self.assertEqual(arm_job.count("check_native_sdk_abi22_artifact.py"), 2)
+            self.assertEqual(arm_job.count("check_native_sdk_abi23_artifact.py"), 2)
             self.assertIn("--sdk csharp", arm_job)
             self.assertEqual(
                 arm_job.count("name: csharp-native-aarch64-unknown-linux-gnu"), 2
@@ -656,6 +661,19 @@ class CSharpNativePackageTests(unittest.TestCase):
         self.assertIn("BeforeTargets=\"GenerateNuspec\"", project)
         self.assertIn("$(IrohaNativePackageScript)&quot; verify-stage", project)
         self.assertIn("SoraFsReferenceValidators.IsAppealFinanceAvailable()", consumer)
+        self.assertIn(
+            "ValidationFeeHijiriQuoteNative.EncodeRequestV1(hijiriRequest)", consumer
+        )
+        self.assertIn(
+            "ValidationFeeHijiriQuoteNative.VerifyResponseV1(", consumer
+        )
+        self.assertIn("catch (InvalidDataException)", consumer)
+        self.assertIn("if (!OperatingSystem.IsWindows())", hijiri_quote)
+        self.assertIn("NativeEncodeRequestV1Unix(", hijiri_quote)
+        self.assertIn("NativeVerifyResponseV1Unix(", hijiri_quote)
+        self.assertIn("NativeEncodeRequestV1Windows(", hijiri_quote)
+        self.assertIn("NativeVerifyResponseV1Windows(", hijiri_quote)
+        self.assertIn("out uint outputLength);", hijiri_quote)
         self.assertIn("CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER", consumer)
 
 

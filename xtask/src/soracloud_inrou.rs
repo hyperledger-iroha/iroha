@@ -38,6 +38,20 @@ fn run_portable_local() -> Result<(), Box<dyn Error>> {
             ],
             &[],
         )?;
+        run_cargo_smoke_command(
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "irohad",
+                "--bin",
+                "iroha3d",
+                "ensure_inrou_portable_lease_disks_create_reusable_raw_images",
+                "--",
+                "--nocapture",
+            ],
+            &[],
+        )?;
     }
     run_cargo_smoke_command(
         &[

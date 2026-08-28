@@ -906,23 +906,6 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
     (service, keys)
 }
 
-/// Bind a production-shaped leader-wire ingress to an otherwise closed worker fixture.
-pub(in crate::sumeragi) fn install_leader_wire_ingress_for_test(
-    services: &mut ProductionV2Services,
-    ingress: Arc<FairV2Ingress>,
-    context: &wire::HeightContext,
-) {
-    services.leader_wire_ingress = ingress;
-    services.leader_wire_recovery_authority =
-        super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-            context.id(),
-            context.height,
-            [0xE7; 32],
-            0,
-            false,
-        );
-}
-
 fn lane_commit_qc(validator: PeerId) -> LaneBlockQcV1 {
     let validator_set = vec![validator];
     let validator_set_hash = HashOf::new(&validator_set);

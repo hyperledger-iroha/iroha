@@ -4334,7 +4334,6 @@ impl Run for FetchArgs {
                 offset: spec.offset,
                 length: spec.length,
                 digest: spec.digest,
-                taikai_segment_hint: spec.taikai_segment_hint.clone(),
             })
             .collect();
         let plan = CarBuildPlan {

@@ -1461,7 +1461,6 @@ impl<'registry> ReadyDurableValidateAdapterPreviewError<'registry> {
             _failure: ReadyDurableValidateAdapterPreviewFailure::Adapter(error),
         }
     }
-
 }
 // DURABLE_VALIDATE_ASYNC_HANDOFF_DECLARATIONS_BEGIN
 /// Move-only registry authority detached from one exact durable Validate row.
@@ -1746,44 +1745,6 @@ impl ReadyValidateSuccessorV1 {
                 Some((key, *round, *subject, true))
             }
         }
-    }
-
-    /// Reconstruct the pre-publication same-row owner for refinement tests.
-    #[cfg(test)]
-    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn predecessor_retransmit_identity_for_test(
-        &self,
-        attestation: AttestedReadyValidateDemand,
-    ) -> Option<(
-        LifecycleValidateDispatchKeyV1,
-        wire::ConsensusRound,
-        wire::BlockSubject,
-        bool,
-    )> {
-        if !self.exactly_matches_ready_attestation(attestation) {
-            return None;
-        }
-        let location = match &self.identity {
-            ReadyValidateSuccessorIdentityV1::PublishedValidated(location)
-            | ReadyValidateSuccessorIdentityV1::PublishedRejected(location) => location,
-            ReadyValidateSuccessorIdentityV1::SidecarWake { .. } => return None,
-        };
-        let current = attestation.dispatch_key();
-        if current.digest() != location.replacement_digest
-            || location.incumbent_digest == location.replacement_digest
-        {
-            return None;
-        }
-        let mut context = [0_u8; 32];
-        context.copy_from_slice(location.round.context_id.0.as_ref());
-        let predecessor = LifecycleValidateDispatchKeyV1::from_recovered_validate_registration(
-            LifecycleDigest::new(context),
-            location.round.height,
-            current.owner(),
-            current.lifecycle_ordinal(),
-            current.slot(),
-            location.incumbent_digest,
-        )?;
-        Some((predecessor, location.round, location.subject, true))
     }
 
     /// Borrow the exact reducer-fence wait retained by a Busy preview.

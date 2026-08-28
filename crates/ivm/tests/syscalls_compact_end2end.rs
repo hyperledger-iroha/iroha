@@ -6,6 +6,8 @@ fn compact_proof_decodes_and_verifies() {
     use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
     use sha2::{Digest, Sha256};
     let mut vm = IVM::new(u64::MAX);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
+    vm.load_program(&prog).expect("load");
     // Write 8 bytes into the second 32-byte chunk.
     let addr = ivm::Memory::HEAP_START + 32;
     vm.memory
@@ -19,8 +21,6 @@ fn compact_proof_decodes_and_verifies() {
     vm.set_register(11, out_ptr);
     vm.set_register(12, 16);
     vm.set_register(13, root_ptr);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
-    vm.load_program(&prog).expect("load");
     vm.run().expect("run");
     // Read header to determine total length
     let mut hdr = [0u8; 1 + 4 + 4];
@@ -65,6 +65,8 @@ fn compact_proof_dir_flip_fails() {
     use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleTree};
     use sha2::{Digest, Sha256};
     let mut vm = IVM::new(u64::MAX);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
+    vm.load_program(&prog).unwrap();
     let addr = ivm::Memory::HEAP_START + 32;
     vm.memory.store_u32(addr, 0xDEAD_BEEF).unwrap();
     vm.memory.commit();
@@ -75,8 +77,6 @@ fn compact_proof_dir_flip_fails() {
     vm.set_register(11, out_ptr);
     vm.set_register(12, 16);
     vm.set_register(13, root_ptr);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
-    vm.load_program(&prog).unwrap();
     vm.run().unwrap();
     // Decode proof
     let mut hdr = [0u8; 9];
@@ -120,6 +120,8 @@ fn compact_proof_dir_flip_fails() {
 #[test]
 fn compact_depth_cap_uses_the_full_protocol_register() {
     let mut vm = IVM::new(u64::MAX);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
+    vm.load_program(&prog).expect("load program");
     let addr = ivm::Memory::HEAP_START + 32;
     vm.memory.store_u32(addr, 0xDEAD_BEEF).expect("store");
     vm.memory.commit();
@@ -130,8 +132,6 @@ fn compact_depth_cap_uses_the_full_protocol_register() {
     // truncated to depth one.
     vm.set_register(12, u64::from(u32::MAX) + 2);
     vm.set_register(13, 0);
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
-    vm.load_program(&prog).expect("load program");
     vm.run().expect("run");
     assert!(vm.register(10) > 1);
 }

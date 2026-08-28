@@ -3,9 +3,10 @@ use crate::*;
 use core::{num::NonZeroU64, time::Duration};
 use halo2curves::{
     Coordinates, CurveAffine,
+    bls12381::{Fr as Bls12381Fr, G1Affine as Bls12381G1Affine, G2Affine as Bls12381G2Affine},
     bn256::{Fq, Fr, G1Affine},
     ff::PrimeField as _,
-    group::Curve,
+    group::{Curve, GroupEncoding},
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, MerkleTree, Signature, SignatureOf};
 use iroha_data_model::{
@@ -19,13 +20,17 @@ use iroha_data_model::{
     bridge::{
         BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeSccpDestinationProofV1,
         SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
-        SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
-        SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpEvmSourceEmitterV1,
-        SccpGovernedRouteV1, SccpGroth16Bn254IcV1, SccpGroth16Bn254SemanticCircuitV1,
+        SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+        SccpBn254G1PointV1, SccpBn254G2PointV1, SccpDestinationDeploymentV1,
+        SccpEvmDestinationDeploymentV1, SccpEvmSourceEmitterV1, SccpGovernedRouteV1,
+        SccpGroth16Bls12381IcV1, SccpGroth16Bls12381SemanticCircuitV1,
+        SccpGroth16Bls12381VerifyingKeyV1, SccpGroth16Bn254IcV1, SccpGroth16Bn254SemanticCircuitV1,
         SccpGroth16Bn254VerifyingKeyV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
         SccpOutboundProofPolicyV1, SccpPortableVerifyingKeyRefV1, SccpRouteActivationV1,
         SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1, SccpSoraOutboundExecutionPolicyV1,
-        SccpSoraSettlementV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
+        SccpSoraSettlementV1, SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTonAddressV1,
+        SccpTonDestinationDeploymentV1, SccpTonSourceEmitterV1,
+        sccp_groth16_bls12381_public_signal_schema_hash_v1,
         sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_sora_taira_chain_id_hash_v1,
         sccp_v1_taira_xor_asset_definition_id,
     },
@@ -39,6 +44,13 @@ use iroha_data_model::{
 };
 use norito::to_bytes;
 use std::collections::BTreeSet;
+
+const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
+
+const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
+    TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
+}
+
 /// Complete exact EVM outbound fixture for downstream SCCP integration tests.
 ///
 /// Every field is reconstructed from the governed route and the returned proof
@@ -54,6 +66,25 @@ pub struct SccpExactOutboundTestFixtureV1 {
     pub request: SccpGroth16Bn254ProofRequestV1,
     /// Pairing-valid Groth16 artifact bound to the request.
     pub artifact: SccpGroth16Bn254ProofArtifactV1,
+    /// Closed bridge-proof container for Core and Torii admission tests.
+    pub bridge_proof: BridgeSccpDestinationProofV1,
+    /// Complete signed block and exact Sumeragi-v2 finality used by the bundle.
+    pub finalized_block: SccpFinalizedBlockTestFixtureV1,
+}
+/// Complete exact TON outbound fixture for downstream SCCP integration tests.
+///
+/// Every field is reconstructed from the governed TON route and the returned
+/// proof passes the canonical BLS12-381 and route-binding verification path.
+#[derive(Clone, Debug)]
+pub struct SccpExactTonOutboundTestFixtureV1 {
+    /// Complete exact governed TON route used by the proof.
+    pub route: SccpGovernedRouteV1,
+    /// Canonical SORA-origin message bundle with a TON account recipient.
+    pub bundle: TairaSccpMessageProofV1,
+    /// Query-free request derived from the route and bundle.
+    pub request: SccpTonGroth16Bls12381ProofRequestV1,
+    /// Pairing-valid Groth16 artifact bound to the request.
+    pub artifact: SccpTonGroth16Bls12381ProofArtifactV1,
     /// Closed bridge-proof container for Core and Torii admission tests.
     pub bridge_proof: BridgeSccpDestinationProofV1,
     /// Complete signed block and exact Sumeragi-v2 finality used by the bundle.
@@ -147,7 +178,68 @@ impl SccpExactOutboundTestFixtureV1 {
             .expect("exact finalized-header SCCP Groth16 artifact");
         let bridge_proof = bridge_sccp_destination_proof_v1(&artifact)
             .expect("closed exact finalized-header SCCP bridge proof");
-        assert!(verify_sccp_destination_proof_v1(&bridge_proof, &bundle, &route).is_some());
+        assert!(
+            verify_sccp_destination_proof_v1(&bridge_proof, &bundle, &route, finality).is_some()
+        );
+        Self {
+            route,
+            bundle,
+            request,
+            artifact,
+            bridge_proof,
+            finalized_block,
+        }
+    }
+}
+impl SccpExactTonOutboundTestFixtureV1 {
+    /// Rebuild this exact TON fixture around one complete finalized signed block.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the block is incomplete, commits another SCCP root, has an
+    /// invalid parent, or the regenerated BLS12-381 proof stops satisfying
+    /// production verification.
+    #[must_use]
+    pub fn with_finalized_block(
+        &self,
+        block: &SignedBlock,
+        parent: Option<&SccpFinalizedBlockTestFixtureV1>,
+    ) -> Self {
+        let block_header = block.header();
+        assert!(block_header.merkle_root().is_some());
+        assert!(block_header.result_merkle_root().is_some());
+        assert_eq!(
+            block_header.sccp_commitment_root(),
+            Some(self.bundle.commitment_root)
+        );
+        let finalized_block = sccp_finalize_taira_block_test_fixture_v1(block, parent);
+        let finality = finalized_block.proof();
+        assert_eq!(finality.block_header, block_header);
+        assert_eq!(finality.finality_artifact.block_hash, block_header.hash());
+        finality
+            .finality_artifact
+            .validate_for_header(&block_header)
+            .expect("exact TON fixture finality binds the complete block header");
+        finality
+            .finality_artifact
+            .verify()
+            .expect("exact TON fixture finality is cryptographically valid");
+        let mut bundle = self.bundle.clone();
+        bundle.finality_proof =
+            to_bytes(finality).expect("canonical exact TON finalized-header finality proof");
+        assert!(verify_message_bundle_structure(&bundle));
+        let route = self.route.clone();
+        let request =
+            build_sccp_ton_groth16_bls12381_proof_request_from_governed_route_v1(&bundle, &route)
+                .expect("exact finalized-header SCCP governed TON proof request");
+        let proof_bytes = valid_bls12381_proof_bytes(&request);
+        let artifact = wrap_sccp_ton_groth16_bls12381_proof_result_v1(&proof_bytes, &request)
+            .expect("exact finalized-header SCCP TON Groth16 artifact");
+        let bridge_proof = bridge_sccp_ton_destination_proof_v1(&artifact)
+            .expect("closed exact finalized-header SCCP TON bridge proof");
+        assert!(
+            verify_sccp_destination_proof_v1(&bridge_proof, &bundle, &route, finality).is_some()
+        );
         Self {
             route,
             bundle,
@@ -212,6 +304,43 @@ fn verifying_key() -> SccpGroth16Bn254VerifyingKeyV1 {
         },
     }
 }
+fn bls12381_g1_bytes(point: Bls12381G1Affine) -> [u8; 48] {
+    let encoded = point.to_bytes();
+    let mut bytes = [0; 48];
+    bytes.copy_from_slice(encoded.as_ref());
+    bytes
+}
+fn bls12381_g2_bytes(point: Bls12381G2Affine) -> [u8; 96] {
+    let encoded = point.to_bytes();
+    let mut bytes = [0; 96];
+    bytes.copy_from_slice(encoded.as_ref());
+    bytes
+}
+fn bls12381_verifying_key() -> SccpGroth16Bls12381VerifyingKeyV1 {
+    let g1 = bls12381_g1_bytes(Bls12381G1Affine::generator());
+    let g2 = bls12381_g2_bytes(Bls12381G2Affine::generator());
+    SccpGroth16Bls12381VerifyingKeyV1 {
+        version: 1,
+        alpha1: g1,
+        beta2: g2,
+        gamma2: g2,
+        delta2: g2,
+        ic: SccpGroth16Bls12381IcV1 {
+            constant: g1,
+            signal_0: g1,
+            signal_1: g1,
+            signal_2: g1,
+            signal_3: g1,
+            signal_4: g1,
+            signal_5: g1,
+            signal_6: g1,
+            signal_7: g1,
+            signal_8: g1,
+            signal_9: g1,
+            signal_10: g1,
+        },
+    }
+}
 fn outbound_policy() -> SccpOutboundProofPolicyV1 {
     SccpOutboundProofPolicyV1 {
         version: 1,
@@ -233,6 +362,20 @@ fn outbound_policy() -> SccpOutboundProofPolicyV1 {
             checkpoint_context_id: [0x74; 32],
             checkpoint_finality_artifact_hash: [0x75; 32],
         },
+    }
+}
+fn ton_outbound_policy() -> SccpOutboundProofPolicyV1 {
+    SccpOutboundProofPolicyV1 {
+        version: 1,
+        semantic_profile: SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bls12381(
+            SccpGroth16Bls12381SemanticCircuitV1 {
+                version: 1,
+                circuit_commitment: [0x76; 32],
+                witness_generator_commitment: [0x77; 32],
+                public_signal_schema_hash: sccp_groth16_bls12381_public_signal_schema_hash_v1(),
+            },
+        ),
+        sora_finality_anchor: outbound_policy().sora_finality_anchor,
     }
 }
 /// Build the deterministic proved burn-and-record policy used by SCCP tests.
@@ -286,6 +429,7 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
         route_address: [0x51; 20],
         route_code_hash: [0x61; 32],
         taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
+        max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
     };
     let destination = SccpDestinationDeploymentV1::Evm(deployment);
     let route_configuration_hash = destination
@@ -322,6 +466,7 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
             asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
             custody_owner: AccountId::new(custody),
             payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+            max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
         },
     };
     route
@@ -334,6 +479,101 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
         route_configuration_hash
     );
     assert!(sccp_governed_route_groth16_key_is_valid_v1(&route));
+    route
+}
+/// Build one complete exact TON governed route for downstream tests.
+///
+/// # Panics
+///
+/// Panics when `network` is not a TON profile or a static fixture invariant
+/// no longer matches the production route schema.
+#[must_use]
+pub fn sccp_exact_ton_governed_route_test_fixture_v1(
+    network: SccpNetworkV1,
+    activation: SccpRouteActivationV1,
+) -> SccpGovernedRouteV1 {
+    assert!(
+        matches!(
+            network,
+            SccpNetworkV1::TonMainnet | SccpNetworkV1::TonTestnet
+        ),
+        "exact TON SCCP fixture requires a TON profile"
+    );
+    let lane_id = SccpLaneIdV1 {
+        source: network,
+        target: SccpNetworkV1::SoraTaira,
+    };
+    let address = |byte| SccpTonAddressV1 {
+        workchain: 0,
+        account: [byte; 32],
+    };
+    let verifying_key = bls12381_verifying_key();
+    let deployment = SccpTonDestinationDeploymentV1 {
+        jetton_master_address: address(0x81),
+        jetton_master_code_hash: [0x91; 32],
+        jetton_master_initial_data_hash: [0x89; 32],
+        jetton_wallet_code_hash: [0x92; 32],
+        route_address: address(0x82),
+        route_code_hash: [0x93; 32],
+        route_initial_data_hash: [0x8a; 32],
+        embedded_verifier_code_hash: [0x94; 32],
+        verifier_circuit_hash: [0x76; 32],
+        verifying_key,
+        verifier_key_hash: sccp_groth16_bls12381_verifying_key_hash_v1(&verifying_key)
+            .expect("exact SCCP TON verification key is curve-valid"),
+        proof_profile_commitment: sccp_ton_groth16_bls12381_proof_profile_commitment_v1(),
+        outbound_proof_policy: ton_outbound_policy(),
+        taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER,
+        max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER),
+    };
+    let destination = SccpDestinationDeploymentV1::Ton(deployment);
+    let route_configuration_hash = destination
+        .route_configuration_hash(
+            lane_id,
+            SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
+            SCCP_TAIRA_XOR_ASSET_KEY_V1,
+            1,
+            SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+        )
+        .expect("exact SCCP TON route configuration is valid");
+    let custody = KeyPair::try_from_seed(vec![0x82; 32], Algorithm::Ed25519)
+        .expect("exact SCCP TON custody fixture key")
+        .public_key()
+        .clone();
+    let route = SccpGovernedRouteV1 {
+        lane_id,
+        route_id: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.to_owned(),
+        asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1.to_owned(),
+        revision: 1,
+        activation,
+        inbound_finality_cutoff: None,
+        source_identity: SccpSourceIdentityV1 {
+            lane: lane_id,
+            emitter: SccpSourceEmitterV1::Ton(SccpTonSourceEmitterV1 {
+                address: deployment.route_address,
+                code_hash: deployment.route_code_hash,
+                route_config_hash: route_configuration_hash,
+            }),
+        },
+        destination,
+        sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
+        settlement: SccpSoraSettlementV1 {
+            asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
+            custody_owner: AccountId::new(custody),
+            payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+            max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
+        },
+    };
+    route
+        .validate()
+        .expect("exact SCCP governed TON route fixture remains valid");
+    assert_eq!(
+        route
+            .route_configuration_hash()
+            .expect("exact SCCP TON fixture route configuration"),
+        route_configuration_hash
+    );
+    assert!(sccp_ton_deployment_matches_verifying_key_v1(&deployment));
     route
 }
 fn transfer_payload(route: &SccpGovernedRouteV1, nonce: u64) -> SccpPayloadV1 {
@@ -359,6 +599,38 @@ fn transfer_payload(route: &SccpGovernedRouteV1, nonce: u64) -> SccpPayloadV1 {
         sender: sender.into_bytes(),
         recipient_codec: SCCP_CODEC_EVM_ADDRESS20,
         recipient: vec![0x91; 20],
+        route_id_codec: SCCP_CODEC_CANONICAL_TEXT,
+        route_id: route.route_id.as_bytes().to_vec(),
+    })
+}
+fn ton_transfer_payload(route: &SccpGovernedRouteV1, nonce: u64) -> SccpPayloadV1 {
+    let sender = AccountId::new(
+        KeyPair::try_from_seed(vec![0x90; 32], Algorithm::Ed25519)
+            .expect("exact outbound SCCP sender fixture key")
+            .public_key()
+            .clone(),
+    )
+    .to_i105_for_discriminant(SCCP_TAIRA_I105_DISCRIMINANT_V1)
+    .expect("exact outbound SCCP sender fixture has canonical Taira I105");
+    let recipient = canonical_sccp_ton_account36_bytes_v1(SccpTonAddressV1 {
+        workchain: 0,
+        account: [0xa6; 32],
+    })
+    .expect("exact TON recipient is canonical");
+    SccpPayloadV1::Transfer(TransferPayloadV1 {
+        version: 1,
+        source_domain: SCCP_DOMAIN_SORA,
+        dest_domain: route.lane_id.source.domain_id(),
+        nonce,
+        route_revision: route.revision,
+        asset_home_domain: SCCP_DOMAIN_SORA,
+        asset_id_codec: SCCP_CODEC_CANONICAL_TEXT,
+        asset_id: route.asset_key.as_bytes().to_vec(),
+        amount: 123,
+        sender_codec: SCCP_CODEC_CANONICAL_TEXT,
+        sender: sender.into_bytes(),
+        recipient_codec: SCCP_CODEC_TON_ACCOUNT36,
+        recipient: recipient.to_vec(),
         route_id_codec: SCCP_CODEC_CANONICAL_TEXT,
         route_id: route.route_id.as_bytes().to_vec(),
     })
@@ -825,7 +1097,12 @@ fn message_bundle(
     route: &SccpGovernedRouteV1,
     nonce: u64,
 ) -> (TairaSccpMessageProofV1, SccpFinalizedBlockTestFixtureV1) {
-    let payload = transfer_payload(route, nonce);
+    message_bundle_with_payload(route, transfer_payload(route, nonce))
+}
+fn message_bundle_with_payload(
+    route: &SccpGovernedRouteV1,
+    payload: SccpPayloadV1,
+) -> (TairaSccpMessageProofV1, SccpFinalizedBlockTestFixtureV1) {
     let context = SccpOutboundMessageContextV1::new(
         SccpLaneIdV1 {
             source: route.lane_id.target,
@@ -894,6 +1171,26 @@ fn valid_proof(request: &SccpGroth16Bn254ProofRequestV1) -> Vec<u8> {
     };
     encode_sccp_evm_groth16_bn254_proof_bytes(&proof)
 }
+fn valid_bls12381_proof_bytes(request: &SccpTonGroth16Bls12381ProofRequestV1) -> Vec<u8> {
+    let mut a_scalar = Bls12381Fr::from(3_u64);
+    for signal in request.public_signals.words() {
+        a_scalar += bls12381_fr_from_be_word(signal).expect("canonical exact TON scalar signal");
+    }
+    let proof = SccpGroth16Bls12381ProofV1 {
+        a: SccpBls12381G1CompressedV1 {
+            bytes: bls12381_g1_bytes((Bls12381G1Affine::generator() * a_scalar).to_affine())
+                .to_vec(),
+        },
+        b: SccpBls12381G2CompressedV1 {
+            bytes: bls12381_g2_bytes(Bls12381G2Affine::generator()).to_vec(),
+        },
+        c: SccpBls12381G1CompressedV1 {
+            bytes: bls12381_g1_bytes(Bls12381G1Affine::generator()).to_vec(),
+        },
+    };
+    canonical_sccp_groth16_bls12381_proof_bytes_v1(&proof)
+        .expect("exact TON proof has canonical compressed bytes")
+}
 /// Build an owned, end-to-end exact Ethereum-mainnet outbound test fixture.
 ///
 /// # Panics
@@ -925,8 +1222,50 @@ pub fn sccp_exact_outbound_test_fixture_for_nonce_v1(nonce: u64) -> SccpExactOut
         .expect("exact SCCP Groth16 artifact");
     let bridge_proof =
         bridge_sccp_destination_proof_v1(&artifact).expect("closed exact SCCP bridge proof");
-    assert!(verify_sccp_destination_proof_v1(&bridge_proof, &bundle, &route).is_some());
+    assert!(
+        verify_sccp_destination_proof_v1(&bridge_proof, &bundle, &route, finalized_block.proof(),)
+            .is_some()
+    );
     SccpExactOutboundTestFixtureV1 {
+        route,
+        bundle,
+        request,
+        artifact,
+        bridge_proof,
+        finalized_block,
+    }
+}
+/// Build an owned, end-to-end exact TON-mainnet outbound test fixture.
+///
+/// # Panics
+///
+/// Panics if any fixed vector stops satisfying the production SCCP
+/// canonicalization, governed-route, finality, or BLS12-381 verification rules.
+#[must_use]
+pub fn sccp_exact_ton_outbound_test_fixture_v1() -> SccpExactTonOutboundTestFixtureV1 {
+    let route = sccp_exact_ton_governed_route_test_fixture_v1(
+        SccpNetworkV1::TonMainnet,
+        SccpRouteActivationV1::Bidirectional,
+    );
+    let (bundle, finalized_block) =
+        message_bundle_with_payload(&route, ton_transfer_payload(&route, 19));
+    assert!(
+        build_sccp_groth16_bn254_proof_request_from_governed_route_v1(&bundle, &route).is_none(),
+        "TON proving material must never enter the BN254 path"
+    );
+    let request =
+        build_sccp_ton_groth16_bls12381_proof_request_from_governed_route_v1(&bundle, &route)
+            .expect("exact SCCP governed TON proof request");
+    let proof_bytes = valid_bls12381_proof_bytes(&request);
+    let artifact = wrap_sccp_ton_groth16_bls12381_proof_result_v1(&proof_bytes, &request)
+        .expect("exact SCCP TON Groth16 artifact");
+    let bridge_proof = bridge_sccp_ton_destination_proof_v1(&artifact)
+        .expect("closed exact SCCP TON bridge proof");
+    assert!(
+        verify_sccp_destination_proof_v1(&bridge_proof, &bundle, &route, finalized_block.proof(),)
+            .is_some()
+    );
+    SccpExactTonOutboundTestFixtureV1 {
         route,
         bundle,
         request,
@@ -938,6 +1277,24 @@ pub fn sccp_exact_outbound_test_fixture_for_nonce_v1(nonce: u64) -> SccpExactOut
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ton_fixture_exercises_closed_bls12381_destination_path() {
+        let fixture = sccp_exact_ton_outbound_test_fixture_v1();
+        assert_eq!(fixture.route.lane_id.source, SccpNetworkV1::TonMainnet);
+        assert_eq!(
+            fixture.request.backend,
+            BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381
+        );
+        assert_eq!(
+            decode_and_parse_canonical_sccp_destination_proof_v1(
+                &to_bytes(&fixture.bridge_proof).expect("canonical outer TON fixture envelope")
+            )
+            .expect("closed outer TON fixture decodes")
+            .1
+            .backend(),
+            BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381
+        );
+    }
     #[test]
     fn finalized_block_rebinding_authenticates_every_exact_hash_role() {
         let fixture = sccp_exact_outbound_test_fixture_v1();
@@ -982,6 +1339,7 @@ mod tests {
                 &rebound.bridge_proof,
                 &rebound.bundle,
                 &rebound.route,
+                rebound.finalized_block.proof(),
             )
             .is_some()
         );

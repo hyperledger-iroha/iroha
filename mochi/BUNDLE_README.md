@@ -15,8 +15,8 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
 
 ## Running the desktop shell
 
-1. Install the `iroha3d` and `iroha` binaries somewhere in your `PATH`.
-   MOCHI supervises these executables instead of embedding the node itself.
+1. Install the `iroha3d` binary somewhere in your `PATH`.
+   MOCHI supervises this executable instead of embedding the node itself.
    The bundle now includes a matching `kagami` binary under `bin/` so genesis
    generation works out of the box. If you store the binaries elsewhere, point
    the supervisor at them with the `MOCHI_IROHAD`/`MOCHI_KAGAMI`
@@ -52,11 +52,17 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
    rejected before publication.
 3. Start the supervisor via `./bin/mochi`. The egui application will create the
    per-profile data tree on demand and generate a Kagami-aligned genesis block.
-   The dashboard shows a compatibility summary (binary versions and
-   `kagami verify` output for genesis profiles) before peers are launched.
+   For a selected genesis profile, Mochi requires `kagami verify` to confirm
+   the requested chain and VRF seed before publishing the generation. Runtime
+   binaries are resolved only when the operation that needs them starts.
    Readiness is gated on a small smoke transaction by default; disable it with
    `--disable-smoke`, `MOCHI_READINESS_SMOKE=false`, or
    `supervisor.readiness_smoke = false`.
+
+The first-release desktop bundle supports secret-bearing signer vaults and
+`.env.local` bootstrap output on Unix hosts (macOS and Linux). Those operations
+fail before writing on other platforms until equivalent owner-only file and
+directory-durability guarantees are implemented.
 
 The bundle keeps everything relative so the archive can be expanded anywhere
 on disk or inside CI artefact stores. All generated state (peer configs,
@@ -65,8 +71,11 @@ the sample manifest. Per-peer runtime storage separates `storage/kura`,
 `storage/snapshot`, and `storage/torii`; Kura's authenticated catalog root never
 contains snapshot or Torii files. Exported snapshot metadata records the exact
 `kura-subdirectory-v1` storage layout, and restore fails closed on unmarked or
-unknown layouts. An explicit snapshot root always starts with its required empty
-`generations/` directory.
+unknown layouts. Restore copies and hashes storage under fixed V1 depth and entry
+budgets, then journals the peer-storage swap so an interrupted operation is
+rolled back or its committed cleanup is completed at the next launch. An
+explicit snapshot root always starts with its required empty `generations/`
+directory.
 Generated `config.toml` files include a short MOCHI header with the resolved
 chain id and (when available) consensus fingerprint so operators can confirm
 they are launching the intended genesis profile.
@@ -85,8 +94,10 @@ profile = "four-peer-bft" # 4 validators
 profile = { peer_count = 7, consensus_mode = "permissioned" } # 7 validators
 ```
 
-For NPoS/Nexus runs, switch to `consensus_mode = "npos"` and include a genesis
-profile (`iroha3-dev`, `iroha3-testus`, or `iroha3-nexus`) as shown below.
+For NPoS runs, switch to `consensus_mode = "npos"` and include a supported
+genesis profile (`iroha3-dev` or `iroha3-taira`) as shown below. Public Nexus
+manifest generation remains a Kagami workflow because it requires an explicit
+canonical XOR asset definition id.
 
 ## Nexus lane runs
 
@@ -94,7 +105,7 @@ Define Nexus lane catalogs in `config/local.toml`:
 
 ```
 [supervisor]
-profile = { peer_count = 4, consensus_mode = "npos", genesis_profile = "iroha3-nexus" }
+profile = { peer_count = 4, consensus_mode = "npos", genesis_profile = "iroha3-dev" }
 
 [nexus]
 lane_count = 3
@@ -126,8 +137,9 @@ id = 0
 # Consensus mode, committee geometry, DA layout, and deadlines are signed context.
 ```
 
-Alternatively, store the `[nexus]` block above in a standalone TOML file and
-load it with `--nexus-config path/to/nexus.toml`.
+Alternatively, store exactly the `[nexus]` block above, with no sibling root
+keys or tables, in a standalone TOML file and load it with
+`--nexus-config path/to/nexus.toml`.
 
 Torii DA ingest replay and manifest roots are generated inside each peer's
 selected storage generation. They cannot be redirected by bundle settings.
@@ -139,8 +151,8 @@ Kura/merge-log path preview (the generated peer configs include the same paths
 in their header). Use the Maintenance bar to reset a single lane:
 MOCHI submits a signed retire/add lifecycle replacement via Torii and leaves the
 authenticated storage transition to Kura. The Lane status panel surfaces DA cursors,
-relay lag, legacy-labeled transport-byte observations, and relay ingest state per
-peer so operators can spot lagging lanes quickly.
+relay lag, transport-byte observations, and relay ingest state per peer so operators
+can spot lagging lanes quickly.
 The Settings dialog also includes a profile override field that accepts preset
 slugs or inline TOML tables for custom peer counts/consensus modes.
 

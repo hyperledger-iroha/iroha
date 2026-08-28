@@ -615,16 +615,15 @@ fn assert_ready_validate_vote_sign_live_transaction(
                 None,
             );
             let mut staged = coordinator.stage_durable_transaction();
-            let retry_ordinal = match staged
-                .reduce_admit(AdmissionRequest::Candidate(retry_candidate))
-            {
-                AdmissionDecision::Admitted {
-                    owner,
-                    ordinal,
-                    producer_turn_ordinal: None,
-                } if owner == lease.owner() => ordinal,
-                decision => panic!("admit later same-owner Validate retry: {decision:?}"),
-            };
+            let retry_ordinal =
+                match staged.reduce_admit(AdmissionRequest::Candidate(retry_candidate)) {
+                    AdmissionDecision::Admitted {
+                        owner,
+                        ordinal,
+                        producer_turn_ordinal: None,
+                    } if owner == lease.owner() => ordinal,
+                    decision => panic!("admit later same-owner Validate retry: {decision:?}"),
+                };
             assert_eq!(
                 retry_ordinal,
                 broadcast_ordinal

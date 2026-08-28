@@ -158,7 +158,6 @@ fn push_zero_chunk(chunks: &mut Vec<CarChunk>, offset: &mut u64, length: usize) 
         offset: *offset,
         length: length_u32,
         digest: *zero_digest(length).as_bytes(),
-        taikai_segment_hint: None,
     });
     *offset += u64::try_from(length).expect("registered chunk length fits u64");
 }

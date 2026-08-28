@@ -50,10 +50,12 @@ import {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
+  configureCurveSupport,
 } from "../src/address.js";
 import { sorafsGatewayFetch } from "../src/sorafs.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "../src/ivmArtifact.js";
 import { blake2b256 } from "../src/blake2b.js";
+import { contractPayloadDigestHex } from "../src/contractPayload.js";
 import { buildBrowserVerifyingKeyTransactionPayload } from "../src/transactionCodec.js";
 import {
   parseStrictLosslessIntegerJson,
@@ -1386,6 +1388,9 @@ function verifyingKeyTransactionPayload(
     networkId = VK_SIGNING_NETWORK_ID,
     authority = request.authority,
     recordOverrides = {},
+    creationTimeMs = 42,
+    feePayment = { payer: "authority", chargeLimits: [] },
+    metadata = {},
   } = {},
 ) {
   return buildBrowserVerifyingKeyTransactionPayload(
@@ -1399,11 +1404,113 @@ function verifyingKeyTransactionPayload(
           recordOverrides,
         ),
       ],
-      creationTimeMs: 42,
+      creationTimeMs,
       ttlMs: 60_000,
-      feePayment: { payer: "authority", chargeLimits: [] },
+      feePayment,
+      metadata,
     },
     operation,
+  );
+}
+
+function browserFeePayment(intent) {
+  const chargeLimits = intent.value.charge_limits.map((limit) => ({
+    kind: limit.kind.kind === "pipeline_gas" ? "pipelineGas" : limit.kind.kind,
+    assetDefinitionId: limit.asset_definition_id,
+    maxAmount: limit.max_amount,
+  }));
+  if (intent.payer === "authority") {
+    return {
+      payer: "authority",
+      chargeLimits,
+      gasLimit: intent.value.gas_limit,
+    };
+  }
+  return {
+    payer: "sponsor",
+    programId: `${intent.value.program_id.sponsor}/${intent.value.program_id.name}`,
+    programRevision: intent.value.program_revision,
+    chargeLimits,
+    gasLimit: intent.value.gas_limit,
+  };
+}
+
+function multisigDraftForBindings({
+  authority = FIXTURE_ALICE_ID,
+  feePayment = authorityFeePayment(),
+  creationTimeMs = 42,
+  metadata = {},
+} = {}) {
+  const request = {
+    ...normalizedVerifyingKeyRequest(),
+    authority,
+  };
+  const original = verifyingKeyTransactionPayload(request, "register", {
+    authority,
+    creationTimeMs,
+    feePayment: browserFeePayment(feePayment),
+    metadata,
+  });
+  const fields = [];
+  let offset = 0;
+  while (offset < original.length) {
+    const field = readTestCompactField(original, offset);
+    fields.push(Buffer.from(field.value));
+    offset = field.end;
+  }
+  const ttl = Buffer.alloc(8);
+  ttl.writeBigUInt64LE(100_000n);
+  fields[4] = Buffer.concat([Buffer.of(1), encodeTestCompactField(ttl)]);
+  fields[7] = Buffer.alloc(4);
+  return verifyingKeyDraftForPayload(
+    Buffer.concat(fields.map(encodeTestCompactField)),
+  );
+}
+
+function draftIntentForDraft(draft) {
+  const payload = Buffer.from(draft.transaction_payload_b64, "base64");
+  const fields = [];
+  let offset = 0;
+  while (offset < payload.length) {
+    const field = readTestCompactField(payload, offset);
+    fields.push(field.value);
+    offset = field.end;
+  }
+  return {
+    executableB64: fields[3].toString("base64"),
+    metadataB64: fields[8].toString("base64"),
+  };
+}
+
+function contractDraftIntentForDraft(
+  draft,
+  {
+    contractAddress =
+      "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    codeHashHex = "1".repeat(64),
+    payload,
+  } = {},
+) {
+  return {
+    ...draftIntentForDraft(draft),
+    contractAddress,
+    codeHashHex,
+    payloadDigestHex: contractPayloadDigestHex(payload),
+  };
+}
+
+function draftWithReplacedTransactionField(draft, fieldIndex, replacement) {
+  const payload = Buffer.from(draft.transaction_payload_b64, "base64");
+  const fields = [];
+  let offset = 0;
+  while (offset < payload.length) {
+    const field = readTestCompactField(payload, offset);
+    fields.push(Buffer.from(field.value));
+    offset = field.end;
+  }
+  fields[fieldIndex] = Buffer.from(replacement);
+  return verifyingKeyDraftForPayload(
+    Buffer.concat(fields.map(encodeTestCompactField)),
   );
 }
 
@@ -6419,6 +6526,7 @@ test("submitDaBlob rejects pre-release receipt omissions and unknown fields", as
       label,
     );
   }
+
 });
 
 test("submitDaBlob rejects coercible non-byte digest entries in responses", async () => {
@@ -14064,6 +14172,7 @@ registerToriiClientGovernanceTests({
   ValidationError,
   ValidationErrorCode,
   cloneFixture,
+  configureCurveSupport,
   createResponse,
   expectValidationErrorFixture,
   parseStrictLosslessIntegerJson,
@@ -17536,20 +17645,6 @@ test("ToriiClient.getConfigurationTyped normalizes snapshot", async () => {
         require_mtls: true,
         canary_allowlist_size: 3,
       },
-      streaming: {
-        soranet: {
-          enabled: true,
-          stream_tag: "norito-stream",
-          exit_multiaddr: "/dns/exit/udp/9443/quic",
-          padding_budget_ms: 10,
-          access_kind: "read-only",
-          gar_category: "stream.norito.read_only",
-          channel_salt: "test-salt",
-          provision_spool_dir: "./storage/streaming/soranet_routes",
-          provision_window_segments: 4,
-          provision_queue_capacity: 128,
-        },
-      },
     },
     nexus: {
       axt: {
@@ -17591,20 +17686,6 @@ test("ToriiClient.getConfigurationTyped normalizes snapshot", async () => {
         stage: "ga",
         requireMtls: true,
         canaryAllowlistSize: 3,
-      },
-      streaming: {
-        soranet: {
-          enabled: true,
-          streamTag: "norito-stream",
-          exitMultiaddr: "/dns/exit/udp/9443/quic",
-          paddingBudgetMs: 10,
-          accessKind: "read-only",
-          garCategory: "stream.norito.read_only",
-          channelSalt: "test-salt",
-          provisionSpoolDir: "./storage/streaming/soranet_routes",
-          provisionWindowSegments: 4,
-          provisionQueueCapacity: 128,
-        },
       },
     },
     nexus: {
@@ -21328,7 +21409,13 @@ test("contract mutation drafts reject retired inline private-key fields", async 
 test("prepareContractCall posts a secret-free payload and normalizes the draft", async () => {
   let captured;
   const feePayment = sponsorFeePayment(FIXTURE_BOB_ID, 42, 3);
-  const draft = verifyingKeyDraftForPayload(Buffer.from([1]));
+  const payload = { value: 7, labels: ["a", "b"] };
+  const draft = multisigDraftForBindings({
+    authority: FIXTURE_ALICE_ID,
+    feePayment,
+    creationTimeMs: 42,
+    metadata: { caller_note: "trusted" },
+  });
   const responsePayload = {
     ok: true,
     submitted: false,
@@ -21338,7 +21425,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
     abi_hash_hex: "2".repeat(64),
     tx_hash_hex: null,
     creation_time_ms: 42,
-    transaction_ttl_ms: 5_000,
+    transaction_ttl_ms: null,
     entrypoint: "increment",
     entrypoint_hash_hex: null,
     ...draft,
@@ -21357,7 +21444,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
       gas_limit: 42,
       gas_used: null,
       fee_payment: feePayment,
-      payload_digest_hex: "5".repeat(64),
+      payload_digest_hex: contractPayloadDigestHex(payload),
     },
   };
   const fetchImpl = async (url, init) => {
@@ -21368,14 +21455,19 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = { value: 7, labels: ["a", "b"] };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+  });
   const result = await client.prepareContractCall({
     authority: FIXTURE_ALICE_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     entrypoint: "increment",
     payload,
+    metadata: { caller_note: "trusted" },
+    creationTimeMs: 42,
     feePayment,
+    draftIntent: contractDraftIntentForDraft(draft, { payload }),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call`);
   const body = JSON.parse(captured.init.body);
@@ -21384,6 +21476,8 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
     contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     entrypoint: "increment",
     payload,
+    metadata: { caller_note: "trusted" },
+    creation_time_ms: 42,
     fee_payment: feePayment,
   });
   assert.deepEqual(result, {
@@ -21395,7 +21489,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
     abi_hash_hex: "2".repeat(64),
     tx_hash_hex: null,
     creation_time_ms: 42,
-    transaction_ttl_ms: 5_000,
+    transaction_ttl_ms: null,
     entrypoint_hash_hex: null,
     entrypoint: "increment",
     transaction_payload_b64: draft.transaction_payload_b64,
@@ -21406,6 +21500,11 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
 
 test("prepareContractCall rejects submitted and unmarked response state", async () => {
   const txHash = "3".repeat(64);
+  const draft = multisigDraftForBindings({
+    authority: FIXTURE_ALICE_ID,
+    feePayment: authorityFeePayment(42),
+    creationTimeMs: 42,
+  });
   const responsePayload = {
     ok: true,
     submitted: true,
@@ -21447,12 +21546,16 @@ test("prepareContractCall rejects submitted and unmarked response state", async 
       jsonData: responsePayload,
       headers: { "content-type": "application/json" },
     });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+  });
   const prepare = () => client.prepareContractCall({
     authority: FIXTURE_ALICE_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     entrypoint: "increment",
     feePayment: authorityFeePayment(42),
+    draftIntent: contractDraftIntentForDraft(draft),
   });
   await assert.rejects(
     prepare,
@@ -21471,6 +21574,11 @@ test("prepareContractCall rejects submitted and unmarked response state", async 
 });
 
 test("callContract response requires operation_receipt", async () => {
+  const draft = multisigDraftForBindings({
+    authority: FIXTURE_ALICE_ID,
+    feePayment: authorityFeePayment(42),
+    creationTimeMs: 42,
+  });
   const fetchImpl = async () =>
     createResponse({
       status: 200,
@@ -21485,7 +21593,10 @@ test("callContract response requires operation_receipt", async () => {
       },
       headers: { "content-type": "application/json" },
     });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+  });
 
   await assert.rejects(
     () =>
@@ -21494,6 +21605,7 @@ test("callContract response requires operation_receipt", async () => {
         contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         entrypoint: "increment",
         feePayment: authorityFeePayment(42),
+        draftIntent: contractDraftIntentForDraft(draft),
       }),
     /contractCall response\.operation_receipt must be an object/,
   );
@@ -21502,6 +21614,11 @@ test("callContract response requires operation_receipt", async () => {
 test("callContract rejects coercible, non-canonical, or unexpected response fields", async () => {
   const contractAddress =
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+  const draft = multisigDraftForBindings({
+    authority: FIXTURE_ALICE_ID,
+    feePayment: authorityFeePayment(42),
+    creationTimeMs: 42,
+  });
   const makePayload = () => ({
     ok: true,
     submitted: false,
@@ -21511,10 +21628,10 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
     abi_hash_hex: "2".repeat(64),
     tx_hash_hex: null,
     creation_time_ms: 42,
-    transaction_ttl_ms: 5_000,
+    transaction_ttl_ms: null,
     entrypoint: "increment",
     entrypoint_hash_hex: null,
-    ...verifyingKeyDraftForPayload(Buffer.from([1])),
+    ...draft,
     operation_receipt: {
       operation_kind: "contract_call",
       status: "pending_signature",
@@ -21573,6 +21690,7 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
           jsonData: payload,
           headers: { "content-type": "application/json" },
         }),
+      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
     });
     await assert.rejects(
       () =>
@@ -21581,11 +21699,231 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
           contractAddress,
           entrypoint: "increment",
           feePayment: authorityFeePayment(42),
+          draftIntent: contractDraftIntentForDraft(draft),
         }),
       pattern,
       label,
     );
   }
+});
+
+test("prepareContractCall rejects colluding contract substitutions and receipt tampering", async () => {
+  const contractAddress =
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+  const payload = { value: 7, labels: ["a", "b"] };
+  const feePayment = sponsorFeePayment(FIXTURE_BOB_ID, 42, 3);
+  const draft = multisigDraftForBindings({
+    authority: FIXTURE_ALICE_ID,
+    feePayment,
+    creationTimeMs: 42,
+  });
+  const draftIntent = contractDraftIntentForDraft(draft, { payload });
+  const validResponse = {
+    ok: true,
+    submitted: false,
+    dataspace: "universal",
+    contract_address: contractAddress,
+    code_hash_hex: "1".repeat(64),
+    abi_hash_hex: "2".repeat(64),
+    tx_hash_hex: null,
+    creation_time_ms: 42,
+    transaction_ttl_ms: null,
+    entrypoint: "increment",
+    entrypoint_hash_hex: null,
+    ...draft,
+    operation_receipt: {
+      operation_kind: "contract_call",
+      status: "pending_signature",
+      transport: "torii",
+      dataspace: "universal",
+      contract_alias: null,
+      contract_address: contractAddress,
+      code_hash_hex: "1".repeat(64),
+      abi_hash_hex: "2".repeat(64),
+      tx_hash_hex: null,
+      entrypoint: "increment",
+      entrypoint_hash_hex: null,
+      gas_limit: 42,
+      gas_used: null,
+      fee_payment: feePayment,
+      payload_digest_hex: contractPayloadDigestHex(payload),
+    },
+  };
+  const request = {
+    authority: FIXTURE_ALICE_ID,
+    contractAddress,
+    entrypoint: "increment",
+    payload,
+    creationTimeMs: 42,
+    feePayment,
+    draftIntent,
+  };
+  const cases = [
+    [
+      "colluding resolved address",
+      (value) => {
+        value.contract_address = "colluding-substitution";
+        value.operation_receipt.contract_address = "colluding-substitution";
+      },
+      /resolved address changed the caller-trusted draftIntent/,
+    ],
+    [
+      "colluding code hash",
+      (value) => {
+        value.code_hash_hex = "a".repeat(64);
+        value.operation_receipt.code_hash_hex = "a".repeat(64);
+      },
+      /code hash changed the caller-trusted draftIntent/,
+    ],
+    [
+      "receipt ABI hash",
+      (value) => { value.operation_receipt.abi_hash_hex = "a".repeat(64); },
+      /receipt does not match the resolved contract binding/,
+    ],
+    [
+      "receipt transport",
+      (value) => { value.operation_receipt.transport = "relay"; },
+      /does not match the exact pending draft context/,
+    ],
+    [
+      "receipt dataspace",
+      (value) => { value.operation_receipt.dataspace = "private"; },
+      /does not match the exact pending draft context/,
+    ],
+    [
+      "receipt gas use",
+      (value) => { value.operation_receipt.gas_used = 1; },
+      /does not match the exact pending draft context/,
+    ],
+    [
+      "receipt alias",
+      (value) => { value.operation_receipt.contract_alias = "call::universal"; },
+      /not bound to the requested alias/,
+    ],
+    [
+      "receipt gas limit",
+      (value) => { value.operation_receipt.gas_limit = 41; },
+      /gas_limit does not match its fee_payment/,
+    ],
+    [
+      "receipt payload digest",
+      (value) => { value.operation_receipt.payload_digest_hex = "b".repeat(64); },
+      /payload digest changed the caller-trusted draftIntent/,
+    ],
+    [
+      "colluding creation time",
+      (value) => {
+        const substitutedDraft = multisigDraftForBindings({
+          authority: FIXTURE_ALICE_ID,
+          feePayment,
+          creationTimeMs: 43,
+        });
+        value.creation_time_ms = 43;
+        value.transaction_payload_b64 = substitutedDraft.transaction_payload_b64;
+        value.signing_message_b64 = substitutedDraft.signing_message_b64;
+      },
+      /creation_time_ms is not bound to the request/,
+    ],
+  ];
+  for (const [label, mutate, pattern] of cases) {
+    const responsePayload = JSON.parse(JSON.stringify(validResponse));
+    mutate(responsePayload);
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: responsePayload,
+        headers: { "content-type": "application/json" },
+      }),
+      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    });
+    await assert.rejects(
+      () => client.prepareContractCall(request),
+      pattern,
+      label,
+    );
+  }
+
+  const aliasResponse = JSON.parse(JSON.stringify(validResponse));
+  aliasResponse.dataspace = "private";
+  aliasResponse.operation_receipt.dataspace = "private";
+  aliasResponse.operation_receipt.contract_alias = "call::universal";
+  const aliasClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: aliasResponse,
+      headers: { "content-type": "application/json" },
+    }),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+  });
+  const { contractAddress: _address, ...aliasRequest } = request;
+  await assert.rejects(
+    () => aliasClient.prepareContractCall({
+      ...aliasRequest,
+      contractAlias: "call::universal",
+    }),
+    /dataspace does not match the requested alias/,
+  );
+});
+
+test("prepareContractCall validates caller-trusted payload intent before fetch", async () => {
+  const payload = { value: 7 };
+  const draft = multisigDraftForBindings({
+    authority: FIXTURE_ALICE_ID,
+    feePayment: authorityFeePayment(42),
+    creationTimeMs: 42,
+  });
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("fetch must not run for mismatched caller intent");
+    },
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+  });
+  await assert.rejects(
+    () => client.prepareContractCall({
+      authority: FIXTURE_ALICE_ID,
+      contractAddress:
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+      entrypoint: "increment",
+      payload,
+      feePayment: authorityFeePayment(42),
+      draftIntent: contractDraftIntentForDraft(draft, {
+        payload: { value: 8 },
+      }),
+    }),
+    /payloadDigestHex must match the exact request payload/,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("prepareContractCall rejects a zero explicit creation time before fetch", async () => {
+  const draft = multisigDraftForBindings({
+    authority: FIXTURE_ALICE_ID,
+    feePayment: authorityFeePayment(42),
+    creationTimeMs: 42,
+  });
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("fetch must not run for an invalid creation time");
+    },
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+  });
+  await assert.rejects(
+    () => client.prepareContractCall({
+      authority: FIXTURE_ALICE_ID,
+      contractAddress:
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+      entrypoint: "increment",
+      creationTimeMs: 0,
+      feePayment: authorityFeePayment(42),
+      draftIntent: contractDraftIntentForDraft(draft),
+    }),
+    /contractCall\.creationTimeMs must be a positive integer/,
+  );
+  assert.equal(fetchCalls, 0);
 });
 
 test("callContract rejects missing feePayment", async () => {
@@ -21683,8 +22021,9 @@ test("callContract rejects unsupported option fields", async () => {
 test("proposeMultisig posts the native Norito request DTO", async () => {
   let captured;
   const instruction = { Custom: { payload: { probe: true } } };
+  const draft = multisigDraftForBindings({ creationTimeMs: 123456 });
   const responsePayload = {
-    ...verifyingKeyDraftForPayload(Buffer.from([1])),
+    ...draft,
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
     proposal_id: "a".repeat(64),
@@ -21692,6 +22031,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     tx_hash_hex: null,
     executed_tx_hash_hex: null,
     creation_time_ms: 123456,
+    fee_payment: authorityFeePayment(),
   };
   const fetchImpl = async (url, init) => {
     captured = { url, init };
@@ -21701,7 +22041,10 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+  });
   const result = await client.proposeMultisig({
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
@@ -21713,6 +22056,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     validationFeeHijiriFeeQuoteHash: "CD".repeat(32),
     validationFeeInstructionIndex: 1,
     validationFeeTransferEntryIndex: 2,
+    draftIntent: draftIntentForDraft(draft),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/propose`);
   assert.equal(captured.init.headers["Content-Type"], "application/x-norito");
@@ -21749,6 +22093,94 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       validation_fee_instruction_index: "1",
       validation_fee_transfer_entry_index: "2",
     },
+  );
+});
+
+test("proposeMultisig binds every unsigned payload to local caller intent", async () => {
+  const trustedDraft = multisigDraftForBindings();
+  const trustedIntent = draftIntentForDraft(trustedDraft);
+  const request = {
+    multisigAccountAlias: "cbdc@banka",
+    signerAccountId: FIXTURE_ALICE_ID,
+    instructions: [{ Custom: { payload: { probe: true } } }],
+    feePayment: authorityFeePayment(),
+  };
+  const responseFor = (draft) => ({
+    ...draft,
+    ok: true,
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    proposal_id: "a".repeat(64),
+    instructions_hash: "a".repeat(64),
+    tx_hash_hex: null,
+    executed_tx_hash_hex: null,
+    creation_time_ms: 42,
+    fee_payment: authorityFeePayment(),
+  });
+  const clientFor = (draft, networkId = VK_SIGNING_NETWORK_ID) =>
+    new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: responseFor(draft),
+        headers: { "content-type": "application/json" },
+      }),
+      localSigningContext: new LocalSigningContext(networkId),
+    });
+
+  await assert.rejects(
+    () => clientFor(trustedDraft).proposeMultisig(request),
+    /requires a caller-trusted draftIntent/,
+  );
+  await assert.rejects(
+    () => new SourceToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: responseFor(trustedDraft),
+        headers: { "content-type": "application\/json" },
+      }),
+    }).proposeMultisig({ ...request, draftIntent: trustedIntent }),
+    /requires ToriiClient options\.localSigningContext/,
+  );
+  const otherNetworkBytes = Buffer.alloc(32, 3);
+  await assert.rejects(
+    () => clientFor(
+      trustedDraft,
+      NetworkId.fromBytes(otherNetworkBytes),
+    ).proposeMultisig({ ...request, draftIntent: trustedIntent }),
+    /changed caller-trusted networkId/,
+  );
+
+  const alternateExecutable = Buffer.from(trustedIntent.executableB64, "base64");
+  alternateExecutable[alternateExecutable.length - 1] ^= 1;
+  const replacedExecutable = draftWithReplacedTransactionField(
+    trustedDraft,
+    3,
+    alternateExecutable,
+  );
+  await assert.rejects(
+    () => clientFor(replacedExecutable).proposeMultisig({
+      ...request,
+      draftIntent: trustedIntent,
+    }),
+    /changed caller-trusted executable/,
+  );
+
+  const alternateMetadata = Buffer.from(
+    draftIntentForDraft(multisigDraftForBindings({
+      metadata: { probe: true },
+    })).metadataB64,
+    "base64",
+  );
+  const replacedMetadata = draftWithReplacedTransactionField(
+    trustedDraft,
+    8,
+    alternateMetadata,
+  );
+  await assert.rejects(
+    () => clientFor(replacedMetadata).proposeMultisig({
+      ...request,
+      draftIntent: trustedIntent,
+    }),
+    /changed caller-trusted metadata/,
   );
 });
 
@@ -21994,11 +22426,13 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
 });
 
 test("proposeMultisig rejects malformed success responses", async () => {
+  const bindingDraft = multisigDraftForBindings();
   const request = {
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
     instructions: [{ Custom: { payload: { probe: true } } }],
     feePayment: authorityFeePayment(),
+    draftIntent: draftIntentForDraft(bindingDraft),
   };
 
   const clientWithResponse = (jsonData) =>
@@ -22009,11 +22443,14 @@ test("proposeMultisig rejects malformed success responses", async () => {
           jsonData,
           headers: { "content-type": "application/json" },
         }),
+      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
     });
   const validDraft = {
-    ...verifyingKeyDraftForPayload(Buffer.from([1])),
+    ...bindingDraft,
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    creation_time_ms: 42,
+    fee_payment: authorityFeePayment(),
   };
 
   await assert.rejects(
@@ -22056,6 +22493,53 @@ test("proposeMultisig rejects malformed success responses", async () => {
       }).proposeMultisig(request),
     /creation_time_ms/,
   );
+  const { fee_payment: _omittedFeePayment, ...missingFeePayment } = validDraft;
+  await assert.rejects(
+    () => clientWithResponse(missingFeePayment).proposeMultisig(request),
+    /fee_payment/,
+  );
+  await assert.rejects(
+    () =>
+      clientWithResponse({
+        ...validDraft,
+        fee_payment: sponsorFeePayment(FIXTURE_BOB_ID, null, 1),
+      }).proposeMultisig(request),
+    /changed the requested payer, sponsor revision, or gas bound/,
+  );
+  await assert.rejects(
+    () =>
+      clientWithResponse({
+        ...validDraft,
+        fee_payment: {
+          payer: "authority",
+          value: {
+            charge_limits: [{
+              kind: { kind: "nexus", value: null },
+              asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+              max_amount: "1",
+            }],
+            gas_limit: null,
+          },
+        },
+      }).proposeMultisig(request),
+    /changed caller-trusted fee_payment/,
+  );
+  await assert.rejects(
+    () =>
+      clientWithResponse({
+        ...validDraft,
+        ...multisigDraftForBindings({ authority: FIXTURE_BOB_ID }),
+      }).proposeMultisig(request),
+    /transaction_payload_b64 must contain one canonical transaction payload bound to the requested signer/,
+  );
+  await assert.rejects(
+    () =>
+      clientWithResponse({
+        ...validDraft,
+        creation_time_ms: 43,
+      }).proposeMultisig(request),
+    /creation_time_ms does not match the exact transaction payload/,
+  );
 });
 
 test("multisig response decoders reject non-exact resolved account ids", async () => {
@@ -22083,6 +22567,7 @@ test("multisig response decoders reject non-exact resolved account ids", async (
         signerAccountId: FIXTURE_ALICE_ID,
         instructions: [{ Custom: { payload: { probe: true } } }],
         feePayment: authorityFeePayment(),
+        signatureB64: "AQ==",
       }),
     pattern,
   );
@@ -22119,13 +22604,18 @@ test("multisig response decoders reject non-exact resolved account ids", async (
 
 test("proposeMultisigContractCall posts alias selector and normalizes response", async () => {
   let captured;
+  const draft = multisigDraftForBindings({
+    feePayment: authorityFeePayment(5),
+    creationTimeMs: 123456,
+  });
   const responsePayload = {
-    ...verifyingKeyDraftForPayload(Buffer.from([1])),
+    ...draft,
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
     proposal_id: "a".repeat(64),
     instructions_hash: "a".repeat(64),
     creation_time_ms: 123456,
+    fee_payment: authorityFeePayment(5),
   };
   const fetchImpl = async (url, init) => {
     captured = { url, init };
@@ -22135,7 +22625,10 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+  });
   const result = await client.proposeMultisigContractCall({
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
@@ -22143,6 +22636,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
     entrypoint: "execute",
     payload: { amount: "10" },
     feePayment: authorityFeePayment(5),
+    draftIntent: draftIntentForDraft(draft),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/propose`);
   const body = JSON.parse(captured.init.body);
@@ -22187,6 +22681,7 @@ test("approveMultisigContractCall posts concrete selector and normalizes respons
     instructions_hash: "b".repeat(64),
     tx_hash_hex: "d".repeat(64),
     executed_tx_hash_hex: "d".repeat(64),
+    fee_payment: authorityFeePayment(),
   };
   const fetchImpl = async (url, init) => {
     captured = { url, init };
@@ -22231,6 +22726,7 @@ test("approveMultisigContractCall rejects unmarked transaction hashes", async ()
       instructions_hash: "b".repeat(64),
       tx_hash_hex: "d".repeat(64),
       executed_tx_hash_hex: "d".repeat(64),
+      fee_payment: authorityFeePayment(),
       [field]: "c".repeat(64),
     };
     const client = new ToriiClient(BASE_URL, {

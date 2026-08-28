@@ -33,7 +33,7 @@ const GENERATION_INVENTORY_MAX_BYTES_V1: usize = 8 * 1024 * 1024;
 const GENERATION_SMALL_RECORD_MAX_BYTES_V1: usize = 4 * 1024;
 const GENERATION_MAX_PEER_DIRECTORIES_V1: usize = 7;
 const GENERATION_ID_RECORD_BYTES: usize = 32 + 1;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PublicationFaultPoint {
     BeforeInventory,
@@ -272,8 +272,12 @@ impl GenerationTransaction {
         self,
         context: GenerationInventoryContext<'_>,
     ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
-        self.publish_inner(context, None)
+        #[cfg(test)]
+        return self.publish_inner(context, None);
+        #[cfg(not(test))]
+        self.publish_inner(context)
     }
+    #[cfg(test)]
     #[expect(clippy::result_large_err, reason = "failure retains generation lock")]
     pub(crate) fn publish_with_fault_retaining_failure(
         self,
@@ -286,9 +290,13 @@ impl GenerationTransaction {
     fn publish_inner(
         mut self,
         context: GenerationInventoryContext<'_>,
-        #[cfg_attr(not(test), allow(unused_variables))] fault: Option<PublicationFaultPoint>,
+        #[cfg(test)] fault: Option<PublicationFaultPoint>,
     ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
-        match self.try_publish_inner(context, fault) {
+        #[cfg(test)]
+        let result = self.try_publish_inner(context, fault);
+        #[cfg(not(test))]
+        let result = self.try_publish_inner(context);
+        match result {
             Ok(durability_error) => Ok(PublishedGeneration {
                 transaction: self,
                 durability_error,
@@ -302,7 +310,7 @@ impl GenerationTransaction {
     fn try_publish_inner(
         &mut self,
         context: GenerationInventoryContext<'_>,
-        #[cfg_attr(not(test), allow(unused_variables))] fault: Option<PublicationFaultPoint>,
+        #[cfg(test)] fault: Option<PublicationFaultPoint>,
     ) -> Result<Option<std::io::Error>> {
         #[cfg(test)]
         inject_fault(fault, PublicationFaultPoint::BeforeInventory)?;
@@ -379,6 +387,7 @@ impl GenerationTransaction {
         // The atomic pointer replacement is the commit point. Never remove a
         // generation after this point, even if directory durability is unknown.
         self.committed = true;
+        #[cfg(test)]
         let durability_error = if fault == Some(PublicationFaultPoint::AfterPointerRename) {
             Some(std::io::Error::other(
                 "injected generation publication fault after pointer rename",
@@ -386,6 +395,8 @@ impl GenerationTransaction {
         } else {
             sync_directory(&self.network_root).err()
         };
+        #[cfg(not(test))]
+        let durability_error = sync_directory(&self.network_root).err();
         Ok(durability_error)
     }
     fn sync_runtime_storage_roots(&self) -> Result<()> {
@@ -1625,7 +1636,7 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
-    use iroha_data_model::{ChainId, peer::PeerId};
+    use iroha_data_model::{AccountId, ChainId, peer::PeerId};
     use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
     const FIXTURE_CONFIGURED_HASH: &str =
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
@@ -1716,6 +1727,9 @@ mod tests {
         )
         .expect("write signed rANS tables fixture");
         let rans_tables_literal = rans_tables_path.to_string_lossy().replace('\\', "\\\\");
+        let vpn_operator_account = AccountId::new(genesis_public_key.clone())
+            .to_i105_for_discriminant(chain_discriminant)
+            .expect("encode fixture VPN operator account for its chain");
         let mut config =
             include_str!("../../../crates/iroha_config/iroha_test_config.toml").to_owned();
         config = config.replacen(
@@ -1758,19 +1772,34 @@ manifest_store_dir = "managed/torii/da-manifests"
 data_dir = "managed/sorafs"
 
 [streaming.codec]
+cabac_mode = "disabled"
+trellis_blocks = []
 rans_tables_path = "__RANS_TABLES_PATH__"
-
-[streaming.soranet]
-provision_spool_dir = "managed/streaming/soranet"
-
-[streaming.soravpn]
-provision_spool_dir = "managed/streaming/soravpn"
+entropy_mode = "rans_bundled"
+bundle_width = 2
+bundle_accel = "none"
 
 [network.soranet_handshake.pow]
 revocation_store_path = "managed/soranet/revocations.norito"
+
+[network.soranet_vpn]
+operator_account_id = "__VPN_OPERATOR_ACCOUNT__"
+
+[gov]
+citizenship_escrow_account = "__CHAIN_ACCOUNT__"
+bond_escrow_account = "__CHAIN_ACCOUNT__"
+slash_receiver_account = "__CHAIN_ACCOUNT__"
+viral_incentive_pool_account = "__CHAIN_ACCOUNT__"
+viral_escrow_account = "__CHAIN_ACCOUNT__"
+sorafs_pin_fee_treasury_account = "__CHAIN_ACCOUNT__"
+
+[nexus.fees]
+sponsor_vault_custody_account_id = "__CHAIN_ACCOUNT__"
 "#,
         );
         config = config.replacen("__RANS_TABLES_PATH__", &rans_tables_literal, 1);
+        config = config.replacen("__VPN_OPERATOR_ACCOUNT__", &vpn_operator_account, 1);
+        config = config.replace("__CHAIN_ACCOUNT__", &vpn_operator_account);
         config = config.replacen(
             "session_store_dir = \"./storage/streaming\"",
             "session_store_dir = \"managed/streaming\"",
@@ -1833,9 +1862,13 @@ revocation_store_path = "managed/soranet/revocations.norito"
         assert!(block.has_results());
         assert_eq!(block.results().len(), block.entrypoint_hashes().len());
         assert!(block.results().all(|result| result.as_ref().is_ok()));
-        assert_eq!(
-            block.committed_fragment_count(),
-            Some(u64::try_from(block.results().len()).expect("fixture result count fits u64"))
+        let result_count =
+            u64::try_from(block.results().len()).expect("fixture result count fits u64");
+        assert!(
+            block
+                .committed_fragment_count()
+                .is_some_and(|count| count >= result_count),
+            "genesis may commit internal fragments in addition to its transaction results"
         );
         block
             .validate_entrypoint_merkle_cache()

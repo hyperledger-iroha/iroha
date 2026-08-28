@@ -41,6 +41,7 @@ if str(PACKAGE_ROOT) not in sys.path:
 import iroha_torii_client as torii_module  # noqa: E402
 import iroha_torii_client.client as client_module  # noqa: E402
 from iroha_torii_client import (  # noqa: E402  (import depends on sys.path mutation)
+    ContractCallDraftIntent,
     ContractCallResponse,
     ContractOperationReceipt,
     ExplorerAccountQr,
@@ -49,6 +50,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     GovernanceLockRecord,
     KagemushaRedeemRequestV4,
     KagemushaTopUpRequestV4,
+    MultisigDraftIntent,
     MultisigResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
@@ -63,12 +65,14 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     SumeragiV2Status,
     ToriiCanonicalRequestAuth,
     ToriiClient,
+    ToriiLocalSigningContext,
     ToriiOperatorSigningContext,
     VpnQuoteCreateRequest,
     VpnReceiptSubmitRequest,
     VpnSessionCreateRequest,
     build_canonical_request_headers,
     canonical_network_request_signature_message,
+    contract_payload_digest_hex,
 )
 from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
 from iroha_torii_client.native_amx import (  # noqa: E402
@@ -133,6 +137,77 @@ _NATIVE_AMX_VALIDATOR_SET = [
     "ea013099BA3FACE165941434D3238C4D5767059EBFFFB4120A9885A4EB2BAC9CD868F690660D2936B03C0214FBDAD36034D578",
     "ea0130B921EAC90D1A99EC9DA3FF8C8A29EBEE19DD1B659A4C6FC21BC8046EA30DE566668EDCCEAE4CB5932F4F860606A1E0E3",
 ]
+_MULTISIG_DRAFT_EXECUTABLE = b"trusted multisig executable archive"
+_MULTISIG_DRAFT_METADATA = (0).to_bytes(8, "little")
+_CONTRACT_DRAFT_EXECUTABLE = b"trusted contract-call executable archive"
+_CONTRACT_DRAFT_METADATA = b"trusted final contract-call metadata archive"
+_CONTRACT_ADDRESS = (
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+)
+_OTHER_CONTRACT_ADDRESS = (
+    "irohac1qyqqqqqqqqqqqq8y2pcrtkxvkrn5nt74kjjkjcst6kc56qcqa2dqp"
+)
+_CONTRACT_CODE_HASH = "22" * 32
+
+
+def _local_signing_context() -> ToriiLocalSigningContext:
+    return ToriiLocalSigningContext(network_id=OFFLINE_NETWORK_ID)
+
+
+def _multisig_draft_intent() -> MultisigDraftIntent:
+    return MultisigDraftIntent(
+        executable_b64=base64.b64encode(_MULTISIG_DRAFT_EXECUTABLE).decode("ascii"),
+        metadata_b64=base64.b64encode(_MULTISIG_DRAFT_METADATA).decode("ascii"),
+    )
+
+
+def _contract_draft_intent(
+    *,
+    payload: Any = None,
+    contract_address: str = _CONTRACT_ADDRESS,
+    code_hash_hex: str = _CONTRACT_CODE_HASH,
+) -> ContractCallDraftIntent:
+    return ContractCallDraftIntent(
+        executable_b64=base64.b64encode(_CONTRACT_DRAFT_EXECUTABLE).decode("ascii"),
+        metadata_b64=base64.b64encode(_CONTRACT_DRAFT_METADATA).decode("ascii"),
+        contract_address=contract_address,
+        code_hash_hex=code_hash_hex,
+        payload_digest_hex=contract_payload_digest_hex(payload),
+    )
+
+
+def _multisig_transaction_draft(
+    *,
+    authority: str = CANONICAL_OWNER,
+    fee_payment: Optional[Mapping[str, Any]] = None,
+    creation_time_ms: int = 42,
+    executable: bytes = _MULTISIG_DRAFT_EXECUTABLE,
+    metadata: bytes = _MULTISIG_DRAFT_METADATA,
+) -> Dict[str, Any]:
+    def field(value: bytes) -> bytes:
+        return client_module._multisig_norito_field(value)
+
+    normalized_fee = ToriiClient._normalize_fee_payment_intent(
+        fee_payment or _authority_fee_payment(),
+        context="multisig fixture fee_payment",
+    )
+    payload = b"".join(
+        field(value)
+        for value in (
+            (0).to_bytes(4, "little")
+            + field(bytes.fromhex(OFFLINE_NETWORK_ID[5:69])),
+            client_module._multisig_account_id_archive(authority),
+            creation_time_ms.to_bytes(8, "little"),
+            executable,
+            b"\x01" + field((100_000).to_bytes(8, "little")),
+            b"\x00",
+            client_module._multisig_fee_payment_archive(normalized_fee),
+            (0).to_bytes(4, "little"),
+            metadata,
+            b"\x00",
+        )
+    )
+    return _app_api_transaction_draft(payload)
 
 
 def _contract_operation_receipt(
@@ -141,18 +216,19 @@ def _contract_operation_receipt(
     gas_limit: int = 5000,
     fee_payment: Optional[Dict[str, Any]] = None,
     contract_alias: Optional[str] = "router::universal",
-    contract_address: Optional[str] = (
-        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
-    ),
+    contract_address: Optional[str] = _CONTRACT_ADDRESS,
+    code_hash_hex: str = _CONTRACT_CODE_HASH,
+    payload: Any = None,
+    dataspace: str = "universal",
 ) -> Dict[str, Any]:
     return {
         "operation_kind": "contract_call",
         "status": "pending_signature",
         "transport": "torii",
-        "dataspace": "universal",
+        "dataspace": dataspace,
         "contract_alias": contract_alias,
         "contract_address": contract_address,
-        "code_hash_hex": "22" * 32,
+        "code_hash_hex": code_hash_hex,
         "abi_hash_hex": "33" * 32,
         "tx_hash_hex": None,
         "entrypoint": entrypoint,
@@ -160,42 +236,80 @@ def _contract_operation_receipt(
         "gas_limit": gas_limit,
         "gas_used": None,
         "fee_payment": fee_payment or _sponsor_fee_payment(gas_limit),
-        "payload_digest_hex": "66" * 32,
+        "payload_digest_hex": contract_payload_digest_hex(payload),
     }
 
 
 def _contract_call_draft(
     *,
+    authority: str = CANONICAL_OWNER,
     entrypoint: str = "ping",
     contract_alias: Optional[str] = "router::universal",
-    contract_address: Optional[str] = (
-        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
-    ),
+    contract_address: Optional[str] = _CONTRACT_ADDRESS,
+    code_hash_hex: str = _CONTRACT_CODE_HASH,
+    payload: Any = None,
     fee_payment: Optional[Dict[str, Any]] = None,
+    executable: bytes = _CONTRACT_DRAFT_EXECUTABLE,
+    metadata: bytes = _CONTRACT_DRAFT_METADATA,
+    creation_time_ms: int = 42,
+    transaction_ttl_ms: Optional[int] = None,
 ) -> Dict[str, Any]:
-    transaction_payload = b"\x01\x02\x03"
+    def field(value: bytes) -> bytes:
+        return client_module._multisig_norito_field(value)
+
+    normalized_fee = ToriiClient._normalize_fee_payment_intent(
+        fee_payment or _sponsor_fee_payment(5000),
+        context="contract fixture fee_payment",
+        require_gas_limit=True,
+    )
+    dataspace = (
+        contract_alias.split("::", 1)[1].split(".")[-1]
+        if contract_alias is not None
+        else "universal"
+    )
+    transaction_payload = b"".join(
+        field(value)
+        for value in (
+            (0).to_bytes(4, "little")
+            + field(bytes.fromhex(OFFLINE_NETWORK_ID[5:69])),
+            client_module._multisig_account_id_archive(authority),
+            creation_time_ms.to_bytes(8, "little"),
+            executable,
+            b"\x01"
+            + field((transaction_ttl_ms or 100_000).to_bytes(8, "little")),
+            b"\x00",
+            client_module._multisig_fee_payment_archive(normalized_fee),
+            (0).to_bytes(4, "little"),
+            metadata,
+            b"\x00",
+        )
+    )
     signing_message = bytearray(hashlib.blake2b(transaction_payload, digest_size=32).digest())
     signing_message[-1] |= 1
     return {
         "ok": True,
         "submitted": False,
-        "dataspace": "universal",
-        "code_hash_hex": "22" * 32,
+        "dataspace": dataspace,
+        "code_hash_hex": code_hash_hex,
         "abi_hash_hex": "33" * 32,
-        "creation_time_ms": 42,
+        "creation_time_ms": creation_time_ms,
         "contract_address": contract_address,
         "tx_hash_hex": None,
         "pipeline_status": None,
         "entrypoint": entrypoint,
-        "transaction_ttl_ms": 60_000,
+        "transaction_ttl_ms": transaction_ttl_ms,
         "entrypoint_hash_hex": None,
         "transaction_payload_b64": base64.b64encode(transaction_payload).decode("ascii"),
         "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
         "operation_receipt": _contract_operation_receipt(
             entrypoint=entrypoint,
-            fee_payment=fee_payment,
+            gas_limit=normalized_fee["value"]["gas_limit"],
+            fee_payment=normalized_fee,
             contract_alias=contract_alias,
             contract_address=contract_address,
+            code_hash_hex=code_hash_hex,
+            payload=payload,
+            dataspace=dataspace,
         ),
     }
 
@@ -3201,44 +3315,313 @@ def test_fee_sponsor_program_lookup_rejects_noncanonical_response_name(
 
 
 def test_call_contract_posts_selector_payload_and_parses_response() -> None:
+    call_payload = {"value": 1, "labels": ["alpha"]}
     session = RecordingSession()
     session.queue(
         StubResponse(
             status_code=200,
             payload=_contract_call_draft(
                 fee_payment=_authority_fee_payment(5000),
+                transaction_ttl_ms=5_000,
+                payload=call_payload,
             ),
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
 
     result = client.prepare_contract_call(
         authority=CANONICAL_OWNER,
         contract_alias="router::universal",
         entrypoint="ping",
-        payload={"value": 1, "labels": ["alpha"]},
+        payload=call_payload,
+        metadata={"caller_note": "trusted"},
+        creation_time_ms=42,
+        transaction_ttl_ms=5_000,
         fee_payment=_authority_fee_payment(5000),
+        draft_intent=_contract_draft_intent(payload=call_payload),
     )
 
     assert isinstance(result, ContractCallResponse)
     assert result.entrypoint == "ping"
     assert result.creation_time_ms == 42
-    assert result.transaction_ttl_ms == 60_000
+    assert result.transaction_ttl_ms == 5_000
     assert result.entrypoint_hash_hex is None
     assert isinstance(result.operation_receipt, ContractOperationReceipt)
     assert result.operation_receipt.gas_limit == 5000
-    assert result.operation_receipt.payload_digest_hex == "66" * 32
+    assert result.operation_receipt.payload_digest_hex == contract_payload_digest_hex(
+        call_payload
+    )
     assert result.submitted is False
     assert result.pipeline_status is None
-    assert result.transaction_payload_b64 == base64.b64encode(b"\x01\x02\x03").decode("ascii")
+    assert result.transaction_payload_b64 is not None
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert payload == {
         "authority": CANONICAL_OWNER,
         "contract_alias": "router::universal",
         "entrypoint": "ping",
         "payload": {"value": 1, "labels": ["alpha"]},
+        "metadata": {"caller_note": "trusted"},
+        "creation_time_ms": 42,
+        "transaction_ttl_ms": 5_000,
         "fee_payment": _authority_fee_payment(5000),
     }
+
+
+def test_contract_payload_digest_uses_cross_sdk_canonical_json() -> None:
+    assert contract_payload_digest_hex() == (
+        "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    )
+    canonical = '{"a":[true,"é"],"b":2}'
+    assert contract_payload_digest_hex({"b": 2, "a": [True, "é"]}) == (
+        client_module.blake3(canonical.encode("utf-8")).hexdigest()
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        1.5,
+        1 << 53,
+        {1: "non-string key"},
+        {"bad": "\ud800"},
+        ("tuple",),
+    ],
+)
+def test_contract_payload_digest_rejects_ambiguous_json(payload: Any) -> None:
+    with pytest.raises((TypeError, ValueError), match="contract payload"):
+        contract_payload_digest_hex(payload)
+
+
+def test_contract_payload_digest_rejects_cycles() -> None:
+    payload: List[Any] = []
+    payload.append(payload)
+
+    with pytest.raises(ValueError, match="cycles"):
+        contract_payload_digest_hex(payload)
+
+
+@pytest.mark.parametrize("payload", [1.5, {1: "non-string key"}, ("tuple",)])
+def test_call_contract_rejects_ambiguous_payload_before_dispatch(
+    payload: Any,
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
+
+    with pytest.raises((TypeError, ValueError), match="contract payload"):
+        client.prepare_contract_call(
+            authority=CANONICAL_OWNER,
+            contract_alias="router::universal",
+            entrypoint="ping",
+            payload=payload,
+            fee_payment=_authority_fee_payment(5000),
+            draft_intent=_contract_draft_intent(),
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("mismatch", ["payload_digest", "resolved_address", "code_hash"])
+def test_call_contract_rejects_untrusted_intent_before_dispatch(mismatch: str) -> None:
+    call_payload = {"value": 1}
+    intent = _contract_draft_intent(payload=call_payload)
+    request_address: Optional[str] = None
+    request_alias: Optional[str] = "router::universal"
+    if mismatch == "payload_digest":
+        intent = _contract_draft_intent(payload={"value": 2})
+    elif mismatch == "resolved_address":
+        request_address = _OTHER_CONTRACT_ADDRESS
+        request_alias = None
+    else:
+        intent = ContractCallDraftIntent(
+            executable_b64=intent.executable_b64,
+            metadata_b64=intent.metadata_b64,
+            contract_address=intent.contract_address,
+            code_hash_hex="AA" * 32,
+            payload_digest_hex=intent.payload_digest_hex,
+        )
+    session = RecordingSession()
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
+
+    with pytest.raises(ValueError):
+        client.prepare_contract_call(
+            authority=CANONICAL_OWNER,
+            contract_address=request_address,
+            contract_alias=request_alias,
+            entrypoint="ping",
+            payload=call_payload,
+            fee_payment=_authority_fee_payment(5000),
+            draft_intent=intent,
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("executable", b"substituted contract executable"),
+        ("metadata", b"substituted contract metadata"),
+    ],
+)
+def test_call_contract_rejects_rehashed_unsigned_payload_substitution(
+    field: str,
+    replacement: bytes,
+) -> None:
+    call_payload = {"value": 1}
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_contract_call_draft(
+                fee_payment=_authority_fee_payment(5000),
+                payload=call_payload,
+                **{field: replacement},
+            )
+        )
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
+
+    with pytest.raises(RuntimeError, match=f"caller-trusted {field}"):
+        client.prepare_contract_call(
+            authority=CANONICAL_OWNER,
+            contract_alias="router::universal",
+            entrypoint="ping",
+            payload=call_payload,
+            fee_payment=_authority_fee_payment(5000),
+            draft_intent=_contract_draft_intent(payload=call_payload),
+        )
+
+
+@pytest.mark.parametrize("field", ["contract_address", "code_hash_hex"])
+def test_call_contract_rejects_colluding_response_and_receipt_substitution(
+    field: str,
+) -> None:
+    call_payload = {"value": 1}
+    response = _contract_call_draft(
+        fee_payment=_authority_fee_payment(5000),
+        payload=call_payload,
+    )
+    replacement = (
+        _OTHER_CONTRACT_ADDRESS if field == "contract_address" else "44" * 32
+    )
+    response[field] = replacement
+    response["operation_receipt"][field] = replacement
+    session = RecordingSession()
+    session.queue(StubResponse(payload=response))
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
+
+    with pytest.raises(RuntimeError, match="exact pending draft binding"):
+        client.prepare_contract_call(
+            authority=CANONICAL_OWNER,
+            contract_alias="router::universal",
+            entrypoint="ping",
+            payload=call_payload,
+            fee_payment=_authority_fee_payment(5000),
+            draft_intent=_contract_draft_intent(payload=call_payload),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "expected_error"),
+    [
+        ("status", "submitted", "exact pending draft binding"),
+        ("transport", "relay", "exact pending draft binding"),
+        ("dataspace", "private", "exact pending draft binding"),
+        ("contract_alias", "substituted::universal", "exact pending draft binding"),
+        ("contract_address", _OTHER_CONTRACT_ADDRESS, "exact pending draft binding"),
+        ("code_hash_hex", "44" * 32, "exact pending draft binding"),
+        ("abi_hash_hex", "44" * 32, "exact pending draft binding"),
+        ("entrypoint", "substituted", "exact pending draft binding"),
+        ("tx_hash_hex", "a" * 63 + "b", "exact pending draft binding"),
+        ("entrypoint_hash_hex", "a" * 63 + "b", "exact pending draft binding"),
+        ("gas_limit", 4999, "gas_limit does not match"),
+        ("gas_used", 1, "exact pending draft binding"),
+        ("fee_payment", _sponsor_fee_payment(5000), "fee_payment changed"),
+        ("payload_digest_hex", "44" * 32, "payload digest"),
+    ],
+)
+def test_call_contract_rejects_tampered_operation_receipt(
+    field: str,
+    replacement: Any,
+    expected_error: str,
+) -> None:
+    call_payload = {"value": 1}
+    response = _contract_call_draft(
+        fee_payment=_authority_fee_payment(5000),
+        payload=call_payload,
+    )
+    response["operation_receipt"][field] = replacement
+    session = RecordingSession()
+    session.queue(StubResponse(payload=response))
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
+
+    with pytest.raises(RuntimeError, match=expected_error):
+        client.prepare_contract_call(
+            authority=CANONICAL_OWNER,
+            contract_alias="router::universal",
+            entrypoint="ping",
+            payload=call_payload,
+            fee_payment=_authority_fee_payment(5000),
+            draft_intent=_contract_draft_intent(payload=call_payload),
+        )
+
+
+def test_contract_receipt_rejects_unknown_fields() -> None:
+    receipt = _contract_operation_receipt()
+    receipt["server_hint"] = "unsigned"
+
+    with pytest.raises(RuntimeError, match="unsupported fields"):
+        ToriiClient._parse_contract_operation_receipt(
+            receipt,
+            context="contract receipt",
+        )
+
+
+def test_call_contract_unsigned_draft_requires_trusted_intent() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_contract_call_draft(fee_payment=_authority_fee_payment(5000))
+        )
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
+
+    with pytest.raises(ValueError, match="ContractCallDraftIntent"):
+        client.prepare_contract_call(
+            authority=CANONICAL_OWNER,
+            contract_alias="router::universal",
+            entrypoint="ping",
+            fee_payment=_authority_fee_payment(5000),
+        )
+
+    assert session.calls == []
 
 
 def test_pipeline_status_parser_exposes_only_public_metadata() -> None:
@@ -3473,13 +3856,19 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
         StubResponse(
             status_code=200,
             payload=_contract_call_draft(
+                authority=boundary["authority"],
                 entrypoint=boundary["entrypoint"],
                 contract_alias=boundary["contract_alias"],
                 fee_payment=boundary["fee_payment"],
+                payload=boundary["payload"],
             ),
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
 
     client.prepare_contract_call(
         authority=boundary["authority"],
@@ -3487,6 +3876,7 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
         entrypoint=boundary["entrypoint"],
         payload=boundary["payload"],
         fee_payment=boundary["fee_payment"],
+        draft_intent=_contract_draft_intent(payload=boundary["payload"]),
     )
 
     submitted = json.loads(session.calls[0]["data"].decode("utf-8"))
@@ -3502,6 +3892,7 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
 
 
 def test_call_contract_posts_exact_sponsor_program_and_rejects_adversarial_sponsor() -> None:
+    call_payload: Dict[str, Any] = {}
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -3509,17 +3900,23 @@ def test_call_contract_posts_exact_sponsor_program_and_rejects_adversarial_spons
             payload=_contract_call_draft(
                 contract_alias="router::is",
                 fee_payment=_sponsor_fee_payment(5000),
+                payload=call_payload,
             ),
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
 
     client.prepare_contract_call(
         authority=CANONICAL_OWNER,
         contract_alias="router::is",
         entrypoint="ping",
-        payload={},
+        payload=call_payload,
         fee_payment=_sponsor_fee_payment(5000),
+        draft_intent=_contract_draft_intent(payload=call_payload),
     )
 
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
@@ -3539,7 +3936,11 @@ def test_call_contract_posts_exact_sponsor_program_and_rejects_adversarial_spons
 
 def test_call_contract_rejects_missing_entrypoint_and_non_positive_gas_before_dispatch() -> None:
     session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
 
     for entrypoint in ("", "   "):
         with pytest.raises(ValueError, match="prepare_contract_call.entrypoint"):
@@ -3580,7 +3981,10 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
     session = RecordingSession()
     instruction = b"\x01\x02\x03\x04"
     proposal_id = "aa" * 32
-    draft = _app_api_transaction_draft()
+    draft = _multisig_transaction_draft(
+        fee_payment=_sponsor_fee_payment(),
+        creation_time_ms=123,
+    )
     session.queue(
         StubResponse(
             payload={
@@ -3592,12 +3996,17 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
                 "tx_hash_hex": None,
                 "executed_tx_hash_hex": None,
                 "creation_time_ms": 123,
+                "fee_payment": _sponsor_fee_payment(),
                 "transaction_payload_b64": draft["transaction_payload_b64"],
                 "signing_message_b64": draft["signing_message_b64"],
             },
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
     result = client.propose_multisig(
         multisig_account_alias="cbdc@banka",
         signer_account_id=CANONICAL_OWNER,
@@ -3609,12 +4018,14 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         validation_fee_hijiri_fee_quote_hash="0X" + "CD" * 32,
         validation_fee_instruction_index=1,
         validation_fee_transfer_entry_index=2,
+        draft_intent=_multisig_draft_intent(),
     )
     assert isinstance(result, MultisigResponse)
     assert result.ok is True
     assert result.resolved_multisig_account_id == CANONICAL_OWNER
     assert result.submitted is False
     assert result.instructions_hash == proposal_id
+    assert result.fee_payment == _sponsor_fee_payment()
     assert result.transaction_payload_b64 == draft["transaction_payload_b64"]
     assert result.signing_message_b64 == draft["signing_message_b64"]
     call = session.calls[0]
@@ -3634,6 +4045,91 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         "validation_fee_instruction_index": "1",
         "validation_fee_transfer_entry_index": "2",
     }
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("executable", b"substituted multisig executable"),
+        ("metadata", b"substituted multisig metadata"),
+    ],
+)
+def test_propose_multisig_rejects_rehashed_unsigned_payload_substitution(
+    field: str,
+    replacement: bytes,
+) -> None:
+    fee_payment = _authority_fee_payment()
+    draft = _multisig_transaction_draft(
+        fee_payment=fee_payment,
+        **{field: replacement},
+    )
+    proposal_id = "aa" * 32
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "ok": True,
+                "resolved_multisig_account_id": CANONICAL_OWNER,
+                "submitted": False,
+                "proposal_id": proposal_id,
+                "instructions_hash": proposal_id,
+                "tx_hash_hex": None,
+                "executed_tx_hash_hex": None,
+                "creation_time_ms": 42,
+                "fee_payment": fee_payment,
+                **draft,
+            }
+        )
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
+
+    with pytest.raises(RuntimeError, match=f"caller-trusted {field}"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            signer_account_id=CANONICAL_OWNER,
+            instructions=[b"\x01"],
+            fee_payment=fee_payment,
+            draft_intent=_multisig_draft_intent(),
+        )
+
+
+def test_propose_multisig_unsigned_draft_requires_trusted_intent() -> None:
+    fee_payment = _authority_fee_payment()
+    proposal_id = "aa" * 32
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "ok": True,
+                "resolved_multisig_account_id": CANONICAL_OWNER,
+                "submitted": False,
+                "proposal_id": proposal_id,
+                "instructions_hash": proposal_id,
+                "tx_hash_hex": None,
+                "executed_tx_hash_hex": None,
+                "creation_time_ms": 42,
+                "fee_payment": fee_payment,
+                **_multisig_transaction_draft(fee_payment=fee_payment),
+            }
+        )
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
+
+    with pytest.raises(ValueError, match="MultisigDraftIntent"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            signer_account_id=CANONICAL_OWNER,
+            instructions=[b"\x01"],
+            fee_payment=fee_payment,
+        )
 
 
 @pytest.mark.parametrize("field", ["tx_hash_hex", "executed_tx_hash_hex"])
@@ -3994,6 +4490,89 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             fee_payment=_authority_fee_payment(),
         )
 
+    for response_fee_payment, message in (
+        (None, "fee_payment"),
+        (_sponsor_fee_payment(), "changed the requested payer"),
+    ):
+        session = RecordingSession()
+        response_payload = {
+            "ok": True,
+            "resolved_multisig_account_id": CANONICAL_OWNER,
+            **_app_api_transaction_draft(),
+        }
+        if response_fee_payment is not None:
+            response_payload["fee_payment"] = response_fee_payment
+        session.queue(StubResponse(payload=response_payload))
+        client = ToriiClient("http://node.test", session=session)
+        with pytest.raises((RuntimeError, TypeError), match=message):
+            client.propose_multisig(
+                multisig_account_alias="cbdc@banka",
+                signer_account_id=CANONICAL_OWNER,
+                instructions=[b"\x01"],
+                fee_payment=_authority_fee_payment(),
+            )
+
+    payload_fee = _authority_fee_payment()
+    response_fee = _authority_fee_payment()
+    response_fee["value"]["charge_limits"] = [
+        {
+            "kind": {"kind": "nexus", "value": None},
+            "asset_definition_id": CANONICAL_ASSET_DEFINITION_ID,
+            "max_amount": "1",
+        }
+    ]
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "ok": True,
+                "resolved_multisig_account_id": CANONICAL_OWNER,
+                "creation_time_ms": 42,
+                "fee_payment": response_fee,
+                **_multisig_transaction_draft(fee_payment=payload_fee),
+            }
+        )
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
+    with pytest.raises(RuntimeError, match="caller-trusted fee_payment"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            signer_account_id=CANONICAL_OWNER,
+            instructions=[b"\x01"],
+            fee_payment=payload_fee,
+            draft_intent=_multisig_draft_intent(),
+        )
+
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "ok": True,
+                "resolved_multisig_account_id": CANONICAL_OWNER,
+                "creation_time_ms": 42,
+                "fee_payment": payload_fee,
+                **_multisig_transaction_draft(authority=OTHER_CANONICAL_ACCOUNT),
+            }
+        )
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
+    with pytest.raises(RuntimeError, match="caller-trusted authority"):
+        client.propose_multisig(
+            multisig_account_alias="cbdc@banka",
+            signer_account_id=CANONICAL_OWNER,
+            instructions=[b"\x01"],
+            fee_payment=payload_fee,
+            draft_intent=_multisig_draft_intent(),
+        )
+
 
 def test_call_contract_rejects_ambiguous_selector() -> None:
     client = ToriiClient("http://node.test", session=RecordingSession())
@@ -4024,6 +4603,27 @@ def test_call_contract_rejects_padded_selectors_before_dispatch() -> None:
         client.prepare_contract_call(
             authority=CANONICAL_OWNER,
             contract_alias="router::universal ",
+            entrypoint="ping",
+            fee_payment=_authority_fee_payment(1),
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "contract_alias",
+    ["router", "router::", "router::domain.dataspace.extra", "router::domain@dataspace"],
+)
+def test_call_contract_rejects_noncanonical_alias_before_dispatch(
+    contract_alias: str,
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(ValueError, match="contract_alias"):
+        client.prepare_contract_call(
+            authority=CANONICAL_OWNER,
+            contract_alias=contract_alias,
             entrypoint="ping",
             fee_payment=_authority_fee_payment(1),
         )
@@ -4762,7 +5362,8 @@ def test_get_node_capabilities_parses_snapshot() -> None:
 
 def test_contract_helpers_against_mock_server() -> None:
     server = ToriiMockServer().start()
-    contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+    contract_address = _CONTRACT_ADDRESS
+    call_payload = {"value": 1}
     try:
         response = requests.post(
             f"{server.base_url.rstrip('/')}/__mock__/gov/config",
@@ -4778,19 +5379,24 @@ def test_contract_helpers_against_mock_server() -> None:
                     contract_alias=None,
                     contract_address=contract_address,
                     fee_payment=_authority_fee_payment(5000),
+                    payload=call_payload,
                 ),
             },
             timeout=5.0,
         )
         response.raise_for_status()
 
-        client = ToriiClient(server.base_url)
+        client = ToriiClient(
+            server.base_url,
+            local_signing_context=_local_signing_context(),
+        )
         call = client.prepare_contract_call(
             authority=CANONICAL_OWNER,
             contract_address=contract_address,
             entrypoint="ping",
-            payload={"value": 1},
+            payload=call_payload,
             fee_payment=_authority_fee_payment(5000),
+            draft_intent=_contract_draft_intent(payload=call_payload),
         )
         governed = client.get_governance_contract(
             contract_address, canonical_auth=_governance_auth()
@@ -6984,20 +7590,6 @@ def test_get_configuration_returns_snapshot() -> None:
                         "require_mtls": True,
                         "canary_allowlist_size": 3,
                     },
-                    "streaming": {
-                        "soranet": {
-                            "enabled": True,
-                            "stream_tag": "norito",
-                            "exit_multiaddr": "/dns/torii/udp/9443/quic",
-                            "padding_budget_ms": 25,
-                            "access_kind": "authenticated",
-                            "gar_category": "soranet-auth",
-                            "channel_salt": "salt-123",
-                            "provision_spool_dir": "./storage/streaming/soranet_routes",
-                            "provision_window_segments": 4,
-                            "provision_queue_capacity": 256,
-                        }
-                    },
                 },
             }
         )
@@ -7017,10 +7609,6 @@ def test_get_configuration_returns_snapshot() -> None:
     assert transport.norito_rpc is not None
     assert transport.norito_rpc.stage == "ga"
     assert transport.norito_rpc.canary_allowlist_size == 3
-    assert transport.streaming is not None
-    assert transport.streaming.soranet is not None
-    assert transport.streaming.soranet.padding_budget_ms == 25
-    assert transport.streaming.soranet.provision_queue_capacity == 256
 
 
 def test_update_configuration_posts_payload() -> None:

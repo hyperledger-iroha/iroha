@@ -15,6 +15,29 @@ fn mismatched_closer_block_source(depth: usize) -> String {
     source.push_str("} }");
     source
 }
+fn generic_type(depth: usize) -> String {
+    format!("{}T{}", "T<".repeat(depth), ">".repeat(depth))
+}
+fn nested_list_expression(depth: usize) -> String {
+    format!("{}0{}", "[".repeat(depth), "]".repeat(depth))
+}
+fn mixed_nested_expression(depth: usize) -> String {
+    let mut expression = String::from("0");
+    for index in 0..depth {
+        expression = match index % 8 {
+            0 => format!("[{expression}]"),
+            1 => format!("wrap({expression})"),
+            2 => format!("root[{expression}]"),
+            3 => format!("(0, {expression})"),
+            4 => format!("json[{expression}]"),
+            5 => format!("json{{ value: {expression} }}"),
+            6 => format!("Node {{ value: {expression} }}"),
+            7 => format!("Option::some({expression})"),
+            _ => unreachable!("modulo constrains the wrapper kind"),
+        };
+    }
+    expression
+}
 #[test]
 fn oversized_source_is_one_lossless_budget_error_region() {
     let text = " ".repeat(MAX_SOURCE_BYTES + 1);
@@ -58,8 +81,8 @@ fn delimiter_depth_boundary_is_deterministic() {
 fn mismatched_closers_cannot_hide_recursive_block_depth() {
     std::thread::Builder::new()
         .name("mismatched-delimiter-depth".to_owned())
-        // The unoptimized parser retains one ordinary expression frame, so
-        // keep this below platform defaults without undercutting that frame.
+        // Exercise lossless preflight and recovery from a constrained caller;
+        // recursive grammar lowering is isolated on its bounded worker.
         .stack_size(256 * 1024)
         .spawn(|| {
             let shallow_text = mismatched_closer_block_source(4);
@@ -82,9 +105,9 @@ fn mismatched_closers_cannot_hide_recursive_block_depth() {
             assert_eq!(excessive_output.tree.text(&excessive), excessive_text);
             assert!(has_code(&excessive_output.diagnostics.diagnostics, "K0003"));
         })
-        .expect("spawn small-stack delimiter-depth parser")
+        .expect("spawn small-stack delimiter-depth caller")
         .join()
-        .expect("delimiter-depth parser must not overflow its stack");
+        .expect("delimiter-depth frontend must not overflow the caller stack");
 }
 #[test]
 fn long_unary_chain_hits_depth_budget_without_recursive_parsing() {
@@ -103,6 +126,125 @@ fn long_unary_chain_hits_depth_budget_without_recursive_parsing() {
     let source = SourceFile::new(SourceId(7), "unary-depth.ko", text);
     let output = parse(&source, FrontendBudget::v1());
     assert!(has_code(&output.diagnostics.diagnostics, "K0003"));
+}
+#[test]
+fn recursive_expression_forms_use_the_bounded_parser_stack() {
+    std::thread::Builder::new()
+        .name("kotodama-recursive-expression-boundary".to_owned())
+        .stack_size(128 * 1024)
+        .spawn(|| {
+            let boundary = MAX_NESTING_DEPTH - 2;
+            for (source_id, label, expression) in [
+                (90, "nested-list", nested_list_expression(boundary)),
+                (91, "mixed-nesting", mixed_nested_expression(boundary)),
+            ] {
+                let text = function_source(&format!("let value = {expression};"));
+                let source = SourceFile::new(
+                    SourceId(source_id),
+                    format!("{label}-boundary.ko"),
+                    text.clone(),
+                );
+                let output = parse(&source, FrontendBudget::v1());
+                assert_eq!(output.tree.text(&source), text, "{label}");
+                assert!(
+                    output.diagnostics.diagnostics.is_empty(),
+                    "{label} boundary emitted diagnostics: {:?}",
+                    output.diagnostics.diagnostics
+                );
+            }
+
+            let excessive_text = function_source(&format!(
+                "let value = {};",
+                mixed_nested_expression(boundary + 1)
+            ));
+            let excessive = SourceFile::new(
+                SourceId(92),
+                "mixed-nesting-excessive.ko",
+                excessive_text.clone(),
+            );
+            let excessive_output = parse(&excessive, FrontendBudget::v1());
+            assert_eq!(excessive_output.tree.text(&excessive), excessive_text);
+            assert!(has_code(&excessive_output.diagnostics.diagnostics, "K0003"));
+
+            let malformed_text = format!(
+                "seiyaku Demo {{ fn f() {{ let value = {}",
+                mixed_nested_expression(boundary)
+            );
+            let malformed = SourceFile::new(
+                SourceId(93),
+                "mixed-nesting-malformed.ko",
+                malformed_text.clone(),
+            );
+            let malformed_output = parse(&malformed, FrontendBudget::v1());
+            assert_eq!(malformed_output.tree.text(&malformed), malformed_text);
+            assert!(!malformed_output.diagnostics.diagnostics.is_empty());
+            assert!(!has_code(
+                &malformed_output.diagnostics.diagnostics,
+                "K0003"
+            ));
+        })
+        .expect("spawn small-stack recursive-expression caller")
+        .join()
+        .expect("bounded parser handoff must contain recursive expression forms");
+}
+#[test]
+fn public_ast_and_cst_clones_handoff_from_a_small_caller() {
+    std::thread::Builder::new()
+        .name("kotodama-public-tree-clone-boundary".to_owned())
+        .stack_size(128 * 1024)
+        .spawn(|| {
+            let expression = nested_list_expression(MAX_NESTING_DEPTH - 2);
+            let ty = format!(
+                "{}int{}",
+                "Option<".repeat(MAX_NESTING_DEPTH - 1),
+                ">".repeat(MAX_NESTING_DEPTH - 1)
+            );
+            let text = format!(
+                "seiyaku Demo {{ state {ty} value; fn f() {{ let nested = {expression}; }} }}"
+            );
+            let source = SourceFile::new(SourceId(94), "clone-boundary.ko", text);
+            let output = parse(&source, FrontendBudget::v1());
+            assert!(output.diagnostics.diagnostics.is_empty());
+            let output_clone = output.clone();
+            let root_clone = output.tree.root().clone();
+            assert_eq!(&root_clone, output_clone.tree.root());
+            assert!(format!("{root_clone:?}").contains("GreenNode"));
+            drop(root_clone);
+            drop(output_clone);
+
+            let output = parse_program(&source, FrontendBudget::v1());
+            assert!(output.diagnostics.diagnostics.is_empty());
+            let output_clone = output.clone();
+            let program = output.program.as_ref().expect("boundary AST");
+            let program_clone = program.clone();
+            assert_eq!(program, &program_clone);
+            assert!(format!("{program:?}").contains("Program"));
+            drop(program_clone);
+            let kotodama_lang::ast::Item::State(state) = &program.items[0] else {
+                panic!("boundary fixture must retain its state declaration");
+            };
+            let type_clone = state.ty.clone();
+            assert_eq!(&state.ty, &type_clone);
+            assert!(!format!("{:?}", state.ty).is_empty());
+            drop(type_clone);
+            let kotodama_lang::ast::Item::Function(function) = &program.items[1] else {
+                panic!("boundary fixture must retain its function");
+            };
+            let kotodama_lang::ast::Statement::Let { value, .. } =
+                function.body.statements[0].kind()
+            else {
+                panic!("boundary fixture must retain its nested binding");
+            };
+            let value_clone = value.clone();
+            assert_eq!(value, &value_clone);
+            assert!(!format!("{value:?}").is_empty());
+            drop(value_clone);
+            drop(output_clone);
+            drop(output);
+        })
+        .expect("spawn small public-tree clone caller")
+        .join()
+        .expect("public AST and CST clones must not consume the caller stack");
 }
 #[test]
 fn deeply_nested_type_hits_depth_budget_without_recursive_parsing() {
@@ -126,7 +268,81 @@ fn deeply_nested_type_hits_depth_budget_without_recursive_parsing() {
     assert!(has_code(&output.diagnostics.diagnostics, "K0003"));
 }
 #[test]
-fn malformed_boundary_types_are_recovered_without_recursive_drop() {
+fn boundary_depth_type_errors_are_lossless_through_the_parser_worker() {
+    std::thread::Builder::new()
+        .name("kotodama-type-error-cleanup".to_owned())
+        .stack_size(128 * 1024)
+        .spawn(|| {
+            let source_type = generic_type(MAX_NESTING_DEPTH - 1);
+            let nested_type = generic_type(MAX_NESTING_DEPTH - 2);
+            let missing_outer = format!(
+                "{}T{}",
+                "T<".repeat(MAX_NESTING_DEPTH - 1),
+                ">".repeat(MAX_NESTING_DEPTH - 2)
+            );
+            let cases = [
+                (
+                    "missing-generic-closer",
+                    format!("seiyaku A {{ state {missing_outer} value; }}"),
+                ),
+                (
+                    "state-name",
+                    format!("seiyaku A {{ state {source_type}; }}"),
+                ),
+                (
+                    "const-value",
+                    format!("seiyaku A {{ const {source_type} value = ; }}"),
+                ),
+                (
+                    "struct-field-name",
+                    format!("seiyaku A {{ struct S {{ {nested_type}; }} }}"),
+                ),
+                (
+                    "struct-field-collection",
+                    format!("seiyaku A {{ struct S {{ {nested_type} value;"),
+                ),
+                (
+                    "parameter-name",
+                    format!("seiyaku A {{ fn f({nested_type}) {{}} }}"),
+                ),
+                (
+                    "parameter-collection",
+                    format!("seiyaku A {{ fn f({nested_type} value"),
+                ),
+                (
+                    "return-type",
+                    format!("seiyaku A {{ fn f({nested_type} value) -> {source_type}"),
+                ),
+                (
+                    "local-value",
+                    format!("seiyaku A {{ fn f() {{ let {nested_type} value = ; }} }}"),
+                ),
+            ];
+            for (index, (label, text)) in cases.into_iter().enumerate() {
+                let source = SourceFile::new(
+                    SourceId(70 + index as u32),
+                    format!("type-error-{label}.ko"),
+                    text.clone(),
+                );
+                let output = parse(&source, FrontendBudget::v1());
+                assert_eq!(output.tree.text(&source), text, "{label}");
+                assert!(
+                    !output.diagnostics.diagnostics.is_empty(),
+                    "{label} must retain its syntax diagnostic"
+                );
+                assert!(
+                    !has_code(&output.diagnostics.diagnostics, "K0003"),
+                    "{label} is malformed at, not above, the nesting boundary: {:?}",
+                    output.diagnostics.diagnostics
+                );
+            }
+        })
+        .expect("spawn small-stack type-error caller")
+        .join()
+        .expect("type-error recovery must not overflow the caller stack");
+}
+#[test]
+fn malformed_boundary_types_recover_losslessly_through_the_parser_worker() {
     std::thread::Builder::new()
         .name("malformed-boundary-type".to_owned())
         .stack_size(128 * 1024)
@@ -161,9 +377,9 @@ fn malformed_boundary_types_are_recovered_without_recursive_drop() {
                 );
             }
         })
-        .expect("spawn small-stack malformed-type parser")
+        .expect("spawn small-stack malformed-type caller")
         .join()
-        .expect("malformed-type parser must not overflow its stack");
+        .expect("malformed-type recovery must not overflow the caller stack");
 }
 #[test]
 fn mixed_grouping_and_prefixes_share_one_depth_budget() {
@@ -313,7 +529,7 @@ fn assert_unclosed_boundary_block_losslessly(links: usize, source_id: u32) {
 }
 
 #[test]
-fn flat_expression_shapes_share_the_depth_budget_on_a_small_stack() {
+fn flat_expression_shapes_share_the_depth_budget_from_small_callers() {
     std::thread::Builder::new()
         .name("kotodama-expression-depth".into())
         .stack_size(128 * 1024)
@@ -442,9 +658,9 @@ fn flat_expression_shapes_share_the_depth_budget_on_a_small_stack() {
                 47,
             );
         })
-        .expect("spawn small-stack parser worker")
+        .expect("spawn small-stack frontend caller")
         .join()
-        .expect("small-stack parser worker");
+        .expect("small-stack frontend caller");
 }
 
 fn assert_source_depth_boundary(
@@ -557,12 +773,11 @@ fn boolean_else_if_value(branches: usize) -> String {
 }
 
 #[test]
-fn expression_valued_else_if_flow_is_iterative_on_a_small_stack() {
+fn expression_valued_else_if_flow_preserves_the_depth_budget() {
     std::thread::Builder::new()
         .name("kotodama-else-if-flow-depth".into())
-        // Parenthesized statement and nested-condition forms retain one
-        // ordinary expression-parser frame. This is still far below the
-        // platform default and catches per-branch stack growth.
+        // Keep lossless CST construction and cleanup honest on a constrained
+        // caller while recursive grammar lowering uses its bounded worker.
         .stack_size(256 * 1024)
         .spawn(|| {
             assert_source_depth_boundary(
@@ -584,9 +799,9 @@ fn expression_valued_else_if_flow_is_iterative_on_a_small_stack() {
                 62,
             );
         })
-        .expect("spawn small-stack else-if parser worker")
+        .expect("spawn small-stack else-if caller")
         .join()
-        .expect("small-stack else-if parser worker");
+        .expect("small-stack else-if caller");
 }
 
 #[test]

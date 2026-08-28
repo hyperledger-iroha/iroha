@@ -15,7 +15,7 @@ runner = Path(sys.argv[1]).read_text(encoding="utf-8")
 workflow = Path(sys.argv[2]).read_text(encoding="utf-8")
 
 required_runner_tokens = (
-    'NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi22.json"',
+    'NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi23.json"',
     'tests/client_hard_cut_contract_test.py',
     'VERIFY_EVIDENCE_ARGS=()',
     'if [[ -n "${SORAFS_PYTHON_SDK_EVIDENCE_DIR:-}" ]]; then',
@@ -38,9 +38,9 @@ if not skip_audit < retention < verification:
     )
 
 evidence_directory = (
-    "${{ runner.temp }}/iroha-sorafs-python-native-abi22-evidence"
+    "${{ runner.temp }}/iroha-sorafs-python-native-abi23-evidence"
 )
-evidence_file = f"{evidence_directory}/python-native-abi22.json"
+evidence_file = f"{evidence_directory}/python-native-abi23.json"
 required_workflow_tokens = (
     f"SORAFS_PYTHON_SDK_EVIDENCE_DIR: {evidence_directory}",
     "name: Upload verified Python ABI-23 evidence",

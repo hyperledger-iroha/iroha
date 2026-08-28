@@ -381,7 +381,7 @@ fn require_inrou_host_peer_binding(
         Ok(())
     } else {
         Err(invalid_parameter(
-            "Inrou host capability peer_id must be derived from the validator account's single signatory and exactly match its active on-chain peer binding",
+            "Inrou host capability peer_id must match the exact peer in an active public-lane validator record",
         ))
     }
 }
@@ -6863,6 +6863,15 @@ fn inrou_replica_selection_digest(
     .map_err(|err| invalid_parameter(format!("failed to encode Inrou placement seed: {err}")))?;
     Ok(*Hash::new(payload).as_ref())
 }
+fn inrou_placement_target_allows(
+    bundle: &SoraDeploymentBundleV1,
+    validator_account_id: &AccountId,
+    peer_id: &str,
+) -> bool {
+    bundle.service.placement_targets.iter().any(|target| {
+        &target.validator_account_id == validator_account_id && target.peer_id == peer_id
+    })
+}
 fn select_inrou_replica_placement(
     state_transaction: &StateTransaction<'_, '_>,
     service_name: &Name,
@@ -6881,6 +6890,9 @@ fn select_inrou_replica_placement(
         .iter()
     {
         if service_validator_accounts.contains(validator_account_id) {
+            continue;
+        }
+        if !inrou_placement_target_allows(bundle, validator_account_id, &capability.peer_id) {
             continue;
         }
         if require_inrou_host_peer_binding(
@@ -6996,15 +7008,23 @@ fn exact_inrou_placement_host_is_eligible(
     };
     bundle.container.runtime == iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou
         && bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+        && inrou_placement_target_allows(
+            bundle,
+            &placement.validator_account_id,
+            &placement.peer_id,
+        )
         && capability.peer_id == placement.peer_id
         && inrou_host_reservation_usage_fits_capability(capability, aggregate_usage, now_ms)
-        && capability
-            .supported_guest_isas
-            .contains(&placement.selected_guest_isa)
         && bundle.container.inrou.as_ref().is_some_and(|inrou| {
             inrou
                 .guest_images
-                .contains_key(&placement.selected_guest_isa)
+                .get(&placement.selected_guest_isa)
+                .is_some_and(|image| {
+                    capability
+                        .supported_guest_isas
+                        .contains(&placement.selected_guest_isa)
+                        && image.published_artifact == capability.trusted_guest_artifact
+                })
         })
         && require_inrou_host_peer_binding(
             &placement.validator_account_id,
@@ -7030,6 +7050,27 @@ fn reconcile_inrou_service_placements(
     state_transaction: &mut StateTransaction<'_, '_>,
     now_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
+    let stale_capability_accounts = state_transaction
+        .world
+        .soracloud_inrou_host_capabilities
+        .iter()
+        .filter_map(|(validator_account_id, capability)| {
+            (!capability.can_host_replicas_at(now_ms)
+                || require_inrou_host_peer_binding(
+                    validator_account_id,
+                    &capability.peer_id,
+                    state_transaction,
+                )
+                .is_err())
+            .then(|| validator_account_id.clone())
+        })
+        .collect::<Vec<_>>();
+    for validator_account_id in stale_capability_accounts {
+        state_transaction
+            .world
+            .soracloud_inrou_host_capabilities
+            .remove(validator_account_id);
+    }
     let current_height = state_transaction.block_height();
     let deployment_keys = state_transaction
         .world
@@ -7164,12 +7205,13 @@ fn reconcile_inrou_service_placements(
             .soracloud_inrou_host_capabilities
             .iter()
         {
-            if require_inrou_host_peer_binding(
-                validator_account_id,
-                &capability.peer_id,
-                state_transaction,
-            )
-            .is_ok()
+            if inrou_placement_target_allows(&bundle, validator_account_id, &capability.peer_id)
+                && require_inrou_host_peer_binding(
+                    validator_account_id,
+                    &capability.peer_id,
+                    state_transaction,
+                )
+                .is_ok()
                 && inrou_host_supports_bundle(capability, &bundle, None, now_ms)?.is_some()
             {
                 eligible_validator_count =
@@ -9449,6 +9491,27 @@ fn insert_admitted_bundle(
         bundle,
     );
 }
+fn carry_inrou_placement_across_atomic_upgrade(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    service_name: &Name,
+    previous_service_version: &str,
+    service_version: &str,
+) -> Result<(), InstructionExecutionError> {
+    let previous_key = (
+        service_name.as_ref().to_owned(),
+        previous_service_version.to_owned(),
+    );
+    let Some(mut placement) = state_transaction
+        .world
+        .soracloud_inrou_service_placements
+        .get(&previous_key)
+        .cloned()
+    else {
+        return Ok(());
+    };
+    placement.service_version = service_version.to_owned();
+    record_inrou_service_placement(state_transaction, placement)
+}
 fn next_service_process_generation(
     service_name: &Name,
     current_generation: u64,
@@ -9796,6 +9859,28 @@ fn admit_bundle(
             lease_volume_states,
         },
     )?;
+    if bundle.container.runtime == SoraContainerRuntimeV1::Inrou
+        && bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+    {
+        if action == SoraServiceLifecycleActionV1::Upgrade {
+            let previous_service_version = previous_version.as_deref().ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "service `{service_name}` Inrou upgrade lost its previous active revision"
+                    )
+                    .into(),
+                )
+            })?;
+            carry_inrou_placement_across_atomic_upgrade(
+                state_transaction,
+                &service_name,
+                previous_service_version,
+                &service_version,
+            )?;
+        }
+        let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
+        reconcile_inrou_service_placements(state_transaction, now_ms)?;
+    }
     record_audit_event(
         state_transaction,
         SoraServiceAuditEventV1 {

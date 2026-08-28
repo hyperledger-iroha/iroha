@@ -52,6 +52,7 @@ type KaigiAccountDependencyLocator = (u8, DomainId, Name);
 const KAIGI_DEPENDENCY_RELAY_REGISTRATION: u8 = 0;
 const KAIGI_DEPENDENCY_RELAY_FEEDBACK: u8 = 1;
 const KAIGI_DEPENDENCY_ACTIVE_CALL: u8 = 2;
+const KAIGI_RELAY_HEALTH_NOTES_MAX_CHARS_V1: usize = 512;
 
 /// Signature-authenticated account authorizing a Kaigi state transition.
 #[derive(Clone, Copy, Debug)]
@@ -755,10 +756,7 @@ impl Execute for UnregisterKaigiRelay {
             .get(&feedback_key)
             .cloned();
         if let Some(value) = feedback_value.as_ref() {
-            let feedback: KaigiRelayFeedback = value
-                .clone()
-                .try_into_any_norito()
-                .map_err(|err| Error::Conversion(err.to_string()))?;
+            let feedback = decode_stored_relay_feedback(&domain_id, &feedback_key, value)?;
             if feedback.relay_id != self.relay_id {
                 return Err(Error::InvariantViolation(
                     "stored Kaigi relay feedback identifier does not match unregister target"
@@ -853,11 +851,11 @@ impl Execute for ReportKaigiRelayHealth {
             notes,
         } = self;
         if let Some(ref text) = notes
-            && text.chars().count() > 512
+            && text.chars().count() > KAIGI_RELAY_HEALTH_NOTES_MAX_CHARS_V1
         {
-            return Err(relay_error(
-                "relay health notes must not exceed 512 characters",
-            ));
+            return Err(relay_error(format!(
+                "relay health notes must not exceed {KAIGI_RELAY_HEALTH_NOTES_MAX_CHARS_V1} characters"
+            )));
         }
         apply_with_record(
             state_transaction,
@@ -1129,6 +1127,24 @@ fn clear_ledger_visible_privacy_hints(record: &mut KaigiRecord) {
         nullifier.issued_at_ms = 0;
     }
 }
+fn validate_stored_kaigi_privacy_hints(record: &KaigiRecord) -> Result<(), String> {
+    let retains_alias_tag = record
+        .host_commitment
+        .as_ref()
+        .is_some_and(|commitment| commitment.alias_tag.is_some())
+        || record
+            .roster_commitments
+            .iter()
+            .any(|commitment| commitment.alias_tag.is_some());
+    let retains_nullifier_timestamp = record
+        .nullifier_log
+        .iter()
+        .any(|nullifier| nullifier.issued_at_ms != 0);
+    if retains_alias_tag || retains_nullifier_timestamp {
+        return Err("stored Kaigi record retains forbidden clear privacy hints".into());
+    }
+    Ok(())
+}
 fn ensure_kaigi_json_size(value: &Json, limit: usize, label: &str) -> Result<(), String> {
     ensure_kaigi_json_len(value.as_ref().len(), limit, label)
 }
@@ -1165,6 +1181,18 @@ fn validate_kaigi_record_v1(record: &KaigiRecord) -> Result<(), String> {
         .any(|window| window[0] >= window[1])
     {
         return Err("Kaigi participants must be strictly sorted and unique".into());
+    }
+    if record.participants.binary_search(&record.host).is_ok() {
+        return Err("Kaigi participants must not include the host account".into());
+    }
+    if record
+        .billing_account
+        .as_ref()
+        .is_some_and(|billing_account| billing_account != &record.host)
+    {
+        return Err(
+            "Kaigi billing account must equal the host until delegated billing is supported".into(),
+        );
     }
     if record.roster_commitments.len() > participant_limit {
         return Err(format!(
@@ -1204,6 +1232,42 @@ fn validate_kaigi_record_v1(record: &KaigiRecord) -> Result<(), String> {
         .any(|commitment| !usage_commitments.insert(commitment))
     {
         return Err("Kaigi usage commitments must be unique".into());
+    }
+    if record.roster_root != KaigiRecord::compute_roster_root(&record.roster_commitments) {
+        return Err("Kaigi roster root does not match the retained roster commitments".into());
+    }
+    match (record.status, record.ended_at_ms) {
+        (KaigiStatus::Active, None) => {}
+        (KaigiStatus::Ended, Some(ended_at_ms)) if ended_at_ms >= record.created_at_ms => {}
+        (KaigiStatus::Ended, Some(_)) => {
+            return Err("Kaigi end timestamp must not precede creation".into());
+        }
+        (KaigiStatus::Active, Some(_)) => {
+            return Err("active Kaigi record must not retain an end timestamp".into());
+        }
+        (KaigiStatus::Ended, None) => {
+            return Err("ended Kaigi record must retain an end timestamp".into());
+        }
+    }
+    match record.privacy_mode {
+        KaigiPrivacyMode::Transparent => {
+            if record.host_commitment.is_some()
+                || !record.roster_commitments.is_empty()
+                || !record.nullifier_log.is_empty()
+                || !record.usage_commitments.is_empty()
+            {
+                return Err(
+                    "transparent Kaigi record must not retain private roster artifacts".into(),
+                );
+            }
+        }
+        KaigiPrivacyMode::ZkRosterV1 => {
+            if !record.participants.is_empty() {
+                return Err(
+                    "private Kaigi record must not retain transparent participant IDs".into(),
+                );
+            }
+        }
     }
     if record.participant_metadata.len() > participant_limit.saturating_add(1) {
         return Err(format!(
@@ -1253,6 +1317,11 @@ fn decode_stored_kaigi_record(
         ));
     }
     validate_kaigi_record_v1(&record).map_err(|message| {
+        Error::InvariantViolation(
+            format!("stored Kaigi record violates V1 constraints: {message}").into(),
+        )
+    })?;
+    validate_stored_kaigi_privacy_hints(&record).map_err(|message| {
         Error::InvariantViolation(
             format!("stored Kaigi record violates V1 constraints: {message}").into(),
         )
@@ -1446,21 +1515,10 @@ fn validate_indexed_kaigi_dependency(
             Ok(IndexedKaigiDependency::RelayRegistration)
         }
         KAIGI_DEPENDENCY_RELAY_FEEDBACK => {
-            let feedback: KaigiRelayFeedback =
-                value.clone().try_into_any_norito().map_err(|err| {
-                    Error::InvariantViolation(
-                        format!("malformed indexed Kaigi relay feedback: {err}").into(),
-                    )
-                })?;
-            let expected_key = kaigi_relay_feedback_key(&feedback.relay_id).map_err(|err| {
-                Error::InvariantViolation(
-                    format!("invalid indexed Kaigi relay feedback identity: {err}").into(),
-                )
-            })?;
-            if &expected_key != key || &feedback.relay_id != indexed_account {
+            let feedback = decode_stored_relay_feedback(domain_id, key, value)?;
+            if &feedback.relay_id != indexed_account {
                 return Err(Error::InvariantViolation(
-                    "Kaigi relay feedback dependency is indexed under the wrong account or key"
-                        .into(),
+                    "Kaigi relay feedback dependency is indexed under the wrong account".into(),
                 ));
             }
             Ok(IndexedKaigiDependency::RelayFeedback)
@@ -2169,6 +2227,47 @@ fn decode_stored_relay_registration(
     }
     Ok(registration)
 }
+fn decode_stored_relay_feedback(
+    domain_id: &DomainId,
+    key: &Name,
+    value: &Json,
+) -> Result<KaigiRelayFeedback, Error> {
+    ensure_kaigi_json_size(
+        value,
+        KAIGI_METADATA_VALUE_MAX_JSON_BYTES_V1,
+        "stored Kaigi relay feedback",
+    )
+    .map_err(|message| Error::InvariantViolation(message.into()))?;
+    let feedback: KaigiRelayFeedback = value.clone().try_into_any_norito().map_err(|err| {
+        Error::InvariantViolation(
+            format!("malformed Kaigi relay feedback in domain {domain_id}: {err}").into(),
+        )
+    })?;
+    let expected_key = kaigi_relay_feedback_key(&feedback.relay_id).map_err(|err| {
+        Error::InvariantViolation(
+            format!("invalid retained Kaigi relay feedback identity: {err}").into(),
+        )
+    })?;
+    if &expected_key != key {
+        return Err(Error::InvariantViolation(
+            "retained Kaigi relay feedback key does not match its relay ID; feedback identifier does not match metadata key"
+                .into(),
+        ));
+    }
+    if feedback
+        .notes
+        .as_deref()
+        .is_some_and(|notes| notes.chars().count() > KAIGI_RELAY_HEALTH_NOTES_MAX_CHARS_V1)
+    {
+        return Err(Error::InvariantViolation(
+            format!(
+                "stored Kaigi relay feedback notes exceed the {KAIGI_RELAY_HEALTH_NOTES_MAX_CHARS_V1}-character limit"
+            )
+            .into(),
+        ));
+    }
+    Ok(feedback)
+}
 fn collect_kaigi_relay_registry(
     world: &impl WorldReadOnly,
 ) -> Result<BTreeMap<AccountId, DomainId>, Error> {
@@ -2208,18 +2307,27 @@ where
     Ok(rebuilt)
 }
 
-fn collect_kaigi_account_dependencies(
+fn collect_kaigi_account_dependencies_at(
     world: &impl WorldReadOnly,
+    max_retained_timestamp_ms: Option<u64>,
 ) -> Result<BTreeMap<AccountId, BTreeSet<KaigiAccountDependencyLocator>>, Error> {
-    collect_kaigi_account_dependencies_from_domains(world.domains_iter())
+    collect_kaigi_account_dependencies_from_domains(world.domains_iter(), max_retained_timestamp_ms)
 }
 
 fn collect_kaigi_account_dependencies_from_domains<D>(
     domains: impl IntoIterator<Item = D>,
+    max_retained_timestamp_ms: Option<u64>,
 ) -> Result<BTreeMap<AccountId, BTreeSet<KaigiAccountDependencyLocator>>, Error>
 where
     D: Borrow<Domain>,
 {
+    let domains = domains.into_iter().collect::<Vec<_>>();
+    let relay_registry = collect_kaigi_relay_registry_from_domains(
+        domains
+            .iter()
+            .map(|domain| <D as Borrow<Domain>>::borrow(domain)),
+    )?;
+    let mut feedback_relays = BTreeSet::new();
     let mut rebuilt = BTreeMap::<AccountId, BTreeSet<KaigiAccountDependencyLocator>>::new();
     for domain in domains {
         let domain = domain.borrow();
@@ -2227,29 +2335,69 @@ where
             let literal = key.as_ref();
             let (kind, accounts) = if literal.starts_with("kaigi__") {
                 let record = decode_stored_kaigi_record(domain.id(), key, value)?;
+                if let Some(maximum) = max_retained_timestamp_ms {
+                    if record.created_at_ms > maximum {
+                        return Err(Error::InvariantViolation(
+                            format!(
+                                "retained Kaigi creation timestamp {} exceeds restored ledger time {maximum}",
+                                record.created_at_ms
+                            )
+                            .into(),
+                        ));
+                    }
+                    if let Some(ended_at_ms) = record.ended_at_ms
+                        && ended_at_ms > maximum
+                    {
+                        return Err(Error::InvariantViolation(
+                            format!(
+                                "retained Kaigi end timestamp {ended_at_ms} exceeds restored ledger time {maximum}"
+                            )
+                            .into(),
+                        ));
+                    }
+                }
                 (
                     KAIGI_DEPENDENCY_ACTIVE_CALL,
                     active_call_dependency_accounts(&record),
                 )
             } else if literal.starts_with("kaigi_relay_feedback__") {
-                let feedback: KaigiRelayFeedback =
-                    value.clone().try_into_any_norito().map_err(|err| {
-                        Error::InvariantViolation(
+                let feedback = decode_stored_relay_feedback(domain.id(), key, value)?;
+                match relay_registry.get(&feedback.relay_id) {
+                    Some(home) if home == domain.id() => {}
+                    Some(home) => {
+                        return Err(Error::InvariantViolation(
                             format!(
-                                "malformed Kaigi relay feedback in domain {}: {err}",
+                                "retained Kaigi relay feedback for {} is stored in domain {} instead of its registered home {home}",
+                                feedback.relay_id,
                                 domain.id()
                             )
                             .into(),
-                        )
-                    })?;
-                let expected_key = kaigi_relay_feedback_key(&feedback.relay_id).map_err(|err| {
-                    Error::InvariantViolation(
-                        format!("invalid retained Kaigi relay feedback identity: {err}").into(),
-                    )
-                })?;
-                if &expected_key != key {
+                        ));
+                    }
+                    None => {
+                        return Err(Error::InvariantViolation(
+                            format!(
+                                "retained Kaigi relay feedback for {} has no registered relay descriptor",
+                                feedback.relay_id
+                            )
+                            .into(),
+                        ));
+                    }
+                }
+                if !feedback_relays.insert(feedback.relay_id.clone()) {
                     return Err(Error::InvariantViolation(
-                        "retained Kaigi relay feedback key does not match its relay ID".into(),
+                        "duplicate Kaigi relay feedback found across domains".into(),
+                    ));
+                }
+                if let Some(maximum) = max_retained_timestamp_ms
+                    && feedback.reported_at_ms > maximum
+                {
+                    return Err(Error::InvariantViolation(
+                        format!(
+                            "retained Kaigi relay feedback timestamp {} exceeds restored ledger time {maximum}",
+                            feedback.reported_at_ms
+                        )
+                        .into(),
                     ));
                 }
                 (
@@ -2280,12 +2428,21 @@ where
 
 /// Rebuild the skipped Kaigi account-dependency reverse index from domain metadata.
 pub(crate) fn rebuild_kaigi_account_dependencies(world: &mut World) -> Result<(), String> {
-    let current =
-        collect_kaigi_account_dependencies(&world.view()).map_err(|error| error.to_string())?;
+    rebuild_kaigi_account_dependencies_at(world, None)
+}
+
+/// Rebuild Kaigi account dependencies while bounding retained timestamps by restored ledger time.
+pub(crate) fn rebuild_kaigi_account_dependencies_at(
+    world: &mut World,
+    max_retained_timestamp_ms: Option<u64>,
+) -> Result<(), String> {
+    let current = collect_kaigi_account_dependencies_at(&world.view(), max_retained_timestamp_ms)
+        .map_err(|error| error.to_string())?;
     let previous = {
         let reverted_domains = world.domains.block_and_revert();
         let rebuilt = collect_kaigi_account_dependencies_from_domains(
             reverted_domains.iter().map(|(_, domain)| domain),
+            max_retained_timestamp_ms,
         )
         .map_err(|error| error.to_string())?;
         // Abort the temporary revert view so authoritative metadata and its undo journal remain
@@ -2298,11 +2455,13 @@ pub(crate) fn rebuild_kaigi_account_dependencies(world: &mut World) -> Result<()
     Ok(())
 }
 
-/// Validate the rebuilt Kaigi account-dependency index against authoritative metadata.
-pub(crate) fn validate_rebuilt_kaigi_account_dependencies(
+/// Validate rebuilt Kaigi dependencies while bounding retained timestamps by restored ledger time.
+pub(crate) fn validate_rebuilt_kaigi_account_dependencies_at(
     world: &impl WorldReadOnly,
+    max_retained_timestamp_ms: Option<u64>,
 ) -> Result<(), String> {
-    let expected = collect_kaigi_account_dependencies(world).map_err(|error| error.to_string())?;
+    let expected = collect_kaigi_account_dependencies_at(world, max_retained_timestamp_ms)
+        .map_err(|error| error.to_string())?;
     let actual = world
         .kaigi_account_dependencies()
         .iter()
@@ -2612,10 +2771,7 @@ fn load_relay_feedback(
     let Some(stored) = domain.metadata().get(&key) else {
         return Ok(None);
     };
-    let feedback: KaigiRelayFeedback = stored
-        .clone()
-        .try_into_any_norito()
-        .map_err(|err| Error::Conversion(err.to_string()))?;
+    let feedback = decode_stored_relay_feedback(&domain_id, &key, stored)?;
     if feedback.relay_id != *relay_id {
         return Err(Error::InvariantViolation(
             "stored Kaigi relay feedback identifier does not match metadata key".into(),
@@ -3144,6 +3300,7 @@ mod tests {
                 alias_tag: None,
             })
             .collect();
+        private.roster_root = KaigiRecord::compute_roster_root(&private.roster_commitments);
         validate_kaigi_record_v1(&private).expect("exact private roster limit is valid");
         private.roster_commitments.push(KaigiParticipantCommitment {
             commitment: hashes[KAIGI_MAX_PARTICIPANTS_V1].clone(),
@@ -3205,6 +3362,32 @@ mod tests {
                 .expect_err("metadata for an unrelated account must fail")
                 .contains("host or a current participant")
         );
+
+        let (mut private, _, _) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        private
+            .participant_metadata
+            .insert(private.host.clone(), Metadata::default());
+        validate_kaigi_record_v1(&private)
+            .expect("private records may retain metadata for their host");
+    }
+    #[test]
+    fn kaigi_record_v1_rejects_unreachable_host_membership_and_billing() {
+        let (mut record, host, participant) = new_record(KaigiPrivacyMode::Transparent);
+        record.billing_account = Some(participant);
+        assert!(
+            validate_kaigi_record_v1(&record)
+                .expect_err("third-party billing cannot be restored before it is supported")
+                .contains("billing account must equal the host")
+        );
+
+        record.billing_account = Some(host.clone());
+        validate_kaigi_record_v1(&record).expect("an explicit host billing account remains valid");
+        record.push_participant(host);
+        assert!(
+            validate_kaigi_record_v1(&record)
+                .expect_err("the implicit host must not be restored as a participant")
+                .contains("participants must not include the host")
+        );
     }
     #[test]
     fn kaigi_record_v1_usage_segment_invariant_is_privacy_mode_sensitive() {
@@ -3220,6 +3403,70 @@ mod tests {
                 .expect_err("private usage segments must retain commitments")
                 .contains("segment count must match")
         );
+    }
+    #[test]
+    fn kaigi_record_v1_enforces_roster_root_and_mode_specific_state() {
+        let (mut private, _, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        private.roster_root = Hash::new(b"incorrect retained roster root");
+        assert!(
+            validate_kaigi_record_v1(&private)
+                .expect_err("a stale private roster root must fail")
+                .contains("roster root does not match")
+        );
+
+        let (mut private, _, _) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        private.push_participant(participant);
+        assert!(
+            validate_kaigi_record_v1(&private)
+                .expect_err("private records must not retain transparent participants")
+                .contains("transparent participant IDs")
+        );
+
+        for artifact in 0..4 {
+            let (mut transparent, _, _) = new_record(KaigiPrivacyMode::Transparent);
+            match artifact {
+                0 => transparent.host_commitment = Some(sample_commitment()),
+                1 => transparent.push_commitment(sample_commitment()),
+                2 => transparent.push_nullifier(sample_nullifier(0xB1)),
+                3 => transparent.push_usage_commitment(Hash::new(b"transparent usage artifact")),
+                _ => unreachable!("bounded artifact cases"),
+            }
+            assert!(
+                validate_kaigi_record_v1(&transparent)
+                    .expect_err("transparent records must reject private artifacts")
+                    .contains("must not retain private roster artifacts")
+            );
+        }
+    }
+    #[test]
+    fn kaigi_record_v1_enforces_lifecycle_timestamp_shape() {
+        let (mut record, _, _) = new_record(KaigiPrivacyMode::Transparent);
+        record.created_at_ms = 10;
+        record.ended_at_ms = Some(10);
+        assert!(
+            validate_kaigi_record_v1(&record)
+                .expect_err("an active record with an end timestamp must fail")
+                .contains("active Kaigi record")
+        );
+
+        record.status = KaigiStatus::Ended;
+        record.ended_at_ms = None;
+        assert!(
+            validate_kaigi_record_v1(&record)
+                .expect_err("an ended record without an end timestamp must fail")
+                .contains("ended Kaigi record")
+        );
+
+        record.ended_at_ms = Some(9);
+        assert!(
+            validate_kaigi_record_v1(&record)
+                .expect_err("an end timestamp before creation must fail")
+                .contains("must not precede creation")
+        );
+
+        record.ended_at_ms = Some(10);
+        validate_kaigi_record_v1(&record)
+            .expect("an ended record at its creation timestamp remains valid");
     }
     #[test]
     fn transparent_join_at_protocol_cap_rejects_without_mutating_record() {
@@ -4300,6 +4547,46 @@ mod tests {
                 .all(|nullifier| nullifier.issued_at_ms == 0)
         );
     }
+    #[test]
+    fn retained_call_decode_rejects_clear_privacy_hints() {
+        let decode = |record: KaigiRecord| {
+            let domain = record.id.domain_id.clone();
+            let key = kaigi_metadata_key(&record.id.call_name).expect("call metadata key");
+            let value = Json::try_new(record).expect("serialize retained record");
+            decode_stored_kaigi_record(&domain, &key, &value)
+        };
+
+        let (clean, _, _) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        decode(clean.clone()).expect("a scrubbed private record remains restorable");
+
+        let mut host_alias = clean.clone();
+        let mut host_commitment = sample_commitment();
+        host_commitment.alias_tag = Some("host".to_owned());
+        host_alias.host_commitment = Some(host_commitment);
+        assert_invariant_error(
+            decode(host_alias).expect_err("a retained host alias tag must fail closed"),
+            "forbidden clear privacy hints",
+        );
+
+        let mut roster_alias = clean.clone();
+        let mut roster_commitment = sample_commitment();
+        roster_commitment.alias_tag = Some("participant".to_owned());
+        roster_alias.push_commitment(roster_commitment);
+        assert_invariant_error(
+            decode(roster_alias).expect_err("a retained roster alias tag must fail closed"),
+            "forbidden clear privacy hints",
+        );
+
+        let mut timed_nullifier = clean;
+        let mut nullifier = sample_nullifier(0xAA);
+        nullifier.issued_at_ms = 1;
+        timed_nullifier.push_nullifier(nullifier);
+        assert_invariant_error(
+            decode(timed_nullifier)
+                .expect_err("a retained nullifier issuance timestamp must fail closed"),
+            "forbidden clear privacy hints",
+        );
+    }
     #[cfg(feature = "kaigi_privacy_mocks")]
     #[test]
     fn privacy_join_updates_commitments_and_leave_stays_off_chain() {
@@ -4601,6 +4888,9 @@ mod tests {
                 "rejected store must not mutate metadata"
             );
 
+            record.max_participants = None;
+            record.status = KaigiStatus::Ended;
+            record.ended_at_ms = None;
             stx.world
                 .domain_mut(&domain)
                 .expect("domain")
@@ -4609,9 +4899,9 @@ mod tests {
                     key.clone(),
                     Json::try_new(record.clone()).expect("serialize legacy invalid record"),
                 );
-            let error = collect_kaigi_account_dependencies(&stx.world)
-                .expect_err("snapshot rebuild must reject an invalid retained record");
-            assert_invariant_error(error, "stored Kaigi record violates V1 constraints");
+            let error = collect_kaigi_account_dependencies_at(&stx.world, None)
+                .expect_err("snapshot rebuild must reject an invalid retained lifecycle");
+            assert_invariant_error(error, "ended Kaigi record must retain an end timestamp");
             let stored: KaigiRecord = stx
                 .world
                 .domain(&domain)
@@ -5343,12 +5633,17 @@ mod tests {
                     .metadata_mut()
                     .insert(
                         feedback_key.clone(),
-                        Json::try_new(feedback).expect("serialize feedback"),
+                        Json::try_new(feedback.clone()).expect("serialize feedback"),
                     );
+                let feedback_dependency = (
+                    KAIGI_DEPENDENCY_RELAY_FEEDBACK,
+                    home.clone(),
+                    feedback_key.clone(),
+                );
                 seed_kaigi_account_dependency_for_testing(
                     stx,
                     &key_relay,
-                    (KAIGI_DEPENDENCY_RELAY_FEEDBACK, home.clone(), feedback_key),
+                    feedback_dependency.clone(),
                 );
                 for error in [
                     ensure_kaigi_relay_home_change_allowed(stx, &key_relay, &home, Some(&other))
@@ -5357,6 +5652,40 @@ mod tests {
                         .expect_err("corrupt feedback key must reject account removal"),
                 ] {
                     assert_invariant_error(error, "feedback key does not match its relay ID");
+                }
+                stx.world
+                    .domain_mut(&home)
+                    .expect("home domain")
+                    .metadata_mut()
+                    .remove(&feedback_key);
+                remove_kaigi_account_dependency_for_testing(stx, &key_relay, &feedback_dependency);
+
+                let correct_feedback_key =
+                    kaigi_relay_feedback_key(&payload_relay).expect("correct feedback key");
+                stx.world
+                    .domain_mut(&home)
+                    .expect("home domain")
+                    .metadata_mut()
+                    .insert(
+                        correct_feedback_key.clone(),
+                        Json::try_new(feedback).expect("serialize feedback"),
+                    );
+                seed_kaigi_account_dependency_for_testing(
+                    stx,
+                    &key_relay,
+                    (
+                        KAIGI_DEPENDENCY_RELAY_FEEDBACK,
+                        home.clone(),
+                        correct_feedback_key,
+                    ),
+                );
+                for error in [
+                    ensure_kaigi_relay_home_change_allowed(stx, &key_relay, &home, Some(&other))
+                        .expect_err("wrong-account feedback index must reject alias movement"),
+                    ensure_kaigi_account_can_unregister(stx, &key_relay)
+                        .expect_err("wrong-account feedback index must reject account removal"),
+                ] {
+                    assert_invariant_error(error, "indexed under the wrong account");
                 }
             },
         );
@@ -6018,10 +6347,7 @@ mod tests {
         );
         let mut record =
             KaigiRecord::from_new(&NewKaigi::with_defaults(call.clone(), host.clone()), 0);
-        record.max_participants = Some(
-            u32::try_from(KAIGI_MAX_PARTICIPANTS_V1 + 1)
-                .expect("participant limit plus one fits u32"),
-        );
+        record.ended_at_ms = Some(0);
         let record_key = kaigi_metadata_key(&call.call_name).expect("Kaigi metadata key");
         let mut world = World::with(
             [Domain::new(domain_id.clone()).build(&ALICE_ID)],
@@ -6054,7 +6380,7 @@ mod tests {
         let error = rebuild_kaigi_account_dependencies(&mut world)
             .expect_err("rebuild must validate invalid records in the latest undo layer");
         assert!(
-            error.contains("stored Kaigi record violates V1 constraints"),
+            error.contains("active Kaigi record must not retain an end timestamp"),
             "unexpected error: {error}"
         );
         assert_eq!(
@@ -6092,6 +6418,175 @@ mod tests {
             let error = collect_kaigi_relay_registry(&stx.world)
                 .expect_err("duplicate relay rows must fail state rebuild");
             assert_invariant_error(error, "duplicate Kaigi relay registration");
+        });
+    }
+    #[test]
+    fn retained_call_rebuild_rejects_future_lifecycle_timestamps() {
+        let (domain, host, _) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("future-retained-call").expect("call name"),
+        );
+        let key = kaigi_metadata_key(&call.call_name).expect("call metadata key");
+        with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&host), |stx| {
+            let mut record =
+                KaigiRecord::from_new(&NewKaigi::with_defaults(call.clone(), host.clone()), 21);
+            stx.world
+                .domain_mut(&domain)
+                .expect("call domain")
+                .metadata_mut()
+                .insert(
+                    key.clone(),
+                    Json::try_new(record.clone()).expect("serialize future-created call"),
+                );
+            let error = collect_kaigi_account_dependencies_at(&stx.world, Some(20))
+                .expect_err("future call creation must fail restore");
+            assert_invariant_error(
+                error,
+                "creation timestamp 21 exceeds restored ledger time 20",
+            );
+
+            record.created_at_ms = 20;
+            record.status = KaigiStatus::Ended;
+            record.ended_at_ms = Some(21);
+            stx.world
+                .domain_mut(&domain)
+                .expect("call domain")
+                .metadata_mut()
+                .insert(
+                    key.clone(),
+                    Json::try_new(record.clone()).expect("serialize future-ended call"),
+                );
+            let error = collect_kaigi_account_dependencies_at(&stx.world, Some(20))
+                .expect_err("future call end must fail restore");
+            assert_invariant_error(error, "end timestamp 21 exceeds restored ledger time 20");
+
+            record.ended_at_ms = Some(20);
+            stx.world
+                .domain_mut(&domain)
+                .expect("call domain")
+                .metadata_mut()
+                .insert(
+                    key.clone(),
+                    Json::try_new(record).expect("serialize valid ended call"),
+                );
+            collect_kaigi_account_dependencies_at(&stx.world, Some(20))
+                .expect("call lifecycle timestamps at ledger time remain restorable");
+        });
+    }
+    #[test]
+    fn retained_relay_feedback_rebuild_rejects_poisoned_rows() {
+        let home = DomainId::try_new("feedback-home", "universal").expect("home domain id");
+        let wrong = DomainId::try_new("feedback-wrong", "universal").expect("wrong domain id");
+        let (relay_id, _) = gen_account_in("feedback-home");
+        let feedback_key =
+            kaigi_relay_feedback_key(&relay_id).expect("relay feedback metadata key");
+        let call = KaigiId::new(
+            home.clone(),
+            Name::from_str("restore-feedback").expect("call name"),
+        );
+        with_state_transaction_at(20, |stx| {
+            for domain_id in [&home, &wrong] {
+                Register::domain(Domain::new(domain_id.clone()))
+                    .execute(&ALICE_ID, stx)
+                    .expect("register feedback domain");
+            }
+            Register::account(Account::new(relay_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay account");
+            add_relay_to_allowlist(stx, &home, &relay_id);
+            RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: relay_id.clone(),
+                    hpke_public_key: vec![0xAA],
+                    bandwidth_class: 1,
+                },
+            }
+            .execute(&relay_id, stx)
+            .expect("register relay descriptor");
+
+            let mut feedback = KaigiRelayFeedback {
+                relay_id: relay_id.clone(),
+                call: call.clone(),
+                reported_by: ALICE_ID.clone(),
+                status: KaigiRelayHealthStatus::Degraded,
+                reported_at_ms: 20,
+                notes: None,
+            };
+            let error = ensure_kaigi_json_len(
+                KAIGI_METADATA_VALUE_MAX_JSON_BYTES_V1 + 1,
+                KAIGI_METADATA_VALUE_MAX_JSON_BYTES_V1,
+                "stored Kaigi relay feedback",
+            )
+            .expect_err("retained feedback must remain inside the V1 JSON byte bound");
+            assert!(
+                error.contains("byte JSON limit"),
+                "unexpected error: {error}"
+            );
+
+            feedback.notes = None;
+            stx.world
+                .domain_mut(&wrong)
+                .expect("wrong domain")
+                .metadata_mut()
+                .insert(
+                    feedback_key.clone(),
+                    Json::try_new(feedback.clone()).expect("serialize wrong-home feedback"),
+                );
+            let error = collect_kaigi_account_dependencies_at(&stx.world, Some(20))
+                .expect_err("wrong-home feedback must fail restore");
+            assert_invariant_error(error, "instead of its registered home");
+            stx.world
+                .domain_mut(&wrong)
+                .expect("wrong domain")
+                .metadata_mut()
+                .remove(&feedback_key);
+
+            feedback.notes = Some("界".repeat(KAIGI_RELAY_HEALTH_NOTES_MAX_CHARS_V1 + 1));
+            stx.world
+                .domain_mut(&home)
+                .expect("home domain")
+                .metadata_mut()
+                .insert(
+                    feedback_key.clone(),
+                    Json::try_new(feedback.clone()).expect("serialize overlong notes"),
+                );
+            let error = collect_kaigi_account_dependencies_at(&stx.world, Some(20))
+                .expect_err("overlong retained feedback notes must fail restore");
+            assert_invariant_error(error, "character limit");
+
+            feedback.notes = None;
+            feedback.reported_at_ms = 21;
+            stx.world
+                .domain_mut(&home)
+                .expect("home domain")
+                .metadata_mut()
+                .insert(
+                    feedback_key.clone(),
+                    Json::try_new(feedback.clone()).expect("serialize future feedback"),
+                );
+            let error = collect_kaigi_account_dependencies_at(&stx.world, Some(20))
+                .expect_err("future retained feedback must fail restore");
+            assert_invariant_error(error, "exceeds restored ledger time");
+
+            feedback.reported_at_ms = 20;
+            stx.world
+                .domain_mut(&home)
+                .expect("home domain")
+                .metadata_mut()
+                .insert(
+                    feedback_key.clone(),
+                    Json::try_new(feedback).expect("serialize valid feedback"),
+                );
+            let rebuilt = collect_kaigi_account_dependencies_at(&stx.world, Some(20))
+                .expect("valid feedback remains restorable");
+            assert!(rebuilt.get(&relay_id).is_some_and(|dependencies| {
+                dependencies.contains(&(
+                    KAIGI_DEPENDENCY_RELAY_FEEDBACK,
+                    home.clone(),
+                    feedback_key.clone(),
+                ))
+            }));
         });
     }
     #[test]

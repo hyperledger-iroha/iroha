@@ -162,6 +162,11 @@ use iroha_torii_shared::{
         SignInProofV1, WalletSignatureV1,
     },
     connect_sdk,
+    validation_fee_api::{
+        VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
+        VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1, VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+        ValidationFeeHijiriQuoteRequestV1, ValidationFeeHijiriQuoteResponseV1,
+    },
 };
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use norito::{
@@ -224,14 +229,11 @@ use sorafs_manifest::{
     validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
-    AnonymityPolicy, OrchestratorConfig, RolloutPhase, TransportPolicy, fetch_via_gateway,
+    AnonymityPolicy, DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR, OrchestratorConfig, RolloutPhase,
+    TransportPolicy, fetch_via_gateway,
     proxy::{
         LocalQuicProxyConfig, ProxyCarBridgeConfig, ProxyKaigiBridgeConfig, ProxyMode,
         ProxyNoritoBridgeConfig,
-    },
-    taikai_cache::{
-        EvictionStats, PromotionStats, QosConfig, QosStats, ReliabilityTuning, TaikaiCacheConfig,
-        TaikaiCacheStatsSnapshot, TaikaiPullQueueStats, TierStats,
     },
 };
 use std::{
@@ -313,9 +315,7 @@ fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
         | "secp-256-k1"
         | "secp-256k1"
         | "secp256k1" => Some(Algorithm::Secp256k1),
-        "dilithium" | "dilithium3" | "ml-dsa" | "ml-dsa-65" | "mldsa" | "mldsa65" => {
-            Some(Algorithm::MlDsa)
-        }
+        "ml-dsa" | "ml-dsa-65" | "mldsa" | "mldsa65" => Some(Algorithm::MlDsa),
         "gost-3410-2012-256-paramset-a" | "gost3410-2012-256-paramset-a" => {
             Some(Algorithm::Gost3410_2012_256ParamSetA)
         }
@@ -2363,82 +2363,6 @@ fn py_stream_budget_to_internal(budget: &PyStreamBudget) -> StreamBudget {
         burst_bytes: budget.burst_bytes,
     }
 }
-fn ensure_positive_u64(value: u64, context: &str) -> PyResult<u64> {
-    if value == 0 {
-        Err(PyValueError::new_err(format!(
-            "{context} must be greater than zero"
-        )))
-    } else {
-        Ok(value)
-    }
-}
-fn ensure_positive_u32(value: u32, context: &str) -> PyResult<u32> {
-    if value == 0 {
-        Err(PyValueError::new_err(format!(
-            "{context} must be greater than zero"
-        )))
-    } else {
-        Ok(value)
-    }
-}
-fn py_taikai_cache_to_internal(cfg: &PyTaikaiCacheOptions) -> PyResult<TaikaiCacheConfig> {
-    let qos = &cfg.qos;
-    let qos_config = QosConfig {
-        priority_rate_bps: ensure_positive_u64(
-            qos.priority_rate_bps,
-            "taikai_cache.qos.priority_rate_bps",
-        )?,
-        standard_rate_bps: ensure_positive_u64(
-            qos.standard_rate_bps,
-            "taikai_cache.qos.standard_rate_bps",
-        )?,
-        bulk_rate_bps: ensure_positive_u64(qos.bulk_rate_bps, "taikai_cache.qos.bulk_rate_bps")?,
-        burst_multiplier: ensure_positive_u32(
-            qos.burst_multiplier,
-            "taikai_cache.qos.burst_multiplier",
-        )?,
-    };
-    Ok(TaikaiCacheConfig {
-        hot_capacity_bytes: ensure_positive_u64(
-            cfg.hot_capacity_bytes,
-            "taikai_cache.hot_capacity_bytes",
-        )?,
-        hot_retention: Duration::from_secs(ensure_positive_u64(
-            cfg.hot_retention_secs,
-            "taikai_cache.hot_retention_secs",
-        )?),
-        warm_capacity_bytes: ensure_positive_u64(
-            cfg.warm_capacity_bytes,
-            "taikai_cache.warm_capacity_bytes",
-        )?,
-        warm_retention: Duration::from_secs(ensure_positive_u64(
-            cfg.warm_retention_secs,
-            "taikai_cache.warm_retention_secs",
-        )?),
-        cold_capacity_bytes: ensure_positive_u64(
-            cfg.cold_capacity_bytes,
-            "taikai_cache.cold_capacity_bytes",
-        )?,
-        cold_retention: Duration::from_secs(ensure_positive_u64(
-            cfg.cold_retention_secs,
-            "taikai_cache.cold_retention_secs",
-        )?),
-        qos: qos_config,
-        reliability: {
-            let defaults = ReliabilityTuning::default();
-            let reliability = cfg.reliability.clone().unwrap_or_default();
-            let failures_to_trip = reliability
-                .failures_to_trip
-                .unwrap_or(defaults.failures_to_trip)
-                .max(1);
-            let open_secs = reliability.open_secs.unwrap_or(defaults.open_secs).max(1);
-            ReliabilityTuning {
-                failures_to_trip,
-                open_secs,
-            }
-        },
-    })
-}
 fn py_transport_hints_to_internal(hints: &[PyTransportHint]) -> Vec<TransportHint> {
     hints
         .iter()
@@ -2942,7 +2866,6 @@ struct PyGatewayFetchOptions {
     transport_policy: Option<String>,
     anonymity_policy: Option<String>,
     local_proxy: Option<PyLocalProxyOptions>,
-    taikai_cache: Option<PyTaikaiCacheOptions>,
 }
 #[derive(Clone, Default, FromPyObject)]
 struct PyLocalProxyOptions {
@@ -2974,29 +2897,6 @@ struct PyLocalProxyKaigiBridgeOptions {
     spool_dir: String,
     extension: Option<String>,
     room_policy: Option<String>,
-}
-#[derive(Clone, FromPyObject)]
-struct PyTaikaiQosOptions {
-    priority_rate_bps: u64,
-    standard_rate_bps: u64,
-    bulk_rate_bps: u64,
-    burst_multiplier: u32,
-}
-#[derive(Clone, Default, FromPyObject)]
-struct PyTaikaiReliabilityOptions {
-    failures_to_trip: Option<u32>,
-    open_secs: Option<u64>,
-}
-#[derive(Clone, FromPyObject)]
-struct PyTaikaiCacheOptions {
-    hot_capacity_bytes: u64,
-    hot_retention_secs: u64,
-    warm_capacity_bytes: u64,
-    warm_retention_secs: u64,
-    cold_capacity_bytes: u64,
-    cold_retention_secs: u64,
-    qos: PyTaikaiQosOptions,
-    reliability: Option<PyTaikaiReliabilityOptions>,
 }
 fn chunk_verification_error_payload(
     py: Python<'_>,
@@ -3085,72 +2985,6 @@ fn attempt_failure_payload(py: Python<'_>, failure: AttemptFailure) -> PyResult<
         }
     }
     Ok(payload.into())
-}
-fn tier_counts_payload(py: Python<'_>, counts: TierStats) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("hot", counts.hot)?;
-    dict.set_item("warm", counts.warm)?;
-    dict.set_item("cold", counts.cold)?;
-    Ok(dict.into())
-}
-fn eviction_counts_payload(py: Python<'_>, counts: EvictionStats) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    let hot = PyDict::new(py);
-    hot.set_item("expired", counts.hot.expired)?;
-    hot.set_item("capacity", counts.hot.capacity)?;
-    let warm = PyDict::new(py);
-    warm.set_item("expired", counts.warm.expired)?;
-    warm.set_item("capacity", counts.warm.capacity)?;
-    let cold = PyDict::new(py);
-    cold.set_item("expired", counts.cold.expired)?;
-    cold.set_item("capacity", counts.cold.capacity)?;
-    dict.set_item("hot", hot)?;
-    dict.set_item("warm", warm)?;
-    dict.set_item("cold", cold)?;
-    Ok(dict.into())
-}
-fn promotions_payload(py: Python<'_>, promotions: PromotionStats) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("warm_to_hot", promotions.warm_to_hot)?;
-    dict.set_item("cold_to_warm", promotions.cold_to_warm)?;
-    dict.set_item("cold_to_hot", promotions.cold_to_hot)?;
-    Ok(dict.into())
-}
-fn qos_counts_payload(py: Python<'_>, counts: QosStats) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("priority", counts.priority)?;
-    dict.set_item("standard", counts.standard)?;
-    dict.set_item("bulk", counts.bulk)?;
-    Ok(dict.into())
-}
-fn taikai_cache_stats_payload(
-    py: Python<'_>,
-    stats: TaikaiCacheStatsSnapshot,
-) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("hits", tier_counts_payload(py, stats.hits)?)?;
-    dict.set_item("misses", stats.misses)?;
-    dict.set_item("inserts", tier_counts_payload(py, stats.inserts)?)?;
-    dict.set_item("evictions", eviction_counts_payload(py, stats.evictions)?)?;
-    dict.set_item("promotions", promotions_payload(py, stats.promotions)?)?;
-    dict.set_item("qos_denials", qos_counts_payload(py, stats.qos_denials)?)?;
-    Ok(dict.into())
-}
-fn taikai_queue_stats_payload(py: Python<'_>, stats: TaikaiPullQueueStats) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("pending_segments", stats.pending_segments)?;
-    dict.set_item("pending_bytes", stats.pending_bytes)?;
-    dict.set_item("pending_batches", stats.pending_batches)?;
-    dict.set_item("in_flight_batches", stats.in_flight_batches)?;
-    dict.set_item("hedged_batches", stats.hedged_batches)?;
-    dict.set_item(
-        "shaper_denials",
-        qos_counts_payload(py, stats.shaper_denials)?,
-    )?;
-    dict.set_item("dropped_segments", stats.dropped_segments)?;
-    dict.set_item("failovers", stats.failovers)?;
-    dict.set_item("open_circuits", stats.open_circuits)?;
-    Ok(dict.into())
 }
 fn attempt_error_payload(py: Python<'_>, error: AttemptError) -> PyResult<Py<PyDict>> {
     let AttemptError { provider, failure } = error;
@@ -3292,7 +3126,6 @@ fn sorafs_multi_fetch_local_py(
                 offset: spec.offset,
                 length: spec.length,
                 digest: spec.digest,
-                taikai_segment_hint: spec.taikai_segment_hint.clone(),
             })
             .collect(),
         files: vec![FilePlan {
@@ -3768,7 +3601,6 @@ fn sorafs_gateway_fetch_py(
                 offset: spec.offset,
                 length: spec.length,
                 digest: spec.digest,
-                taikai_segment_hint: spec.taikai_segment_hint.clone(),
             })
             .collect(),
         files: vec![FilePlan {
@@ -3958,22 +3790,18 @@ fn sorafs_gateway_fetch_py(
         }
         if matches!(proxy_cfg.proxy_mode, ProxyMode::Bridge) && proxy_cfg.norito_bridge.is_none() {
             proxy_cfg.norito_bridge = Some(ProxyNoritoBridgeConfig {
-                spool_dir: defaults::streaming::soranet::PROVISION_SPOOL_DIR.to_string(),
+                spool_dir: DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR.to_string(),
                 extension: Some("norito".to_string()),
             });
         }
         if matches!(proxy_cfg.proxy_mode, ProxyMode::Bridge) && proxy_cfg.kaigi_bridge.is_none() {
             proxy_cfg.kaigi_bridge = Some(ProxyKaigiBridgeConfig {
-                spool_dir: defaults::streaming::soranet::PROVISION_SPOOL_DIR.to_string(),
+                spool_dir: DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR.to_string(),
                 extension: Some("norito".to_string()),
                 room_policy: Some("public".to_string()),
             });
         }
         orchestrator_config.local_proxy = Some(proxy_cfg);
-    }
-    if let Some(cache_opts) = options.taikai_cache.as_ref() {
-        let cache_cfg = py_taikai_cache_to_internal(cache_opts)?;
-        orchestrator_config.taikai_cache = Some(cache_cfg);
     }
     let local_proxy_snapshot = orchestrator_config.local_proxy.clone();
     let gateway_provider_count = provider_inputs.len();
@@ -4169,18 +3997,6 @@ fn sorafs_gateway_fetch_py(
         result.set_item("car_verification", car_dict)?;
     } else {
         result.set_item("car_verification", py.None())?;
-    }
-    if let Some(cache_stats) = session.taikai_cache_stats {
-        let summary = taikai_cache_stats_payload(py, cache_stats)?;
-        result.set_item("taikai_cache_summary", summary)?;
-    } else {
-        result.set_item("taikai_cache_summary", py.None())?;
-    }
-    if let Some(queue_stats) = session.taikai_cache_queue {
-        let queue = taikai_queue_stats_payload(py, queue_stats)?;
-        result.set_item("taikai_cache_queue", queue)?;
-    } else {
-        result.set_item("taikai_cache_queue", py.None())?;
     }
     Ok(result.unbind())
 }
@@ -5853,10 +5669,51 @@ mod tests {
     fn authority_fee_payment_json() -> &'static str {
         r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}}"#
     }
+    fn envelope_json_with_crypto_fields(
+        envelope: &SignedTransactionEnvelope,
+        signature: Vec<u8>,
+        public_key: Vec<u8>,
+    ) -> String {
+        SignedTransactionEnvelope {
+            network_id: envelope.network_id,
+            authority: envelope.authority.clone(),
+            signed_transaction: envelope.signed_transaction.clone(),
+            signed_transaction_versioned: envelope.signed_transaction_versioned.clone(),
+            hash: envelope.hash,
+            signature,
+            public_key,
+        }
+        .to_json()
+        .expect("test envelope JSON")
+    }
     include!("tests/python_crypto_boundary_tests.rs");
     #[test]
     fn native_sdk_bridge_abi_version_is_exactly_twenty_two() {
         assert_eq!(connect_norito_bridge_abi_version_py(), 23);
+    }
+    #[test]
+    fn hijiri_quote_pyo3_codec_encodes_and_rejects_malformed_response() {
+        ensure_python();
+        let account_literal = canonical_i105_from_seed(0x37);
+        Python::attach(|py| {
+            let archive = validation_fee_hijiri_quote_request_v1_py(py, &account_literal, 2)
+                .expect("encode Hijiri quote request");
+            let archive_bytes = archive.bind(py).as_bytes();
+            let decoded: ValidationFeeHijiriQuoteRequestV1 =
+                decode_from_bytes(archive_bytes).expect("decode encoded request");
+            assert_eq!(decoded.account_id.to_string(), account_literal);
+            assert_eq!(decoded.qualifying_transfer_count, 2);
+            assert!(validation_fee_hijiri_quote_request_v1_py(py, &account_literal, 0).is_err());
+
+            let error =
+                validation_fee_verify_hijiri_quote_response_v1_py(b"not norito", archive_bytes)
+                    .expect_err("malformed response must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("not a Hijiri validation-fee quote response")
+            );
+        });
     }
     #[test]
     fn attachments_json_decodes_versioned_signed_transaction() {
@@ -5908,6 +5765,22 @@ mod tests {
             let restored = SignedTransactionEnvelope::from_json(&envelope_type, &envelope_json)
                 .expect("exact envelope JSON roundtrip");
             assert_eq!(restored.network_id, envelope.network_id);
+            let short_signature_json = envelope_json_with_crypto_fields(
+                &envelope,
+                envelope.signature[..63].to_vec(),
+                envelope.public_key.clone(),
+            );
+            let Err(error) =
+                SignedTransactionEnvelope::from_json(&envelope_type, &short_signature_json)
+            else {
+                panic!("63-byte Ed25519 envelope signature must reject");
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("ed25519 signature must be 64 bytes"),
+                "unexpected Ed25519 geometry error: {error}"
+            );
             for retired_key in [
                 "chain",
                 "chainId",
@@ -5945,6 +5818,73 @@ mod tests {
             .expect("signed transaction is non-empty");
         *last ^= 0x01;
         assert!(canonical_signed_transaction_hash_v1(&tampered).is_err());
+    }
+    #[test]
+    fn ml_dsa_signed_transaction_envelope_json_roundtrip_is_algorithm_aware() {
+        ensure_python();
+        let keypair = KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::MlDsa)
+            .expect("derive ML-DSA-65 envelope fixture key");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let fee_payment = parse_fee_payment_intent_json(authority_fee_payment_json())
+            .expect("authority fee payment parses");
+        let signed =
+            ModelTransactionBuilder::new(python_test_network_id().inner, authority, fee_payment)
+                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+                .try_sign(keypair.private_key())
+                .expect("ML-DSA-65 transaction signs");
+        let envelope = signed_transaction_envelope_from_model_v1(&signed)
+            .expect("authenticated ML-DSA-65 envelope");
+        assert_eq!(
+            envelope.signature.len(),
+            Algorithm::MlDsa.signature_payload_len()
+        );
+        assert_eq!(envelope.public_key.len(), 1_952);
+        let envelope_json = envelope.to_json().expect("ML-DSA-65 envelope JSON");
+        Python::attach(|py| {
+            let envelope_type = py.get_type::<SignedTransactionEnvelope>();
+            let restored = SignedTransactionEnvelope::from_json(&envelope_type, &envelope_json)
+                .expect("ML-DSA-65 envelope JSON roundtrip");
+            assert_eq!(restored.signature, envelope.signature);
+            assert_eq!(restored.public_key, envelope.public_key);
+
+            let cases = [
+                (
+                    "short signature",
+                    envelope.signature[..envelope.signature.len() - 1].to_vec(),
+                    envelope.public_key.clone(),
+                    "ml-dsa signature must be 3309 bytes",
+                ),
+                (
+                    "short public key",
+                    envelope.signature.clone(),
+                    envelope.public_key[..envelope.public_key.len() - 1].to_vec(),
+                    "invalid ML-DSA public key length",
+                ),
+                (
+                    "all-zero signature",
+                    vec![0; envelope.signature.len()],
+                    envelope.public_key.clone(),
+                    "all zero",
+                ),
+                (
+                    "all-zero public key",
+                    envelope.signature.clone(),
+                    vec![0; envelope.public_key.len()],
+                    "all-zero material",
+                ),
+            ];
+            for (label, signature, public_key, expected) in cases {
+                let malformed = envelope_json_with_crypto_fields(&envelope, signature, public_key);
+                let Err(error) = SignedTransactionEnvelope::from_json(&envelope_type, &malformed)
+                else {
+                    panic!("{label} must reject");
+                };
+                assert!(
+                    error.to_string().contains(expected),
+                    "{label}: expected {expected:?}, got {error}"
+                );
+            }
+        });
     }
     #[test]
     fn generated_sm2_keypair_uses_checked_os_entropy() {
@@ -7015,55 +6955,6 @@ mod tests {
         assert!(canonical_gateway_provider(invalid_privacy).is_err());
     }
     #[test]
-    fn py_taikai_cache_options_convert_to_internal_config() {
-        ensure_python();
-        let qos = PyTaikaiQosOptions {
-            priority_rate_bps: 83_886_080,
-            standard_rate_bps: 41_943_040,
-            bulk_rate_bps: 12_582_912,
-            burst_multiplier: 4,
-        };
-        let opts = PyTaikaiCacheOptions {
-            hot_capacity_bytes: 8_388_608,
-            hot_retention_secs: 45,
-            warm_capacity_bytes: 33_554_432,
-            warm_retention_secs: 180,
-            cold_capacity_bytes: 268_435_456,
-            cold_retention_secs: 3_600,
-            qos,
-            reliability: None,
-        };
-        let config = py_taikai_cache_to_internal(&opts).expect("config parses");
-        assert_eq!(config.hot_capacity_bytes, 8_388_608);
-        assert_eq!(config.hot_retention.as_secs(), 45);
-        assert_eq!(config.qos.burst_multiplier, 4);
-    }
-    #[test]
-    fn py_taikai_cache_options_reject_zero_values() {
-        ensure_python();
-        let qos = PyTaikaiQosOptions {
-            priority_rate_bps: 83_886_080,
-            standard_rate_bps: 41_943_040,
-            bulk_rate_bps: 12_582_912,
-            burst_multiplier: 4,
-        };
-        let opts = PyTaikaiCacheOptions {
-            hot_capacity_bytes: 0,
-            hot_retention_secs: 45,
-            warm_capacity_bytes: 1,
-            warm_retention_secs: 1,
-            cold_capacity_bytes: 1,
-            cold_retention_secs: 1,
-            qos,
-            reliability: None,
-        };
-        let err = py_taikai_cache_to_internal(&opts).expect_err("zero rejected");
-        assert!(
-            err.to_string()
-                .contains("taikai_cache.hot_capacity_bytes must be greater than zero")
-        );
-    }
-    #[test]
     fn parse_time_trigger_kwargs_handles_known_arguments() {
         ensure_python();
         Python::attach(|py| {
@@ -7986,114 +7877,6 @@ mod tests {
                     "removed policy evidence field `{removed}` must stay absent"
                 );
             }
-        });
-    }
-    #[test]
-    fn taikai_cache_payload_helpers_render_counts() {
-        ensure_python();
-        let mut evictions = EvictionStats::default();
-        evictions.hot.expired = 1;
-        evictions.hot.capacity = 2;
-        evictions.warm.expired = 3;
-        evictions.warm.capacity = 4;
-        evictions.cold.expired = 5;
-        evictions.cold.capacity = 6;
-        let stats = TaikaiCacheStatsSnapshot {
-            hits: TierStats {
-                hot: 7,
-                warm: 8,
-                cold: 9,
-            },
-            misses: 10,
-            inserts: TierStats {
-                hot: 11,
-                warm: 12,
-                cold: 13,
-            },
-            evictions,
-            promotions: PromotionStats {
-                warm_to_hot: 14,
-                cold_to_warm: 15,
-                cold_to_hot: 16,
-            },
-            qos_denials: QosStats {
-                priority: 17,
-                standard: 18,
-                bulk: 19,
-            },
-        };
-        Python::attach(|py| {
-            let summary = taikai_cache_stats_payload(py, stats).expect("payload");
-            let summary = summary.bind(py);
-            let hits = summary
-                .get_item("hits")
-                .expect("hits entry")
-                .expect("hits entry");
-            let hits = hits.cast::<PyDict>().expect("dict");
-            assert_eq!(
-                hits.get_item("hot")
-                    .expect("hot count")
-                    .expect("hot count")
-                    .extract::<u64>()
-                    .expect("u64"),
-                7
-            );
-            let qos = summary.get_item("qos_denials").expect("qos").expect("qos");
-            let qos = qos.cast::<PyDict>().expect("dict");
-            assert_eq!(
-                qos.get_item("standard")
-                    .expect("standard")
-                    .expect("standard")
-                    .extract::<u64>()
-                    .expect("u64"),
-                18
-            );
-        });
-    }
-    #[test]
-    fn taikai_queue_payload_helpers_render_counts() {
-        ensure_python();
-        let queue = TaikaiPullQueueStats {
-            pending_segments: 2,
-            pending_bytes: 3,
-            pending_batches: 4,
-            in_flight_batches: 5,
-            hedged_batches: 6,
-            shaper_denials: QosStats {
-                priority: 1,
-                standard: 2,
-                bulk: 3,
-            },
-            dropped_segments: 7,
-            failovers: 8,
-            open_circuits: 9,
-        };
-        Python::attach(|py| {
-            let payload = taikai_queue_stats_payload(py, queue).expect("payload");
-            let payload = payload.bind(py);
-            assert_eq!(
-                payload
-                    .get_item("hedged_batches")
-                    .expect("hedged")
-                    .expect("hedged")
-                    .extract::<u64>()
-                    .expect("u64"),
-                6
-            );
-            let shaper = payload
-                .get_item("shaper_denials")
-                .expect("shaper")
-                .expect("shaper");
-            let shaper = shaper.cast::<PyDict>().expect("dict");
-            assert_eq!(
-                shaper
-                    .get_item("bulk")
-                    .expect("bulk")
-                    .expect("bulk")
-                    .extract::<u64>()
-                    .expect("u64"),
-                3
-            );
         });
     }
     #[test]
@@ -11703,18 +11486,6 @@ impl SignedTransactionEnvelope {
                 )));
             }
         }
-        if signature.len() != 64 {
-            return Err(PyValueError::new_err(format!(
-                "signature must be 64 bytes, got {}",
-                signature.len()
-            )));
-        }
-        if public_key.len() != 32 {
-            return Err(PyValueError::new_err(format!(
-                "public key must be 32 bytes, got {}",
-                public_key.len()
-            )));
-        }
         let mut hash = [0u8; Hash::LENGTH];
         let hash_bytes = hex::decode(hash_hex).map_err(|err| {
             PyValueError::new_err(format!("invalid hash_hex value `{hash_hex}`: {err}"))
@@ -11743,6 +11514,17 @@ impl SignedTransactionEnvelope {
             ));
         }
         let decoded = decode_canonical_signed_transaction_v1(&signed_transaction_versioned)?;
+        let signatory = require_single_signatory(decoded.authority(), "transaction authority")?;
+        let (algorithm, _) = public_key_to_bytes(signatory, "authority public key")?;
+        let expected_signature_len = algorithm.signature_payload_len();
+        if signature.len() != expected_signature_len {
+            return Err(PyValueError::new_err(format!(
+                "{algorithm} signature must be {expected_signature_len} bytes, got {}",
+                signature.len()
+            )));
+        }
+        checked_signature_from_bytes_for_algorithm(&signature, algorithm, "envelope signature")?;
+        parse_public_key_for_algorithm(algorithm, &public_key)?;
         if decoded.network_id() != Some(&network_id) {
             return Err(PyValueError::new_err(
                 "envelope network_id does not match the signed transaction NetworkId",
@@ -15065,6 +14847,110 @@ fn privacy_validate_compiled_profile_catalog_v1_py(archive: &[u8]) -> i32 {
     validate_local_privacy_compiled_profile_catalog_archive_v1(archive).code()
 }
 #[pyfunction]
+#[pyo3(name = "validation_fee_hijiri_quote_request_v1")]
+fn validation_fee_hijiri_quote_request_v1_py(
+    py: Python<'_>,
+    account_id: &str,
+    qualifying_transfer_count: u32,
+) -> PyResult<Py<PyBytes>> {
+    let account_id = parse_exact_i105_account_id(
+        account_id,
+        "validation_fee_hijiri_quote_request_v1.account_id",
+    )?;
+    let request = ValidationFeeHijiriQuoteRequestV1 {
+        version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+        account_id,
+        qualifying_transfer_count,
+    };
+    request.validate().map_err(|error| {
+        PyValueError::new_err(format!(
+            "invalid Hijiri validation-fee quote request: {error}"
+        ))
+    })?;
+    let archive = norito::to_bytes(&request).map_err(|error| {
+        PyRuntimeError::new_err(format!(
+            "failed to encode Hijiri validation-fee quote request: {error}"
+        ))
+    })?;
+    if archive.is_empty() || archive.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1 {
+        return Err(PyRuntimeError::new_err(
+            "encoded Hijiri validation-fee quote request exceeds its wire bound",
+        ));
+    }
+    Ok(Py::from(PyBytes::new(py, &archive)))
+}
+#[pyfunction]
+#[pyo3(name = "validation_fee_verify_hijiri_quote_response_v1")]
+fn validation_fee_verify_hijiri_quote_response_v1_py(
+    response_norito: &[u8],
+    request_norito: &[u8],
+) -> PyResult<String> {
+    if request_norito.is_empty()
+        || request_norito.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1
+    {
+        return Err(PyValueError::new_err(format!(
+            "request_norito must contain 1..{VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1} bytes"
+        )));
+    }
+    if response_norito.is_empty()
+        || response_norito.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
+    {
+        return Err(PyValueError::new_err(format!(
+            "response_norito must contain 1..{VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1} bytes"
+        )));
+    }
+    let request: ValidationFeeHijiriQuoteRequestV1 =
+        decode_from_bytes(request_norito).map_err(|error| {
+            PyValueError::new_err(format!(
+                "request_norito is not a Hijiri validation-fee quote request: {error}"
+            ))
+        })?;
+    let canonical_request = norito::to_bytes(&request).map_err(|error| {
+        PyRuntimeError::new_err(format!(
+            "failed to re-encode Hijiri validation-fee quote request: {error}"
+        ))
+    })?;
+    if canonical_request != request_norito {
+        return Err(PyValueError::new_err("request_norito is not canonical"));
+    }
+    request.validate().map_err(|error| {
+        PyValueError::new_err(format!(
+            "invalid Hijiri validation-fee quote request: {error}"
+        ))
+    })?;
+    let response: ValidationFeeHijiriQuoteResponseV1 =
+        decode_from_bytes(response_norito).map_err(|error| {
+            PyValueError::new_err(format!(
+                "response_norito is not a Hijiri validation-fee quote response: {error}"
+            ))
+        })?;
+    let canonical_response = norito::to_bytes(&response).map_err(|error| {
+        PyRuntimeError::new_err(format!(
+            "failed to re-encode Hijiri validation-fee quote response: {error}"
+        ))
+    })?;
+    if canonical_response != response_norito {
+        return Err(PyValueError::new_err("response_norito is not canonical"));
+    }
+    response.validate_for_request(&request).map_err(|error| {
+        PyValueError::new_err(format!(
+            "Hijiri validation-fee quote response validation failed: {error}"
+        ))
+    })?;
+    let projection = json::to_json(&response).map_err(|error| {
+        PyRuntimeError::new_err(format!(
+            "failed to project Hijiri validation-fee quote response: {error}"
+        ))
+    })?;
+    if projection.is_empty() || projection.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
+    {
+        return Err(PyRuntimeError::new_err(
+            "verified Hijiri quote projection exceeds its response bound",
+        ));
+    }
+    Ok(projection)
+}
+#[pyfunction]
 #[pyo3(name = "privacy_bridge_abi_version")]
 fn privacy_bridge_abi_version_py() -> u32 {
     PRIVACY_BRIDGE_ABI_VERSION_V1
@@ -15419,6 +15305,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         privacy_validate_compiled_profile_catalog_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        validation_fee_hijiri_quote_request_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        validation_fee_verify_hijiri_quote_response_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(cuda_available_py, module)?)?;

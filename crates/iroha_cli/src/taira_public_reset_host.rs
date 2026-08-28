@@ -13,10 +13,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, eyre};
 use iroha::{
     client::{
-        AccountFaucetPolicyV1, AccountFaucetPreparedTransactionV1,
-        AccountOnboardingPlanReceiptV1, AccountOnboardingPreparedTransactionV1,
-        AccountOnboardingProofRequiredPrepareResponseV1, TairaPublicResetMutationBindingV1,
-        verify_account_faucet_prepared_transaction_v1,
+        AccountFaucetPolicyV1, AccountFaucetPreparedTransactionV1, AccountOnboardingPlanReceiptV1,
+        AccountOnboardingPreparedTransactionV1, AccountOnboardingProofRequiredPrepareResponseV1,
+        TairaPublicResetMutationBindingV1, verify_account_faucet_prepared_transaction_v1,
         verify_account_onboarding_prepared_transaction_v1,
         verify_account_onboarding_proof_required_result_v1,
     },
@@ -28,7 +27,13 @@ use iroha::{
         asset::AssetDefinitionId,
         block::{BlockHeader, consensus_v2::SumeragiV2Status},
         nexus::FeeSponsorProgramId,
+        peer::PeerId,
         prelude::{Name, SignedTransaction},
+        soracloud::{
+            SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SoraContainerManifestV1, SoraContainerRuntimeV1,
+            SoraDeploymentBundleV1, SoraInrouGuestIsaV1, SoraInrouPlacementTargetV1,
+            SoraServiceExecutionPlaneV1, SoraServiceManifestV1,
+        },
         transaction::FeePaymentIntent,
     },
 };
@@ -45,6 +50,10 @@ use reqwest::{
     header::{ACCEPT, CONTENT_TYPE},
 };
 use sha2::{Digest as _, Sha256};
+use sorafs_manifest::operator_preseed::{
+    OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1, OperatorPreseedSessionReceiptV1,
+    OperatorPreseedTargetReceiptV1,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
@@ -71,6 +80,13 @@ const HOST_REQUEST_SCHEMA_V1: &str = "iroha.taira.public-reset.host-request.v1";
 const HOST_RECEIPT_SCHEMA_V1: &str = "iroha.taira.public-reset.host-receipt.v1";
 const HOST_GUARD_SCHEMA_V1: &str = "iroha.taira.public-reset.host-guard.v1";
 const LOCAL_RECEIPT_SCHEMA_V1: &str = "iroha.taira.public-reset.local-receipt.v1";
+const LOCAL_RECEIPT_FIELDS_V1: &[&str] = &[
+    "schema",
+    "authorization_sha256",
+    "authorization_nonce",
+    "receipt_name",
+    "report",
+];
 const GENERATED_MARKER_SCHEMA_V1: &str = "iroha.taira.public-reset.generated-path.v1";
 #[cfg(any(target_os = "linux", test))]
 const CLEANUP_PLAN_SCHEMA_V1: &str = "iroha.taira.public-reset.cleanup-plan.v1";
@@ -98,6 +114,24 @@ const MAX_PROOF_READ_RESPONSE_BYTES: usize =
 const FRAME_LENGTH_BYTES: usize = 8;
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const HOST_ACTION_IN_PROGRESS_MARKER: &str = "iroha.taira.public-reset.host-action-in-progress.v1";
+const INROU_STAGE_UPLOAD_SCHEMA_V1: &str = "iroha.taira.public-reset.inrou-stage-upload.v1";
+const INROU_STAGE_UPLOAD_ROLE_V1: &str = "inrou_stage";
+const MAX_INROU_STAGE_FILES_V1: usize = 4_096;
+const MAX_INROU_STAGE_UPLOAD_MANIFEST_BYTES_V1: usize = 4 * 1024 * 1024;
+const MAX_INROU_BUNDLE_PAYLOAD_BYTES_V1: u64 = 512 * 1024 * 1024;
+const INROU_STAGE_RECEIPT_FILE_V1: &str = "receipt.json";
+const INROU_STAGE_CONTAINER_FILE_V1: &str = "container.json";
+const INROU_STAGE_SERVICE_FILE_V1: &str = "service.json";
+const INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1: &str = "payloads/bundle.bin";
+const INROU_STAGE_GUEST_PAYLOAD_DIR_V1: &str = "payloads/guest";
+const INROU_STAGE_BUNDLE_MANIFEST_FILE_V1: &str = "manifests/bundle.to";
+const INROU_STAGE_GUEST_MANIFEST_FILE_V1: &str = "manifests/aarch64.to";
+const INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1: &str = "payloads/discovery";
+const INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1: &str = "payloads/discovery/index.json";
+const INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1: &str = "manifests/discovery.to";
+const INROU_PRESEED_QUALIFICATION_DIR_V1: &str = ".operator-preseed-v1";
+const MAX_INROU_PRESEED_QUALIFICATIONS_V1: usize = 4_096;
+const MAX_INROU_PRESEED_QUALIFICATION_BYTES_V1: u64 = 1024 * 1024;
 #[cfg(target_os = "linux")]
 const MAX_CLEANUP_ENTRIES: usize = 65_536;
 #[cfg(any(target_os = "linux", test))]
@@ -136,6 +170,163 @@ pub(super) fn is_local_mutation_recovery_pending(error: &eyre::Report) -> bool {
     error
         .downcast_ref::<LocalMutationRecoveryPending>()
         .is_some()
+}
+
+#[derive(Debug)]
+struct PermanentInrouRestartProofError {
+    class: &'static str,
+    detail: String,
+}
+
+impl std::fmt::Display for PermanentInrouRestartProofError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.class, self.detail)
+    }
+}
+
+impl std::error::Error for PermanentInrouRestartProofError {}
+
+#[derive(Debug)]
+struct InvalidLocalReceiptEvidence {
+    detail: String,
+}
+
+impl std::fmt::Display for InvalidLocalReceiptEvidence {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.detail)
+    }
+}
+
+impl std::error::Error for InvalidLocalReceiptEvidence {}
+
+fn invalid_local_receipt_evidence(detail: impl Into<String>) -> eyre::Report {
+    InvalidLocalReceiptEvidence {
+        detail: detail.into(),
+    }
+    .into()
+}
+
+fn require_exact_local_receipt_fields(object: &norito::json::Map, label: &str) -> Result<()> {
+    require_exact_json_fields(object, LOCAL_RECEIPT_FIELDS_V1, label)
+        .map_err(|error| invalid_local_receipt_evidence(format!("{error:#}")))
+}
+
+fn is_exact_local_receipt_envelope(
+    bytes: &[u8],
+    authorization_sha256: &str,
+    authorization_nonce: &str,
+    receipt_name: &str,
+) -> bool {
+    json::from_slice::<norito::json::Value>(bytes)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .is_some_and(|object| {
+            require_exact_local_receipt_fields(&object, "staged local receipt envelope").is_ok()
+                && object.get("schema").and_then(norito::json::Value::as_str)
+                    == Some(LOCAL_RECEIPT_SCHEMA_V1)
+                && object
+                    .get("authorization_sha256")
+                    .and_then(norito::json::Value::as_str)
+                    == Some(authorization_sha256)
+                && object
+                    .get("authorization_nonce")
+                    .and_then(norito::json::Value::as_str)
+                    == Some(authorization_nonce)
+                && object
+                    .get("receipt_name")
+                    .and_then(norito::json::Value::as_str)
+                    == Some(receipt_name)
+                && object.contains_key("report")
+        })
+}
+
+fn is_provably_truncated_local_receipt_json(error: &json::Error, input_len: usize) -> bool {
+    match error {
+        json::Error::UnexpectedCharacter {
+            found: json::UnexpectedToken::Eof,
+            ..
+        }
+        | json::Error::UnterminatedString { .. }
+        | json::Error::UnexpectedEof { .. }
+        | json::Error::EofEscape { .. }
+        | json::Error::EofHex { .. } => true,
+        json::Error::WithPos { byte, .. }
+        | json::Error::ExpectedDigits { byte, .. }
+        | json::Error::ExpectedFracDigits { byte, .. }
+        | json::Error::ExpectedExpDigits { byte, .. }
+        | json::Error::ExpectedObjectEnd { byte, .. }
+        | json::Error::ExpectedArrayEnd { byte, .. }
+        | json::Error::ExpectedKeyString { byte, .. }
+        | json::Error::ExpectedKeyHashQuote { byte, .. }
+        | json::Error::ExpectedColon { byte, .. }
+        | json::Error::ExpectedCommaOrArrayEnd { byte, .. }
+        | json::Error::ExpectedCommaOrObjectEnd { byte, .. } => *byte >= input_len,
+        _ => false,
+    }
+}
+
+fn classify_inrou_restart_semantic_result<T>(
+    result: Result<T>,
+    recovery_only: bool,
+    class: &'static str,
+) -> Result<T> {
+    if !recovery_only {
+        return result;
+    }
+    result.map_err(|error| {
+        PermanentInrouRestartProofError {
+            class,
+            detail: format!("{error:#}"),
+        }
+        .into()
+    })
+}
+
+fn classify_inrou_restart_receipt_read<T>(
+    result: Result<T>,
+    recovery_only: bool,
+    class: &'static str,
+) -> Result<T> {
+    match result {
+        Err(error)
+            if recovery_only
+                && error
+                    .downcast_ref::<InvalidLocalReceiptEvidence>()
+                    .is_some() =>
+        {
+            classify_inrou_restart_semantic_result(Err(error), true, class)
+        }
+        result => result,
+    }
+}
+
+fn require_retained_restart_wave_before_frontier<T>(
+    receipt: Option<T>,
+    recovery_only: bool,
+    wave: usize,
+    recovery_frontier: usize,
+    class: &'static str,
+) -> Result<Option<T>> {
+    if recovery_only && wave < recovery_frontier && receipt.is_none() {
+        return classify_inrou_restart_semantic_result(
+            Err(eyre!(
+                "restart recovery lacks a retained receipt before its completed frontier"
+            )),
+            true,
+            class,
+        );
+    }
+    Ok(receipt)
+}
+
+fn classify_inrou_restart_recovery_outcome(result: Result<()>) -> Result<RecoveryOutcome> {
+    match result {
+        Ok(()) => Ok(RecoveryOutcome::Applied),
+        Err(error) => match error.downcast_ref::<PermanentInrouRestartProofError>() {
+            Some(permanent) => Ok(RecoveryOutcome::Rejected(permanent.class.to_owned())),
+            None => Err(error),
+        },
+    }
 }
 
 /// Hidden remote dispatcher command. Requests are accepted only on stdin.
@@ -403,14 +594,33 @@ struct CleanupPlanV1 {
     entries: Vec<CleanupPlanEntryV1>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct InrouStageUploadFileV1 {
+    path: String,
+    size: u64,
+    sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct InrouStageUploadManifestV1 {
+    schema: String,
+    stage_tree_sha256: String,
+    stage_bytes: u64,
+    files: Vec<InrouStageUploadFileV1>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HostAction {
     Preflight,
     Upload,
     Stage,
+    InrouStageUpload,
     Stop,
     Install,
     Reset,
+    Preseed,
     Start,
     Restart,
     EdgeStage,
@@ -428,9 +638,11 @@ impl HostAction {
             Self::Preflight => "preflight",
             Self::Upload => "upload",
             Self::Stage => "stage",
+            Self::InrouStageUpload => "inrou_stage_upload",
             Self::Stop => "stop",
             Self::Install => "install",
             Self::Reset => "reset",
+            Self::Preseed => "preseed",
             Self::Start => "start",
             Self::Restart => "restart",
             Self::EdgeStage => "edge_stage",
@@ -448,9 +660,11 @@ impl HostAction {
             "preflight" => Ok(Self::Preflight),
             "upload" => Ok(Self::Upload),
             "stage" => Ok(Self::Stage),
+            "inrou_stage_upload" => Ok(Self::InrouStageUpload),
             "stop" => Ok(Self::Stop),
             "install" => Ok(Self::Install),
             "reset" => Ok(Self::Reset),
+            "preseed" => Ok(Self::Preseed),
             "start" => Ok(Self::Start),
             "restart" => Ok(Self::Restart),
             "edge_stage" => Ok(Self::EdgeStage),
@@ -466,10 +680,13 @@ impl HostAction {
 
     const fn timeout_secs(self, inventory: &InventoryV1) -> u64 {
         match self {
-            Self::Preflight | Self::Upload | Self::Stage => inventory.timeouts.install_secs,
+            Self::Preflight | Self::Upload | Self::Stage | Self::InrouStageUpload => {
+                inventory.timeouts.install_secs
+            }
             Self::Stop => inventory.timeouts.stop_secs,
             Self::Install => inventory.timeouts.install_secs,
             Self::Reset => inventory.timeouts.reset_secs,
+            Self::Preseed => inventory.timeouts.reset_secs,
             Self::Start => inventory.timeouts.start_secs,
             Self::Restart => inventory.timeouts.restart_secs,
             Self::EdgeStage | Self::EdgeCutover | Self::EdgeVerify | Self::Seal => {
@@ -559,7 +776,7 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
         ));
     }
     let (admitted, _chain_guard) = admit_host_request(request, action)?;
-    if action != HostAction::Upload {
+    if !matches!(action, HostAction::Upload | HostAction::InrouStageUpload) {
         require_stream_eof(body)?;
     }
     if action == HostAction::Preflight {
@@ -617,8 +834,10 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
     if let Some(mut receipt) =
         read_existing_host_receipt(&receipt_dir, &receipt_name, &admitted, action)?
     {
-        if action == HostAction::Upload {
-            verify_upload_body(&admitted, body, None)?;
+        match action {
+            HostAction::Upload => verify_upload_body(&admitted, body, None)?,
+            HostAction::InrouStageUpload => verify_inrou_stage_upload_body(&admitted, body, false)?,
+            _ => {}
         }
         if action == HostAction::Cleanup {
             verify_completed_cleanup_plan(&admitted, Some(&receipt))?;
@@ -658,8 +877,10 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
         )
         && revalidate_cached_action_postcondition(&admitted, action).is_ok()
     {
-        if action == HostAction::Upload {
-            verify_upload_body(&admitted, body, None)?;
+        match action {
+            HostAction::Upload => verify_upload_body(&admitted, body, None)?,
+            HostAction::InrouStageUpload => verify_inrou_stage_upload_body(&admitted, body, false)?,
+            _ => {}
         }
         let receipt = host_receipt(
             &admitted,
@@ -870,6 +1091,7 @@ fn validate_prepared_mutation_identity(admitted: &HostAdmission) -> Result<()> {
                 | "write_canary"
                 | "inrou_bundle_pin"
                 | "inrou_guest_pin"
+                | "inrou_discovery_pin"
                 | "inrou_canary"
         ),
         "post_edge" | "restart-wave-1" | "restart-wave-2" | "restart-wave-3" | "restart-wave-4" => {
@@ -938,7 +1160,8 @@ fn mutation_predecessor_kind(kind: &str, phase: &str) -> Option<&'static str> {
         (_, "write_canary") => Some("faucet"),
         ("pre_edge", "inrou_bundle_pin") => Some("write_canary"),
         ("pre_edge", "inrou_guest_pin") => Some("inrou_bundle_pin"),
-        ("pre_edge", "inrou_canary") => Some("inrou_guest_pin"),
+        ("pre_edge", "inrou_discovery_pin") => Some("inrou_guest_pin"),
+        ("pre_edge", "inrou_canary") => Some("inrou_discovery_pin"),
         _ => None,
     }
 }
@@ -1108,7 +1331,7 @@ fn validate_prepared_mutation_envelope(
     }
     let is_inrou = matches!(
         admitted.request.mutation_kind.as_str(),
-        "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_canary"
+        "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_discovery_pin" | "inrou_canary"
     );
     if !is_inrou
         && !matches!(
@@ -1310,8 +1533,16 @@ fn validate_prepared_mutation_envelope(
                 "bundle_manifest_digest_hex",
                 "guest_content_cid",
                 "guest_manifest_digest_hex",
+                "discovery_payload_dir",
+                "discovery_document_hash",
+                "discovery_content_cid",
+                "discovery_manifest_digest_hex",
+                "public_discovery_url",
+                "public_discovery_cid_host_url",
+                "deployment_bundle_hash",
                 "container_manifest_hash",
                 "service_manifest_hash",
+                "placement_targets",
             ],
             "prepared Inrou stage identity",
         )?;
@@ -1335,6 +1566,31 @@ fn validate_prepared_mutation_envelope(
                 canary.guest_manifest_digest_hex.as_str(),
             ),
             (
+                "discovery_payload_dir",
+                canary.discovery_payload_dir.as_str(),
+            ),
+            (
+                "discovery_document_hash",
+                canary.discovery_document_hash.as_str(),
+            ),
+            (
+                "discovery_content_cid",
+                canary.discovery_content_cid.as_str(),
+            ),
+            (
+                "discovery_manifest_digest_hex",
+                canary.discovery_manifest_digest_hex.as_str(),
+            ),
+            ("public_discovery_url", canary.public_discovery_url.as_str()),
+            (
+                "public_discovery_cid_host_url",
+                canary.public_discovery_cid_host_url.as_str(),
+            ),
+            (
+                "deployment_bundle_hash",
+                canary.deployment_bundle_hash.as_str(),
+            ),
+            (
                 "container_manifest_hash",
                 canary.container_manifest_hash.as_str(),
             ),
@@ -1349,6 +1605,18 @@ fn validate_prepared_mutation_envelope(
                 ));
             }
         }
+        let placement_targets = json::from_value::<BTreeSet<SoraInrouPlacementTargetV1>>(
+            stage
+                .get("placement_targets")
+                .cloned()
+                .ok_or_else(|| eyre!("prepared Inrou stage identity omits placement targets"))?,
+        )
+        .wrap_err("prepared Inrou stage placement targets are invalid")?;
+        if placement_targets != inventory_inrou_placement_targets(&admitted.inventory)? {
+            return Err(eyre!(
+                "prepared Inrou stage placement targets differ from the exact validator-client inventory"
+            ));
+        }
         Some(crate::soracloud::TairaInrouStageIdentity {
             service_name: canary.service_name.clone(),
             service_version: canary.service_version.clone(),
@@ -1361,8 +1629,16 @@ fn validate_prepared_mutation_envelope(
             bundle_manifest_digest_hex: canary.bundle_manifest_digest_hex.clone(),
             guest_content_cid: canary.guest_content_cid.clone(),
             guest_manifest_digest_hex: canary.guest_manifest_digest_hex.clone(),
+            discovery_payload_dir: canary.discovery_payload_dir.clone(),
+            discovery_document_hash: canary.discovery_document_hash.clone(),
+            discovery_content_cid: canary.discovery_content_cid.clone(),
+            discovery_manifest_digest_hex: canary.discovery_manifest_digest_hex.clone(),
+            public_discovery_url: canary.public_discovery_url.clone(),
+            public_discovery_cid_host_url: canary.public_discovery_cid_host_url.clone(),
+            deployment_bundle_hash: canary.deployment_bundle_hash.clone(),
             container_manifest_hash: canary.container_manifest_hash.clone(),
             service_manifest_hash: canary.service_manifest_hash.clone(),
+            placement_targets,
         })
     } else {
         None
@@ -1471,7 +1747,7 @@ fn validate_prepared_mutation_envelope(
             )
             .wrap_err("prepared final-canary transaction authentication failed")?;
         }
-        "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_canary" => {
+        "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_discovery_pin" | "inrou_canary" => {
             require_exact_json_fields(
                 operation_envelope,
                 &[
@@ -1636,7 +1912,9 @@ fn validate_prepared_mutation_envelope(
                 eyre!("prepared transaction fee quote is semantically invalid: {error}")
             })?;
         if json::to_value(&fee_quote)? != norito::json::Value::Object(fee_quote_value.clone()) {
-            return Err(eyre!("prepared transaction fee quote is not canonical V1 JSON"));
+            return Err(eyre!(
+                "prepared transaction fee quote is not canonical V1 JSON"
+            ));
         }
     }
     if is_inrou {
@@ -1692,6 +1970,9 @@ fn validate_prepared_mutation_envelope(
         let prepared_operation = match admitted.request.mutation_kind.as_str() {
             "inrou_bundle_pin" => crate::soracloud::TairaInrouCanaryPreparedOperationV1::BundlePin,
             "inrou_guest_pin" => crate::soracloud::TairaInrouCanaryPreparedOperationV1::GuestPin,
+            "inrou_discovery_pin" => {
+                crate::soracloud::TairaInrouCanaryPreparedOperationV1::DiscoveryPin
+            }
             "inrou_canary" => {
                 crate::soracloud::TairaInrouCanaryPreparedOperationV1::ServiceMutation
             }
@@ -1778,12 +2059,12 @@ fn inventory_fee_payment_intent(inventory: &InventoryV1) -> Result<FeePaymentInt
 }
 
 fn inventory_faucet_policy(inventory: &InventoryV1) -> Result<AccountFaucetPolicyV1> {
+    let _chain_guard = ChainDiscriminantGuard::enter(inventory.chain_discriminant);
     let authority = AccountId::parse_encoded(&inventory.faucet_policy.authority)
         .wrap_err("signed inventory faucet authority is invalid")?;
-    let asset_definition_id = AssetDefinitionId::from_str(
-        &inventory.faucet_policy.asset_definition_id,
-    )
-    .wrap_err("signed inventory faucet asset definition is invalid")?;
+    let asset_definition_id =
+        AssetDefinitionId::from_str(&inventory.faucet_policy.asset_definition_id)
+            .wrap_err("signed inventory faucet asset definition is invalid")?;
     AccountFaucetPolicyV1::try_new(
         authority,
         asset_definition_id,
@@ -1831,6 +2112,7 @@ fn prepared_operation_identity(kind: &str) -> Result<(&'static str, &'static str
         "write_canary" => ("final_canary", "final_canary"),
         "inrou_bundle_pin" => ("inrou_bundle_pin", "bundle_pin"),
         "inrou_guest_pin" => ("inrou_guest_pin", "guest_pin"),
+        "inrou_discovery_pin" => ("inrou_discovery_pin", "discovery_pin"),
         "inrou_canary" => ("inrou_canary", "service_mutation"),
         _ => return Err(eyre!("prepared mutation child kind is outside V1")),
     })
@@ -1931,7 +2213,7 @@ fn validate_prepared_mutation_applied_evidence(
         .ok_or_else(|| eyre!("prepared mutation Applied evidence is not an object"))?;
     let is_inrou = matches!(
         prepared.kind.as_str(),
-        "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_canary"
+        "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_discovery_pin" | "inrou_canary"
     );
     let service_applied = prepared.kind == "inrou_canary";
     require_exact_json_fields(
@@ -2815,7 +3097,6 @@ fn admit_host_request(
         json::from_slice(&trusted_key_bytes).wrap_err("host request trusted key is invalid")?;
     let chain_guard = super::enter_inventory_chain_discriminant(&inventory)?;
     validate_inventory(&inventory)?;
-    validate_first_release_physical_host(&inventory)?;
     let inventory_sha256 = sha256_hex(&inventory_bytes);
     let authorization_sha256 = authorization_semantic_sha256(&authorization, &trusted_key)?;
     if authorization_sha256 != request.authorization_semantic_sha256 {
@@ -2891,7 +3172,7 @@ fn admit_host_request(
             now,
         )?;
     }
-    validate_host_artifact_request(&request, &target, action)?;
+    validate_host_artifact_request(&request, &inventory, &target, action)?;
     let request_sha256 = host_request_identity_sha256(&request)?;
     let action_deadline = monotonic_now
         .checked_add(Duration::from_millis(
@@ -2901,18 +3182,21 @@ fn admit_host_request(
                 .ok_or_else(|| eyre!("host action deadline elapsed during admission"))?,
         ))
         .ok_or_else(|| eyre!("host monotonic action deadline overflow"))?;
-    Ok((HostAdmission {
-        request,
-        request_sha256,
-        inventory,
-        inventory_sha256,
-        authorization,
-        authorization_sha256,
-        target,
-        guard,
-        action_deadline,
-        execution_expired,
-    }, chain_guard))
+    Ok((
+        HostAdmission {
+            request,
+            request_sha256,
+            inventory,
+            inventory_sha256,
+            authorization,
+            authorization_sha256,
+            target,
+            guard,
+            action_deadline,
+            execution_expired,
+        },
+        chain_guard,
+    ))
 }
 
 fn upload_parent(service_root: &str) -> String {
@@ -2920,20 +3204,6 @@ fn upload_parent(service_root: &str) -> String {
         .join(".public-reset-upload-v1")
         .to_string_lossy()
         .into_owned()
-}
-
-pub(super) fn validate_first_release_physical_host(inventory: &InventoryV1) -> Result<()> {
-    let expected = inventory.edge.endpoint.host_identity_sha256.as_str();
-    if inventory
-        .validators
-        .iter()
-        .any(|validator| validator.endpoint.host_identity_sha256 != expected)
-    {
-        return Err(eyre!(
-            "first-release public reset requires edge and all four validator aliases on one exact physical SSH host identity"
-        ));
-    }
-    Ok(())
 }
 
 fn host_request_identity_sha256(request: &HostRequestV1) -> Result<String> {
@@ -2993,6 +3263,7 @@ fn validate_action_deadline(
 
 fn validate_host_artifact_request(
     request: &HostRequestV1,
+    inventory: &InventoryV1,
     target: &HostTarget,
     action: HostAction,
 ) -> Result<()> {
@@ -3004,6 +3275,24 @@ fn validate_host_artifact_request(
         {
             return Err(eyre!(
                 "upload request does not bind one exact inventory artifact"
+            ));
+        }
+    } else if action == HostAction::InrouStageUpload {
+        let carrier = inventory
+            .validators
+            .iter()
+            .find(|validator| {
+                validator.endpoint.host_identity_sha256 == target.endpoint().host_identity_sha256
+            })
+            .ok_or_else(|| eyre!("Inrou stage upload inventory has no validator carrier"))?;
+        if target.slug() != carrier.slug
+            || request.artifact_role != INROU_STAGE_UPLOAD_ROLE_V1
+            || request.artifact_sha256 != inventory.inrou_canary.stage_tree_sha256
+            || request.artifact_size != inventory.inrou_canary.stage_bytes
+            || request.artifact_mode != 0o400
+        {
+            return Err(eyre!(
+                "Inrou stage upload request does not bind the exact host-scoped signed stage"
             ));
         }
     } else if !request.artifact_role.is_empty()
@@ -3139,7 +3428,7 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
     if uname_system != b"Linux\n" || uname_machine != b"aarch64\n" {
         return Err(eyre!("host platform is not exact Linux/AArch64"));
     }
-    if matches!(admitted.target, HostTarget::Validator(_)) {
+    if matches!(&admitted.target, HostTarget::Validator(_)) {
         require_kvm_api_v12()?;
     }
     match &admitted.target {
@@ -3318,6 +3607,7 @@ fn run_host_command(program: &str, args: &[&str], deadline: Instant) -> Result<V
             args: args.iter().map(OsString::from).collect(),
             stdin_prefix: Vec::new(),
             stdin_file: None,
+            stdin_files: Vec::new(),
             inherited_files: Vec::new(),
             deadline,
         })?,
@@ -3648,13 +3938,25 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
             artifact_role: String::new(),
         });
     }
-    for action in [
-        HostAction::Stop,
-        HostAction::Install,
-        HostAction::Reset,
-        HostAction::Start,
-        HostAction::Restart,
-    ] {
+    for action in [HostAction::Stop, HostAction::Install, HostAction::Reset] {
+        for validator in &validators {
+            plan.push(HostActionKeyV1 {
+                host_slug: validator.slug.clone(),
+                action: action.label().to_owned(),
+                artifact_role: String::new(),
+            });
+        }
+    }
+    if let Some(carrier) = validators.first() {
+        for action in [HostAction::InrouStageUpload, HostAction::Preseed] {
+            plan.push(HostActionKeyV1 {
+                host_slug: carrier.slug.clone(),
+                action: action.label().to_owned(),
+                artifact_role: String::new(),
+            });
+        }
+    }
+    for action in [HostAction::Start, HostAction::Restart] {
         for validator in &validators {
             plan.push(HostActionKeyV1 {
                 host_slug: validator.slug.clone(),
@@ -3973,7 +4275,14 @@ fn rollback_rank(inventory: &InventoryV1, slug: &str) -> Option<u8> {
 fn host_action_touches_live_state(key: &HostActionKeyV1) -> bool {
     matches!(
         key.action.as_str(),
-        "stop" | "install" | "reset" | "start" | "restart" | "edge_cutover" | "edge_verify"
+        "stop"
+            | "install"
+            | "reset"
+            | "preseed"
+            | "start"
+            | "restart"
+            | "edge_cutover"
+            | "edge_verify"
     )
 }
 
@@ -4069,7 +4378,7 @@ fn lock_host_action(admitted: &HostAdmission) -> Result<File> {
     }
 }
 
-fn host_coordination_root(admitted: &HostAdmission) -> Result<PathBuf> {
+fn host_coordination_path(admitted: &HostAdmission) -> Result<PathBuf> {
     let guard = Path::new(admitted.target.reset_guard());
     let control = guard
         .parent()
@@ -4079,10 +4388,20 @@ fn host_coordination_root(admitted: &HostAdmission) -> Result<PathBuf> {
             "reset guard escaped the fixed host-global control root"
         ));
     }
+    Ok(control
+        .join("hosts")
+        .join(&admitted.target.endpoint().host_identity_sha256))
+}
+
+fn host_coordination_root(admitted: &HostAdmission) -> Result<PathBuf> {
+    let root = host_coordination_path(admitted)?;
+    let control = root
+        .parent()
+        .and_then(Path::parent)
+        .expect("validated host coordination path has a control root");
     require_root_directory(control, true, "host-global control root")?;
     let hosts = control.join("hosts");
     ensure_root_directory_with_mode(&hosts, 0o700)?;
-    let root = hosts.join(&admitted.target.endpoint().host_identity_sha256);
     ensure_root_directory_with_mode(&root, 0o700)?;
     Ok(root)
 }
@@ -4223,6 +4542,9 @@ fn revalidate_cached_action_postcondition(
             let expected = artifact(admitted.target.artifacts(), &admitted.request.artifact_role)?;
             verify_regular_hash(&path, &expected.sha256)
         }
+        HostAction::InrouStageUpload => {
+            validate_host_inrou_stage(admitted, &inrou_stage_root(admitted)?)
+        }
         HostAction::Stage | HostAction::EdgeStage => verify_staged_artifacts(admitted),
         HostAction::Stop => {
             let HostTarget::Validator(validator) = &admitted.target else {
@@ -4246,6 +4568,7 @@ fn revalidate_cached_action_postcondition(
             Ok(())
         }
         HostAction::Reset => verify_fresh_state(admitted),
+        HostAction::Preseed => preseed_inrou_stores(admitted, false),
         HostAction::Start | HostAction::Restart => {
             let HostTarget::Validator(validator) = &admitted.target else {
                 return Err(eyre!("cached active receipt requires a validator target"));
@@ -4261,6 +4584,7 @@ fn revalidate_cached_action_postcondition(
                 label,
                 &validator.systemd_unit,
             )?;
+            verify_preseed_barrier_for_start(admitted)?;
             require_unit_active(&validator.systemd_unit, admitted.action_deadline)?;
             attest_validator_process(admitted, validator, &candidate, true)
         }
@@ -4316,6 +4640,17 @@ fn revalidate_current_target_postcondition(
         })
         .map(|key| HostAction::parse(&key.action))
         .transpose()?;
+    if current == Some(HostAction::Reset)
+        && completed
+            .iter()
+            .any(|key| key.action == HostAction::Preseed.label())
+    {
+        // Preseed deliberately populates every reset-generated store on this
+        // physical host. Once that barrier is durable, an older validator
+        // receipt must prove the host-scoped barrier rather than incorrectly
+        // requiring its SoraFS directory to remain empty.
+        return verify_preseed_barrier_for_start(admitted);
+    }
     match current {
         Some(HostAction::Cleanup) => Ok(()),
         Some(action) => revalidate_cached_action_postcondition(admitted, action),
@@ -4452,6 +4787,14 @@ fn execute_host_action(
             verify_upload_body(admitted, body, Some(&destination))?;
             Ok((0, 0, "artifact uploaded and rehashed".to_owned()))
         }
+        HostAction::InrouStageUpload => {
+            verify_inrou_stage_upload_body(admitted, body, true)?;
+            Ok((
+                0,
+                0,
+                "canonical host-scoped Inrou stage uploaded and fully revalidated".to_owned(),
+            ))
+        }
         HostAction::Stage | HostAction::EdgeStage => {
             verify_staged_artifacts(admitted)?;
             Ok((0, 0, "complete staged artifact closure verified".to_owned()))
@@ -4477,10 +4820,28 @@ fn execute_host_action(
             reset_validator_state(admitted)?;
             Ok((0, 0, "validator state atomically reset".to_owned()))
         }
+        HostAction::Preseed => {
+            preseed_inrou_stores(admitted, true)?;
+            Ok((
+                0,
+                0,
+                "all physical-host Inrou stores preseeded and read-revalidated under one offline barrier"
+                    .to_owned(),
+            ))
+        }
         HostAction::Start => {
             let HostTarget::Validator(validator) = &admitted.target else {
                 return Err(eyre!("start action requires a validator target"));
             };
+            let carrier = inrou_stage_carrier(
+                &admitted.inventory,
+                &validator.endpoint.host_identity_sha256,
+            )?;
+            if carrier.slug == validator.slug {
+                preseed_inrou_stores(admitted, false)?;
+            } else {
+                verify_preseed_barrier_for_start(admitted)?;
+            }
             start_unit(admitted, "start", &validator.systemd_unit)?;
             let release = Path::new(&validator.service_root)
                 .join("releases")
@@ -4492,6 +4853,7 @@ fn execute_host_action(
             let HostTarget::Validator(validator) = &admitted.target else {
                 return Err(eyre!("restart action requires a validator target"));
             };
+            verify_preseed_barrier_for_start(admitted)?;
             restart_unit(admitted, validator)?;
             let release = Path::new(&validator.service_root)
                 .join("releases")
@@ -4660,6 +5022,634 @@ fn verify_upload_body(
     }
     verify_regular_hash(destination, &artifact.sha256)?;
     sync_directory(destination.parent().expect("artifact has parent"))
+}
+
+fn read_inrou_stage_upload_manifest(body: &mut impl Read) -> Result<InrouStageUploadManifestV1> {
+    let mut framed_length = [0_u8; FRAME_LENGTH_BYTES + 1];
+    body.read_exact(&mut framed_length)
+        .wrap_err("Inrou stage upload manifest frame is truncated")?;
+    if framed_length[FRAME_LENGTH_BYTES] != b'\n'
+        || !framed_length[..FRAME_LENGTH_BYTES]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return Err(eyre!(
+            "Inrou stage upload manifest length is not canonical hexadecimal"
+        ));
+    }
+    let length = usize::from_str_radix(
+        std::str::from_utf8(&framed_length[..FRAME_LENGTH_BYTES])?,
+        16,
+    )?;
+    if length == 0 || length > MAX_INROU_STAGE_UPLOAD_MANIFEST_BYTES_V1 {
+        return Err(eyre!(
+            "Inrou stage upload manifest exceeds its V1 byte bound"
+        ));
+    }
+    let mut bytes = vec![0_u8; length];
+    body.read_exact(&mut bytes)
+        .wrap_err("Inrou stage upload manifest is truncated")?;
+    let manifest: InrouStageUploadManifestV1 =
+        json::from_slice(&bytes).wrap_err("Inrou stage upload manifest is not V1 JSON")?;
+    if json::to_json(&manifest)?.as_bytes() != bytes {
+        return Err(eyre!("Inrou stage upload manifest JSON is not canonical"));
+    }
+    Ok(manifest)
+}
+
+fn validate_inrou_stage_relative_path(path: &str) -> Result<()> {
+    if path.is_empty()
+        || path.len() > 512
+        || path.starts_with('/')
+        || path.ends_with('/')
+        || path.split('/').any(|component| {
+            component.is_empty()
+                || matches!(component, "." | "..")
+                || !component
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        })
+    {
+        return Err(eyre!("Inrou stage upload path escaped its closed grammar"));
+    }
+    Ok(())
+}
+
+fn validate_inrou_stage_upload_manifest(
+    admitted: &HostAdmission,
+    manifest: &InrouStageUploadManifestV1,
+) -> Result<()> {
+    if manifest.schema != INROU_STAGE_UPLOAD_SCHEMA_V1
+        || manifest.stage_tree_sha256 != admitted.inventory.inrou_canary.stage_tree_sha256
+        || manifest.stage_tree_sha256 != admitted.authorization.claims.inrou_stage_tree_sha256
+        || manifest.stage_bytes != admitted.inventory.inrou_canary.stage_bytes
+        || manifest.files.is_empty()
+        || manifest.files.len() > MAX_INROU_STAGE_FILES_V1
+    {
+        return Err(eyre!(
+            "Inrou stage upload manifest is not the exact signed stage closure"
+        ));
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"iroha:taira:public-reset:inrou-stage-tree:v1\0");
+    let mut total = 0_u64;
+    let mut previous: Option<&str> = None;
+    for file in &manifest.files {
+        validate_inrou_stage_relative_path(&file.path)?;
+        super::validate_lower_hex("Inrou stage file SHA-256", &file.sha256, 64)?;
+        if previous.is_some_and(|previous| previous >= file.path.as_str()) {
+            return Err(eyre!(
+                "Inrou stage upload file paths are not strictly ordered and unique"
+            ));
+        }
+        previous = Some(&file.path);
+        total = total
+            .checked_add(file.size)
+            .filter(|total| *total <= super::MAX_INROU_STAGE_BYTES)
+            .ok_or_else(|| eyre!("Inrou stage upload exceeds its V1 byte bound"))?;
+        update_frame(&mut digest, file.path.as_bytes());
+        update_frame(&mut digest, &file.size.to_be_bytes());
+        update_frame(&mut digest, file.sha256.as_bytes());
+    }
+    if total != manifest.stage_bytes || hex::encode(digest.finalize()) != manifest.stage_tree_sha256
+    {
+        return Err(eyre!(
+            "Inrou stage upload manifest tree commitment does not reproduce its signed identity"
+        ));
+    }
+    let fixed = manifest
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.sha256.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    for (path, expected) in [
+        (
+            INROU_STAGE_RECEIPT_FILE_V1,
+            admitted.inventory.inrou_canary.receipt_sha256.as_str(),
+        ),
+        (
+            INROU_STAGE_CONTAINER_FILE_V1,
+            admitted.inventory.inrou_canary.container_sha256.as_str(),
+        ),
+        (
+            INROU_STAGE_SERVICE_FILE_V1,
+            admitted.inventory.inrou_canary.service_sha256.as_str(),
+        ),
+        (
+            INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
+            admitted
+                .inventory
+                .inrou_canary
+                .bundle_payload_sha256
+                .as_str(),
+        ),
+        (
+            INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
+            admitted
+                .inventory
+                .inrou_canary
+                .bundle_manifest_sha256
+                .as_str(),
+        ),
+        (
+            INROU_STAGE_GUEST_MANIFEST_FILE_V1,
+            admitted
+                .inventory
+                .inrou_canary
+                .guest_manifest_sha256
+                .as_str(),
+        ),
+        (
+            INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
+            admitted
+                .inventory
+                .inrou_canary
+                .discovery_document_sha256
+                .as_str(),
+        ),
+        (
+            INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+            admitted
+                .inventory
+                .inrou_canary
+                .discovery_manifest_sha256
+                .as_str(),
+        ),
+    ] {
+        if fixed.get(path).copied() != Some(expected) {
+            return Err(eyre!(
+                "Inrou stage upload fixed file `{path}` differs from inventory"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn inrou_stage_carrier<'a>(
+    inventory: &'a InventoryV1,
+    host_identity: &str,
+) -> Result<&'a ValidatorV1> {
+    inventory
+        .validators
+        .iter()
+        .find(|validator| validator.endpoint.host_identity_sha256 == host_identity)
+        .ok_or_else(|| eyre!("physical validator host has no Inrou stage carrier"))
+}
+
+fn inrou_stage_root(admitted: &HostAdmission) -> Result<PathBuf> {
+    let parent = host_coordination_root(admitted)?.join("inrou-stage-v1");
+    ensure_root_private_directory(&parent)?;
+    Ok(parent.join(&admitted.inventory.authorization_nonce))
+}
+
+fn inrou_stage_cleanup_parent_path(admitted: &HostAdmission) -> Result<PathBuf> {
+    Ok(host_coordination_path(admitted)?.join("inrou-stage-v1"))
+}
+
+fn current_inrou_stage_path(admitted: &HostAdmission) -> Result<PathBuf> {
+    Ok(inrou_stage_cleanup_parent_path(admitted)?.join(&admitted.inventory.authorization_nonce))
+}
+
+fn verify_inrou_stage_upload_body(
+    admitted: &HostAdmission,
+    body: &mut impl Read,
+    persist: bool,
+) -> Result<()> {
+    let manifest = read_inrou_stage_upload_manifest(body)?;
+    validate_inrou_stage_upload_manifest(admitted, &manifest)?;
+    let final_root = inrou_stage_root(admitted)?;
+    let staging = final_root.with_file_name(format!(
+        ".{}.{}.next",
+        admitted.inventory.authorization_nonce, admitted.request_sha256
+    ));
+    let write_new = persist && !final_root.exists();
+    if write_new {
+        if staging.exists() {
+            require_root_directory(&staging, true, "partial Inrou stage upload")?;
+            verify_inrou_stage_marker(&staging, admitted)?;
+            fs::remove_dir_all(&staging)
+                .wrap_err("failed to discard authorization-owned partial Inrou stage")?;
+            sync_directory(staging.parent().expect("staging has a parent"))?;
+        }
+        ensure_generated_directory(&staging, admitted, "inrou_stage", 0o700)?;
+    }
+    let mut buffer = [0_u8; 64 * 1024];
+    for expected in &manifest.files {
+        ensure_action_deadline(admitted)?;
+        let destination = write_new.then(|| staging.join(&expected.path));
+        let mut output = if let Some(destination) = destination.as_ref() {
+            ensure_generated_subdirectories(
+                &staging,
+                destination
+                    .parent()
+                    .ok_or_else(|| eyre!("Inrou stage upload file has no parent"))?,
+            )?;
+            #[cfg(unix)]
+            let file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o400)
+                .open(destination)?;
+            #[cfg(not(unix))]
+            let file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(destination)?;
+            Some(file)
+        } else {
+            None
+        };
+        let mut digest = Sha256::new();
+        let mut copied = 0_u64;
+        while copied < expected.size {
+            ensure_action_deadline(admitted)?;
+            let remaining = usize::try_from((expected.size - copied).min(buffer.len() as u64))
+                .expect("bounded Inrou stage upload chunk");
+            let count = body
+                .read(&mut buffer[..remaining])
+                .wrap_err("failed to read Inrou stage upload file")?;
+            if count == 0 {
+                return Err(eyre!(
+                    "Inrou stage upload ended before `{}` reached its declared length",
+                    expected.path
+                ));
+            }
+            copied += u64::try_from(count).expect("read count fits u64");
+            digest.update(&buffer[..count]);
+            if let Some(output) = output.as_mut() {
+                output.write_all(&buffer[..count])?;
+            }
+        }
+        if copied != expected.size || hex::encode(digest.finalize()) != expected.sha256 {
+            return Err(eyre!(
+                "Inrou stage upload file `{}` differs from its committed bytes",
+                expected.path
+            ));
+        }
+        if let Some(output) = output {
+            output.sync_all()?;
+        }
+    }
+    require_stream_eof(body)?;
+    if write_new {
+        sync_release_tree(&staging, admitted)?;
+        validate_host_inrou_stage(admitted, &staging)?;
+        match rename_noreplace(&staging, &final_root) {
+            Ok(()) => {}
+            Err(error) if final_root.exists() => {
+                verify_inrou_stage_marker(&staging, admitted)?;
+                fs::remove_dir_all(&staging)?;
+                drop(error);
+            }
+            Err(error) => return Err(error),
+        }
+        sync_directory(final_root.parent().expect("Inrou stage has a parent"))?;
+    }
+    validate_host_inrou_stage(admitted, &final_root)
+}
+
+fn verify_inrou_stage_marker(root: &Path, admitted: &HostAdmission) -> Result<()> {
+    let marker = read_generated_marker(root)?;
+    let carrier = inrou_stage_carrier(
+        &admitted.inventory,
+        &admitted.target.endpoint().host_identity_sha256,
+    )?;
+    if marker.schema != GENERATED_MARKER_SCHEMA_V1
+        || marker.kind != "inrou_stage"
+        || marker.host_slug != carrier.slug
+        || marker.inventory_sha256 != admitted.inventory_sha256
+        || marker.authorization_nonce != admitted.inventory.authorization_nonce
+        || marker.revision != admitted.inventory.revision.commit
+        || marker.created_at_unix_ms != admitted.authorization.claims.issued_at_unix_ms
+    {
+        return Err(eyre!(
+            "Inrou stage marker is not bound to this physical-host authorization"
+        ));
+    }
+    Ok(())
+}
+
+fn host_inrou_stage_file_closure(
+    root: &Path,
+    admitted: &HostAdmission,
+) -> Result<BTreeMap<String, (u64, String)>> {
+    require_root_directory(root, true, "host Inrou stage")?;
+    verify_inrou_stage_marker(root, admitted)?;
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = BTreeMap::new();
+    while let Some(directory) = pending.pop() {
+        ensure_action_deadline(admitted)?;
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path == root.join(".public-reset-generated-v1.json") {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(&path)?;
+            #[cfg(unix)]
+            if metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+                return Err(eyre!("host Inrou stage entry lacks root-private custody"));
+            }
+            if metadata.file_type().is_symlink() {
+                return Err(eyre!("host Inrou stage contains a symlink"));
+            }
+            if metadata.is_dir() {
+                require_root_directory(&path, true, "host Inrou stage directory")?;
+                pending.push(path);
+                continue;
+            }
+            #[cfg(unix)]
+            if !metadata.is_file() || metadata.nlink() != 1 || metadata.mode() & 0o7777 != 0o400 {
+                return Err(eyre!("host Inrou stage file has unsafe custody"));
+            }
+            #[cfg(not(unix))]
+            if !metadata.is_file() {
+                return Err(eyre!("host Inrou stage contains a special file"));
+            }
+            let relative = path
+                .strip_prefix(root)?
+                .to_str()
+                .ok_or_else(|| eyre!("host Inrou stage path is not UTF-8"))?
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            validate_inrou_stage_relative_path(&relative)?;
+            let (mut file, snapshot) = open_pinned_regular(&path, "host Inrou stage file")?;
+            let hash = hash_reader(&mut file)?;
+            ensure_pinned_unchanged(&path, "host Inrou stage file", &file, &snapshot)?;
+            if files.insert(relative, (snapshot.len, hash)).is_some()
+                || files.len() > MAX_INROU_STAGE_FILES_V1
+            {
+                return Err(eyre!(
+                    "host Inrou stage file closure is not unique and bounded"
+                ));
+            }
+        }
+    }
+    Ok(files)
+}
+
+fn read_host_inrou_stage_file(root: &Path, relative: &str, max_bytes: u64) -> Result<Vec<u8>> {
+    validate_inrou_stage_relative_path(relative)?;
+    let path = root.join(relative);
+    let (file, snapshot) = open_pinned_regular(&path, "host Inrou stage semantic file")?;
+    if snapshot.len > max_bytes {
+        return Err(eyre!(
+            "host Inrou stage semantic file exceeds its byte bound"
+        ));
+    }
+    super::read_pinned_bytes(
+        &path,
+        "host Inrou stage semantic file",
+        file,
+        &snapshot,
+        max_bytes,
+    )
+}
+
+fn validate_host_inrou_stage(admitted: &HostAdmission, root: &Path) -> Result<()> {
+    let files = host_inrou_stage_file_closure(root, admitted)?;
+    let mut digest = Sha256::new();
+    digest.update(b"iroha:taira:public-reset:inrou-stage-tree:v1\0");
+    let mut total = 0_u64;
+    for (path, (size, hash)) in &files {
+        total = total
+            .checked_add(*size)
+            .filter(|total| *total <= super::MAX_INROU_STAGE_BYTES)
+            .ok_or_else(|| eyre!("host Inrou stage exceeds its signed byte bound"))?;
+        update_frame(&mut digest, path.as_bytes());
+        update_frame(&mut digest, &size.to_be_bytes());
+        update_frame(&mut digest, hash.as_bytes());
+    }
+    if files.is_empty()
+        || total != admitted.inventory.inrou_canary.stage_bytes
+        || hex::encode(digest.finalize()) != admitted.inventory.inrou_canary.stage_tree_sha256
+        || admitted.inventory.inrou_canary.stage_tree_sha256
+            != admitted.authorization.claims.inrou_stage_tree_sha256
+    {
+        return Err(eyre!(
+            "host Inrou stage tree differs from its signed closure"
+        ));
+    }
+    for (path, expected) in [
+        (
+            INROU_STAGE_RECEIPT_FILE_V1,
+            &admitted.inventory.inrou_canary.receipt_sha256,
+        ),
+        (
+            INROU_STAGE_CONTAINER_FILE_V1,
+            &admitted.inventory.inrou_canary.container_sha256,
+        ),
+        (
+            INROU_STAGE_SERVICE_FILE_V1,
+            &admitted.inventory.inrou_canary.service_sha256,
+        ),
+        (
+            INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
+            &admitted.inventory.inrou_canary.bundle_payload_sha256,
+        ),
+        (
+            INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
+            &admitted.inventory.inrou_canary.bundle_manifest_sha256,
+        ),
+        (
+            INROU_STAGE_GUEST_MANIFEST_FILE_V1,
+            &admitted.inventory.inrou_canary.guest_manifest_sha256,
+        ),
+        (
+            INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
+            &admitted.inventory.inrou_canary.discovery_document_sha256,
+        ),
+        (
+            INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+            &admitted.inventory.inrou_canary.discovery_manifest_sha256,
+        ),
+    ] {
+        if files.get(path).map(|(_, hash)| hash) != Some(expected) {
+            return Err(eyre!("host Inrou stage fixed file `{path}` changed"));
+        }
+    }
+    let receipt_bytes = read_host_inrou_stage_file(
+        root,
+        INROU_STAGE_RECEIPT_FILE_V1,
+        MAX_HOST_REQUEST_BYTES as u64,
+    )?;
+    let receipt: crate::soracloud::TairaInrouStageReceiptV1 =
+        json::from_slice(&receipt_bytes).wrap_err("host Inrou stage receipt is invalid")?;
+    let expected_placement_targets = inventory_inrou_placement_targets(&admitted.inventory)?;
+    if receipt.schema_version != 1
+        || receipt.sorafs_retention_epoch == 0
+        || receipt.placement_targets != expected_placement_targets
+        || receipt.mutation_mode != "deploy"
+        || receipt.service_name != admitted.inventory.inrou_canary.service_name
+        || receipt.service_version != admitted.inventory.inrou_canary.service_version
+        || receipt.container_file != INROU_STAGE_CONTAINER_FILE_V1
+        || receipt.service_file != INROU_STAGE_SERVICE_FILE_V1
+        || receipt.bundle_payload_file != INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1
+        || receipt.bundle_manifest_file != INROU_STAGE_BUNDLE_MANIFEST_FILE_V1
+        || receipt.bundle_hash != admitted.inventory.inrou_canary.bundle_hash
+        || receipt.bundle_content_cid != admitted.inventory.inrou_canary.bundle_content_cid
+        || receipt.bundle_manifest_digest_hex
+            != admitted.inventory.inrou_canary.bundle_manifest_digest_hex
+        || receipt.guest_isa != SoraInrouGuestIsaV1::Aarch64.as_str()
+        || receipt.guest_payload_dir != INROU_STAGE_GUEST_PAYLOAD_DIR_V1
+        || receipt.guest_manifest_file != INROU_STAGE_GUEST_MANIFEST_FILE_V1
+        || receipt.guest_content_cid != admitted.inventory.inrou_canary.guest_content_cid
+        || receipt.guest_manifest_digest_hex
+            != admitted.inventory.inrou_canary.guest_manifest_digest_hex
+        || receipt.discovery_payload_dir != INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1
+        || receipt.discovery_manifest_file != INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1
+        || receipt.discovery_document_hash
+            != admitted.inventory.inrou_canary.discovery_document_hash
+        || receipt.discovery_content_cid != admitted.inventory.inrou_canary.discovery_content_cid
+        || receipt.discovery_manifest_digest_hex
+            != admitted
+                .inventory
+                .inrou_canary
+                .discovery_manifest_digest_hex
+        || receipt.public_discovery_url != admitted.inventory.inrou_canary.public_discovery_url
+        || receipt.public_discovery_cid_host_url
+            != admitted
+                .inventory
+                .inrou_canary
+                .public_discovery_cid_host_url
+        || receipt.container_manifest_hash
+            != admitted.inventory.inrou_canary.container_manifest_hash
+        || receipt.service_manifest_hash != admitted.inventory.inrou_canary.service_manifest_hash
+    {
+        return Err(eyre!(
+            "host Inrou stage receipt differs from inventory semantics"
+        ));
+    }
+    let retention_value = receipt.sorafs_retention_epoch.to_string();
+    for (manifest_path, description) in [
+        (
+            INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
+            "host Inrou bundle manifest",
+        ),
+        (
+            INROU_STAGE_GUEST_MANIFEST_FILE_V1,
+            "host Inrou guest manifest",
+        ),
+        (
+            INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+            "host Inrou discovery manifest",
+        ),
+    ] {
+        let manifest_bytes = read_host_inrou_stage_file(
+            root,
+            manifest_path,
+            sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES as u64,
+        )?;
+        let manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)
+            .wrap_err_with(|| format!("decode canonical {description}"))?;
+        let identity = manifest.metadata.as_slice();
+        if manifest.pin_policy.retention_epoch != receipt.sorafs_retention_epoch
+            || identity.len() != 1
+            || identity[0].key != "soracloud.retention_epoch"
+            || identity[0].value != retention_value
+        {
+            return Err(eyre!(
+                "{description} does not carry the exact receipted SoraFS retention identity"
+            ));
+        }
+    }
+    let container: SoraContainerManifestV1 = json::from_slice(&read_host_inrou_stage_file(
+        root,
+        INROU_STAGE_CONTAINER_FILE_V1,
+        MAX_HOST_REQUEST_BYTES as u64,
+    )?)?;
+    let service: SoraServiceManifestV1 = json::from_slice(&read_host_inrou_stage_file(
+        root,
+        INROU_STAGE_SERVICE_FILE_V1,
+        MAX_HOST_REQUEST_BYTES as u64,
+    )?)?;
+    let bundle = SoraDeploymentBundleV1 {
+        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        container,
+        service,
+    };
+    bundle
+        .validate_for_admission()
+        .wrap_err("host Inrou stage bundle fails authoritative admission")?;
+    let route = bundle
+        .service
+        .route
+        .as_ref()
+        .ok_or_else(|| eyre!("host Inrou stage service has no route"))?;
+    let published = bundle
+        .container
+        .inrou
+        .as_ref()
+        .and_then(|inrou| inrou.guest_images.get(&SoraInrouGuestIsaV1::Aarch64))
+        .ok_or_else(|| eyre!("host Inrou stage lacks its AArch64 guest image"))?;
+    if bundle.container.runtime != SoraContainerRuntimeV1::Inrou
+        || bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
+        || bundle.service.placement_targets != expected_placement_targets
+        || bundle.service.service_name.to_string() != admitted.inventory.inrou_canary.service_name
+        || bundle.service.service_version != admitted.inventory.inrou_canary.service_version
+        || bundle.service.replicas.get() != 4
+        || route.host != admitted.inventory.inrou_canary.route_host
+        || route.path_prefix != admitted.inventory.inrou_canary.route_path_prefix
+        || bundle.container.lifecycle.healthcheck_path.as_deref()
+            != Some(admitted.inventory.inrou_canary.healthcheck_path.as_str())
+        || bundle.container_manifest_hash().to_string()
+            != admitted.inventory.inrou_canary.container_manifest_hash
+        || bundle.service_manifest_hash().to_string()
+            != admitted.inventory.inrou_canary.service_manifest_hash
+        || published.published_artifact.manifest_digest_hex
+            != admitted.inventory.inrou_canary.guest_manifest_digest_hex
+        || published.published_artifact.content_cid
+            != admitted.inventory.inrou_canary.guest_content_cid
+    {
+        return Err(eyre!(
+            "host Inrou stage bundle differs from signed canary semantics"
+        ));
+    }
+    let payload_path = root.join(INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1);
+    let (mut payload, payload_snapshot) =
+        open_pinned_regular(&payload_path, "host Inrou bundle payload")?;
+    if payload_snapshot.len > MAX_INROU_BUNDLE_PAYLOAD_BYTES_V1 {
+        return Err(eyre!("host Inrou bundle payload exceeds its V1 byte bound"));
+    }
+    let (payload_hash, payload_bytes) =
+        Hash::new_from_reader_bounded(&mut payload, MAX_INROU_BUNDLE_PAYLOAD_BYTES_V1)?;
+    ensure_pinned_unchanged(
+        &payload_path,
+        "host Inrou bundle payload",
+        &payload,
+        &payload_snapshot,
+    )?;
+    if payload_bytes != payload_snapshot.len
+        || payload_hash != bundle.container.bundle_hash
+        || payload_hash.to_string() != admitted.inventory.inrou_canary.bundle_hash
+    {
+        return Err(eyre!(
+            "host Inrou stage bundle payload hash is inconsistent"
+        ));
+    }
+    let expected_guest_files = [
+        published.kernel_image_path.as_str(),
+        published.rootfs_image_path.as_str(),
+        published
+            .initrd_image_path
+            .as_deref()
+            .ok_or_else(|| eyre!("host Inrou stage guest image omits initrd"))?,
+    ]
+    .map(|path| {
+        path.strip_prefix("/inrou/")
+            .map(|path| format!("{INROU_STAGE_GUEST_PAYLOAD_DIR_V1}/{path}"))
+            .ok_or_else(|| eyre!("host Inrou guest path escaped /inrou"))
+    })
+    .into_iter()
+    .collect::<Result<BTreeSet<_>>>()?;
+    let actual_guest_files = files
+        .keys()
+        .filter(|path| path.starts_with(&format!("{INROU_STAGE_GUEST_PAYLOAD_DIR_V1}/")))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if actual_guest_files != expected_guest_files {
+        return Err(eyre!("host Inrou stage guest payload closure is not exact"));
+    }
+    Ok(())
 }
 
 fn verify_staged_artifacts(admitted: &HostAdmission) -> Result<()> {
@@ -5086,6 +6076,641 @@ fn verify_fresh_state(admitted: &HostAdmission) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn verify_populated_fresh_state_for_quarantine(
+    state: &Path,
+    admitted: &HostAdmission,
+) -> Result<()> {
+    require_root_directory(state, true, "populated fresh validator state")?;
+    verify_generated_marker(state, admitted, "fresh_state")?;
+    let expected = BTreeSet::from_iter(
+        std::iter::once(OsString::from(".public-reset-generated-v1.json"))
+            .chain(RESET_GENERATED_ENTRIES.into_iter().map(OsString::from)),
+    );
+    let actual = fs::read_dir(state)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<BTreeSet<_>>>()?;
+    if actual != expected {
+        return Err(eyre!(
+            "populated fresh state differs from its exact top-level reset closure"
+        ));
+    }
+    for name in RESET_GENERATED_ENTRIES {
+        let path = state.join(name);
+        require_root_directory(&path, true, "populated fresh validator state entry")?;
+        verify_generated_marker(&path, admitted, "fresh_state_entry")?;
+    }
+    // Rollback atomically renames this authorization-created state root. It
+    // neither follows nor deletes descendants, so enumerating a legitimate
+    // multi-gigabyte SoraFS chunk tree would create an artificial rollback
+    // failure. The exact top-level namespace, root custody, and every direct
+    // authorization marker are the complete quarantine authority boundary.
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ValidatorPreseedStore {
+    slug: String,
+    placement: SoraInrouPlacementTargetV1,
+    data_dir: PathBuf,
+    max_capacity_bytes: u64,
+}
+
+fn inventory_inrou_placement_targets(
+    inventory: &InventoryV1,
+) -> Result<BTreeSet<SoraInrouPlacementTargetV1>> {
+    let targets = inventory
+        .validator_clients
+        .iter()
+        .map(|client| {
+            let validator_account_id = AccountId::parse_encoded(&client.account_id)
+                .map_err(|error| eyre!("invalid validator client account identity: {error}"))?;
+            let target = SoraInrouPlacementTargetV1 {
+                validator_account_id,
+                peer_id: client.peer_id.clone(),
+            };
+            target.validate()?;
+            Ok(target)
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    if targets.len() != 4 {
+        return Err(eyre!(
+            "public-reset inventory must bind exactly four distinct Inrou placement targets"
+        ));
+    }
+    Ok(targets)
+}
+
+fn inventory_inrou_placement_target_for_slug(
+    inventory: &InventoryV1,
+    slug: &str,
+) -> Result<SoraInrouPlacementTargetV1> {
+    let client = inventory
+        .validator_clients
+        .iter()
+        .find(|client| client.slug == slug)
+        .ok_or_else(|| eyre!("validator `{slug}` has no exact client identity"))?;
+    let validator_account_id = AccountId::parse_encoded(&client.account_id)
+        .map_err(|error| eyre!("invalid validator client account identity: {error}"))?;
+    let target = SoraInrouPlacementTargetV1 {
+        validator_account_id,
+        peer_id: client.peer_id.clone(),
+    };
+    target.validate()?;
+    Ok(target)
+}
+
+fn installed_validator_config_bytes(
+    admitted: &HostAdmission,
+    validator: &ValidatorV1,
+) -> Result<Vec<u8>> {
+    let release = Path::new(&validator.service_root)
+        .join("releases")
+        .join(&admitted.inventory.revision.commit);
+    let config_artifact = artifact(&validator.artifacts, "config")?;
+    let expected_path = release.join("config/config.toml");
+    if Path::new(&config_artifact.remote_path) != expected_path {
+        return Err(eyre!(
+            "validator config artifact does not occupy its canonical installed path"
+        ));
+    }
+    verify_regular_hash(&expected_path, &config_artifact.sha256)?;
+    let (file, snapshot) = open_pinned_regular(&expected_path, "installed validator config")?;
+    if snapshot.len > MAX_HOST_REQUEST_BYTES as u64 {
+        return Err(eyre!(
+            "installed validator config exceeds its V1 byte bound"
+        ));
+    }
+    super::read_pinned_bytes(
+        &expected_path,
+        "installed validator config",
+        file,
+        &snapshot,
+        MAX_HOST_REQUEST_BYTES as u64,
+    )
+}
+
+fn required_toml_table<'a>(
+    root: &'a toml::Value,
+    path: &[&str],
+    label: &str,
+) -> Result<&'a toml::map::Map<String, toml::Value>> {
+    let mut value = root;
+    for component in path {
+        value = value
+            .get(*component)
+            .ok_or_else(|| eyre!("installed validator config omits `{label}`"))?;
+    }
+    value
+        .as_table()
+        .ok_or_else(|| eyre!("installed validator config `{label}` is not a table"))
+}
+
+fn validate_marker_for_validator(
+    root: &Path,
+    admitted: &HostAdmission,
+    validator: &ValidatorV1,
+    kind: &str,
+) -> Result<()> {
+    let marker = read_generated_marker(root)?;
+    if marker.schema != GENERATED_MARKER_SCHEMA_V1
+        || marker.kind != kind
+        || marker.host_slug != validator.slug
+        || marker.inventory_sha256 != admitted.inventory_sha256
+        || marker.authorization_nonce != admitted.inventory.authorization_nonce
+        || marker.revision != admitted.inventory.revision.commit
+        || marker.created_at_unix_ms != admitted.authorization.claims.issued_at_unix_ms
+    {
+        return Err(eyre!(
+            "validator state marker is not bound to this exact reset authorization"
+        ));
+    }
+    Ok(())
+}
+
+fn validator_preseed_store(
+    admitted: &HostAdmission,
+    validator: &ValidatorV1,
+) -> Result<ValidatorPreseedStore> {
+    let bytes = installed_validator_config_bytes(admitted, validator)?;
+    let text = std::str::from_utf8(&bytes).wrap_err("installed validator config is not UTF-8")?;
+    let config: toml::Value =
+        toml::from_str(text).wrap_err("installed validator config is not valid TOML")?;
+    let placement =
+        inventory_inrou_placement_target_for_slug(&admitted.inventory, &validator.slug)?;
+    let configured_peer_literal = config
+        .get("public_key")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| eyre!("installed validator config omits its consensus public_key"))?;
+    let configured_peer = configured_peer_literal
+        .parse::<PeerId>()
+        .wrap_err("installed validator consensus public_key is invalid")?;
+    if configured_peer.to_string() != configured_peer_literal
+        || configured_peer_literal != placement.peer_id
+    {
+        return Err(eyre!(
+            "installed validator consensus public_key differs from its exact signed inventory peer"
+        ));
+    }
+    let storage = required_toml_table(&config, &["sorafs", "storage"], "sorafs.storage")?;
+    if storage.get("enabled").and_then(toml::Value::as_bool) != Some(false) {
+        return Err(eyre!(
+            "public-reset validator must keep embedded SoraFS storage disabled"
+        ));
+    }
+    let configured_data_dir = storage
+        .get("data_dir")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| eyre!("sorafs.storage.data_dir must be explicit"))?;
+    let max_capacity_bytes = storage
+        .get("max_capacity_bytes")
+        .and_then(toml::Value::as_integer)
+        .and_then(|value| u64::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| eyre!("sorafs.storage.max_capacity_bytes must be a positive integer"))?;
+    let inrou = required_toml_table(
+        &config,
+        &["soracloud_runtime", "inrou"],
+        "soracloud_runtime.inrou",
+    )?;
+    if inrou.get("enabled").and_then(toml::Value::as_bool) != Some(true)
+        || inrou
+            .get("trusted_guest_manifest_digest_hex")
+            .and_then(toml::Value::as_str)
+            != Some(
+                admitted
+                    .inventory
+                    .inrou_canary
+                    .guest_manifest_digest_hex
+                    .as_str(),
+            )
+        || inrou
+            .get("trusted_guest_content_cid")
+            .and_then(toml::Value::as_str)
+            != Some(admitted.inventory.inrou_canary.guest_content_cid.as_str())
+    {
+        return Err(eyre!(
+            "installed validator Inrou trust anchor differs from the signed stage"
+        ));
+    }
+    let state_root = Path::new(&validator.state_root);
+    require_root_directory(state_root, true, "fresh validator state root")?;
+    validate_marker_for_validator(state_root, admitted, validator, "fresh_state")?;
+    let configured = Path::new(configured_data_dir);
+    require_root_no_symlink_ancestors(configured, "configured SoraFS data directory")?;
+    require_root_directory(configured, true, "configured SoraFS data directory")?;
+    let canonical_state = fs::canonicalize(state_root)?;
+    let canonical_data = fs::canonicalize(configured)?;
+    let relative = canonical_data
+        .strip_prefix(&canonical_state)
+        .wrap_err("configured SoraFS data directory escaped validator state root")?;
+    if relative.as_os_str().is_empty() {
+        return Err(eyre!(
+            "configured SoraFS data directory cannot equal validator state root"
+        ));
+    }
+    let first = relative
+        .components()
+        .next()
+        .and_then(|component| match component {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .ok_or_else(|| eyre!("configured SoraFS path is not canonical UTF-8"))?;
+    if !RESET_GENERATED_ENTRIES.contains(&first) {
+        return Err(eyre!(
+            "configured SoraFS data directory is outside the reset-generated state closure"
+        ));
+    }
+    validate_marker_for_validator(
+        &canonical_state.join(first),
+        admitted,
+        validator,
+        "fresh_state_entry",
+    )?;
+    Ok(ValidatorPreseedStore {
+        slug: validator.slug.clone(),
+        placement,
+        data_dir: canonical_data,
+        max_capacity_bytes,
+    })
+}
+
+fn validator_preseed_stores(
+    admitted: &HostAdmission,
+    require_stopped: bool,
+) -> Result<Vec<ValidatorPreseedStore>> {
+    let host_identity = admitted.target.endpoint().host_identity_sha256.as_str();
+    let validators = admitted
+        .inventory
+        .validators
+        .iter()
+        .filter(|validator| validator.endpoint.host_identity_sha256 == host_identity)
+        .collect::<Vec<_>>();
+    if validators.is_empty() {
+        return Err(eyre!("physical host has no validator stores to preseed"));
+    }
+    if require_stopped {
+        for validator in &validators {
+            require_unit_stopped(&validator.systemd_unit, admitted.action_deadline)?;
+        }
+    }
+    let mut stores = validators
+        .into_iter()
+        .map(|validator| validator_preseed_store(admitted, validator))
+        .collect::<Result<Vec<_>>>()?;
+    stores.sort_by(|left, right| left.placement.cmp(&right.placement));
+    let capacity = stores[0].max_capacity_bytes;
+    let mut distinct = BTreeSet::new();
+    for store in &stores {
+        if store.max_capacity_bytes != capacity {
+            return Err(eyre!(
+                "physical-host validator SoraFS capacities must be exactly equal"
+            ));
+        }
+        if !distinct.insert(store.data_dir.clone()) {
+            return Err(eyre!(
+                "physical-host validator SoraFS roots must be distinct"
+            ));
+        }
+        if let Some(other) = distinct.iter().find(|other| {
+            **other != store.data_dir
+                && (other.starts_with(&store.data_dir) || store.data_dir.starts_with(other))
+        }) {
+            return Err(eyre!(
+                "physical-host validator SoraFS roots overlap: `{}` and `{}`",
+                other.display(),
+                store.data_dir.display()
+            ));
+        }
+    }
+    Ok(stores)
+}
+
+fn installed_preseed_binary(admitted: &HostAdmission, carrier: &ValidatorV1) -> Result<PathBuf> {
+    let binary_artifact = artifact(&carrier.artifacts, "sorafs_node")?;
+    let path = Path::new(&carrier.service_root)
+        .join("releases")
+        .join(&admitted.inventory.revision.commit)
+        .join("bin/sorafs-node");
+    if Path::new(&binary_artifact.remote_path) != path {
+        return Err(eyre!(
+            "SoraFS preseed helper does not occupy its canonical installed path"
+        ));
+    }
+    verify_regular_hash(&path, &binary_artifact.sha256)?;
+    let metadata = fs::symlink_metadata(&path)?;
+    #[cfg(unix)]
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.uid() != 0
+        || metadata.mode() & 0o022 != 0
+        || metadata.mode() & 0o111 == 0
+        || metadata.nlink() != 1
+    {
+        return Err(eyre!("installed SoraFS preseed helper has unsafe custody"));
+    }
+    Ok(path)
+}
+
+fn parse_preseed_session_receipt(
+    output: &[u8],
+    stores: &[ValidatorPreseedStore],
+    admitted: &HostAdmission,
+    verify_only: bool,
+) -> Result<()> {
+    let bytes = output
+        .strip_suffix(b"\n")
+        .filter(|bytes| !bytes.is_empty() && !bytes.ends_with(b"\n"))
+        .ok_or_else(|| eyre!("SoraFS preseed helper emitted a noncanonical receipt line"))?;
+    let receipt: OperatorPreseedSessionReceiptV1 =
+        json::from_slice(bytes).wrap_err("SoraFS preseed helper emitted an invalid V1 receipt")?;
+    if json::to_json(&receipt)?.as_bytes() != bytes {
+        return Err(eyre!(
+            "SoraFS preseed helper receipt is not canonical compact JSON"
+        ));
+    }
+    receipt
+        .validate()
+        .map_err(|error| eyre!("invalid SoraFS preseed helper receipt: {error}"))?;
+    let expected_targets = stores
+        .iter()
+        .map(|store| OperatorPreseedTargetReceiptV1 {
+            validator_account_id: store.placement.validator_account_id.to_string(),
+            peer_id: store.placement.peer_id.clone(),
+            store_root: store.data_dir.to_string_lossy().into_owned(),
+        })
+        .collect::<Vec<_>>();
+    let expected_mode = if verify_only { "verify_only" } else { "ingest" };
+    let expected_artifacts = BTreeMap::from([
+        (
+            admitted
+                .inventory
+                .inrou_canary
+                .bundle_manifest_digest_hex
+                .as_str(),
+            INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
+        ),
+        (
+            admitted
+                .inventory
+                .inrou_canary
+                .guest_manifest_digest_hex
+                .as_str(),
+            INROU_STAGE_GUEST_MANIFEST_FILE_V1,
+        ),
+        (
+            admitted
+                .inventory
+                .inrou_canary
+                .discovery_manifest_digest_hex
+                .as_str(),
+            INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+        ),
+    ]);
+    if receipt.mode != expected_mode
+        || receipt.max_capacity_bytes != stores[0].max_capacity_bytes
+        || receipt.targets != expected_targets
+        || receipt.artifacts.len() != expected_artifacts.len()
+        || receipt.artifacts.iter().any(|artifact| {
+            !expected_artifacts.contains_key(artifact.manifest_digest_blake3.as_str())
+        })
+    {
+        return Err(eyre!(
+            "SoraFS preseed helper receipt differs from the exact requested stores and artifacts"
+        ));
+    }
+    for artifact in &receipt.artifacts {
+        let manifest_path = expected_artifacts
+            .get(artifact.manifest_digest_blake3.as_str())
+            .expect("exact preseed artifact set checked above");
+        let manifest_bytes = read_host_inrou_stage_file(
+            &inrou_stage_root(admitted)?,
+            manifest_path,
+            sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES as u64,
+        )?;
+        let manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)
+            .wrap_err("failed to re-decode signed preseed manifest")?;
+        if artifact.content_length != manifest.content_length
+            || artifact.store_count != u32::try_from(stores.len()).unwrap_or(u32::MAX)
+        {
+            return Err(eyre!(
+                "SoraFS preseed helper receipt has different artifact geometry"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn preseed_inrou_stores(admitted: &HostAdmission, allow_ingest: bool) -> Result<()> {
+    let stage_root = inrou_stage_root(admitted)?;
+    validate_host_inrou_stage(admitted, &stage_root)?;
+    let host_identity = admitted.target.endpoint().host_identity_sha256.as_str();
+    let carrier = inrou_stage_carrier(&admitted.inventory, host_identity)?;
+    let stores = validator_preseed_stores(admitted, true)?;
+    let program = installed_preseed_binary(admitted, carrier)?;
+    let mut args = vec![OsString::from("preseed-session")];
+    if !allow_ingest {
+        args.push(OsString::from("--verify-only"));
+    }
+    for store in &stores {
+        args.push(OsString::from(format!(
+            "--target={},{},{}",
+            store.placement.validator_account_id,
+            store.placement.peer_id,
+            store.data_dir.display()
+        )));
+    }
+    args.push(OsString::from(format!(
+        "--max-capacity-bytes={}",
+        stores[0].max_capacity_bytes
+    )));
+    for (manifest, source_flag, source) in [
+        (
+            INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
+            "--payload",
+            INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
+        ),
+        (
+            INROU_STAGE_GUEST_MANIFEST_FILE_V1,
+            "--payload-dir",
+            INROU_STAGE_GUEST_PAYLOAD_DIR_V1,
+        ),
+        (
+            INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+            "--payload-dir",
+            INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1,
+        ),
+    ] {
+        args.push(OsString::from(format!(
+            "--manifest={}",
+            stage_root.join(manifest).display()
+        )));
+        args.push(OsString::from(format!(
+            "{source_flag}={}",
+            stage_root.join(source).display()
+        )));
+    }
+    run_locked_preseed_session(&program, &args, admitted.action_deadline, |output| {
+        parse_preseed_session_receipt(output, &stores, admitted, !allow_ingest)
+    })?;
+    verify_regular_hash(
+        &program,
+        &artifact(&carrier.artifacts, "sorafs_node")?.sha256,
+    )?;
+    validate_host_inrou_stage(admitted, &stage_root)?;
+    let rechecked = validator_preseed_stores(admitted, true)?;
+    if rechecked.len() != stores.len()
+        || rechecked.iter().zip(&stores).any(|(actual, expected)| {
+            actual.slug != expected.slug
+                || actual.data_dir != expected.data_dir
+                || actual.max_capacity_bytes != expected.max_capacity_bytes
+        })
+    {
+        return Err(eyre!(
+            "validator SoraFS configuration changed during preseed"
+        ));
+    }
+    Ok(())
+}
+
+fn verify_preseed_barrier_for_start(admitted: &HostAdmission) -> Result<()> {
+    let host_identity = admitted.target.endpoint().host_identity_sha256.as_str();
+    let carrier = inrou_stage_carrier(&admitted.inventory, host_identity)?;
+    validate_host_inrou_stage(admitted, &inrou_stage_root(admitted)?)?;
+    let stores = validator_preseed_stores(admitted, false)?;
+    if stores.is_empty() {
+        return Err(eyre!(
+            "validator start has no preseeded SoraFS store closure"
+        ));
+    }
+    let expected_artifacts = BTreeSet::from([
+        admitted
+            .inventory
+            .inrou_canary
+            .bundle_manifest_digest_hex
+            .as_str(),
+        admitted
+            .inventory
+            .inrou_canary
+            .guest_manifest_digest_hex
+            .as_str(),
+        admitted
+            .inventory
+            .inrou_canary
+            .discovery_manifest_digest_hex
+            .as_str(),
+    ]);
+    for store in &stores {
+        let qualifications =
+            read_local_preseed_qualifications(&store.data_dir).map_err(|error| {
+                eyre!(
+                    "validator `{}` has no readable durable Inrou preseed qualification: {error:#}",
+                    store.slug
+                )
+            })?;
+        let store_root = store
+            .data_dir
+            .to_str()
+            .ok_or_else(|| eyre!("validator preseed root is not UTF-8"))?;
+        let exact_current = qualifications.iter().any(|receipt| {
+            receipt.mode == "ingest"
+                && receipt.max_capacity_bytes == store.max_capacity_bytes
+                && receipt.targets.iter().any(|target| {
+                    target.validator_account_id == store.placement.validator_account_id.to_string()
+                        && target.peer_id == store.placement.peer_id
+                        && target.store_root == store_root
+                })
+                && receipt.artifacts.len() == expected_artifacts.len()
+                && receipt.artifacts.iter().all(|artifact| {
+                    expected_artifacts.contains(artifact.manifest_digest_blake3.as_str())
+                })
+        });
+        if !exact_current {
+            return Err(eyre!(
+                "validator `{}` lacks a durable current local validator/peer/capacity qualification for the exact bundle, guest, and discovery artifacts",
+                store.slug
+            ));
+        }
+    }
+    let receipt_path = Path::new(&carrier.reset_guard)
+        .join("receipts")
+        .join(&admitted.inventory.authorization_nonce)
+        .join("preseed.json");
+    let (receipt, _) =
+        read_private_json::<HostReceiptV1>(&receipt_path, "physical-host Inrou preseed receipt")?;
+    if receipt.schema != HOST_RECEIPT_SCHEMA_V1
+        || receipt.action != HostAction::Preseed.label()
+        || receipt.host_slug != carrier.slug
+        || receipt.inventory_sha256 != admitted.inventory_sha256
+        || receipt.authorization_sha256 != admitted.authorization_sha256
+        || receipt.authorization_nonce != admitted.inventory.authorization_nonce
+        || receipt.status != "ok"
+    {
+        return Err(eyre!(
+            "validator start lacks the exact physical-host Inrou preseed barrier"
+        ));
+    }
+    Ok(())
+}
+
+fn read_local_preseed_qualifications(
+    store_root: &Path,
+) -> Result<Vec<OperatorPreseedSessionReceiptV1>> {
+    let directory = store_root.join(INROU_PRESEED_QUALIFICATION_DIR_V1);
+    require_root_directory(&directory, true, "operator-preseed qualification directory")?;
+    let mut paths = fs::read_dir(&directory)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    paths.sort();
+    if paths.is_empty() || paths.len() > MAX_INROU_PRESEED_QUALIFICATIONS_V1 {
+        return Err(eyre!(
+            "operator-preseed qualification count is outside the V1 bound"
+        ));
+    }
+    let mut receipts = Vec::with_capacity(paths.len());
+    for path in paths {
+        let name = path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or_else(|| eyre!("operator-preseed qualification name is not UTF-8"))?;
+        let digest = name
+            .strip_suffix(".json")
+            .ok_or_else(|| eyre!("operator-preseed qualification name is not canonical"))?;
+        super::validate_lower_hex("operator-preseed qualification name", digest, 64)?;
+        let (file, snapshot) = open_pinned_regular(&path, "operator-preseed qualification")?;
+        #[cfg(unix)]
+        if snapshot.uid != 0 || snapshot.mode & 0o7777 != 0o600 || snapshot.nlink != 1 {
+            return Err(eyre!(
+                "operator-preseed qualification lacks root-owned 0600 single-link custody"
+            ));
+        }
+        let bytes = super::read_pinned_bytes(
+            &path,
+            "operator-preseed qualification",
+            file,
+            &snapshot,
+            MAX_INROU_PRESEED_QUALIFICATION_BYTES_V1,
+        )?;
+        if hex::encode(blake3::hash(&bytes).as_bytes()) != digest {
+            return Err(eyre!(
+                "operator-preseed qualification filename differs from its bytes"
+            ));
+        }
+        let receipt: OperatorPreseedSessionReceiptV1 = json::from_slice(&bytes)
+            .wrap_err("operator-preseed qualification is not exact V1 JSON")?;
+        receipt
+            .validate()
+            .map_err(|error| eyre!("invalid operator-preseed qualification: {error}"))?;
+        if json::to_json(&receipt)?.as_bytes() != bytes {
+            return Err(eyre!(
+                "operator-preseed qualification is not canonical compact JSON"
+            ));
+        }
+        receipts.push(receipt);
+    }
+    Ok(receipts)
 }
 
 fn rollback_nonce_root(admitted: &HostAdmission) -> Result<PathBuf> {
@@ -5902,7 +7527,7 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
                     // destination; reconcile only the closed generated
                     // layout before quarantining it.
                     reconcile_fresh_state(state, admitted)?;
-                    verify_generated_marker(state, admitted, "fresh_state")?;
+                    verify_populated_fresh_state_for_quarantine(state, admitted)?;
                     if fresh_trash.exists() {
                         verify_generated_marker(&fresh_trash, admitted, "fresh_state")?;
                         return Err(eyre!(
@@ -6008,7 +7633,7 @@ fn verify_rollback_postcondition(admitted: &HostAdmission) -> Result<()> {
             require_state_identity(state, &intent)?;
             let fresh_trash = nonce_root.join("fresh-state.after");
             if fresh_trash.exists() {
-                verify_generated_marker(&fresh_trash, admitted, "fresh_state")?;
+                verify_populated_fresh_state_for_quarantine(&fresh_trash, admitted)?;
             }
             require_session_manager_operation_applied(
                 admitted,
@@ -6113,7 +7738,7 @@ enum CleanupPlanEntryState {
 #[cfg(any(target_os = "linux", test))]
 fn validate_cleanup_original_name(name: &str, kind: &str) -> Result<()> {
     match kind {
-        "upload" => super::validate_nonce(name),
+        "upload" | "inrou_stage" => super::validate_nonce(name),
         "release"
             if name.len() == 40
                 && name
@@ -6198,6 +7823,46 @@ fn read_durable_cleanup_plan(admitted: &HostAdmission) -> Result<CleanupPlanV1> 
     Ok(plan)
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn partition_cleanup_reclaim_limit(
+    max_reclaim_bytes_per_host: u64,
+    target_index: usize,
+    target_count: usize,
+) -> Result<u64> {
+    if target_count == 0 || target_index >= target_count {
+        return Err(eyre!(
+            "cleanup target is outside the exact physical-host partition"
+        ));
+    }
+    let target_count = u64::try_from(target_count)
+        .map_err(|_| eyre!("cleanup target count is not representable"))?;
+    let target_index = u64::try_from(target_index)
+        .map_err(|_| eyre!("cleanup target index is not representable"))?;
+    let base = max_reclaim_bytes_per_host / target_count;
+    let remainder = max_reclaim_bytes_per_host % target_count;
+    let extra = if target_index < remainder { 1 } else { 0 };
+    base.checked_add(extra)
+        .ok_or_else(|| eyre!("cleanup target reclaim partition overflow"))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn physical_host_cleanup_reclaim_limit(admitted: &HostAdmission) -> Result<u64> {
+    let cleanup_targets = host_forward_plan(admitted)
+        .into_iter()
+        .filter(|key| key.action == HostAction::Cleanup.label())
+        .collect::<Vec<_>>();
+    let target = host_action_key(admitted, HostAction::Cleanup);
+    let target_index = cleanup_targets
+        .iter()
+        .position(|candidate| candidate == &target)
+        .ok_or_else(|| eyre!("cleanup target is absent from the physical-host plan"))?;
+    partition_cleanup_reclaim_limit(
+        admitted.inventory.cleanup.max_reclaim_bytes_per_host,
+        target_index,
+        cleanup_targets.len(),
+    )
+}
+
 #[cfg(target_os = "linux")]
 fn build_cleanup_plan(admitted: &HostAdmission) -> Result<CleanupPlanV1> {
     let policy = &admitted.inventory.cleanup;
@@ -6229,6 +7894,51 @@ fn build_cleanup_plan(admitted: &HostAdmission) -> Result<CleanupPlanV1> {
         let path = entry.path();
         if let Some(candidate) = admit_cleanup_candidate(&path, admitted, "upload", policy)? {
             entries.push(cleanup_plan_entry_from_candidate(&candidate, admitted)?);
+        }
+    }
+    if matches!(&admitted.target, HostTarget::Validator(_)) {
+        // The retained stage is a host-global, authorization-bound transport
+        // copy. Once a newer sealed authorization reaches cleanup, older
+        // stage trees are superseded and may be reclaimed under the signed
+        // cap. `.operator-preseed-v1` qualifications remain inside each live
+        // validator store as current cache authority and are never scanned.
+        if !scan_cleanup_tombstone_entries(admitted, "inrou_stage", policy)?.is_empty() {
+            return Err(eyre!(
+                "Inrou-stage cleanup tombstone exists without this request's durable plan"
+            ));
+        }
+        let stage_parent = inrou_stage_cleanup_parent_path(admitted)?;
+        require_root_directory(&stage_parent, true, "Inrou stage cleanup namespace")?;
+        for entry in fs::read_dir(&stage_parent)? {
+            ensure_action_deadline(admitted)?;
+            let entry = entry?;
+            namespace_entries = namespace_entries
+                .checked_add(1)
+                .ok_or_else(|| eyre!("cleanup namespace entry count overflow"))?;
+            if namespace_entries > MAX_CLEANUP_NAMESPACE_ENTRIES {
+                return Err(eyre!("cleanup namespace exceeds its entry bound"));
+            }
+            let name = entry.file_name();
+            if cleanup_original_name_from_tombstone(&name, "inrou_stage")?.is_some() {
+                continue;
+            }
+            let Some(name) = name.to_str() else { continue };
+            if name == admitted.inventory.authorization_nonce
+                || validate_cleanup_original_name(name, "inrou_stage").is_err()
+            {
+                continue;
+            }
+            let path = entry.path();
+            ensure_cleanup_stage_not_current(
+                "inrou_stage",
+                &path,
+                &current_inrou_stage_path(admitted)?,
+            )?;
+            if let Some(candidate) =
+                admit_cleanup_candidate(&path, admitted, "inrou_stage", policy)?
+            {
+                entries.push(cleanup_plan_entry_from_candidate(&candidate, admitted)?);
+            }
         }
     }
     let releases = Path::new(admitted.target.service_root()).join("releases");
@@ -6301,7 +8011,7 @@ fn build_cleanup_plan(admitted: &HostAdmission) -> Result<CleanupPlanV1> {
         inventory_sha256: admitted.inventory_sha256.clone(),
         authorization_sha256: admitted.authorization_sha256.clone(),
         authorization_nonce: admitted.inventory.authorization_nonce.clone(),
-        max_reclaim_bytes: policy.max_reclaim_bytes_per_host,
+        max_reclaim_bytes: physical_host_cleanup_reclaim_limit(admitted)?,
         bytes_before,
         entries,
     })
@@ -6316,7 +8026,7 @@ fn validate_cleanup_plan(admitted: &HostAdmission, plan: &CleanupPlanV1) -> Resu
         || plan.inventory_sha256 != admitted.inventory_sha256
         || plan.authorization_sha256 != admitted.authorization_sha256
         || plan.authorization_nonce != admitted.inventory.authorization_nonce
-        || plan.max_reclaim_bytes != admitted.inventory.cleanup.max_reclaim_bytes_per_host
+        || plan.max_reclaim_bytes != physical_host_cleanup_reclaim_limit(admitted)?
         || plan.entries.len() > MAX_CLEANUP_NAMESPACE_ENTRIES
     {
         return Err(eyre!("cleanup plan is not bound to this exact request"));
@@ -6332,11 +8042,7 @@ fn validate_cleanup_plan(admitted: &HostAdmission, plan: &CleanupPlanV1) -> Resu
         {
             return Err(eyre!("cleanup plan entry identity is not exact"));
         }
-        let marker = validate_generic_marker_fields(
-            entry.marker.clone(),
-            admitted.target.slug(),
-            &entry.kind,
-        )?;
+        let marker = validate_cleanup_marker_fields(entry.marker.clone(), admitted, &entry.kind)?;
         validate_cleanup_marker_name(&marker, OsStr::new(&entry.original_name), &entry.kind)?;
         let marker_bytes = json::to_json(&marker)?.into_bytes();
         if entry.marker_sha256 != sha256_hex(&marker_bytes) {
@@ -6364,6 +8070,7 @@ fn cleanup_original_path(admitted: &HostAdmission, kind: &str, name: &str) -> Re
     validate_cleanup_original_name(name, kind)?;
     match kind {
         "upload" => Ok(Path::new(&admitted.guard.upload_parent).join(name)),
+        "inrou_stage" => Ok(inrou_stage_cleanup_parent_path(admitted)?.join(name)),
         "release" => Ok(Path::new(admitted.target.service_root())
             .join("releases")
             .join(name)),
@@ -6545,6 +8252,12 @@ fn open_cleanup_plan_entry(
             &original_path,
             &validated_current_release_target(admitted)?,
         )?;
+    } else if kind == "inrou_stage" {
+        ensure_cleanup_stage_not_current(
+            kind,
+            &original_path,
+            &current_inrou_stage_path(admitted)?,
+        )?;
     }
     let tombstone_name = cleanup_tombstone_name(OsStr::new(&entry.original_name), kind)?;
     let tombstone_path = original_path.with_file_name(&tombstone_name);
@@ -6566,9 +8279,9 @@ fn open_cleanup_plan_entry(
             let (parent, directory, name) =
                 open_generated_cleanup_root(&original_path, admitted, kind)?;
             validate_cleanup_plan_directory(entry, &directory)?;
-            let marker = validate_generic_marker_fields(
+            let marker = validate_cleanup_marker_fields(
                 read_generated_marker_at(&directory)?,
-                admitted.target.slug(),
+                admitted,
                 kind,
             )?;
             validate_cleanup_marker_name(&marker, &name, kind)?;
@@ -6618,8 +8331,7 @@ fn open_cleanup_plan_entry(
             .map(|bytes| decode_generated_marker(&bytes))
             .transpose()?;
             if let Some(marker) = marker.as_ref() {
-                let marker =
-                    validate_generic_marker_fields(marker.clone(), admitted.target.slug(), kind)?;
+                let marker = validate_cleanup_marker_fields(marker.clone(), admitted, kind)?;
                 validate_cleanup_marker_name(&marker, OsStr::new(&entry.original_name), kind)?;
                 if marker != entry.marker
                     || entry.marker_sha256 != sha256_hex(json::to_json(&marker)?.as_bytes())
@@ -6668,6 +8380,7 @@ fn validate_cleanup_plan_directory(entry: &CleanupPlanEntryV1, directory: &File)
 fn cleanup_kind(kind: &str) -> Result<&'static str> {
     match kind {
         "upload" => Ok("upload"),
+        "inrou_stage" => Ok("inrou_stage"),
         "release" => Ok("release"),
         _ => Err(eyre!("generated cleanup kind is not exact V1")),
     }
@@ -6717,6 +8430,50 @@ fn validate_generic_marker_fields(
     Ok(marker)
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn validate_cleanup_marker_fields(
+    marker: GeneratedMarkerV1,
+    admitted: &HostAdmission,
+    kind: &str,
+) -> Result<GeneratedMarkerV1> {
+    let expected_host_slug = if kind == "inrou_stage" {
+        inrou_stage_carrier(
+            &admitted.inventory,
+            &admitted.target.endpoint().host_identity_sha256,
+        )?
+        .slug
+        .as_str()
+    } else {
+        admitted.target.slug()
+    };
+    let marker = validate_generic_marker_fields(marker, expected_host_slug, kind)?;
+    if kind == "inrou_stage"
+        && (marker.authorization_nonce == admitted.inventory.authorization_nonce
+            || marker.created_at_unix_ms >= admitted.authorization.claims.issued_at_unix_ms)
+    {
+        return Err(eyre!(
+            "cleanup Inrou stage is current or is not an older superseded authorization"
+        ));
+    }
+    Ok(marker)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn ensure_cleanup_stage_not_current(
+    kind: &str,
+    original: &Path,
+    current_stage: &Path,
+) -> Result<()> {
+    match kind {
+        "inrou_stage" if original != current_stage => Ok(()),
+        "inrou_stage" => Err(eyre!(
+            "cleanup plan Inrou stage became the selected current stage"
+        )),
+        "upload" | "release" => Ok(()),
+        _ => Err(eyre!("generated cleanup kind is not exact V1")),
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn admit_cleanup_candidate(
     root: &Path,
@@ -6725,11 +8482,8 @@ fn admit_cleanup_candidate(
     policy: &super::CleanupV1,
 ) -> Result<Option<CleanupCandidate>> {
     let (parent, directory, name) = open_generated_cleanup_root(root, admitted, kind)?;
-    let marker = validate_generic_marker_fields(
-        read_generated_marker_at(&directory)?,
-        admitted.target.slug(),
-        kind,
-    )?;
+    let marker =
+        validate_cleanup_marker_fields(read_generated_marker_at(&directory)?, admitted, kind)?;
     validate_cleanup_marker_name(&marker, &name, kind)?;
     let minimum_ms = policy.minimum_age_secs.saturating_mul(1_000);
     if now_unix_ms()?.saturating_sub(marker.created_at_unix_ms) < minimum_ms {
@@ -6751,7 +8505,8 @@ fn validate_cleanup_marker_name(
     original_name: &OsStr,
     kind: &str,
 ) -> Result<()> {
-    if (kind == "upload" && original_name != OsStr::new(&marker.authorization_nonce))
+    if (matches!(kind, "upload" | "inrou_stage")
+        && original_name != OsStr::new(&marker.authorization_nonce))
         || (kind == "release" && original_name != OsStr::new(&marker.revision))
     {
         return Err(eyre!(
@@ -6829,7 +8584,7 @@ fn scan_cleanup_tombstone_entries(
         )?
         .map(|bytes| decode_generated_marker(&bytes))
         .transpose()?
-        .map(|marker| validate_generic_marker_fields(marker, admitted.target.slug(), kind))
+        .map(|marker| validate_cleanup_marker_fields(marker, admitted, kind))
         .transpose()?;
         if let Some(marker) = marker.as_ref() {
             validate_cleanup_marker_name(marker, &original_name, kind)?;
@@ -6995,18 +8750,27 @@ fn cleanup_parent_relative(kind: &str) -> Result<&'static Path> {
 
 #[cfg(target_os = "linux")]
 fn open_cleanup_parent(admitted: &HostAdmission, kind: &str) -> Result<(PathBuf, File)> {
-    let service_root = Path::new(admitted.target.service_root());
-    require_root_directory(service_root, false, "cleanup service root")?;
-    let relative = cleanup_parent_relative(kind)?;
-    let parent_path = service_root.join(relative);
-    require_root_directory(
-        &parent_path,
-        kind == "upload",
-        "generated cleanup namespace",
-    )?;
-    let service = File::open(service_root)?;
+    let (namespace_root, relative, root_private, parent_private) = if kind == "inrou_stage" {
+        (
+            host_coordination_root(admitted)?,
+            Path::new("inrou-stage-v1"),
+            true,
+            true,
+        )
+    } else {
+        (
+            Path::new(admitted.target.service_root()).to_path_buf(),
+            cleanup_parent_relative(kind)?,
+            false,
+            kind == "upload",
+        )
+    };
+    require_root_directory(&namespace_root, root_private, "cleanup namespace root")?;
+    let parent_path = namespace_root.join(relative);
+    require_root_directory(&parent_path, parent_private, "generated cleanup namespace")?;
+    let namespace = File::open(&namespace_root)?;
     let parent = File::from(rustix::fs::openat2(
-        &service,
+        &namespace,
         relative,
         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
@@ -7139,9 +8903,9 @@ fn remove_generated_tree_beneath(
     byte_cap: u64,
 ) -> Result<()> {
     verify_named_root_directory(&candidate.parent, &candidate.name, &candidate.directory)?;
-    let marker = validate_generic_marker_fields(
+    let marker = validate_cleanup_marker_fields(
         read_generated_marker_at(&candidate.directory)?,
-        admitted.target.slug(),
+        admitted,
         candidate.kind,
     )?;
     if marker != candidate.marker {
@@ -7156,6 +8920,12 @@ fn remove_generated_tree_beneath(
             candidate.kind,
             &candidate.path,
             &validated_current_release_target(admitted)?,
+        )?;
+    } else if candidate.kind == "inrou_stage" {
+        ensure_cleanup_stage_not_current(
+            candidate.kind,
+            &candidate.path,
+            &current_inrou_stage_path(admitted)?,
         )?;
     }
     ensure_action_deadline(admitted)?;
@@ -7187,10 +8957,17 @@ fn remove_cleanup_tombstone(
     byte_cap: u64,
 ) -> Result<()> {
     verify_named_root_directory(&tombstone.parent, &tombstone.name, &tombstone.directory)?;
+    if tombstone.kind == "inrou_stage" {
+        ensure_cleanup_stage_not_current(
+            tombstone.kind,
+            &tombstone.path,
+            &current_inrou_stage_path(admitted)?,
+        )?;
+    }
     if let Some(expected_marker) = tombstone.marker.as_ref() {
-        let marker = validate_generic_marker_fields(
+        let marker = validate_cleanup_marker_fields(
             read_generated_marker_at(&tombstone.directory)?,
-            admitted.target.slug(),
+            admitted,
             tombstone.kind,
         )?;
         validate_cleanup_marker_name(&marker, &tombstone.original_name, tombstone.kind)?;
@@ -7219,9 +8996,9 @@ fn remove_cleanup_tombstone(
             MAX_HOST_REQUEST_BYTES,
         )?
         .ok_or_else(|| eyre!("generated cleanup marker vanished before final unlink"))?;
-        let marker = validate_generic_marker_fields(
+        let marker = validate_cleanup_marker_fields(
             decode_generated_marker(&marker_bytes)?,
-            admitted.target.slug(),
+            admitted,
             tombstone.kind,
         )?;
         validate_cleanup_marker_name(&marker, &tombstone.original_name, tombstone.kind)?;
@@ -7660,6 +9437,7 @@ pub(super) struct ProcessSpec {
     args: Vec<OsString>,
     stdin_prefix: Vec<u8>,
     stdin_file: Option<(File, u64)>,
+    stdin_files: Vec<(File, u64)>,
     inherited_files: Vec<File>,
     deadline: Instant,
 }
@@ -7751,18 +9529,18 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
     if spec.deadline <= Instant::now() {
         return Err(eyre!("child process deadline must be in the future"));
     }
-    let mut source = match &spec.stdin_file {
-        Some((file, expected)) => {
-            let mut clone = file
-                .try_clone()
-                .wrap_err("failed to duplicate pinned streamed input descriptor")?;
-            clone
-                .rewind()
-                .wrap_err("failed to rewind pinned streamed input")?;
-            Some((clone, *expected, 0_u64))
-        }
-        None => None,
-    };
+    let mut sources =
+        Vec::with_capacity(spec.stdin_files.len() + usize::from(spec.stdin_file.is_some()));
+    for (file, expected) in spec.stdin_file.iter().chain(&spec.stdin_files) {
+        let mut clone = file
+            .try_clone()
+            .wrap_err("failed to duplicate pinned streamed input descriptor")?;
+        clone
+            .rewind()
+            .wrap_err("failed to rewind pinned streamed input")?;
+        sources.push((clone, *expected, 0_u64));
+    }
+    let mut source_index = 0_usize;
     let deadline = spec.deadline;
     let mut command = Command::new(&spec.program);
     command
@@ -7863,7 +9641,7 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
                     .map(|written| {
                         prefix_offset += written;
                     })
-            } else if let Some((file, expected, copied)) = source.as_mut() {
+            } else if let Some((file, expected, copied)) = sources.get_mut(source_index) {
                 if file_range.is_empty() && *copied < *expected {
                     let remaining =
                         usize::try_from((*expected - *copied).min(file_buffer.len() as u64))
@@ -7884,7 +9662,8 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
                     file_range = 0..read;
                 }
                 if file_range.is_empty() {
-                    stdin_complete = true;
+                    source_index += 1;
+                    stdin_complete = source_index == sources.len();
                     Ok(())
                 } else {
                     writer
@@ -7950,6 +9729,175 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
         stdout: stdout_bytes,
         stderr: stderr_bytes,
     })
+}
+
+#[allow(
+    unsafe_code,
+    reason = "the preseed helper is isolated in an owned process group before spawn"
+)]
+fn run_locked_preseed_session(
+    program: &Path,
+    args: &[OsString],
+    deadline: Instant,
+    verify_ready_receipt: impl FnOnce(&[u8]) -> Result<()>,
+) -> Result<()> {
+    if deadline <= Instant::now() {
+        return Err(eyre!("preseed-session deadline must be in the future"));
+    }
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .env_clear()
+        .env("LC_ALL", "C")
+        .current_dir("/")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
+        .spawn()
+        .wrap_err_with(|| format!("failed to spawn `{}`", program.display()))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| eyre!("preseed-session stdin pipe missing"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| eyre!("preseed-session stdout pipe missing"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| eyre!("preseed-session stderr pipe missing"))?;
+    for (descriptor, label) in [(stdout.as_fd(), "stdout"), (stderr.as_fd(), "stderr")] {
+        let flags = rustix::fs::fcntl_getfl(descriptor)
+            .wrap_err_with(|| format!("failed to inspect preseed-session {label}"))?;
+        rustix::fs::fcntl_setfl(descriptor, flags | rustix::fs::OFlags::NONBLOCK)
+            .wrap_err_with(|| format!("failed to make preseed-session {label} nonblocking"))?;
+    }
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    let mut stdout_eof = false;
+    let mut stderr_eof = false;
+    let mut status = None;
+    let ready_len = loop {
+        if Instant::now() >= deadline {
+            terminate_owned_child(&mut child)?;
+            return Err(eyre!(
+                "`{}` exceeded its deadline before the ready barrier",
+                program.display()
+            ));
+        }
+        if let Err(error) = drain_nonblocking(&mut stdout, &mut stdout_bytes, &mut stdout_eof) {
+            terminate_owned_child(&mut child)?;
+            return Err(error).wrap_err("failed to read preseed-session ready receipt");
+        }
+        if let Err(error) = drain_nonblocking(&mut stderr, &mut stderr_bytes, &mut stderr_eof) {
+            terminate_owned_child(&mut child)?;
+            return Err(error).wrap_err("failed to drain preseed-session stderr");
+        }
+        if status.is_none() {
+            status = child.try_wait()?;
+        }
+        if let Some(newline) = stdout_bytes.iter().position(|byte| *byte == b'\n') {
+            if newline + 1 != stdout_bytes.len()
+                || stdout_bytes[..newline].contains(&b'\r')
+                || status.is_some()
+            {
+                terminate_owned_child(&mut child)?;
+                return Err(eyre!(
+                    "preseed-session did not retain a live one-line ready barrier"
+                ));
+            }
+            break stdout_bytes.len();
+        }
+        if stdout_eof || status.is_some() {
+            return Err(eyre!(
+                "authorization-bound SoraFS preseed session exited before its ready barrier: {}",
+                String::from_utf8_lossy(&stderr_bytes)
+            ));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        std::thread::sleep(PROCESS_POLL_INTERVAL.min(remaining));
+    };
+    if let Err(error) = verify_ready_receipt(&stdout_bytes) {
+        terminate_owned_child(&mut child)?;
+        return Err(error).wrap_err("rejected SoraFS preseed ready barrier while locks were held");
+    }
+    if let Err(error) = drain_nonblocking(&mut stdout, &mut stdout_bytes, &mut stdout_eof) {
+        terminate_owned_child(&mut child)?;
+        return Err(error).wrap_err("failed to recheck preseed-session stdout after readiness");
+    }
+    if let Err(error) = drain_nonblocking(&mut stderr, &mut stderr_bytes, &mut stderr_eof) {
+        terminate_owned_child(&mut child)?;
+        return Err(error).wrap_err("failed to recheck preseed-session stderr after readiness");
+    }
+    if stdout_bytes.len() != ready_len {
+        terminate_owned_child(&mut child)?;
+        return Err(eyre!(
+            "authorization-bound SoraFS preseed session emitted trailing stdout while readiness was validated"
+        ));
+    }
+    match child.try_wait() {
+        Ok(None) => {}
+        Ok(Some(status)) => {
+            terminate_owned_child(&mut child)?;
+            return Err(eyre!(
+                "authorization-bound SoraFS preseed session exited with {status} while its ready barrier was being validated"
+            ));
+        }
+        Err(error) => {
+            terminate_owned_child(&mut child)?;
+            return Err(error).wrap_err(
+                "failed to prove the SoraFS preseed helper remained live after readiness validation",
+            );
+        }
+    }
+    // The helper owns every store lock until this exact EOF. Release the
+    // session only after its bounded canonical readiness evidence is accepted.
+    drop(stdin);
+    loop {
+        if Instant::now() >= deadline {
+            terminate_owned_child(&mut child)?;
+            return Err(eyre!(
+                "`{}` exceeded its deadline while releasing the ready barrier",
+                program.display()
+            ));
+        }
+        drain_nonblocking(&mut stdout, &mut stdout_bytes, &mut stdout_eof)?;
+        drain_nonblocking(&mut stderr, &mut stderr_bytes, &mut stderr_eof)?;
+        let release_output = stdout_bytes
+            .get(ready_len..)
+            .expect("ready receipt remains the stdout prefix");
+        if !OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1.starts_with(release_output) {
+            terminate_owned_child(&mut child)?;
+            return Err(eyre!(
+                "authorization-bound SoraFS preseed session emitted a noncanonical release acknowledgment"
+            ));
+        }
+        if status.is_none() {
+            status = child.try_wait()?;
+        }
+        if status.is_some() && stdout_eof && stderr_eof {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        std::thread::sleep(PROCESS_POLL_INTERVAL.min(remaining));
+    }
+    let status = status.expect("preseed session exits before loop completes");
+    if !status.success() {
+        return Err(eyre!(
+            "authorization-bound SoraFS preseed session failed with {status}: {}",
+            String::from_utf8_lossy(&stderr_bytes)
+        ));
+    }
+    if stdout_bytes.get(ready_len..) != Some(OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1) {
+        return Err(eyre!(
+            "authorization-bound SoraFS preseed session did not emit the exact EOF release acknowledgment"
+        ));
+    }
+    Ok(())
 }
 
 fn drain_nonblocking(reader: &mut impl Read, output: &mut Vec<u8>, eof: &mut bool) -> Result<()> {
@@ -8425,6 +10373,14 @@ impl RuntimeCustody {
                 "manifests/aarch64.to",
                 &admitted.inventory.inrou_canary.guest_manifest_sha256,
             ),
+            (
+                INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
+                &admitted.inventory.inrou_canary.discovery_document_sha256,
+            ),
+            (
+                INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+                &admitted.inventory.inrou_canary.discovery_manifest_sha256,
+            ),
         ] {
             if fixed.get(path) != Some(expected) {
                 return Err(eyre!("retained Inrou stage fixed-file hash mismatch"));
@@ -8503,6 +10459,66 @@ impl RuntimeCustody {
         }
         ensure_local_deadline(Some(deadline))?;
         Ok(())
+    }
+
+    fn stage_upload_stream(
+        &self,
+        admitted: &AdmittedReset,
+        deadline: Instant,
+    ) -> Result<(Vec<u8>, Vec<(File, u64)>)> {
+        self.revalidate(admitted, deadline, false)?;
+        if self.snapshot_stage_files.is_empty()
+            || self.snapshot_stage_files.len() > MAX_INROU_STAGE_FILES_V1
+        {
+            return Err(eyre!(
+                "retained Inrou stage file count is outside V1 bounds"
+            ));
+        }
+        let (stage_tree_sha256, stage_bytes) = revalidate_stage_files(
+            &self.inrou_stage_dir,
+            &self.snapshot_stage_files,
+            Some(deadline),
+        )?;
+        if stage_tree_sha256 != admitted.inventory.inrou_canary.stage_tree_sha256
+            || stage_tree_sha256 != admitted.authorization.claims.inrou_stage_tree_sha256
+            || stage_bytes != admitted.inventory.inrou_canary.stage_bytes
+        {
+            return Err(eyre!(
+                "retained Inrou stage changed before its host-scoped upload"
+            ));
+        }
+        let mut files = Vec::with_capacity(self.snapshot_stage_files.len());
+        let mut sources = Vec::with_capacity(self.snapshot_stage_files.len());
+        for (path, input) in &self.snapshot_stage_files {
+            ensure_local_deadline(Some(deadline))?;
+            files.push(InrouStageUploadFileV1 {
+                path: path.clone(),
+                size: input.snapshot.len,
+                sha256: hash_pinned_input(input, "snapshotted Inrou stage file", Some(deadline))?,
+            });
+            sources.push((
+                input
+                    .file
+                    .try_clone()
+                    .wrap_err("failed to duplicate snapshotted Inrou stage descriptor")?,
+                input.snapshot.len,
+            ));
+        }
+        let manifest = InrouStageUploadManifestV1 {
+            schema: INROU_STAGE_UPLOAD_SCHEMA_V1.to_owned(),
+            stage_tree_sha256,
+            stage_bytes,
+            files,
+        };
+        let bytes = json::to_json(&manifest)?.into_bytes();
+        if bytes.is_empty() || bytes.len() > MAX_INROU_STAGE_UPLOAD_MANIFEST_BYTES_V1 {
+            return Err(eyre!(
+                "Inrou stage upload manifest exceeds its V1 byte bound"
+            ));
+        }
+        let mut frame = format!("{:08x}\n", bytes.len()).into_bytes();
+        frame.extend_from_slice(&bytes);
+        Ok((frame, sources))
     }
 
     fn recover(
@@ -8598,6 +10614,14 @@ impl RuntimeCustody {
                 "manifests/aarch64.to",
                 &admitted.inventory.inrou_canary.guest_manifest_sha256,
             ),
+            (
+                INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
+                &admitted.inventory.inrou_canary.discovery_document_sha256,
+            ),
+            (
+                INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+                &admitted.inventory.inrou_canary.discovery_manifest_sha256,
+            ),
         ] {
             if fixed.get(path) != Some(expected) {
                 return Err(eyre!(
@@ -8643,8 +10667,16 @@ fn stage_identity_matches_inventory(
         && identity.bundle_manifest_digest_hex == expected.bundle_manifest_digest_hex
         && identity.guest_content_cid == expected.guest_content_cid
         && identity.guest_manifest_digest_hex == expected.guest_manifest_digest_hex
+        && identity.discovery_payload_dir == expected.discovery_payload_dir
+        && identity.discovery_document_hash == expected.discovery_document_hash
+        && identity.discovery_content_cid == expected.discovery_content_cid
+        && identity.discovery_manifest_digest_hex == expected.discovery_manifest_digest_hex
+        && identity.public_discovery_url == expected.public_discovery_url
+        && identity.public_discovery_cid_host_url == expected.public_discovery_cid_host_url
+        && identity.deployment_bundle_hash == expected.deployment_bundle_hash
         && identity.container_manifest_hash == expected.container_manifest_hash
         && identity.service_manifest_hash == expected.service_manifest_hash
+        && identity.placement_targets == expected.placement_targets
 }
 
 fn validate_validator_client_semantics(
@@ -8809,12 +10841,20 @@ fn pin_stage_tree(
                     relative,
                     pin_owner_private_file(&path, "retained Inrou stage file")?,
                 ));
+                if files.len() > MAX_INROU_STAGE_FILES_V1 {
+                    return Err(eyre!(
+                        "retained Inrou stage exceeds its V1 file-count bound"
+                    ));
+                }
             } else {
                 return Err(eyre!("retained Inrou stage contains a special file"));
             }
         }
     }
     files.sort_by(|left, right| left.0.cmp(&right.0));
+    if files.is_empty() {
+        return Err(eyre!("retained Inrou stage is empty"));
+    }
     let (hash, bytes) = revalidate_stage_files(root, &files, deadline)?;
     let fixed = files
         .iter()
@@ -8953,7 +10993,6 @@ impl<'a> OpenSshTransport<'a, RealProcessRunner> {
         }
         revalidate_pinned(&admitted.ssh_identity, "OpenSSH identity")?;
         revalidate_pinned(&admitted.known_hosts, "OpenSSH known-hosts")?;
-        validate_first_release_physical_host(&admitted.inventory)?;
         validate_shared_cli(admitted)?;
         let closure = LocalArtifactClosure::snapshot(journal_dir, admitted)?;
         let runtime = RuntimeCustody::admit(runtime, admitted, journal_dir)?;
@@ -9019,7 +11058,6 @@ impl<'a> RollbackSshTransport<'a> {
         validate_owner_private_dir(journal_dir, "public-reset journal directory")?;
         revalidate_pinned(&admitted.ssh_identity, "OpenSSH identity")?;
         revalidate_pinned(&admitted.known_hosts, "OpenSSH known-hosts")?;
-        validate_first_release_physical_host(&admitted.inventory)?;
         Ok(Self {
             admitted,
             runner: RealProcessRunner,
@@ -9048,7 +11086,6 @@ impl<'a> SealCleanupSshTransport<'a> {
         validate_owner_private_dir(journal_dir, "public-reset journal directory")?;
         revalidate_pinned(&admitted.ssh_identity, "OpenSSH identity")?;
         revalidate_pinned(&admitted.known_hosts, "OpenSSH known-hosts")?;
-        validate_first_release_physical_host(&admitted.inventory)?;
         Ok(Self {
             admitted,
             runner: RealProcessRunner,
@@ -9150,6 +11187,7 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
             args,
             stdin_prefix: frame,
             stdin_file: None,
+            stdin_files: Vec::new(),
             inherited_files: vec![identity_file, known_hosts_file],
             deadline,
         })?,
@@ -9451,21 +11489,54 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 require_forward_lease_budget(self.admitted, timeout_secs)?;
             }
         }
-        let (artifact_role, artifact_sha256, artifact_size, artifact_mode, stdin_file) =
-            match upload {
-                Some(artifact) if action == HostAction::Upload => (
-                    artifact.role.clone(),
-                    artifact.sha256.clone(),
+        let (
+            artifact_role,
+            artifact_sha256,
+            artifact_size,
+            artifact_mode,
+            stdin_file,
+            stdin_files,
+            stage_frame,
+        ) = match upload {
+            Some(artifact) if action == HostAction::Upload => (
+                artifact.role.clone(),
+                artifact.sha256.clone(),
+                artifact.size,
+                artifact.mode,
+                Some((
+                    self.closure.stream_file(slug, &artifact.role)?,
                     artifact.size,
-                    artifact.mode,
-                    Some((
-                        self.closure.stream_file(slug, &artifact.role)?,
-                        artifact.size,
-                    )),
-                ),
-                None if action != HostAction::Upload => (String::new(), String::new(), 0, 0, None),
-                _ => return Err(eyre!("host upload request shape is inconsistent")),
-            };
+                )),
+                Vec::new(),
+                Vec::new(),
+            ),
+            None if action == HostAction::InrouStageUpload => {
+                let (frame, files) = self.runtime.stage_upload_stream(self.admitted, deadline)?;
+                (
+                    INROU_STAGE_UPLOAD_ROLE_V1.to_owned(),
+                    self.admitted
+                        .inventory
+                        .inrou_canary
+                        .stage_tree_sha256
+                        .clone(),
+                    self.admitted.inventory.inrou_canary.stage_bytes,
+                    0o400,
+                    None,
+                    files,
+                    frame,
+                )
+            }
+            None if action != HostAction::Upload => (
+                String::new(),
+                String::new(),
+                0,
+                0,
+                None,
+                Vec::new(),
+                Vec::new(),
+            ),
+            _ => return Err(eyre!("host upload request shape is inconsistent")),
+        };
         let (
             mutation_operation,
             mutation_kind,
@@ -9524,6 +11595,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             .into_bytes();
         let mut frame = format!("{:08x}\n", request_bytes.len()).into_bytes();
         frame.extend_from_slice(&request_bytes);
+        frame.extend_from_slice(&stage_frame);
         let remote_command = format!("{FIXED_DISPATCHER} {HOST_DISPATCH_SUFFIX}");
         validate_remote_command(&remote_command)?;
         let (identity_path, identity_file) =
@@ -9542,6 +11614,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             args,
             stdin_prefix: frame,
             stdin_file,
+            stdin_files,
             inherited_files: vec![identity_file, known_hosts_file],
             deadline,
         };
@@ -9742,6 +11815,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             args,
             stdin_prefix: Vec::new(),
             stdin_file: None,
+            stdin_files: Vec::new(),
             inherited_files,
             deadline,
         })
@@ -10264,13 +12338,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 OsString::from("--faucet-authority"),
                 OsString::from(&self.admitted.inventory.faucet_policy.authority),
                 OsString::from("--faucet-asset-id"),
-                OsString::from(
-                    &self
-                        .admitted
-                        .inventory
-                        .faucet_policy
-                        .asset_definition_id,
-                ),
+                OsString::from(&self.admitted.inventory.faucet_policy.asset_definition_id),
                 OsString::from("--faucet-amount"),
                 OsString::from(self.admitted.inventory.faucet_policy.amount.to_string()),
             ]);
@@ -10669,6 +12737,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         let operation = match kind {
             "inrou_bundle_pin" => "bundle-pin",
             "inrou_guest_pin" => "guest-pin",
+            "inrou_discovery_pin" => "discovery-pin",
             "inrou_canary" => "service-mutation",
             _ => return Err(eyre!("unsupported prepared Inrou child kind")),
         };
@@ -10709,7 +12778,12 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
     }
 
     fn inrou_canary(&mut self, timeout_secs: u64) -> Result<()> {
-        for kind in ["inrou_bundle_pin", "inrou_guest_pin", "inrou_canary"] {
+        for kind in [
+            "inrou_bundle_pin",
+            "inrou_guest_pin",
+            "inrou_discovery_pin",
+            "inrou_canary",
+        ] {
             let deadline = Instant::now()
                 .checked_add(Duration::from_secs(timeout_secs))
                 .ok_or_else(|| eyre!("prepared Inrou child deadline overflow"))?;
@@ -10768,8 +12842,219 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         wave: usize,
         recovery_only: bool,
     ) -> Result<()> {
+        if !(1..=4).contains(&wave) {
+            return Err(eyre!("Inrou restart wave must be within 1 through 4"));
+        }
+        let baselines = self.read_inrou_restart_baselines_with_mode(recovery_only)?;
+        let previous =
+            self.validated_retained_inrou_restart_chain(&baselines, wave - 1, recovery_only)?;
+        let target_baseline = &baselines[wave - 1];
         let receipt_name = format!("inrou-restart-wave-{wave}.json");
-        self.require_fresh_inrou_check(&receipt_name, timeout_secs, recovery_only)
+        let retained_receipt = require_retained_restart_wave_before_frontier(
+            classify_inrou_restart_receipt_read(
+                self.read_local_receipt(&receipt_name),
+                recovery_only,
+                "inrou_restart_wave_evidence",
+            )?,
+            recovery_only,
+            wave,
+            4,
+            "inrou_restart_wave_evidence",
+        )?;
+        let retained = classify_inrou_restart_semantic_result(
+            retained_receipt
+                .map(|value| {
+                    let evidence = validate_exact_inrou_check_report(&value, self.admitted, false)?;
+                    validate_inrou_restart_transition(
+                        &previous,
+                        target_baseline,
+                        &evidence,
+                        &self.admitted.inventory,
+                        wave - 1,
+                    )?;
+                    Ok::<_, eyre::Report>(evidence)
+                })
+                .transpose(),
+            recovery_only,
+            "inrou_restart_wave_evidence",
+        )?;
+        let value =
+            self.run_inrou_check_report_with_mode(timeout_secs, recovery_only, Some(wave - 1))?;
+        let fresh = validate_exact_inrou_check_report(&value, self.admitted, true)?;
+        if let Some(retained) = retained.as_ref() {
+            validate_inrou_live_continuity(retained, &fresh, &self.admitted.inventory, wave - 1)?;
+        } else {
+            validate_inrou_restart_transition(
+                &previous,
+                target_baseline,
+                &fresh,
+                &self.admitted.inventory,
+                wave - 1,
+            )?;
+            self.publish_local_receipt(&receipt_name, &value)?;
+        }
+        Ok(())
+    }
+
+    fn require_final_inrou_restart_sweep(
+        &mut self,
+        timeout_secs: u64,
+        recovery_only: bool,
+    ) -> Result<()> {
+        let baselines = self.read_inrou_restart_baselines_with_mode(recovery_only)?;
+        let final_wave =
+            self.validated_retained_inrou_restart_chain(&baselines, 4, recovery_only)?;
+        let mut current = Vec::with_capacity(4);
+        for validator_index in 0..4 {
+            let value = self.run_inrou_check_report_with_mode(
+                timeout_secs,
+                recovery_only,
+                Some(validator_index),
+            )?;
+            current.push(validate_exact_inrou_check_report(
+                &value,
+                self.admitted,
+                true,
+            )?);
+        }
+        validate_inrou_restart_final_sweep(
+            &baselines,
+            &final_wave,
+            &current,
+            &self.admitted.inventory,
+        )
+    }
+
+    fn ensure_inrou_restart_baselines(&mut self, timeout_secs: u64) -> Result<()> {
+        if self.runtime.validator_client_configs.len() != 4 {
+            return Err(eyre!(
+                "Inrou restart qualification requires four ordered validator client configs"
+            ));
+        }
+        let mut baselines = Vec::with_capacity(4);
+        for validator_index in 0..4 {
+            let receipt_name = format!("inrou-pre-restart-validator-{}.json", validator_index + 1);
+            let evidence = if let Some(value) = self.read_local_receipt(&receipt_name)? {
+                validate_exact_inrou_check_report(&value, self.admitted, false)?
+            } else {
+                let value = self.run_inrou_check_report_with_mode(
+                    timeout_secs,
+                    false,
+                    Some(validator_index),
+                )?;
+                let evidence = validate_exact_inrou_check_report(&value, self.admitted, true)?;
+                validate_inrou_evidence_for_validator(
+                    &evidence,
+                    &self.admitted.inventory,
+                    validator_index,
+                )?;
+                self.publish_local_receipt(&receipt_name, &value)?;
+                evidence
+            };
+            validate_inrou_evidence_for_validator(
+                &evidence,
+                &self.admitted.inventory,
+                validator_index,
+            )?;
+            baselines.push(evidence);
+        }
+        validate_inrou_restart_baseline_set(&baselines, &self.admitted.inventory)
+    }
+
+    fn read_inrou_restart_baselines_with_mode(
+        &self,
+        recovery_only: bool,
+    ) -> Result<Vec<ValidatedInrouEvidence>> {
+        let mut baselines = Vec::with_capacity(4);
+        for validator_index in 0..4 {
+            let receipt_name = format!("inrou-pre-restart-validator-{}.json", validator_index + 1);
+            let receipt = classify_inrou_restart_receipt_read(
+                self.read_local_receipt(&receipt_name),
+                recovery_only,
+                "inrou_restart_baseline_evidence",
+            )?;
+            let value = classify_inrou_restart_semantic_result(
+                receipt.ok_or_else(|| eyre!("Inrou restart qualification lacks its baseline set")),
+                recovery_only,
+                "inrou_restart_baseline_evidence",
+            )?;
+            let evidence = classify_inrou_restart_semantic_result(
+                validate_exact_inrou_check_report(&value, self.admitted, false),
+                recovery_only,
+                "inrou_restart_baseline_evidence",
+            )?;
+            classify_inrou_restart_semantic_result(
+                validate_inrou_evidence_for_validator(
+                    &evidence,
+                    &self.admitted.inventory,
+                    validator_index,
+                ),
+                recovery_only,
+                "inrou_restart_baseline_evidence",
+            )?;
+            baselines.push(evidence);
+        }
+        classify_inrou_restart_semantic_result(
+            validate_inrou_restart_baseline_set(&baselines, &self.admitted.inventory),
+            recovery_only,
+            "inrou_restart_baseline_evidence",
+        )?;
+        Ok(baselines)
+    }
+
+    fn validated_retained_inrou_restart_chain(
+        &self,
+        baselines: &[ValidatedInrouEvidence],
+        through_wave: usize,
+        recovery_only: bool,
+    ) -> Result<ValidatedInrouEvidence> {
+        let mut previous = classify_inrou_restart_semantic_result(
+            baselines
+                .first()
+                .cloned()
+                .ok_or_else(|| eyre!("Inrou restart baseline set is empty")),
+            recovery_only,
+            "inrou_restart_baseline_evidence",
+        )?;
+        for wave in 1..=through_wave {
+            let receipt_name = format!("inrou-restart-wave-{wave}.json");
+            let receipt = classify_inrou_restart_receipt_read(
+                self.read_local_receipt(&receipt_name),
+                recovery_only,
+                "inrou_restart_wave_evidence",
+            )?;
+            let value = classify_inrou_restart_semantic_result(
+                receipt
+                    .ok_or_else(|| eyre!("Inrou restart proof lacks its preceding wave receipt")),
+                recovery_only,
+                "inrou_restart_wave_evidence",
+            )?;
+            let current = classify_inrou_restart_semantic_result(
+                validate_exact_inrou_check_report(&value, self.admitted, false),
+                recovery_only,
+                "inrou_restart_wave_evidence",
+            )?;
+            let target_baseline = classify_inrou_restart_semantic_result(
+                baselines
+                    .get(wave - 1)
+                    .ok_or_else(|| eyre!("Inrou restart wave has no target baseline")),
+                recovery_only,
+                "inrou_restart_wave_evidence",
+            )?;
+            classify_inrou_restart_semantic_result(
+                validate_inrou_restart_transition(
+                    &previous,
+                    target_baseline,
+                    &current,
+                    &self.admitted.inventory,
+                    wave - 1,
+                ),
+                recovery_only,
+                "inrou_restart_wave_evidence",
+            )?;
+            previous = current;
+        }
+        Ok(previous)
     }
 
     fn require_fresh_inrou_check(
@@ -10783,7 +13068,9 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         require_fresh_liveness_report(
             self,
             had_prior_receipt,
-            |transport| transport.run_inrou_check_report_with_mode(timeout_secs, recovery_only),
+            |transport| {
+                transport.run_inrou_check_report_with_mode(timeout_secs, recovery_only, None)
+            },
             |value, transport| validate_fresh_inrou_check_report(value, transport.admitted),
             |transport, value| transport.publish_local_receipt(receipt_name, value),
         )
@@ -10793,9 +13080,25 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         &mut self,
         timeout_secs: u64,
         recovery_only: bool,
+        validator_index: Option<usize>,
     ) -> Result<norito::json::Value> {
-        let (config_path, config_file) =
-            inherited_input_path(&self.runtime.client_config, "Taira runtime client config")?;
+        let (config, label) = if let Some(validator_index) = validator_index {
+            (
+                self.runtime
+                    .validator_client_configs
+                    .get(validator_index)
+                    .ok_or_else(|| {
+                        eyre!("Inrou restart check lacks its ordered validator client config")
+                    })?,
+                format!("Taira validator {} client config", validator_index + 1),
+            )
+        } else {
+            (
+                &self.runtime.client_config,
+                "Taira runtime client config".to_owned(),
+            )
+        };
+        let (config_path, config_file) = inherited_input_path(config, &label)?;
         let args = vec![
             "-c".into(),
             config_path.into_os_string(),
@@ -10816,6 +13119,18 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             timeout_secs.to_string().into(),
             "--json".into(),
         ];
+        let authorization_deadline_unix_ms = (!recovery_only).then_some(
+            self.admitted
+                .authorization
+                .claims
+                .execution_expires_at_unix_ms,
+        );
+        let started_at_unix_ms = now_unix_ms()?;
+        if authorization_deadline_unix_ms.is_some_and(|deadline| started_at_unix_ms >= deadline) {
+            return Err(eyre!(
+                "Inrou-check invocation began at or after the reset authorization expiry"
+            ));
+        }
         let output = if recovery_only {
             let deadline = Instant::now()
                 .checked_add(Duration::from_secs(timeout_secs))
@@ -10836,7 +13151,14 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 "same-revision Inrou restart check",
             )?
         };
+        let finished_at_unix_ms = now_unix_ms()?;
         let value = parse_json_report(&output, "same-revision Inrou restart check")?;
+        validate_fresh_inrou_observation_window(
+            &value,
+            started_at_unix_ms,
+            finished_at_unix_ms,
+            authorization_deadline_unix_ms,
+        )?;
         Ok(value)
     }
 
@@ -10849,18 +13171,45 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             None
         } else {
             let previous_name = format!("convergence-wave-{}.json", wave - 1);
-            let value = self
-                .read_local_receipt(&previous_name)?
-                .ok_or_else(|| eyre!("restart convergence lacks its preceding wave receipt"))?;
-            Some(validate_convergence_wave(
-                &value,
-                wave - 1,
-                &self.admitted.inventory,
+            let receipt = classify_inrou_restart_receipt_read(
+                self.read_local_receipt(&previous_name),
+                recovery_only,
+                "inrou_restart_convergence_evidence",
+            )?;
+            let value = classify_inrou_restart_semantic_result(
+                receipt
+                    .ok_or_else(|| eyre!("restart convergence lacks its preceding wave receipt")),
+                recovery_only,
+                "inrou_restart_convergence_evidence",
+            )?;
+            Some(classify_inrou_restart_semantic_result(
+                validate_convergence_wave(&value, wave - 1, &self.admitted.inventory),
+                recovery_only,
+                "inrou_restart_convergence_evidence",
             )?)
         };
-        let had_prior_receipt = if let Some(value) = self.read_local_receipt(&receipt_name)? {
-            let checkpoint = validate_convergence_wave(&value, wave, &self.admitted.inventory)?;
-            require_successor_checkpoint(previous.as_ref(), &checkpoint)?;
+        let retained_receipt = require_retained_restart_wave_before_frontier(
+            classify_inrou_restart_receipt_read(
+                self.read_local_receipt(&receipt_name),
+                recovery_only,
+                "inrou_restart_convergence_evidence",
+            )?,
+            recovery_only,
+            wave,
+            4,
+            "inrou_restart_convergence_evidence",
+        )?;
+        let had_prior_receipt = if let Some(value) = retained_receipt {
+            let checkpoint = classify_inrou_restart_semantic_result(
+                validate_convergence_wave(&value, wave, &self.admitted.inventory),
+                recovery_only,
+                "inrou_restart_convergence_evidence",
+            )?;
+            classify_inrou_restart_semantic_result(
+                require_successor_checkpoint(previous.as_ref(), &checkpoint),
+                recovery_only,
+                "inrou_restart_convergence_evidence",
+            )?;
             true
         } else {
             false
@@ -10972,7 +13321,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         validate_receipt_name(name)?;
         self.reconcile_local_receipt_staging(name)?;
         let path = self.local_receipt_root.join(name);
-        if !path.exists() {
+        if !path.try_exists()? {
             return Ok(None);
         }
         let (file, snapshot) = open_pinned_regular(&path, "local reset receipt")?;
@@ -10983,11 +13332,13 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             &snapshot,
             MAX_PROCESS_OUTPUT as u64,
         )?;
-        let envelope: norito::json::Value =
-            json::from_slice(&bytes).wrap_err("local receipt envelope is invalid")?;
-        let object = envelope
-            .as_object()
-            .ok_or_else(|| eyre!("local receipt envelope must be an object"))?;
+        let envelope: norito::json::Value = json::from_slice(&bytes).map_err(|error| {
+            invalid_local_receipt_evidence(format!("local receipt envelope is invalid: {error}"))
+        })?;
+        let object = envelope.as_object().ok_or_else(|| {
+            invalid_local_receipt_evidence("local receipt envelope must be an object")
+        })?;
+        require_exact_local_receipt_fields(object, "local receipt envelope")?;
         if object.get("schema").and_then(norito::json::Value::as_str)
             != Some(LOCAL_RECEIPT_SCHEMA_V1)
             || object
@@ -11003,93 +13354,22 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 .and_then(norito::json::Value::as_str)
                 != Some(name)
         {
-            return Err(eyre!("local receipt envelope does not bind this execution"));
+            return Err(invalid_local_receipt_evidence(
+                "local receipt envelope does not bind this execution",
+            ));
         }
         Ok(Some(object.get("report").cloned().ok_or_else(|| {
-            eyre!("local receipt envelope omits report")
+            invalid_local_receipt_evidence("local receipt envelope omits report")
         })?))
     }
 
     fn reconcile_local_receipt_staging(&self, name: &str) -> Result<()> {
-        let staging_name = format!(".{name}.next");
-        let staging = self.local_receipt_root.join(&staging_name);
-        let Ok(metadata) = fs::symlink_metadata(&staging) else {
-            return Ok(());
-        };
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(eyre!("local receipt staging is not a regular file"));
-        }
-        let (file, snapshot) = open_pinned_regular(&staging, "staged local reset receipt")?;
-        super::require_owner_private_snapshot(&snapshot, "staged local reset receipt")?;
-        let bytes = super::read_pinned_bytes(
-            &staging,
-            "staged local reset receipt",
-            file,
-            &snapshot,
-            MAX_PROCESS_OUTPUT as u64,
-        )?;
-        let destination = self.local_receipt_root.join(name);
-        if destination.exists() {
-            let (file, snapshot) = open_pinned_regular(&destination, "local reset receipt")?;
-            let actual = super::read_pinned_bytes(
-                &destination,
-                "local reset receipt",
-                file,
-                &snapshot,
-                MAX_PROCESS_OUTPUT as u64,
-            )?;
-            if actual != bytes {
-                return Err(eyre!(
-                    "staged local receipt conflicts with its published destination"
-                ));
-            }
-            sync_private_regular(&destination, "published local reset receipt")?;
-            fs::remove_file(&staging)?;
-            return sync_directory(&self.local_receipt_root);
-        }
-        let complete = json::from_slice::<norito::json::Value>(&bytes)
-            .ok()
-            .and_then(|value| value.as_object().cloned())
-            .is_some_and(|object| {
-                object.get("schema").and_then(norito::json::Value::as_str)
-                    == Some(LOCAL_RECEIPT_SCHEMA_V1)
-                    && object
-                        .get("authorization_sha256")
-                        .and_then(norito::json::Value::as_str)
-                        == Some(self.admitted.authorization_sha256.as_str())
-                    && object
-                        .get("authorization_nonce")
-                        .and_then(norito::json::Value::as_str)
-                        == Some(self.admitted.inventory.authorization_nonce.as_str())
-                    && object
-                        .get("receipt_name")
-                        .and_then(norito::json::Value::as_str)
-                        == Some(name)
-                    && object.contains_key("report")
-            });
-        let parent = File::open(&self.local_receipt_root)?;
-        if complete {
-            sync_private_regular(&staging, "staged local reset receipt")?;
-            rustix::fs::renameat_with(
-                &parent,
-                OsStr::new(&staging_name),
-                &parent,
-                OsStr::new(name),
-                rustix::fs::RenameFlags::NOREPLACE,
-            )?;
-        } else if bytes.last() != Some(&b'}') {
-            rustix::fs::unlinkat(
-                &parent,
-                OsStr::new(&staging_name),
-                rustix::fs::AtFlags::empty(),
-            )?;
-        } else {
-            return Err(eyre!(
-                "complete-looking local receipt staging is invalid or belongs to another execution"
-            ));
-        }
-        parent.sync_all()?;
-        Ok(())
+        reconcile_local_receipt_staging_at(
+            &self.local_receipt_root,
+            &self.admitted.authorization_sha256,
+            &self.admitted.inventory.authorization_nonce,
+            name,
+        )
     }
 
     fn validate_existing_local_receipt(
@@ -11128,6 +13408,107 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         let bytes = json::to_json(&norito::json::Value::Object(envelope))?.into_bytes();
         publish_private_noreplace(&self.local_receipt_root, name, &bytes)
     }
+}
+
+fn reconcile_local_receipt_staging_at(
+    local_receipt_root: &Path,
+    authorization_sha256: &str,
+    authorization_nonce: &str,
+    name: &str,
+) -> Result<()> {
+    validate_receipt_name(name)?;
+    validate_owner_private_dir(local_receipt_root, "local receipt directory")?;
+    let staging_name = format!(".{name}.next");
+    let staging = local_receipt_root.join(&staging_name);
+    let metadata = match fs::symlink_metadata(&staging) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(invalid_local_receipt_evidence(
+            "local receipt staging is not a regular file",
+        ));
+    }
+    let (file, staging_snapshot) = open_pinned_regular(&staging, "staged local reset receipt")?;
+    super::require_owner_private_snapshot(&staging_snapshot, "staged local reset receipt")?;
+    let pinned_staging = file
+        .try_clone()
+        .wrap_err("failed to retain staged local reset receipt descriptor")?;
+    let bytes = super::read_pinned_bytes(
+        &staging,
+        "staged local reset receipt",
+        file,
+        &staging_snapshot,
+        MAX_PROCESS_OUTPUT as u64,
+    )?;
+    let destination = local_receipt_root.join(name);
+    if destination.try_exists()? {
+        let (file, destination_snapshot) =
+            open_pinned_regular(&destination, "local reset receipt")?;
+        let actual = super::read_pinned_bytes(
+            &destination,
+            "local reset receipt",
+            file,
+            &destination_snapshot,
+            MAX_PROCESS_OUTPUT as u64,
+        )?;
+        if actual != bytes {
+            return Err(invalid_local_receipt_evidence(
+                "staged local receipt conflicts with its published destination",
+            ));
+        }
+        sync_private_regular(&destination, "published local reset receipt")?;
+        ensure_pinned_unchanged(
+            &staging,
+            "staged local reset receipt",
+            &pinned_staging,
+            &staging_snapshot,
+        )?;
+        fs::remove_file(&staging)?;
+        return sync_directory(local_receipt_root);
+    }
+    let parsed = json::from_slice::<norito::json::Value>(&bytes);
+    let complete =
+        is_exact_local_receipt_envelope(&bytes, authorization_sha256, authorization_nonce, name);
+    let parent = File::open(local_receipt_root)?;
+    if complete {
+        sync_private_regular(&staging, "staged local reset receipt")?;
+        ensure_pinned_unchanged(
+            &staging,
+            "staged local reset receipt",
+            &pinned_staging,
+            &staging_snapshot,
+        )?;
+        rustix::fs::renameat_with(
+            &parent,
+            OsStr::new(&staging_name),
+            &parent,
+            OsStr::new(name),
+            rustix::fs::RenameFlags::NOREPLACE,
+        )?;
+    } else if parsed
+        .as_ref()
+        .is_err_and(|error| is_provably_truncated_local_receipt_json(error, bytes.len()))
+    {
+        ensure_pinned_unchanged(
+            &staging,
+            "staged local reset receipt",
+            &pinned_staging,
+            &staging_snapshot,
+        )?;
+        rustix::fs::unlinkat(
+            &parent,
+            OsStr::new(&staging_name),
+            rustix::fs::AtFlags::empty(),
+        )?;
+    } else {
+        return Err(invalid_local_receipt_evidence(
+            "unpublished local receipt staging is complete or malformed invalid evidence",
+        ));
+    }
+    parent.sync_all()?;
+    Ok(())
 }
 
 fn canonical_local_report(report: &norito::json::Value) -> Result<norito::json::Value> {
@@ -11197,6 +13578,7 @@ fn build_recovery_intent(inventory: &InventoryV1, step: ExecutionStep) -> Option
             "write_canary",
             "inrou_bundle_pin",
             "inrou_guest_pin",
+            "inrou_discovery_pin",
             "inrou_canary",
         ]
         .into_iter()
@@ -11326,7 +13708,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 "onboarding" | "faucet" | "write_canary" => {
                     self.recover_write_canary_child_until(deadline, mutation)?
                 }
-                "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_canary" => {
+                "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_discovery_pin" | "inrou_canary" => {
                     self.recover_inrou_prepared_child_until(deadline, mutation)?
                 }
                 _ => {
@@ -11354,11 +13736,16 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         match step {
             ExecutionStep::Canary => {}
             ExecutionStep::RestartProof => {
-                for wave in 1..=4 {
-                    self.convergence(inventory.timeouts.convergence_secs, wave, true)?;
-                    self.inrou_check_with_mode(inventory.timeouts.canary_secs, wave, true)?;
-                }
-                self.doctor_with_mode(inventory.timeouts.canary_secs, true)?;
+                let result = (|| {
+                    self.read_inrou_restart_baselines_with_mode(true)?;
+                    for wave in 1..=4 {
+                        self.convergence(inventory.timeouts.convergence_secs, wave, true)?;
+                        self.inrou_check_with_mode(inventory.timeouts.canary_secs, wave, true)?;
+                    }
+                    self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, true)?;
+                    self.doctor_with_mode(inventory.timeouts.canary_secs, true)
+                })();
+                return classify_inrou_restart_recovery_outcome(result);
             }
             ExecutionStep::EdgeVerify => {
                 self.doctor_with_mode(inventory.timeouts.canary_secs, true)?;
@@ -11403,9 +13790,14 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                         kind,
                     )?;
                 }
-                for (offset, kind) in ["inrou_bundle_pin", "inrou_guest_pin", "inrou_canary"]
-                    .into_iter()
-                    .enumerate()
+                for (offset, kind) in [
+                    "inrou_bundle_pin",
+                    "inrou_guest_pin",
+                    "inrou_discovery_pin",
+                    "inrou_canary",
+                ]
+                .into_iter()
+                .enumerate()
                 {
                     self.run_journaled_inrou_prepared_child(
                         progress,
@@ -11418,6 +13810,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 Ok(())
             }
             ExecutionStep::RestartProof => {
+                self.ensure_inrou_restart_baselines(inventory.timeouts.canary_secs)?;
                 for (index, validator) in inventory.validators.iter().enumerate() {
                     let wave = index + 1;
                     let restart_index = index * 4;
@@ -11444,6 +13837,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                     self.convergence(inventory.timeouts.convergence_secs, wave, false)?;
                     self.inrou_check(inventory.timeouts.canary_secs, wave)?;
                 }
+                self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, false)?;
                 self.doctor(inventory.timeouts.canary_secs)
             }
             ExecutionStep::EdgeVerify => {
@@ -11503,6 +13897,25 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         timeout_secs: u64,
     ) -> Result<()> {
         match step {
+            ExecutionStep::Preseed => {
+                let mut physical_hosts = BTreeSet::new();
+                for validator in &inventory.validators {
+                    if !physical_hosts.insert(validator.endpoint.host_identity_sha256.clone()) {
+                        continue;
+                    }
+                    self.bootstrap_and_dispatch_validator(
+                        validator,
+                        HostAction::InrouStageUpload,
+                        inventory.timeouts.install_secs,
+                    )?;
+                    self.bootstrap_and_dispatch_validator(
+                        validator,
+                        HostAction::Preseed,
+                        timeout_secs,
+                    )?;
+                }
+                Ok(())
+            }
             ExecutionStep::Convergence => {
                 self.doctor(timeout_secs)?;
                 self.convergence(timeout_secs, 0, false)
@@ -11512,6 +13925,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 self.inrou_canary(timeout_secs)
             }
             ExecutionStep::RestartProof => {
+                self.ensure_inrou_restart_baselines(inventory.timeouts.canary_secs)?;
                 for (index, validator) in inventory.validators.iter().enumerate() {
                     let wave = index + 1;
                     self.bootstrap_and_dispatch_validator(
@@ -11527,6 +13941,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                     self.convergence(inventory.timeouts.convergence_secs, wave, false)?;
                     self.inrou_check(inventory.timeouts.canary_secs, wave)?;
                 }
+                self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, false)?;
                 self.doctor(inventory.timeouts.canary_secs)?;
                 Ok(())
             }
@@ -11750,11 +14165,19 @@ const PREPARED_INROU_SERVICE_APPLIED_REPORT_FIELDS: &[&str] = &[
     "route_path",
     "active_host_adverts",
     "hosted_replica_count",
+    "local_placement",
     "bundle_hash",
     "bundle_content_cid",
     "bundle_manifest_digest_hex",
     "guest_content_cid",
     "guest_manifest_digest_hex",
+    "discovery_payload_dir",
+    "discovery_document_hash",
+    "discovery_content_cid",
+    "discovery_manifest_digest_hex",
+    "public_discovery_url",
+    "public_discovery_cid_host_url",
+    "deployment_bundle_hash",
     "container_manifest_hash",
     "service_manifest_hash",
     "observed_at_unix_ms",
@@ -11873,12 +14296,16 @@ fn validate_prepared_report_common_arrays(
         ),
         (
             "inrou_public_routes",
-            "observed deterministic identities for replica slots 1, 2, 3, and 4",
+            "observed distinct durable identities and guest boots for replica slots 1, 2, 3, and 4",
+        ),
+        (
+            "inrou_public_discovery",
+            "current and revision authority plus public path and CID-host bytes, headers, and hash are exact",
         ),
     ];
     if checks.len() != expected.len() {
         return Err(eyre!(
-            "{label} must contain the exact two successful Inrou checks"
+            "{label} must contain the exact three successful Inrou checks"
         ));
     }
     for (check, (name, detail)) in checks.iter().zip(expected) {
@@ -12134,6 +14561,8 @@ fn validate_prepared_inrou_report(
     const PENDING_EVIDENCE: &[&str] = &[
         "Absent",
         "ObservationUnavailable",
+        "PinApprovalPending",
+        "PinObservationMissing",
         "Queued",
         "Approved",
         "Committed",
@@ -12167,6 +14596,7 @@ fn validate_prepared_inrou_report(
     let expected_operation = match kind {
         "inrou_bundle_pin" => "bundle_pin",
         "inrou_guest_pin" => "guest_pin",
+        "inrou_discovery_pin" => "discovery_pin",
         "inrou_canary" => "service_mutation",
         _ => return Err(eyre!("prepared Inrou report has an invalid child kind")),
     };
@@ -12280,10 +14710,35 @@ fn validate_prepared_inrou_report(
     Ok(())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ValidatedInrouReplicaIdentity {
+    replica_slot: u64,
+    identity: String,
+    response_sha256: String,
+    app_data_marker_sha256: String,
+    boot_sequence: u64,
+    guest_boot_id_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ValidatedInrouLocalPlacement {
+    peer_id: String,
+    validator_account_id: String,
+    validator_index: usize,
+    replica_slot: u64,
+    placement_incarnation: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ValidatedInrouEvidence {
+    replicas: Vec<ValidatedInrouReplicaIdentity>,
+    local_placement: ValidatedInrouLocalPlacement,
+}
+
 fn validate_applied_inrou_service_identity(
     object: &norito::json::Map,
     inventory: &InventoryV1,
-) -> Result<()> {
+) -> Result<ValidatedInrouEvidence> {
     let canary = &inventory.inrou_canary;
     let route_path = format!("{}{}", canary.route_path_prefix, canary.healthcheck_path);
     for (field, expected) in [
@@ -12301,6 +14756,31 @@ fn validate_applied_inrou_service_identity(
         (
             "guest_manifest_digest_hex",
             canary.guest_manifest_digest_hex.as_str(),
+        ),
+        (
+            "discovery_payload_dir",
+            canary.discovery_payload_dir.as_str(),
+        ),
+        (
+            "discovery_document_hash",
+            canary.discovery_document_hash.as_str(),
+        ),
+        (
+            "discovery_content_cid",
+            canary.discovery_content_cid.as_str(),
+        ),
+        (
+            "discovery_manifest_digest_hex",
+            canary.discovery_manifest_digest_hex.as_str(),
+        ),
+        ("public_discovery_url", canary.public_discovery_url.as_str()),
+        (
+            "public_discovery_cid_host_url",
+            canary.public_discovery_cid_host_url.as_str(),
+        ),
+        (
+            "deployment_bundle_hash",
+            canary.deployment_bundle_hash.as_str(),
         ),
         (
             "container_manifest_hash",
@@ -12339,13 +14819,25 @@ fn validate_applied_inrou_service_identity(
             "prepared Inrou service report must contain four replica identities"
         ));
     }
+    let mut replica_slots = BTreeSet::new();
+    let mut response_hashes = BTreeSet::new();
+    let mut app_data_markers = BTreeSet::new();
+    let mut guest_boot_ids = BTreeSet::new();
+    let mut validated_replicas = Vec::with_capacity(replicas.len());
     for (index, replica) in replicas.iter().enumerate() {
         let replica = replica
             .as_object()
             .ok_or_else(|| eyre!("prepared Inrou replica identity must be an object"))?;
         require_exact_json_fields(
             replica,
-            &["replica_slot", "identity", "response_sha256"],
+            &[
+                "replica_slot",
+                "identity",
+                "response_sha256",
+                "app_data_marker_sha256",
+                "boot_sequence",
+                "guest_boot_id_sha256",
+            ],
             "prepared Inrou replica identity",
         )?;
         let slot = u64::try_from(index + 1).expect("bounded replica slot");
@@ -12354,6 +14846,19 @@ fn validate_applied_inrou_service_identity(
             .get("response_sha256")
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("prepared Inrou replica response hash is missing"))?;
+        let app_data_marker = replica
+            .get("app_data_marker_sha256")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| eyre!("prepared Inrou replica app-data marker hash is missing"))?;
+        let boot_sequence = replica
+            .get("boot_sequence")
+            .and_then(norito::json::Value::as_u64)
+            .filter(|sequence| *sequence > 0)
+            .ok_or_else(|| eyre!("prepared Inrou replica boot sequence must be positive"))?;
+        let guest_boot_id = replica
+            .get("guest_boot_id_sha256")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| eyre!("prepared Inrou replica guest boot ID hash is missing"))?;
         if replica
             .get("replica_slot")
             .and_then(norito::json::Value::as_u64)
@@ -12362,14 +14867,339 @@ fn validate_applied_inrou_service_identity(
                 .get("identity")
                 .and_then(norito::json::Value::as_str)
                 != Some(identity.as_str())
-            || require_lower_sha256(response, "prepared Inrou replica response hash").is_err()
         {
             return Err(eyre!(
                 "prepared Inrou replica identities are not exact slots 1 through 4"
             ));
         }
+        require_lower_sha256(response, "prepared Inrou replica response hash")?;
+        require_lower_sha256(
+            app_data_marker,
+            "prepared Inrou replica app-data marker hash",
+        )?;
+        require_lower_sha256(guest_boot_id, "prepared Inrou replica guest boot ID hash")?;
+        replica_slots.insert(slot);
+        if !response_hashes.insert(response) {
+            return Err(eyre!(
+                "prepared Inrou service report repeats a replica response hash"
+            ));
+        }
+        if !app_data_markers.insert(app_data_marker) {
+            return Err(eyre!(
+                "prepared Inrou service report repeats a durable app-data marker"
+            ));
+        }
+        if !guest_boot_ids.insert(guest_boot_id) {
+            return Err(eyre!(
+                "prepared Inrou service report repeats a guest boot identity"
+            ));
+        }
+        validated_replicas.push(ValidatedInrouReplicaIdentity {
+            replica_slot: slot,
+            identity: identity.clone(),
+            response_sha256: response.to_owned(),
+            app_data_marker_sha256: app_data_marker.to_owned(),
+            boot_sequence,
+            guest_boot_id_sha256: guest_boot_id.to_owned(),
+        });
+    }
+    let local_placement =
+        validate_applied_inrou_local_placement(object, inventory, &replica_slots)?;
+    Ok(ValidatedInrouEvidence {
+        replicas: validated_replicas,
+        local_placement,
+    })
+}
+
+fn validate_applied_inrou_local_placement(
+    object: &norito::json::Map,
+    inventory: &InventoryV1,
+    replica_slots: &BTreeSet<u64>,
+) -> Result<ValidatedInrouLocalPlacement> {
+    let placement = object
+        .get("local_placement")
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| eyre!("prepared Inrou service report omits its local placement"))?;
+    require_exact_json_fields(
+        placement,
+        &[
+            "peer_id",
+            "validator_account_id",
+            "replica_slot",
+            "placement_incarnation",
+        ],
+        "prepared Inrou local placement",
+    )?;
+
+    let peer_id_literal = placement
+        .get("peer_id")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("prepared Inrou local placement omits its peer ID"))?;
+    let peer_id = peer_id_literal
+        .parse::<iroha::data_model::peer::PeerId>()
+        .wrap_err("prepared Inrou local placement peer ID is invalid")?;
+    if peer_id.to_string() != peer_id_literal {
+        return Err(eyre!(
+            "prepared Inrou local placement peer ID is not canonical"
+        ));
+    }
+
+    let validator_account_literal = placement
+        .get("validator_account_id")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("prepared Inrou local placement omits its validator account"))?;
+    let _chain_guard = ChainDiscriminantGuard::enter(inventory.chain_discriminant);
+    let validator_account = AccountId::parse_encoded(validator_account_literal)
+        .wrap_err("prepared Inrou local placement validator account is invalid")?;
+    let validator_index = inventory
+        .validator_clients
+        .iter()
+        .position(|client| client.account_id == validator_account_literal)
+        .ok_or_else(|| {
+            eyre!(
+                "prepared Inrou local placement validator account is not one exact inventory identity"
+            )
+        })?;
+    if validator_account.to_string() != validator_account_literal {
+        return Err(eyre!(
+            "prepared Inrou local placement validator account is not one exact inventory identity"
+        ));
+    }
+    let expected_peer_id = inventory.validator_clients[validator_index]
+        .peer_id
+        .parse::<iroha::data_model::peer::PeerId>()
+        .wrap_err("inventory validator peer ID is invalid")?;
+    if expected_peer_id != peer_id {
+        return Err(eyre!(
+            "prepared Inrou local placement peer ID does not match its exact inventory validator pair"
+        ));
+    }
+
+    let replica_slot = placement
+        .get("replica_slot")
+        .and_then(norito::json::Value::as_u64)
+        .filter(|slot| (1..=4).contains(slot) && replica_slots.contains(slot))
+        .ok_or_else(|| {
+            eyre!("prepared Inrou local placement does not name one reported replica slot")
+        })?;
+    let _ = u16::try_from(replica_slot).expect("replica slot 1 through 4 fits u16");
+
+    let incarnation_literal = placement
+        .get("placement_incarnation")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("prepared Inrou local placement omits its incarnation"))?;
+    let incarnation = Hash::from_str(incarnation_literal)
+        .wrap_err("prepared Inrou local placement incarnation is invalid")?;
+    if incarnation.to_string() != incarnation_literal {
+        return Err(eyre!(
+            "prepared Inrou local placement incarnation is not canonical"
+        ));
+    }
+    let mut zero_prehash_sentinel = [0_u8; Hash::LENGTH];
+    zero_prehash_sentinel[Hash::LENGTH - 1] = 1;
+    if <[u8; Hash::LENGTH]>::from(incarnation) == zero_prehash_sentinel {
+        return Err(eyre!(
+            "prepared Inrou local placement incarnation is the forbidden zero-prehash sentinel"
+        ));
+    }
+    Ok(ValidatedInrouLocalPlacement {
+        peer_id: peer_id_literal.to_owned(),
+        validator_account_id: validator_account_literal.to_owned(),
+        validator_index,
+        replica_slot,
+        placement_incarnation: incarnation_literal.to_owned(),
+    })
+}
+
+fn validate_inrou_evidence_for_validator(
+    evidence: &ValidatedInrouEvidence,
+    inventory: &InventoryV1,
+    validator_index: usize,
+) -> Result<()> {
+    let expected = inventory
+        .validator_clients
+        .get(validator_index)
+        .ok_or_else(|| eyre!("Inrou restart evidence names an unknown validator index"))?;
+    if evidence.local_placement.validator_index != validator_index
+        || evidence.local_placement.validator_account_id != expected.account_id
+        || evidence.local_placement.peer_id != expected.peer_id
+    {
+        return Err(eyre!(
+            "Inrou restart evidence is not hosted by the ordered validator being restarted"
+        ));
     }
     Ok(())
+}
+
+fn validate_inrou_restart_baseline_set(
+    baselines: &[ValidatedInrouEvidence],
+    inventory: &InventoryV1,
+) -> Result<()> {
+    if baselines.len() != 4 || inventory.validator_clients.len() != 4 {
+        return Err(eyre!(
+            "Inrou restart qualification requires four ordered validator baselines"
+        ));
+    }
+    let expected_replicas = &baselines[0].replicas;
+    let mut peer_ids = BTreeSet::new();
+    let mut validator_accounts = BTreeSet::new();
+    let mut replica_slots = BTreeSet::new();
+    let mut placement_incarnations = BTreeSet::new();
+    for (validator_index, baseline) in baselines.iter().enumerate() {
+        validate_inrou_evidence_for_validator(baseline, inventory, validator_index)?;
+        if baseline.replicas.as_slice() != expected_replicas.as_slice() {
+            return Err(eyre!(
+                "Inrou restart baselines disagree before the first host restart"
+            ));
+        }
+        let placement = &baseline.local_placement;
+        if !peer_ids.insert(placement.peer_id.as_str())
+            || !validator_accounts.insert(placement.validator_account_id.as_str())
+            || !replica_slots.insert(placement.replica_slot)
+            || !placement_incarnations.insert(placement.placement_incarnation.as_str())
+        {
+            return Err(eyre!(
+                "Inrou restart baselines do not cover four distinct validator placements"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_inrou_restart_transition(
+    previous: &ValidatedInrouEvidence,
+    target_baseline: &ValidatedInrouEvidence,
+    current: &ValidatedInrouEvidence,
+    inventory: &InventoryV1,
+    validator_index: usize,
+) -> Result<()> {
+    validate_inrou_evidence_for_validator(current, inventory, validator_index)?;
+    if current.local_placement != target_baseline.local_placement {
+        return Err(eyre!(
+            "Inrou restart changed the target validator's authoritative placement"
+        ));
+    }
+    if previous.replicas.len() != 4 || current.replicas.len() != 4 {
+        return Err(eyre!(
+            "Inrou restart transition requires four replica identities"
+        ));
+    }
+    let restarted_slot = current.local_placement.replica_slot;
+    for (before, after) in previous.replicas.iter().zip(&current.replicas) {
+        if after.replica_slot != before.replica_slot
+            || after.identity != before.identity
+            || after.app_data_marker_sha256 != before.app_data_marker_sha256
+        {
+            return Err(eyre!(
+                "Inrou restart changed replica {} identity or durable marker",
+                before.replica_slot
+            ));
+        }
+        if before.replica_slot == restarted_slot {
+            if before.boot_sequence.checked_add(1) != Some(after.boot_sequence)
+                || after.guest_boot_id_sha256 == before.guest_boot_id_sha256
+                || after.response_sha256 == before.response_sha256
+            {
+                return Err(eyre!(
+                    "Inrou restart did not prove exactly one new guest boot for replica slot {restarted_slot}"
+                ));
+            }
+        } else if after != before {
+            return Err(eyre!(
+                "non-selected Inrou replica slot {} changed during an exact-host restart",
+                before.replica_slot
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_inrou_restart_final_sweep(
+    baselines: &[ValidatedInrouEvidence],
+    final_wave: &ValidatedInrouEvidence,
+    current: &[ValidatedInrouEvidence],
+    inventory: &InventoryV1,
+) -> Result<()> {
+    validate_inrou_restart_baseline_set(baselines, inventory)?;
+    if current.len() != 4 {
+        return Err(eyre!(
+            "final Inrou restart sweep requires four ordered validator reports"
+        ));
+    }
+    let current_replicas = &current[0].replicas;
+    validate_inrou_replica_continuity(&final_wave.replicas, current_replicas)?;
+    for (validator_index, evidence) in current.iter().enumerate() {
+        validate_inrou_evidence_for_validator(evidence, inventory, validator_index)?;
+        let baseline = &baselines[validator_index];
+        if evidence.local_placement != baseline.local_placement {
+            return Err(eyre!(
+                "final Inrou restart sweep changed validator {} placement",
+                validator_index + 1
+            ));
+        }
+        if evidence.replicas.as_slice() != current_replicas.as_slice() {
+            return Err(eyre!(
+                "final Inrou restart sweep does not agree on one current replica vector"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_inrou_replica_continuity(
+    retained: &[ValidatedInrouReplicaIdentity],
+    current: &[ValidatedInrouReplicaIdentity],
+) -> Result<()> {
+    if retained.len() != 4 || current.len() != 4 {
+        return Err(eyre!(
+            "live Inrou continuity requires four replica identities"
+        ));
+    }
+    for (before, after) in retained.iter().zip(current) {
+        if after.replica_slot != before.replica_slot
+            || after.identity != before.identity
+            || after.app_data_marker_sha256 != before.app_data_marker_sha256
+            || after.boot_sequence < before.boot_sequence
+        {
+            return Err(eyre!(
+                "live Inrou replica slot {} rolled back or changed durable identity",
+                before.replica_slot
+            ));
+        }
+        if after.boot_sequence == before.boot_sequence {
+            if after.guest_boot_id_sha256 != before.guest_boot_id_sha256
+                || after.response_sha256 != before.response_sha256
+            {
+                return Err(eyre!(
+                    "live Inrou replica slot {} changed without a new guest boot",
+                    before.replica_slot
+                ));
+            }
+        } else if after.guest_boot_id_sha256 == before.guest_boot_id_sha256
+            || after.response_sha256 == before.response_sha256
+        {
+            return Err(eyre!(
+                "live Inrou replica slot {} advanced without distinct boot evidence",
+                before.replica_slot
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_inrou_live_continuity(
+    retained: &ValidatedInrouEvidence,
+    current: &ValidatedInrouEvidence,
+    inventory: &InventoryV1,
+    validator_index: usize,
+) -> Result<()> {
+    validate_inrou_evidence_for_validator(current, inventory, validator_index)?;
+    if current.local_placement != retained.local_placement {
+        return Err(eyre!(
+            "live Inrou continuity differs from the retained validator placement"
+        ));
+    }
+    validate_inrou_replica_continuity(&retained.replicas, &current.replicas)
 }
 
 fn parse_json_report(bytes: &[u8], label: &str) -> Result<norito::json::Value> {
@@ -12419,11 +15249,6 @@ const DOCTOR_EXPECTED_CHECKS: &[(&str, u64, Option<&str>)] = &[
         400,
         Some("mounted route is expected to return HTTP 400 for this preflight shape"),
     ),
-    (
-        "retired_transaction_status_alias",
-        404,
-        Some("mounted route is expected to return HTTP 404 for this preflight shape"),
-    ),
     ("sccp_capabilities", 200, None),
     ("zk_proofs_count", 200, None),
     ("public_lane_validators", 200, None),
@@ -12442,7 +15267,7 @@ const DOCTOR_EXPECTED_CHECKS: &[(&str, u64, Option<&str>)] = &[
         401,
         Some("mounted route is expected to return HTTP 401 for this preflight shape"),
     ),
-    ("mcp_get", 200, None),
+    ("mcp_get", 405, None),
     ("mcp_initialize", 200, None),
     ("mcp_tools_list", 200, None),
     (
@@ -12490,7 +15315,10 @@ fn validate_doctor_report(value: &norito::json::Value, public_root: &str) -> Res
         .and_then(norito::json::Value::as_array)
         .ok_or_else(|| eyre!("Taira doctor checks must be an array"))?;
     if checks.len() != DOCTOR_EXPECTED_CHECKS.len() {
-        return Err(eyre!("Taira doctor report must contain exactly 15 checks"));
+        return Err(eyre!(
+            "Taira doctor report must contain exactly {} checks",
+            DOCTOR_EXPECTED_CHECKS.len()
+        ));
     }
     for (check, &(name, http_status, detail)) in checks.iter().zip(DOCTOR_EXPECTED_CHECKS) {
         let check = check
@@ -12549,11 +15377,19 @@ const FRESH_INROU_CHECK_REPORT_FIELDS: &[&str] = &[
     "route_path",
     "active_host_adverts",
     "hosted_replica_count",
+    "local_placement",
     "bundle_hash",
     "bundle_content_cid",
     "bundle_manifest_digest_hex",
     "guest_content_cid",
     "guest_manifest_digest_hex",
+    "discovery_payload_dir",
+    "discovery_document_hash",
+    "discovery_content_cid",
+    "discovery_manifest_digest_hex",
+    "public_discovery_url",
+    "public_discovery_cid_host_url",
+    "deployment_bundle_hash",
     "container_manifest_hash",
     "service_manifest_hash",
     "observed_at_unix_ms",
@@ -12573,11 +15409,19 @@ const RETAINED_INROU_CHECK_REPORT_FIELDS: &[&str] = &[
     "route_path",
     "active_host_adverts",
     "hosted_replica_count",
+    "local_placement",
     "bundle_hash",
     "bundle_content_cid",
     "bundle_manifest_digest_hex",
     "guest_content_cid",
     "guest_manifest_digest_hex",
+    "discovery_payload_dir",
+    "discovery_document_hash",
+    "discovery_content_cid",
+    "discovery_manifest_digest_hex",
+    "public_discovery_url",
+    "public_discovery_cid_host_url",
+    "deployment_bundle_hash",
     "container_manifest_hash",
     "service_manifest_hash",
     "replica_identities",
@@ -12587,21 +15431,45 @@ fn validate_fresh_inrou_check_report(
     value: &norito::json::Value,
     admitted: &AdmittedReset,
 ) -> Result<()> {
-    validate_exact_inrou_check_report(value, admitted, true)
+    validate_exact_inrou_check_report(value, admitted, true).map(|_| ())
+}
+
+fn validate_fresh_inrou_observation_window(
+    value: &norito::json::Value,
+    started_at_unix_ms: u64,
+    finished_at_unix_ms: u64,
+    authorization_deadline_unix_ms: Option<u64>,
+) -> Result<()> {
+    let observed_at_unix_ms = value
+        .as_object()
+        .and_then(|object| object.get("observed_at_unix_ms"))
+        .and_then(norito::json::Value::as_u64)
+        .filter(|timestamp| *timestamp > 0)
+        .ok_or_else(|| eyre!("fresh Inrou check report omits its observation timestamp"))?;
+    if finished_at_unix_ms < started_at_unix_ms
+        || observed_at_unix_ms < started_at_unix_ms
+        || observed_at_unix_ms > finished_at_unix_ms
+        || authorization_deadline_unix_ms.is_some_and(|deadline| finished_at_unix_ms >= deadline)
+    {
+        return Err(eyre!(
+            "fresh Inrou check observation is outside its authorized invocation window"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_retained_inrou_check_report(
     value: &norito::json::Value,
     admitted: &AdmittedReset,
 ) -> Result<()> {
-    validate_exact_inrou_check_report(value, admitted, false)
+    validate_exact_inrou_check_report(value, admitted, false).map(|_| ())
 }
 
 fn validate_exact_inrou_check_report(
     value: &norito::json::Value,
     admitted: &AdmittedReset,
     fresh: bool,
-) -> Result<()> {
+) -> Result<ValidatedInrouEvidence> {
     let canary = &admitted.inventory.inrou_canary;
     validate_common_report(value, "taira_inrou_check", &canary.public_root)?;
     let object = value.as_object().expect("common report checked object");
@@ -12619,7 +15487,7 @@ fn validate_exact_inrou_check_report(
         },
     )?;
     validate_prepared_report_common_arrays(object, true, "Inrou check report")?;
-    validate_applied_inrou_service_identity(object, &admitted.inventory)?;
+    let evidence = validate_applied_inrou_service_identity(object, &admitted.inventory)?;
     if fresh
         && !object
             .get("observed_at_unix_ms")
@@ -12630,7 +15498,7 @@ fn validate_exact_inrou_check_report(
             "fresh Inrou check report omits its observation timestamp"
         ));
     }
-    Ok(())
+    Ok(evidence)
 }
 
 /// Decode and validate one exact first-release Sumeragi V2 status report.
@@ -12692,7 +15560,7 @@ fn validate_convergence_status(
             "Sumeragi CommitQC is not the exact authenticated 3-of-4 committed checkpoint"
         ));
     }
-    let context = json::to_value(&commit.certificate.round.context_id)?
+    let context = json::to_value(&commit.certificate.round.context_id.0)?
         .as_str()
         .ok_or_else(|| eyre!("CommitQC context identifier is not canonical JSON"))?
         .to_owned();
@@ -12712,6 +15580,19 @@ fn validate_convergence_wave(
     let object = value
         .as_object()
         .ok_or_else(|| eyre!("convergence-wave receipt must be an object"))?;
+    require_exact_json_fields(
+        object,
+        &[
+            "schema",
+            "wave",
+            "height",
+            "height_context_id",
+            "block_hash",
+            "last_commit_qc",
+            "validator_reports",
+        ],
+        "convergence-wave receipt",
+    )?;
     if object.get("schema").and_then(norito::json::Value::as_str)
         != Some("iroha.taira.public-reset.convergence-wave.v1")
         || object.get("wave").and_then(norito::json::Value::as_u64)
@@ -13279,12 +16160,10 @@ mod tests {
         assert_eq!(authority.gas_limit(), None);
         assert!(authority.charge_limits().is_empty());
 
-        let _chain_guard =
-            ChainDiscriminantGuard::enter(inventory.chain_discriminant);
-        let sponsor_owner = AccountId::parse_encoded(
-            &inventory.canary_onboarding_request.account_id,
-        )
-        .expect("canonical inventory canary account");
+        let _chain_guard = ChainDiscriminantGuard::enter(inventory.chain_discriminant);
+        let sponsor_owner =
+            AccountId::parse_encoded(&inventory.canary_onboarding_request.account_id)
+                .expect("canonical inventory canary account");
         let sponsor = FeeSponsorProgramId::new(
             sponsor_owner,
             Name::from_str("public_reset").expect("program name"),
@@ -13292,8 +16171,7 @@ mod tests {
         inventory.fee_intent.payer = "sponsor".to_owned();
         inventory.fee_intent.sponsor_program = Some(sponsor.to_string());
         inventory.fee_intent.sponsor_program_revision = Some(7);
-        let selected =
-            inventory_fee_payment_intent(&inventory).expect("sponsor fee intent");
+        let selected = inventory_fee_payment_intent(&inventory).expect("sponsor fee intent");
         assert_eq!(selected.sponsor_program(), Some((&sponsor, 7)));
         assert_eq!(selected.gas_limit(), None);
         assert!(selected.charge_limits().is_empty());
@@ -13306,6 +16184,7 @@ mod tests {
     #[test]
     fn signed_inventory_derives_the_only_accepted_faucet_policy() {
         let mut inventory = progress_admission().inventory;
+        let _chain_guard = ChainDiscriminantGuard::enter(inventory.chain_discriminant);
         let policy = inventory_faucet_policy(&inventory).expect("canonical faucet policy");
         assert_eq!(
             policy.faucet_authority().to_string(),
@@ -13397,6 +16276,307 @@ mod tests {
     }
 
     #[test]
+    fn fresh_inrou_observation_is_bound_to_its_authorized_invocation_window() {
+        let report = norito::json!({"observed_at_unix_ms": 150_u64});
+        validate_fresh_inrou_observation_window(&report, 100, 200, Some(300))
+            .expect("observation within the invocation and authorization windows");
+        validate_fresh_inrou_observation_window(&report, 100, 200, None)
+            .expect("read-only recovery remains valid after authorization expiry");
+
+        for (started_at, finished_at, authorization_deadline) in [
+            (151, 200, 300),
+            (100, 149, 300),
+            (100, 200, 200),
+            (201, 200, 300),
+        ] {
+            let error = validate_fresh_inrou_observation_window(
+                &report,
+                started_at,
+                finished_at,
+                Some(authorization_deadline),
+            )
+            .expect_err("stale, future, expired, or reversed evidence must fail closed");
+            assert!(
+                error.to_string().contains("authorized invocation window"),
+                "unexpected freshness error: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn restart_recovery_rejects_permanent_proof_failure_but_retries_live_failure() {
+        let permanent = classify_inrou_restart_semantic_result::<()>(
+            Err(eyre!("retained baseline is invalid")),
+            true,
+            "inrou_restart_baseline_evidence",
+        );
+        assert_eq!(
+            classify_inrou_restart_recovery_outcome(permanent)
+                .expect("permanent proof failure has a stable recovery outcome"),
+            RecoveryOutcome::Rejected("inrou_restart_baseline_evidence".to_owned())
+        );
+
+        let invalid_receipt = classify_inrou_restart_receipt_read::<()>(
+            Err(invalid_local_receipt_evidence(
+                "retained receipt envelope is invalid",
+            )),
+            true,
+            "inrou_restart_wave_evidence",
+        );
+        assert_eq!(
+            classify_inrou_restart_recovery_outcome(invalid_receipt)
+                .expect("invalid retained evidence has a stable recovery outcome"),
+            RecoveryOutcome::Rejected("inrou_restart_wave_evidence".to_owned())
+        );
+
+        let missing_preceding_convergence = classify_inrou_restart_semantic_result::<()>(
+            Err(eyre!(
+                "restart convergence lacks its preceding wave receipt"
+            )),
+            true,
+            "inrou_restart_convergence_evidence",
+        );
+        assert_eq!(
+            classify_inrou_restart_recovery_outcome(missing_preceding_convergence)
+                .expect("missing immutable convergence proof has a stable recovery outcome"),
+            RecoveryOutcome::Rejected("inrou_restart_convergence_evidence".to_owned())
+        );
+
+        let transient_receipt_read = classify_inrou_restart_receipt_read::<()>(
+            Err(
+                std::io::Error::new(std::io::ErrorKind::Interrupted, "receipt read interrupted")
+                    .into(),
+            ),
+            true,
+            "inrou_restart_wave_evidence",
+        );
+        let io_error = classify_inrou_restart_recovery_outcome(transient_receipt_read)
+            .expect_err("transient receipt I/O must remain pending through the coordinator");
+        assert!(
+            io_error.to_string().contains("receipt read interrupted"),
+            "unexpected receipt I/O recovery error: {io_error:#}"
+        );
+
+        let error = classify_inrou_restart_recovery_outcome(Err(eyre!(
+            "live Inrou route is temporarily unavailable"
+        )))
+        .expect_err("transient live failure remains pending through the coordinator");
+        assert!(
+            error.to_string().contains("temporarily unavailable"),
+            "unexpected transient recovery error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn restart_recovery_reconstructs_only_the_final_frontier_receipt() {
+        let missing_wave_one = require_retained_restart_wave_before_frontier::<()>(
+            None,
+            true,
+            1,
+            4,
+            "inrou_restart_wave_evidence",
+        );
+        assert_eq!(
+            classify_inrou_restart_recovery_outcome(missing_wave_one.map(|_| ()))
+                .expect("missing evidence behind the completed frontier is permanent"),
+            RecoveryOutcome::Rejected("inrou_restart_wave_evidence".to_owned())
+        );
+
+        assert_eq!(
+            require_retained_restart_wave_before_frontier::<()>(
+                None,
+                true,
+                4,
+                4,
+                "inrou_restart_wave_evidence",
+            )
+            .expect("the final crash frontier remains reconstructible"),
+            None
+        );
+        assert_eq!(
+            require_retained_restart_wave_before_frontier(
+                Some("retained wave"),
+                true,
+                1,
+                4,
+                "inrou_restart_wave_evidence",
+            )
+            .expect("retained evidence before the frontier remains usable"),
+            Some("retained wave")
+        );
+    }
+
+    #[test]
+    fn local_receipt_envelope_rejects_unknown_first_release_fields() {
+        let value = norito::json!({
+            "schema": LOCAL_RECEIPT_SCHEMA_V1,
+            "authorization_sha256": "00",
+            "authorization_nonce": "nonce",
+            "receipt_name": "inrou-restart-wave-1.json",
+            "report": {},
+        });
+        let mut envelope = value.as_object().expect("fixture object").clone();
+        require_exact_local_receipt_fields(&envelope, "local receipt envelope")
+            .expect("the sole V1 envelope field set is exact");
+
+        envelope.insert(
+            "legacy_report".to_owned(),
+            norito::json::Value::Object(norito::json::Map::new()),
+        );
+        let error = require_exact_local_receipt_fields(&envelope, "local receipt envelope")
+            .expect_err("unknown or compatibility receipt fields must fail closed");
+        assert!(
+            error
+                .downcast_ref::<InvalidLocalReceiptEvidence>()
+                .is_some(),
+            "exact-field failure must remain a permanent evidence classification"
+        );
+        assert!(
+            error.to_string().contains("legacy_report"),
+            "unexpected exact-field error: {error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn truncated_unpublished_receipt_staging_is_removed_before_retry() {
+        let receipt_name = "inrou-restart-wave-1.json";
+        let complete = format!(
+            r#"{{"schema":"{LOCAL_RECEIPT_SCHEMA_V1}","authorization_sha256":"00","authorization_nonce":"nonce","receipt_name":"{receipt_name}","report":{{"status":"ok"}}}}"#
+        );
+        assert!(is_exact_local_receipt_envelope(
+            complete.as_bytes(),
+            "00",
+            "nonce",
+            receipt_name,
+        ));
+
+        let truncated = complete
+            .strip_suffix('}')
+            .expect("fixture has an outer envelope terminator");
+        assert_eq!(truncated.as_bytes().last(), Some(&b'}'));
+        assert!(
+            !is_exact_local_receipt_envelope(truncated.as_bytes(), "00", "nonce", receipt_name,),
+            "a nested report terminator must not prove a complete staged envelope"
+        );
+
+        let target_dir = fs::canonicalize(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join("target"),
+        )
+        .expect("canonical workspace target directory");
+        let directory = tempfile::Builder::new()
+            .prefix("taira-truncated-local-receipt-")
+            .tempdir_in(target_dir)
+            .expect("owner-private temporary receipt root");
+        let receipt_root = directory.path().to_path_buf();
+        fs::set_permissions(&receipt_root, fs::Permissions::from_mode(0o700))
+            .expect("protect temporary receipt root");
+        validate_owner_private_dir(&receipt_root, "local receipt directory")
+            .expect("owner-private receipt root");
+        let staging = receipt_root.join(format!(".{receipt_name}.next"));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&staging)
+            .expect("truncated receipt staging");
+        file.write_all(truncated.as_bytes())
+            .expect("write truncated staging");
+        file.sync_all().expect("sync truncated staging");
+        drop(file);
+
+        reconcile_local_receipt_staging_at(&receipt_root, "00", "nonce", receipt_name)
+            .expect("provably truncated unpublished staging is discarded");
+        assert!(!staging.exists());
+        assert!(!receipt_root.join(receipt_name).exists());
+
+        publish_private_noreplace(&receipt_root, receipt_name, complete.as_bytes())
+            .expect("retry publishes the complete receipt");
+        reconcile_local_receipt_staging_at(&receipt_root, "00", "nonce", receipt_name)
+            .expect("published receipt reopens cleanly");
+        assert_eq!(
+            fs::read(receipt_root.join(receipt_name)).expect("published receipt"),
+            complete.as_bytes()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn complete_wrong_binding_receipt_staging_is_preserved() {
+        let receipt_name = "inrou-restart-wave-1.json";
+        let wrong_binding = format!(
+            r#"{{"schema":"{LOCAL_RECEIPT_SCHEMA_V1}","authorization_sha256":"11","authorization_nonce":"nonce","receipt_name":"{receipt_name}","report":{{"status":"ok"}}}}"#
+        );
+        let target_dir = fs::canonicalize(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join("target"),
+        )
+        .expect("canonical workspace target directory");
+        let directory = tempfile::Builder::new()
+            .prefix("taira-wrong-binding-local-receipt-")
+            .tempdir_in(target_dir)
+            .expect("owner-private temporary receipt root");
+        let receipt_root = directory.path().to_path_buf();
+        fs::set_permissions(&receipt_root, fs::Permissions::from_mode(0o700))
+            .expect("protect temporary receipt root");
+        validate_owner_private_dir(&receipt_root, "local receipt directory")
+            .expect("owner-private receipt root");
+        let staging = receipt_root.join(format!(".{receipt_name}.next"));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&staging)
+            .expect("wrong-binding receipt staging");
+        file.write_all(wrong_binding.as_bytes())
+            .expect("write wrong-binding staging");
+        file.sync_all().expect("sync wrong-binding staging");
+        drop(file);
+
+        let error = reconcile_local_receipt_staging_at(&receipt_root, "00", "nonce", receipt_name)
+            .expect_err("complete wrong-binding staging must fail closed");
+        assert!(
+            error
+                .downcast_ref::<InvalidLocalReceiptEvidence>()
+                .is_some(),
+            "wrong binding must be permanent invalid evidence: {error:#}"
+        );
+        assert_eq!(
+            fs::read(&staging).expect("preserved wrong-binding staging"),
+            wrong_binding.as_bytes()
+        );
+        let destination = receipt_root.join(receipt_name);
+        assert!(!destination.exists());
+
+        let published = format!(
+            r#"{{"schema":"{LOCAL_RECEIPT_SCHEMA_V1}","authorization_sha256":"00","authorization_nonce":"nonce","receipt_name":"{receipt_name}","report":{{"status":"ok"}}}}"#
+        );
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&destination)
+            .expect("published receipt fixture");
+        file.write_all(published.as_bytes())
+            .expect("write published receipt fixture");
+        file.sync_all().expect("sync published receipt fixture");
+        drop(file);
+        reconcile_local_receipt_staging_at(&receipt_root, "00", "nonce", receipt_name)
+            .expect_err("a published receipt must not erase conflicting staged evidence");
+        assert_eq!(
+            fs::read(&staging).expect("preserved staged evidence after destination conflict"),
+            wrong_binding.as_bytes()
+        );
+        assert_eq!(
+            fs::read(destination).expect("preserved published receipt"),
+            published.as_bytes()
+        );
+    }
+
+    #[test]
     fn cleanup_tombstones_use_one_exact_first_release_name() {
         let upload = OsString::from("a".repeat(32));
         let upload_tombstone =
@@ -13405,6 +16585,15 @@ mod tests {
             cleanup_original_name_from_tombstone(&upload_tombstone, "upload")
                 .expect("parse upload tombstone"),
             Some(upload)
+        );
+
+        let inrou_stage = OsString::from("b".repeat(32));
+        let inrou_stage_tombstone = cleanup_tombstone_name(&inrou_stage, "inrou_stage")
+            .expect("canonical Inrou-stage tombstone");
+        assert_eq!(
+            cleanup_original_name_from_tombstone(&inrou_stage_tombstone, "inrou_stage")
+                .expect("parse Inrou-stage tombstone"),
+            Some(inrou_stage)
         );
 
         let release = OsString::from("1".repeat(40));
@@ -13491,7 +16680,8 @@ mod tests {
             inventory_sha256: admitted.inventory_sha256.clone(),
             authorization_sha256: admitted.authorization_sha256.clone(),
             authorization_nonce: admitted.inventory.authorization_nonce.clone(),
-            max_reclaim_bytes: admitted.inventory.cleanup.max_reclaim_bytes_per_host,
+            max_reclaim_bytes: physical_host_cleanup_reclaim_limit(&admitted)
+                .expect("physical-host cleanup partition"),
             bytes_before: 1,
             entries: vec![entry],
         };
@@ -13520,6 +16710,159 @@ mod tests {
         oversized.bytes_before = oversized.entries[0].initial_bytes;
         validate_cleanup_plan(&admitted, &oversized)
             .expect_err("cleanup plan cannot exceed the signed cap");
+    }
+
+    #[test]
+    fn cleanup_reclaim_limit_partitions_the_physical_host_cap_once() {
+        let max_reclaim_bytes_per_host = 16 * 1024 * 1024 * 1024 + 4;
+        let mut admitted = progress_admission();
+        admitted.inventory.cleanup.max_reclaim_bytes_per_host = max_reclaim_bytes_per_host;
+        let mut target_slugs = admitted
+            .inventory
+            .validators
+            .iter()
+            .map(|validator| validator.slug.clone())
+            .collect::<Vec<_>>();
+        target_slugs.push(admitted.inventory.edge.slug.clone());
+        let limits = target_slugs
+            .iter()
+            .map(|slug| {
+                select_target(&mut admitted, slug);
+                physical_host_cleanup_reclaim_limit(&admitted)
+                    .expect("canonical five-target physical-host partition")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(limits.len(), 5);
+        assert_eq!(
+            limits.iter().copied().sum::<u64>(),
+            max_reclaim_bytes_per_host
+        );
+        assert_eq!(limits[0], limits[4] + 1);
+        assert_eq!(limits[1], limits[4] + 1);
+        assert_eq!(limits[2], limits[4] + 1);
+        assert_eq!(limits[3], limits[4]);
+
+        let original_name = admitted.inventory.authorization_nonce.clone();
+        let marker = GeneratedMarkerV1 {
+            schema: GENERATED_MARKER_SCHEMA_V1.to_owned(),
+            kind: "upload".to_owned(),
+            host_slug: admitted.target.slug().to_owned(),
+            inventory_sha256: admitted.inventory_sha256.clone(),
+            authorization_nonce: original_name.clone(),
+            revision: admitted.inventory.revision.commit.clone(),
+            created_at_unix_ms: 1,
+        };
+        let marker_sha256 = sha256_hex(json::to_json(&marker).expect("marker JSON").as_bytes());
+        let plan = CleanupPlanV1 {
+            schema: CLEANUP_PLAN_SCHEMA_V1.to_owned(),
+            action: HostAction::Cleanup.label().to_owned(),
+            host_slug: admitted.target.slug().to_owned(),
+            request_sha256: admitted.request_sha256.clone(),
+            inventory_sha256: admitted.inventory_sha256.clone(),
+            authorization_sha256: admitted.authorization_sha256.clone(),
+            authorization_nonce: admitted.inventory.authorization_nonce.clone(),
+            max_reclaim_bytes: limits[4],
+            bytes_before: limits[4],
+            entries: vec![CleanupPlanEntryV1 {
+                kind: "upload".to_owned(),
+                original_name: original_name.clone(),
+                original_path: Path::new(&admitted.guard.upload_parent)
+                    .join(&original_name)
+                    .to_string_lossy()
+                    .into_owned(),
+                marker,
+                marker_sha256,
+                directory_device: 1,
+                directory_inode: 1,
+                initial_bytes: limits[4],
+            }],
+        };
+        validate_cleanup_plan(&admitted, &plan).expect("one target may consume its exact share");
+        let mut over_partition = plan;
+        over_partition.entries[0].initial_bytes = over_partition.max_reclaim_bytes + 1;
+        over_partition.bytes_before = over_partition.entries[0].initial_bytes;
+        validate_cleanup_plan(&admitted, &over_partition)
+            .expect_err("one target cannot consume one byte beyond its physical-host share");
+
+        assert!(partition_cleanup_reclaim_limit(1, 5, 5).is_err());
+        assert!(partition_cleanup_reclaim_limit(1, 0, 0).is_err());
+    }
+
+    #[test]
+    fn cleanup_plan_binds_only_older_noncurrent_inrou_stages() {
+        let mut admitted = progress_admission();
+        admitted.authorization.claims.issued_at_unix_ms = 10;
+        let old_nonce = "o".repeat(32);
+        let carrier = inrou_stage_carrier(
+            &admitted.inventory,
+            &admitted.target.endpoint().host_identity_sha256,
+        )
+        .expect("fixture stage carrier");
+        let marker = GeneratedMarkerV1 {
+            schema: GENERATED_MARKER_SCHEMA_V1.to_owned(),
+            kind: "inrou_stage".to_owned(),
+            host_slug: carrier.slug.clone(),
+            inventory_sha256: "1".repeat(64),
+            authorization_nonce: old_nonce.clone(),
+            revision: "2".repeat(40),
+            created_at_unix_ms: 9,
+        };
+        let marker_sha256 = sha256_hex(json::to_json(&marker).expect("marker JSON").as_bytes());
+        let entry = CleanupPlanEntryV1 {
+            kind: "inrou_stage".to_owned(),
+            original_name: old_nonce.clone(),
+            original_path: inrou_stage_cleanup_parent_path(&admitted)
+                .expect("fixed Inrou stage parent")
+                .join(&old_nonce)
+                .to_string_lossy()
+                .into_owned(),
+            marker,
+            marker_sha256,
+            directory_device: 1,
+            directory_inode: 1,
+            initial_bytes: 1,
+        };
+        let plan = CleanupPlanV1 {
+            schema: CLEANUP_PLAN_SCHEMA_V1.to_owned(),
+            action: HostAction::Cleanup.label().to_owned(),
+            host_slug: admitted.target.slug().to_owned(),
+            request_sha256: admitted.request_sha256.clone(),
+            inventory_sha256: admitted.inventory_sha256.clone(),
+            authorization_sha256: admitted.authorization_sha256.clone(),
+            authorization_nonce: admitted.inventory.authorization_nonce.clone(),
+            max_reclaim_bytes: physical_host_cleanup_reclaim_limit(&admitted)
+                .expect("physical-host cleanup partition"),
+            bytes_before: 1,
+            entries: vec![entry],
+        };
+        validate_cleanup_plan(&admitted, &plan)
+            .expect("older marker-bound Inrou stage is reclaimable");
+
+        let mut current = plan.clone();
+        current.entries[0].original_name = admitted.inventory.authorization_nonce.clone();
+        current.entries[0].original_path = current_inrou_stage_path(&admitted)
+            .expect("current stage path")
+            .to_string_lossy()
+            .into_owned();
+        current.entries[0].marker.authorization_nonce =
+            admitted.inventory.authorization_nonce.clone();
+        current.entries[0].marker_sha256 = sha256_hex(
+            json::to_json(&current.entries[0].marker)
+                .expect("current marker JSON")
+                .as_bytes(),
+        );
+        let _ = validate_cleanup_plan(&admitted, &current)
+            .expect_err("current Inrou stage must never enter a cleanup plan");
+
+        let mut not_older = plan;
+        not_older.entries[0].marker.created_at_unix_ms = 10;
+        not_older.entries[0].marker_sha256 = sha256_hex(
+            json::to_json(&not_older.entries[0].marker)
+                .expect("nonterminal marker JSON")
+                .as_bytes(),
+        );
+        let _ = validate_cleanup_plan(&admitted, &not_older)
+            .expect_err("a non-older Inrou stage is not proven superseded");
     }
 
     #[test]
@@ -13553,6 +16896,10 @@ mod tests {
             .expect_err("a release selected after planning must never be deleted");
         ensure_cleanup_plan_entry_not_selected("upload", planned, planned)
             .expect("the release selector does not govern upload roots");
+        ensure_cleanup_stage_not_current("inrou_stage", planned, other)
+            .expect("an older Inrou stage remains eligible");
+        let _ = ensure_cleanup_stage_not_current("inrou_stage", planned, planned)
+            .expect_err("the current Inrou stage must never be deleted");
     }
 
     #[expect(
@@ -13756,6 +17103,26 @@ mod tests {
         assert_missing_convergence_field_rejected(missing, &validator, "oldest_age_ms");
     }
 
+    #[test]
+    fn convergence_wave_receipt_rejects_unknown_first_release_fields() {
+        let value = norito::json!({
+            "schema": "iroha.taira.public-reset.convergence-wave.v1",
+            "wave": 0,
+            "height": 1,
+            "height_context_id": "context",
+            "block_hash": "block",
+            "last_commit_qc": {},
+            "validator_reports": [],
+            "retired_v0": true,
+        });
+        let error = validate_convergence_wave(&value, 0, &progress_admission().inventory)
+            .expect_err("unknown convergence receipt fields must fail closed");
+        assert!(
+            error.to_string().contains("retired_v0"),
+            "unexpected exact-field error: {error:#}"
+        );
+    }
+
     fn sample_request() -> HostRequestV1 {
         HostRequestV1 {
             schema: HOST_REQUEST_SCHEMA_V1.to_owned(),
@@ -13880,14 +17247,127 @@ mod tests {
     }
 
     #[test]
-    fn first_release_reset_rejects_mixed_physical_hosts() {
-        let mut mixed = super::super::sample_inventory_fixture();
-        mixed.validators[0].endpoint.host_identity_sha256 = "f".repeat(64);
-        let _ = validate_first_release_physical_host(&mixed)
-            .expect_err("mixed physical host identities must fail closed");
-        let shared = progress_admission();
-        validate_first_release_physical_host(&shared.inventory)
-            .expect("one physical host identity is canonical");
+    fn inrou_preseed_plan_is_once_per_physical_validator_host() {
+        let mut admitted = progress_admission();
+        for (index, validator) in admitted.inventory.validators.iter_mut().enumerate() {
+            validator.endpoint.host_identity_sha256 = if index < 2 {
+                "a".repeat(64)
+            } else {
+                "b".repeat(64)
+            };
+        }
+        select_target(&mut admitted, "taira-validator-1");
+        let first_plan = host_forward_plan(&admitted);
+        assert_eq!(
+            first_plan
+                .iter()
+                .filter(|key| key.action == HostAction::InrouStageUpload.label())
+                .count(),
+            1
+        );
+        assert_eq!(
+            first_plan
+                .iter()
+                .filter(|key| key.action == HostAction::Preseed.label())
+                .count(),
+            1
+        );
+        assert!(first_plan.iter().any(|key| {
+            key.host_slug == "taira-validator-2" && key.action == HostAction::Reset.label()
+        }));
+        assert!(!first_plan.iter().any(|key| {
+            key.host_slug == "taira-validator-3" && key.action == HostAction::Reset.label()
+        }));
+
+        select_target(&mut admitted, "taira-validator-3");
+        let second_plan = host_forward_plan(&admitted);
+        assert_eq!(
+            second_plan
+                .iter()
+                .filter(|key| key.action == HostAction::InrouStageUpload.label())
+                .count(),
+            1
+        );
+        assert_eq!(
+            second_plan
+                .iter()
+                .filter(|key| key.action == HostAction::Preseed.label())
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn inrou_stage_upload_manifest_reproduces_the_signed_tree() {
+        let mut admitted = progress_admission();
+        let paths = [
+            INROU_STAGE_CONTAINER_FILE_V1,
+            INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
+            INROU_STAGE_GUEST_MANIFEST_FILE_V1,
+            INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
+            INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+            INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
+            INROU_STAGE_RECEIPT_FILE_V1,
+            INROU_STAGE_SERVICE_FILE_V1,
+        ];
+        let mut files = paths
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| InrouStageUploadFileV1 {
+                path: path.to_owned(),
+                size: u64::try_from(index + 1).expect("bounded fixture size"),
+                sha256: hex::encode([u8::try_from(index + 1).expect("bounded fixture byte"); 32]),
+            })
+            .collect::<Vec<_>>();
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        let fixed = files
+            .iter()
+            .map(|file| (file.path.as_str(), file.sha256.clone()))
+            .collect::<BTreeMap<_, _>>();
+        admitted.inventory.inrou_canary.receipt_sha256 = fixed[INROU_STAGE_RECEIPT_FILE_V1].clone();
+        admitted.inventory.inrou_canary.container_sha256 =
+            fixed[INROU_STAGE_CONTAINER_FILE_V1].clone();
+        admitted.inventory.inrou_canary.service_sha256 = fixed[INROU_STAGE_SERVICE_FILE_V1].clone();
+        admitted.inventory.inrou_canary.bundle_payload_sha256 =
+            fixed[INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1].clone();
+        admitted.inventory.inrou_canary.bundle_manifest_sha256 =
+            fixed[INROU_STAGE_BUNDLE_MANIFEST_FILE_V1].clone();
+        admitted.inventory.inrou_canary.guest_manifest_sha256 =
+            fixed[INROU_STAGE_GUEST_MANIFEST_FILE_V1].clone();
+        admitted.inventory.inrou_canary.discovery_document_sha256 =
+            fixed[INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1].clone();
+        admitted.inventory.inrou_canary.discovery_manifest_sha256 =
+            fixed[INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1].clone();
+        let mut tree = Sha256::new();
+        tree.update(b"iroha:taira:public-reset:inrou-stage-tree:v1\0");
+        let mut stage_bytes = 0_u64;
+        for file in &files {
+            stage_bytes += file.size;
+            update_frame(&mut tree, file.path.as_bytes());
+            update_frame(&mut tree, &file.size.to_be_bytes());
+            update_frame(&mut tree, file.sha256.as_bytes());
+        }
+        let stage_tree_sha256 = hex::encode(tree.finalize());
+        admitted.inventory.inrou_canary.stage_bytes = stage_bytes;
+        admitted.inventory.inrou_canary.stage_tree_sha256 = stage_tree_sha256.clone();
+        admitted.authorization.claims.inrou_stage_tree_sha256 = stage_tree_sha256.clone();
+        let manifest = InrouStageUploadManifestV1 {
+            schema: INROU_STAGE_UPLOAD_SCHEMA_V1.to_owned(),
+            stage_tree_sha256,
+            stage_bytes,
+            files,
+        };
+        validate_inrou_stage_upload_manifest(&admitted, &manifest)
+            .expect("exact signed upload tree");
+
+        let mut reordered = manifest.clone();
+        reordered.files.swap(0, 1);
+        validate_inrou_stage_upload_manifest(&admitted, &reordered)
+            .expect_err("noncanonical file ordering must fail closed");
+        let mut traversal = manifest;
+        traversal.files[0].path = "../container.json".to_owned();
+        validate_inrou_stage_upload_manifest(&admitted, &traversal)
+            .expect_err("stage path traversal must fail closed");
     }
 
     #[test]
@@ -14050,6 +17530,7 @@ mod tests {
             args: vec![OsString::from(inherited)],
             stdin_prefix: Vec::new(),
             stdin_file: None,
+            stdin_files: Vec::new(),
             inherited_files: vec![file],
             deadline: Instant::now() + Duration::from_secs(2),
         })
@@ -14066,6 +17547,7 @@ mod tests {
             args: Vec::new(),
             stdin_prefix: Vec::new(),
             stdin_file: None,
+            stdin_files: Vec::new(),
             inherited_files: Vec::new(),
             deadline: Instant::now() + Duration::from_secs(2),
         })
@@ -14076,6 +17558,116 @@ mod tests {
     }
 
     #[test]
+    fn process_runner_streams_ordered_pinned_file_closure() {
+        let directory = tempfile::tempdir().expect("temporary stream directory");
+        let first_path = directory.path().join("first");
+        let second_path = directory.path().join("second");
+        fs::write(&first_path, b"first-").expect("write first stream file");
+        fs::write(&second_path, b"second").expect("write second stream file");
+        let output = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/bin/cat"),
+            args: Vec::new(),
+            stdin_prefix: b"prefix-".to_vec(),
+            stdin_file: None,
+            stdin_files: vec![
+                (File::open(first_path).expect("open first stream file"), 6),
+                (File::open(second_path).expect("open second stream file"), 6),
+            ],
+            inherited_files: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(2),
+        })
+        .expect("ordered multi-file stdin stream");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"prefix-first-second");
+        assert!(output.stderr.is_empty());
+    }
+
+    #[test]
+    fn locked_preseed_session_releases_only_after_ready_receipt_validation() {
+        let mut validated = false;
+        run_locked_preseed_session(
+            Path::new("/bin/sh"),
+            &[
+                OsString::from("-c"),
+                OsString::from(
+                    "printf 'ready\\n'; IFS= read -r unexpected; test $? -ne 0 && printf '{\"schema_version\":1,\"status\":\"released\"}\\n'",
+                ),
+            ],
+            Instant::now() + Duration::from_secs(2),
+            |receipt| {
+                assert_eq!(receipt, b"ready\n");
+                validated = true;
+                Ok(())
+            },
+        )
+        .expect("ready barrier keeps stdin lease until validation");
+        assert!(validated);
+    }
+
+    #[test]
+    fn locked_preseed_session_rejects_stdout_after_ready_barrier() {
+        let error = run_locked_preseed_session(
+            Path::new("/bin/sh"),
+            &[
+                OsString::from("-c"),
+                OsString::from("printf 'ready\\n'; IFS= read -r unexpected; printf 'trailing\\n'"),
+            ],
+            Instant::now() + Duration::from_secs(2),
+            |receipt| {
+                assert_eq!(receipt, b"ready\n");
+                Ok(())
+            },
+        )
+        .expect_err("stdout after the accepted ready line must fail closed");
+        assert!(error.to_string().contains("release acknowledgment"));
+    }
+
+    #[test]
+    fn locked_preseed_session_rejects_exit_without_release_acknowledgment() {
+        let error = run_locked_preseed_session(
+            Path::new("/bin/sh"),
+            &[
+                OsString::from("-c"),
+                OsString::from("printf 'ready\\n'; IFS= read -r unexpected; test $? -ne 0"),
+            ],
+            Instant::now() + Duration::from_secs(2),
+            |receipt| {
+                assert_eq!(receipt, b"ready\n");
+                Ok(())
+            },
+        )
+        .expect_err("release without the exact acknowledgment must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("exact EOF release acknowledgment")
+        );
+    }
+
+    #[test]
+    fn locked_preseed_session_rejects_exit_during_ready_validation() {
+        let error = run_locked_preseed_session(
+            Path::new("/bin/sh"),
+            &[
+                OsString::from("-c"),
+                OsString::from("printf 'ready\\n'; sleep 0.1"),
+            ],
+            Instant::now() + Duration::from_secs(2),
+            |receipt| {
+                assert_eq!(receipt, b"ready\n");
+                std::thread::sleep(Duration::from_millis(200));
+                Ok(())
+            },
+        )
+        .expect_err("the accepted receipt must still be protected by live store locks");
+        assert!(
+            error
+                .to_string()
+                .contains("ready barrier was being validated")
+        );
+    }
+
+    #[test]
     fn process_runner_enforces_one_absolute_timeout() {
         let started = Instant::now();
         let error = run_bounded_process(&ProcessSpec {
@@ -14083,6 +17675,7 @@ mod tests {
             args: vec![OsString::from("5")],
             stdin_prefix: Vec::new(),
             stdin_file: None,
+            stdin_files: Vec::new(),
             inherited_files: Vec::new(),
             deadline: Instant::now() + Duration::from_millis(50),
         })
@@ -14098,6 +17691,7 @@ mod tests {
             args: Vec::new(),
             stdin_prefix: vec![b'x'; 4 * 1024 * 1024],
             stdin_file: None,
+            stdin_files: Vec::new(),
             inherited_files: Vec::new(),
             deadline: Instant::now() + Duration::from_secs(2),
         })
@@ -14498,12 +18092,17 @@ mod tests {
 
     fn exact_inrou_check_report_fixture(admitted: &AdmittedReset) -> norito::json::Value {
         let canary = &admitted.inventory.inrou_canary;
+        let validator_account_id = admitted.inventory.validator_clients[1].account_id.clone();
+        let peer_id = admitted.inventory.validator_clients[1].peer_id.clone();
         let replicas = (1_u64..=4)
             .map(|slot| {
                 norito::json!({
                     "replica_slot": slot,
                     "identity": (format!("{}:replica:{slot}", canary.service_name)),
                     "response_sha256": (format!("{slot}").repeat(64)),
+                    "app_data_marker_sha256": (format!("{:x}", slot + 4).repeat(64)),
+                    "boot_sequence": slot,
+                    "guest_boot_id_sha256": (format!("{:x}", slot + 8).repeat(64)),
                 })
             })
             .collect::<Vec<_>>();
@@ -14522,7 +18121,13 @@ mod tests {
                     "name": "inrou_public_routes",
                     "http_status": 200,
                     "ok": true,
-                    "detail": "observed deterministic identities for replica slots 1, 2, 3, and 4",
+                    "detail": "observed distinct durable identities and guest boots for replica slots 1, 2, 3, and 4",
+                },
+                {
+                    "name": "inrou_public_discovery",
+                    "http_status": 200,
+                    "ok": true,
+                    "detail": "current and revision authority plus public path and CID-host bytes, headers, and hash are exact",
                 },
             ],
             "warnings": [],
@@ -14533,16 +18138,54 @@ mod tests {
             "route_path": (format!("{}{}", canary.route_path_prefix, canary.healthcheck_path)),
             "active_host_adverts": 4,
             "hosted_replica_count": 4,
+            "local_placement": {
+                "peer_id": peer_id,
+                "validator_account_id": validator_account_id,
+                "replica_slot": 2,
+                "placement_incarnation": (Hash::new(b"fixture Inrou local placement").to_string()),
+            },
             "bundle_hash": (canary.bundle_hash.clone()),
             "bundle_content_cid": (canary.bundle_content_cid.clone()),
             "bundle_manifest_digest_hex": (canary.bundle_manifest_digest_hex.clone()),
             "guest_content_cid": (canary.guest_content_cid.clone()),
             "guest_manifest_digest_hex": (canary.guest_manifest_digest_hex.clone()),
+            "discovery_payload_dir": (canary.discovery_payload_dir.clone()),
+            "discovery_document_hash": (canary.discovery_document_hash.clone()),
+            "discovery_content_cid": (canary.discovery_content_cid.clone()),
+            "discovery_manifest_digest_hex": (canary.discovery_manifest_digest_hex.clone()),
+            "public_discovery_url": (canary.public_discovery_url.clone()),
+            "public_discovery_cid_host_url": (canary.public_discovery_cid_host_url.clone()),
+            "deployment_bundle_hash": (canary.deployment_bundle_hash.clone()),
             "container_manifest_hash": (canary.container_manifest_hash.clone()),
             "service_manifest_hash": (canary.service_manifest_hash.clone()),
             "observed_at_unix_ms": 1,
             "replica_identities": replicas,
         })
+    }
+
+    fn set_inrou_fixture_local_placement(
+        report: &mut norito::json::Value,
+        admitted: &AdmittedReset,
+        validator_index: usize,
+        replica_slot: u64,
+    ) {
+        let validator_account_id = admitted.inventory.validator_clients[validator_index]
+            .account_id
+            .clone();
+        let peer_id = admitted.inventory.validator_clients[validator_index]
+            .peer_id
+            .clone();
+        *report
+            .pointer_mut("/local_placement")
+            .expect("fixture local placement") = norito::json!({
+            "peer_id": peer_id,
+            "validator_account_id": validator_account_id,
+            "replica_slot": replica_slot,
+            "placement_incarnation": (Hash::new(
+                format!("fixture Inrou placement {validator_index}").as_bytes(),
+            )
+            .to_string()),
+        });
     }
 
     #[test]
@@ -14575,6 +18218,287 @@ mod tests {
             .insert("mutation_mode".to_owned(), "deploy".into());
         validate_fresh_inrou_check_report(&extra, &admitted)
             .expect_err("retired mixed-mode fields must fail closed");
+    }
+
+    #[test]
+    fn inrou_check_requires_exact_durable_replica_and_local_placement_evidence() {
+        let admitted = admitted_reset_fixture();
+        let canonical = exact_inrou_check_report_fixture(&admitted);
+
+        for field in [
+            "peer_id",
+            "validator_account_id",
+            "replica_slot",
+            "placement_incarnation",
+        ] {
+            let mut missing = canonical.clone();
+            missing
+                .pointer_mut("/local_placement")
+                .and_then(norito::json::Value::as_object_mut)
+                .expect("local placement object")
+                .remove(field);
+            let _ = validate_fresh_inrou_check_report(&missing, &admitted)
+                .expect_err("every local-placement field is mandatory");
+        }
+
+        let mut extra = canonical.clone();
+        extra
+            .pointer_mut("/local_placement")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("local placement object")
+            .insert("legacy_host_index".to_owned(), 1_u64.into());
+        let _ = validate_fresh_inrou_check_report(&extra, &admitted)
+            .expect_err("unknown local-placement fields must fail closed");
+
+        for pointer in [
+            "/replica_identities/1/response_sha256",
+            "/replica_identities/1/app_data_marker_sha256",
+            "/replica_identities/1/guest_boot_id_sha256",
+        ] {
+            let source_pointer = if pointer.ends_with("response_sha256") {
+                "/replica_identities/0/response_sha256"
+            } else if pointer.ends_with("app_data_marker_sha256") {
+                "/replica_identities/0/app_data_marker_sha256"
+            } else {
+                "/replica_identities/0/guest_boot_id_sha256"
+            };
+            let duplicate = canonical
+                .pointer(source_pointer)
+                .expect("source replica identity field")
+                .clone();
+            let mut report = canonical.clone();
+            *report.pointer_mut(pointer).expect("replica identity field") = duplicate;
+            let _ = validate_fresh_inrou_check_report(&report, &admitted)
+                .expect_err("response, durable marker, and guest boot identities must be distinct");
+        }
+
+        let mut zero_boot = canonical.clone();
+        *zero_boot
+            .pointer_mut("/replica_identities/0/boot_sequence")
+            .expect("boot sequence") = 0_u64.into();
+        let _ = validate_fresh_inrou_check_report(&zero_boot, &admitted)
+            .expect_err("zero boot sequence must fail closed");
+
+        let mut substituted_slot = canonical.clone();
+        *substituted_slot
+            .pointer_mut("/local_placement/replica_slot")
+            .expect("placement replica slot") = 5_u64.into();
+        let _ = validate_fresh_inrou_check_report(&substituted_slot, &admitted)
+            .expect_err("local placement must name one exact reported replica slot");
+
+        let mut mismatched_peer = canonical.clone();
+        *mismatched_peer
+            .pointer_mut("/local_placement/peer_id")
+            .expect("placement peer ID") =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x78; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("mismatched canonical peer")
+                .public_key()
+                .to_string()
+                .into();
+        let _ = validate_fresh_inrou_check_report(&mismatched_peer, &admitted)
+            .expect_err("peer ID must match the exact inventory validator pair");
+
+        let mut zero_prehash = [0_u8; Hash::LENGTH];
+        zero_prehash[Hash::LENGTH - 1] = 1;
+        let mut sentinel_incarnation = canonical;
+        *sentinel_incarnation
+            .pointer_mut("/local_placement/placement_incarnation")
+            .expect("placement incarnation") = Hash::prehashed(zero_prehash).to_string().into();
+        let _ = validate_fresh_inrou_check_report(&sentinel_incarnation, &admitted)
+            .expect_err("zero-prehash placement incarnation must fail closed");
+    }
+
+    #[test]
+    fn inrou_restart_evidence_binds_ordered_host_and_exact_guest_transition() {
+        let admitted = admitted_reset_fixture();
+        let mut baseline_reports = (0..4)
+            .map(|validator_index| {
+                let mut report = exact_inrou_check_report_fixture(&admitted);
+                set_inrou_fixture_local_placement(
+                    &mut report,
+                    &admitted,
+                    validator_index,
+                    u64::try_from(validator_index + 1).expect("bounded slot"),
+                );
+                report
+            })
+            .collect::<Vec<_>>();
+        let baselines = baseline_reports
+            .iter()
+            .map(|report| {
+                validate_exact_inrou_check_report(report, &admitted, true)
+                    .expect("exact validator baseline")
+            })
+            .collect::<Vec<_>>();
+        validate_inrou_restart_baseline_set(&baselines, &admitted.inventory)
+            .expect("four ordered validator baselines");
+        validate_inrou_restart_final_sweep(
+            &baselines,
+            &baselines[0],
+            &baselines,
+            &admitted.inventory,
+        )
+        .expect("all four final placements and replica vectors agree");
+
+        let mut later_consistent_boot = baselines.clone();
+        for evidence in &mut later_consistent_boot {
+            evidence.replicas[0].boot_sequence += 1;
+            evidence.replicas[0].guest_boot_id_sha256 = "d".repeat(64);
+            evidence.replicas[0].response_sha256 = "e".repeat(64);
+        }
+        validate_inrou_restart_final_sweep(
+            &baselines,
+            &baselines[0],
+            &later_consistent_boot,
+            &admitted.inventory,
+        )
+        .expect("recovery accepts one agreed monotonic replica vector");
+
+        let mut repeated_incarnation = baselines.clone();
+        repeated_incarnation[1]
+            .local_placement
+            .placement_incarnation = baselines[0].local_placement.placement_incarnation.clone();
+        let _ = validate_inrou_restart_baseline_set(&repeated_incarnation, &admitted.inventory)
+            .expect_err("validator placements must have distinct CAS incarnations");
+
+        let mut final_placement_drift = baselines.clone();
+        final_placement_drift[0]
+            .local_placement
+            .placement_incarnation = Hash::new(b"post-restart-placement-drift").to_string();
+        let _ = validate_inrou_restart_final_sweep(
+            &baselines,
+            &baselines[0],
+            &final_placement_drift,
+            &admitted.inventory,
+        )
+        .expect_err("the final sweep must recheck every validator placement");
+
+        let mut final_replica_drift = baselines.clone();
+        final_replica_drift[3].replicas[0].boot_sequence += 1;
+        let _ = validate_inrou_restart_final_sweep(
+            &baselines,
+            &baselines[0],
+            &final_replica_drift,
+            &admitted.inventory,
+        )
+        .expect_err("the final sweep must agree on one final replica vector");
+
+        let mut restarted = baseline_reports.remove(0);
+        *restarted
+            .pointer_mut("/replica_identities/0/boot_sequence")
+            .expect("selected boot sequence") = 2_u64.into();
+        *restarted
+            .pointer_mut("/replica_identities/0/guest_boot_id_sha256")
+            .expect("selected guest boot ID") = "d".repeat(64).into();
+        *restarted
+            .pointer_mut("/replica_identities/0/response_sha256")
+            .expect("selected response hash") = "e".repeat(64).into();
+        let restarted_evidence = validate_exact_inrou_check_report(&restarted, &admitted, true)
+            .expect("exact restarted evidence");
+        let _ = validate_inrou_restart_transition(
+            &baselines[0],
+            &baselines[0],
+            &restarted_evidence,
+            &admitted.inventory,
+            0,
+        )
+        .expect("exact selected-host transition");
+
+        let _ = validate_inrou_restart_transition(
+            &baselines[0],
+            &baselines[1],
+            &restarted_evidence,
+            &admitted.inventory,
+            1,
+        )
+        .expect_err("restart evidence cannot substitute another ordered validator");
+
+        let mut nonselected_drift = restarted.clone();
+        *nonselected_drift
+            .pointer_mut("/replica_identities/1/boot_sequence")
+            .expect("non-selected boot sequence") = 3_u64.into();
+        *nonselected_drift
+            .pointer_mut("/replica_identities/1/guest_boot_id_sha256")
+            .expect("non-selected guest boot ID") = "f".repeat(64).into();
+        *nonselected_drift
+            .pointer_mut("/replica_identities/1/response_sha256")
+            .expect("non-selected response hash") = "a".repeat(64).into();
+        let nonselected_drift =
+            validate_exact_inrou_check_report(&nonselected_drift, &admitted, true)
+                .expect("structurally exact drift report");
+        let _ = validate_inrou_restart_transition(
+            &baselines[0],
+            &baselines[0],
+            &nonselected_drift,
+            &admitted.inventory,
+            0,
+        )
+        .expect_err("non-selected replica drift must fail the exact transition");
+
+        let mut skipped_boot = restarted;
+        *skipped_boot
+            .pointer_mut("/replica_identities/0/boot_sequence")
+            .expect("selected boot sequence") = 3_u64.into();
+        let skipped_boot = validate_exact_inrou_check_report(&skipped_boot, &admitted, true)
+            .expect("structurally exact skipped-boot report");
+        let _ = validate_inrou_restart_transition(
+            &baselines[0],
+            &baselines[0],
+            &skipped_boot,
+            &admitted.inventory,
+            0,
+        )
+        .expect_err("restart wave must advance its guest boot exactly once");
+    }
+
+    #[test]
+    fn applied_inrou_service_evidence_accepts_the_current_producer_shape() {
+        let admitted = admitted_reset_fixture();
+        let mut applied = exact_inrou_check_report_fixture(&admitted);
+        let object = applied
+            .as_object_mut()
+            .expect("applied Inrou report object");
+        object.insert("command".to_owned(), "taira_inrou_canary".into());
+        object.insert(
+            "authorization_sha256".to_owned(),
+            admitted.authorization_sha256.clone().into(),
+        );
+        object.insert(
+            "authorization_nonce".to_owned(),
+            admitted.inventory.authorization_nonce.clone().into(),
+        );
+        object.insert("mutation_kind".to_owned(), "inrou_canary".into());
+        object.insert("mutation_phase".to_owned(), "pre_edge".into());
+        object.insert("idempotency_key".to_owned(), "3".repeat(64).into());
+        object.insert("operation".to_owned(), "service_mutation".into());
+        object.insert("transaction_hash_hex".to_owned(), "4".repeat(64).into());
+        object.insert("prepared_envelope_sha256".to_owned(), "5".repeat(64).into());
+        object.insert("prepared_envelope_size".to_owned(), 128_u64.into());
+        object.insert("recovery_outcome".to_owned(), "Applied".into());
+        object.insert("applied_block_height".to_owned(), 7_u64.into());
+        object.insert("evidence".to_owned(), "4".repeat(64).into());
+        object.insert(
+            "execution_expires_at_unix_ms".to_owned(),
+            admitted
+                .authorization
+                .claims
+                .execution_expires_at_unix_ms
+                .into(),
+        );
+        object.insert("fee_payment".to_owned(), norito::json!({}));
+        object.insert("fee_quote".to_owned(), norito::json!({}));
+        object.insert("mutation_mode".to_owned(), "deploy".into());
+
+        require_exact_json_fields(
+            object,
+            PREPARED_INROU_SERVICE_APPLIED_REPORT_FIELDS,
+            "prepared Inrou service report",
+        )
+        .expect("current producer field set");
+        validate_prepared_report_common_arrays(object, true, "prepared Inrou service report")
+            .expect("current producer check evidence");
+        validate_applied_inrou_service_identity(object, &admitted.inventory)
+            .expect("current producer service identity");
     }
 
     fn exact_doctor_report_fixture(public_root: &str) -> norito::json::Value {
@@ -14641,7 +18565,7 @@ mod tests {
             .expect("MCP GET doctor check");
         mcp_get.insert("http_status".to_owned(), 204_u64.into());
         validate_doctor_report(&nonfinal_mcp, public_root)
-            .expect_err("MCP GET must require exact HTTP 200");
+            .expect_err("MCP GET must require exact HTTP 405");
 
         let mut substituted = canonical;
         substituted
@@ -14683,6 +18607,7 @@ mod tests {
             "write_canary",
             "inrou_bundle_pin",
             "inrou_guest_pin",
+            "inrou_discovery_pin",
             "inrou_canary",
         ]
         .map(|kind| child_mutation_idempotency_key(nonce, "pre_edge", kind));
@@ -14702,6 +18627,10 @@ mod tests {
         assert_eq!(
             prepared_operation_identity("inrou_guest_pin").expect("guest identity"),
             ("inrou_guest_pin", "guest_pin")
+        );
+        assert_eq!(
+            prepared_operation_identity("inrou_discovery_pin").expect("discovery identity"),
+            ("inrou_discovery_pin", "discovery_pin")
         );
         assert_eq!(
             prepared_operation_identity("inrou_canary").expect("service identity"),
@@ -15289,7 +19218,7 @@ mod tests {
         let inventory = super::super::sample_inventory_fixture();
         let canary = build_recovery_intent(&inventory, ExecutionStep::Canary)
             .expect("canary recovery intent");
-        assert_eq!(canary.mutations.len(), 6);
+        assert_eq!(canary.mutations.len(), 7);
         assert_eq!(
             canary
                 .mutations
@@ -15302,6 +19231,7 @@ mod tests {
                 "write_canary",
                 "inrou_bundle_pin",
                 "inrou_guest_pin",
+                "inrou_discovery_pin",
                 "inrou_canary",
             ]
         );

@@ -52,13 +52,8 @@ fn fair_v2_ingress_maximum_merge_sidecar_chunk_frame_matches_canonical_wire() {
         required_network_message_bytes,
         "allocation-free geometry must equal the maximum wrapped canonical chunk"
     );
-    let exact_frame = iroha_p2p::network::data_frame_wire_len(
-        &responder,
-        Some(&requester),
-        u8::MAX,
-        iroha_p2p::network::message::Priority::High,
-        &message,
-    );
+    let exact_frame =
+        iroha_p2p::network::data_frame_wire_len(&responder, Some(&requester), &message);
     assert_eq!(
         iroha_p2p::network::data_frame_wire_len_from_payload_len::<crate::NetworkMessage>(
             &responder,

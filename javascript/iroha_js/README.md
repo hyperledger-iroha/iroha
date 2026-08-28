@@ -9,6 +9,24 @@ workflows.
 TypeScript consumers can import the bundled `index.d.ts` definitions for the
 SDK surface.
 
+Public Taira metadata is available without copying runbook literals. Supply the
+current deployment's genesis-derived `NetworkId`; the stable chain UUID is not
+a signing identity and the profile never substitutes it:
+
+```js
+import {
+  NetworkId,
+  TAIRA_TESTNET_PROFILE,
+  ToriiClient,
+  createTairaLocalSigningContext,
+} from "@iroha/iroha-js";
+
+const networkId = NetworkId.parse(configuredNetworkIdLiteral);
+const torii = new ToriiClient(TAIRA_TESTNET_PROFILE.toriiBaseUrl, {
+  localSigningContext: createTairaLocalSigningContext(networkId),
+});
+```
+
 From an Iroha source checkout, run the native build (wrapping
 `cargo build -p iroha_js_host`) before using native-backed APIs:
 
@@ -2449,6 +2467,7 @@ An optional `options.signal` lets callers abort the one-shot dispatch:
 ```js
 import { promises as fs } from "node:fs";
 import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js";
+import { contractPayloadDigestHex } from "@iroha/iroha-js/contract-payload";
 
 const authority = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
 const canonicalAuth = { accountId: authority, privateKey: runtimePrivateKey };
@@ -2506,7 +2525,7 @@ statuses and rejects padded or case-drifted spellings.
 
 The `SoranetPuzzleClient` helper talks to the optional
 `soranet-puzzle-service` microservice so SDK consumers can mint Argon2 tickets,
-inspect puzzle policy, and request ML-DSA-65 admission tokens without reimplementing
+inspect puzzle policy, and request ML-DSA-44 admission tokens without reimplementing
 the HTTP transport. The client mirrors the JSON schema described in
 [`specs/soranet/puzzle_service_operations.md`](../../specs/soranet/puzzle_service_operations.md).
 
@@ -2521,35 +2540,34 @@ const puzzle = new SoranetPuzzleClient("http://localhost:8088", {
 });
 
 const config = await puzzle.getPuzzleConfig();
-if (config.required) {
-  console.log(
-    `difficulty=${config.difficulty} Argon2 lanes=${config.puzzle?.lanes ?? 0}`,
-  );
-}
+console.log(
+  `difficulty=${config.difficulty} Argon2 lanes=${config.puzzle.lanes}`,
+);
 
 const ticket = await puzzle.mintPuzzleTicket("bb".repeat(32), {
   ttlSecs: 90,
-  signed: true,
 });
-console.log(`ticket=${ticket.ticketB64} expires=${ticket.expiresAt}`);
-if (ticket.signedTicketB64) {
+console.log(
+  `${ticket.credentialKind} ticket=${ticket.credentialB64} expires=${ticket.expiresAt}`,
+);
+if (ticket.signedTicketFingerprintHex) {
   console.log(`signed ticket fingerprint=${ticket.signedTicketFingerprintHex}`);
 }
 
 const token = await puzzle.mintAdmissionToken("aa".repeat(32), {
   ttlSecs: 300,
-  flags: 1,
 });
 console.log(`token id=${token.tokenIdHex} issuer=${token.issuerFingerprintHex}`);
 ```
 
 `mintPuzzleTicket` requires a nonzero 32-byte transcript hash as its first
-argument and accepts a `signed` flag to request relay-signed credentials; signed
-responses include a `signedTicketFingerprintHex` to help track replay cache
-state across restarts.
+argument. The service selects `credentialKind` from its immutable relay policy:
+`raw` without a signed-ticket verifier key and `signed` when the verifier and
+signing keys are configured. Signed responses include a
+`signedTicketFingerprintHex` to help track replay cache state across restarts.
 
 The service assigns admission-token issue times from its own clock; callers can
-only request TTL and flags. The mint and token-configuration endpoints require
+only request TTL. The mint and token-configuration endpoints require
 the bearer credential stored in the service's `--mint-auth-token-path` file.
 Run the plaintext service on loopback and terminate TLS at a local proxy. Use
 `/v1/token/config` to display the active issuer fingerprint and revocation
@@ -2944,28 +2962,46 @@ can stage a leased alias binding for rehearsal environments.
 `ToriiClient.prepareContractCall` wraps `/v1/contracts/call` and prepares an
 unsigned transaction draft. The request contains the authority,
 `contract_address` or `contract_alias`, the explicit entrypoint, optional
-payload, and typed `feePayment`; private signing material is never sent to
-Torii. Validate the returned scaffold and signing message, sign locally, then
-submit the finalized signed transaction through the normal transaction route.
+payload and metadata, typed `feePayment`, and an off-wire `draftIntent` built
+from the locally verified contract artifact. Private signing material and the
+intent are never sent to Torii. The client rejects the returned draft unless
+its exact network, authority, executable, metadata, quoted fee, creation time,
+TTL, admission mode, nonce, and attachments match caller-trusted state. Sign
+only after that validation succeeds, then submit the finalized transaction
+through the normal transaction route.
 
 ```js
-import { ToriiClient } from "@iroha/iroha-js";
+import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.IROHA_TORII_URL, {
   authToken: process.env.IROHA_TORII_AUTH_TOKEN,
+  localSigningContext: new LocalSigningContext(
+    NetworkId.parse(EXACT_NETWORK_ID_LITERAL),
+  ),
 });
 
+const payload = { amount: 1 };
+const contractAddress =
+  "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
 const response = await torii.prepareContractCall({
   authority: AUTHORITY_ACCOUNT_ID,
-  contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+  contractAddress,
   entrypoint: "increment",
-  payload: { amount: 1 },
+  payload,
+  metadata: TRUSTED_FINAL_METADATA,
   feePayment: {
     payer: "authority",
     value: {
       charge_limits: [],
       gas_limit: 1_500_000,
     },
+  },
+  draftIntent: {
+    executableB64: TRUSTED_EXECUTABLE_NORITO.toString("base64"),
+    metadataB64: TRUSTED_FINAL_METADATA_NORITO.toString("base64"),
+    contractAddress,
+    codeHashHex: TRUSTED_CONTRACT_CODE_HASH_HEX,
+    payloadDigestHex: contractPayloadDigestHex(payload),
   },
 });
 
@@ -2975,12 +3011,20 @@ console.log("code hash:", response.code_hash_hex);
 console.log("payload digest:", response.operation_receipt.payload_digest_hex);
 ```
 
-Any JSON-serializable payload is cloned before submission so callers can reuse the
-object elsewhere without mutation. The helper rejects malformed entrypoint
+Any browser-safe canonical JSON payload is cloned before submission so callers
+can reuse the object elsewhere without mutation. Use safe integers and encode
+decimal or wide numeric values as their canonical schema strings. The helper
+rejects malformed entrypoint
 selectors, missing or malformed typed fee intents, or invalid contract target
-selectors before the request reaches Torii. For detached/local signing paths,
-use the explicit `/v1/fees/quote` flow described above instead of the app-route
-convenience.
+selectors before the request reaches Torii. `draftIntent` must come from a
+trusted local builder or verified artifact/schema path; deriving its archives,
+resolved address, code hash, or payload digest from the response being checked
+defeats the trust boundary. The returned operation receipt is also checked
+against that intent and the request's alias, entrypoint, fee gas bound, and
+payload. Unsigned generic and contract-call multisig responses use the archive
+intent requirement whenever `signatureB64` is absent. For detached/local
+signing paths, use the explicit `/v1/fees/quote` flow described above instead of
+the app-route convenience.
 
 ### Proof-carrying deployed contract calls
 
@@ -3033,6 +3077,10 @@ const binding = {
   policyChainGenesisHash: TRUSTED_POLICY_CHAIN_GENESIS_HASH,
   checkpoint: await loadDurableValidationFeeCheckpoint(),
 };
+const canonicalAuth = {
+  accountId: AUTHORITY_ACCOUNT_ID,
+  privateKey: AUTHORITY_PRIVATE_KEY,
+};
 
 let checkpoint = binding.checkpoint;
 let page;
@@ -3040,12 +3088,31 @@ do {
   page = await torii.getValidationFeeCurrentPolicyProofPage(
     binding,
     checkpoint,
+    { canonicalAuth },
   );
   await storeDurableValidationFeeCheckpoint(page.promotedCheckpoint);
   checkpoint = page.promotedCheckpoint;
 } while (page.projection.more_available);
 
 console.log("verified Parliament policy:", page.projection.current_policy);
+```
+
+To price the active policy with the execution account's current Hijiri risk,
+request an authenticated live quote. `quoteValidationFeeHijiri` sends and
+accepts only bounded, unencoded, exact `application/x-norito`, rejects
+cacheable responses, and uses the
+ABI 23 native verifier to bind all arithmetic, policy/Hijiri hashes, the echoed
+account/count, and `evaluatedStateHeight + 1` before returning an immutable
+projection. Its assurance label is intentionally evaluated-only; admission
+still rejects a quote made stale by an intervening policy or risk update.
+
+```js
+const hijiriQuote = await torii.quoteValidationFeeHijiri(
+  AUTHORITY_ACCOUNT_ID,
+  2,
+  { canonicalAuth },
+);
+console.log(hijiriQuote.aggregateAdjustedFeeMinorUnits);
 ```
 
 Each projected Parliament authorization is the exact certificate-backed V1
@@ -3650,8 +3717,8 @@ if (snapshot) {
   if (snapshot.confidentialGas) {
     console.log("Conf gas per nullifier:", snapshot.confidentialGas.perNullifier);
   }
-  if (snapshot.transport?.streaming?.soranet) {
-    console.log("SoraNet Norito exit:", snapshot.transport.streaming.soranet.exitMultiaddr);
+  if (snapshot.transport?.noritoRpc) {
+    console.log("Norito-RPC stage:", snapshot.transport.noritoRpc.stage);
   }
 }
 ```

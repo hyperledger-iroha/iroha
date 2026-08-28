@@ -2004,6 +2004,20 @@ fn begin_real_xml_provenance(source: &[u8]) {
         }
     });
 }
+fn canonical_real_xml_field_name(message_type: &str, field: &str) -> String {
+    if canonical_message_type(message_type).as_ref() == "pacs.009" {
+        match field {
+            // Preserve the application-header timestamp independently from the
+            // group-header creation time used by the pacs.009 schema.
+            "AppHdr/CreDt" => return field.to_owned(),
+            // Payment status and return messages correlate through GrpHdr/MsgId;
+            // it must not collapse into the distinct BAH BizMsgIdr identity.
+            "Document/FICdtTrf/GrpHdr/MsgId" => return "MsgId".to_owned(),
+            _ => {}
+        }
+    }
+    canonical_field_name(message_type, field)
+}
 fn msg_set_xml(
     field: &str,
     value: &[u8],
@@ -2013,7 +2027,7 @@ fn msg_set_xml(
     MESSAGE_STACK.with(|stack| {
         let mut stack = stack.borrow_mut();
         let message = stack.last_mut().ok_or(MsgError::NoActiveMessage)?;
-        let key = canonical_field_name(&message.message_type, field);
+        let key = canonical_real_xml_field_name(&message.message_type, field);
         if let Some(existing) = message.fields.get(&key) {
             if existing.as_slice() != value {
                 return Err(MsgError::InvalidFormat);
@@ -2714,19 +2728,37 @@ pub fn msg_clone() {
 pub fn msg_set(field: &str, value: &[u8]) {
     MESSAGE_STACK.with(|stack| {
         if let Some(m) = stack.borrow_mut().last_mut() {
-            let key = canonical_field_name(&m.message_type, field);
+            let key = stored_field_key(m, field);
             m.fields.insert(key, value.to_vec());
             m.xml_source_sha256 = None;
             m.xml_field_sources.clear();
         }
     });
 }
+fn stored_field_key(message: &IsoMessage, field: &str) -> String {
+    if message.fields.contains_key(field) {
+        return field.to_owned();
+    }
+    let real_xml_key = canonical_real_xml_field_name(&message.message_type, field);
+    if message.fields.contains_key(&real_xml_key) {
+        return real_xml_key;
+    }
+    let canonical_key = canonical_field_name(&message.message_type, field);
+    if real_xml_key != canonical_key {
+        // The sealed v1 table historically aliases two distinct pacs.009
+        // identities. Keep the corrected runtime key even when it has not yet
+        // been materialised so a missing group MsgId cannot read, overwrite, or
+        // remove the BAH BizMsgIdr (and likewise for the two creation times).
+        return real_xml_key;
+    }
+    canonical_key
+}
 /// Retrieve the value of an ISO 20022 field.
 pub fn msg_get(field: &str) -> Option<Vec<u8>> {
     MESSAGE_STACK.with(|stack| {
         let borrow = stack.borrow();
         let message = borrow.last()?;
-        let key = canonical_field_name(&message.message_type, field);
+        let key = stored_field_key(message, field);
         message.fields.get(&key).cloned()
     })
 }
@@ -2751,7 +2783,7 @@ pub fn msg_add(field: &str) {
 pub fn msg_remove(field: &str) {
     MESSAGE_STACK.with(|stack| {
         if let Some(m) = stack.borrow_mut().last_mut() {
-            let key = canonical_field_name(&m.message_type, field);
+            let key = stored_field_key(m, field);
             m.fields.remove(&key);
             m.xml_source_sha256 = None;
             m.xml_field_sources.clear();
@@ -4400,6 +4432,28 @@ mod tests {
         assert_eq!(
             msg_get("CdtrAcct").as_deref(),
             Some(b"GB33BUKB20201555555555".as_ref())
+        );
+    }
+    #[test]
+    fn parsed_pacs009_distinct_identity_fields_remain_mutable() {
+        assert_validated("pacs.009.001.10", SAMPLE_PACS009_ENVELOPE_XML);
+
+        msg_set("AppHdr/CreDt", b"2025-11-12T09:35:00Z");
+        assert_eq!(
+            msg_get("AppHdr/CreDt").as_deref(),
+            Some(b"2025-11-12T09:35:00Z".as_ref())
+        );
+
+        msg_set("Document/FICdtTrf/GrpHdr/MsgId", b"PACS009-GRP-NEW");
+        assert_eq!(
+            msg_get("MsgId").as_deref(),
+            Some(b"PACS009-GRP-NEW".as_ref())
+        );
+        msg_remove("Document/FICdtTrf/GrpHdr/MsgId");
+        assert!(msg_get("MsgId").is_none());
+        assert_eq!(
+            msg_get("BizMsgIdr").as_deref(),
+            Some(b"BAH-PACS009-1".as_ref())
         );
     }
     #[test]

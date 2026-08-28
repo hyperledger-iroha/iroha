@@ -9,7 +9,7 @@ use dashmap::{DashMap, mapref::entry::Entry};
 use parking_lot::Mutex;
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap, VecDeque, hash_map::DefaultHasher},
+    collections::{BinaryHeap, HashMap, HashSet, VecDeque, hash_map::DefaultHasher},
     fmt,
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -495,6 +495,36 @@ pub fn key_from_headers(
             && values.next().is_none()
             && let Ok(value) = value.to_str()
             && !value.is_empty()
+        {
+            return value.to_owned();
+        }
+    }
+    if let Some(ip) = effective_remote_ip(headers, remote) {
+        return ip.to_string();
+    }
+    if let Some(h) = hint {
+        return h.to_string();
+    }
+    "anon".to_string()
+}
+/// Derive a rate-limit key while accepting only configured API tokens as identities.
+///
+/// Invalid or ambiguous token headers fall back to the effective remote address, so an attacker
+/// cannot manufacture an unbounded family of fresh rate buckets before authentication rejects the
+/// request.
+pub fn key_from_validated_headers(
+    headers: &HeaderMap,
+    remote: Option<IpAddr>,
+    hint: Option<&str>,
+    use_api_token: bool,
+    valid_tokens: &HashSet<String>,
+) -> String {
+    if use_api_token {
+        let mut values = headers.get_all("x-api-token").iter();
+        if let Some(value) = values.next()
+            && values.next().is_none()
+            && let Ok(value) = value.to_str()
+            && valid_tokens.contains(value)
         {
             return value.to_owned();
         }
@@ -1244,6 +1274,25 @@ mod tests {
             "hint"
         );
         assert_eq!(key_from_headers(&headers2, None, None, true), "anon");
+    }
+    #[test]
+    fn validated_header_key_reuses_remote_bucket_for_invalid_tokens() {
+        let remote = Some("203.0.113.99".parse().unwrap());
+        let valid = HashSet::from(["configured-secret".to_owned()]);
+        for supplied in ["attacker-one", "attacker-two"] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-api-token", supplied.parse().unwrap());
+            assert_eq!(
+                key_from_validated_headers(&headers, remote, Some("hint"), true, &valid),
+                "203.0.113.99"
+            );
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-token", "configured-secret".parse().unwrap());
+        assert_eq!(
+            key_from_validated_headers(&headers, remote, Some("hint"), true, &valid),
+            "configured-secret"
+        );
     }
     #[test]
     fn key_from_headers_ignores_token_when_disabled() {

@@ -276,6 +276,9 @@ SORAFS_HEDGING_BILLING_SERVICE_RS = (
 )
 IROHA_CLI_SORAFS_RS = REPO_ROOT / "crates" / "iroha_cli" / "src" / "commands" / "sorafs.rs"
 IROHA_P2P_PEER_RS = REPO_ROOT / "crates" / "iroha_p2p" / "src" / "peer.rs"
+IROHA_CRYPTO_SORANET_POW_RS = (
+    REPO_ROOT / "crates" / "iroha_crypto" / "src" / "soranet" / "pow.rs"
+)
 IROHA_CORE_KISO_RS = REPO_ROOT / "crates" / "iroha_core" / "src" / "kiso.rs"
 IROHA_CONFIG_ACTUAL_RS = (
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "actual.rs"
@@ -2045,6 +2048,7 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     actual_config = read(IROHA_CONFIG_ACTUAL_RS)
     user_config = read(IROHA_CONFIG_USER_RS)
     client_api = read(IROHA_CONFIG_CLIENT_API_RS)
+    pow_crypto = read(IROHA_CRYPTO_SORANET_POW_RS)
 
     handshake_args = cli.split("pub struct HandshakeUpdateArgs", 1)[1].split(
         "impl HandshakeUpdateArgs", 1
@@ -2064,9 +2068,9 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     verify_challenge_ticket = peer.split("pub(crate) fn verify_challenge_ticket", 1)[
         1
     ].split("fn verify_ticket_bytes", 1)[0]
-    actual_default_pow = actual_config.split("pub const fn default_const() -> Self", 1)[
-        1
-    ].split("impl_default!(SoranetPow", 1)[0]
+    actual_default_pow = actual_config.split("impl SoranetPow", 1)[1].split(
+        "pub const fn default_const() -> Self", 1
+    )[1].split("impl_default!(SoranetPow", 1)[0]
     actual_pow = actual_config.split("pub struct SoranetPow", 1)[1].split(
         "/// Argon2 puzzle parameters shared with peers.", 1
     )[0]
@@ -2099,10 +2103,10 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     )[1].split("impl JsonDeserialize for SoranetHandshakePowUpdate", 1)[0]
 
     for stale in (
-        "pow-optional",
-        "pow_optional",
         "pow-required",
         "pow_required",
+        "pow-optional",
+        "pow_optional",
         "pow-puzzle-disable",
         "pow_puzzle_disable",
         "pow-puzzle-enable",
@@ -2115,8 +2119,8 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
         assert stale not in handshake_args
         assert stale not in into_payload
 
-    assert "pow_update.required = Some(false)" not in into_payload
-    assert "puzzle_update.enabled = Some(false)" not in into_payload
+    assert "pow_update.required" not in into_payload
+    assert "puzzle_update.enabled" not in into_payload
     assert "require_sm_handshake_match = Some(false)" not in into_payload
     assert "require_sm_openssl_preview_match = Some(false)" not in into_payload
 
@@ -2157,17 +2161,26 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "Self::apply_pow_update(&mut handshake.pow, &pow_update)?" in apply_handshake_update
     assert "-> Result<(), String>" in apply_pow_update
     assert "update.required" not in apply_pow_update
-    assert "puzzle_update.enabled" not in apply_pow_update
     assert "pow.required" not in apply_pow_update
+    assert "puzzle_update.enabled" not in apply_pow_update
+    assert "pow.puzzle = None" not in apply_pow_update
     assert "pow.puzzle.memory_kib" in apply_pow_update
     assert "pow.puzzle.time_cost" in apply_pow_update
     assert "pow.puzzle.lanes" in apply_pow_update
-    assert "pow.puzzle = None" not in apply_pow_update
 
     assert "Fallback to unsigned tickets" not in peer
     assert "signed_ticket" not in peer
     assert "bytes.len() == pow::TICKET_LEN" not in verify_challenge_ticket
     assert "self.verify_ticket_bytes(bytes, transcript_hash)" in verify_challenge_ticket
+    assert "pub frames: Vec<Vec<u8>>" not in peer
+    assert "pub credential: Vec<u8>" in peer
+    assert "struct Parameters" not in pow_crypto
+    assert "struct ChallengeBinding" not in pow_crypto
+    assert "enum MintError" not in pow_crypto
+    assert "fn mint_ticket" not in pow_crypto
+    assert "verify_with_revocations" not in pow_crypto
+    assert "record_revocation" not in pow_crypto
+    assert "hashcash" not in pow_crypto.lower()
 
     assert "handshake_update_accepts_pow_overrides" in cli
     assert "soranet_handshake_update_applies" in kiso
@@ -2217,7 +2230,7 @@ def test_sorafs_soranet_orchestrator_has_no_masque_bypass_path() -> None:
         "pub fn config_from_json", 1
     )[0]
     config_from_json = orchestrator.split("pub fn config_from_json", 1)[1].split(
-        "fn taikai_cache_to_json", 1
+        "fn compliance_to_json", 1
     )[0]
 
     for section in (path_metadata, relay_hint, circuit, circuit_info, manager_config):
@@ -21652,7 +21665,7 @@ def test_orderbook_docs_distinguish_shipped_native_ledger_from_remaining_service
         "javascript/iroha_js/src/toriiClient.js": ("responseStatusWithoutUserGetter(response) !== 202", "_readBoundedResponseBytes(", "x-iroha-signed-transaction-hash"),
         "python/iroha_torii_client/orderbook_submission.py": ("SorafsOrderbookSubmissionAmbiguousError", "_HTTP_ADAPTER_SEND(", "stream=True", "require_orderbook_https_base_url", "Transfer-Encoding"),
         "python/iroha_torii_client/tests/orderbook_submission_test.py": ("test_redirect_body_is_never_consumed_by_the_one_shot_adapter_path", "test_noncanonical_or_insecure_base_url_fails_before_http"),
-        "scripts/check_native_sdk_abi22_artifact.py": ("inspectSorafsOrderbookSubmissionForDiscriminantV1", "verify_sorafs_orderbook_submission_receipt_v1"),
+        "scripts/check_native_sdk_abi23_artifact.py": ("inspectSorafsOrderbookSubmissionForDiscriminantV1", "verify_sorafs_orderbook_submission_receipt_v1"),
     }
     assert all(marker in read(REPO_ROOT / path) for path, markers in sdk_contract.items() for marker in markers)
     status = read(REPO_ROOT / "status.md"); assert status.index("SoraFS orderbook signed-submit SDK hard cut") < status.index("SoraFS orderbook submit SDK helpers")

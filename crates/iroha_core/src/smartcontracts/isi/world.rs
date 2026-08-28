@@ -8246,7 +8246,7 @@ pub mod isi {
             gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(payload) => {
                 parliament_timed_ovn_corpus_count_v1(payload.ballot_records.len())?;
                 if payload.ballot_records.len()
-                    > iroha_data_model::isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
+                    > iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
                     || payload
                     .ballot_records
                     .iter()
@@ -10923,14 +10923,13 @@ pub mod isi {
         })
     }
     fn validate_sccp_finality_against_state(
-        context: &iroha_sccp::SccpVerifiedDestinationContextV1,
+        parsed: &iroha_sccp::SccpParsedDestinationProofV1,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        crate::bridge::verify_sccp_destination_context_against_local_state(
+    ) -> Result<iroha_sccp::TairaBridgeFinalityProofV1, Error> {
+        crate::bridge::verify_sccp_parsed_destination_proof_against_local_state(
             state_transaction,
-            context,
+            parsed,
         )
-        .map(|_| ())
         .map_err(|err| {
             invalid_bridge_proof(format!(
                 "SCCP finality proof is not locally anchored: {err}"
@@ -10941,12 +10940,6 @@ pub mod isi {
         chain_id: &iroha_data_model::ChainId,
     ) -> Option<iroha_data_model::bridge::SccpNetworkV1> {
         crate::state::sccp_local_sora_network_for_chain_id(chain_id)
-    }
-    fn validate_sccp_bridge_proof_range_matches_artifact(
-        proof: &iroha_data_model::bridge::BridgeProof,
-        artifact: &iroha_sccp::SccpVerifiedDestinationCallV1,
-    ) -> Result<(), Error> {
-        validate_sccp_bridge_proof_range(proof, artifact.public_inputs.finality_height)
     }
     fn validate_sccp_bridge_proof_range(
         proof: &iroha_data_model::bridge::BridgeProof,
@@ -11134,15 +11127,18 @@ pub mod isi {
                 "SCCP destination proof payload or configuration selects another route revision",
             ));
         }
-        let verified = iroha_sccp::verify_parsed_sccp_destination_proof_v1(parsed, route)
-            .ok_or_else(|| {
+        validate_sccp_bridge_proof_range(proof, parsed.finality().finality_artifact.height)?;
+        let trusted_finality = validate_sccp_finality_against_state(&parsed, state_transaction)?;
+        let artifact = iroha_sccp::verify_parsed_sccp_destination_proof_v1(
+            parsed,
+            route,
+            &trusted_finality,
+        )
+        .ok_or_else(|| {
             invalid_bridge_proof(
-                "SCCP destination artifact failed exact governed request, key, pairing, or calldata verification",
+                "SCCP destination artifact failed exact governed request, key, pairing, finality, or calldata verification",
             )
         })?;
-        let artifact = verified.call();
-        validate_sccp_bridge_proof_range_matches_artifact(proof, artifact)?;
-        validate_sccp_finality_against_state(&verified, state_transaction)?;
         if record.recorded_at_height != artifact.public_inputs.finality_height {
             return Err(invalid_bridge_proof(
                 "SCCP destination proof finality height differs from the authoritative outbound record height",
@@ -11359,6 +11355,7 @@ pub mod isi {
                     state_transaction,
                     &route.route_key,
                     recipient,
+                    transfer.amount,
                     amount,
                 )?;
             SccpInboundSettlementV1::Transfer(prepared)
@@ -12954,102 +12951,6 @@ pub mod isi {
             ))
         }
     }
-    impl Execute for bridge::FundSccpRouteEscrow {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            if self.amount.is_zero() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "SCCP route escrow funding amount must be positive".into(),
-                    ),
-                ));
-            }
-            let route = state_transaction
-                .sccp_registry
-                .route(&self.route_key)
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "SCCP route escrow funding references an ungoverned route revision"
-                                .into(),
-                        ),
-                    )
-                })?;
-            if route.settlement.asset_definition_id != self.asset_definition_id
-                || route.settlement.custody_owner != *authority
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "SCCP route escrow funding requires the exact governed asset and custody owner"
-                        .into(),
-                ));
-            }
-            ensure_sccp_route_escrow_account(
-                &self.route_key,
-                &self.asset_definition_id,
-                state_transaction,
-            )?;
-            crate::smartcontracts::isi::asset::isi::execute_sccp_route_owner_funding(
-                state_transaction,
-                authority,
-                &self.route_key,
-                &self.asset_definition_id,
-                self.amount,
-            )
-        }
-    }
-    impl Execute for bridge::RefundSccpRouteEscrow {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            if self.amount.is_zero() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "SCCP route escrow refund amount must be positive".into(),
-                    ),
-                ));
-            }
-            let route = state_transaction
-                .sccp_registry
-                .route(&self.route_key)
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "SCCP route escrow refund references an ungoverned route revision"
-                                .into(),
-                        ),
-                    )
-                })?;
-            if route.settlement.asset_definition_id != self.asset_definition_id
-                || route.settlement.custody_owner != *authority
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "SCCP route escrow refund requires the exact governed asset and custody owner"
-                        .into(),
-                ));
-            }
-            if !matches!(
-                route.activation,
-                iroha_data_model::bridge::SccpRouteActivationV1::Staged
-                    | iroha_data_model::bridge::SccpRouteActivationV1::Retired
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "SCCP route escrow may be refunded only while staged or retired".into(),
-                ));
-            }
-            crate::smartcontracts::isi::asset::isi::execute_sccp_route_owner_refund(
-                state_transaction,
-                authority,
-                &self.route_key,
-                &self.asset_definition_id,
-                self.amount,
-            )
-        }
-    }
     impl Execute for bridge::RecordBridgeReceipt {
         fn execute(
             self,
@@ -13380,6 +13281,7 @@ pub mod isi {
             authority,
             &settlement.route_key,
             &settlement.settlement_asset_definition_id,
+            transfer.amount,
             amount,
         )
     }
@@ -19831,7 +19733,7 @@ pub mod isi {
                             iroha_data_model::governance::types::BallotAttemptId::new([0x97; 32]),
                         ballot_records: vec![
                             vec![0x98; TIMED_OVN_BALLOT_RECORD_BYTES_V1];
-                            iroha_data_model::isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
+                            iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
                                 + 1
                         ],
                     },
@@ -22772,6 +22674,7 @@ pub mod isi {
                 route_address: evm.route_address,
                 route_code_hash: evm.route_code_hash,
                 taira_to_token_multiplier: evm.taira_to_token_multiplier,
+                max_wrapped_supply: evm.max_wrapped_supply,
             };
             let lane = SccpLaneIdV1 {
                 source: SccpNetworkV1::TronMainnet,
@@ -23183,6 +23086,7 @@ pub mod isi {
                 &exact.bridge_proof,
                 &exact.bundle,
                 &exact.route,
+                exact.finalized_block.proof(),
             )
             .expect("exact receipt artifact fixture");
             SccpReceiptArtifactFixture {
@@ -25582,7 +25486,7 @@ pub mod isi {
                 crate::smartcontracts::isi::asset::isi::is_sccp_custody_owner(&stx, &ALICE_ID,)
             );
         });
-        world_test!(sccp_route_escrow_accepts_only_owner_funding_and_rejects_ordinary_drain {
+        world_test!(sccp_route_escrow_rejects_ordinary_credit_and_drain {
             blank_test_state_transaction!(state, block, stx);
             let mut registry = test_active_eth_registry();
             registry.lanes[0].routes[0].settlement.custody_owner = ALICE_ID.clone();
@@ -25597,26 +25501,12 @@ pub mod isi {
                 &route_key,
                 &definition,
             );
-            let amount = Quantity::from(7_u64);
-            bridge::FundSccpRouteEscrow {
-                route_key: route_key.clone(),
-                asset_definition_id: definition.clone(),
-                amount: amount.clone(),
-            }
-            .expect_execute(&ALICE_ID, &mut stx, "the exact route owner may fund only the derived escrow");
             let escrow_asset = AssetId::new(definition.clone(), escrow.clone());
-            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), amount);
+            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), Quantity::zero());
             if stx.world.account(&BOB_ID).is_err() {
                 Register::account(Account::new(BOB_ID.clone()))
                     .expect_execute(&ALICE_ID, &mut stx, "register non-owner fixture");
             }
-            let non_owner_error = bridge::FundSccpRouteEscrow {
-                route_key: route_key.clone(),
-                asset_definition_id: definition.clone(),
-                amount: Quantity::from(1_u64),
-            }
-            .expect_execute_err(&BOB_ID, &mut stx, "a route manager or unrelated account cannot debit itself into custody");
-            assert_err!(format!("{non_owner_error:?}"), "exact governed asset and custody owner");
             Grant::account_permission(
                 Permission::from(CanTransferAsset {
                     asset: escrow_asset.clone(),
@@ -25627,11 +25517,11 @@ pub mod isi {
             let drain_error = Transfer::asset_quantity(escrow_asset.clone(), 1_u64, BOB_ID.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "ordinary transfer cannot drain SCCP route escrow");
             assert_err!(format!("{drain_error:?}"), "SCCP custody can only be debited");
-            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), amount);
+            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), Quantity::zero());
             let mint_error = Mint::asset_quantity(1_u64, escrow_asset.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "ordinary mint cannot credit SCCP route escrow");
             assert_contains!(format!("{mint_error:?}"), "only be credited by a route-bound native SCCP instruction");
-            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), amount);
+            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), Quantity::zero());
         });
         world_test!(record_sccp_message_rejects_duplicate_outbound_key {
             sccp_recording_transaction!(state, block, stx);
@@ -26767,11 +26657,16 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 "domain registration must reject an over-limit relay allowlist",
             );
-            assert_contains!(
-                error.to_string(),
-                "500-entry limit",
-                "unexpected error: {error}"
-            );
+            match error {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                    assert_contains!(
+                        message,
+                        "500-entry limit",
+                        "unexpected smart-contract error"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
             assert!(
                 stx.world.domains.get(&rejected_domain_id).is_none(),
                 "rejected registration must not materialize the domain"
@@ -30267,6 +30162,7 @@ seiyaku GovernanceLifecycle {
                     bundle_decodes: 1,
                     groth16_pairings: 0,
                     bls_verifications: 0,
+                    bls12381_point_decodes: 0,
                 }
             );
             assert_eq!(

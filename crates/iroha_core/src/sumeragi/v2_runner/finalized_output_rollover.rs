@@ -8,6 +8,7 @@ fn drain_finalized_lane_work_output(
 ) -> Result<(), V2RunnerError> {
     loop {
         let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+        let _ = apply_obsolete_merge_sidecar_generation_hints(lane_work, services)?;
         let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
         apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
         apply_certified_merge_sidecar_chunk_admissions(
@@ -63,13 +64,9 @@ pub(super) fn preflight_finalized_lane_rollover(
     if !executor.ready_to_finish() {
         return Ok(false);
     }
-    let (receipt, artifact) = executor
-        .durable_finality()
-        .ok_or_else(|| {
-            V2RunnerError::Service(
-                "ready Sumeragi executor lost its durable finality owner".to_owned(),
-            )
-        })?;
+    let (receipt, artifact) = executor.durable_finality().ok_or_else(|| {
+        V2RunnerError::Service("ready Sumeragi executor lost its durable finality owner".to_owned())
+    })?;
     if !*canonical_lane_body_recovered {
         let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
         *canonical_lane_body_recovered = true;

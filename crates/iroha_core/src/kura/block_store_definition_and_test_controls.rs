@@ -650,6 +650,7 @@ pub struct BlockCount(pub usize);
 pub struct BlockStore {
     path_to_blockchain: PathBuf,
     da_blocks_dir: PathBuf,
+    read_only: bool,
     data_file: Option<FileWrap>,
     index_file: Option<FileWrap>,
     hashes_file: Option<FileWrap>,
@@ -720,6 +721,7 @@ impl Debug for BlockStore {
         f.debug_struct("BlockStore")
             .field("path_to_blockchain", &self.path_to_blockchain)
             .field("da_blocks_dir", &self.da_blocks_dir)
+            .field("read_only", &self.read_only)
             .field("data_file_open", &self.data_file.is_some())
             .field("index_file_open", &self.index_file.is_some())
             .field("hashes_file_open", &self.hashes_file.is_some())

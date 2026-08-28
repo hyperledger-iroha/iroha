@@ -47,7 +47,7 @@ The test model has the following structure:
 Sample configuration assets live in the [`defaults`](../../defaults/) directory and are used by the test harness out of the box:
 
 - `client.toml` – default CLI configuration consumed by the tests.
-- `docker-compose*.yml` – Docker Compose manifests generated via `kagami swarm` for single-node, local, and default multi-peer networks.
+- `docker-compose*.yml` – Docker Compose manifests generated via `kagami docker` for local development networks.
 - `genesis.json` – default genesis block produced by `kagami genesis generate`, aligned with the CLI tests.
 
 To customise the environment:

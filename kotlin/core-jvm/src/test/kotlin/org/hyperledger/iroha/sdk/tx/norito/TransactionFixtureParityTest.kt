@@ -13,6 +13,7 @@ import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKeyAdmission
+import org.hyperledger.iroha.sdk.crypto.SignatureAdmission
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
@@ -645,7 +646,9 @@ class TransactionFixtureParityTest {
         val memberPublicKey = ByteArray(MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH) {
             ((it % 251) + 1).toByte()
         }
-        val memberSignature = ByteArray(64) { ((0x40 + it) and 0xFF).toByte() }
+        val memberSignature = ByteArray(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH) {
+            ((it % 251) + 1).toByte()
+        }
         val signed = SignedTransaction.builder()
             .setEncodedPayload(payloadBytes)
             .setSignature(ByteArray(64) { (it + 1).toByte() })

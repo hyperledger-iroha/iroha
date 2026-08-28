@@ -132,6 +132,13 @@ impl AccountAddress {
         if controller_cursor != bytes.len() {
             return Err(AccountAddressError::UnexpectedTrailingBytes);
         }
+        let controller_class = match &controller {
+            ControllerPayload::SingleKey { .. } => AddressClass::SingleKey,
+            ControllerPayload::MultiSig(_) => AddressClass::MultiSig,
+        };
+        if header.class != controller_class {
+            return Err(AccountAddressError::UnsupportedAddressFormat);
+        }
         Ok(Self { header, controller })
     }
     /// Decode the canonical I105 representation.
@@ -513,10 +520,10 @@ impl AddressHeader {
         class: AddressClass,
         norm_version: u8,
     ) -> Result<Self, AccountAddressError> {
-        if version > 0b111 {
+        if version != HEADER_VERSION_V1 {
             return Err(AccountAddressError::InvalidHeaderVersion(version));
         }
-        if norm_version > 0b11 {
+        if norm_version != HEADER_NORM_VERSION_V1 {
             return Err(AccountAddressError::InvalidNormVersion(norm_version));
         }
         Ok(Self {
@@ -2223,6 +2230,71 @@ mod tests {
             .to_account_id()
             .expect("extended single-key account id decodes");
         assert_eq!(roundtrip, account);
+    }
+    #[test]
+    fn canonical_decode_rejects_reserved_headers_and_controller_class_mismatches() {
+        let single = AccountAddress::from_account_id(&AccountId::new(ed25519_pk()))
+            .expect("single-key address")
+            .canonical_bytes()
+            .expect("single-key canonical bytes");
+
+        for version in 1_u8..=0b111 {
+            let mut reserved = single.clone();
+            reserved[0] = (version << 5) | (HEADER_NORM_VERSION_V1 << 1);
+            let error = AccountAddress::from_canonical_bytes(&reserved)
+                .expect_err("reserved address versions must be rejected");
+            assert!(
+                matches!(error, AccountAddressError::InvalidHeaderVersion(found) if found == version)
+            );
+        }
+        for norm_version in [0_u8, 2, 3] {
+            let mut reserved = single.clone();
+            reserved[0] = norm_version << 1;
+            let error = AccountAddress::from_canonical_bytes(&reserved)
+                .expect_err("reserved normalization versions must be rejected");
+            assert!(
+                matches!(error, AccountAddressError::InvalidNormVersion(found) if found == norm_version)
+            );
+        }
+
+        let mut compact_single_under_multisig = single;
+        compact_single_under_multisig[0] = 0x0a;
+        assert!(matches!(
+            AccountAddress::from_canonical_bytes(&compact_single_under_multisig),
+            Err(AccountAddressError::UnsupportedAddressFormat)
+        ));
+
+        let (mldsa_key, _) = checked_random_keypair_with_algorithm(Algorithm::MlDsa).into_parts();
+        let mut extended_single_under_multisig =
+            AccountAddress::from_account_id(&AccountId::new(mldsa_key))
+                .expect("ML-DSA single-key address")
+                .canonical_bytes()
+                .expect("ML-DSA canonical bytes");
+        assert_eq!(
+            extended_single_under_multisig[1],
+            CONTROLLER_SINGLE_KEY_EXTENDED_TAG
+        );
+        extended_single_under_multisig[0] = 0x0a;
+        assert!(matches!(
+            AccountAddress::from_canonical_bytes(&extended_single_under_multisig),
+            Err(AccountAddressError::UnsupportedAddressFormat)
+        ));
+
+        let policy = MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(ed25519_pk_with(1), 1).expect("member")],
+        )
+        .expect("multisig policy");
+        let mut multisig_under_single =
+            AccountAddress::from_account_id(&AccountId::new_multisig(policy))
+                .expect("multisig address")
+                .canonical_bytes()
+                .expect("multisig canonical bytes");
+        multisig_under_single[0] = 0x02;
+        assert!(matches!(
+            AccountAddress::from_canonical_bytes(&multisig_under_single),
+            Err(AccountAddressError::UnsupportedAddressFormat)
+        ));
     }
     #[test]
     fn account_address_rejects_extended_encoding_for_short_single_key() {
