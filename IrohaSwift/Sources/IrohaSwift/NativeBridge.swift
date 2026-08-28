@@ -89,9 +89,9 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64_x86_64": "e7656ef3a0bd5cf3cdbbef3b709c4fd5689f2fc5d4f9dd1d20b337472eca4cb6",
-        "ios-arm64": "32a0bf6953dcb2ef0625ec0c22f7c80505b38bc405c21234f484958b6ebb4dc6",
-        "ios-arm64_x86_64-simulator": "87be1e9f98bf46e5d3dd4a6ffaa9dbc6e079559f8e251b590502970a8e447f56"
+        "macos-arm64_x86_64": "5399e9c5bdf5dda6999ed519164da18e84abf3a3388358bb85775daec5c13795",
+        "ios-arm64": "fb6ecc4e8dc23164322b4e54d33f5ac1a6cbafde8fc41b0470191156f4875407",
+        "ios-arm64_x86_64-simulator": "ad80863dabef21ca9ae5531a20f1ae8902a4c3aa20d63c6a242f1f2470c78126"
     ]
     static let parliamentTimedOvnWalletRequiredSymbols = [
         "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1",
