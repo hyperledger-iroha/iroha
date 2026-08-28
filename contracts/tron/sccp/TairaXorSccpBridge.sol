@@ -147,6 +147,7 @@ contract TairaXorSccpBridge {
     bytes32 private immutable sourceReplayDomainHash;
     bytes32 private immutable destinationReplayDomainHash;
     SccpTronMintBreaker public immutable mintBreaker;
+    bytes32 public immutable mintBreakerCodeHash;
     uint256 public immutable maxWrappedSupply;
 
     mapping(address => uint64) public transferNonces;
@@ -320,6 +321,7 @@ contract TairaXorSccpBridge {
         sourceReplayDomainHash = exactSourceReplayDomainHash;
         destinationReplayDomainHash = exactDestinationReplayDomainHash;
         mintBreaker = SccpTronMintBreaker(deployment.mintBreakerAddress);
+        mintBreakerCodeHash = deployment.mintBreakerCodeHash;
         maxWrappedSupply = configuredMaxWrappedSupply;
     }
 
@@ -497,6 +499,10 @@ contract TairaXorSccpBridge {
         bytes calldata canonicalPayloadBytes,
         bytes calldata replayWitness
     ) external onExpectedChain nonReentrant returns (bytes32 messageId) {
+        require(
+            _codeHash(address(mintBreaker)) == mintBreakerCodeHash,
+            "SC_BREAKER"
+        );
         require(!mintBreaker.mintingDisabled(), "SC_BREAKER");
         require(statementHash != bytes32(0), "SC_PROOF");
         require(publicInputs[2] == bytes32(uint256(DOMAIN_TRON)), "SC_PROOF");
