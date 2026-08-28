@@ -28,6 +28,13 @@ CONSTANTS
   \* @type: Int;
   SourceCount
 
+(*
+ @typeAlias: sourceSessionClaim = { source_id: Int, tx_entrypoint_hash: { type_tag: Str, digest: Int }, plan_digest: Int, round: { context_id: Int, height: Int, view: Int }, epoch: Int, network_id: Int, authority_context_height: Int, coordinator_lane_id: Int, coordinator_dataspace_id: Int, coordinator_lane_incarnation: Int, planned_coordinator_block_height: Int, coordinator_lane_block_view: Int, coordinator_proposal_hash: Int };
+ @typeAlias: sourceParticipantClaim = { lane_id: Int, dataspace_id: Int, lane_incarnation: Int };
+ @typeAlias: durableSourceClaim = { session: $sourceSessionClaim, participants: (Int -> $sourceParticipantClaim) };
+ @typeAlias: sourceClaimAuthorization = { source_key: Int, session: $sourceSessionClaim, participant_member: Int, participant: $sourceParticipantClaim };
+ @typeAlias: sourceClaimMap = (Int -> $durableSourceClaim);
+ *)
 NativeSourceClaimV4FieldMutationModes ==
   {"DivergentSourceClaimSourceId",
    "DivergentSourceClaimTxEntrypointHash",
@@ -261,6 +268,7 @@ ExactSourceClaimAuthorization ==
     ExactParticipantMember,
     ExactSourceParticipantClaim)
 
+\* @type: ($sourceClaimAuthorization) => $sourceClaimMap;
 SourceClaimMapFromJournalAuthorization(authorization) ==
   [source \in {authorization.source_key} |->
      NativeDurableSourceClaimV4(
@@ -268,6 +276,7 @@ SourceClaimMapFromJournalAuthorization(authorization) ==
        [member \in {authorization.participant_member} |->
           authorization.participant])]
 
+\* @type: (Set($sourceClaimAuthorization)) => $sourceClaimMap;
 ReconstructSourceClaimMapFromJournal(records) ==
   IF records = {}
   THEN EmptySourceClaimMap
@@ -328,6 +337,7 @@ SourceClaimFieldAccepted(fieldMode, stored, candidate) ==
   \/ Mode = fieldMode
   \/ Mode = "DivergentSourceClaim"
 
+\* @type: ($sourceSessionClaim, $sourceSessionClaim) => Bool;
 SourceSessionClaimAccepted(stored, candidate) ==
   /\ SourceClaimFieldAccepted(
        "DivergentSourceClaimSourceId",
@@ -388,6 +398,7 @@ SourceSessionClaimAccepted(stored, candidate) ==
        stored.coordinator_proposal_hash,
        candidate.coordinator_proposal_hash)
 
+\* @type: ($durableSourceClaim, Int, $sourceParticipantClaim) => Bool;
 SourceParticipantClaimAccepted(stored, member, candidate) ==
   IF ExactParticipantMember \in DOMAIN stored.participants
   THEN
@@ -408,6 +419,7 @@ SourceParticipantClaimAccepted(stored, member, candidate) ==
          candidate.lane_incarnation)
   ELSE FALSE
 
+\* @type: ($sourceClaimMap, $sourceSessionClaim, Int, $sourceParticipantClaim) => Bool;
 SourceClaimGuardAccepts(
     sourceClaimMap, sessionClaim, participantMember, participantClaim) ==
   IF ExactSourceClaimKey \in DOMAIN sourceClaimMap
@@ -529,7 +541,9 @@ VARIABLES
   \* Exact append-only V4 signing-claim crash/reload state.
   \* @type: Str;
   sourceClaimPhase,
+  \* @type: $sourceClaimMap;
   volatileSourceClaimMap,
+  \* @type: Set($sourceClaimAuthorization);
   durableSourceClaimJournalRecords,
   \* @type: Bool;
   sourceClaimReloadReconstructed,
@@ -634,6 +648,7 @@ pruneVars ==
     startupRepairCompleted, durableApplicationLost,
     pruneExactObjectRemoval>>
 
+\* @type: <<Bool, Bool>>;
 sameRouteVars == <<sameRouteSettled, separateParticipantMarker>>
 
 sourceClaimVars ==
@@ -642,6 +657,7 @@ sourceClaimVars ==
     sourceClaimExactReplayAccepted, sourceClaimDivergentRetryAttempted,
     sourceClaimDivergentRetryAccepted, sourceClaimDivergentRetryRejected>>
 
+\* @type: <<Set(Str), Set(Str), Set(Str), Set(Str)>>;
 startupRepairRouteVars ==
   <<authenticatedCarrierManifestRoutes,
     plannedNativeMarkerRepairRoutes,
@@ -658,14 +674,36 @@ startupRepairVars ==
     finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
     mergeCarrierRecordExact, mergeCarrierRepairPlanned,
     bodyCachePopulated, postCacheCarrierPreflighted,
-    startupRepairRouteVars>>
+    authenticatedCarrierManifestRoutes,
+    plannedNativeMarkerRepairRoutes,
+    preflightedNativeMarkerRepairRoutes,
+    appliedNativeMarkerRepairRoutes>>
 
-claimVars == <<sourceClaimVars, startupRepairVars>>
+claimVars ==
+  <<sourceClaimPhase, volatileSourceClaimMap,
+    durableSourceClaimJournalRecords, sourceClaimReloadReconstructed,
+    sourceClaimExactReplayAccepted, sourceClaimDivergentRetryAttempted,
+    sourceClaimDivergentRetryAccepted, sourceClaimDivergentRetryRejected,
+    startupRepairStage, plannedEvidenceRepairGroups,
+    startupRepairPlanReadOnly, canonicalBodyNeedCount,
+    canonicalBodiesRecovered, recoveredCanonicalBodyGroups,
+    planRevalidatedAfterRecovery, preflightedEvidenceRepairGroups,
+    appliedEvidenceRepairGroups, evidenceRepairReadBackVerified,
+    queueGateOpen, queueReservationReconciled,
+    finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
+    mergeCarrierRecordExact, mergeCarrierRepairPlanned,
+    bodyCachePopulated, postCacheCarrierPreflighted,
+    authenticatedCarrierManifestRoutes,
+    plannedNativeMarkerRepairRoutes,
+    preflightedNativeMarkerRepairRoutes,
+    appliedNativeMarkerRepairRoutes>>
 
+\* @type: <<Bool, Bool, Bool, Bool>>;
 admissionVars ==
   <<nativeAdmissionAttempted, activeIncarnationExact, predecessorExact,
     contiguousNextHeight>>
 
+\* @type: <<Bool, Bool, Bool, Bool, Bool>>;
 groupVars ==
   <<groupApplied, groupUnique, groupOrdered, groupExactCover,
     groupAppliedAtomically>>
@@ -753,11 +791,14 @@ EffectivePartialHeights ==
 ContiguousHeightInterval(heights) ==
   \A lower \in heights:
     \A upper \in heights:
-      lower <= upper => (lower..upper) \subseteq heights
+      lower <= upper =>
+        {height \in EvidenceHeights : lower <= height /\ height <= upper}
+          \subseteq heights
 
 OldestPrefix(heights) ==
   \/ heights = {}
-  \/ \E highest \in EvidenceHeights: heights = 1..highest
+  \/ \E highest \in EvidenceHeights:
+       heights = {height \in EvidenceHeights : height <= highest}
 
 HighestHalfRepairOnly ==
   /\ Cardinality(EffectivePartialHeights) <= 1
@@ -922,7 +963,7 @@ StageStandaloneManifestTemp ==
   /\ phase' = "ManifestTempDurable"
   /\ manifestTempFiles' = manifestTempFiles \union {TargetHeight}
   /\ manifestTempAuthenticated' =
-       Mode \notin {"ForgedManifestLeaf", "UnauthenticatedTempPromotion"}
+       (Mode \notin {"ForgedManifestLeaf", "UnauthenticatedTempPromotion"})
   /\ publicationPairPendingCleanup' = TRUE
   /\ authenticatedProofAvailable' = TRUE
   /\ manifestLeafAuthenticated' = (Mode # "ForgedManifestLeaf")
@@ -954,7 +995,7 @@ PersistStandaloneManifest ==
   /\ manifestTempFiles' = manifestTempFiles \ {TargetHeight}
   /\ manifestTempAuthenticated' = FALSE
   /\ unauthenticatedTempPromoted' =
-       unauthenticatedTempPromoted \/ ~manifestTempAuthenticated
+       (unauthenticatedTempPromoted \/ ~manifestTempAuthenticated)
   /\ UNCHANGED
        <<finalizedHeights, receiptFiles, receiptTempFiles,
          latestIndexTempFiles,
@@ -1013,7 +1054,7 @@ PersistStandaloneReceipt ==
   /\ receiptTempFiles' = receiptTempFiles \ {TargetHeight}
   /\ receiptTempAuthenticated' = FALSE
   /\ unauthenticatedTempPromoted' =
-       unauthenticatedTempPromoted \/ ~receiptTempAuthenticated
+       (unauthenticatedTempPromoted \/ ~receiptTempAuthenticated)
   /\ UNCHANGED
        <<finalizedHeights, manifestFiles, manifestTempFiles,
          latestIndexTempFiles,
@@ -1773,7 +1814,7 @@ PlanUnifiedStartupEvidenceRepair ==
   /\ canonicalBodyNeedCount' =
        IF Mode = "UncoalescedCanonicalBodyNeeds" THEN 2 ELSE 1
   /\ planRevalidatedAfterRecovery' =
-       Mode \in {"MissingReverseMergeCarrier", "OrphanMergeCarrier"}
+       (Mode \in {"MissingReverseMergeCarrier", "OrphanMergeCarrier"})
   /\ appliedEvidenceRepairGroups' =
        IF Mode = "MutatingUnifiedStartupPlan"
        THEN {OrdinaryReceiptRepairGroup}

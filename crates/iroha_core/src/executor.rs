@@ -9323,6 +9323,16 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
+    // Privacy activation remains governance-bound in Core, while proof
+    // submission consumes the rollback-safe signed transaction-intent binding
+    // and runs the exhaustive native verifier before any persistent world,
+    // ledger, or budget mutation.
+    if is_any!(
+        iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1,
+        iroha_data_model::isi::privacy::SubmitPrivacyProofV1,
+    ) {
+        return true;
+    }
     // Offline/Kagemusha execution is guarded by exact native checks in Core.
     if is_any!(
         iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
@@ -11686,6 +11696,74 @@ mod tests {
                 !initial_native_instruction_is_explicitly_admitted(instruction),
                 "{} must remain unavailable through the post-genesis Initial executor",
                 instruction.id()
+            );
+        }
+    }
+    #[test]
+    fn initial_executor_routes_native_privacy_corridor_to_core() {
+        use crate::privacy_profiles::compiled_privacy_profile_v1;
+        use iroha_data_model::{
+            isi::privacy::{RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1},
+            privacy::{
+                IrohaJindoPolynomialCommitmentStatementV1, PrivacyJindoFieldElementV1,
+                PrivacyJindoLatticeCommitmentV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+                PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolIdV1,
+                PrivacyProtocolLifecycleV1, PrivacyStatementContextV1, PrivacyStatementV1,
+                PrivacyTransactionIntentDigestV1,
+            },
+        };
+
+        let profile =
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
+                .expect("load compiled Jindo profile");
+        let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
+            PrivacyProposedLifecycleV1 {
+                proposed_at_height: 2,
+                activate_at_height: 2 + crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
+            },
+        ));
+        let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
+            IrohaJindoPolynomialCommitmentStatementV1 {
+                context: PrivacyStatementContextV1 {
+                    network_id: executor_test_network_id(b"initial-privacy-corridor"),
+                    action_index: 0,
+                    transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x11; 32]),
+                    parameter_id: profile.parameter_id,
+                    parameter_digest: profile.parameter_digest,
+                    verifier_digest: profile.verifier_digest,
+                    statement_schema_digest: profile.statement_schema_digest,
+                    engine_manifest_digest: profile.engine_manifest_digest,
+                },
+                polynomial_commitments: vec![PrivacyJindoLatticeCommitmentV1::new(vec![0x22])],
+                evaluation_point: PrivacyJindoFieldElementV1::new([0x33; 32]),
+                claimed_evaluations: vec![PrivacyJindoFieldElementV1::new([0x44; 32])],
+            },
+        );
+        let statement_digest = statement.digest().expect("hash Jindo statement fixture");
+        let envelope = PrivacyProofEnvelopeV1 {
+            protocol_id: profile.protocol_id,
+            proof_system_id: profile.proof_system_id,
+            engine_id: profile.engine_id,
+            parameter_id: profile.parameter_id,
+            parameter_digest: profile.parameter_digest,
+            verifier_digest: profile.verifier_digest,
+            statement_schema_digest: profile.statement_schema_digest,
+            engine_manifest_digest: profile.engine_manifest_digest,
+            statement_digest,
+            statement,
+            proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1::new(
+                vec![0x55],
+            )),
+        };
+        let instructions: [InstructionBox; 2] = [
+            RegisterPrivacyProtocolActivationV1::new(activation).into(),
+            SubmitPrivacyProofV1::new(envelope).into(),
+        ];
+        for instruction in &instructions {
+            assert!(
+                initial_native_instruction_is_explicitly_admitted(instruction),
+                "{} must reach its exact native Core authorization and verification gates",
+                instruction.id(),
             );
         }
     }

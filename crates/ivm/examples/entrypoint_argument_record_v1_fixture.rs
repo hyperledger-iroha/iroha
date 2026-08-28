@@ -5,7 +5,35 @@ mod fixture_io;
 use iroha_primitives::json::Json;
 use ivm::{ProgramMetadata, encode_argument_record_from_json};
 use norito::json::{Map, Value};
-const SOURCE: &str = "seiyaku ArgumentRecordFixture {\n  view fn quote(int count, bool active, string memo, bytes digest) -> int {\n    let _active = active;\n    let _memo = memo;\n    let _digest = digest;\n    return count;\n  }\n}\n";
+const SOURCE: &str = r#"seiyaku ArgumentRecordFixture {
+  view fn quote(int count, int exact_int, decimal exact_decimal, quantity exact_quantity, bool active, string memo, bytes digest) -> int {
+    let Json exact = json {
+      exact_int: exact_int,
+      exact_decimal: exact_decimal,
+      exact_quantity: exact_quantity,
+    };
+    let int decoded_int = match exact.get_int(Name::parse("exact_int")) {
+      Option::some(value) => value,
+      Option::none => { return 0; },
+    };
+    let decimal decoded_decimal = match exact.get_decimal(Name::parse("exact_decimal")) {
+      Option::some(value) => value,
+      Option::none => { return 0; },
+    };
+    let quantity decoded_quantity = match exact.get_quantity(Name::parse("exact_quantity")) {
+      Option::some(value) => value,
+      Option::none => { return 0; },
+    };
+    if decoded_int != exact_int || decoded_decimal != exact_decimal || decoded_quantity != exact_quantity {
+      return 0;
+    }
+    let _active = active;
+    let _memo = memo;
+    let _digest = digest;
+    return count;
+  }
+}
+"#;
 fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
     let mut map = Map::new();
     for (key, value) in entries {
@@ -36,6 +64,15 @@ pub fn render_fixture() -> String {
         .expect("quote argument schema");
     let payload_value = object([
         ("count", Value::from("-7")),
+        (
+            "exact_int",
+            Value::from("1606938044258990275541962092341162602522202993782792835301376"),
+        ),
+        ("exact_decimal", Value::from("-12345678901234567890.125")),
+        (
+            "exact_quantity",
+            Value::from("12345678901234567890.0000000000000000000000000001"),
+        ),
         ("active", Value::from(true)),
         ("memo", Value::from("kotodama-v1")),
         ("digest", Value::from("0x000102feff")),
@@ -62,6 +99,9 @@ pub fn render_fixture() -> String {
                     "parameters",
                     Value::Array(vec![
                         parameter("count", "int"),
+                        parameter("exact_int", "int"),
+                        parameter("exact_decimal", "decimal"),
+                        parameter("exact_quantity", "quantity"),
                         parameter("active", "bool"),
                         parameter("memo", "string"),
                         parameter("digest", "bytes"),

@@ -730,6 +730,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             else {
                 panic!("Ready Validate fixture must retain a completed Validate parent")
             };
+            let completion_incumbent_digest = completion.incumbent_digest;
             executor
                 .install_recovered_published_lifecycle_validate_retry_marker(
                     &completion.incumbent.effect,
@@ -780,14 +781,50 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 .coordinator
                 .attest_ready_validate_demand(&owner.registry, lease.ordinal())
                 .expect("attest the exact pre-publication Validate carrier");
+            let replacement_dispatch_key = validate_attestation.dispatch_key();
+            let incumbent_dispatch_key = replacement_dispatch_key
+                .with_carrier_digest(completion_incumbent_digest);
+            assert_ne!(
+                incumbent_dispatch_key.digest(),
+                replacement_dispatch_key.digest(),
+                "{row:?}: publication must replace the same-address carrier digest"
+            );
             executor
                 .arm_live_lifecycle_validate_successor(
-                    validate_attestation.dispatch_key(),
+                    incumbent_dispatch_key,
+                    None,
                     validate_round,
                     validate_subject,
-                    matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply),
+                    true,
                 )
-                .expect("restore the exact preliminary Validate successor owner");
+                .expect("arm the exact sidecar-woken incumbent Validate owner");
+            let publication_apply_is_authorized = matches!(
+                row.fixture_outcome(),
+                ReadyDurableValidateFixtureOutcome::Validated
+            );
+            let foreign_rollover = executor.arm_live_lifecycle_validate_successor(
+                replacement_dispatch_key,
+                Some(replacement_dispatch_key),
+                validate_round,
+                validate_subject,
+                publication_apply_is_authorized,
+            );
+            assert!(
+                foreign_rollover
+                    .expect_err("a replacement key cannot authenticate itself as the incumbent")
+                    .to_string()
+                    .contains("a second Validate successor changed"),
+                "{row:?}: foreign incumbent rollover must retain the fail-closed contract"
+            );
+            executor
+                .arm_live_lifecycle_validate_successor(
+                    replacement_dispatch_key,
+                    Some(incumbent_dispatch_key),
+                    validate_round,
+                    validate_subject,
+                    publication_apply_is_authorized,
+                )
+                .expect("roll the exact incumbent into its published Validate successor owner");
             if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
                 let commit_qc = recovered_apply
                     .as_ref()

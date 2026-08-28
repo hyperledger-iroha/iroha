@@ -300,11 +300,28 @@ def _validation_ack(
     try:
         authentication = receipt_document["authentication"]
         authentication["bootstrap"]
-        receipt_document["evidence"]
+        receipt_evidence = receipt_document["evidence"]
+        formal_replay = receipt_evidence["formal_replay_release"]
     except (KeyError, TypeError) as error:
         raise CacheCopyError(
             "aggregate receipt lacks validator invocation authentication"
         ) from error
+    if (
+        not isinstance(formal_replay, dict)
+        or not isinstance(formal_replay.get("signature"), dict)
+        or not isinstance(formal_replay["signature"].get("sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", formal_replay["signature"]["sha256"])
+        is None
+        or not isinstance(formal_replay.get("principal"), str)
+        or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9_.@+-]{0,127}",
+            formal_replay["principal"],
+        )
+        is None
+    ):
+        raise CacheCopyError(
+            "aggregate receipt formal replay validator inputs are malformed"
+        )
 
     completion_payload, _ = _read_regular(completion, "bootstrap completion")
     try:
@@ -396,6 +413,26 @@ def _validation_ack(
         ),
         "--formal-completion": (
             "path", receipt_path("evidence", "formal_completion")
+        ),
+        "--formal-replay-source-receipt": (
+            "path",
+            receipt_path("evidence", "formal_replay_release", "source_receipt"),
+        ),
+        "--formal-replay-release-root": (
+            "path",
+            str(
+                Path(
+                    receipt_path(
+                        "evidence", "formal_replay_release", "receipt"
+                    )
+                ).parent
+            ),
+        ),
+        "--expected-formal-replay-signature-sha256": (
+            "text", formal_replay["signature"]["sha256"]
+        ),
+        "--formal-replay-principal": (
+            "text", formal_replay["principal"]
         ),
         "--seed-completion": (
             "path", receipt_path("evidence", "seed_matrix_completion")

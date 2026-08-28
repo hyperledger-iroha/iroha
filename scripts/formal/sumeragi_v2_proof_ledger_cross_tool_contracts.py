@@ -1126,11 +1126,11 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolLinkedConsumerContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="install_view",
-                        item_token_sha256="09d31e09f4aa305f555b38165e6a27646096c9e2f858c06d3e43191f8d5bbdc8",
+                        item_token_sha256="4394b964c82c9143a1e5c8056723a2775c7b33de457eb0f26ea790cd51cfc5ba",
                         required_expression="""
                             let stale_body_cleanup =
                                 self.plan_certified_view_body_cleanup(
-                                    tag, protected_body
+                                    tag, protected_body, highest_prepare_body
                                 )?;
                         """,
                         mutation_boundaries=(
@@ -3160,7 +3160,7 @@ _CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE = (
     "crates/iroha_core/src/sumeragi/v2_core/refinement/first_release_witness.rs"
 )
 _CHECKED_PRODUCTION_TOKEN_CLOSURE_SHA256 = (
-    "a4bf41d3a4389122cad3e4aafa0c86b159ec5cc6ea245756d28ecca446d23819"
+    "09d72fdf8e47b84799a1621112ddc3dd77a9f44934ea6a053c9730fee9b1ee65"
 )
 _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256 = (
     "c79d22d356c0f53aceb7b771cb14660ea68ab6da856d46e186506bb5e570a9aa"
@@ -3252,7 +3252,7 @@ _CHECKED_PRODUCTION_COMPLETION_PRODUCT_RANK_SHA256 = (
     "5cec83a64f58fe1751a5f60a7b3a0ad5d80512adb16a00132fd8242457f77d8f"
 )
 _CHECKED_PRODUCTION_COMPLETION_PRODUCT_RANK_DESCENT_SHA256 = (
-    "c99a968bf360ff9d32fd9813addefeb8e10562acd341d24d7b9479ba057589f9"
+    "82e6313ddc4f3ac90075240a756d6a87223bc28011051c904fb8abf7bb091934"
 )
 _TOTAL_GATE_THEOREM_ITEM_SHA256 = {
     "ProductionDurableIntentTraceRefinesProgressWitness": "129a6981dfcf42f154616ba6569eea2b671902267b2dfbddf4ede6add37560d0",

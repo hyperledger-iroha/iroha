@@ -129,10 +129,10 @@ pub proof fn production_in_flight_first_release_witness_refines_named_next(
         witness.action == projection.action,
         witness.actor == projection.actor,
         witness.target == projection.target,
-        witness.source_identity.word0 == 0x9b9babea9e018b44u64,
-        witness.source_identity.word1 == 0xfb739f96b2690f17u64,
-        witness.source_identity.word2 == 0xe1f8d08aa23a38f4u64,
-        witness.source_identity.word3 == 0x2a16ecef1e858f7du64,
+        witness.source_identity.word0 == 0xfadfd6bdc5b95767u64,
+        witness.source_identity.word1 == 0x65cff17d1daba165u64,
+        witness.source_identity.word2 == 0x5b35cd66f9614617u64,
+        witness.source_identity.word3 == 0x03e54552334f660cu64,
         production_in_flight_first_release_transition_kernel(projection),
 {
     reveal(production_in_flight_first_release_witness_binding_kernel);

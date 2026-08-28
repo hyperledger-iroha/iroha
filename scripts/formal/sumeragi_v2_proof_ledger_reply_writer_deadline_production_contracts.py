@@ -60,7 +60,7 @@ _REPLY_WRITER_DEADLINE_NETWORK_ITEM_SHA256 = {
         "93884415a18ff4e3f7c0c680d0219b8a1d01ebdca398b9c8534aa678a20a21e0"
     ),
     "NetworkBase::post_reliable_actor_frame_to_writer": (
-        "9347732994ea2854fc8185768ca08bbd0b3bac410fdb65b3d724b4ccb71d0c4b"
+        "36e36738ea178308c723438134f5ccfeda275ef638830e08195f03879bc0db3d"
     ),
     "NetworkBase::expire_reply_writer_occurrence": (
         "47b73c3e71be2a9896d208bb15097d7359194a738374bee812813a44d4f8a140"
@@ -132,7 +132,7 @@ _REPLY_WRITER_DEADLINE_WORKER_ITEM_SHA256 = {
         "e78d702c927524d363d59d1a098bfd6649d6d399e3f0252faac9d500c77b5a80"
     ),
     "PendingExactOutput::drive_with_budget_ack": (
-        "675d0e99a923f9b8cc96d725458584f4ea762cd4fd69fd9f8e7e76b158c82d52"
+        "04239df36b41b04bc4f3ffcca56e4b3ea0d6ebf9f42fce7739d70f85ba65ba79"
     ),
     "PendingExactOutput::poll_reply_flushes": (
         "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749"

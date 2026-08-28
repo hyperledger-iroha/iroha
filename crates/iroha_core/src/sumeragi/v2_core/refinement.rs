@@ -861,6 +861,36 @@ macro_rules! refinement_tag_value {
     (IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE) => {
         28u8
     };
+    (LEADER_WIRE_LIFECYCLE_ABSENT) => {
+        0u8
+    };
+    (LEADER_WIRE_LIFECYCLE_DORMANT) => {
+        1u8
+    };
+    (LEADER_WIRE_LIFECYCLE_INGRESS) => {
+        2u8
+    };
+    (LEADER_WIRE_LIFECYCLE_RUNTIME) => {
+        3u8
+    };
+    (LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL) => {
+        4u8
+    };
+    (LEADER_WIRE_LIFECYCLE_TERMINAL) => {
+        5u8
+    };
+    (LEADER_WIRE_ADMISSION_INSERT) => {
+        1u8
+    };
+    (LEADER_WIRE_ADMISSION_REACTIVATE) => {
+        2u8
+    };
+    (LEADER_WIRE_ADMISSION_COALESCE) => {
+        3u8
+    };
+    (LEADER_WIRE_ADMISSION_REPLACE_TERMINAL) => {
+        4u8
+    };
     (SUCCESSOR_AUTHORITY_APPLIED) => {
         1u8
     };
@@ -1029,6 +1059,16 @@ assert_refinement_tag_values!(
     IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
     IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY,
     IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE,
+    LEADER_WIRE_LIFECYCLE_ABSENT,
+    LEADER_WIRE_LIFECYCLE_DORMANT,
+    LEADER_WIRE_LIFECYCLE_INGRESS,
+    LEADER_WIRE_LIFECYCLE_RUNTIME,
+    LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL,
+    LEADER_WIRE_LIFECYCLE_TERMINAL,
+    LEADER_WIRE_ADMISSION_INSERT,
+    LEADER_WIRE_ADMISSION_REACTIVATE,
+    LEADER_WIRE_ADMISSION_COALESCE,
+    LEADER_WIRE_ADMISSION_REPLACE_TERMINAL,
     SUCCESSOR_AUTHORITY_APPLIED,
     SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
     SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
@@ -3027,20 +3067,20 @@ macro_rules! production_leader_wire_admission_trace_body {
             && $projection.records_after <= $projection.capacity
             && $projection.capacity > 0u64;
         let incumbent_active_shape = match $projection.status_before {
-            LEADER_WIRE_LIFECYCLE_INGRESS => {
+            refinement_tag_value!(LEADER_WIRE_LIFECYCLE_INGRESS) => {
                 !$projection.terminal_evidence_before && !$projection.replay_dormant_before
             }
-            LEADER_WIRE_LIFECYCLE_RUNTIME => {
+            refinement_tag_value!(LEADER_WIRE_LIFECYCLE_RUNTIME) => {
                 $projection.runtime_owner_before
                     && !$projection.terminal_evidence_before
                     && !$projection.replay_dormant_before
             }
-            LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL => {
+            refinement_tag_value!(LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL) => {
                 $projection.runtime_owner_before
                     && !$projection.terminal_evidence_before
                     && !$projection.replay_dormant_before
             }
-            LEADER_WIRE_LIFECYCLE_TERMINAL => {
+            refinement_tag_value!(LEADER_WIRE_LIFECYCLE_TERMINAL) => {
                 $projection.runtime_owner_before
                     && $projection.terminal_evidence_before
                     && !$projection.replay_dormant_before
@@ -3049,13 +3089,15 @@ macro_rules! production_leader_wire_admission_trace_body {
         };
         incoming_identity_is_typed
             && common_after
-            && if $projection.operation == LEADER_WIRE_ADMISSION_INSERT {
+            && if $projection.operation == refinement_tag_value!(LEADER_WIRE_ADMISSION_INSERT) {
                 canonical_identity_is_zero_body!($projection.incumbent_identity)
                     && $projection.incumbent_view == 0u64
                     && $projection.incumbent_admission_ordinal == 0u128
                     && $projection.incumbent_scheduler_ordinal == 0u128
-                    && $projection.status_before == LEADER_WIRE_LIFECYCLE_ABSENT
-                    && $projection.status_after == LEADER_WIRE_LIFECYCLE_INGRESS
+                    && $projection.status_before
+                        == refinement_tag_value!(LEADER_WIRE_LIFECYCLE_ABSENT)
+                    && $projection.status_after
+                        == refinement_tag_value!(LEADER_WIRE_LIFECYCLE_INGRESS)
                     && $projection.stored_admission_ordinal
                         == $projection.incoming_admission_ordinal
                     && $projection.stored_scheduler_ordinal
@@ -3076,7 +3118,9 @@ macro_rules! production_leader_wire_admission_trace_body {
                         == $projection.incoming_scheduler_ordinal
                     && $projection.records_before < u64::MAX
                     && $projection.records_after == $projection.records_before + 1u64
-            } else if $projection.operation == LEADER_WIRE_ADMISSION_REACTIVATE {
+            } else if $projection.operation
+                == refinement_tag_value!(LEADER_WIRE_ADMISSION_REACTIVATE)
+            {
                 incumbent_identity_is_typed
                     && canonical_identity_equal_body!(
                         $projection.incumbent_identity,
@@ -3087,8 +3131,10 @@ macro_rules! production_leader_wire_admission_trace_body {
                         == $projection.stored_admission_ordinal
                     && $projection.incumbent_scheduler_ordinal
                         == $projection.stored_scheduler_ordinal
-                    && $projection.status_before == LEADER_WIRE_LIFECYCLE_DORMANT
-                    && $projection.status_after == LEADER_WIRE_LIFECYCLE_INGRESS
+                    && $projection.status_before
+                        == refinement_tag_value!(LEADER_WIRE_LIFECYCLE_DORMANT)
+                    && $projection.status_after
+                        == refinement_tag_value!(LEADER_WIRE_LIFECYCLE_INGRESS)
                     && $projection.runtime_owner_before == $projection.runtime_owner_after
                     && !$projection.terminal_evidence_before
                     && !$projection.terminal_evidence_after
@@ -3103,7 +3149,8 @@ macro_rules! production_leader_wire_admission_trace_body {
                     && $projection.scheduler_ordinal_high_watermark_before
                         >= $projection.stored_scheduler_ordinal
                     && $projection.records_before == $projection.records_after
-            } else if $projection.operation == LEADER_WIRE_ADMISSION_COALESCE {
+            } else if $projection.operation == refinement_tag_value!(LEADER_WIRE_ADMISSION_COALESCE)
+            {
                 incumbent_identity_is_typed
                     && canonical_identity_equal_body!(
                         $projection.incumbent_identity,
@@ -3128,16 +3175,21 @@ macro_rules! production_leader_wire_admission_trace_body {
                     && $projection.scheduler_ordinal_high_watermark_before
                         >= $projection.stored_scheduler_ordinal
                     && $projection.records_before == $projection.records_after
-            } else if $projection.operation == LEADER_WIRE_ADMISSION_REPLACE_TERMINAL {
+            } else if $projection.operation
+                == refinement_tag_value!(LEADER_WIRE_ADMISSION_REPLACE_TERMINAL)
+            {
                 incumbent_identity_is_typed
                     && !canonical_identity_equal_body!(
                         $projection.incumbent_identity,
                         $projection.incoming_identity
                     )
                     && incumbent_active_shape
-                    && ($projection.status_before == LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL
-                        || $projection.status_before == LEADER_WIRE_LIFECYCLE_TERMINAL)
-                    && $projection.status_after == LEADER_WIRE_LIFECYCLE_INGRESS
+                    && ($projection.status_before
+                        == refinement_tag_value!(LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL)
+                        || $projection.status_before
+                            == refinement_tag_value!(LEADER_WIRE_LIFECYCLE_TERMINAL))
+                    && $projection.status_after
+                        == refinement_tag_value!(LEADER_WIRE_LIFECYCLE_INGRESS)
                     && $projection.stored_admission_ordinal
                         == $projection.incoming_admission_ordinal
                     && $projection.stored_scheduler_ordinal

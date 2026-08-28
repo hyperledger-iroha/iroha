@@ -322,20 +322,15 @@ fn strict_startup_rejects_every_retired_kura_artifact_after_fast_defers_the_audi
         }
         let mut fast_config = config.clone();
         fast_config.init_mode = InitMode::Fast;
-        let (fast_kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &fast_config,
-            &lane_config,
-        )
-        .expect("Fast startup must defer retired-artifact audits");
+        let (fast_kura, _) =
+            Kura::open_test_kura_with_configured_lane_config(&fast_config, &lane_config)
+                .expect("Fast startup must defer retired-artifact audits");
         drop(fast_kura);
         assert!(
             fs::symlink_metadata(&path).is_ok(),
             "Fast startup must not inspect or mutate retired artifacts",
         );
-        let err = match Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &lane_config,
-        ) {
+        let err = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
             Ok(_) => panic!("retired artifact {name} must abort Kura startup"),
             Err(err) => err,
         };
@@ -420,6 +415,19 @@ fn offline_top_up_entrypoint_for_index_with_outer_authority(
     authorization_operation_id: [u8; 32],
     outer_authority: &KeyPair,
 ) -> TransactionEntrypoint {
+    offline_top_up_entrypoint_for_index_with_outer_authority_and_admission_intent(
+        request_operation_id,
+        authorization_operation_id,
+        outer_authority,
+        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
+    )
+}
+fn offline_top_up_entrypoint_for_index_with_outer_authority_and_admission_intent(
+    request_operation_id: [u8; 32],
+    authorization_operation_id: [u8; 32],
+    outer_authority: &KeyPair,
+    admission_intent: iroha_data_model::transaction::TransactionAdmissionIntent,
+) -> TransactionEntrypoint {
     let network_id = test_network_id(b"kura-offline-operation-index-network");
     let domain_id = DomainId::try_new("offline", "index").expect("fixture domain id");
     let definition = AssetDefinitionId::derive_from_components(
@@ -500,6 +508,7 @@ fn offline_top_up_entrypoint_for_index_with_outer_authority(
         ]
         .into(),
     ))
+    .with_admission_intent(admission_intent)
     .sign(outer_authority.private_key());
     TransactionEntrypoint::External(transaction)
 }

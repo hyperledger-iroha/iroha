@@ -1,12 +1,6 @@
 //! Topic cap enforcement tests. Skips gracefully if sockets are unavailable.
-use iroha_config::parameters::actual::{
-    Network as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPow,
-};
+use iroha_config::parameters::actual::Network as Config;
 use iroha_config::parameters::defaults::network::TRUST_GOSSIP;
-use iroha_config_base::WithOrigin;
-use iroha_crypto::soranet::handshake::{
-    DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-};
 use iroha_data_model::prelude::Peer;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{
@@ -83,25 +77,6 @@ async fn wait_for_consensus_cap_increase(start_cap: u64, timeout: Duration) -> O
     .await
     .ok()
 }
-fn default_soranet_handshake() -> ActualSoranetHandshake {
-    // Frame-cap tests do not exercise admission puzzles; avoid coupling their
-    // deadlines to Argon2 cost or host load.
-    let pow = SoranetPow {
-        required: false,
-        puzzle: None,
-        ..SoranetPow::default()
-    };
-    ActualSoranetHandshake {
-        descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
-        client_capabilities: WithOrigin::inline(DEFAULT_CLIENT_CAPABILITIES.to_vec()),
-        relay_capabilities: WithOrigin::inline(DEFAULT_RELAY_CAPABILITIES.to_vec()),
-        trust_gossip: true,
-        kem_id: 1,
-        sig_id: 1,
-        resume_hash: None,
-        pow,
-    }
-}
 fn make_config(
     addr: &SocketAddr,
     public: &SocketAddr,
@@ -126,7 +101,7 @@ fn make_config(
             addr.clone(),
             public.clone(),
             Duration::from_millis(2000),
-            default_soranet_handshake(),
+            super::mandatory_test_soranet_handshake(),
             TRUST_GOSSIP,
         )
     }

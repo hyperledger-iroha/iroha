@@ -16,6 +16,9 @@ decision trace witness, this is a bounded regression witness, not a safety
 invariant or deductive proof obligation.
 ***************************************************************************)
 
+ResumeWitnessRosters == <<<<0>>>>
+ResumeWitnessPowers == <<<<1>>>>
+
 RecoveredHistoricalLockedCommitSigning ==
   \E request \in signVotes:
     /\ request.node \in Honest

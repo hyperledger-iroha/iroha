@@ -1220,8 +1220,7 @@ pub(super) mod tests {
             .expect("encode history-fixture proposal");
         let block = Arc::new(executed_block);
         let mut context = fixture.context.clone();
-        context.da_layout.max_payload_size_bytes = 1_048_576;
-        context.da_layout.max_chunk_count = 1024;
+        context.da_layout = wire::SumeragiV2GenesisContextParameters::recommended().da_layout;
         context.validate().expect("valid history-fixture context");
         let subject = wire::BlockSubject {
             parent_block_hash: None,
@@ -1674,10 +1673,9 @@ pub(super) mod tests {
         assert_eq!(server.len(), 1);
     }
     #[test]
-    fn server_rebinds_randomized_request_signature_without_waiting_for_eviction() {
+    fn server_reuses_canonical_restart_request_without_waiting_for_eviction() {
         let fixture = Fixture::new();
-        let requester = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::MlDsa)
-            .expect("deterministic ML-DSA requester key");
+        let requester = key(0xA5);
         let requester_peer = peer(&requester);
         let mut first_discovery =
             V2BlockSyncDiscovery::new(fixture.context.clone(), requester_peer.clone(), 1)
@@ -1700,10 +1698,10 @@ pub(super) mod tests {
             panic!("restarted discovery emits a certificate request")
         };
         assert_eq!(first.signature_preimage(), restarted.signature_preimage());
-        assert_ne!(first.signature, restarted.signature);
+        assert_eq!(first.signature, restarted.signature);
         let first_hash = HashOf::new(&first);
         let restarted_hash = HashOf::new(&restarted);
-        assert_ne!(first_hash, restarted_hash);
+        assert_eq!(first_hash, restarted_hash);
 
         let responder = &fixture.rotated_responder;
         let mut server =
@@ -1737,7 +1735,7 @@ pub(super) mod tests {
         };
         assert_eq!(rebound.request_hash, restarted_hash);
         assert_eq!(rebound.certificate, fixture.artifact.commit_qc);
-        restarted_discovery
+        let _ = restarted_discovery
             .authenticate_response(rebound.clone(), &peer(responder))
             .expect("restarted requester accepts rebound response");
         Signature::try_from_bytes(&rebound.signature)
@@ -1745,7 +1743,7 @@ pub(super) mod tests {
             .verify(responder.public_key(), &rebound.signature_preimage())
             .expect("verify rebound response signature");
         assert_eq!(server.len(), 1);
-        assert!(!server.responses.contains_key(&first_hash));
+        assert!(server.responses.contains_key(&first_hash));
         assert!(server.responses.contains_key(&restarted_hash));
         assert_eq!(server.identities.len(), 1);
         assert_eq!(server.order, VecDeque::from([restarted_hash]));
@@ -1832,10 +1830,9 @@ pub(super) mod tests {
         assert_eq!(server.body_len(), 0);
     }
     #[test]
-    fn historical_body_cache_rebinds_randomized_request_signature() {
+    fn historical_body_cache_reuses_canonical_restart_request() {
         let fixture = Fixture::new();
-        let requester = KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::MlDsa)
-            .expect("deterministic ML-DSA requester key");
+        let requester = key(0xA6);
         let requester_peer = peer(&requester);
         let mut first = fixture.body_request(fixture.artifact.commit_qc.clone());
         first.requester = requester_peer.clone();
@@ -1849,10 +1846,10 @@ pub(super) mod tests {
                 .payload()
                 .to_vec();
         assert_eq!(first.signature_preimage(), restarted.signature_preimage());
-        assert_ne!(first.signature, restarted.signature);
+        assert_eq!(first.signature, restarted.signature);
         let first_hash = HashOf::new(&first);
         let restarted_hash = HashOf::new(&restarted);
-        assert_ne!(first_hash, restarted_hash);
+        assert_eq!(first_hash, restarted_hash);
 
         let responder = &fixture.old_validators[0];
         let first_response = body_cache_response(&fixture, &first);
@@ -1887,7 +1884,7 @@ pub(super) mod tests {
             .expect("verify rebound body signature");
         assert_eq!(server.body_len(), 1);
         assert_eq!(server.body_response_bytes(), rebound_bytes);
-        assert!(!server.body_responses.contains_key(&first_hash));
+        assert!(server.body_responses.contains_key(&first_hash));
         assert!(server.body_responses.contains_key(&restarted_hash));
         assert_eq!(server.body_identities.len(), 1);
         assert_eq!(server.body_order, VecDeque::from([restarted_hash]));
@@ -2150,8 +2147,7 @@ pub(super) mod tests {
         assert!(proposal.is_resultless_proposal());
         let block = Arc::new(executed_block);
         let mut context = fixture.context.clone();
-        context.da_layout.max_payload_size_bytes = 1_048_576;
-        context.da_layout.max_chunk_count = 1024;
+        context.da_layout = wire::SumeragiV2GenesisContextParameters::recommended().da_layout;
         context.validate().expect("historical context");
         let subject = wire::BlockSubject {
             parent_block_hash: None,
@@ -2351,7 +2347,7 @@ pub(super) mod tests {
             },
         )
         .expect("authenticate rotated archive request");
-        rotated_request
+        let _ = rotated_request
             .authenticate_response(&context, rotated_response, &rotated_peer)
             .expect("lagging peer accepts current key for exact historical body");
         assert_eq!(server.body_len(), 1);
@@ -2363,8 +2359,10 @@ pub(super) mod tests {
         )
         .payload()
         .to_vec();
+        let mut invalid_server =
+            V2BlockSyncServer::new(context.network_id.clone(), 1).expect("invalid-proof server");
         assert!(matches!(
-            server.serve_historical_body(
+            invalid_server.serve_historical_body(
                 kura.as_ref(),
                 forged,
                 &peer(&fixture.requester),
@@ -2374,6 +2372,7 @@ pub(super) mod tests {
                 V2TransportError::CertificateRejected(_)
             ))
         ));
-        assert_eq!(server.body_len(), 0);
+        assert_eq!(invalid_server.body_len(), 0);
+        assert_eq!(server.body_len(), 1);
     }
 }

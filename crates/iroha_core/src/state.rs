@@ -31379,17 +31379,23 @@ impl State {
         Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1>,
         MergeLedgerCommitError,
     > {
-        let block_hashes = self.block_hashes.view();
+        // Keep canonical history and live lane authority on one coherent State
+        // snapshot. In particular, never retain a standalone BlockHashesView
+        // while acquiring `State::view()`: a concurrent block commit marks the
+        // State generation odd before publishing block hashes, so that lock
+        // order would make the reader wait for the writer while the writer
+        // waits for the reader's block-hash guard.
+        let state_view = self.view();
         self.validate_queue_plan_admissions_with_canonical_history(
             admissions,
             active_lanes,
             carrier_height,
-            validate_live_authority,
+            validate_live_authority.then_some(&state_view),
             |authority_height| {
                 usize::try_from(authority_height)
                     .ok()
                     .and_then(|height| height.checked_sub(1))
-                    .and_then(|index| block_hashes.get(index).copied())
+                    .and_then(|index| state_view.block_hashes.get(index).copied())
             },
         )
     }
@@ -31398,7 +31404,7 @@ impl State {
         admissions: &[Vec<u8>],
         active_lanes: &[MergeLaneBinding],
         carrier_height: u64,
-        validate_live_authority: bool,
+        live_authority_view: Option<&StateView<'_>>,
         canonical_block_hash_at_height: impl Fn(u64) -> Option<HashOf<BlockHeader>>,
     ) -> Result<
         Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1>,
@@ -31468,9 +31474,9 @@ impl State {
                             .to_owned(),
                     ));
                 }
-                if validate_live_authority {
+                if let Some(state_view) = live_authority_view {
                     let authority = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
-                        &self.view(),
+                        state_view,
                         route.leg.route,
                         context.proposal_height,
                     );
@@ -47156,12 +47162,6 @@ impl<'state> StateBlock<'state> {
         }
         Ok(required)
     }
-    pub(crate) fn queue_plan_pending_binding_for_entrypoint(
-        &self,
-        entrypoint_hash: HashOf<TransactionEntrypoint>,
-    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV1>, String> {
-        State::queue_plan_pending_binding_in_view(self, entrypoint_hash)
-    }
     pub(crate) fn require_queue_plan_admission_intents_from_block(
         &self,
         block: &SignedBlock,
@@ -57231,6 +57231,7 @@ impl StateTransaction<'_, '_> {
         Ok(step)
     }
     /// Execute deterministic pipeline triggers, staging their state changes.
+    #[cfg(test)]
     pub(crate) fn execute_pipeline_triggers(
         &mut self,
         events: impl IntoIterator<Item = PipelineEventBox>,

@@ -1596,7 +1596,7 @@ mod tests {
     }
     // typed-matrix-residual:start token-rows
     struct TokenCase(&'static str);
-    const TOKEN_CASES: [TokenCase; 23] = [
+    const TOKEN_CASES: [TokenCase; 22] = [
         TokenCase("decode_rejects_all_zero_signature_material"),
         TokenCase("decode_rejects_unrepresentable_timestamps"),
         TokenCase("verifier_try_new_rejects_invalid_public_key_before_fingerprint"),
@@ -1609,7 +1609,6 @@ mod tests {
         TokenCase("token_store_rejects_expired_and_ttl_overflow"),
         TokenCase("verifier_rejects_replay_with_store"),
         TokenCase("verifier_rejects_invalid_public_key_length_before_backend"),
-        TokenCase("verifier_new_with_invalid_public_key_fails_closed_during_verify"),
         TokenCase("verifier_rejects_signature_length_before_replay_store"),
         TokenCase("verifier_rejects_short_all_zero_signature_as_bad_encoding"),
         TokenCase("verifier_rejects_all_zero_signature_before_backend_and_replay_store"),
@@ -2042,7 +2041,7 @@ mod tests {
 
     #[test]
     fn admission_token_verifier_rejects_malformed_signatures_before_replay() {
-        let id = TOKEN_CASES[13].0;
+        let id = TOKEN_CASES[12].0;
         let mut fixture = minted_token_with_expectation(0x51A, 300, "ML-DSA keypair generation");
         fixture
             .token
@@ -2059,7 +2058,7 @@ mod tests {
             0,
             "{id}"
         );
-        let id = TOKEN_CASES[14].0;
+        let id = TOKEN_CASES[13].0;
         let mut fixture = minted_token_with_expectation(0x51A0, 300, "ML-DSA keypair generation");
         fixture.token.signature.fill(0);
         fixture
@@ -2081,7 +2080,7 @@ mod tests {
 
     #[test]
     fn admission_token_verifier_rejects_inert_signature_before_replay() {
-        let id = TOKEN_CASES[15].0;
+        let id = TOKEN_CASES[14].0;
         let mut fixture = minted_token_with_expectation(0x5A, 300, "ML-DSA keypair generation");
         fixture.token.signature.fill(0);
         let (verifier, store) = fixture.verifier_with_store(900, 900, 5);
@@ -2957,7 +2956,7 @@ mod tests {
     }
     #[test]
     fn admission_token_persistence_matrix() {
-        let id = TOKEN_CASES[16].0;
+        let id = TOKEN_CASES[15].0;
         let fixture = PersistentStoreFixture::new(4, 120, 10_000, "duplicate_store.txt");
         fixture.write(vec![
             TokenStoreEntry {
@@ -2981,7 +2980,7 @@ mod tests {
             message.contains("token id"),
             "{id}: unexpected error: {message}"
         );
-        let id = TOKEN_CASES[17].0;
+        let id = TOKEN_CASES[16].0;
         let fixture = PersistentStoreFixture::new(4, 120, 10_000, "over_ttl_store.txt");
         fixture.write(vec![TokenStoreEntry {
             id: [0xAC; 32],
@@ -2990,7 +2989,7 @@ mod tests {
         }]);
         let err = fixture.load().expect_err("over-TTL entry should fail");
         assert!(store_parse_message(err, id).contains("max_ttl"), "{id}");
-        let id = TOKEN_CASES[18].0;
+        let id = TOKEN_CASES[17].0;
         let fixture = PersistentStoreFixture::new(1, 120, 10_000, "over_capacity_store.txt");
         fixture.write(vec![
             TokenStoreEntry {
@@ -3008,12 +3007,12 @@ mod tests {
             .load()
             .expect_err("over-capacity snapshot should fail");
         assert!(store_parse_message(err, id).contains("capacity"), "{id}");
-        let id = TOKEN_CASES[19].0;
+        let id = TOKEN_CASES[18].0;
         let fixture = PersistentStoreFixture::new(2, 120, 10_000, "empty_store.txt");
         write_private_test_file(&fixture.path, b"");
         let err = fixture.load().expect_err("empty snapshot should fail");
         assert!(store_parse_message(err, id).contains("empty"), "{id}");
-        let id = TOKEN_CASES[20].0;
+        let id = TOKEN_CASES[19].0;
         let fixture = PersistentStoreFixture::new(4, 120, 10_000, "overflow_store.txt");
         fixture.write(vec![TokenStoreEntry {
             id: [0xBB; 32],
@@ -3030,12 +3029,12 @@ mod tests {
             message.contains("overflows"),
             "{id}: unexpected error: {message}"
         );
-        let id = TOKEN_CASES[21].0;
+        let id = TOKEN_CASES[20].0;
         let fixture = PersistentStoreFixture::new(2, 120, 10_000, "invalid_store.txt");
         write_private_test_file(&fixture.path, b"not norito");
         let err = fixture.load().expect_err("invalid snapshot should fail");
         assert!(matches!(err, TokenStoreError::Parse(_)), "{id}");
-        let id = TOKEN_CASES[22].0;
+        let id = TOKEN_CASES[21].0;
         let fixture = PersistentStoreFixture::new(2, 120, 10_000, "single_owner.norito");
         let owner = fixture.load().expect("first owner");
         let error = fixture

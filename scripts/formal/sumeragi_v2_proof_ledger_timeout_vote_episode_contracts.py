@@ -356,6 +356,17 @@ let timeout_control_dependency = leader_wire_barrier.is_some_and(|owner| {
     _require_rust_token_sequence(
         selector_path,
         queue_gate,
+        _CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES[
+            "historical_replica_release_dependency"
+        ],
+        "historical replica release must remain a separately authenticated "
+        "older-height dependency and must not weaken current-owner TimeoutVote "
+        "classification",
+        errors,
+    )
+    _require_rust_token_sequence(
+        selector_path,
+        queue_gate,
         """
 if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {
     FairV2IngressQueueGateVerdict::Blocked

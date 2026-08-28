@@ -36,3 +36,10 @@ path = "fuzz_targets/numeric_v1.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "artifact_admission_v1"
+path = "fuzz_targets/artifact_admission_v1.rs"
+test = false
+doc = false
+bench = false

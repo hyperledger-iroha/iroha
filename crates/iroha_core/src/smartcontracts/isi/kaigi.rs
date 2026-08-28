@@ -1675,6 +1675,7 @@ pub(crate) fn validate_rebuilt_kaigi_relay_registry(
     }
     Ok(())
 }
+#[cfg(test)]
 fn validated_kaigi_relay_registry_count(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<usize, Error> {

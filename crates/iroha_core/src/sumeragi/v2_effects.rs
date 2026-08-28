@@ -3601,6 +3601,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     pub(in crate::sumeragi) fn arm_live_lifecycle_validate_successor(
         &mut self,
         dispatch_key: LifecycleValidateDispatchKeyV1,
+        incumbent_dispatch_key: Option<LifecycleValidateDispatchKeyV1>,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
         apply_is_authorized: bool,
@@ -3632,6 +3633,25 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                     && existing.subject == candidate.subject
                     && existing.apply_is_authorized == candidate.apply_is_authorized =>
             {
+                Ok(())
+            }
+            Some(existing)
+                if incumbent_dispatch_key == Some(existing.dispatch_key)
+                    && existing.apply_is_authorized
+                    && existing.dispatch_key.owner() == candidate.dispatch_key.owner()
+                    && existing.dispatch_key.lifecycle_ordinal()
+                        == candidate.dispatch_key.lifecycle_ordinal()
+                    && existing.dispatch_key.slot() == candidate.dispatch_key.slot()
+                    && existing.dispatch_key.digest() != candidate.dispatch_key.digest()
+                    && existing.round == candidate.round
+                    && existing.subject == candidate.subject =>
+            {
+                // An apply-authorized sidecar-woken Validate retains the exact incumbent carrier
+                // while its worker runs. Durable completion then atomically
+                // replaces that same physical address with a typed outcome
+                // digest. Accept only that authenticated incumbent-to-
+                // replacement edge; unrelated owners still fail closed below.
+                self.live_lifecycle_validate_successor = Some(candidate);
                 Ok(())
             }
             Some(_) => Err(EffectExecutorError::Contract(

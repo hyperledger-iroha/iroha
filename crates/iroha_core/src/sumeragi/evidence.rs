@@ -1072,8 +1072,11 @@ mod tests {
         )
         .commit_unchecked()
         .unpack(|_| {});
-        let block: std::sync::Arc<iroha_data_model::block::SignedBlock> =
-            std::sync::Arc::new(committed.into());
+        let mut executed_block: iroha_data_model::block::SignedBlock = committed.into();
+        executed_block
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("attach deterministic v2 evidence fixture results");
+        let block = std::sync::Arc::new(executed_block);
         state
             .kura()
             .store_block(std::sync::Arc::clone(&block))

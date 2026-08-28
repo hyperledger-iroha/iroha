@@ -786,26 +786,28 @@ def _validate_source_relations(
                     f"contains repair-capable token {token!r}"
                 )
 
-    for relative, symbol, token in (
+    for relative, symbol, token, expected_count in (
         (
             "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
             "run_lifecycle_active_height",
             "service_historical_recovery_tick(&mut lane_work)?",
+            3,
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
             "run_pending_active_height",
             "service_historical_recovery_tick(lane_work)?",
+            1,
         ),
     ):
         item = _item_for(
             root, items, relative, "fn", symbol, errors, rust_binding_item
         )
-        if item is not None and item.count(token) != 1:
+        if item is not None and item.count(token) != expected_count:
             errors.append(
                 f"{root / relative}: passive/recovery item {symbol} must "
-                "service exactly one retained historical owner per quiet "
-                "retransmission turn"
+                "service exactly one retained historical owner in each quiet "
+                f"retransmission corridor (expected {expected_count} corridors)"
             )
 
 

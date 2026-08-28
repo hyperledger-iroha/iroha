@@ -16,6 +16,9 @@ fn historical_capacity_payload_for_kura(
         Level::INFO,
         format!("historical recovery capacity {tag}"),
     )])
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let entrypoint = TransactionEntrypoint::External(transaction);
     let entrypoint_hash = Hash::from(entrypoint.hash());

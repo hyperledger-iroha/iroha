@@ -1577,13 +1577,26 @@ impl PreparedLifecycleIngressSelector {
     /// its installed concrete registry incumbent without changing either.
     pub(super) fn attest_scheduler_fetch_carrier(
         &self,
+        reserved_target: &LifecycleIngressIoTargetSeal,
         coordinator: &LifecycleCoordinator,
         registry: &mut LifecycleWorkRegistryHolder,
     ) -> Result<LifecycleIngressSchedulerFetchSeal, LifecycleIngressSchedulerCarrierError> {
+        let reserved_work_id = self
+            .selected_claimed_response_family()
+            .ok()
+            .and_then(|family| family.candidate.ordinary())
+            .map(CertifiedResponsePriorityCandidate::work_id);
         if !matches!(
             self.io_target,
-            PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence
-        ) {
+            PreparedLifecycleIngressIoTarget::Unsupported
+        ) || reserved_target.context != self.context
+            || reserved_target.ingress_identity != *self.selected_identity()
+            || reserved_target.kind != LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence
+            || reserved_target.certified_serve_request.is_some()
+            || reserved_work_id.is_none()
+            || reserved_target.certified_fetch_work_id != reserved_work_id
+            || reserved_target.recovered_decision_fetch_key.is_some()
+        {
             return Err(LifecycleIngressSchedulerCarrierError::UnsupportedCarrier);
         }
         let authority = self

@@ -2061,6 +2061,9 @@ fn autonomous_lane_payload_for_kura(
         Level::INFO,
         "autonomous checkpoint payload".to_owned(),
     )])
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let entrypoint = TransactionEntrypoint::External(transaction);
     let entrypoint_hash = Hash::from(entrypoint.hash());
@@ -2179,6 +2182,11 @@ fn install_autonomous_lane_marker_for_kura(
     lane_config: &RuntimeLaneConfig,
     payload: &LaneExecutablePayloadV1,
 ) {
+    // Authenticated configured-catalog startup deliberately exposes only the
+    // primary storage segment until a production geometry journal publishes
+    // the rest. This isolated fixture explicitly installs its complete test
+    // catalog before binding the requested lane marker.
+    kura.replace_lane_storage_entries_for_test(lane_config);
     let descriptor = &payload.origin_proposal.descriptor;
     let entry = lane_config
         .entry(descriptor.lane_id)
@@ -2777,6 +2785,7 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen Kura");
+    reopened.replace_lane_storage_entries_for_test(&lane_config);
     assert_eq!(
         reopened
             .read_autonomous_lane_slot_retirement(lane_id, 1, network_id, epoch)

@@ -784,6 +784,19 @@ catch (ToriiApiException exception)
 }
 ```
 
+## Canonical Norito fixtures
+
+C# consumes the Rust-owned corpus directly from `../fixtures/norito_rpc`; it
+does not maintain an SDK-local mirror. The test project links the canonical
+manifest, source descriptor, and all 27 `.norito` payloads into its build output
+from that root. Its closed-schema parity suite opens every manifest
+`encoded_file`, compares it byte-for-byte with the canonical Base64 payload,
+length, Iroha hash, and Norito frame, and also sends
+`../fixtures/kotodama/entrypoint_argument_record_v1.json` through the production
+contract-call client boundary. Regenerate only with the two independent
+absent-root `norito-rpc-fixtures` publications and validate the reviewed result
+with `norito-rpc-verify`; never use copied C# test output as fixture authority.
+
 ## Layout
 
 - `src/Hyperledger.Iroha.Sdk/` - package source

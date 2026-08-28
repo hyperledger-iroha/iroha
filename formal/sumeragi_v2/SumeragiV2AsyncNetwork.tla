@@ -2814,7 +2814,12 @@ AsyncOrdinaryIngressCarrierPhysicalCutInvariantIn(state) ==
 \* closed instead of wrapping.  This fixed implementation bound is neither a
 \* configuration parameter nor a source of fairness.
 AsyncIngressPhysicalOrdinalMaximum ==
-  18446744073709551615
+  (2 ^ 64) - 1
+
+\* TLC's evaluator is signed-64-bit bounded even though the production
+\* ordinal is u64.  Finite counterexample searches substitute a ceiling above
+\* every configured trace budget; the production/TLAPS operator stays exact.
+FiniteAsyncIngressPhysicalOrdinalMaximum == 4096
 
 AsyncIngressPhysicalOrdinalAvailable(node) ==
   AsyncNextIngressPhysicalOrdinal(node)
@@ -7347,6 +7352,39 @@ TcOutbox(node, tc) ==
   {AsyncNetworkItem("TimeoutCertificate", node,
                     TcEnvelope(recipient, tc)):
      recipient \in CurrentVoters}
+
+(***************************************************************************
+The production wire carrier above remains the complete structural universe.
+For a finite TLC run, eagerly materializing that universe would enumerate the
+full powerset carried by every possible timeout certificate before the first
+state exists.  The finite projection instead closes over every authenticated
+item already owned by runtime state plus every control batch that the next
+honest producer action can publish.  Byzantine actions publish their exact
+batch atomically into `asyncSentItems`, so they enter this projection in the
+successor state without weakening their constructor domains.  This is a
+state-derived enumeration boundary only; the production/TLAPS operator is not
+narrowed.
+***************************************************************************)
+FiniteAsyncPublishableControlItems ==
+  (UNION {ProposalOutbox(request): request \in signProposals})
+    \cup (UNION {VoteOutbox(request): request \in signVotes})
+    \cup (UNION {TimeoutOutbox(request): request \in signTimeouts})
+    \cup (UNION {
+           QcOutbox(
+             node,
+             QC(context, roundView, "Prepare", subject,
+                ProjectedVoteSignersAt(
+                  node, roundView, "Prepare", subject))):
+           node \in ValidatorIds,
+           roundView \in Views,
+           subject \in Subjects})
+
+FiniteAsyncNetworkItems ==
+  asyncSentItems
+    \cup asyncRetainedControl
+    \cup asyncActiveRequests
+    \cup {packet.item: packet \in asyncTransport}
+    \cup FiniteAsyncPublishableControlItems
 
 (***************************************************************************
 The request producer freezes the complete height roster before emitting any
@@ -17504,10 +17542,11 @@ AsyncFaultStep ==
        InjectByzantineCertifiedRequest(source, recipient, qc, nonce)
   \/ \E signer \in ValidatorIds, roundView \in Views,
        subject \in Subjects,
-       timeoutCertificate \in TimeoutCertificateOptionSet,
-       highestPrepare \in PrepareQcOptionSet:
-       AsyncByzantineProposal(signer, roundView, subject,
-                              timeoutCertificate, highestPrepare)
+       justification \in ByzantineProposalJustificationDomain:
+       AsyncByzantineProposal(
+         signer, roundView, subject,
+         justification.timeoutCertificate,
+         justification.highestPrepareQc)
   \/ \E signer \in ValidatorIds, roundView \in Views,
        phase \in Phases, subject \in Subjects:
        AsyncByzantineVote(signer, roundView, phase, subject)
@@ -27825,9 +27864,10 @@ AsyncServeServiceabilityInvariant ==
            node, asyncIoQueues[node][index].candidate.item)
 
 AsyncServeOrdinalInvariant ==
-  /\ asyncNextServeIngressOrdinal
-       \in [ValidatorIds ->
-             1..(AsyncIngressPhysicalOrdinalMaximum + 1)]
+  /\ DOMAIN asyncNextServeIngressOrdinal = ValidatorIds
+  /\ \A node \in ValidatorIds:
+       asyncNextServeIngressOrdinal[node]
+         \in 1..(AsyncIngressPhysicalOrdinalMaximum + 1)
   /\ asyncNextServeAdmissionOrdinal
        \in [ValidatorIds -> Nat \ {0}]
   /\ \A admission \in asyncServeIngressAdmissions:

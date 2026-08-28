@@ -18,7 +18,7 @@ use iroha_config::{
     },
     parameters::actual::{
         Logger as LoggerConfig, NoritoRpcStage, Root as Config,
-        SoranetHandshake as ActualSoranetHandshake, SoranetPow, SoranetPuzzle,
+        SoranetHandshake as ActualSoranetHandshake, SoranetPow,
     },
 };
 use iroha_futures::supervisor::{Child, OnShutdown};
@@ -633,9 +633,6 @@ impl Actor {
                 ));
             }
         }
-        if let Some(required) = update.required {
-            pow.required = required;
-        }
         if let Some(difficulty) = update.difficulty {
             pow.difficulty = difficulty;
         }
@@ -649,26 +646,17 @@ impl Actor {
             pow.ticket_ttl = Duration::from_secs(secs);
         }
         if let Some(puzzle_update) = &update.puzzle {
-            if let Some(enabled) = puzzle_update.enabled {
-                if enabled && pow.puzzle.is_none() {
-                    pow.puzzle = Some(default_puzzle_params());
-                }
+            if let Some(memory) = puzzle_update.memory_kib {
+                pow.puzzle.memory_kib =
+                    NonZeroU32::new(memory).expect("validated puzzle memory is non-zero");
             }
-            if let Some(puzzle) = &mut pow.puzzle {
-                if let Some(memory) = puzzle_update.memory_kib {
-                    puzzle.memory_kib =
-                        NonZeroU32::new(memory).expect("validated puzzle memory is non-zero");
-                }
-                if let Some(time_cost) = puzzle_update.time_cost {
-                    puzzle.time_cost =
-                        NonZeroU32::new(time_cost).expect("validated puzzle time cost is non-zero");
-                }
-                if let Some(lanes) = puzzle_update.lanes {
-                    puzzle.lanes =
-                        NonZeroU32::new(lanes).expect("validated puzzle lane count is non-zero");
-                }
-            } else if puzzle_update.enabled.unwrap_or(false) {
-                pow.puzzle = Some(default_puzzle_params());
+            if let Some(time_cost) = puzzle_update.time_cost {
+                pow.puzzle.time_cost =
+                    NonZeroU32::new(time_cost).expect("validated puzzle time cost is non-zero");
+            }
+            if let Some(lanes) = puzzle_update.lanes {
+                pow.puzzle.lanes =
+                    NonZeroU32::new(lanes).expect("validated puzzle lane count is non-zero");
             }
         }
         Ok(())
@@ -681,13 +669,6 @@ impl Actor {
             allow_cidrs: Some(state.network.allow_cidrs.clone()),
             deny_cidrs: Some(state.network.deny_cidrs.clone()),
         }
-    }
-}
-fn default_puzzle_params() -> SoranetPuzzle {
-    SoranetPuzzle {
-        memory_kib: NonZeroU32::new(64 * 1024).expect("non-zero memory"),
-        time_cost: NonZeroU32::new(2).expect("non-zero time"),
-        lanes: NonZeroU32::new(1).expect("non-zero lanes"),
     }
 }
 #[cfg(test)]
@@ -2181,12 +2162,11 @@ mod tests {
             .expect("resume hash present")
             .value();
         assert_eq!(resume, resume_bytes.as_slice());
-        assert!(observed.pow.required);
         assert_eq!(observed.pow.difficulty, 6);
         assert_eq!(observed.pow.max_future_skew.as_secs(), 1200);
         assert_eq!(observed.pow.min_ticket_ttl.as_secs(), 90);
         assert_eq!(observed.pow.ticket_ttl.as_secs(), 240);
-        let puzzle_cfg = observed.pow.puzzle.expect("puzzle config present");
+        let puzzle_cfg = observed.pow.puzzle;
         assert_eq!(puzzle_cfg.memory_kib.get(), 131_072);
         assert_eq!(puzzle_cfg.time_cost.get(), 3);
         assert_eq!(puzzle_cfg.lanes.get(), 2);
@@ -2380,7 +2360,7 @@ mod tests {
         let snapshot = rx.borrow().clone();
         assert_eq!(snapshot.pow.difficulty, 9);
         assert_eq!(snapshot.pow.ticket_ttl.as_secs(), 45);
-        assert!(snapshot.pow.puzzle.is_some());
+        assert_eq!(snapshot.pow.puzzle.memory_kib.get(), 32 * 1024);
         runtime.await.expect("runtime responder task");
     }
     #[tokio::test]

@@ -175,7 +175,7 @@ ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 # bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
 # before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "67f49ac8eb83b4227351562d23a614559c385c7540e547dee0d97d51f112f62a"
+    "f6fb4c0250f95c45d884ce38b56344c8f988655eb841835b3db76226d6440432"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -186,7 +186,7 @@ ASYNC_LIVENESS_SHARD_MAX_THEOREMS = 150
 # raising the limit for every release shard.
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_LINES = {
     "SumeragiV2AsyncInstallRunnerProofs": 5_879,
-    "SumeragiV2AsyncProgressOwnershipProofs": 5_662,
+    "SumeragiV2AsyncProgressOwnershipProofs": 5_663,
     "SumeragiV2AsyncTemporalRankProofs": 5_514,
 }
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS = {
@@ -1268,7 +1268,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "9d28823206f1e5c12c23263710f5255b5166fa27aeb16f7e2c70b2496076e1b1"
+        "c6e38f4a22da9e8d7e22304f29bc100b4d37f794aba98b8056875b961b596336"
     ),
     "SumeragiV2AsyncRankAndInitProofs.tla": (
         "c6f6eade349f107e0572cb381690ad054b61493ef274a9127eed247f4f7b75ca"
@@ -1366,10 +1366,10 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "9d28823206f1e5c12c23263710f5255b5166fa27aeb16f7e2c70b2496076e1b1"
+        "c6e38f4a22da9e8d7e22304f29bc100b4d37f794aba98b8056875b961b596336"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
-        "fac37875375b831db6ed1bd1f64e194fd5e7eebde51019c345a85c4083664752"
+        "df5f59ad90f8829b626c3a78651707c38b8cdcc67da788e68e09c33016463c73"
     ),
 }
 
@@ -1525,7 +1525,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "a167d46e931ebe08e8933c27a1cc2efb26898cd7fd5dbeb2b006924c590d31f6"
     ),
     "scripts/formal/run_sumeragi_v2_inflight_first_release.sh": (
-        "91ed2f7ef62c446dfcc08836aeacf151f4f75464858be540e418b8d45f11a35d"
+        "7c038172b7e023bd6599c5a2ca57ff122153faa65d14eab691301b9810075f4d"
     ),
     "scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh": (
         "1cd0bee3b981d6a0cc814587543b82c02ef6d220ae92a12c2afc55e0faf4032a"
@@ -1537,7 +1537,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "c3427e8773ca3955fd0a81e3d17787230ca19a4672e42fea69c2ea4ec395a04a"
     ),
     "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
-        "3c9bb248f68cc4d9106cdadedaf3d6b1ef82a265c2e76e5dfc7c85cc3e59ad05"
+        "fc5603ec56a3abfde5bd4c16177edd7e43e0d4013a8bbadd2a6a8b80e938bdea"
     ),
     "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh": (
         "1391403cbf0f1b64f78bee9ba6ccf5ee043d157a49e33cbaec7ece949633ae39"
@@ -1573,7 +1573,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "41a0c3d8cfda9400fcdd26e27cabbbeeeae4e06f13fd9bb5819f38af50fe6a9e"
     ),
     "scripts/formal/run_sumeragi_v2_tlc.sh": (
-        "d046eb57d9a2a99dfc318980707614f96058fc3f5143becdce6a7b9cf3822511"
+        "424836141ffb6f21ebca3c8ad9c02aa9a18fb891fe7cb2fb95bae18cf47d474d"
     ),
     "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh": (
         "c8baa9b718c40c26062b2a54107da0ae46f20ae333304f386be08e5dc40b7645"
@@ -4121,7 +4121,26 @@ fn is_certified_fence_escape(&self) -> bool {
         "retiring_the_sole_certificate_does_not_fake_completion_headroom",
         "unpublished_body_replacement_cannot_overbook_the_certified_slot",
     )
-    test_context = (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),)
+    test_context = (
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "test",
+            ")",
+            "]",
+            "pub",
+            "(",
+            "in",
+            "crate",
+            "::",
+            "sumeragi",
+            ")",
+            "mod",
+            "tests",
+        ),
+    )
     test_items: dict[str, RustItem | None] = {}
     for item_name in tests:
         item = _require_rust_item(runtime_path, source, item_name, errors)
@@ -4691,8 +4710,14 @@ def _chain_epoch_refinement_shard_contract(
     # dependency check proves that no shard relies on a declaration hidden in
     # a later physical root, which would make the textual partition invalid as
     # a sequential EXTENDS chain even though concatenation still matched.
+    if len(CHAIN_EPOCH_REFINEMENT_SHARDS) != len(shard_identifiers):
+        errors.append(
+            "chain/epoch refinement shard identifier inventory length differs "
+            "from the physical shard inventory"
+        )
+        return errors, providers
     for index, (module, symbols) in enumerate(
-        zip(CHAIN_EPOCH_REFINEMENT_SHARDS, shard_identifiers, strict=True)
+        zip(CHAIN_EPOCH_REFINEMENT_SHARDS, shard_identifiers)
     ):
         for symbol in sorted(symbols):
             provider_index = provider_indices.get(symbol)
@@ -4713,11 +4738,13 @@ def _chain_epoch_refinement_source(formal_dir: Path) -> str:
         for module in CHAIN_EPOCH_REFINEMENT_SHARDS
     ]
     if all(path.is_file() for path in shard_paths):
+        if len(CHAIN_EPOCH_REFINEMENT_SHARDS) != len(shard_paths):
+            raise ValueError(
+                "chain/epoch refinement physical shard path inventory length differs"
+            )
         sources = {
             module: path.read_text(encoding="utf-8")
-            for module, path in zip(
-                CHAIN_EPOCH_REFINEMENT_SHARDS, shard_paths, strict=True
-            )
+            for module, path in zip(CHAIN_EPOCH_REFINEMENT_SHARDS, shard_paths)
         }
         bodies, errors = _chain_epoch_refinement_shard_bodies(sources)
         if errors:

@@ -2793,14 +2793,14 @@ pub struct SoranetHandshakePowSummary {
 impl From<&'_ base::SoranetPow> for SoranetHandshakePowSummary {
     fn from(value: &'_ base::SoranetPow) -> Self {
         Self {
-            required: value.required,
+            required: true,
             difficulty: value.difficulty,
             max_future_skew_secs: value.max_future_skew.as_secs(),
             min_ticket_ttl_secs: value.min_ticket_ttl.as_secs(),
             ticket_ttl_secs: value.ticket_ttl.as_secs(),
             outbound_mint_capacity: value.outbound_mint_capacity.get(),
             inbound_verify_capacity: value.inbound_verify_capacity.get(),
-            puzzle: value.puzzle.map(SoranetHandshakePuzzleSummary::from),
+            puzzle: Some(SoranetHandshakePuzzleSummary::from(value.puzzle)),
         }
     }
 }

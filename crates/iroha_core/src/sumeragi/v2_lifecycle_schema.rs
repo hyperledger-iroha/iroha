@@ -1586,6 +1586,17 @@ impl LifecycleValidateDispatchKeyV1 {
     pub(crate) const fn digest(self) -> LifecycleDigest {
         self.digest
     }
+
+    /// Rebind only the installed carrier digest at this exact logical and
+    /// physical Validate address.
+    ///
+    /// Same-address durable completion publication authenticates the old and
+    /// replacement digests separately. Keeping this projection private to the
+    /// lifecycle coordinator lets that typed publication describe its exact
+    /// incumbent without exposing a generic dispatch-key constructor.
+    pub(super) const fn with_carrier_digest(self, digest: LifecycleDigest) -> Self {
+        Self { digest, ..self }
+    }
 }
 impl AttestedReadyValidateDemand {
     /// Bind one opaque registry carrier seal to its exact Validate row.

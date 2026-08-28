@@ -643,6 +643,75 @@ reservation.commit(dispatch);
         "Ready Validate must reserve the worker slot before its exact Waiting dispatch",
     )
     require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
+        """
+pub(super) const fn with_carrier_digest(self, digest: LifecycleDigest) -> Self {
+    Self { digest, ..self }
+}
+""",
+        "durable Validate completion may rebind only the carrier digest at its exact private address",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs",
+        """
+ReadyValidateSuccessorIdentityV1::PublishedValidated(location) => Some((
+    key,
+    Some(key.with_carrier_digest(location.incumbent_digest)),
+    location.round,
+    location.subject,
+    true,
+)),
+ReadyValidateSuccessorIdentityV1::PublishedRejected(location) => Some((
+    key,
+    Some(key.with_carrier_digest(location.incumbent_digest)),
+    location.round,
+    location.subject,
+    false,
+)),
+ReadyValidateSuccessorIdentityV1::SidecarWake { round, subject, .. } => {
+    Some((key, None, *round, *subject, true))
+}
+""",
+        "published Validate successors must authenticate the exact incumbent digest while sidecar wake has no replacement authority",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+        """
+let (dispatch_key, incumbent_dispatch_key, round, subject, apply_is_authorized) = successor
+    .preliminary_retransmit_identity(attestation)
+    .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+executor
+    .arm_live_lifecycle_validate_successor(
+        dispatch_key,
+        incumbent_dispatch_key,
+        round,
+        subject,
+        apply_is_authorized,
+    )
+""",
+        "completion dispatch must carry the authenticated incumbent key into live reconciliation",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        """
+Some(existing)
+    if incumbent_dispatch_key == Some(existing.dispatch_key)
+        && existing.apply_is_authorized
+        && existing.dispatch_key.owner() == candidate.dispatch_key.owner()
+        && existing.dispatch_key.lifecycle_ordinal()
+            == candidate.dispatch_key.lifecycle_ordinal()
+        && existing.dispatch_key.slot() == candidate.dispatch_key.slot()
+        && existing.dispatch_key.digest() != candidate.dispatch_key.digest()
+        && existing.round == candidate.round
+        && existing.subject == candidate.subject =>
+{
+    self.live_lifecycle_validate_successor = Some(candidate);
+    Ok(())
+}
+""",
+        "live reconciliation must replace only the exact apply-authorized incumbent at the same physical Validate address",
+    )
+    require_sequence(
         "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
         """
 V2IoCommand::LifecycleValidate(task) => {
@@ -907,7 +976,24 @@ def _applied_phase_admission_production_source_fidelity_errors(
         ),
     )
     test_context = (
-        ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "test",
+            ")",
+            "]",
+            "pub",
+            "(",
+            "in",
+            "crate",
+            "::",
+            "sumeragi",
+            ")",
+            "mod",
+            "tests",
+        ),
     )
 
     preflight = _require_rust_item(

@@ -5,6 +5,125 @@ _RETAINED_EFFECT_PACEMAKER_PROGRESS_REGRESSION_SHA256 = (
 )
 
 
+def _effect_capacity_runtime_forwarding_source_fidelity_errors(
+    effects_path: Path, source: str, errors: list[str]
+) -> None:
+    production_effect_runtime_context = (
+        ("impl", "EffectRuntime", "for", "SerializedV2Runtime"),
+    )
+    for item_name, seal_name, delegate, description in (
+        (
+            "rebind_unpublished_body_available",
+            "effect_runtime_rebind_unpublished_body_available",
+            """
+SerializedV2Runtime::rebind_unpublished_body_available(
+    self, previous, rebound, round, subject,
+)
+.map_err(|error| error.to_string())
+""",
+            "production EffectRuntime unpublished BodyAvailable rebind forwarding",
+        ),
+        (
+            "retire_unpublished_body_available",
+            "effect_runtime_retire_unpublished_body_available",
+            """
+SerializedV2Runtime::retire_unpublished_body_available(
+    self, tag, round, subject
+)
+.map_err(|error| error.to_string())
+""",
+            "production EffectRuntime unpublished BodyAvailable retirement forwarding",
+        ),
+    ):
+        matching = tuple(
+            item
+            for item in rust_items(source, item_name)
+            if item.brace_context == production_effect_runtime_context
+        )
+        if len(matching) != 1:
+            errors.append(
+                f"{effects_path}: require exactly one production EffectRuntime "
+                f"item named {item_name}; found {len(matching)}"
+            )
+            continue
+        production_delegate = matching[0]
+        _require_rust_item_context(
+            effects_path,
+            production_delegate,
+            production_effect_runtime_context,
+            description,
+            errors,
+        )
+        _require_rust_token_sequence(
+            effects_path,
+            production_delegate,
+            delegate,
+            description,
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            effects_path,
+            production_delegate,
+            _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256[seal_name],
+            description,
+            errors,
+        )
+
+    for item_name, expected_source, description in (
+        (
+            "plan_body_pipeline_candidate_terminal",
+            """
+fn plan_body_pipeline_candidate_terminal(
+    &mut self,
+    effect: &AdapterEffect,
+    ownership: &RuntimeEffectOwnership,
+) -> Result<Option<RuntimeEffectOwnership>, String> {
+    SerializedV2Runtime::plan_body_pipeline_candidate_terminal(self, effect, ownership)
+}
+""",
+            "production EffectRuntime body-terminal incumbent-owner plan forwarding",
+        ),
+        (
+            "commit_body_pipeline_candidate_terminals",
+            """
+fn commit_body_pipeline_candidate_terminals(
+    &mut self,
+    terminals: &[(&AdapterEffect, &RuntimeEffectOwnership)],
+) -> Result<(), String> {
+    SerializedV2Runtime::commit_body_pipeline_candidate_terminals(self, terminals)
+}
+""",
+            "production EffectRuntime atomic body-terminal authority commit forwarding",
+        ),
+    ):
+        matching = tuple(
+            item
+            for item in rust_items(source, item_name)
+            if item.brace_context == production_effect_runtime_context
+        )
+        if len(matching) != 1:
+            errors.append(
+                f"{effects_path}: require exactly one production EffectRuntime "
+                f"item named {item_name}; found {len(matching)}"
+            )
+            continue
+        production_delegate = matching[0]
+        _require_rust_item_context(
+            effects_path,
+            production_delegate,
+            production_effect_runtime_context,
+            description,
+            errors,
+        )
+        _require_exact_rust_tokens(
+            effects_path,
+            production_delegate,
+            expected_source,
+            description,
+            errors,
+        )
+
+
 def _effect_capacity_terminal_retirement_source_fidelity_errors(
     effects_path: Path,
     source: str,
@@ -131,11 +250,15 @@ if let Err(error) = services.enqueue_body_fetch(pending.task) {
         install_view,
         """
 self.authenticated_genesis_replay.retain(|key, stage| {
-    Some(*key) == protected_body
-        && matches!(stage, AuthenticatedGenesisReplayStageV1::Stored { .. })
+    (Some(*key) == protected_body || Some(*key) == highest_prepare_body)
+        && matches!(
+            stage,
+            AuthenticatedGenesisReplayStageV1::Store { .. }
+                | AuthenticatedGenesisReplayStageV1::Stored { .. }
+        )
 });
 """,
-        "certified-view installation must retain only the protected stored authenticated-genesis replay owner",
+        "certified-view installation must retain only Store-or-Stored authenticated-genesis owners selected by the protected or cleanup-only highest-Prepare body",
         errors,
     )
     _require_rust_item_token_sha256(
@@ -639,11 +762,14 @@ fn retained_dispatch_allows_network_ingress(
     payload: &wire::ConsensusMessageV2Payload,
 ) -> bool {
     network_ingress_is_certified_fence_escape(payload)
+        || self
+            .runtime
+            .wire_ingress_may_use_pacemaker_progress(payload)
         || (self.retained_effect_batch.is_none() && self.parked_effect_batch.is_none()
             || !Self::network_ingress_requires_reducer_order(payload))
 }
 """,
-        "retained dispatch transport completion and certified fence-escape policy",
+        "retained dispatch transport completion, certified fence escape, and typed pacemaker-progress policy",
         errors,
     )
 

@@ -178,6 +178,24 @@ pub(crate) fn runtime_from_handshake(
     handshake: ActualSoranetHandshake,
 ) -> Result<Arc<SoranetHandshakeRuntime>, Error> {
     let validated = validate_handshake(handshake)?;
+    runtime_from_validated_handshake(validated)
+}
+
+#[cfg(test)]
+/// Build an in-memory, admission-disabled runtime for isolated unit fixtures.
+pub(crate) fn runtime_from_handshake_without_admission_for_test(
+    handshake: ActualSoranetHandshake,
+) -> Result<Arc<SoranetHandshakeRuntime>, Error> {
+    let mut validated = validate_handshake(handshake)?;
+    validated.pow_required = false;
+    validated.owner.required = false;
+    validated.owner.replay_state_path = None;
+    runtime_from_validated_handshake(validated)
+}
+
+fn runtime_from_validated_handshake(
+    validated: ValidatedSoranetHandshake,
+) -> Result<Arc<SoranetHandshakeRuntime>, Error> {
     let owner = validated.owner.clone();
     let puzzle_work_admission =
         process_wide_admission(owner.outbound_mint_capacity, owner.inbound_verify_capacity)
@@ -232,7 +250,6 @@ fn validate_handshake(
         pow,
     } = handshake;
     let ActualSoranetPow {
-        required,
         difficulty,
         max_future_skew,
         min_ticket_ttl,
@@ -244,28 +261,27 @@ fn validate_handshake(
         revocation_store_path,
         puzzle,
     } = pow;
+    let required = true;
     validate_revocation_window(max_future_skew, revocation_max_ttl)?;
     validate_puzzle_work_capacities(outbound_mint_capacity, inbound_verify_capacity)?;
     let pow_params =
         PowParameters::try_new(difficulty, max_future_skew, min_ticket_ttl).map_err(|err| {
             Error::HandshakeSoranet(format!("invalid soranet PoW configuration: {err}"))
         })?;
-    let puzzle_params = puzzle
-        .map(|cfg| {
-            puzzle::Parameters::try_new(
-                cfg.memory_kib,
-                cfg.time_cost,
-                cfg.lanes,
-                difficulty,
-                max_future_skew,
-                min_ticket_ttl,
-            )
-            .map_err(|err| {
-                Error::HandshakeSoranet(format!("invalid soranet puzzle configuration: {err}"))
-            })
-        })
-        .transpose()?;
-    if puzzle_params.is_some() && ticket_ttl <= min_ticket_ttl {
+    let puzzle_params = Some(
+        puzzle::Parameters::try_new(
+            puzzle.memory_kib,
+            puzzle.time_cost,
+            puzzle.lanes,
+            difficulty,
+            max_future_skew,
+            min_ticket_ttl,
+        )
+        .map_err(|err| {
+            Error::HandshakeSoranet(format!("invalid soranet puzzle configuration: {err}"))
+        })?,
+    );
+    if ticket_ttl <= min_ticket_ttl {
         return Err(Error::HandshakeSoranet(format!(
             "invalid soranet puzzle ticket timing: ticket_ttl {ticket_ttl:?} must exceed min_ticket_ttl {min_ticket_ttl:?}"
         )));

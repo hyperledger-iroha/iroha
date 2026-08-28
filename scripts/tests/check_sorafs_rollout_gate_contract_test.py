@@ -2067,6 +2067,9 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     actual_default_pow = actual_config.split("pub const fn default_const() -> Self", 1)[
         1
     ].split("impl_default!(SoranetPow", 1)[0]
+    pow_summary_conversion = client_api.split(
+        "impl From<&'_ base::SoranetPow> for SoranetHandshakePowSummary", 1
+    )[1].split("/// Summary of the Argon2 puzzle gate.", 1)[0]
     user_pow = user_config.split("pub struct SoranetHandshakePow", 1)[1].split(
         "impl SoranetHandshakePow", 1
     )[0]
@@ -2092,21 +2095,28 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "require_sm_handshake_match = Some(false)" not in into_payload
     assert "require_sm_openssl_preview_match = Some(false)" not in into_payload
 
-    assert "required: true" in actual_default_pow
+    assert "required:" not in actual_default_pow
+    assert "puzzle: SoranetPuzzle::default_const()" in actual_default_pow
     assert "signed_ticket_public_key" not in actual_config
     assert "signed_ticket_public_key_hex" not in user_config
     assert "signed_ticket_public_key_hex" not in client_api
     assert "required: bool" not in user_pow
     assert "enabled: bool" not in user_puzzle
-    assert "required: true" in user_config.split("fn parse(self) -> actual::SoranetPow", 1)[1].split(
-        "/// Puzzle configuration supplied at the user level.", 1
-    )[0]
-    assert "puzzle: Some(puzzle.parse())" in user_config.split(
+    user_pow_parse = user_config.split("fn parse(self) -> actual::SoranetPow", 1)[
+        1
+    ].split("/// Puzzle configuration supplied at the user level.", 1)[0]
+    assert "required:" not in user_pow_parse
+    assert "puzzle: puzzle.parse()" in user_config.split(
         "fn parse(self) -> actual::SoranetPow", 1
     )[1].split("/// Puzzle configuration supplied at the user level.", 1)[0]
     assert "actual::SoranetPuzzle" in user_config.split(
         "fn parse(self) -> actual::SoranetPuzzle", 1
     )[1].split("/// User-level configuration container for SoraNet privacy telemetry.", 1)[0]
+    assert "required: true" in pow_summary_conversion
+    assert (
+        "puzzle: Some(SoranetHandshakePuzzleSummary::from(value.puzzle))"
+        in pow_summary_conversion
+    )
 
     assert "SM handshake matching is mandatory" in apply_config_update
     assert "SM OpenSSL preview matching is mandatory" in apply_config_update
@@ -2115,7 +2125,9 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "-> Result<(), String>" in apply_pow_update
     assert "PoW admission is mandatory" in apply_pow_update
     assert "Argon2 puzzle admission is mandatory" in apply_pow_update
-    assert "pow.required = required;" in apply_pow_update
+    assert "matches!(update.required, Some(false))" in apply_pow_update
+    assert "matches!(puzzle_update.enabled, Some(false))" in apply_pow_update
+    assert "pow.required =" not in apply_pow_update
     assert "pow.puzzle = None" not in apply_pow_update
 
     assert "Fallback to unsigned tickets" not in peer

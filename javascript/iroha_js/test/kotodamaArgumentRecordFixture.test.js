@@ -20,6 +20,18 @@ test("contract call preserves the shared Rust argument-record fixture at the Tor
 
   let submittedBody;
   const boundary = fixture.torii_boundary;
+  assert.equal(typeof boundary.payload.exact_int, "string");
+  assert.equal(
+    boundary.payload.exact_int,
+    "1606938044258990275541962092341162602522202993782792835301376",
+  );
+  assert.equal(typeof boundary.payload.exact_decimal, "string");
+  assert.equal(boundary.payload.exact_decimal, "-12345678901234567890.125");
+  assert.equal(typeof boundary.payload.exact_quantity, "string");
+  assert.equal(
+    boundary.payload.exact_quantity,
+    "12345678901234567890.0000000000000000000000000001",
+  );
   const transactionPayload = Buffer.from([1]);
   const signingMessage = Buffer.from(blake2b256(transactionPayload));
   signingMessage[signingMessage.length - 1] |= 1;

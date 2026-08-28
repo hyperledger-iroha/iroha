@@ -113,6 +113,13 @@ Dashboards and alert rules are versioned under `dashboards/` and documented in
   authority owns the durable admission. A journal durability fault blocks
   drain until restart repair either restores the record or leaves the lane
   explicitly fail-closed.
+- Treat the proposal-native QueuePlan certificate as control-only. The
+  `QueuePlanSynced` transaction's physical FIFO position or live-reservation
+  ordinal must remain a fence until its autonomous outcome is terminal, and it
+  executes only through a certified merge. Any ordinary external block
+  entrypoint with that intent is invalid; locked-body recovery must reject it
+  before changing pending payload, reservation, FIFO, session, or retirement
+  state.
 
 ## 4. Incident Response
 

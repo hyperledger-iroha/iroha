@@ -738,7 +738,15 @@ fn preflight_effect_insertion(
     if !lane_work_effect_reply_routes_are_valid(effect) {
         return Err(LaneWorkEffectInsertionOutcome::Rejected);
     }
-    if self.effects.len() >= self.limits.effect_capacity.get() {
+    let ordinary_capacity = self.limits.effect_capacity.get();
+    let autonomous_new_view_progress = Self::is_autonomous_new_view_progress_effect(effect)
+        || self
+            .effects
+            .iter()
+            .any(Self::is_autonomous_new_view_progress_effect);
+    let admission_capacity =
+        ordinary_capacity.saturating_add(usize::from(autonomous_new_view_progress));
+    if self.effects.len() >= admission_capacity {
         return Err(LaneWorkEffectInsertionOutcome::Rejected);
     }
     Ok(key)

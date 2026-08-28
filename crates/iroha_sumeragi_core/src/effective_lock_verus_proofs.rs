@@ -450,9 +450,7 @@ pub fn verified_production_exact_body_owner_rebind(
             owner.tag == rebound_tag
                 && owner.key == previous.key
                 && owner.manifest_hash == previous.manifest_hash
-                && previous.tag.height == rebound_tag.height
-                && previous.tag.view <= rebound_tag.view
-                && previous.tag.generation < rebound_tag.generation
+                && tag_projection_strictly_advances_body!(rebound_tag, previous.tag)
         }),
 {
     let rebound = exact_body_owner_rebind_body!(

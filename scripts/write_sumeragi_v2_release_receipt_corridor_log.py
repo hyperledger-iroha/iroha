@@ -1389,7 +1389,7 @@ def _corridor_legs(
             (
                 "preflight-source-seal",
                 "pytest",
-                78,
+                80,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/workspace_source_manifest_test.py "
                 "pytests/scripts/seal_workspace_source_test.py",
@@ -1448,7 +1448,7 @@ def _corridor_legs(
             (
                 "preflight-release-bootstrap",
                 "pytest",
-                258,
+                261,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_bootstrap_test.py "
@@ -1457,7 +1457,7 @@ def _corridor_legs(
             (
                 "preflight-release-bootstrap-validator",
                 "pytest",
-                44,
+                50,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_bootstrap_validator_test.py",
@@ -1465,7 +1465,7 @@ def _corridor_legs(
             (
                 "preflight-release-receipt",
                 "pytest",
-                368,
+                362,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_receipt_test.py "
@@ -1477,7 +1477,7 @@ def _corridor_legs(
             (
                 "preflight-multilane-scaling",
                 "pytest",
-                52,
+                53,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "scripts/tests/validate_multilane_scaling_evidence_test.py "
@@ -1486,7 +1486,7 @@ def _corridor_legs(
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                5513,
+                5494,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "

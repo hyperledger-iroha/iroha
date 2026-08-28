@@ -17,6 +17,7 @@ import argparse
 from dataclasses import dataclass
 import errno
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -29,7 +30,43 @@ import sys
 import time
 from typing import Any, Iterable, Union
 
-from sumeragi_v2_replay_signing import SIGNING_CONTRACT
+
+def _load_local_module(module_name: str, filename: str) -> Any:
+    """Load one authenticated sibling without relying on ambient import paths."""
+
+    path = Path(__file__).absolute().parent / filename
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"replay support module is unavailable: {path}")
+    canonical_path = path.resolve(strict=True)
+    if canonical_path != path:
+        raise RuntimeError(f"replay support module path is not canonical: {path}")
+    path = canonical_path
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        loaded_path = Path(getattr(loaded, "__file__", "")).resolve()
+        if loaded_path != path:
+            raise RuntimeError(
+                f"replay support module identity differs: {loaded_path} != {path}"
+            )
+        return loaded
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load replay support module: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+_REPLAY_SIGNING = _load_local_module(
+    "sumeragi_v2_replay_signing",
+    "sumeragi_v2_replay_signing.py",
+)
+SIGNING_CONTRACT = _REPLAY_SIGNING.SIGNING_CONTRACT
 
 
 SCHEMA_NAME = "iroha-sumeragi-v2-replay-receipt-v1"

@@ -5,12 +5,13 @@ use super::{
     AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE, AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE,
     AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX, AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
     AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES, AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
-    AutonomousLaneBlockArtifact, AutonomousLaneBlockLatestAttemptV1, AutonomousLaneMergeBundleV1,
-    AutonomousLifecycleBootstrapRecoveryStage, AutonomousLifecycleBootstrapV1,
-    AutonomousLifecycleCursorPhaseKindV1, AutonomousLifecycleCursorPhaseV1,
-    AutonomousLifecycleCursorV1, AutonomousLifecycleTerminalOutcomeSourceV1,
-    AutonomousLifecycleTerminalOutcomeV1, BlockStore, BlockStoreCommitMarker,
-    BoundProgressDirectory, BoundProgressNamespace, BoundProgressPair,
+    AutonomousLaneBlockArtifact, AutonomousLaneBlockLatestAttemptV1,
+    AutonomousLaneEntrypointClaimStateV1, AutonomousLaneEntrypointClaimV1,
+    AutonomousLaneMergeBundleV1, AutonomousLifecycleBootstrapRecoveryStage,
+    AutonomousLifecycleBootstrapV1, AutonomousLifecycleCursorPhaseKindV1,
+    AutonomousLifecycleCursorPhaseV1, AutonomousLifecycleCursorV1,
+    AutonomousLifecycleTerminalOutcomeSourceV1, AutonomousLifecycleTerminalOutcomeV1, BlockStore,
+    BlockStoreCommitMarker, BoundProgressDirectory, BoundProgressNamespace, BoundProgressPair,
     BoundProgressRecoveryFailure, CERTIFIED_LANE_BLOCKS_DATA_FILE,
     CERTIFIED_LANE_BLOCKS_INDEX_FILE, COUNT_FILE_NAME, DATA_FILE_NAME, Error, HASHES_FILE_NAME,
     HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1, HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
@@ -21,7 +22,7 @@ use super::{
     LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LANE_MERGE_APPLICATION_FRONTIER_FILE,
     LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE, LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE,
     LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
-    LaneBlockExecutionInputArtifact, LaneBlockExecutionPreflightArtifact,
+    LaneBlockArtifact, LaneBlockExecutionInputArtifact, LaneBlockExecutionPreflightArtifact,
     LaneBlockExecutionSourceV1, LaneHistoryCompactionOutcome, LaneMergeApplicationFrontierV1,
     MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES, MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
     MergeLedgerCarrierRecord, NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE,
@@ -32,13 +33,36 @@ use super::{
 };
 #[cfg(test)]
 use super::{
-    AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX, DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES,
+    AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX, AutonomousLaneReleaseProjectionContext,
+    AutonomousLaneReleasedClaimDisposition, AutonomousLifecycleAttemptBindingV1,
+    AutonomousLifecycleCursorUnsignedV1, AutonomousLifecycleProcessGenerationClaim,
+    AutonomousLifecycleStableStateV1, DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES,
     NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX, NATIVE_AMX_EVIDENCE_FILE_SUFFIX,
     NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS, OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE,
-    OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE, SidecarIndexEntry, SidecarIndexLayout,
-    V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
+    OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE, ProductionInFlightFirstReleaseTransitionProjection,
+    SidecarIndexEntry, SidecarIndexLayout, V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
+    lane_queue_reservation_group_binding_from_ordered_keys,
 };
 use crate::secure_file_metadata::{self, SecureMetadata};
+#[cfg(test)]
+use crate::{
+    queue::{
+        LaneQueueReservationGroupBindingV1,
+        canonical_lane_queue_reservation_group_identity_projection,
+    },
+    sumeragi::v2_core::{
+        IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED,
+        IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN,
+        ProductionInFlightFirstReleaseCarrierProjection,
+        ProductionInFlightFirstReleaseDecisionProjection,
+        ProductionInFlightFirstReleaseHistoryProjection,
+        ProductionInFlightFirstReleaseQueueProjection,
+        ProductionInFlightFirstReleaseReleaseProjection,
+        ProductionInFlightFirstReleaseSessionProjection,
+        ProductionInFlightFirstReleaseStateProjection,
+        production_in_flight_first_release_state_kernel,
+    },
+};
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -6254,24 +6278,30 @@ impl Kura {
         else {
             return false;
         };
+        let Ok(reservation_keys) = payload
+            .reservation_keys
+            .iter()
+            .map(norito::encode_canonical)
+            .collect::<Result<Vec<_>, _>>()
+        else {
+            return false;
+        };
+        let Ok(routing_plans) = payload
+            .routing_plans
+            .iter()
+            .map(norito::encode_canonical)
+            .collect::<Result<Vec<_>, _>>()
+        else {
+            return false;
+        };
         execution.origin_proposal == payload.origin_proposal
             && execution.autonomous_network_id == payload.network_id
             && execution.autonomous_epoch == payload.epoch
             && execution.autonomous_payload_hash == payload.payload_hash
             && execution.entrypoint_hashes == payload.entrypoint_hashes
             && execution.entrypoints == payload.entrypoints
-            && execution.reservation_keys
-                == payload
-                    .reservation_keys
-                    .iter()
-                    .map(Encode::encode)
-                    .collect::<Vec<_>>()
-            && execution.routing_plans
-                == payload
-                    .routing_plans
-                    .iter()
-                    .map(Encode::encode)
-                    .collect::<Vec<_>>()
+            && execution.reservation_keys == reservation_keys
+            && execution.routing_plans == routing_plans
             && execution.native_amx_receipts == payload.native_amx_receipts
     }
     fn hinted_lane_payload_targets_retirement(
@@ -8792,7 +8822,7 @@ impl Kura {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let lane_bound = self.open_geometry_bound_progress_sidecar(&lane_data, &lane_index)?;
+        let mut lane_bound = self.open_geometry_bound_progress_sidecar(&lane_data, &lane_index)?;
         self.ensure_geometry_progress_pair_uses_directory(
             &lane_bound,
             &lane_artifacts_guard,
@@ -8994,14 +9024,7 @@ impl Kura {
         let mut work_heights = certified_heights.clone();
         work_heights.extend(merge_bundle_heights.iter().copied());
         for (lane_block_height, (_, _, retired)) in &autonomous {
-            if *retired {
-                if certified_heights.contains(lane_block_height) {
-                    return Err(self.geometry_error(
-                        ErrorKind::InvalidData,
-                        "retired autonomous slot conflicts with a certified lane block",
-                    ));
-                }
-            } else {
+            if !*retired {
                 work_heights.insert(*lane_block_height);
             }
         }
@@ -9246,13 +9269,37 @@ impl Kura {
             if let Some((autonomous_artifact, current, retired)) =
                 autonomous.get(&lane_block_height)
             {
-                if *retired
-                    || current != &certified.proposal
-                    || !self.lane_retirement_merge_receipt_applies_autonomous_payload(
-                        &receipt,
-                        &autonomous_artifact.executable_payload,
+                let matches_execution_role = if *retired {
+                    let lane_artifact = self
+                        .read_geometry_lane_block_artifact_from_bound(
+                            binding.lane_id,
+                            lane_block_height,
+                            lane_bound.sidecar_mut().ok_or_else(|| {
+                                self.geometry_error(
+                                    ErrorKind::InvalidData,
+                                    "retired ordinary overlap has no lane-block artifact sidecar",
+                                )
+                            })?,
+                        )
+                        .ok_or_else(|| {
+                            self.geometry_error(
+                                ErrorKind::InvalidData,
+                                "retired ordinary overlap lane-block artifact is malformed",
+                            )
+                        })?;
+                    self.certified_ordinary_is_canonical_hint_promotion_locked(
+                        &autonomous_artifact.executable_payload.origin_proposal,
+                        &certified,
+                        &lane_artifact,
                     )
-                {
+                } else {
+                    current == &certified.proposal
+                        && self.lane_retirement_merge_receipt_applies_autonomous_payload(
+                            &receipt,
+                            &autonomous_artifact.executable_payload,
+                        )
+                };
+                if !matches_execution_role {
                     return Err(self.geometry_error(
                         ErrorKind::InvalidData,
                         "retired autonomous lane evidence differs from its certified merge execution",
@@ -9736,6 +9783,26 @@ impl Kura {
         Self::validate_lane_block_execution_input_artifact(&artifact)
             .is_ok()
             .then_some(artifact)
+    }
+    fn read_geometry_lane_block_artifact_from_bound(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        bound: &mut super::BoundProgressSidecar,
+    ) -> Option<LaneBlockArtifact> {
+        let artifact = Self::read_indexed_sidecar_from_open_files(
+            lane_block_height,
+            &mut bound.data,
+            &mut bound.index,
+            &bound.namespace.data_path,
+            &bound.namespace.index_path,
+            norito::decode_canonical::<LaneBlockArtifact>,
+            "lane block artifact",
+        )?;
+        (artifact.ownership.lane_id == lane_id
+            && artifact.ownership.lane_block_height == lane_block_height
+            && artifact.ownership.validate_replay_material().is_ok())
+        .then_some(artifact)
     }
     #[allow(clippy::too_many_arguments)]
     fn read_geometry_autonomous_attempt_namespace(
@@ -10279,6 +10346,19 @@ impl Kura {
                 "autonomous payload attempt lacks its exact lifecycle cursor or signed payload-durable bootstrap",
             ));
         }
+        let attempt_payloads_by_identity = attempts
+            .iter()
+            .flat_map(|(lane_block_height, attempts_at_height)| {
+                attempts_at_height
+                    .iter()
+                    .map(move |(pointer, artifact, _, _)| {
+                        (
+                            (*lane_block_height, pointer.proposal_height),
+                            (&artifact.executable_payload, pointer),
+                        )
+                    })
+            })
+            .collect::<BTreeMap<_, _>>();
         // Every initial Prepared cursor requires its exact signed bootstrap authority.
         for (lane_block_height, attempts_at_height) in &attempts {
             for (pointer, artifact, _, _) in attempts_at_height {
@@ -10464,7 +10544,13 @@ impl Kura {
                     }
                 }
                 if require_terminal_lifecycle {
-                    if active_entry.is_some() {
+                    let complete_canonical = outcome.is_some_and(|(_, outcome)| {
+                        outcome.is_complete() && outcome.source().is_canonical_carrier()
+                    });
+                    // A certified slot cannot acquire release-path retirement evidence.
+                    // Its independently authenticated Complete canonical-carrier outcome
+                    // proves the exact merge receipt and Queue terminal projection above.
+                    if active_entry.is_some() && !complete_canonical {
                         let view_path = lane_artifacts.join(format!(
                             "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX}_{lane_block_height:020}_{:020}.norito",
                             pointer.proposal_height,
@@ -10578,17 +10664,12 @@ impl Kura {
                                     "prearchive claim is neither exact nor a monotonic successor",
                                 ));
                             }
-                            let newer_payload = attempts
-                                .get(&claim.lane_block_height)
-                                .and_then(|attempts_at_height| {
-                                    attempts_at_height.iter().find_map(
-                                        |(newer_pointer, newer_artifact, _, _)| {
-                                            (newer_pointer.proposal_height == claim.proposal_height
-                                                && newer_pointer.network_id == claim.network_id
-                                                && newer_pointer.epoch == claim.epoch)
-                                                .then_some(&newer_artifact.executable_payload)
-                                        },
-                                    )
+                            let newer_payload = attempt_payloads_by_identity
+                                .get(&(claim.lane_block_height, claim.proposal_height))
+                                .and_then(|(payload, pointer)| {
+                                    (pointer.network_id == claim.network_id
+                                        && pointer.epoch == claim.epoch)
+                                        .then_some(*payload)
                                 })
                                 .ok_or_else(|| {
                                     Self::invalid_lane_artifact_error(
@@ -10613,9 +10694,6 @@ impl Kura {
                         cursor.phase(),
                         AutonomousLifecycleCursorPhaseV1::Terminal { .. }
                     );
-                    let complete_canonical = outcome.is_some_and(|(_, outcome)| {
-                        outcome.is_complete() && outcome.source().is_canonical_carrier()
-                    });
                     let complete_replica = outcome.is_some_and(|(_, outcome)| {
                         outcome.is_complete()
                             && matches!(

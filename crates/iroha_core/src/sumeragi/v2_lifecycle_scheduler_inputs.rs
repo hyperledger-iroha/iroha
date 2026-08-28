@@ -931,10 +931,10 @@ impl PreparedProductionIngressCapacityWait {
             LifecycleIoCapacityWaitStatus::Released => {
                 let Self {
                     mode: _,
-                    wait: _,
+                    wait,
                     selector,
                 } = self;
-                ProductionIngressCapacityRetry::Released(selector)
+                ProductionIngressCapacityRetry::Released(wait.restore_into_prepared(selector))
             }
             LifecycleIoCapacityWaitStatus::GenerationExhausted
             | LifecycleIoCapacityWaitStatus::ForeignOrDisconnected => {
@@ -2844,12 +2844,13 @@ impl ProductionLifecycleOwnerV1 {
                 });
             }
         }
-        let (dispatch_key, round, subject, apply_is_authorized) = successor
+        let (dispatch_key, incumbent_dispatch_key, round, subject, apply_is_authorized) = successor
             .preliminary_retransmit_identity(attestation)
             .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
         executor
             .arm_live_lifecycle_validate_successor(
                 dispatch_key,
+                incumbent_dispatch_key,
                 round,
                 subject,
                 apply_is_authorized,
@@ -3589,7 +3590,7 @@ impl ProductionLifecycleOwnerV1 {
             } => (reservation, prepared),
         };
         if !reservation.preflight_recovered_decision_fetch_target_absent() {
-            let prepared = reservation.abort_into_prepared(prepared);
+            let prepared = reservation.fail_closed_into_prepared(prepared);
             return Err(
                 ProductionRecoveredDecisionFetchPersistenceErrorV1::InFlightSelectedWork(prepared),
             );
@@ -3849,20 +3850,26 @@ impl ProductionLifecycleOwnerV1 {
                 );
             }
             ProductionCertifiedFetchAdmissionSettlementV1::RestartRequired => {
-                drop(reservation.abort_into_prepared(prepared));
+                drop(reservation);
+                drop(prepared);
                 return Err(
                     ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionSettlement,
                 );
             }
         }
-        let fetch =
-            match prepared.attest_scheduler_fetch_carrier(&self.coordinator, &mut self.registry) {
-                Ok(fetch) => fetch,
-                Err(_) => {
-                    drop(reservation.abort_into_prepared(prepared));
-                    return Err(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier);
-                }
-            };
+        let reserved_target = reservation.authenticated_certified_fetch_target(&factory);
+        let fetch = match reserved_target.and_then(|target| {
+            prepared
+                .attest_scheduler_fetch_carrier(target, &self.coordinator, &mut self.registry)
+                .ok()
+        }) {
+            Some(fetch) => fetch,
+            None => {
+                drop(reservation);
+                drop(prepared);
+                return Err(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier);
+            }
+        };
         let positions = prepared.selected_positions().components();
         let live_debts = [
             mode.debt(),

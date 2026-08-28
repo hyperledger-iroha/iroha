@@ -621,6 +621,7 @@ impl Kura {
                                 retirement,
                                 queue_disposition,
                                 &outcome,
+                                None,
                             )?;
                         }
                     }
@@ -1199,6 +1200,177 @@ impl Kura {
             ));
         }
         Ok(outcome.is_complete().then_some(outcome.outcome_hash))
+    }
+    /// Require the exact release-path lifecycle unit to be durably Complete
+    /// before an ordinary canonical certificate may share its retired slot.
+    ///
+    /// Producer release requires every exact claim to be `Released`. Replica
+    /// release additionally requires the Complete terminal-outcome hash to be
+    /// sealed into every exact `ReplicaReleasedComplete` claim; the raw
+    /// `ReplicaReleased` crash boundary is deliberately insufficient.
+    fn require_retired_autonomous_payload_complete_release_locked(
+        &self,
+        pending_canonical_bytes: Option<u64>,
+        entry: &LaneConfigEntry,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+    ) -> Result<()> {
+        if !retirement.matches_payload(payload) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "retired ordinary-slot overlap changed the autonomous retirement identity",
+            ));
+        }
+        let descriptor = &payload.origin_proposal.descriptor;
+        let path = Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
+            entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let parent = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.clone(),
+                "retired ordinary-slot overlap outcome path has no parent directory",
+            )
+        })?;
+        let bytes = self
+            .read_regular_sidecar_bytes(
+                &path,
+                parent,
+                AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+            )?
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::WouldBlock,
+                        "retired ordinary-slot overlap lacks a lifecycle terminal outcome",
+                    ),
+                    path.clone(),
+                )
+            })?;
+        let outcome = Self::decode_autonomous_lifecycle_terminal_outcome(&path, &bytes)?;
+        outcome
+            .validate_for_payload(payload)
+            .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+        if !outcome.is_complete() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::WouldBlock,
+                    "retired ordinary-slot overlap awaits a Complete lifecycle outcome",
+                ),
+                path,
+            ));
+        }
+        let cursor =
+            self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(entry, payload)?;
+        if cursor.binding() != outcome.binding() {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "retired ordinary-slot overlap outcome changed its signed cursor binding",
+            ));
+        }
+        match outcome.source() {
+            source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease { .. } => {
+                self.autonomous_lifecycle_terminal_source_matches_release_locked(
+                    pending_canonical_bytes,
+                    entry,
+                    payload,
+                    Some(retirement),
+                    source,
+                )?;
+                self.require_autonomous_lane_entrypoint_claims_released_locked(
+                    payload, retirement,
+                )
+            }
+            source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                queue_disposition,
+                ..
+            } => {
+                let observed_disposition = self
+                    .autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
+                        pending_canonical_bytes,
+                        entry,
+                        payload,
+                        Some(retirement),
+                        source,
+                    )?;
+                let complete_hash = self
+                    .autonomous_lifecycle_replica_terminal_outcome_is_complete_locked(
+                        entry,
+                        payload,
+                        retirement,
+                        queue_disposition,
+                    )?
+                    .ok_or_else(|| {
+                        Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::WouldBlock,
+                                "retired ordinary-slot overlap lacks a Complete replica outcome",
+                            ),
+                            path.clone(),
+                        )
+                    })?;
+                if observed_disposition != queue_disposition
+                    || complete_hash != outcome.outcome_hash
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "retired ordinary-slot overlap changed its replica terminal identity",
+                    ));
+                }
+                let retirement_hash = retirement.digest()?;
+                for entrypoint_hash in &payload.entrypoint_hashes {
+                    let claim_path = Self::autonomous_lane_entrypoint_claim_path(
+                        &self.store_root,
+                        &payload.network_id,
+                        entrypoint_hash,
+                    );
+                    let temp_path =
+                        Self::autonomous_lane_entrypoint_claim_temp_path(&claim_path);
+                    if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::WouldBlock,
+                                "retired ordinary-slot overlap has a staged replica claim",
+                            ),
+                            temp_path,
+                        ));
+                    }
+                    let claim = Self::decode_autonomous_lane_entrypoint_claim(&claim_path)
+                        .map_err(|message| {
+                            Self::invalid_lane_artifact_error(claim_path.clone(), message)
+                        })?;
+                    let expected =
+                        AutonomousLaneEntrypointClaimV1::replica_released_complete_for_payload(
+                            payload,
+                            *entrypoint_hash,
+                            retirement_hash,
+                            queue_disposition,
+                            complete_hash,
+                        );
+                    if claim != expected
+                        || !self
+                            .autonomous_lane_entrypoint_claim_path_matches(&claim, &claim_path)
+                    {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::WouldBlock,
+                                "retired ordinary-slot overlap lacks every exact replica Complete claim",
+                            ),
+                            claim_path,
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier { .. } => Err(
+                Self::invalid_lane_artifact_error(
+                    path,
+                    "retired ordinary-slot overlap cannot use a canonical-carrier terminal source",
+                ),
+            ),
+        }
     }
     fn read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(
         &self,
@@ -2496,6 +2668,7 @@ impl Kura {
                                 retirement,
                                 queue_disposition,
                                 &outcome,
+                                None,
                             )?;
                         }
                     }
@@ -3011,6 +3184,8 @@ impl Kura {
         pending_canonical_bytes: u64,
         entries: &[LaneConfigEntry],
     ) -> Result<()> {
+        let mut capacity_cache = AutonomousReplicaClaimStartupCapacityCache::default();
+        let mut directory_entries_seen = 0_usize;
         let mut outcomes_seen = 0_usize;
         for entry in entries {
             let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
@@ -3022,6 +3197,19 @@ impl Kura {
             for directory_entry in directory_entries {
                 let directory_entry =
                     directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+                directory_entries_seen =
+                    directory_entries_seen.checked_add(1).ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            directory.clone(),
+                            "replica Complete startup seal directory-entry count overflows",
+                        )
+                    })?;
+                if directory_entries_seen > AUTONOMOUS_LIFECYCLE_GENERATION_AUDIT_MAX_ENTRIES {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "replica Complete startup seal exceeds its global directory-entry bound",
+                    ));
+                }
                 let path = directory_entry.path();
                 let name = directory_entry.file_name().into_string().map_err(|_| {
                     Self::invalid_lane_artifact_error(
@@ -3142,6 +3330,7 @@ impl Kura {
                     retirement,
                     queue_disposition,
                     &outcome,
+                    Some(&mut capacity_cache),
                 )?;
             }
         }
@@ -3228,6 +3417,7 @@ impl Kura {
                             retirement,
                             queue_disposition,
                             outcome,
+                            None,
                         )?;
                     }
                 }

@@ -1613,6 +1613,18 @@ impl LifecycleIoCapacityWait {
             status
         }
     }
+
+    /// Rejoin the retained one-shot target to the exact selector which minted
+    /// this released capacity wait.
+    pub(crate) fn restore_into_prepared(
+        self,
+        mut prepared: PreparedLifecycleIngressSelector,
+    ) -> PreparedLifecycleIngressSelector {
+        prepared
+            .restore_lifecycle_io_target(self.target)
+            .expect("released capacity target must restore only into its source selector");
+        prepared
+    }
 }
 /// Borrow-bound target reservation holding queue state and admission together.
 /// It permits only typed abort or post-preflight consumption into `target`'s
@@ -1633,6 +1645,16 @@ impl LifecycleIoCapacityReservation<'_> {
         _factory: &super::v2_lifecycle_coordinator::AuthenticatedSchedulerInputsFactory,
     ) -> u64 {
         self.predecessor_debt
+    }
+    /// Borrow the exact selected ordinary-Fetch target only through the sealed
+    /// scheduler factory while the capacity reservation remains live.
+    pub(crate) fn authenticated_certified_fetch_target(
+        &self,
+        _factory: &super::v2_lifecycle_coordinator::AuthenticatedSchedulerInputsFactory,
+    ) -> Option<&LifecycleIngressIoTargetSeal> {
+        self.target.as_ref().filter(|target| {
+            target.kind() == LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence
+        })
     }
     /// Move the exact Serve target into lifecycle admission while retaining
     /// the worker queue cut and reserved auxiliary slot.
@@ -1791,6 +1813,33 @@ impl LifecycleIoCapacityReservation<'_> {
             .take()
             .expect("aborted reservation retains its fail-stop operation")
             .complete();
+        prepared
+    }
+    /// Fail closed before releasing the reserved queue cut, then restore the
+    /// one-shot target solely for ownership-preserving fatal diagnostics.
+    pub(crate) fn fail_closed_into_prepared(
+        mut self,
+        mut prepared: PreparedLifecycleIngressSelector,
+    ) -> PreparedLifecycleIngressSelector {
+        let target = self
+            .target
+            .take()
+            .expect("fatal reservation retains its one-shot target");
+        prepared
+            .restore_lifecycle_io_target(target)
+            .expect("fatal reservation target must restore only into its source selector");
+        let operation = self
+            .operation
+            .take()
+            .expect("fatal reservation retains its fail-stop operation");
+        drop(operation);
+        let state = self
+            .state
+            .take()
+            .expect("fatal reservation retains the queue guard");
+        self.queue.admission.release();
+        drop(state);
+        self.queue.ready.notify_all();
         prepared
     }
     /// Consume the locked reservation into the preflighted exact persistence

@@ -593,7 +593,19 @@ theorem under that binding. The finite TLC configurations leave the ceiling
 symbolic and larger because their service budget counts abstract actions, not
 milliseconds; those searches validate the conditional transition argument,
 not the operational claim that a particular deployment meets the ten-base
-service premise.
+service premise. Each finite configuration explicitly replaces `Generations`,
+`GenerationCanIncrement`, `ModelConfiguration`, and
+`ByzantineProposalJustificationDomain` with their `Finite*` projections and
+keeps `MaxGeneration >= MaxView`; this avoids evaluating an infinite-`Nat`
+comparison or eagerly materializing the timeout-vote powerset while preserving
+every configured view and every proposal-justification pair that can survive
+the exact installed-TC guard. The production justification domain remains the
+full timeout-certificate/PrepareQC Cartesian product. The asynchronous
+liveness configuration also substitutes a finite physical-ingress ordinal
+ceiling above its trace budget because TLC evaluates integers through a signed
+64-bit implementation; the production model spells the exact `u64` maximum as
+`(2 ^ 64) - 1`. These substitutions are counterexample-search projections,
+not deductive evidence or proof-ledger promotions.
 
 The claim is conditional and per height: after GST, with a representative
 roster of at least four voting peers, a responsive dual quorum, and
@@ -1730,11 +1742,11 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`331123d12b08027a9ac0ed0157ed84007eac5a8659b1995bf4c77c3eedb231c2`.
+`2858dd2206f1374c044fa0b3c0d3f02a02cb7b2190d65540e13ce34ee35c6470`.
 The separate source-sealed G-UNIT inventory contains 522 focused tests,
 including 316 `iroha_core` tests. Its 523-line
 canonical TSV has SHA-256
-`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`;
+`a19753ab7879a95094d8f1ee968e2e44d9a36453f2814acdadffaaead1ab4a97`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through

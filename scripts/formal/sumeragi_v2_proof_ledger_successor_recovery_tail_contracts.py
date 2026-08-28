@@ -153,9 +153,7 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
 
     runtime_tokens = rust_code_tokens(sources["runtime"])
     for retired in (
-        "step_recovery",
         "step_recovery_and_take_scheduler_ownership_for_test",
-        "RecoveryAfterClocksArmed",
         "RecoveryFifo",
         "RecoveryFifoRetryRetained",
         "RecoveryIdle",
@@ -2263,10 +2261,12 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "let mut inbound = prepared.inbound.take()",
             "let mut prepared_serve = prepared.prepared_serve.take()",
             "PreparedDequeuedV2IngressFailStopScopeV1::new",
+            "macro_rules! finish",
             "let final_admission = services_output_guard.acquire()",
             "fail_stop.complete()",
             "prepared.complete()",
             "drop(final_admission)",
+            "match inbound.message()",
         ),
     )
     require_tokens(
@@ -2274,8 +2274,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ordinary_consumer,
         "single exact ordinary post-dequeue runner tail",
         (
-            "BlockMessage::KuraReplicaAdvert(_)",
-            "inbound.message().is_lane_local()",
+            "BlockMessage::KuraReplicaAdvert(_) =>",
+            "BlockMessage::LaneHistoricalRecoveryResponse(_) => { let _ = lane_work.accept_lane_message_with_ingress_ownership(",
             "FairV2IngressDequeueDisposition::RetireObsolete",
             "wire::ConsensusMessageV2Payload::Proposal(proposal)",
             "wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)",
@@ -2740,8 +2740,9 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "height_driver",
         apply_terminal_completion_retry,
-        "both direct Broadcast outcomes must re-enter Completion before Runtime",
+        "applied lifecycle Decision and both direct Broadcast outcomes must re-enter Completion before Runtime",
         (
+            "LifecycleDecisionApplyApplied",
             "LifecycleValidatePublished",
             "LifecycleValidateSidecarWoken",
             "ApplyTerminalDirectBroadcastCompleted",
@@ -3083,10 +3084,13 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         (
             "self.ensure_open()?",
             "let key = prepared.pending_key()",
+            "self.lifecycle_decision_apply_successor_outputs",
+            "attestation.exactly_matches_terminal_preparation(&prepared)",
             "self.pending_lifecycle_output_admissions.remove(&key)",
             "return Err(self.close(error, services))",
             "owner.settle_apply_terminal_direct_broadcast(",
             "ProductionLifecycleOutputAdmissionSettlementV1::Completed",
+            "self.lifecycle_decision_apply_successor_outputs = None",
             "ProductionLifecycleOutputAdmissionSettlementV1::Deferred(pending)",
             "pending.key() != key",
             "pending_lifecycle_output_admissions.insert(key, pending)",
@@ -3243,7 +3247,7 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         (
             "Empty",
             "ObsoletePredecessor(ProductionPreparedOrdinaryIngressTurnV1)",
-            "ExactPrepareQc(ProductionPreparedOrdinaryIngressTurnV1)",
+            "ExactPrepareProgress(ProductionPreparedOrdinaryIngressTurnV1)",
             "RestartRequired",
         ),
     )
@@ -3253,26 +3257,25 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         "LaunchedProductionLifecycleV1",
         "prepare_pre_timeout_locked_prepare_qc_ingress_turn",
         errors,
-        "launched fixed-cut pre-timeout PrepareQC fair-ingress preparation",
+        "launched fixed-cut pre-timeout exact Prepare progress fair-ingress preparation",
     )
     require_order(
         "driver",
         launched_pre_timeout_ingress,
-        "fixed-cut pre-timeout ingress preserves exact preview, ordinary gate, and dequeue tail",
+        "fixed-cut pre-timeout ingress preserves exact Prepare preview, ordinary gate, and dequeue tail",
         (
             "self.executor.lifecycle_terminal_subject()",
             "Arc::clone(&self.leader_wire_ingress_binding.ingress)",
             "capture_next_ingress_turn_cut_before_with_obsolete_retirement(",
             "cut.physical_cut()",
             "BlockMessage::V2(message)",
-            "ConsensusMessageV2Payload::QuorumCertificate(_)",
-            "executor.wire_previews_pre_timeout_locked_prepare_qc(",
+            "executor.wire_previews_pre_timeout_locked_prepare_qc(cut, &message.payload)",
             "captured.selected_disposition() == FairV2IngressDequeueDisposition::RetireObsolete",
             "prepare_ordinary_ingress_dequeue(",
             "PreparedOrdinaryIngressDequeueV1::Prepared(turn) if obsolete",
             "ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ObsoletePredecessor(turn)",
             "PreparedOrdinaryIngressDequeueV1::Prepared(turn)",
-            "ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ExactPrepareQc(turn)",
+            "ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ExactPrepareProgress(turn)",
             "PreparedOrdinaryIngressDequeueV1::RestartRequired",
             "ProductionPreTimeoutLockedPrepareQcIngressTurnV1::RestartRequired",
         ),
@@ -3298,13 +3301,15 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
     require_order(
         "height_driver",
         lifecycle_height_driver,
-        "terminal Apply must publish a lower direct-output fence wake before cold-output service",
+        "terminal cut or Apply must publish a lower direct-output fence wake before cold-output service",
         (
-            "if producer_claim.apply_terminal_settled()",
+            "if terminal_finalization_cut.is_some() || producer_claim.apply_terminal_settled()",
+            "let direct_output_woken = activated.with_runner_runtime(",
             "let fence = executor.lifecycle_reducer_fence_observation()",
             "owner.wake_apply_terminal_direct_broadcast_if_fenced(fence)",
             "if direct_output_woken",
             "LifecycleV2IngressDrainDispositionV1::retry_before_producer",
+            "if producer_claim.apply_terminal_settled()",
             "settle_one_recovered_lifecycle_output(",
             "settled_apply_output_drain_disposition(settlement, producer_claim)",
         ),
@@ -3353,6 +3358,35 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
     )
 
     pre_timeout_target = item("adapter", "pre_timeout_locked_prepare_qc_target")
+
+    recovery_step = item("runtime", "step_recovery")
+    require_order(
+        "runtime",
+        recovery_step,
+        "no-clock interrupted-tip recovery retains exact runtime ownership accounting",
+        (
+            "if self.fail_closed",
+            "self.last_scheduler_ownership.is_some()",
+            "self.pending_effect_ownership.is_some()",
+            "!self.pending_leader_wire_terminals.is_empty()",
+            "if self.clocks_armed",
+            "RuntimeError::RecoveryAfterClocksArmed",
+            "self.driver.all_deferred_admission_ordinals().is_empty()",
+            "!self.driver.deferred_work_is_serviceable()",
+            "self.dispatch_one_adapter_deferred(now, None)",
+            "self.scheduler_arbitration_inputs(now)",
+            "self.ingress.pop_next_with_ownership()",
+            "scheduled != ScheduledWork::Fifo",
+            "command.lifecycle_owner()",
+            "self.driver.dispatch(command)",
+            "if retry_unadmitted",
+            "RuntimeSelectedOwnerKind::FifoRetryRetained",
+            "self.retain_effect_ownership(",
+            "self.complete_driver_dispatch_leader_wire_owners(",
+            "self.observe_effects(now, &effects)",
+            "Ok(RuntimeStep::Advanced(effects))",
+        ),
+    )
     require_order(
         "adapter",
         pre_timeout_target,
@@ -3438,9 +3472,9 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
     require_tokens(
         "runtime",
         runtime_wire_preview_binding,
-        "production runtime wire preview delegates to cloned LockAndCommit",
+        "production runtime wire preview delegates to exact Prepare progress",
         (
-            "self.pre_timeout_locked_prepare_qc_stages_lock_and_commit(certificate, target)",
+            "self.pre_timeout_locked_prepare_progress_is_exact(payload, target)",
         ),
     )
     runtime_command_preview_binding = qualified_item(
@@ -3452,13 +3486,11 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
     require_order(
         "runtime",
         runtime_command_preview_binding,
-        "runtime command preview admits only an authenticated QC with cloned LockAndCommit",
+        "runtime command preview admits only authenticated exact Prepare progress",
         (
             "AdapterCommand::Authenticated(authenticated)",
+            "self.pre_timeout_locked_prepare_progress_is_exact(",
             "authenticated.payload()",
-            "wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)",
-            "self.pre_timeout_locked_prepare_qc_stages_lock_and_commit(",
-            "certificate",
             "target",
         ),
     )
@@ -3533,12 +3565,11 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
     require_order(
         "runtime",
         runtime_wire_preview,
-        "fair-ingress preview is current-cut and exact-QC only",
+        "fair-ingress preview is current-cut and exact Prepare progress only",
         (
             "self.pre_timeout_locked_prepare_qc_cut_is_current(cut)",
-            "wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)",
             "self.driver.wire_previews_pre_timeout_locked_prepare_qc(",
-            "certificate",
+            "payload",
             "cut.target",
         ),
     )
@@ -3755,6 +3786,9 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
             "PreGate::Ordinary(ordinary_turn)",
             "drain_one_ordinary_completion_after_lifecycle_pass_through",
             "PreGate::Selected(selected)",
+            "PreGate::Ready(ready) if terminal_finalization_cut.is_some()",
+            "terminal_ready_broadcast_permit()",
+            "drive_apply_terminal_ready_broadcast_turn(ready, permit)",
             "PreGate::Ready(ready) if producer_claim.apply_terminal_settled()",
             "apply_terminal_ready_broadcast_permit()",
             "drive_apply_terminal_ready_broadcast_turn(ready, permit)",
@@ -3776,7 +3810,7 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
     require_order(
         "height_driver",
         lifecycle_height_driver,
-        "bounded exact PrepareQC service precedes the owned timeout in one Runtime turn",
+        "bounded exact Prepare progress precedes the owned timeout in one Runtime turn",
         (
             "LifecycleRunnerRankTarget::Runtime =>",
             "if producer_claim.blocks_runtime()",
@@ -3792,11 +3826,14 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
             "activated.consume_prepared_ordinary_ingress_turn(",
             "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
             "LifecycleV2IngressDrainDispositionV1::retry_before_producer(",
-            "PreTimeoutIngress::ExactPrepareQc(prepared)",
+            "PreTimeoutIngress::ExactPrepareProgress(prepared)",
             "activated.consume_prepared_ordinary_ingress_turn(",
             "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
+            "activated.with_runner_runtime(",
             "executor.step_pre_timeout_locked_prepare_qc_once(",
-            "if advanced",
+            "EffectExecutorStep::Idle",
+            "EffectExecutorStep::Advanced",
+            "reconcile_executor_locked_body(executor, services)",
             "LifecycleV2IngressDrainDispositionV1::retry_before_producer(",
             "advance_executor(receiver, owner, executor, services, 1)",
         ),
@@ -3886,10 +3923,11 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
             observed = _token_sequence_count(
                 height_driver_tokens, rust_code_tokens(token)
             )
-            if observed != 2:
+            if observed != 3:
                 errors.append(
                     f"{paths['height_driver']}:{lifecycle_height_driver.line}: "
-                    "the post-Apply and ordinary Ready branches must each retain "
+                    "the terminal-finalization, post-Apply, and ordinary Ready "
+                    "branches must each retain "
                     f"{token!r}; found {observed} total occurrence(s)"
                 )
     if lifecycle_height_driver is not None:
@@ -3921,8 +3959,11 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         "pre-drain lane-only auxiliary-runtime barrier",
         (
             "let lane_only_completion_barrier = producer_claim.blocks_runtime()",
-            "if lane_only_completion_barrier",
+            "if let Some(cut) = terminal_finalization_cut.as_ref()",
+            "retry_decided_lane_recovery_exact_output(",
+            "else if lane_only_completion_barrier",
             "if producer_claim.permits_decided_lane_recovery_ingress()",
+            "if producer_claim.permits_open_decided_lane_recovery_ingress()",
             "drain_decided_lane_recovery_ingress(",
             "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
             "drain_blocked_ordinary_lane_local_ingress(",
@@ -3934,7 +3975,8 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
             "dispatch_lane_work_effects(",
             "else",
             "broadcast_npos_beacon_messages(",
-            "let discovery_was_outstanding = if lane_only_completion_barrier",
+            "let discovery_was_outstanding = if terminal_finalization_fenced",
+            "else if lane_only_completion_barrier",
             "block_sync_request.is_some()",
             "retry_exact_output_and_apply_sidecar_admissions(",
             "drain_lifecycle_v2_ingress(",
@@ -3945,7 +3987,8 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         lifecycle_live_loop,
         "post-reconciliation blocked ordinary lane-local progress",
         (
-            "let discovery_was_outstanding = if lane_only_completion_barrier",
+            "let discovery_was_outstanding = if terminal_finalization_fenced",
+            "else if lane_only_completion_barrier",
             "let directive = reconcile_executor_locked_body(executor, services)?",
             "local_proposal.state.reconcile(LocalProposalOwner::from(directive))",
             "lane_work.retain_merge_sidecars_for_global_view(",
@@ -4023,7 +4066,8 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         (
             "producer_claim = drain_disposition.producer_claim()",
             "if drain_disposition.requires_yield()",
-            "if drain_disposition.terminal_settlement_stops_runtime()",
+            "let (ready_to_finish, executor_slice) = if terminal_finalization_fenced",
+            "drain_disposition.terminal_settlement_stops_runtime()",
             "executor.ready_to_finish()",
             "AdvanceExecutorSliceOutcomeV1::Idle",
             "else",
@@ -4034,12 +4078,12 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
             "let directive = reconcile_executor_locked_body(executor, services)",
             "match executor_slice",
             "AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary => {}",
-            "let apply_terminal_settled = producer_claim.apply_terminal_settled()",
-            "if apply_terminal_settled && !ready_to_finish",
+            "let terminal_planning_fenced = terminal_finalization_fenced || producer_claim.apply_terminal_settled()",
+            "if terminal_planning_fenced && !ready_to_finish",
             "close_admission_for_restart()",
-            "let producer_turn = if apply_terminal_settled",
+            "let producer_turn = if terminal_planning_fenced",
             "None",
-            "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some())",
+            "if !terminal_planning_fenced && (!ready_to_finish || producer_turn.is_some())",
             "schedule_local_proposal(",
         ),
     )
@@ -4345,7 +4389,8 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         lifecycle_loop,
         "sealed non-Pending lifecycle startup and activation",
         (
-            "V2BodyStore::open_with_policy(",
+            "V2BodyStoreCapacity::new(",
+            "V2BodyStore::open_with_policy_and_capacity(",
             ".into_quarantined_recovered_startup()",
             "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry(",
             ".authenticate_final_wal_startup_authority()",
@@ -4381,7 +4426,7 @@ executor.acknowledge_runner_decision_cleanup(
 """,
         "each ordinary reconciliation point must retire the local proposal and losing lane sidecars before acknowledging runner Decision cleanup",
         errors,
-        count=3,
+        count=2,
     )
     require_order(
         "lifecycle_run_inner",
@@ -4465,18 +4510,20 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         lifecycle_active,
         "coordinator ProducerTurn claim, attempt, and durable settlement",
         (
-            "let (ready_to_finish, executor_slice) = if drain_disposition.terminal_settlement_stops_runtime()",
-            "let apply_terminal_settled = producer_claim.apply_terminal_settled()",
-            "if apply_terminal_settled && !ready_to_finish",
-            "let producer_turn = if apply_terminal_settled",
+            "let (ready_to_finish, executor_slice) = if terminal_finalization_fenced",
+            "drain_disposition.terminal_settlement_stops_runtime()",
+            "let terminal_planning_fenced = terminal_finalization_fenced || producer_claim.apply_terminal_settled()",
+            "if terminal_planning_fenced && !ready_to_finish",
+            "let producer_turn = if terminal_planning_fenced",
             "match activated.claim_producer_turn_for_local_proposal(&mut active_runner)",
-            "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some())",
+            "if !terminal_planning_fenced && (!ready_to_finish || producer_turn.is_some())",
             "schedule_local_proposal(",
             "dispatch_lane_work_effects(",
             "if let Some(claimed) = producer_turn",
             "claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner))",
             "settle_producer_turn_after_local_proposal(&mut active_runner, attempted)",
-            "let finalization_ready = ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner)",
+            "let finalization_ready = if ready_to_finish",
+            "activated.ready_for_finalized_rollover(&mut active_runner)",
             "finalize_lifecycle_height(",
         ),
     )
@@ -4760,922 +4807,13 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         ),
     )
 
-    pending_source = sources["pending_kura"]
-    pending_replay_types_start = pending_source.find(
-        "pub(crate) struct PendingKuraRecoveredAdapterStartupV1"
-    )
-    pending_replay_types_end = pending_source.find(
-        "/// Move-only exact validation marker withheld from ordinary reducer replay.",
-        pending_replay_types_start,
-    )
-    pending_replay_types = (
-        pending_source[pending_replay_types_start:pending_replay_types_end]
-        if pending_replay_types_start >= 0
-        and pending_replay_types_end > pending_replay_types_start
-        else ""
-    )
-    pending_replay_type_tokens = rust_code_tokens(pending_replay_types)
-    for required in (
-        "startup: RecoveredAdapterStartup",
-        "expected: crate::sumeragi::v2_recovery::PendingKuraApply",
-        "startup: AuthenticatedRecoveredAdapterStartup",
-        "replay: RecoveredPendingKuraApplyReplayV1",
-        "pub(in crate::sumeragi) struct RecoveredPendingKuraApplyReplayV1",
-        "fetch: RecoveredWalDecisionFetch",
-        "pub(in crate::sumeragi) struct PreparedRecoveredPendingKuraApplyReplayV1",
-        "wal_identity: RecoveredWalFrameIdentity",
-        "replay_evidence: RecoveredWalDecisionFetchReplayEvidenceV1",
-        "effect: AdapterEffect",
-        "verified: VerifiedHeightContext",
-        "deferred_validated_marker: Option<DeferredPendingKuraValidatedMarkerV1>",
-    ):
-        if not _token_sequence_count(
-            pending_replay_type_tokens, rust_code_tokens(required)
-        ):
-            errors.append(
-                f"{paths['pending_kura']}: opaque pending-Kura replay types "
-                f"omit {required!r}"
-            )
-    for forbidden in (
-        "#[derive(Clone)]",
-        "derive(Copy)",
-        "pub startup:",
-        "pub expected:",
-        "pub replay:",
-        "pub fetch:",
-        "pub verified:",
-        "pub wal_identity:",
-        "pub replay_evidence:",
-        "pub effect:",
-        "pub genesis:",
-        "fn into_parts(",
-        "fn effect(",
-        "fn fetch(",
-    ):
-        if forbidden in pending_replay_types:
-            errors.append(
-                f"{paths['pending_kura']}: opaque pending-Kura replay types "
-                f"expose forbidden surface {forbidden!r}"
-            )
-
-    pending_marker_types_start = pending_source.find(
-        "pub(crate) struct DeferredPendingKuraValidatedMarkerV1"
-    )
-    pending_marker_types_end = pending_source.find(
-        "impl InstalledPendingKuraApplyV1", pending_marker_types_start
-    )
-    pending_marker_types = (
-        pending_source[pending_marker_types_start:pending_marker_types_end]
-        if pending_marker_types_start >= 0
-        and pending_marker_types_end > pending_marker_types_start
-        else ""
-    )
-    pending_marker_type_tokens = rust_code_tokens(pending_marker_types)
-    for required in (
-        "pub(crate) struct DeferredPendingKuraValidatedMarkerV1",
-        "pub(in crate::sumeragi) struct PreparedPendingKuraValidatedApplyV1<'a>",
-        "prepared: super::PreparedDirectValidationSucceededApply<'a>",
-        "child_ownership: crate::sumeragi::v2_runtime::RuntimeEffectOwnership",
-        "_marker: DeferredPendingKuraValidatedMarkerV1",
-        "pub(crate) struct PendingKuraValidatedApplySuccessorV1",
-        "effect: AdapterEffect",
-        "ownership: crate::sumeragi::v2_runtime::RuntimeEffectOwnership",
-        "pub(in crate::sumeragi) struct InstalledPendingKuraApplyV1",
-        "genesis: Option<crate::sumeragi::v2_effects::VerifiedPendingGenesisNexusAmxContext>",
-    ):
-        if not _token_sequence_count(
-            pending_marker_type_tokens, rust_code_tokens(required)
-        ):
-            errors.append(
-                f"{paths['pending_kura']}: move-only pending-Kura marker/child "
-                f"types omit {required!r}"
-            )
-    for forbidden in (
-        "fn into_parts(",
-        "pub effect:",
-        "pub(crate) effect:",
-        "pub(in crate::sumeragi) effect:",
-        "pub(crate) child_ownership:",
-        "pub(in crate::sumeragi) child_ownership:",
-        "pub(crate) _marker:",
-        "pub(in crate::sumeragi) _marker:",
-    ):
-        if _token_sequence_count(
-            pending_marker_type_tokens, rust_code_tokens(forbidden)
-        ):
-            errors.append(
-                f"{paths['pending_kura']}: move-only pending-Kura marker/child "
-                f"types expose forbidden surface {forbidden!r}"
-            )
-    bind_pending = item("pending_kura", "bind_pending_kura_apply")
-    require_order(
-        "pending_kura",
-        bind_pending,
-        "pending-Kura startup context binding",
-        (
-            "expected.context_id() != self.adapter.wire_context.id()",
-            "expected.height() != self.adapter.wire_context.height",
-            "Err((AdapterError::RecoveredPendingKuraApplyMismatch, self))",
-            "Ok(PendingKuraRecoveredAdapterStartupV1 { startup: self, expected, })",
-        ),
-    )
-    pending_auth = item(
-        "pending_kura", "authenticate_final_wal_startup_authority"
-    )
-    require_order(
-        "pending_kura",
-        pending_auth,
-        "pending-Kura Decision-Fetch ownership transfer into storage-only startup",
-        (
-            "startup.authenticate_final_wal_startup_authority()",
-            "let RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) = authority",
-            "if !effects.is_empty()",
-            "AdapterEffect::FetchBody { subject, .. } if subject.block_hash == expected.block_hash()",
-            "authority: RecoveredWalStartupAuthorityV1::None",
-            "replay: RecoveredPendingKuraApplyReplayV1 { expected, fetch }",
-        ),
-    )
-    pending_runtime = item("pending_kura", "into_serialized_runtime")
-    require_order(
-        "pending_kura",
-        pending_runtime,
-        "pending-Kura exact Fetch ownership roundtrip through runtime startup",
-        (
-            "let pending = pending_kura_apply",
-            "let RecoveredPendingKuraApplyReplayV1 { expected, fetch } = replay",
-            "let RecoveredWalDecisionFetch { wal_identity, replay_evidence, effect, } = fetch",
-            "replay_evidence.exactly_matches_recovered_decision_fetch",
-            "Ok((expected, verified, wal_identity, replay_evidence, effect))",
-            ".transpose()?",
-            "let (startup_effects, pending) = match pending",
-            "vec![effect]",
-            "SerializedV2Runtime::new_with_lifecycle_ordinals(",
-            "adapter, startup_effects,",
-            "returned_effects.len() == 1",
-            "returned_effects.pop()",
-            "PreparedRecoveredPendingKuraApplyReplayV1",
-            "deferred_validated_marker: None",
-            "Ok((runtime, replay, local_proposal_attempt))",
-        ),
-    )
-    pending_attach = item("pending_kura", "with_pending_kura_apply_replay")
-    require_order(
-        "pending_kura",
-        pending_attach,
-        "pending-Kura pristine storage-only startup attachment",
-        (
-            "ProductionLifecycleAdapterStartupStateV1::Recovered {",
-            "leader_wire_launch_prepared: false",
-            "if effects.is_empty() && pending_kura_apply.is_none()",
-            "*pending_kura_apply = Some(replay)",
-            "ProductionLifecycleAdapterStartupStateV1::Recovered { .. }",
-            "panic!(",
-        ),
-    )
-
-    pending_marker_defer = item(
-        "pending_kura", "classify_and_defer_validated_marker"
-    )
-    require_order(
-        "pending_kura",
-        pending_marker_defer,
-        "pending-Kura validated-marker deferral",
-        (
-            "replay_evidence.exactly_matches_recovered_decision_fetch(",
-            "if key != expected_key",
-            "if self.deferred_validated_marker.is_some()",
-            "self.expected.context_id() != context.id()",
-            "self.expected.height() != context.height",
-            "self.expected.block_hash() != subject.block_hash",
-            "certificate.phase != crate::sumeragi::v2::wire::GlobalPhase::Commit",
-            "certificate.proposal_round != *round",
-            "certificate.subject != *subject",
-            "certificate.validate(context).is_err()",
-            "manifest.validate(context).is_err()",
-            "manifest.round != *round",
-            "manifest.subject != *subject",
-            "advertised_manifest.as_ref()",
-            "durable.context_id() != context.id()",
-            "durable.round() != *round",
-            "durable.subject() != *subject",
-            "durable.manifest_hash() != iroha_crypto::HashOf::new(manifest)",
-            "validated.durable() != durable",
-            "validated.execution_commitment() != certificate.execution_commitment",
-            "self.deferred_validated_marker = Some(DeferredPendingKuraValidatedMarkerV1",
-        ),
-    )
-    pending_marker_exact = item("pending_kura", "exactly_matches_recovery")
-    require_order(
-        "pending_kura",
-        pending_marker_exact,
-        "pending-Kura exact deferred marker",
-        (
-            "self.tag == replay_tag",
-            "self.manifest_hash == iroha_crypto::HashOf::new(manifest)",
-            "self.validated.durable() == &self.durable",
-            "self.certificate.proposal_round == self.round",
-            "self.certificate.subject == self.subject",
-            "self.certificate.execution_commitment == self.validated.execution_commitment()",
-            "self.certificate.validate(context).is_ok()",
-        ),
-    )
-    pending_marker_prepare = item("pending_kura", "prepare_apply")
-    require_order(
-        "pending_kura",
-        pending_marker_prepare,
-        "pending-Kura marker-owned direct Validate-to-Apply preview",
-        (
-            "let AdapterEffect::ValidateBody",
-            "if *tag != self.tag || *round != self.round || *subject != self.subject",
-            "ownership.binds_durable_decision_authority(",
-            "self.certificate.round",
-            "self.certificate.proposal_round",
-            "self.subject",
-            "self.certificate.execution_commitment",
-            "ownership.exact_pending_adapter_effect_binding(predecessor)",
-            "adapter.prepare_direct_validation_succeeded(",
-            "DirectValidationSucceededPreparation::Apply(prepared)",
-            "validate_pending.project_validate_apply_successor(predecessor, &apply_effect)",
-            "ownership.rebind_as_inherited_adapter_effect(&apply_effect)",
-            "PreparedPendingKuraValidatedApplyV1",
-        ),
-    )
-    reject_tokens(
-        "pending_kura",
-        pending_marker_prepare,
-        "pending-Kura marker-owned direct Validate-to-Apply preview",
-        (
-            "reducer::Event::ValidationCompleted",
-            "periodic_timer",
-        ),
-    )
-    pending_marker_commit = item("pending_kura", "commit")
-    require_order(
-        "pending_kura",
-        pending_marker_commit,
-        "pending-Kura deferred validation commit",
-        (
-            "let super::PreparedDirectValidationSucceededApply",
-            "adapter.reducer = next_reducer",
-            "adapter.registry = next_registry",
-            "adapter.reducer_fence_generation = next_fence_generation",
-            "PendingKuraValidatedApplySuccessorV1 { effect: apply_effect, ownership: child_ownership, }",
-        ),
-    )
-    pending_child_release = item("pending_kura", "consume_for_executor")
-    require_order(
-        "pending_kura",
-        pending_child_release,
-        "pending-Kura executor-only Apply child release",
-        (
-            "PendingKuraApplySuccessorExecutorPermitV1",
-            "(self.effect, self.ownership)",
-        ),
-    )
-
-    pending_install = item("pending_kura", "install")
-    require_order(
-        "pending_kura",
-        pending_install,
-        "pending-Kura marker-verified direct pipeline install",
-        (
-            "let Some(deferred_validated_marker) = deferred_validated_marker",
-            "executor.context() != verified.context()",
-            "replay_evidence.exactly_matches_recovered_decision_fetch",
-            "let effects = vec![effect]",
-            "executor.verify_pending_kura_apply_replay( expected, &effects, deferred_validated_marker, )?",
-            "executor.consume_pending_tip_recovery_effects(effects, services)?",
-            "Ok(InstalledPendingKuraApplyV1 { expected, genesis })",
-        ),
-    )
-    reject_tokens(
-        "pending_kura",
-        pending_install,
-        "pending-Kura marker-aware verification-before-dispatch install",
-        ("executor.verify_pending_kura_apply_replay_unchecked(",),
-    )
-    adapter_source = sources["adapter"]
-    decision_fetch_start = adapter_source.find(
-        "pub(crate) struct RecoveredWalDecisionFetch"
-    )
-    decision_fetch_end = adapter_source.find(
-        "impl RecoveredWalControlSign", decision_fetch_start
-    )
-    decision_fetch_declaration = (
-        adapter_source[decision_fetch_start:decision_fetch_end]
-        if decision_fetch_start >= 0 and decision_fetch_end > decision_fetch_start
-        else ""
-    )
-    decision_fetch_tokens = rust_code_tokens(decision_fetch_declaration)
-    for required in (
-        "pub(crate) struct RecoveredWalDecisionFetch",
-        "wal_identity: RecoveredWalFrameIdentity",
-        "replay_evidence: RecoveredWalDecisionFetchReplayEvidenceV1",
-        "effect: AdapterEffect",
-    ):
-        if not _token_sequence_count(
-            decision_fetch_tokens, rust_code_tokens(required)
-        ):
-            errors.append(
-                f"{paths['adapter']}: move-only recovered Decision Fetch "
-                f"declaration omits {required!r}"
-            )
-    for forbidden in (
-        "derive(Clone)",
-        "derive(Copy)",
-        "pub wal_identity:",
-        "pub replay_evidence:",
-        "pub effect:",
-    ):
-        if _token_sequence_count(
-            decision_fetch_tokens, rust_code_tokens(forbidden)
-        ):
-            errors.append(
-                f"{paths['adapter']}: move-only recovered Decision Fetch "
-                f"exposes forbidden surface {forbidden!r}"
-            )
-
-    pending_owner = item("coordinator_support", "with_pending_kura_apply_replay")
-    require_order(
-        "coordinator_support",
-        pending_owner,
-        "storage-only pending-Kura replay attachment",
-        (
-            "self.registry.registry().exact_recovered_decision_apply_ready_ordinal(&self.coordinator)",
-            ".ok_or(",
-            "RecoveredPendingKuraApplyCarrierPermitV1 {",
-            "lifecycle_ordinal,",
-            "replay.bind_recovered_apply_carrier(apply_carrier)",
-            "self.adapter_startup.take()",
-            "self.adapter_startup = Some(startup.with_pending_kura_apply_replay(replay))",
-            "self",
-        ),
-    )
-    pending_factory = item(
-        "pending_kura", "open_production_lifecycle_owner_v1"
-    )
-    require_order(
-        "pending_kura",
-        pending_factory,
-        "recovered Decision-Apply pending-Kura owner factory",
-        (
-            "startup.open_production_lifecycle_owner_v1(",
-            "owner.with_pending_kura_apply_replay(replay)",
-        ),
-    )
-    launched_pending_install = item("pending_lifecycle", "install_pending_kura_apply")
-    require_order(
-        "pending_lifecycle",
-        launched_pending_install,
-        "fail-stop pending-Kura preactivation install",
-        (
-            "self.pending_kura_apply_replay.take()",
-            "self.services.lifecycle_output_guard()",
-            "super::preactivation::missing_pending_kura_replay(output_guard.as_ref(),)",
-            "self.with_runner_setup(runner",
-            "replay.install(executor, services)",
-            "PendingKuraProductionLifecycleV1 { installed, launched: self, }",
-        ),
-    )
-    pending_apply_startup = item(
-        "effects", "verify_pending_kura_apply_replay"
-    )
-    require_order(
-        "effects",
-        pending_apply_startup,
-        "pending-Kura replay verification with deferred marker",
-        (
-            "self.ensure_open()?",
-            "self.pending_tip_recovery.is_some()",
-            "let decision = self.runtime.replayed_decision_key()",
-            "let [ AdapterEffect::FetchBody",
-            "let owner_tag = self.current_tag()",
-            "if *tag != owner_tag",
-            "let expected_sources = self.frozen_archive_sources()",
-            "self.runtime.verify_certificate(&self.context, certificate)",
-            "let (genesis_context, evidence) = verify_pending_kura_apply_parts_with_marker(",
-            "deferred_validated_marker",
-            "if evidence.durable_round() != *round",
-            "self.pending_tip_recovery = Some(evidence)",
-        ),
-    )
-    evidence_source = sources["effects"]
-    evidence_start = evidence_source.find(
-        "pub(crate) struct PendingKuraApplyRecoveryEvidence"
-    )
-    evidence_end = evidence_source.find(
-        "impl PendingKuraApplyRecoveryEvidence", evidence_start
-    )
-    evidence_declaration = (
-        evidence_source[evidence_start:evidence_end]
-        if evidence_start >= 0 and evidence_end > evidence_start
-        else ""
-    )
-    evidence_tokens = rust_code_tokens(evidence_declaration)
-    for required in (
-        "pub(crate) struct PendingKuraApplyRecoveryEvidence",
-        "deferred_validated_marker: Option<super::v2::DeferredPendingKuraValidatedMarkerV1>",
-        "stage: PendingKuraApplyRecoveryStage",
-    ):
-        if not _token_sequence_count(evidence_tokens, rust_code_tokens(required)):
-            errors.append(
-                f"{paths['effects']}: direct pending-Kura evidence omits {required!r}"
-            )
-
-    evidence_impl_end = evidence_source.find(
-        "/// Explicit bounds for outstanding effect work", evidence_end
-    )
-    evidence_impl = (
-        evidence_source[evidence_end:evidence_impl_end]
-        if evidence_end >= 0 and evidence_impl_end > evidence_end
-        else ""
-    )
-    evidence_impl_tokens = rust_code_tokens(evidence_impl)
-    for required in (
-        "PendingKuraApplyRecoveryStage::CertifiedFetch | PendingKuraApplyRecoveryStage::DurableStore | PendingKuraApplyRecoveryStage::DeterministicValidation",
-        "marker.exactly_matches_recovery(",
-        "PendingKuraApplyRecoveryStage::Apply | PendingKuraApplyRecoveryStage::ApplicationDispatched | PendingKuraApplyRecoveryStage::Completed",
-        "self.deferred_validated_marker.is_none()",
-        "self.deferred_validated_marker.take()",
-        "self.deferred_validated_marker = Some(marker)",
-    ):
-        if not _token_sequence_count(evidence_impl_tokens, rust_code_tokens(required)):
-            errors.append(
-                f"{paths['effects']}: pending-Kura evidence marker lifecycle "
-                f"omits {required!r}"
-            )
-
-    pending_runtime_prepare = item(
-        "runtime", "prepare_pending_kura_validated_apply"
-    )
-    require_order(
-        "runtime",
-        pending_runtime_prepare,
-        "pending-Kura no-clock marker preparation",
-        (
-            "self.fail_closed",
-            "self.clocks_armed",
-            "self.ingress.len() != 0",
-            "self.pending_effect_ownership.is_some()",
-            "self.last_scheduler_ownership.is_some()",
-            "self.pending_leader_wire_terminals.is_empty()",
-            "marker.prepare_apply(&mut self.driver, predecessor, ownership)",
-        ),
-    )
-
-    default_runtime_commit_candidates = tuple(
-        rust_item
-        for rust_item in rust_items(
-            sources["effects"], "commit_pending_kura_validated_apply"
-        )
-        if rust_item.brace_context
-        == (("pub", "(", "crate", ")", "trait", "EffectRuntime"),)
-    )
-    if len(default_runtime_commit_candidates) != 1:
-        errors.append(
-            f"{paths['effects']}: pending-Kura marker commit must retain one "
-            "EffectRuntime default; found "
-            f"{len(default_runtime_commit_candidates)}"
-        )
-        default_runtime_commit = None
-    else:
-        default_runtime_commit = default_runtime_commit_candidates[0]
-    require_order(
-        "effects",
-        default_runtime_commit,
-        "generic runtime pending-Kura marker fail-closed default",
-        (
-            "Err((",
-            "marker",
-            '"runtime cannot commit a deferred pending-Kura validation marker"',
-        ),
-    )
-
-    serialized_runtime_commit_candidates = tuple(
-        rust_item
-        for rust_item in rust_items(
-            sources["effects"], "commit_pending_kura_validated_apply"
-        )
-        if rust_item.brace_context
-        == (("impl", "EffectRuntime", "for", "SerializedV2Runtime"),)
-    )
-    if len(serialized_runtime_commit_candidates) != 1:
-        errors.append(
-            f"{paths['effects']}: pending-Kura marker commit must retain one "
-            "SerializedV2Runtime implementation; found "
-            f"{len(serialized_runtime_commit_candidates)}"
-        )
-        serialized_runtime_commit = None
-    else:
-        serialized_runtime_commit = serialized_runtime_commit_candidates[0]
-    require_order(
-        "effects",
-        serialized_runtime_commit,
-        "serialized pending-Kura marker commit",
-        (
-            "self.prepare_pending_kura_validated_apply(marker, predecessor, ownership)",
-            "Ok(prepared) => Ok(prepared.commit())",
-            "Err((marker, error)) => Err((marker, error.to_string()))",
-        ),
-    )
-
-    pending_validate_child = item("effects", "validate_body")
-    require_order(
-        "effects",
-        pending_validate_child,
-        "pending-Kura Validate exact Apply child",
-        (
-            "recovery.stage() != PendingKuraApplyRecoveryStage::DeterministicValidation",
-            "recovery.replay_tag() != tag",
-            "recovery.durable_round() != round",
-            "recovery.durable_subject() != subject",
-            "recovery.durable_receipt() != &receipt",
-            "self.ensure_pending_slot()?",
-            "let _next_apply_work = self.plan_work_id()?",
-            "take_deferred_validated_marker()?",
-            "commit_pending_kura_validated_apply(marker, &effect, &ownership)",
-            "restore_deferred_validated_marker(marker)",
-            "return Ok(Some(successor))",
-        ),
-    )
-
-    pending_consume_child = item("effects", "consume_one")
-    require_order(
-        "effects",
-        pending_consume_child,
-        "pending-Kura stage-before-child dispatch",
-        (
-            "result?",
-            "if let Some(stage) = recovery_transition",
-            ".stage = stage",
-            "if let Some(successor) = pending_kura_successor",
-            "PendingKuraApplySuccessorExecutorPermitV1::new()",
-            "self.consume_one(effect, ownership, services)",
-            "EffectExecutorError::Contract(format!(",
-        ),
-    )
-    reject_tokens(
-        "effects",
-        pending_consume_child,
-        "pending-Kura stage-before-child dispatch",
-        ("periodic_timer",),
-    )
-
-    pending_recovery_step = item("effects", "step_pending_tip_recovery")
-    require_order(
-        "effects",
-        pending_recovery_step,
-        "pending-Kura exact local stage consumer",
-        (
-            "self.finish_runtime_step_reconciliation(services)",
-            "RuntimeStep::Idle",
-            "RuntimeStep::Advanced(effects)",
-            "self.consume_pending_tip_recovery_effects(effects, services)?",
-            "PendingTipRecoveryAttemptResult::Advanced",
-            "self.publish_status(services)",
-            "EffectExecutorStep::Advanced { effects: count }",
-        ),
-    )
-    reject_tokens(
-        "effects",
-        pending_recovery_step,
-        "stage-complete direct-marker pending-tip recovery step",
-        (
-            "self.consume_effects(effects, services)?",
-            "let stage = PendingKuraApplyRecoveryStage::Apply",
-            "stage != PendingKuraApplyRecoveryStage::Apply",
-        ),
-    )
-    apply_runtime_readiness = item(
-        "runtime", "lifecycle_decision_apply_dispatch_available"
-    )
-    require_order(
-        "runtime",
-        apply_runtime_readiness,
-        "lifecycle Apply runtime mutation-frontier readiness",
-        (
-            "!self.fail_closed",
-            "self.pending_effect_ownership.is_none()",
-            "self.last_scheduler_ownership.is_none()",
-            "self.pending_leader_wire_terminals.is_empty()",
-        ),
-    )
-    apply_dispatch_readiness = item(
-        "effects", "lifecycle_decision_apply_dispatch_available"
-    )
-    require_order(
-        "effects",
-        apply_dispatch_readiness,
-        "lifecycle Apply dispatch quiescence gate",
-        (
-            "self.ensure_open()?",
-            "let queued_ingress_is_allowed = self.pending_tip_recovery.is_none() || self.runtime.queued_commands() == 0",
-            "self.pending_work() == 0",
-            "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
-            "self.retained_effect_batch.is_none()",
-            "self.parked_effect_batch.is_none()",
-            "self.finality_completion.is_none()",
-            "queued_ingress_is_allowed",
-            "self.runtime.lifecycle_decision_apply_dispatch_available()",
-        ),
-    )
-    pending_apply_registry_projection = item(
-        "registry", "exactly_matches_pending_kura_recovery"
-    )
-    require_order(
-        "registry",
-        pending_apply_registry_projection,
-        "exact pending-Kura lifecycle Apply registry projection",
-        (
-            "self.key.matches_height_context(context)",
-            "self.task.as_ref().is_some_and(|task|",
-            "task.dispatch_key() == self.key",
-            "task.exact_tag() == tag",
-            "task.subject() == subject",
-            "task.certificate() == certificate",
-            "task.validated_receipt() == validated_receipt",
-        ),
-    )
-    pending_apply_executor_dispatch = item(
-        "effects", "prepare_lifecycle_decision_apply_executor_dispatch"
-    )
-    require_order(
-        "effects",
-        pending_apply_executor_dispatch,
-        "exact pending-Kura lifecycle Apply executor dispatch preflight",
-        (
-            "self.ensure_open()?",
-            "self.lifecycle_decision_apply_dispatch_available()?",
-            "evidence.stage() == PendingKuraApplyRecoveryStage::Apply",
-            "evidence.is_exact(&self.context)",
-            "evidence.replay_tag() == self.current_tag()",
-            "prepared.exactly_matches_pending_kura_recovery(",
-            "PendingKuraApplyDispatchTransitionV1 { evidence, last_result:",
-        ),
-    )
-    pending_apply_scheduler = item(
-        "scheduler", "dispatch_completion_with_runner_debt_and_required_ordinal"
-    )
-    require_order(
-        "scheduler",
-        pending_apply_scheduler,
-        "lifecycle Apply executor-readiness capacity probe",
-        (
-            "LifecycleWorkClass::Apply",
-            "let executor_available = executor.lifecycle_decision_apply_dispatch_available()",
-            "LifecycleCompletionCapacityProbeV1::Apply",
-            "executor_available",
-            "capture_lifecycle_completion_capacity_census(probes)",
-        ),
-    )
-    require_order(
-        "scheduler",
-        pending_apply_scheduler,
-        "required Ready ordinal scheduler selection",
-        (
-            "let plan = match required_ordinal",
-            "Some(ordinal) => self.coordinator.plan_turn_requiring_ordinal(inputs, ordinal)",
-            "None => self.coordinator.plan_turn(inputs)",
-            "let lease = match plan",
-        ),
-    )
-    require_order(
-        "scheduler",
-        pending_apply_scheduler,
-        "joined lifecycle Apply scheduler and worker publication",
-        (
-            "LifecycleWorkClass::Apply",
-            "prepare_lifecycle_decision_apply_dispatch(&self.coordinator, &lease)",
-            "reservation.preflight(&prepared)",
-            "executor.prepare_lifecycle_decision_apply_executor_dispatch(&prepared)",
-            "reservation.commit(prepared, executor_dispatch)",
-            "ProductionCompletionDispatchV1::ApplyQueued { ordinal }",
-        ),
-    )
-    apply_capacity_census = item(
-        "worker_services", "capture_lifecycle_completion_capacity_census"
-    )
-    require_order(
-        "worker_services",
-        apply_capacity_census,
-        "lifecycle Apply executor/worker capacity conjunction",
-        (
-            "LifecycleCompletionCapacityProbeV1::Apply { ordinal, key, executor_available, }",
-            "LifecycleCompletionPreparedCapacityV1::Apply { key, available: executor_available, }",
-            "LifecycleCompletionPreparedCapacityV1::Apply { key, available }",
-            "*available = *available && io.command_tx.queue.lifecycle_completion_worker_capacity(state)",
-        ),
-    )
-    pending_worker_commit_context = (
-        (
-            "impl",
-            "LifecycleDecisionApplyCapacityReservationV1",
-            "<",
-            "'",
-            "_",
-            ">",
-        ),
-    )
-    pending_worker_commits = tuple(
-        rust_item
-        for rust_item in rust_items(sources["worker"], "commit")
-        if rust_item.brace_context == pending_worker_commit_context
-    )
-    if len(pending_worker_commits) != 1:
-        errors.append(
-            f"{paths['worker']}: lifecycle Apply worker publication must "
-            "retain exactly one qualified reservation commit; found "
-            f"{len(pending_worker_commits)}"
-        )
-        pending_worker_commit = None
-    else:
-        pending_worker_commit = pending_worker_commits[0]
-    require_order(
-        "worker",
-        pending_worker_commit,
-        "lifecycle Apply worker publication before stage advance",
-        (
-            "let task = prepared.commit_for_worker()",
-            "state.lifecycle_decision_applies.insert(",
-            ".push_back(V2IoCommand::LifecycleDecisionApply(task))",
-            "executor_dispatch.commit_after_worker_dispatch()",
-            "drop(state)",
-            "self.queue.ready.notify_all()",
-            "operation.complete()",
-        ),
-    )
-    pending_dispatch_commit = item("effects", "commit_after_worker_dispatch")
-    require_order(
-        "effects",
-        pending_dispatch_commit,
-        "physical lifecycle Apply publication advances pending stage once",
-        (
-            "let Some(pending) = self.pending else { return; }",
-            "PendingKuraApplyRecoveryStage::Apply",
-            "pending.evidence.stage = PendingKuraApplyRecoveryStage::ApplicationDispatched",
-        ),
-    )
-    pending_apply_turn = item("pending_lifecycle", "drive_apply_recovery_turn")
-    _require_rust_item_context(
-        paths["pending_lifecycle"],
-        pending_apply_turn,
-        (("impl", "PendingKuraProductionLifecycleV1"),),
-        "unconditional lifecycle-owned pending-Kura Apply recovery turn",
+    _successor_recovery_pending_kura_tail_source_fidelity_errors(
+        paths,
+        sources,
         errors,
-        expected_attributes=("#[allow(dead_code, clippy::result_large_err)]",),
-    )
-    require_order(
-        "pending_lifecycle",
-        pending_apply_turn,
-        "bounded closed-ingress pending-Kura direct-pipeline turn",
-        (
-            "self.launched.pending_kura_apply_replay.is_some()",
-            "close_admission_for_restart()",
-            "self.launched.with_runner_setup(runner, |executor, services|",
-            "executor.pending_kura_apply_recovery_evidence()",
-            "PendingKuraApplyRecoveryStage::Completed",
-            "executor.ready_to_finish()",
-            "let completions = services.drain_completions(executor)?",
-            "for _ in 0..limit.max(1)",
-            "executor.step_pending_tip_recovery(Instant::now(), services)?",
-            "let evidence = executor.pending_kura_apply_recovery_evidence()",
-            "let attempts = executor.pending_tip_recovery_attempts()",
-            "if completions == 0 && effects == 0",
-            "ProductionPendingKuraApplyRecoveryProgressV1::Waiting",
-            "ProductionPendingKuraApplyRecoveryProgressV1::Advanced",
-        ),
-    )
-    reject_tokens(
-        "pending_lifecycle",
-        pending_apply_turn,
-        "closed-ingress pending-Kura direct-pipeline turn",
-        (
-            "arm_live_clocks(",
-            "schedule_local_proposal(",
-            "drive_ingress_turn(",
-            "drain_effects(limit)",
-        ),
-    )
-    pending_apply_finality = item(
-        "effects", "commit_lifecycle_decision_apply_finality"
-    )
-    require_order(
-        "effects",
-        pending_apply_finality,
-        "exact pending-Kura lifecycle Apply reaches Completed after finality ownership",
-        (
-            "finality.consume_for_executor(",
-            "evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched",
-            "evidence.is_exact(&self.context)",
-            "tag == evidence.replay_tag()",
-            "artifact.subject == evidence.commit_subject()",
-            "receipt.block_hash() == evidence.commit_subject().block_hash",
-            "self.finality_completion = Some(FinalityCompletion",
-            "FinalityCompletionOwner::LifecycleDecisionApply(dispatch_key)",
-            "evidence.stage = PendingKuraApplyRecoveryStage::Completed",
-        ),
-    )
-    pending_lane = item("pending_lifecycle", "prepare_lane_recovery")
-    require_order(
-        "pending_lifecycle",
-        pending_lane,
-        "affine pending-Kura lane preparation",
-        (
-            "let expected = self.installed.expected()",
-            "services.matches_installed_pending_kura_tip(expected)",
-            "let mut lane_work = operation(expected, executor, services)?",
-            "services.matches_lifecycle_lane_work(&lane_work)",
-            "lane_work.install_lane_drain_queue(Arc::clone(&queue))?",
-            "lane_work.activate_after_lane_drain_queue_install(&queue)?",
-            "let _ = self.installed.take_genesis()",
-            "PreparedPendingKuraLaneRecoveryV1 { installed, lane_work, launched, }",
-        ),
-    )
-    pending_activation = item("pending_lifecycle", "activate_no_clock")
-    require_order(
-        "pending_lifecycle",
-        pending_activation,
-        "pending-Kura no-clock status and ingress activation",
-        (
-            "launched.executor.lifecycle_live_clocks_are_unarmed()",
-            "launched.executor.ready_to_finish()",
-            "matches_installed_pending_kura_tip(installed.expected())",
-            "PendingKuraApplyRecoveryStage::Completed",
-            "begin_fail_stop_operation()",
-            "pending_kura_activation_status_snapshot()",
-            "completion_observer_activation.take()",
-            "activate_effect_completion_observer(observer)",
-            "runner.open_and_publish_recovered_height(",
-            "activation.complete()",
-            "PendingKuraActivatedProductionLifecycleV1 { runner_activation, installed, lane_work, launched, }",
-        ),
-    )
-    reject_tokens(
-        "pending_lifecycle",
-        pending_activation,
-        "pending-Kura no-clock status and ingress activation",
-        (
-            "arm_live_clocks(",
-            "successor_activation_status_snapshot(",
-            "schedule_local_proposal(",
-        ),
-    )
-    pending_finalization = item("pending_lifecycle", "into_finalized_rollover")
-    require_order(
-        "pending_lifecycle",
-        pending_finalization,
-        "pending-Kura affine lane finalization",
-        (
-            "self.launched.executor.ready_to_finish()",
-            "PendingKuraApplyRecoveryStage::Completed",
-            "matches_installed_pending_kura_tip(self.installed.expected())",
-            "matches_lifecycle_lane_work(&self.lane_work)",
-            "exactly_covers_finalization_work(&self.launched.owner.coordinator)",
-            "runner_activation.retire(&launched.leader_wire_ingress_binding.ingress)",
-            "drop(installed)",
-            "launched.leader_wire_ingress_binding.retire()",
-            "executor.into_finalized_parts()",
-            "finish_height(&receipt, &artifact)",
-            "FinalizedProductionLifecycleRolloverV1",
-            "lane_work",
-        ),
-    )
-    missing_pending = item("preactivation", "missing_pending_kura_replay")
-    require_order(
-        "preactivation",
-        missing_pending,
-        "missing pending-Kura replay fail-stop",
-        (
-            "output_guard.close_admission_for_restart()",
-            "ProductionPendingKuraApplyInstallErrorV1::MissingReplay",
-        ),
-    )
-    missing_pending_behavior = item(
-        "preactivation", "missing_pending_kura_replay_closes_canonical_output"
-    )
-    require_order(
-        "preactivation",
-        missing_pending_behavior,
-        "missing pending-Kura replay behavior",
-        (
-            "missing_pending_kura_replay(output_guard.as_ref())",
-            "ProductionPendingKuraApplyInstallErrorV1::MissingReplay",
-            "output_guard.restart_required()",
-        ),
-    )
-    activation = item("launch", "activate_with")
-    require_order(
-        "launch",
-        activation,
-        "ordinary activation rejects pending-Kura recovery",
-        (
-            "lifecycle_activation_recovery_blocker(",
-            "close_admission_for_restart()",
-            "let clock_activation = ProductionLifecycleLiveClockActivationPermitV1",
-            "self.executor.arm_live_clocks(clock_activation, now)",
-        ),
-    )
-    _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
-        paths, errors, item, require_order, reject_tokens, require_tokens
+        item,
+        require_order,
+        reject_tokens,
+        require_tokens,
     )
     return errors

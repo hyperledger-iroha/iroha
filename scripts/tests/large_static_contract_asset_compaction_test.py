@@ -14,10 +14,17 @@ VERSION = "IROHA_STATIC_CONTRACT_ROWS_V1"
 MINIMUM_NET_REDUCTION = 2_000
 # The compaction merge's two parents each contained 12,327 Rust lines in the
 # guarded files, and its postimage contained 10,313. The current test/schema
-# surface adds 1,206 lines to both sides of that honest comparison.
+# surface first added 1,206 lines to both sides of that honest comparison.
+# Current OpenAPI/Parliament hardening adds another 1,268 lines without
+# changing the three migrated contract assets or their reduction delta.
 ORIGINAL_PREIMAGE_RUST_LINES = 12_327
 ORIGINAL_POSTIMAGE_RUST_LINES = 10_313
-CURRENT_TEST_SURFACE_GROWTH_RUST_LINES = 1_206
+PREVIOUS_TEST_SURFACE_GROWTH_RUST_LINES = 1_206
+CURRENT_OPENAPI_SURFACE_GROWTH_RUST_LINES = 1_268
+CURRENT_TEST_SURFACE_GROWTH_RUST_LINES = (
+    PREVIOUS_TEST_SURFACE_GROWTH_RUST_LINES
+    + CURRENT_OPENAPI_SURFACE_GROWTH_RUST_LINES
+)
 BASELINE_RUST_LINES = ORIGINAL_PREIMAGE_RUST_LINES + CURRENT_TEST_SURFACE_GROWTH_RUST_LINES
 MAX_POSTIMAGE_RUST_LINES = BASELINE_RUST_LINES - MINIMUM_NET_REDUCTION
 SOURCE_PATHS = (
@@ -27,6 +34,13 @@ SOURCE_PATHS = (
     'crates/iroha_torii/src/openapi.rs',
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs',
 )
+SOURCE_LINE_LEDGER = {
+    'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 2_262,
+    'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': 841,
+    'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 1_544,
+    'crates/iroha_torii/src/openapi.rs': 5_465,
+    'crates/iroha_torii/src/openapi/tests/vpn_da.rs': 2_675,
+}
 ASSETS = {
     'cleanup': ('crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt', 'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs', 'sha3_256', 'CLEANUP_CONTRACT_ASSET_LEN', 'CLEANUP_CONTRACT_ASSET_SHA3_256'),
     'proof': ('crates/iroha_data_model/src/soracloud/tests/proof_schema_contracts_v1.txt', 'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs', 'sha256', 'PROOF_SCHEMA_CONTRACT_ASSET_LEN', 'PROOF_SCHEMA_CONTRACT_ASSET_SHA256'),
@@ -265,7 +279,7 @@ TEST_INVENTORY = {
         'fhe_input_admission_proof_validate_rejects_open_verify_envelope_drift',
 ),
     'crates/iroha_torii/src/openapi.rs': (
-        'generated_openapi_has_only_resolvable_component_schema_refs',
+        'openapi_authorities_have_only_resolvable_component_schema_refs',
         'package_openapi_authority_is_canonical_norito_json',
         'account_onboarding_current_state_openapi_is_one_closed_v1_observation',
         'connect_status_openapi_separates_session_and_operator_aggregate',
@@ -278,6 +292,7 @@ TEST_INVENTORY = {
         'authenticated_transaction_nullable_fields_are_required_and_nullable',
         'incoming_static_openapi_contracts_remain_bound_to_runtime_routes',
         'static_account_operations_publish_exact_auth_and_private_responses',
+        'compiled_private_cache_contract_follows_the_route_catalog',
         'musubi_provider_bundle_attestation_and_exact_release_contract_is_static',
         'static_authority_is_the_complete_catalog_projection_with_exact_effects',
         'sccp_schema_serialization_excludes_retired_and_secret_fields',
@@ -303,8 +318,10 @@ TEST_INVENTORY = {
         'musubi_crypto_text_schemas_do_not_impose_single_key_size_limits',
         'musubi_cursor_and_ordered_prefix_bounds_match_the_wire_types',
         'musubi_chunker_text_bounds_match_the_wire_type',
+        'multisig_propose_schema_exposes_optional_validation_fee_bindings_as_strings',
         'generated_operations_declare_tool_effects',
-        'retired_sumeragi_mutation_surfaces_are_absent',
+        'retired_sumeragi_vrf_surfaces_are_absent',
+        'validation_fee_plaintext_contracts_stay_retired_and_parliament_capabilities_are_exact',
         'pipeline_fastpq_recovery_documents_operator_auth_and_bounds',
         'signed_transaction_submission_documents_exact_preadmission_contract',
         'signed_transaction_reject_code_inventory_matches_runtime_metadata',
@@ -318,6 +335,8 @@ TEST_INVENTORY = {
         'zk_ivm_openapi_uses_compact_state_dependent_schemas',
         'retired_server_contract_deployment_paths_are_absent',
         'governance_mutation_openapi_is_typed_closed_and_secret_free',
+        'governance_digest_and_parliament_phase_schemas_are_exact',
+        'parliament_attempt_openapi_is_closed_authenticated_and_bounded',
         'governance_read_path_parameters_publish_exact_runtime_grammars',
         'subscription_mutations_publish_exact_unsigned_v1_draft_contract',
         'local_signing_openapi_contracts_are_closed_and_secret_free',
@@ -328,8 +347,8 @@ ATTRIBUTE_SIGNATURE = {
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 'a91e1c3bbf4e2512564f795b197544667aae798efb4c609a30f94853ddf9085d',
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': '8a61371f2409f09729a5ccfe5ea016c79d7f2168100feab501bd9b2c218263d0',
     'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 'd8bb84caecce3d9dc46322b7fba4c6510a53df96d4ad7ca6f45df4d8d218c471',
-    'crates/iroha_torii/src/openapi.rs': '7c96c772a9d233f5805054ad7142f05482e89ca6329261f8ae7fdaf8a989fe44',
-    'crates/iroha_torii/src/openapi/tests/vpn_da.rs': '4fed0cf78a5e0c5d97e2466b067521b039d34c3b1a457b80b96e836474b58a35',
+    'crates/iroha_torii/src/openapi.rs': '49410d0fda7e6e68efbf09c68614f7dfcb6bb33ce81e8906609c65328c129c90',
+    'crates/iroha_torii/src/openapi/tests/vpn_da.rs': '6117af48b2adb690add8256579bfdddda01db37bc04025e1b345aaa65acec8c0',
 }
 
 
@@ -489,7 +508,12 @@ class LargeStaticContractAssetTests(unittest.TestCase):
         self.assertGreaterEqual(combined.count("assert_eq!("), 300)
 
     def test_exact_rust_line_budget_and_cargo_lock_are_preserved(self) -> None:
-        postimage = sum(len((ROOT / path).read_text(encoding="utf-8").splitlines()) for path in SOURCE_PATHS)
+        line_ledger = {
+            path: len((ROOT / path).read_text(encoding="utf-8").splitlines())
+            for path in SOURCE_PATHS
+        }
+        self.assertEqual(line_ledger, SOURCE_LINE_LEDGER)
+        postimage = sum(line_ledger.values())
         self.assertLessEqual(postimage, MAX_POSTIMAGE_RUST_LINES)
         self.assertGreaterEqual(BASELINE_RUST_LINES - postimage, MINIMUM_NET_REDUCTION)
         self.assertLessEqual(
@@ -498,7 +522,7 @@ class LargeStaticContractAssetTests(unittest.TestCase):
         )
         self.assertEqual(
             hashlib.sha256((ROOT / "Cargo.lock").read_bytes()).hexdigest(),
-            "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b",
+            "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f",
         )
 
 

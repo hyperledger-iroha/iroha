@@ -27,6 +27,7 @@ macro_rules! volatile_summary_well_formed_body {
             && $summary.pending_prepare <= 1u64
             && $summary.pending_prepare <= $summary.known_prepare
             && $summary.known_prepare <= 3u64
+            && $summary.known_prepare - $summary.pending_prepare <= 2u64
             // Body work is sourced by a candidate, a pending certified body,
             // or the sole durable decision.  Two spare identities cover the
             // candidate/decision cases without trusting subject equality.

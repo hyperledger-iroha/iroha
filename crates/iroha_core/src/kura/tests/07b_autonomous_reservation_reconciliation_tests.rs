@@ -447,6 +447,8 @@ fn strict_reservation_classifier_rejects_symlinked_attempt_without_following_it(
         descriptor.lane_block_height,
         descriptor.proposal_height,
     );
+    fs::create_dir_all(attempt_path.parent().expect("attempt fixture parent"))
+        .expect("create symlinked-attempt fixture directory");
     let target_path = temp_dir.path().join("outside-autonomous-attempt");
     let target_bytes = b"must not be followed or changed";
     fs::write(&target_path, target_bytes).expect("write symlink target");
@@ -480,6 +482,8 @@ fn strict_reservation_classifier_rejects_oversized_certified_index_without_recov
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let (data_path, index_path) = Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
+    fs::create_dir_all(data_path.parent().expect("certified fixture parent"))
+        .expect("create oversized-certified-index fixture directory");
     let entries_len = (MAX_AUTONOMOUS_RESERVATION_CERTIFIED_INDEX_ENTRIES + 1)
         .checked_mul(PIPELINE_INDEX_ENTRY_SIZE)
         .expect("oversized certified index length");

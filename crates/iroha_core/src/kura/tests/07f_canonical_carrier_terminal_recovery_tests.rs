@@ -154,6 +154,9 @@ fn canonical_terminal_payload_for_test(
             Level::INFO,
             format!("canonical terminal carrier lane {salt}"),
         )])
+        .with_admission_intent(
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        )
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let entrypoint = TransactionEntrypoint::External(transaction);
 
@@ -449,13 +452,69 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
         .map(|lane| {
             let (_, _, template) =
                 autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
-            lifecycle_terminal_bound_payload_for_test(&template, height_context_id, &signer)
+            let incarnation_tag = format!(
+                "kura-terminal-outcome-incarnation:{}",
+                lane.lane_id.as_u32()
+            );
+            let lane_bound = rebind_autonomous_lane_payload_for_kura(
+                &template,
+                lane.lane_id,
+                lane.dataspace_id,
+                1,
+                incarnation_tag.as_bytes(),
+                &signer,
+            );
+            lifecycle_terminal_bound_payload_for_test(&lane_bound, height_context_id, &signer)
         })
         .collect::<Vec<_>>();
     let network_id = payloads[0].network_id;
     let epoch = payloads[0].epoch;
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("terminal-outcome Kura");
+    let initial_lane_config = RuntimeLaneConfig::default();
+    let incarnations = lanes
+        .iter()
+        .zip(&payloads)
+        .map(|(lane, payload)| {
+            (
+                lane.lane_id,
+                payload.origin_proposal.descriptor.lane_incarnation,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let initial_incarnations = BTreeMap::from([(LaneId::SINGLE, incarnations[&LaneId::SINGLE])]);
+    let activation_heights = lanes
+        .iter()
+        .map(|lane| (lane.lane_id, 0))
+        .collect::<BTreeMap<_, _>>();
+    let initial_activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+    let configured_catalog_hash = kura
+        .configured_lane_catalog_baseline()
+        .expect("read terminal-outcome configured catalog baseline")
+        .expect("terminal-outcome configured catalog baseline");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        initial_lane_config.primary(),
+        incarnations[&LaneId::SINGLE],
+        configured_catalog_hash,
+    )
+    .expect("anchor terminal-outcome primary geometry");
+    kura.apply_lane_geometry_transition(
+        &initial_lane_config,
+        &lane_config,
+        &initial_incarnations,
+        &incarnations,
+        &initial_activation_heights,
+        &activation_heights,
+        &BTreeSet::new(),
+    )
+    .expect("publish terminal-outcome secondary lane storage");
+    kura.mark_lane_geometry_catalog_published(
+        &lane_config,
+        &incarnations,
+        &activation_heights,
+        Some(configured_catalog_hash),
+    )
+    .expect("bind terminal-outcome configured geometry journal");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind terminal-outcome local peer");
     let generation = kura

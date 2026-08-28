@@ -539,12 +539,23 @@ native_amx_signing_guard_limits,
         lane_path,
         lane_source,
         """
-let merge_signing_guard = MergeSigningGuard::open_with_committed_frontier(
-    &kura.store_root(),
-    committed_merge_epoch,
-    state_height,
-    limits.merge_signing_guard_limits,
-)
+let merge_signing_guard = if voting_enabled {
+    let committed_merge_epoch = state
+        .merge_ledger()
+        .latest()
+        .map_or(0, |entry| entry.epoch_id);
+    Some(
+        MergeSigningGuard::open_with_committed_frontier(
+            &kura.store_root(),
+            committed_merge_epoch,
+            state_height,
+            limits.merge_signing_guard_limits,
+        )
+        .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?,
+    )
+} else {
+    None
+};
 """,
         "adapter opens the durable merge-signing journal with fingerprinted limits",
         errors,
@@ -665,10 +676,14 @@ Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limit
         kura_path,
         kura_items[kura_constructor],
         """
-let pending_control_sidecar_limits = PendingControlSidecarLimits::from_config(
-    sumeragi_limits,
-    &config.store_dir.resolve_relative_path(),
-)?;
+let pending_control_sidecar_limits = if config.init_mode == InitMode::Fast {
+    PendingControlSidecarLimits::default()
+} else {
+    PendingControlSidecarLimits::from_config(
+        sumeragi_limits,
+        &config.store_dir.resolve_relative_path(),
+    )?
+};
 """,
         "Kura validates pending-control limits before opening its store",
         errors,

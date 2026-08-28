@@ -3253,7 +3253,6 @@ impl Kura {
                 kura.repair_autonomous_lane_merge_bundles_on_startup()?;
                 kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
                 kura.refresh_v2_startup_replay_auxiliary_binding()?;
-                kura.validate_configured_kura_capacity_after_startup_recovery()?;
             } else {
                 warn!(
                     "Kura emergency Fast mode skipped canonical association, historical retained, lane, merge-carrier, reservation, and capacity recovery"
@@ -3261,22 +3260,9 @@ impl Kura {
             }
         }
         if config.init_mode == InitMode::Strict {
-            match kura.kura_disk_usage_bytes_with_total() {
-                Ok((enforced, total)) => {
-                    kura.disk_usage.store(enforced, Ordering::Relaxed);
-                    kura.disk_usage_initialized.store(true, Ordering::Relaxed);
-                    kura.disk_usage_total.store(total, Ordering::Relaxed);
-                    kura.disk_usage_total_initialized
-                        .store(true, Ordering::Relaxed);
-                    kura.disk_usage_total_last_refresh
-                        .store(Self::now_unix_secs(), Ordering::Relaxed);
-                }
-                Err(err) => warn!(
-                    ?err,
-                    path = %kura.store_root.display(),
-                    "failed to measure initial Kura disk usage"
-                ),
-            }
+            kura.validate_and_publish_configured_kura_capacity_after_startup_recovery(
+                !provisional_open,
+            )?;
         } else {
             warn!(
                 configured_limit = config.max_disk_usage_bytes.get(),
@@ -5566,13 +5552,7 @@ impl Kura {
         self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
         self.repair_autonomous_lane_merge_bundles_on_startup()?;
         self.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
-        self.validate_configured_kura_capacity_after_startup_recovery()?;
-        if let Err(err) = self.refresh_disk_usage_bytes() {
-            warn!(
-                ?err,
-                "failed to refresh disk usage after snapshot lane restore"
-            );
-        }
+        self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?;
         Ok(())
     }
     /// Restore snapshot lane storage at an exact committed transition height
@@ -5655,13 +5635,7 @@ impl Kura {
         self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
         self.repair_autonomous_lane_merge_bundles_on_startup()?;
         self.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
-        self.validate_configured_kura_capacity_after_startup_recovery()?;
-        if let Err(err) = self.refresh_disk_usage_bytes() {
-            warn!(
-                ?err,
-                "failed to refresh disk usage after journaled snapshot lane restore"
-            );
-        }
+        self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?;
         Ok(())
     }
     /// Validate lane storage topology changes that can fail without mutating Kura state.
@@ -11216,13 +11190,15 @@ impl Kura {
         self.retain_pending_certified_merge_entries_unlocked(|entry| {
             entry.merge_qc.carrier_height == carrier_height
                 && entry.merge_qc.carrier_parent_hash == carrier_parent_hash
-                && entry.merge_qc.view == view
+                && entry.merge_qc.view <= view
         })
     }
-    /// Remove pending certificates that can no longer be carried by the exact current round.
+    /// Remove pending certificates outside the current carrier lineage.
     ///
-    /// This cleanup runs before pending-count and aggregate-byte admission, so missed rounds
-    /// cannot permanently consume the bounded pending store.
+    /// Same-parent certificates from earlier views remain available to service already-durable
+    /// lifecycle Validate work. Exact-round selection still excludes them from a newer body, and
+    /// finalized-height cleanup bounds their lifetime. The pending-count and aggregate-byte limits
+    /// remain hard admission bounds across a view storm.
     pub(crate) fn prune_pending_certified_merge_entries_not_bound_to(
         &self,
         carrier_height: u64,
@@ -11239,20 +11215,27 @@ impl Kura {
             view,
         )
     }
-    /// At a locked carrier, retain only the exact full entry referenced by the
-    /// immutable body. With no reference, remove every losing sidecar for that
-    /// carrier height while leaving other heights untouched.
+    /// At a locked carrier, retain its same-parent history through the locked view.
+    ///
+    /// An earlier-view sidecar may still own a durable lifecycle Validate completion even after a
+    /// newer immutable body wins. It therefore remains serviceable until this height finalizes.
+    /// Future-view and wrong-parent sidecars at this height are impossible for the lock and are
+    /// removed, while other heights remain untouched.
     pub(crate) fn retain_pending_certified_merge_entry_for_locked_carrier(
         &self,
         carrier_height: u64,
-        reference: Option<&iroha_data_model::block::CertifiedMergeLedgerReference>,
+        carrier_parent_hash: Option<HashOf<BlockHeader>>,
+        locked_view: u64,
     ) -> Result<usize> {
         self.durable_mutation_authorized()?;
         let _guard = self.sidecar_lock.lock();
         self.reconcile_pending_merge_temp_files_unlocked()?;
         self.retain_pending_certified_merge_entries_unlocked(|entry| {
             entry.merge_qc.carrier_height != carrier_height
-                || reference.is_some_and(|reference| reference.matches_entry(entry))
+                || carrier_parent_hash.is_some_and(|carrier_parent_hash| {
+                    entry.merge_qc.carrier_parent_hash == carrier_parent_hash
+                        && entry.merge_qc.view <= locked_view
+                })
         })
     }
     /// Remove every pending merge sidecar whose carrier height is already
@@ -11275,7 +11258,7 @@ impl Kura {
     /// Returns an error for an oversized or conflicting sidecar, or when the
     /// atomic file publication cannot be completed. This method never prunes
     /// other carrier rounds; callers that own the active round must invoke the
-    /// explicit exact-round pruning API first.
+    /// explicit carrier-lineage pruning API first.
     pub(crate) fn persist_pending_certified_merge_entry(
         &self,
         entry: &MergeLedgerEntry,
@@ -25081,17 +25064,37 @@ impl Kura {
                 Some(pending_canonical_bytes),
             )?
         {
-            if autonomous.artifact.executable_payload.origin_proposal != artifact.proposal {
-                return Err(Self::invalid_lane_artifact_error(
-                    Self::autonomous_lane_block_latest_attempt_path_for_entry(
+            let autonomous_payload = &autonomous.artifact.executable_payload;
+            let same_full_proposal = autonomous_payload.origin_proposal == artifact.proposal;
+            if !same_full_proposal {
+                let role_disjoint_ordinary = authority.is_some()
+                    && autonomous.retirement.is_some()
+                    && !autonomous_certificate
+                    && self.active_certified_ordinary_is_canonical_hint_promotion_locked(
                         &entry,
-                        &self.store_root,
-                        lane_block_height,
-                    ),
-                    "certification proposal conflicts with the durable autonomous lane slot",
-                ));
-            }
-            if autonomous.retirement.is_some() {
+                        &autonomous_payload.origin_proposal,
+                        artifact,
+                    );
+                if !role_disjoint_ordinary {
+                    return Err(Self::invalid_lane_artifact_error(
+                        Self::autonomous_lane_block_latest_attempt_path_for_entry(
+                            &entry,
+                            &self.store_root,
+                            lane_block_height,
+                        ),
+                        "certification proposal conflicts with the durable autonomous lane slot",
+                    ));
+                }
+                self.require_retired_autonomous_payload_complete_release_locked(
+                    Some(pending_canonical_bytes),
+                    &entry,
+                    autonomous_payload,
+                    autonomous
+                        .retirement
+                        .as_ref()
+                        .expect("role-disjoint ordinary overlap checked a retired slot"),
+                )?;
+            } else if autonomous.retirement.is_some() {
                 return Err(Self::invalid_lane_artifact_error(
                     autonomous.view_state_path,
                     "durably retired autonomous lane slot cannot be certified",
@@ -31735,6 +31738,7 @@ impl Kura {
         retirement: &AutonomousLaneSlotRetirementV1,
         queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
         outcome: &AutonomousLifecycleTerminalOutcomeV1,
+        mut startup_capacity_cache: Option<&mut AutonomousReplicaClaimStartupCapacityCache>,
     ) -> Result<()> {
         let expected_source =
             AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
@@ -31849,6 +31853,13 @@ impl Kura {
             let current_bytes = Self::file_len_or_zero(&path)?;
             plan.push((path, current_bytes, Some(bytes)));
         }
+        // A fully sealed or authenticatedly superseded group is a true
+        // stutter. In particular, do not turn every Complete outcome seen by
+        // the startup pre-sweep into another global capacity-inventory and
+        // disk-usage scan.
+        if plan.iter().all(|(_, _, replacement)| replacement.is_none()) {
+            return Ok(());
+        }
         let capacity_path = self.store_root.join("blocks");
         let mut capacity = AutonomousClaimMutationPeak::default();
         for (path, current_bytes, replacement) in &plan {
@@ -31862,22 +31873,66 @@ impl Kura {
         let additional_peak_bytes = capacity
             .additional_peak_bytes()
             .map_err(|message| Self::invalid_lane_artifact_error(capacity_path.clone(), message))?;
-        self.validate_configured_autonomous_mutation_disk_peak_locked(
-            pending_canonical_bytes,
-            additional_peak_bytes,
-            false,
-            false,
-            &capacity_path,
-        )?;
+        if let Some(cache) = startup_capacity_cache.as_deref_mut() {
+            self.validate_autonomous_replica_claim_startup_disk_peak_locked(
+                cache,
+                pending_canonical_bytes,
+                additional_peak_bytes,
+                &capacity_path,
+            )?;
+        } else {
+            self.validate_configured_autonomous_mutation_disk_peak_locked(
+                pending_canonical_bytes,
+                additional_peak_bytes,
+                false,
+                false,
+                &capacity_path,
+            )?;
+        }
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        for (path, _, replacement) in plan {
+        let mut stable_before_bytes = 0_u64;
+        let mut stable_after_bytes = 0_u64;
+        for (path, expected_current_bytes, replacement) in plan {
             let Some(bytes) = replacement else {
                 continue;
             };
             let before = Self::file_len_or_zero(&path)?;
+            if before != expected_current_bytes {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "replica Complete claim changed after its capacity preflight",
+                ));
+            }
             self.write_atomic_synced_replace(&path, &bytes)?;
             let after = Self::file_len_or_zero(&path)?;
+            if after != u64::try_from(bytes.len())? {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "replica Complete claim replacement has an unexpected byte length",
+                ));
+            }
             self.update_disk_usage_delta(before, after);
+            stable_before_bytes = stable_before_bytes.checked_add(before).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    capacity_path.clone(),
+                    "replica Complete claim stable-byte total overflowed",
+                )
+            })?;
+            stable_after_bytes = stable_after_bytes.checked_add(after).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    capacity_path.clone(),
+                    "replica Complete claim stable-byte total overflowed",
+                )
+            })?;
+        }
+        if let Some(cache) = startup_capacity_cache.as_deref_mut() {
+            self.record_autonomous_replica_claim_startup_stable_delta_locked(
+                cache,
+                pending_canonical_bytes,
+                stable_before_bytes,
+                stable_after_bytes,
+                &capacity_path,
+            )?;
         }
         accounting_mutation.finish();
         Ok(())
@@ -31984,6 +32039,8 @@ impl Kura {
         };
         let retirement_hash = retirement.digest()?;
         let descriptor = &payload.origin_proposal.descriptor;
+        let mut newer_attempts =
+            BTreeMap::<(u64, u64, u64), AutonomousLaneBlockDurableRecord>::new();
         for entrypoint_hash in &payload.entrypoint_hashes {
             let path = Self::autonomous_lane_entrypoint_claim_path(
                 &self.store_root,
@@ -32034,22 +32091,33 @@ impl Kura {
                     "replica release claim is neither exact nor authenticatedly superseded",
                 ));
             }
-            let newer = self
-                .read_autonomous_lane_block_attempt_record_locked(
-                    entry,
-                    existing.lane_id,
-                    existing.lane_block_height,
-                    existing.proposal_height,
-                    existing.network_id,
-                    existing.epoch,
-                    None,
-                )?
-                .ok_or_else(|| {
-                    Self::invalid_lane_artifact_error(
-                        path.clone(),
-                        "superseding replica entrypoint claim lacks its durable attempt",
-                    )
-                })?;
+            let newer_key = (
+                existing.lane_block_height,
+                existing.proposal_height,
+                existing.epoch,
+            );
+            if !newer_attempts.contains_key(&newer_key) {
+                let newer = self
+                    .read_autonomous_lane_block_attempt_record_locked(
+                        entry,
+                        existing.lane_id,
+                        existing.lane_block_height,
+                        existing.proposal_height,
+                        existing.network_id,
+                        existing.epoch,
+                        None,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "superseding replica entrypoint claim lacks its durable attempt",
+                        )
+                    })?;
+                newer_attempts.insert(newer_key, newer);
+            }
+            let newer = newer_attempts
+                .get(&newer_key)
+                .expect("superseding replica attempt was cached");
             if !existing.owns_payload(&newer.artifact.executable_payload) {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
@@ -32379,8 +32447,9 @@ impl Kura {
     /// Durably close one exact autonomous lane-height slot before releasing its reservations.
     ///
     /// The supplied record must be the canonical identity derived from the already durable
-    /// payload. A certified slot cannot be retired, an exact retry is idempotent, and any
-    /// conflicting or stale-incarnation record fails closed.
+    /// payload. An autonomous/READY certificate cannot be retired; an exact canonical ordinary
+    /// carrier may coexist after the autonomous execution role loses. An exact retry is
+    /// idempotent, and any conflicting or stale-incarnation record fails closed.
     pub(crate) fn persist_autonomous_lane_slot_retirement(
         &self,
         retirement: &AutonomousLaneSlotRetirementV1,
@@ -32469,7 +32538,7 @@ impl Kura {
                 "conflicting autonomous lane slot retirement is already durable",
             ));
         }
-        if self
+        if let Some(certified) = self
             .read_active_certified_lane_block_artifact_from_paths_durability_attested_locked(
                 &entry,
                 retirement.lane_block_height,
@@ -32477,7 +32546,11 @@ impl Kura {
                 &certified_index_path,
                 true,
             )
-            .is_some()
+            && !self.active_certified_ordinary_is_canonical_hint_promotion_locked(
+                &entry,
+                &record.artifact.executable_payload.origin_proposal,
+                &certified,
+            )
         {
             return Err(Self::invalid_lane_artifact_error(
                 certified_data_path,
@@ -39840,6 +39913,96 @@ impl Kura {
             && ownership.lane_block_descriptor_validator_count == descriptor.validator_count
             && ownership.lane_block_descriptor_min_quorum == descriptor.min_quorum
             && ownership.qc_mode_tag == descriptor.qc_mode_tag
+    }
+    /// Prove that an ordinary certificate is the canonical hinted form of a
+    /// hint-neutral autonomous proposal that lost the execution role for its
+    /// global carrier.
+    ///
+    /// Callers hold `prune_lock -> canonical_chain_lock -> lane_geometry_lock
+    /// -> sidecar_lock`. The ordinary lane sidecar and canonical block body are
+    /// both required so a coincident proposal hash or an advisory hint alone
+    /// cannot alias the autonomous lane-height slot.
+    fn certified_ordinary_is_canonical_hint_promotion_locked(
+        &self,
+        autonomous_proposal: &LaneBlockProposalV1,
+        certified: &CertifiedLaneBlockArtifact,
+        lane_artifact: &LaneBlockArtifact,
+    ) -> bool {
+        let proposal = &certified.proposal;
+        let descriptor = &proposal.descriptor;
+        let Some(hint) = proposal.payload_block_hint else {
+            return false;
+        };
+        if certified.prepare_qc.payload_availability_qc.is_some()
+            || autonomous_proposal.payload_block_hint.is_some()
+            || !autonomous_proposal.same_consensus_identity(proposal)
+            || !Self::lane_block_artifact_matches_descriptor(&lane_artifact.ownership, descriptor)
+            || lane_artifact.ownership.proposal_height != hint.proposal_height
+            || lane_artifact.ownership.proposal_view != hint.proposal_view
+            || lane_artifact.proposal_block_hash != hint.proposal_block_hash
+            || !self.lane_block_artifact_is_canonical_locked(lane_artifact)
+        {
+            return false;
+        }
+        let Some(height) = usize::try_from(hint.proposal_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+        else {
+            return false;
+        };
+        let Some(block) = self.get_block(height) else {
+            return false;
+        };
+        if block.hash() != hint.proposal_block_hash
+            || block.header().height().get() != hint.proposal_height
+            || block.header().view_change_index() != hint.proposal_view
+        {
+            return false;
+        }
+        let Some(bundle) = block.execution_context() else {
+            return false;
+        };
+        if block.header().execution_context_hash() != Some(HashOf::new(bundle))
+            || !bundle
+                .lane_payload_ownerships
+                .iter()
+                .any(|ownership| ownership == &lane_artifact.ownership)
+        {
+            return false;
+        }
+        !bundle.autonomous_lane_payloads.iter().any(|envelope| {
+            envelope.lane_id == descriptor.lane_id
+                && envelope.dataspace_id == descriptor.dataspace_id
+                && envelope.lane_incarnation == descriptor.lane_incarnation
+                && envelope.proposal_height == descriptor.proposal_height
+                && envelope.lane_block_height == descriptor.lane_block_height
+                && envelope.lane_block_view == descriptor.lane_block_view
+                && envelope.proposal_hash == proposal.proposal_hash
+                && envelope.descriptor_hash == descriptor.descriptor_hash
+        })
+    }
+    fn active_certified_ordinary_is_canonical_hint_promotion_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        autonomous_proposal: &LaneBlockProposalV1,
+        certified: &CertifiedLaneBlockArtifact,
+    ) -> bool {
+        let descriptor = &certified.proposal.descriptor;
+        let (data_path, index_path) = Self::lane_artifact_paths_for_entry(entry, &self.store_root);
+        self.read_active_lane_block_artifact_from_paths_locked(
+            entry,
+            descriptor.lane_block_height,
+            &data_path,
+            &index_path,
+            false,
+        )
+        .is_some_and(|lane_artifact| {
+            self.certified_ordinary_is_canonical_hint_promotion_locked(
+                autonomous_proposal,
+                certified,
+                &lane_artifact,
+            )
+        })
     }
     #[cfg(test)]
     fn block_entrypoint_hash_at(block: &SignedBlock, index: usize) -> Option<Hash> {

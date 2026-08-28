@@ -968,6 +968,17 @@ def test_full_bootstrap_succeeds_with_real_terminal_receipt_validator(
     fixture_root = release_fixture.root / "full-bootstrap-real-receipt"
     fixture_root.mkdir()
     evidence: dict[str, object] = receipt_contract.make_evidence(fixture_root)
+    formal_replay_source_receipt = evidence["formal_replay_source_receipt"]
+    formal_replay_release_root = evidence["formal_replay_release_root"]
+    assert isinstance(formal_replay_source_receipt, Path)
+    assert isinstance(formal_replay_release_root, Path)
+    release_fixture.formal_replay = SignedReplayBundle(
+        source_receipt=formal_replay_source_receipt,
+        release_root=formal_replay_release_root,
+        signature_sha256=str(evidence["formal_replay_signature_sha256"]),
+        principal=str(evidence["formal_replay_principal"]),
+        signer_fingerprint=str(evidence["expected_signer_fingerprint"]),
+    )
     writer = receipt_contract.fixture_writer(fixture_root)
     bootstrap_evidence = evidence["bootstrap_evidence_dir"]
     release_root = evidence["release_root"]
@@ -1203,6 +1214,10 @@ receipt_arguments=( \
     --expected-signer-fingerprint "$SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT" \
     --corridor-completion {evidence_path("corridor_completion")} \
     --formal-completion {evidence_path("formal_completion")} \
+    --formal-replay-source-receipt "$IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT" \
+    --formal-replay-release-root "$IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT" \
+    --expected-formal-replay-signature-sha256 "$IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256" \
+    --formal-replay-principal "$IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL" \
     --seed-completion {evidence_path("seed_completion")} \
     --chaos-completion {evidence_path("chaos_completion")} \
     --g4p-completion {evidence_path("g4p_completion")} \

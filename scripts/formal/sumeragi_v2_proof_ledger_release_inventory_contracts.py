@@ -1622,7 +1622,7 @@ def _production_liveness_release_inventory_errors(
         "  scripts/tests/validate_multilane_scaling_evidence_test.py\n"
         "  scripts/tests/run_multilane_scaling_gate_test.py\n"
         ")",
-        "preflight-multilane-scaling pytest 52 \\\n"
+        "preflight-multilane-scaling pytest 53 \\\n"
         '  "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest '
         '-q -p no:cacheprovider ${multilane_scaling_contract_files[*]}"',
         'scripts/nexus/validate_multilane_scaling_evidence.py \\\n'
@@ -1861,16 +1861,16 @@ def _production_liveness_release_inventory_errors(
                 )
             expected_receipt_component_sha256 = {
                 "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-                    "9411977ab12ce893cb747d2f1be149972e601924a46a5f9e8c0e3ddaab6469c4"
+                    "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "3fcd0a6dabf5a9aa5380225bdaf66db4678f9144ec349a024d573e307a1571b2"
+                    "eebc8bdce0fbcd7cda07be4632917812f3bac27d6899d19b7da3c1a4b77f5b9c"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-                    "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b"
+                    "0d89b39300b4d1b83e28623a75bcabdf31574451dfe68d8f1b67a49afd1dc440"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
-                    "0f8c776e7ba182a8abe9aeb8c630d9946736389b7279d31939a20a7b7f8b7f16"
+                    "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
                 ),
             }
             if assignments["_RELEASE_RECEIPT_COMPONENT_SHA256"] != [
@@ -2054,6 +2054,20 @@ def _production_liveness_release_inventory_errors(
                     "the immutable finalized receipt",
                 ),
                 (
+                    '"tlapm-projection",\n',
+                    "the authenticated TLAPM projection root inventory",
+                ),
+                (
+                    '"tlapm_folds",\n            projection_root / "Folds.tla",\n'
+                    '            0o444,\n',
+                    "the immutable finalized Folds projection",
+                ),
+                (
+                    '"tlapm_functions",\n            projection_root / "Functions.tla",\n'
+                    '            0o444,\n',
+                    "the immutable finalized Functions projection",
+                ),
+                (
                     'if status != 0 or stdout != expected_stdout or stderr:\n',
                     "the independent verifier success gate",
                 ),
@@ -2072,6 +2086,10 @@ def _production_liveness_release_inventory_errors(
                 (
                     '"formal replay release directories changed during verification"\n',
                     "the post-verification directory identity gate",
+                ),
+                (
+                    '"formal replay TLAPM projection after verification",\n',
+                    "the post-verification projection identity gate",
                 ),
             ):
                 if formal_component_source.count(fragment) != 1:
@@ -2133,7 +2151,7 @@ def _production_liveness_release_inventory_errors(
     )
     expected_bootstrap_component_sha256 = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-            "ebc24402ef78e332d3c1d268e1d5fb3927318335e64aee4d2061f4bd3e1cf61c"
+            "f5593c473235d24df71ed42ca3ab74f7a8421aae6601aebb148c7e0b6e4aeab0"
         ),
     }
     expected_bootstrap_component_symbols = {
@@ -2341,6 +2359,18 @@ def _production_liveness_release_inventory_errors(
                     (
                         'finalized["receipt"].sha256 != source_receipt.sha256\n',
                         "the source/archive receipt equality gate",
+                    ),
+                    (
+                        '"tlapm-projection/Folds.tla",\n',
+                        "the authenticated read-only Folds projection",
+                    ),
+                    (
+                        '"tlapm-projection/Functions.tla",\n',
+                        "the authenticated read-only Functions projection",
+                    ),
+                    (
+                        '"terminal formal replay finalized TLAPM projection",\n',
+                        "the exact two-file projection inventory",
                     ),
                     (
                         '"--expected-formal-replay-signature-sha256",\n',

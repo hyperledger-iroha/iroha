@@ -45,6 +45,36 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
         remainder = &remainder[offset + anchor.len()..];
     }
 }
+
+#[test]
+fn fresh_proposal_refreshes_merge_certification_before_freezing_attachments() {
+    let source = include_str!("../v2_runner.rs");
+    let start = source
+        .find("fn schedule_local_proposal(")
+        .expect("fresh proposal scheduler remains source-bound");
+    let end = source[start..]
+        .find("fn canonical_height_one_proposal_wire(")
+        .map(|offset| start + offset)
+        .expect("fresh proposal scheduler remains independently bounded");
+    let scheduler = &source[start..end];
+    let refresh = scheduler
+        .find("lane_work.refresh_merge_candidates(directive.tag().view())?")
+        .expect("the current-round merge quorum is refreshed");
+    let admissions = scheduler[refresh..]
+        .find("lane_work.reconcile_pending_queue_plan_admissions(")
+        .map(|offset| refresh + offset)
+        .expect("QueuePlan controls are reconciled after merge refresh");
+    let attachments = scheduler[admissions..]
+        .find("let attachments = candidate_attachments(")
+        .map(|offset| admissions + offset)
+        .expect("candidate attachments are frozen after control reconciliation");
+    let assembly = scheduler[attachments..]
+        .find("let assembly = assembler.assemble(")
+        .map(|offset| attachments + offset)
+        .expect("candidate assembly consumes the frozen attachments");
+    assert!(refresh < admissions && admissions < attachments && attachments < assembly);
+}
+
 #[test]
 fn emergency_fast_idles_before_any_active_height_recovery() {
     let parent = include_str!("../v2_runner.rs");

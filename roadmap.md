@@ -1956,7 +1956,7 @@ The static release inventory contract now enumerates `864/864` production tests
 across 43 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
 TSV has
 SHA-256
-`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
+`a19753ab7879a95094d8f1ee968e2e44d9a36453f2814acdadffaaead1ab4a97`.
 The separate canonical production module/test TSV has SHA-256
 `9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a`;
 the newest rows bind the proposal-height namespace for exact retired attempts,

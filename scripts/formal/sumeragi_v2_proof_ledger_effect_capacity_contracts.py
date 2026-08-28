@@ -1018,15 +1018,17 @@ Ok(())
         effects_path,
         dispatch_available,
         """
-Ok(self.pending_work() == 0
-    && self.recovered_decision_fetch_request_index_is_exact_and_empty()
-    && self.retained_effect_batch.is_none()
-    && self.parked_effect_batch.is_none()
-    && self.finality_completion.is_none()
-    && queued_ingress_is_allowed
-    && self.runtime.lifecycle_decision_apply_dispatch_available())
+Ok(
+    self.pending_work() == self.pending_lifecycle_output_admissions.len()
+        && successor_debt_is_exact
+        && self.recovered_decision_fetch_request_index_is_exact_and_empty()
+        && self.parked_effect_batch.is_none()
+        && self.finality_completion.is_none()
+        && self.runtime.queued_commands() == 0
+        && self.runtime.lifecycle_decision_apply_dispatch_available(),
+)
 """,
-        "lifecycle Apply dispatch must freeze every executor mutation owner and the runtime barrier",
+        "lifecycle Apply dispatch must bind the exact attested successor debt while freezing every other executor mutation owner and the runtime barrier",
         errors,
     )
 
@@ -1047,16 +1049,30 @@ Ok(self.pending_work() == 0
         effects_path,
         prepare_dispatch,
         """
-if !self.lifecycle_decision_apply_dispatch_available()? {
+if successor_outputs
+    .as_ref()
+    .is_some_and(|attestation| attestation.dispatch_key() != prepared.dispatch_key())
+    || !self.lifecycle_decision_apply_dispatch_available(successor_outputs.as_ref())?
+{
     return Err(EffectExecutorError::Contract(
         "lifecycle Apply dispatch overtook retained executor work".to_owned(),
     ));
 }
 let Some(evidence) = self.pending_tip_recovery.as_ref() else {
-    return Ok(PreparedLifecycleDecisionApplyExecutorDispatchV1 { pending: None });
+    let successor_outputs = successor_outputs.map(|attestation| {
+        PendingLifecycleDecisionApplySuccessorOutputsTransitionV1 {
+            installed: &mut self.lifecycle_decision_apply_successor_outputs,
+            retained_effect_batch: &mut self.retained_effect_batch,
+            attestation,
+        }
+    });
+    return Ok(PreparedLifecycleDecisionApplyExecutorDispatchV1 {
+        pending: None,
+        successor_outputs,
+    });
 };
 """,
-        "ordinary lifecycle Apply dispatch must remain inert unless exact pending-Kura evidence exists",
+        "ordinary lifecycle Apply dispatch must transfer only the exact attested successor debt while recovered dispatch remains pending-Kura owned",
         errors,
     )
     _require_rust_token_sequence(
@@ -1120,17 +1136,18 @@ let lineage_owner_is_exact = match authority.lineage() {
         effects_path,
         prepare_completion,
         """
-if self.pending_work() != 0
+if self.pending_work() != self.pending_lifecycle_output_admissions.len()
+    || !successor_outputs_are_exact
     || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
     || self.retained_effect_batch.is_some()
     || self.parked_effect_batch.is_some()
     || !pending_recovery_is_exact
     || self.finality_completion.is_some()
-    || (recovered_requires_empty_ingress && self.runtime.queued_commands() != 0)
+    || self.runtime.queued_commands() != 0
     || !lineage_owner_is_exact
 {
 """,
-        "lifecycle Apply completion preparation must reject every competing executor owner",
+        "lifecycle Apply completion preparation must bind the exact successor-output census and reject every competing executor owner",
         errors,
     )
 
@@ -1151,10 +1168,10 @@ if self.pending_work() != 0
         effects_path,
         commit_finality,
         """
-let (dispatch_key, tag, receipt, artifact, committed_status) =
+let (dispatch_key, validate_predecessor_ordinal, tag, receipt, artifact, committed_status) =
     finality.consume_for_executor(LifecycleDecisionApplyExecutorFinalityPermitV1::new());
 """,
-        "lifecycle Apply finality must consume the move-only post-Ledger permit",
+        "lifecycle Apply finality must consume the move-only post-Ledger permit and its exact recovered Validate predecessor",
         errors,
     )
     _require_rust_token_sequence(
@@ -1164,7 +1181,8 @@ let (dispatch_key, tag, receipt, artifact, committed_status) =
 assert!(
     lineage_owner_is_exact
         && self.finality_completion.is_none()
-        && self.pending_work() == 0
+        && self.pending_work() == self.pending_lifecycle_output_admissions.len()
+        && successor_outputs_are_exact
         && self.recovered_decision_fetch_request_index_is_exact_and_empty()
         && pending_recovery_is_exact
         && dispatch_key.matches_height_context(&self.context)
@@ -1176,6 +1194,14 @@ assert!(
         && self.runtime.driver().ready_to_finish(),
     "pre-Ledger lifecycle Apply finality proof remains exact"
 );
+if dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Recovered {
+    self.release_recovered_apply_validate_retry_predecessor(
+        dispatch_key,
+        (artifact.commit_qc.proposal_round, artifact.subject),
+        validate_predecessor_ordinal,
+    )
+    .expect("preflighted recovered Apply Validate predecessor remains exact");
+}
 self.finality_completion = Some(FinalityCompletion {
     tag,
     receipt,
@@ -1183,7 +1209,7 @@ self.finality_completion = Some(FinalityCompletion {
     ownership: FinalityCompletionOwner::LifecycleDecisionApply(dispatch_key),
 });
 """,
-        "lifecycle Apply finality must install only an exact drained lineage-owned tombstone",
+        "lifecycle Apply finality must release the exact recovered Validate predecessor and install only an exact drained lineage-owned tombstone after binding successor-output debt",
         errors,
     )
 
@@ -1261,6 +1287,17 @@ self.finality_completion.is_some()
     && self.parked_effect_batch.is_none()
 """,
         "finalized rollover must retain the runner cleanup fence and no live lifecycle Apply owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        ready_to_finish,
+        """
+self.pending_lifecycle_output_admissions.is_empty()
+    && self.lifecycle_decision_apply_successor_outputs.is_none()
+    && self.recovered_decision_fetch_request_index_is_exact_and_empty()
+""",
+        "finalized rollover must discharge both pending lifecycle outputs and their exact post-Apply successor census",
         errors,
     )
 
@@ -1900,16 +1937,17 @@ match relation {
     RuntimeFetchAuthorityRelation::Same => None,
     RuntimeFetchAuthorityRelation::Stale => {
         if retained_owner != *ownership.owner() {
-            self.latch_fail_closed(
-                "coalesced body completion changed its exact lifecycle owner",
-            );
+            self.latch_fail_closed(format!(
+                "coalesced body completion changed its exact lifecycle owner: tag={tag:?}; candidate={candidate:?}; target={target:?}; retained_owner={retained_owner:?}; incoming_owner={:?}; retained_statement={retained_statement:?}; incoming_statement={incoming_statement:?}",
+                ownership.owner(),
+            ));
             return Err(EnqueueError::FailClosed);
         }
         None
     }
 }
 """,
-            "stale terminal retries must reject a foreign owner while same authority stutters and upgrades remain separately reviewed",
+            "stale terminal retries must reject a foreign owner with exact diagnostic context while same authority stutters and upgrades remain separately reviewed",
             errors,
         )
 
@@ -3059,28 +3097,35 @@ fn effect_candidate_semantic_binding(
         AdapterEffect::StoreBody { round, subject, .. }
         | AdapterEffect::ValidateBody { round, subject, .. } => {
             match self
-                .replayed_decision_key()
+                .replayed_body_authority_certificate()
                 .map_err(|error| error.to_string())?
             {
-                Some((decision_round, proposal_round, decision_subject, commitment))
-                    if *round == proposal_round && *subject == decision_subject =>
+                Some(certificate)
+                    if *round == certificate.proposal_round
+                        && *subject == certificate.subject =>
                 {
-                    let decision_statement = RuntimeCandidateSemanticStatement::new(
-                        decision_round,
-                        proposal_round,
-                        Some(decision_subject),
-                        Some(wire::GlobalPhase::Commit),
-                        Some(commitment),
+                    let authority_statement = RuntimeCandidateSemanticStatement::new(
+                        certificate.round,
+                        certificate.proposal_round,
+                        Some(certificate.subject),
+                        Some(certificate.phase),
+                        Some(certificate.execution_commitment),
                     );
                     if inherited.is_some_and(|parent| {
-                        parent.commit_refinement_to(decision_statement).is_none()
+                        !matches!(
+                            parent.fetch_authority_relation_to(authority_statement),
+                            Some(
+                                RuntimeFetchAuthorityRelation::Same
+                                    | RuntimeFetchAuthorityRelation::Upgrade
+                            )
+                        )
                     }) {
                         return Err(
-                            "Sumeragi v2 durable Decision body recovery conflicted with its causal authority"
+                            "Sumeragi v2 durable body recovery conflicted with its causal authority"
                                 .to_owned(),
                         );
                     }
-                    Some(decision_statement)
+                    Some(authority_statement)
                 }
                 Some(_) | None => inherited.copied(),
             }
@@ -3096,25 +3141,26 @@ fn effect_candidate_semantic_binding(
     production_adapter_effect_candidate_binding(effect, effective_inherited.as_ref())
 }
 """,
-                "production RuntimeDriver must route every candidate through the typed inheritance and refinement gate",
+                "production RuntimeDriver must route every candidate through the typed replayed-certificate inheritance and refinement gate",
                 errors,
             )
             _require_rust_token_sequence(
                 runtime_path,
                 production_binding,
                 """
-Some((decision_round, proposal_round, decision_subject, commitment))
-    if *round == proposal_round && *subject == decision_subject =>
+Some(certificate)
+    if *round == certificate.proposal_round
+        && *subject == certificate.subject =>
 {
-    let decision_statement = RuntimeCandidateSemanticStatement::new(
-        decision_round,
-        proposal_round,
-        Some(decision_subject),
-        Some(wire::GlobalPhase::Commit),
-        Some(commitment),
+    let authority_statement = RuntimeCandidateSemanticStatement::new(
+        certificate.round,
+        certificate.proposal_round,
+        Some(certificate.subject),
+        Some(certificate.phase),
+        Some(certificate.execution_commitment),
     );
 """,
-                "durable Decision body recovery must reconstruct Commit authority only for the exact proposal round and subject",
+                "durable body recovery must reconstruct the exact authenticated certificate authority only for its proposal round and subject",
                 errors,
             )
             _require_rust_token_sequence(
@@ -3122,16 +3168,22 @@ Some((decision_round, proposal_round, decision_subject, commitment))
                 production_binding,
                 """
 if inherited.is_some_and(|parent| {
-    parent.commit_refinement_to(decision_statement).is_none()
+    !matches!(
+        parent.fetch_authority_relation_to(authority_statement),
+        Some(
+            RuntimeFetchAuthorityRelation::Same
+                | RuntimeFetchAuthorityRelation::Upgrade
+        )
+    )
 }) {
     return Err(
-        "Sumeragi v2 durable Decision body recovery conflicted with its causal authority"
+        "Sumeragi v2 durable body recovery conflicted with its causal authority"
             .to_owned(),
     );
 }
-Some(decision_statement)
+Some(authority_statement)
 """,
-                "durable Decision body recovery must reject an incompatible inherited authority before publication",
+                "durable body recovery must reject stale or incompatible inherited authority before publication",
                 errors,
             )
             _require_rust_token_sequence(
@@ -4905,120 +4957,9 @@ self.retain_effect_ownership(
         errors,
     )
 
-    production_effect_runtime_context = (
-        ("impl", "EffectRuntime", "for", "SerializedV2Runtime"),
+    _effect_capacity_runtime_forwarding_source_fidelity_errors(
+        effects_path, source, errors
     )
-    for item_name, seal_name, delegate, description in (
-        (
-            "rebind_unpublished_body_available",
-            "effect_runtime_rebind_unpublished_body_available",
-            """
-SerializedV2Runtime::rebind_unpublished_body_available(
-    self, previous, rebound, round, subject,
-)
-.map_err(|error| error.to_string())
-""",
-            "production EffectRuntime unpublished BodyAvailable rebind forwarding",
-        ),
-        (
-            "retire_unpublished_body_available",
-            "effect_runtime_retire_unpublished_body_available",
-            """
-SerializedV2Runtime::retire_unpublished_body_available(
-    self, tag, round, subject
-)
-.map_err(|error| error.to_string())
-""",
-            "production EffectRuntime unpublished BodyAvailable retirement forwarding",
-        ),
-    ):
-        matching = tuple(
-            item
-            for item in rust_items(source, item_name)
-            if item.brace_context == production_effect_runtime_context
-        )
-        if len(matching) != 1:
-            errors.append(
-                f"{effects_path}: require exactly one production EffectRuntime "
-                f"item named {item_name}; found {len(matching)}"
-            )
-            continue
-        production_delegate = matching[0]
-        _require_rust_item_context(
-            effects_path,
-            production_delegate,
-            production_effect_runtime_context,
-            description,
-            errors,
-        )
-        _require_rust_token_sequence(
-            effects_path,
-            production_delegate,
-            delegate,
-            description,
-            errors,
-        )
-        _require_rust_item_token_sha256(
-            effects_path,
-            production_delegate,
-            _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256[seal_name],
-            description,
-            errors,
-        )
-
-    for item_name, expected_source, description in (
-        (
-            "plan_body_pipeline_candidate_terminal",
-            """
-fn plan_body_pipeline_candidate_terminal(
-    &mut self,
-    effect: &AdapterEffect,
-    ownership: &RuntimeEffectOwnership,
-) -> Result<Option<RuntimeEffectOwnership>, String> {
-    SerializedV2Runtime::plan_body_pipeline_candidate_terminal(self, effect, ownership)
-}
-""",
-            "production EffectRuntime body-terminal incumbent-owner plan forwarding",
-        ),
-        (
-            "commit_body_pipeline_candidate_terminals",
-            """
-fn commit_body_pipeline_candidate_terminals(
-    &mut self,
-    terminals: &[(&AdapterEffect, &RuntimeEffectOwnership)],
-) -> Result<(), String> {
-    SerializedV2Runtime::commit_body_pipeline_candidate_terminals(self, terminals)
-}
-""",
-            "production EffectRuntime atomic body-terminal authority commit forwarding",
-        ),
-    ):
-        matching = tuple(
-            item
-            for item in rust_items(source, item_name)
-            if item.brace_context == production_effect_runtime_context
-        )
-        if len(matching) != 1:
-            errors.append(
-                f"{effects_path}: require exactly one production EffectRuntime "
-                f"item named {item_name}; found {len(matching)}"
-            )
-            continue
-        production_delegate = matching[0]
-        _require_rust_item_context(
-            effects_path,
-            production_delegate,
-            production_effect_runtime_context,
-            description,
-            errors,
-        )
-        _require_exact_rust_tokens(
-            effects_path,
-            production_delegate,
-            expected_source,
-            description,
-            errors,
-        )
 
     _effect_capacity_terminal_retirement_source_fidelity_errors(
         effects_path,

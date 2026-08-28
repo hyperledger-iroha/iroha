@@ -1648,6 +1648,7 @@ impl ReadyValidateSuccessorV1 {
         attestation: AttestedReadyValidateDemand,
     ) -> Option<(
         LifecycleValidateDispatchKeyV1,
+        Option<LifecycleValidateDispatchKeyV1>,
         wire::ConsensusRound,
         wire::BlockSubject,
         bool,
@@ -1657,14 +1658,22 @@ impl ReadyValidateSuccessorV1 {
         }
         let key = attestation.dispatch_key();
         match &self.identity {
-            ReadyValidateSuccessorIdentityV1::PublishedValidated(location) => {
-                Some((key, location.round, location.subject, true))
-            }
-            ReadyValidateSuccessorIdentityV1::PublishedRejected(location) => {
-                Some((key, location.round, location.subject, false))
-            }
+            ReadyValidateSuccessorIdentityV1::PublishedValidated(location) => Some((
+                key,
+                Some(key.with_carrier_digest(location.incumbent_digest)),
+                location.round,
+                location.subject,
+                true,
+            )),
+            ReadyValidateSuccessorIdentityV1::PublishedRejected(location) => Some((
+                key,
+                Some(key.with_carrier_digest(location.incumbent_digest)),
+                location.round,
+                location.subject,
+                false,
+            )),
             ReadyValidateSuccessorIdentityV1::SidecarWake { round, subject, .. } => {
-                Some((key, *round, *subject, true))
+                Some((key, None, *round, *subject, true))
             }
         }
     }

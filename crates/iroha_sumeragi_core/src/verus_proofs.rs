@@ -25,11 +25,7 @@ use crate::refinement::{
     IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_PEER, IDENTITY_KIND_QUORUM_CERTIFICATE,
     IDENTITY_KIND_REFERENCE_DIGEST, IDENTITY_KIND_REPLY_PAYLOAD, IDENTITY_KIND_SIDECAR_CHUNK,
     IDENTITY_KIND_SIDECAR_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST, IDENTITY_KIND_SIDECAR_RESPONSE,
-    IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
-    LEADER_WIRE_ADMISSION_COALESCE, LEADER_WIRE_ADMISSION_INSERT, LEADER_WIRE_ADMISSION_REACTIVATE,
-    LEADER_WIRE_ADMISSION_REPLACE_TERMINAL, LEADER_WIRE_LIFECYCLE_ABSENT,
-    LEADER_WIRE_LIFECYCLE_DORMANT, LEADER_WIRE_LIFECYCLE_INGRESS, LEADER_WIRE_LIFECYCLE_RUNTIME,
-    LEADER_WIRE_LIFECYCLE_TERMINAL, LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL, REPLAY_EFFECT_NONE,
+    IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, REPLAY_EFFECT_NONE,
     WAL_RECORD_DECISION, WAL_RECORD_INSTALL_TIMEOUT, WAL_RECORD_LOCK_AND_COMMIT, WAL_RECORD_NONE,
     WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT, WAL_RECORD_PROPOSAL_INTENT,
     WAL_RECORD_TIMEOUT_INTENT,
@@ -417,9 +413,12 @@ pub proof fn production_completion_capacity_product_rank_descends(
     if root_after == root_before {
         assert(successor_after < successor_before);
     } else {
-        assert(root_after + 1 <= root_before) by(nonlinear_arith);
-        assert(root_after * 4 + successor_after < root_before * 4 + successor_before)
-            by(nonlinear_arith);
+        assert(root_after < root_before);
+        assert(root_after + 1 <= root_before);
+        assert(root_after * 4 + successor_after <= root_after * 4 + 3);
+        assert(root_after * 4 + 3 < (root_after + 1) * 4);
+        assert((root_after + 1) * 4 <= root_before * 4);
+        assert(root_before * 4 <= root_before * 4 + successor_before);
     }
 }
 /// Deliberately inverted owner predicate used only by the concrete mutation
@@ -4965,26 +4964,29 @@ pub proof fn production_leader_wire_admission_trace_refines_lifecycle_ownership(
     ensures
         check_production_leader_wire_admission_transition(projection) == Some(projection) ==> (
             production_leader_wire_admission_refines_lifecycle_ownership_kernel(projection)
-            && projection.operation >= LEADER_WIRE_ADMISSION_INSERT
-            && projection.operation <= LEADER_WIRE_ADMISSION_REPLACE_TERMINAL
+            && projection.operation >= refinement_tag_value!(LEADER_WIRE_ADMISSION_INSERT)
+            && projection.operation
+                <= refinement_tag_value!(LEADER_WIRE_ADMISSION_REPLACE_TERMINAL)
             && (
-                projection.operation == LEADER_WIRE_ADMISSION_INSERT
-                    || projection.operation == LEADER_WIRE_ADMISSION_REPLACE_TERMINAL
+                projection.operation == refinement_tag_value!(LEADER_WIRE_ADMISSION_INSERT)
+                    || projection.operation
+                        == refinement_tag_value!(LEADER_WIRE_ADMISSION_REPLACE_TERMINAL)
                 ==> projection.incoming_admission_ordinal
                         == projection.stored_admission_ordinal
                     && projection.incoming_scheduler_ordinal
                         == projection.stored_scheduler_ordinal
             )
             && (
-                projection.operation == LEADER_WIRE_ADMISSION_REACTIVATE
-                    || projection.operation == LEADER_WIRE_ADMISSION_COALESCE
+                projection.operation == refinement_tag_value!(LEADER_WIRE_ADMISSION_REACTIVATE)
+                    || projection.operation
+                        == refinement_tag_value!(LEADER_WIRE_ADMISSION_COALESCE)
                 ==> projection.incumbent_admission_ordinal
                         == projection.stored_admission_ordinal
                     && projection.incumbent_scheduler_ordinal
                         == projection.stored_scheduler_ordinal
             )
             && (
-                projection.operation == LEADER_WIRE_ADMISSION_COALESCE
+                projection.operation == refinement_tag_value!(LEADER_WIRE_ADMISSION_COALESCE)
                 ==> projection.records_after == projection.records_before
                     && projection.status_after == projection.status_before
                     && projection.last_admission_ordinal_after
@@ -4993,14 +4995,17 @@ pub proof fn production_leader_wire_admission_trace_refines_lifecycle_ownership(
                         == projection.scheduler_ordinal_high_watermark_before
             )
             && (
-                projection.operation == LEADER_WIRE_ADMISSION_REACTIVATE
-                ==> projection.status_before == LEADER_WIRE_LIFECYCLE_DORMANT
-                    && projection.status_after == LEADER_WIRE_LIFECYCLE_INGRESS
+                projection.operation == refinement_tag_value!(LEADER_WIRE_ADMISSION_REACTIVATE)
+                ==> projection.status_before
+                        == refinement_tag_value!(LEADER_WIRE_LIFECYCLE_DORMANT)
+                    && projection.status_after
+                        == refinement_tag_value!(LEADER_WIRE_LIFECYCLE_INGRESS)
                     && projection.replay_dormant_before
                     && !projection.replay_dormant_after
             )
             && (
-                projection.operation == LEADER_WIRE_ADMISSION_REPLACE_TERMINAL
+                projection.operation
+                    == refinement_tag_value!(LEADER_WIRE_ADMISSION_REPLACE_TERMINAL)
                 ==> (projection.incoming_view > projection.incumbent_view
                         || (projection.incoming_phase_is_timeout_certificate
                             && projection.incumbent_phase_is_timeout_certificate
@@ -5442,6 +5447,7 @@ pub struct ProductionEffectTraceProjection {
 #[derive(Copy, Clone)]
 pub struct ProductionVolatileSummaryProjection {
     pub candidate_present: bool,
+    pub fallback_active: bool,
     pub body_work: u64,
     pub pending_prepare: u64,
     pub known_prepare: u64,
@@ -5884,7 +5890,7 @@ pub fn verified_inactive_enter_view_fact(
     ensures
         enter_view_exact == production_enter_view_exact_fact(projection),
 {
-    let relation = verified_incoming_only_enter_view_projection_relation(projection.enter_view);
+    let relation = enter_view_projection_gate_body!(projection.enter_view);
     let effect_counts = verified_enter_view_effect_counts_fact(projection);
     let enter_view_exact = relation && effect_counts;
     proof {
@@ -5927,7 +5933,9 @@ pub fn verified_incoming_only_enter_view_lock_fact(
     ensures
         enter_view_exact == production_enter_view_exact_fact(projection),
 {
-    let enter_view_exact = production_enter_view_exact_body!(projection);
+    let relation = verified_incoming_only_enter_view_projection_relation(projection.enter_view);
+    let effect_counts = verified_enter_view_effect_counts_fact(projection);
+    let enter_view_exact = relation && effect_counts;
     proof {
         assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
             reveal(production_enter_view_exact_fact);
@@ -6014,10 +6022,9 @@ pub fn verified_local_max_enter_view_lock_fact(
     ensures
         enter_view_exact == production_enter_view_exact_fact(projection),
 {
-    let enter_view_exact = verified_local_max_enter_view_projection_relation(
-        projection.enter_view,
-    ) && projection.enter_view.enter_count == effect_count_body!(projection.effects, 8u8)
-        && projection.enter_view.fetch_count == effect_count_body!(projection.effects, 2u8);
+    let relation = verified_local_max_enter_view_projection_relation(projection.enter_view);
+    let effect_counts = verified_enter_view_effect_counts_fact(projection);
+    let enter_view_exact = relation && effect_counts;
     proof {
         assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
             reveal(production_enter_view_exact_fact);
@@ -6507,7 +6514,6 @@ pub open spec fn production_effect_order_relation(
         production_effect_count(trace, 8),
     )
 }
-/// Complete fixed-vector effect relation.
 } // verus!
 include!("verus_proofs/production_transition_contracts.rs");
 // The in-flight reservation/first-release proofs remain in this lexical module.

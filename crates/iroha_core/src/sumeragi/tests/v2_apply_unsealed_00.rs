@@ -396,9 +396,6 @@ impl ApplyFixture {
     fn new_with_lane_lifecycle() -> Self {
         Self::new_with_options(false, false, true, false)
     }
-    fn new_with_native_lane_lifecycle() -> Self {
-        Self::new_with_options(false, false, true, true)
-    }
     fn new_for_production_recovered_decision_apply() -> Self {
         Self::new_with_options_and_network(false, false, false, false, true)
     }
@@ -2178,6 +2175,9 @@ fn reserve_autonomous_crash_batch(
                 Level::INFO,
                 format!("autonomous reservation crash boundary {index}"),
             )])
+            .with_admission_intent(
+                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            )
             .sign(fixture.genesis_key.private_key())
         })
         .collect::<Vec<_>>();
@@ -2464,7 +2464,10 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
                 fixture.service.genesis_account.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-            .with_instructions(instructions(index));
+            .with_instructions(instructions(index))
+            .with_admission_intent(
+                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            );
             let nonce = u32::try_from(index)
                 .ok()
                 .and_then(|value| value.checked_add(1))

@@ -366,7 +366,7 @@ run_mutant queue-plan-split-route-public-acceptance \
 run_mutant queue-plan-execution-before-global-cas \
   "$QUEUE_PLAN_ADMISSION_MODULE" \
   multilane_queue_plan_execution_before_global_cas_bug.cfg \
-  MLQueueEligibilityExact
+  MLQueuePlanExecutionAutonomousOnly
 run_mutant queue-plan-conflicting-cas "$QUEUE_PLAN_ADMISSION_MODULE" \
   multilane_queue_plan_conflicting_cas_bug.cfg \
   MLAdmissionCasUnique

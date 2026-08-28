@@ -2659,10 +2659,18 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "method",
         "Queue::release_barrier_has_exact_fifo_ownership_locked",
         (
-            "fifo_snapshot_locked()",
+            "self.replica_group_has_byte_exact_ordinary_fifo_ownership_locked(&barrier.ordered_keys)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::replica_group_has_byte_exact_ordinary_fifo_ownership_locked",
+        (
+            "let fifo = self.fifo_snapshot_locked()",
             "HashMap::with_capacity(fifo.len())",
             "positions.insert(hash, position).is_some()",
-            "barrier.ordered_keys",
+            "for key in ordered_keys",
             "let Some(tx) = self.txs.get(&hash) else",
             "accepted.hash_as_entrypoint() != key.entrypoint_hash",
             "let Some(plan) = self.routing_plans.get(&hash) else",

@@ -270,7 +270,9 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         let metadata = self
             .regular_sidecar_metadata(path, parent)?
             .ok_or(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)?;
-        if metadata.len() == 0 || metadata.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX) {
+        if metadata.file.len() == 0
+            || metadata.file.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX)
+        {
             return Err(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded);
         }
         *scanned_entries = scanned_entries
@@ -280,7 +282,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             return Err(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded);
         }
         *decoded_bytes = decoded_bytes
-            .checked_add(metadata.len())
+            .checked_add(metadata.file.len())
             .ok_or(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded)?;
         if *decoded_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
             return Err(AutonomousLaneReservationEvidenceError::AggregateBudgetExceeded);
@@ -898,6 +900,8 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         })
     }
     fn autonomous_reservation_certification_for_payload(
+        &self,
+        entry: &LaneConfigEntry,
         snapshot: &AutonomousReservationCertifiedLaneSnapshot,
         payload: &LaneExecutablePayloadV1,
     ) -> std::result::Result<
@@ -907,21 +911,50 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         let proposal = &payload.origin_proposal;
         let height = proposal.descriptor.lane_block_height;
         let indexed = snapshot.requested.get(&height);
-        if indexed.is_some_and(|artifact| artifact.proposal != *proposal) {
-            return Err(AutonomousLaneReservationEvidenceError::CertifiedArtifactConflict);
-        }
         let frontier_at_height = snapshot
             .frontier
             .as_ref()
             .filter(|artifact| artifact.proposal.descriptor.lane_block_height == height);
-        if frontier_at_height.is_some_and(|artifact| artifact.proposal != *proposal) {
-            return Err(AutonomousLaneReservationEvidenceError::CertifiedArtifactConflict);
-        }
         if let (Some(indexed), Some(frontier)) = (indexed, frontier_at_height)
             && indexed != frontier
         {
             return Err(AutonomousLaneReservationEvidenceError::CertifiedArtifactConflict);
         }
+        let (lane_data_path, lane_index_path) =
+            Self::lane_artifact_paths_for_entry(entry, &self.store_root);
+        let lane_artifact = self.read_active_lane_block_artifact_from_paths_locked(
+            entry,
+            height,
+            &lane_data_path,
+            &lane_index_path,
+            false,
+        );
+        let classify = |artifact: &CertifiedLaneBlockArtifact| {
+            if artifact.proposal == *proposal {
+                return Ok(Some(artifact.clone()));
+            }
+            if lane_artifact.as_ref().is_some_and(|lane_artifact| {
+                self.certified_ordinary_is_canonical_hint_promotion_locked(
+                    proposal,
+                    artifact,
+                    lane_artifact,
+                )
+            }) {
+                // This certificate settles the ordinary canonical execution
+                // role. Relative to the retired hint-neutral autonomous
+                // attempt, its reservation role remains uncertified.
+                return Ok(None);
+            }
+            Err(AutonomousLaneReservationEvidenceError::CertifiedArtifactConflict)
+        };
+        let indexed_exact = indexed
+            .map(|artifact| classify(artifact))
+            .transpose()?
+            .flatten();
+        let frontier_exact = frontier_at_height
+            .map(|artifact| classify(artifact))
+            .transpose()?
+            .flatten();
         if indexed.is_some()
             && snapshot
                 .frontier
@@ -942,7 +975,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             // decision, so classification remains fail-closed.
             return Err(AutonomousLaneReservationEvidenceError::CertifiedArtifactConflict);
         }
-        Ok(indexed.or(frontier_at_height).cloned().map_or(
+        Ok(indexed_exact.or(frontier_exact).map_or(
             AutonomousLaneReservationCertificationV1::Uncertified,
             AutonomousLaneReservationCertificationV1::Exact,
         ))
@@ -1009,6 +1042,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         }
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let _geometry_guard = self.lane_geometry_lock.lock();
         let mut entries = BTreeMap::<LaneId, LaneConfigEntry>::new();
         let mut requested_certified_heights = BTreeMap::<LaneId, BTreeSet<u64>>::new();
@@ -1287,7 +1321,8 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             let certified_snapshot = certified_snapshots
                 .get(&group.identity.lane_id)
                 .expect("validated group lane has a certified snapshot");
-            let certification = Self::autonomous_reservation_certification_for_payload(
+            let certification = self.autonomous_reservation_certification_for_payload(
+                entry,
                 certified_snapshot,
                 &attempt.payload,
             )?;

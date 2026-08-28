@@ -16978,6 +16978,22 @@ mod tests {
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use nonzero_ext::nonzero;
     use std::{collections::BTreeMap, sync::Arc};
+
+    fn shared_argument_fixture_payload() -> Json {
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/kotodama/entrypoint_argument_record_v1.json"
+        )))
+        .expect("parse shared contract argument fixture");
+        let payload = fixture
+            .as_object()
+            .and_then(|root| root.get("torii_boundary"))
+            .and_then(norito::json::Value::as_object)
+            .and_then(|boundary| boundary.get("payload"))
+            .expect("shared fixture Torii payload")
+            .clone();
+        Json::from(payload)
+    }
     #[cfg(feature = "zk-halo2-ipa")]
     fn sample_open_verify_envelope() -> iroha_data_model::zk::OpenVerifyEnvelope {
         let fixture =
@@ -25157,52 +25173,120 @@ seiyaku DurableOwner {
         assert_eq!(vm.register(10), 42);
     }
     #[test]
-    fn json_quantity_getter_accepts_only_canonical_strings() {
+    fn exact_json_getters_accept_only_canonical_strings_through_ledger_host() {
         let mut host = CoreHost::new(fixture_account("alice"));
-        let mut vm = IVM::new(10_000);
-        let key: Name = "amount".parse().expect("amount key");
-        let key_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&key));
-        let json = Json::from_str_norito(r#"{"amount":"1.25"}"#).expect("quantity JSON");
+        let mut vm = IVM::new(100_000);
+        let json = shared_argument_fixture_payload();
         let json_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
-        vm.set_register(10, json_ptr);
-        vm.set_register(11, key_ptr);
-        host.syscall(ivm_sys::SYSCALL_JSON_GET_QUANTITY, &mut vm)
-            .expect("get quantity");
-        let (some, words) = ivm::sum::read_words(
-            &vm,
-            vm.register(10),
-            ivm::sum::SumLayoutV1::option(1).expect("quantity option layout"),
-        )
-        .expect("quantity option");
-        assert!(some);
-        let tlv = vm.memory.validate_tlv(words[0]).expect("quantity TLV");
-        assert_eq!(tlv.type_id, PointerType::Quantity);
-        let quantity = QuantityValueV1::decode_frame(tlv.payload)
-            .expect("decode quantity")
-            .into_quantity();
-        assert_eq!(
-            quantity,
-            "1.25".parse::<Quantity>().expect("canonical quantity")
-        );
-        for invalid in [
-            r#"{"amount":"1.2500"}"#,
-            r#"{"amount":"-1"}"#,
-            r#"{"amount":1.25}"#,
+        for (key, syscall, pointer_type, expected) in [
+            (
+                "exact_int",
+                ivm_sys::SYSCALL_JSON_GET_INT,
+                PointerType::Int,
+                "1606938044258990275541962092341162602522202993782792835301376",
+            ),
+            (
+                "exact_decimal",
+                ivm_sys::SYSCALL_JSON_GET_DECIMAL,
+                PointerType::Decimal,
+                "-12345678901234567890.125",
+            ),
+            (
+                "exact_quantity",
+                ivm_sys::SYSCALL_JSON_GET_QUANTITY,
+                PointerType::Quantity,
+                "12345678901234567890.0000000000000000000000000001",
+            ),
         ] {
-            let invalid = Json::from_str_norito(invalid).expect("invalid quantity JSON shape");
-            let invalid_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&invalid));
-            vm.set_register(10, invalid_ptr);
+            let key: Name = key.parse().expect("exact-number key");
+            let key_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&key));
+            vm.set_register(10, json_ptr);
             vm.set_register(11, key_ptr);
-            host.syscall(ivm_sys::SYSCALL_JSON_GET_QUANTITY, &mut vm)
-                .expect("invalid quantity is Option::none");
+            host.syscall(syscall, &mut vm).expect("exact JSON getter");
+            let (some, words) = ivm::sum::read_words(
+                &vm,
+                vm.register(10),
+                ivm::sum::SumLayoutV1::option(1).expect("exact-number option layout"),
+            )
+            .expect("exact-number option");
+            assert!(some, "{key} must produce Option::some");
+            let tlv = vm.memory.validate_tlv(words[0]).expect("exact-number TLV");
+            assert_eq!(tlv.type_id, pointer_type);
+            let actual = match pointer_type {
+                PointerType::Int => IntValueV1::decode_frame(tlv.payload)
+                    .expect("decode int frame")
+                    .into_int()
+                    .to_string(),
+                PointerType::Decimal => {
+                    iroha_primitives::numeric_abi::DecimalValueV1::decode_frame(tlv.payload)
+                        .expect("decode decimal frame")
+                        .into_numeric()
+                        .to_string()
+                }
+                PointerType::Quantity => QuantityValueV1::decode_frame(tlv.payload)
+                    .expect("decode quantity frame")
+                    .into_quantity()
+                    .to_string(),
+                _ => unreachable!("fixed exact-number pointer cases"),
+            };
+            assert_eq!(actual, expected);
+        }
+        let token_json =
+            Json::from_str_norito(r#"{"decimal_token":1.25,"int_token":7,"quantity_token":7}"#)
+                .expect("noncanonical numeric-token JSON");
+        let token_json_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&token_json));
+        for (key, syscall) in [
+            ("int_token", ivm_sys::SYSCALL_JSON_GET_INT),
+            ("decimal_token", ivm_sys::SYSCALL_JSON_GET_DECIMAL),
+            ("quantity_token", ivm_sys::SYSCALL_JSON_GET_QUANTITY),
+        ] {
+            let key: Name = key.parse().expect("numeric-token key");
+            let key_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&key));
+            vm.set_register(10, token_json_ptr);
+            vm.set_register(11, key_ptr);
+            host.syscall(syscall, &mut vm)
+                .expect("numeric token is Option::none");
             assert_eq!(
                 ivm::sum::read_words(
                     &vm,
                     vm.register(10),
-                    ivm::sum::SumLayoutV1::option(1).expect("quantity option layout"),
+                    ivm::sum::SumLayoutV1::option(1).expect("exact-number option layout"),
                 ),
-                Ok((false, vec![]))
+                Ok((false, vec![])),
+                "{key} must reject a JSON number token",
             );
+        }
+    }
+    #[test]
+    fn unassigned_exact_json_getters_fail_before_ledger_host_work() {
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let mut vm = IVM::new(50_000);
+        vm.set_register(10, 0x1111);
+        vm.set_register(11, 0x2222);
+        for number in 0x01_0163..=0x01_0165 {
+            let registers_before = [vm.register(10), vm.register(11)];
+            let heap_cursor_before = vm.memory.alloc(0).expect("read heap cursor");
+            let gas_before = vm.remaining_gas();
+            let queued_before = host.queued.len();
+            let overlay_before = host.durable_state_overlay.len();
+            assert_eq!(
+                host.prepare_syscall(number, &vm),
+                Err(ivm::VMError::UnknownSyscall(number))
+            );
+            assert_eq!(
+                host.syscall(number, &mut vm),
+                Err(ivm::VMError::UnknownSyscall(number))
+            );
+            assert_eq!([vm.register(10), vm.register(11)], registers_before);
+            assert_eq!(
+                vm.memory
+                    .alloc(0)
+                    .expect("read heap cursor after rejection"),
+                heap_cursor_before
+            );
+            assert_eq!(vm.remaining_gas(), gas_before);
+            assert_eq!(host.queued.len(), queued_before);
+            assert_eq!(host.durable_state_overlay.len(), overlay_before);
         }
     }
     #[test]

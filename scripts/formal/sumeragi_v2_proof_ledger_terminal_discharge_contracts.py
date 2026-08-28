@@ -2,7 +2,7 @@
 
 REPLAY_TRACE_SOURCE_SHA256 = {
     "Cargo.lock": (
-        "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+        "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
     ),
     "formal/sumeragi_v2/SumeragiV2TraceWitness.tla": (
         "74c07afb81ce6e5552df12d856ee4d73940bca909e12eff869b959af64f2368d"
@@ -20,19 +20,19 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "07248cd6c7c5db53b8b9cfff98ddae6a823c5022e4f2d45494835707430f60f2"
     ),
     "scripts/formal/collect_sumeragi_v2_replay_receipt.py": (
-        "245e6b6ac906533eb0c2e5c0a879f9fb53ad45e4ff24e6853c3b0b8a7d307ea1"
+        "6b3f4fdf30fd805e6dd044eabd191367753b5c821f7c061268569096d28afe01"
     ),
     "scripts/formal/run_sumeragi_v2_harness.sh": (
-        "e400734ca5d3a9079f5ac5b01cca06921b3811ea6ea8fa93e3e5d128984280b8"
+        "099c05d22938f7a0384ab2671ea85bc18d892656101cda87e7cf8f9a8cd7224a"
     ),
     "scripts/formal/check_sumeragi_v2_replay_receipt.py": (
-        "0f773cfe797f0a3b05865caec82d7db2fcc2c3d0409293899c6795f1b8134108"
+        "e86ce7f9f15b8027060b35bf31bb7666b3b71aa8aa38497ee9dd9c2cb03ed97e"
     ),
     "scripts/formal/sumeragi_v2_replay_receipt_v1.schema.json": (
         "58538f42d9c87bad8da8dd5cee31178c59af63dc4aa4fff6ce9356de5ef4c7f8"
     ),
     "scripts/formal/sumeragi_v2_replay_receipt_test.py": (
-        "244bc010d9248cee22f2a4ec20f3071b9f3ae536fd7c31d1edcd84f4ed5b2ac2"
+        "1720035aea870ded401a0d2363f94b27f1fca2ecff49e61e465364821f557342"
     ),
     "scripts/formal/sumeragi_v2_tlc_result_contract.sh": (
         "f74b5f668830daf9f434fb8ad3234cac13ffafd44a3e8341841d616a27ec03ea"
@@ -44,10 +44,10 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "68e98a5730720d867cccd53415f7d45079109c47376a007d12ef06e72592754c"
     ),
     "scripts/formal/finalize_sumeragi_v2_replay_receipt.py": (
-        "1589753df8b567b4df22dcfc820416b96f83356d19a96c58cc0d3dae631d007e"
+        "b1426c410a03d1ee87c0e683476537ca6014f9db35e453d7fd925948a3c5be89"
     ),
     "scripts/formal/verify_sumeragi_v2_replay_release.py": (
-        "a2c156fb32a4a510a3688befa5d8e8db01707f5985dd3789e14909223eb933c9"
+        "826ecc34e923f377a596df80e4a0ae1e7181a8345f6f2908ee44e93b13564e79"
     ),
 }
 
@@ -370,8 +370,13 @@ def _replay_trace_source_fidelity_errors(
         ('if _read_event_output(events_directory, event, "stderr"):\n', "the empty separate-stderr gate"),
         ('raise CollectionError("normalized replay TSV differs byte-for-byte from the fixture")\n', "the byte-exact normalized fixture gate"),
         (
-            "from sumeragi_v2_replay_signing import SIGNING_CONTRACT\n",
-            "the canonical detached-SSH signing contract import",
+            '    "sumeragi_v2_replay_signing",\n'
+            '    "sumeragi_v2_replay_signing.py",\n',
+            "the canonical detached-SSH signing contract loader",
+        ),
+        (
+            "SIGNING_CONTRACT = _REPLAY_SIGNING.SIGNING_CONTRACT\n",
+            "the loaded detached-SSH signing contract",
         ),
         ("signing = dict(SIGNING_CONTRACT)\n", "the sole V1 signing contract"),
         ('"evidence_class": "release-receipt",\n', "the release receipt class"),
@@ -380,6 +385,60 @@ def _replay_trace_source_fidelity_errors(
         ('"unexpected_files_allowed": False,\n', "the closed artifact inventory"),
     ):
         require_once(collector_relative, fragment, description)
+
+    for relative in (
+        collector_relative,
+        "scripts/formal/check_sumeragi_v2_replay_receipt.py",
+        "scripts/formal/finalize_sumeragi_v2_replay_receipt.py",
+        "scripts/formal/verify_sumeragi_v2_replay_release.py",
+    ):
+        for fragment, description in (
+            (
+                "import importlib.util\n",
+                "the isolated local-module loader dependency",
+            ),
+            (
+                "def _load_local_module(module_name: str, filename: str) -> Any:\n",
+                "the explicit authenticated sibling loader",
+            ),
+            (
+                "    if path.is_symlink() or not path.is_file():\n",
+                "the regular non-symlink sibling gate",
+            ),
+            (
+                "    canonical_path = path.resolve(strict=True)\n"
+                "    if canonical_path != path:\n",
+                "the canonical sibling-path gate",
+            ),
+            (
+                "    spec = importlib.util.spec_from_file_location(module_name, path)\n",
+                "the path-explicit module specification",
+            ),
+        ):
+            require_once(relative, fragment, description)
+
+    checker_relative = "scripts/formal/check_sumeragi_v2_replay_receipt.py"
+    require_once(
+        checker_relative,
+        '    "sumeragi_v2_replay_signing",\n'
+        '    "sumeragi_v2_replay_signing.py",\n',
+        "the checker detached-SSH signing module loader",
+    )
+    for relative in (
+        "scripts/formal/finalize_sumeragi_v2_replay_receipt.py",
+        "scripts/formal/verify_sumeragi_v2_replay_release.py",
+    ):
+        require_once(
+            relative,
+            '    "check_sumeragi_v2_replay_receipt",\n'
+            '    "check_sumeragi_v2_replay_receipt.py",\n',
+            "the independent receipt-checker module loader",
+        )
+        require_once(
+            relative,
+            "_REPLAY_SIGNING = receipt_checker._REPLAY_SIGNING\n",
+            "the shared authenticated signing module binding",
+        )
     collector_source = sources.get(collector_relative)
     if collector_source is not None:
         for forbidden, description in (
@@ -392,7 +451,6 @@ def _replay_trace_source_fidelity_errors(
                     f"not contain {description}"
                 )
 
-    checker_relative = "scripts/formal/check_sumeragi_v2_replay_receipt.py"
     for fragment, description in (
         ('if receipt["mode"] != "formal-only":\n', "the formal-only mode gate"),
         (
@@ -537,6 +595,19 @@ def _replay_trace_source_fidelity_errors(
             "the archived-byte signature replay",
         ),
         (
+            "projection_sources = _projection_sources(receipt_value, receipt_path)\n",
+            "the signed two-file TLAPM projection capture",
+        ),
+        (
+            "_create_projection(output, projection_sources)\n",
+            "the create-only private TLAPM projection publication",
+        ),
+        (
+            '"mode": 0o555,\n                "read_only": True,\n'
+            '                "files": list(PROJECTION_LOGICAL_NAMES),\n',
+            "the authenticated read-only projection attestation",
+        ),
+        (
             '_write_create_only(\n            output, ATTESTATION_NAME, '
             "attestation_bytes, 0o400\n        )\n",
             "the create-only attestation-last publication",
@@ -556,8 +627,16 @@ def _replay_trace_source_fidelity_errors(
             "the exact archived-byte signature replay",
         ),
         (
-            "if len(names) != len(set(names)) or set(names) != set(FILE_MODES):\n",
+            "expected_root_names = {*FILE_MODES, PROJECTION_DIRECTORY_NAME}\n",
             "the closed finalized bundle inventory",
+        ),
+        (
+            '"archived TLAPM projection differs from the signed receipt"\n',
+            "the signed receipt projection rebind",
+        ),
+        (
+            "set(projection_names) != set(PROJECTION_FILE_NAMES)\n",
+            "the exact two-file projection inventory",
         ),
     ):
         require_once(verifier_relative, fragment, description)
@@ -604,7 +683,7 @@ _SAME_ROUND_STRICT_TLA_SOURCE_SHA256 = {
         "971a8bd4cfd654e03fb7bee206b7bdaa9acb1bb449391d9c3218e7b4b13d556e"
     ),
     "SumeragiV2Proofs.tla": (
-        "5089eb6e4f98c97f12b0eb13152ec52e2d9134c09da8df78ecfaf1f168739b16"
+        "54714d447b0181755810b43c86a4e949e859cc19550109caac8a92f926a7ec20"
     ),
 }
 
@@ -1143,28 +1222,28 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "57512631a597b550a139e6b45b938dfc1989b46f66f01640f99dab51a805b6f6"
+        "c2eedbdee34ea24b4d2b1b2f2d6342fa5f6a5978d2eff8ebe38b1b2582f41cd3"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "047871a2fbbc08306274a266a0592cae1f2fc360c66ff66f7e08386f1f4cffd2"
+        "e403277e97e88ea95368d469483c79a72e53b40cb3e99245b50634746b980d65"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
-        "8fd2bbface65035fe2acc59274c514f88233875161915e02229851a3d08852a0"
+        "cf15be44f6b90ccf4ac3d6dd7987423458d31fcdea252a6f9bb6762eb9e9bdbe"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/wal.rs": (
-        "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
+        "d85114cae202b81eb8b99395256a8f6802c22a3a9d3fa5173132d847a4456d0a"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "b75cd269a9bcf8c379d7b72bc5d00b38bc35ea6010ec7bde8be93c22f4f97a31"
+        "3d62ed6c781ffdf54e7fb1a125140b328a018a635bfe98986a9c4606c23dd9d3"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "2e4b90347a928d08d95c7416f86f194f06258f5254448ba0d3ad9ee9396ce070"
+        "d6b9fab4eeb9547faff0238641586bd64c82f6de88c24653a6f65cf6894abb30"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "b22969477e93218eebbef1f28f464f86e545f393910d9ddf75d3001af09f0d25"
+        "7e6a3c35d2a23e349db8b4c6c7ffe75ecbd52bcbbf47a4b456c328dd3b646cd1"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
-        "78ae6f7721048780b66220419c7d59aa7af45ab0e6db62ca6e381e2eea85ea2e"
+        "8304a861a601e8cf230f6473031648a68ae2d0d1418a6d952b7ce6658a5fba16"
     ),
 }
 _INSTALLED_TC_SELECTOR_PROOF_SHA256 = (
@@ -1194,7 +1273,7 @@ _LOCAL_PROPOSAL_TIMEOUT_RUST_ITEM_SHA256 = {
         "111c5d17aba435a3e2a9f593cb6cc4612df9752c0f5add4b7dea06a47f1b2983"
     ),
     "wal_replay": (
-        "7473b0680ec743e30070bc5dcb5ca9d1c7934199852c861fb5e0e9796e7ab709"
+        "54961435ad0487b9c7d320ba4910351f8aacb9fc2bd14f9ec8df94d4dfb4feac"
     ),
     "reducer_active_proposal": (
         "dd2dd74ab7257442e5ce7017be1f4579d8716a162960a043763180a0f1016525"
@@ -1581,11 +1660,12 @@ let effect = self.start_persistence(
                 "view-zero proposal admission must bind the semantic parent decision",
             ),
             (
-                "let Some(checked_refinement) = refinement::check(transition) "
-                "else { let diagnostic = refinement::diagnose(transition); "
-                "iroha_logger::error!(event = ?audit_event, ?diagnostic, "
-                '"Sumeragi v2 reducer rejected the transition refinement predicate"); '
-                "return Err(ReducerError::RefinementViolation); };",
+                """
+let Some(checked_refinement) = refinement::check(transition) else {
+    let _diagnostic = refinement::diagnose(transition);
+    return Err(ReducerError::RefinementViolation);
+};
+""",
                 "Reducer::step must acquire checked production refinement "
                 "authority before committing candidate state",
             ),
@@ -1597,12 +1677,13 @@ let _authorized_refinement = checked_refinement.into_projection();
                 "Reducer::step must consume checked refinement authority before commit",
             ),
             (
-                "let Some(checked_transition) = "
-                "check_production_durable_intent_transition(durable_intent_trace) "
-                "else { iroha_logger::error!(event = ?audit_event, "
-                "?durable_intent_trace, "
-                '"Sumeragi v2 reducer rejected the durable-intent refinement predicate"); '
-                "return Err(ReducerError::RefinementViolation); };",
+                """
+let Some(checked_transition) =
+    check_production_durable_intent_transition(durable_intent_trace)
+else {
+    return Err(ReducerError::RefinementViolation);
+};
+""",
                 "Reducer::step must acquire the source-shared durable-intent "
                 "authorization token",
             ),

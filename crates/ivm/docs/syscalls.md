@@ -218,16 +218,20 @@ Native JSON construction
 - Native construction uses Gas: `G_json_build`; typed getters use Gas: `G_json_get`.
 - Object keys are canonicalized by lexical key order, duplicate keys and
   malformed schemas are rejected, and nested `Option`/`List` handles are read
-  recursively. Booleans remain JSON primitives; `int` renders as a JSON number
-  token across the complete `i64`/`u64` domain, while `decimal` and `quantity`
-  remain canonical base-10 strings and bytes are lowercase `0x` hex. No
-  floating-point conversion occurs.
+  recursively. Booleans remain JSON primitives; `int`, `decimal`, and
+  `quantity` render as canonical base-10 JSON strings, including the complete
+  signed 512-bit `int` domain, and bytes are lowercase `0x` hex. No
+  floating-point conversion or host JSON integer-width conversion occurs.
 - Products, `Result`, and resource handles are not accepted as implicit JSON
   values. Typed getters materialize active payloads only. The exact numeric
-  int getters at `0x010160` and `0x010163` accept only `i64`/`u64` JSON number
-  tokens. Decimal and quantity getters at `0x010161..0x010162` and
-  `0x010164..0x010165` accept canonical strings only. Numeric strings for int,
-  floating-point number tokens, and alternate spellings return `Option::none`.
+  getters are exactly `JSON_GET_INT` at `0x010160`, `JSON_GET_DECIMAL` at
+  `0x010161`, and `JSON_GET_QUANTITY` at `0x010162`; all three accept canonical
+  JSON strings only. JSON number tokens, exponent forms, alternate spellings,
+  overflow, and negative quantities return `Option::none`. Numbers
+  `0x010163..0x010165` are unassigned and return `UnknownSyscall` before
+  syscall gas charging, allocation, or state mutation. Generic `JSON_SET_I64`
+  remains unchanged: it emits a JSON number token and is outside this exact
+  numeric surface.
 
 Domains / Peers
 - 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain
@@ -670,7 +674,7 @@ node enforces that policy unconditionally.
 | 0xB0 | AXT_BEGIN | r10=&AxtDescriptor | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB2 | AXT_COMMIT | - | u64=0 | asset:gas/G_axt@ivm.core/v2 + entries |
-| 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 (production CoreHost accepts only `0` until an authoritative finalized source anchor is implemented) | u64=0/1 | asset:gas/G_verify@ivm.core/v2 + bytes |
+| 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 | u64=0/1 | asset:gas/G_verify@ivm.core/v2 + bytes |
 | 0xB4 | USE_ASSET_HANDLE | r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob? | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&Quantity, r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xB9 | ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |

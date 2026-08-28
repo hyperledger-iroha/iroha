@@ -608,6 +608,43 @@ fn certified_response_queue_refresh_retries_without_closing_output() {
         "self.drive_recovered_ingress_selector(selector, runner)",
     );
 
+    let priority_retry = source_region(
+        priority,
+        "Err(LifecycleIngressSelectorError::QueueCutChanged)",
+        "Err(error)",
+    );
+    assert_source_tokens_in_order(
+        priority_retry,
+        &[
+            "drop(cut);",
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry",
+        ],
+    );
+    assert!(!priority_retry.contains("close_output_for_restart()"));
+
+    for retry in [
+        source_region(
+            ordinary,
+            "Err(LifecycleIngressSelectorError::QueueCutChanged)",
+            "Err(error)",
+        ),
+        source_region(
+            recovered,
+            "Err(LifecycleIngressSelectorError::QueueCutChanged)",
+            "Err(error)",
+        ),
+    ] {
+        assert_source_tokens_in_order(
+            retry,
+            &[
+                "drop(runner);",
+                "ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry",
+            ],
+        );
+        assert!(!retry.contains("close_output_for_restart()"));
+    }
+
     for structural_failure in [
         source_region(narrowing, "Err((error, retained))", "};"),
         source_region(priority, "Err(error)", "};"),

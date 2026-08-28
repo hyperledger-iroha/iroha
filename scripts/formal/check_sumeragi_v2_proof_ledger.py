@@ -80,6 +80,8 @@ _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_network_source_seal_contracts.py",
     "sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py",
     "sumeragi_v2_proof_ledger_production_trace_contracts.py",
+    "sumeragi_v2_proof_ledger_production_trace_evidence_contracts.py",
+    "sumeragi_v2_proof_ledger_candidate_continuation_contracts.py",
     "sumeragi_v2_proof_ledger_serviced_candidate_contracts.py",
     "sumeragi_v2_proof_ledger_reply_writer_deadline_formal_contracts.py",
     "sumeragi_v2_proof_ledger_reply_writer_deadline_production_contracts.py",
@@ -537,7 +539,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "resolve_body_pipeline_completion_owner",
-                "ee5d029fdce1e171ed6f98b287d662a014d3fb7b698a545a0a8617e311640554",
+                "ad21622827a5aa03a02ef7b395cf2d192a5baef6c53ff18d3a77c375a8122d9d",
                 (
                     ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
                 ),
@@ -852,7 +854,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "ingress_atomic_commit": "6842895a159090efa2c4da65863b2e1f83f3afbb2bab05e55e8cfbfb0092d640",
     "lifecycle_ordinal_source_commit": "ededc4d64c8d76d3458b7bcf2f7e9812fe7303673b9d314686968a2369d7c4f6",
     "body_available_commit": "d2f24737c0a9ed5fddc579101ab48ea8a1820ef83508319b9942f6381a65109b",
-    "effect_candidate_retain": "59ff1532bc4f12491fc9aaaa433c47bdb36b4560399548a4862362ea10576d00",
+    "effect_candidate_retain": "498ebc89028de5a60f9cc909f7a7c6f99fc3b3cf3efda45c2ecf9c62834eb097",
     "relay_retry": "052e90cc19d9416a0546c0938c57592da456a5bf98d9c9d64939dc4469d258ac",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",
@@ -8360,6 +8362,7 @@ def _cross_tool_evidence_errors(
 
 
 _execute_checker_component("sumeragi_v2_proof_ledger_production_trace_contracts.py")
+_execute_checker_component("sumeragi_v2_proof_ledger_production_trace_evidence_contracts.py")
 
 
 def build_release_evidence(
@@ -8818,6 +8821,24 @@ def _resume_vote_witness_errors(formal_dir: Path) -> list[str]:
         errors.append(
             f"{module_path}: witness must extend the canonical inductive model directly"
         )
+    exact_carriers = {
+        "ResumeWitnessRosters": "<<<<0>>>>",
+        "ResumeWitnessPowers": "<<<<1>>>>",
+    }
+    for symbol, expected in exact_carriers.items():
+        extracted = _top_level_operator_body(
+            module_source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{module_path}: missing recovery witness carrier {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{module_path}:{line}: recovery witness carrier {symbol} "
+                f"must equal only {expected!r}; found {normalized!r}"
+            )
     recovered = _top_level_operator_body(
         module_source,
         "RecoveredHistoricalLockedCommitSigning",
@@ -8884,6 +8905,27 @@ def _resume_vote_witness_errors(formal_dir: Path) -> list[str]:
             "view advance and one restart; missing or duplicated "
             f"{missing_cfg_lines}"
         )
+    stripped_cfg = strip_tla_comments(cfg_source, preserve_string_contents=True)
+    exact_substitutions = {
+        "EpochRosters": "ResumeWitnessRosters",
+        "EpochPowers": "ResumeWitnessPowers",
+    }
+    for lhs, rhs in exact_substitutions.items():
+        canonical = f"  {lhs} <- {rhs}"
+        canonical_count = len(
+            re.findall(rf"(?m)^{re.escape(canonical)}$", stripped_cfg)
+        )
+        assignments = re.findall(
+            rf"(?m)^[ \t]*{re.escape(lhs)}[ \t]*<-[ \t]*"
+            r"([A-Za-z][A-Za-z0-9_]*)[ \t]*$",
+            stripped_cfg,
+        )
+        if canonical_count != 1 or assignments != [rhs]:
+            errors.append(
+                f"{cfg_path}: recovery witness substitution {lhs} must equal "
+                f"the exact local carrier {rhs} once; found "
+                f"canonical={canonical_count}, inventory={assignments!r}"
+            )
     return errors
 
 
@@ -9461,2154 +9503,7 @@ def _serve_lifecycle_temporal_contract_errors(formal_dir: Path) -> list[str]:
     return errors
 
 
-def _async_candidate_producer_continuation_contract_errors(
-    formal_dir: Path,
-) -> list[str]:
-    """Pin the finite producer handoff, minimum action, and rank contract."""
-    path = formal_dir / "SumeragiV2AsyncCandidateProducerContinuationProofs.tla"
-    if not path.is_file() or path.is_symlink():
-        return [
-            f"{path}: producer-continuation contract must be a regular file"
-        ]
-    try:
-        source = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        return [f"{path}: cannot read producer-continuation contract: {error}"]
-    network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
-    if not network_path.is_file() or network_path.is_symlink():
-        return [
-            f"{network_path}: producer-continuation implementation must be "
-            "a regular file"
-        ]
-    try:
-        network_source = network_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        return [
-            f"{network_path}: cannot read producer-continuation "
-            f"implementation: {error}"
-        ]
-    errors: list[str] = []
-    def require_continuation_physical_cut_operator(
-        symbol: str,
-        required: tuple[str, ...],
-        required_fragments: tuple[str, ...] = (),
-    ) -> None:
-        extracted = _top_level_operator_body(
-            network_source,
-            symbol,
-            preserve_string_contents=True,
-        )
-        if extracted is None:
-            errors.append(
-                f"{network_path}: missing producer-continuation physical-cut "
-                f"operator {symbol}"
-            )
-            return
-        body, line = extracted
-        tokens = set(tla_code_tokens(body))
-        normalized = " ".join(body.split())
-        missing = tuple(token for token in required if token not in tokens)
-        missing_fragments = tuple(
-            fragment
-            for fragment in required_fragments
-            if fragment not in normalized
-        )
-        if missing or missing_fragments:
-            errors.append(
-                f"{network_path}:{line}: {symbol} must retain the immutable "
-                "producer-continuation physical cut and true pre-cut ingress "
-                f"semantics; missing={missing!r}, "
-                f"missing_fragments={missing_fragments!r}"
-            )
-
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateProducerContinuationRecord",
-        ("physicalCut",),
-        ("physicalCut |-> physicalCut",),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateProducerContinuationRecordSet",
-        ("physicalCut", "Nat"),
-        ("physicalCut \\in Nat",),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateProducerContinuationRecordAfterStep",
-        ("record",),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateProducerContinuationStateAfterDeparture",
-        (
-            "AsyncCandidateProducerContinuationRecord",
-            (
-                "AsyncCandidateProducerContinuationSourcePhysicalOrdinalIn"
-            ),
-            "AsyncCandidateProducerContinuationPhysicalCutIn",
-        ),
-        (
-            "AsyncCandidateProducerContinuationSourcePhysicalOrdinalIn( "
-            "state, candidate)",
-            "AsyncCandidateProducerContinuationPhysicalCutIn( state, candidate)",
-        ),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateProducerContinuationRunnerMayPrecedeIngress",
-        (
-            "AsyncIngressSchedulerBarrierActive",
-            "AsyncEarliestIngressPhysicalOrdinal",
-            "physicalCut",
-            "ordinal",
-            "AsyncEarliestIngressSchedulerOrdinal",
-        ),
-        (
-            "record.physicalCut <= AsyncEarliestIngressPhysicalOrdinal(node)",
-            "AsyncEarliestIngressPhysicalOrdinal(node) < record.physicalCut",
-            "record.ordinal <= AsyncEarliestIngressSchedulerOrdinal(node)",
-        ),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncTimeoutLifecyclePhysicalCut",
-        ("asyncControlServiceState", "timeoutLifecyclePhysicalCut", "node"),
-        ("asyncControlServiceState.timeoutLifecyclePhysicalCut[node]",),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncTimeoutLifecyclePhysicalCutForStep",
-        (
-            "timeoutLifecycleOrdinal",
-            "timeoutLifecyclePhysicalCut",
-            "AsyncTimeoutLifecycleUsesRecordedOriginOrdinal",
-            "physicalCut",
-            "AsyncNextIngressPhysicalOrdinal",
-        ),
-        ("ELSE AsyncNextIngressPhysicalOrdinal(node)'",),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateLifecycleStateAfterTimeoutOwnership",
-        (
-            "timeoutLifecycleOrdinal",
-            "timeoutLifecycleOrigin",
-            "timeoutLifecyclePhysicalCut",
-            "AsyncTimeoutLifecycleResetThisStep",
-            "AsyncTimeoutLifecycleTransfersThisStep",
-            "AsyncTimeoutLifecyclePhysicalCutForStep",
-        ),
-        ("!.timeoutLifecyclePhysicalCut",),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncRetransmitLifecyclePhysicalCut",
-        (
-            "asyncControlServiceState",
-            "retransmitLifecyclePhysicalCut",
-            "node",
-        ),
-        ("asyncControlServiceState.retransmitLifecyclePhysicalCut[node]",),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncRetransmitLifecyclePhysicalCutForStep",
-        (
-            "state",
-            "retransmitLifecycleOrdinal",
-            "retransmitLifecyclePhysicalCut",
-            "AsyncNextIngressPhysicalOrdinal",
-        ),
-        ("ELSE AsyncNextIngressPhysicalOrdinal(node)'",),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
-        (
-            "retransmitLifecycleOrdinal",
-            "retransmitLifecyclePhysicalCut",
-            "AsyncRetransmitLifecycleResetThisStep",
-            "AsyncRetransmitLifecycleEpisodeCompletesThisStep",
-            "AsyncRetransmitLifecycleConsumesFreshOrdinal",
-            "AsyncRetransmitLifecyclePhysicalCutForStep",
-        ),
-        ("!.retransmitLifecyclePhysicalCut",),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateProducerContinuationMayPrecedeOwnedRetransmit",
-        (
-            "AsyncRetransmitLifecycleOwned",
-            "sourcePhysicalOrdinal",
-            "AsyncRetransmitLifecyclePhysicalCut",
-            "ordinal",
-            "AsyncRetransmitLifecycleOrdinal",
-        ),
-        (
-            "record.sourcePhysicalOrdinal < "
-            "AsyncRetransmitLifecyclePhysicalCut(node)",
-            "record.ordinal < AsyncRetransmitLifecycleOrdinal(node)",
-        ),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateProducerContinuationMayOwnRuntimeTurn",
-        (
-            "AsyncCandidateProducerContinuationScheduledPredecessorsFor",
-            "AsyncCandidateProducerContinuationMayPrecedeOwnedTimeout",
-            "AsyncCandidateProducerContinuationMayPrecedeOwnedRetransmit",
-        ),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateProducerContinuationPhysicallyBehindOwnedTimeout",
-        (
-            "AsyncTimeoutLifecycleOrdinal",
-            "sourcePhysicalOrdinal",
-            "AsyncTimeoutLifecyclePhysicalCut",
-        ),
-        (
-            "record.sourcePhysicalOrdinal >= "
-            "AsyncTimeoutLifecyclePhysicalCut(node)",
-        ),
-    )
-    require_continuation_physical_cut_operator(
-        (
-            "AsyncCandidateProducerContinuationRuntimePhysicallyEligible"
-            "RecordsForNode"
-        ),
-        (
-            (
-                "AsyncCandidateProducerContinuationPhysicallyEligible"
-                "ResolutionRecordsForNode"
-            ),
-            "AsyncCandidateProducerContinuationPhysicallyBehindOwnedTimeout",
-        ),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateProducerContinuationRuntimeSelectedResolutionRecord",
-        (
-            (
-                "AsyncCandidateProducerContinuationRuntimePhysicallyEligible"
-                "RecordsForNode"
-            ),
-            (
-                "AsyncCandidateProducerContinuationRuntimeResolution"
-                "PredecessorsFor"
-            ),
-        ),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord",
-        (
-            (
-                "AsyncCandidateProducerContinuationRuntimeSelected"
-                "ResolutionRecord"
-            ),
-        ),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode",
-        (
-            (
-                "AsyncCandidateProducerContinuationRuntimePhysicallyEligible"
-                "RecordsForNode"
-            ),
-            "AsyncCandidateProducerContinuationRunnerMayPrecedeIngress",
-        ),
-    )
-    require_continuation_physical_cut_operator(
-        "AsyncCandidateProducerContinuationRunnerResolutionRequired",
-        (
-            "AsyncCandidateProducerContinuationIngressResolutionRequired",
-            (
-                "AsyncCandidateProducerContinuationRunnerSelected"
-                "ResolutionRecord"
-            ),
-            (
-                "AsyncCandidateProducerContinuationRunnableResolution"
-                "RecordsForNode"
-            ),
-        ),
-    )
-    require_continuation_physical_cut_operator(
-        (
-            "AsyncCandidateProducerContinuationEnqueueConsumesSelected"
-            "ReplayReservation"
-        ),
-        (
-            (
-                "AsyncCandidateProducerContinuationRuntimeSelected"
-                "ResolutionRecord"
-            ),
-            (
-                "AsyncCandidateProducerContinuationRuntimeResolution"
-                "Required"
-            ),
-            "asyncRunnerBudget",
-        ),
-    )
-
-    for symbol, required_statement_tokens, required_proof_tokens in (
-        (
-            "AsyncCandidateProducerContinuationStepPreservesPhysicalCut",
-            (
-                "AsyncCandidateProducerContinuationRecordAfterStep",
-                "physicalCut",
-            ),
-            ("AsyncCandidateProducerContinuationRecordAfterStep",),
-        ),
-        (
-            "AsyncCandidateProducerContinuationReservationFreezesPhysicalCut",
-            (
-                "AsyncCandidateProducerContinuationStateAfterDeparture",
-                (
-                    "AsyncCandidateProducerContinuationSourcePhysicalOrdinalIn"
-                ),
-                "AsyncCandidateProducerContinuationPhysicalCutIn",
-                "physicalCut",
-            ),
-            (
-                "AsyncCandidateProducerContinuationStateAfterDeparture",
-                "AsyncCandidateProducerContinuationRecord",
-            ),
-        ),
-        (
-            "AsyncCandidateProducerContinuationPostCutIngressCannotBlockRunnerTurn",
-            (
-                "physicalCut",
-                "AsyncEarliestIngressPhysicalOrdinal",
-                (
-                    "AsyncCandidateProducerContinuationRunnerResolutionRecords"
-                    "ForNode"
-                ),
-            ),
-            ("AsyncCandidateProducerContinuationRunnerMayPrecedeIngress",),
-        ),
-        (
-            "AsyncCandidateProducerContinuationOnlyPreCutIngressCanBlockRunnerTurn",
-            (
-                "physicalCut",
-                "AsyncEarliestIngressPhysicalOrdinal",
-                "AsyncEarliestIngressSchedulerOrdinal",
-            ),
-            ("AsyncCandidateProducerContinuationRunnerMayPrecedeIngress",),
-        ),
-        (
-            "AsyncCandidateProducerContinuationPostTimeoutCutCannotOwnRunnerTurn",
-            (
-                "AsyncTimeoutLifecyclePhysicalCut",
-                "sourcePhysicalOrdinal",
-                (
-                    "AsyncCandidateProducerContinuationRunnableResolution"
-                    "RecordsForNode"
-                ),
-            ),
-            (
-                "AsyncCandidateProducerContinuationMayPrecedeOwnedTimeout",
-            ),
-        ),
-        (
-            "AsyncCandidateProducerContinuationPostRetransmitCutCannotOwnRunnerTurn",
-            (
-                "AsyncRetransmitLifecyclePhysicalCut",
-                "sourcePhysicalOrdinal",
-                (
-                    "AsyncCandidateProducerContinuationRunnableResolution"
-                    "RecordsForNode"
-                ),
-            ),
-            (
-                "AsyncCandidateProducerContinuationMayPrecedeOwnedRetransmit",
-            ),
-        ),
-        (
-            (
-                "AsyncCandidateProducerContinuationRuntimeSelectionIs"
-                "LogicalMinimum"
-            ),
-            (
-                (
-                    "AsyncCandidateProducerContinuationRuntimeSelected"
-                    "ResolutionRecord"
-                ),
-                (
-                    "AsyncCandidateProducerContinuationRuntimePhysically"
-                    "EligibleRecordsForNode"
-                ),
-                (
-                    "AsyncCandidateProducerContinuationRuntimeResolution"
-                    "PredecessorsFor"
-                ),
-            ),
-            (
-                "AsyncCandidateProducerContinuationLogicalOccurrenceRank",
-                (
-                    "AsyncCandidateProducerContinuationLogicalPredecessor"
-                    "StrictlyLowersOccurrenceRank"
-                ),
-            ),
-        ),
-        (
-            (
-                "AsyncCandidateProducerContinuationRunnerSelectionIsTwoStage"
-                "LogicalMinimum"
-            ),
-            (
-                (
-                    "AsyncCandidateProducerContinuationRuntimePhysically"
-                    "EligibleRecordsForNode"
-                ),
-                (
-                    "AsyncCandidateProducerContinuationRuntimeResolution"
-                    "PredecessorsFor"
-                ),
-                (
-                    "AsyncCandidateProducerContinuationRunnableResolution"
-                    "RecordsForNode"
-                ),
-            ),
-            (
-                "AsyncCandidateProducerContinuationRuntimeSelectionIsLogicalMinimum",
-            ),
-        ),
-        (
-            "AsyncTimeoutLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
-            (
-                "AsyncTimeoutLifecyclePhysicalCut",
-                "AsyncNextIngressPhysicalOrdinal",
-            ),
-            (
-                "AsyncCandidateLifecycleStateAfterTimeoutOwnership",
-                "AsyncTimeoutLifecyclePhysicalCutForStep",
-            ),
-        ),
-        (
-            "AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint",
-            (
-                "AsyncTimeoutLifecyclePhysicalCut",
-                "AsyncTimeoutLifecycleOrdinal",
-            ),
-            ("AsyncCandidateLifecycleStateAfterTimeoutOwnership",),
-        ),
-        (
-            "AsyncTimeoutLifecycleOrdinalClearsOnlyAtEndpoint",
-            (
-                "AsyncTimeoutLifecyclePhysicalCut",
-                "AsyncTimeoutLifecycleTransfersThisStep",
-            ),
-            ("AsyncCandidateLifecycleStateAfterTimeoutOwnership",),
-        ),
-        (
-            "AsyncRetransmitFreshLiveEpisodeFreezesIngressPhysicalCut",
-            (
-                "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
-                "AsyncRetransmitLifecycleConsumesFreshOrdinal",
-                "retransmitLifecyclePhysicalCut",
-                "AsyncNextIngressPhysicalOrdinal",
-            ),
-            (
-                "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
-                "AsyncRetransmitLifecyclePhysicalCutForStep",
-            ),
-        ),
-        (
-            "AsyncRetransmitLiveEpisodeRetainsIngressPhysicalCut",
-            (
-                "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
-                "retransmitLifecycleOrdinal",
-                "retransmitLifecyclePhysicalCut",
-            ),
-            ("AsyncCandidateLifecycleStateAfterServeIngressAdmission",),
-        ),
-        (
-            "AsyncRetransmitLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
-            (
-                "AsyncRetransmitLifecyclePhysicalCut",
-                "AsyncNextIngressPhysicalOrdinal",
-                "AsyncRetransmitLifecycleOrdinal",
-                "AsyncNextCandidateLifecycleOrdinal",
-            ),
-            (
-                "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
-                "AsyncRetransmitLifecyclePhysicalCutForStep",
-            ),
-        ),
-        (
-            "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",
-            (
-                "AsyncRetransmitLifecycleOrdinal",
-                "AsyncRetransmitLifecyclePhysicalCut",
-            ),
-            ("AsyncCandidateLifecycleStateAfterServeIngressAdmission",),
-        ),
-        (
-            "AsyncRetransmitLifecycleOwnerAndPhysicalCutClearAtEndpoint",
-            (
-                "AsyncRetransmitLifecycleOrdinal",
-                "AsyncRetransmitLifecyclePhysicalCut",
-                "AsyncRetransmitLifecycleResetThisStep",
-                "AsyncRetransmitLifecycleEpisodeCompletesThisStep",
-            ),
-            ("AsyncCandidateLifecycleStateAfterServeIngressAdmission",),
-        ),
-    ):
-        extracted = _top_level_theorem_body(
-            network_source,
-            symbol,
-            preserve_string_contents=True,
-        )
-        if extracted is None:
-            errors.append(
-                f"{network_path}: missing producer-continuation physical-cut "
-                f"theorem {symbol}"
-            )
-            continue
-        body, line = extracted
-        statement, *proof_parts = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
-            body,
-            maxsplit=1,
-        )
-        proof = "" if not proof_parts else proof_parts[0]
-        statement_tokens = set(tla_code_tokens(statement))
-        missing_statement = tuple(
-            token
-            for token in required_statement_tokens
-            if token not in statement_tokens
-        )
-        missing_proof = tuple(
-            token
-            for token in required_proof_tokens
-            if not _tla_dependency_present(proof, token)
-        )
-        if missing_statement or missing_proof:
-            errors.append(
-                f"{network_path}:{line}: {symbol} must prove stored-cut "
-                "preservation and distinguish post-cut ingress from true "
-                f"pre-cut ingress; missing_statement={missing_statement!r}, "
-                f"missing_proof={missing_proof!r}"
-            )
-    exact_proof_operators = {
-        "AsyncCandidateProducerContinuationExactOwner": (
-            '\\E record \\in AsyncCandidateProducerContinuations: /\\ '
-            'record.status \\in {"Reserved", "Materialized"} /\\ '
-            'record.node \\in {target, leader} /\\ record.context = '
-            'leaderContext /\\ record.height = leaderContext.height /\\ '
-            'record.view = leaderView /\\ record.identity.leader = leader '
-            '/\\ record.subject = subject /\\ record.phase \\in '
-            'AsyncCandidateServiceTrackedKinds /\\ (record.phase \\in '
-            '{"BeginDecision", "PersistDecision"} => record.node = target) '
-            '/\\ record.identity = AsyncCandidateServiceIdentity(record.candidate) /\\ '
-            'record.causalOrigin = record.candidate.causalOrigin'
-        ),
-        "AsyncCandidateProducerContinuationFrozenRecords": (
-            "{record \\in "
-            "AsyncCandidateProducerContinuationResolutionRecordsForNode(node): "
-            "/\\ record.ordinal <= targetOrdinal /\\ record.causalOrigin "
-            "\\in "
-            "AsyncCandidateProducerContinuationFrozenPredecessorOrigins( "
-            "node, targetOrdinal)}"
-        ),
-        "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates": (
-            "{candidate \\in AsyncCandidateSet: \\E record \\in "
-            "AsyncCandidateProducerContinuationFrozenRecords( node, "
-            'targetOrdinal): /\\ record.status = "Reserved" /\\ '
-            'record.sourceClass = "Local" /\\ '
-            "~AsyncCandidateProducerContinuationConcreteSuccessorOwned(record) "
-            "/\\ ~AsyncCandidateProducerContinuationHandoffRetired(record) "
-            "/\\ candidate = record.candidate}"
-        ),
-        "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates": (
-            "{AsyncLeaderWireRuntimeCandidate(record.item): record \\in "
-            "{owned \\in asyncLeaderWireLifecycles: /\\ owned.recipient = node "
-            "/\\ owned.schedulerOrdinal < targetOrdinal /\\ "
-            "AsyncLeaderWireLifecycleActive(owned) /\\ "
-            "owned.physicalAdmissionOrdinal < physicalCut}}"
-        ),
-        "AsyncCandidateProducerContinuationFrozenCandidateOwners": (
-            "AsyncCandidateProducerContinuationFrozenCausalCandidates( "
-            "node, targetOrdinal) \\cup "
-            "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates( "
-            "node, targetOrdinal) \\cup "
-            "AsyncCandidateProducerContinuationFrozenOrdinaryIngressCandidates( "
-            "node, targetOrdinal) \\cup "
-            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates( "
-            "node, targetOrdinal, "
-            "AsyncCandidateProducerContinuationTargetPhysicalCut( node, "
-            "targetOrdinal))"
-        ),
-        "AsyncCandidateProducerContinuationFrozenCandidateTokens": (
-            'UNION {{<<"Candidate", candidate, token>>: token \\in '
-            "1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}: "
-            "candidate \\in AsyncCandidateProducerContinuationFrozenCandidateOwners( "
-            "node, targetOrdinal)}"
-        ),
-        "AsyncCandidateProducerContinuationFrozenStatusTokens": (
-            'UNION {{<<"Continuation", record.identity, token>>: token \\in '
-            "1..AsyncCandidateProducerContinuationStatusRank(record.status)}: "
-            "record \\in AsyncCandidateProducerContinuationFrozenRecords( node, "
-            "targetOrdinal)}"
-        ),
-        "AsyncCandidateProducerContinuationFrozenPrefixDescentProperty": (
-            "specification => \\A node \\in AsyncVotersAt(initialContext), "
-            "identity \\in AsyncCandidateServiceIdentities, targetOrdinal \\in Nat "
-            "\\ {0}, targetStage \\in "
-            "AsyncCandidateServiceStageClasses, status \\in "
-            '{"Reserved", "Materialized"}, budget \\in '
-            "AsyncCandidateProducerContinuationFrozenPrefixRankCarrier: "
-            "AsyncCandidateProducerContinuationFrozenPrefixAtBudget( node, "
-            "identity, targetOrdinal, targetStage, status, budget) ~> "
-            "AsyncCandidateProducerContinuationPrefixDescentGoal( node, "
-            "identity, targetOrdinal, targetStage, status, budget)"
-        ),
-        "AsyncCandidateProducerContinuationFrozenPrefixClosureProperty": (
-            "specification => \\A node \\in AsyncVotersAt(initialContext), "
-            "identity \\in AsyncCandidateServiceIdentities, targetOrdinal \\in Nat "
-            "\\ {0}, targetStage \\in "
-            "AsyncCandidateServiceStageClasses, status \\in "
-            '{"Reserved", "Materialized"}, budget \\in '
-            "AsyncCandidateProducerContinuationFrozenPrefixRankCarrier: "
-            "AsyncCandidateProducerContinuationFrozenPrefixAtBudget( node, "
-            "identity, targetOrdinal, targetStage, status, budget) ~> "
-            "AsyncCandidateProducerContinuationTargetStatusExit( identity, "
-            "status)"
-        ),
-        "AsyncCandidateProducerContinuationDormantReservationClosureProperty": (
-            "specification => \\A node \\in AsyncVotersAt(initialContext), "
-            "record \\in AsyncCandidateProducerContinuationRecordSet: /\\ "
-            "gst /\\ record = "
-            "AsyncCandidateProducerContinuationSelectedResolutionRecord(node) "
-            '/\\ record.status = "Reserved" /\\ record \\in '
-            "AsyncCandidateProducerContinuationResolutionRecordsForNode(node) "
-            "~> AsyncCandidateProducerContinuationDormantReservationGoal(record)"
-        ),
-    }
-    exact_network_operators = {
-        "AsyncCandidateProducerContinuationCapacity": (
-            "AsyncCandidateServiceRecordCapacity"
-        ),
-        "AsyncCandidateProducerContinuationStatuses": (
-            '{"Reserved", "Materialized", "Terminal"}'
-        ),
-        "AsyncCandidateProducerContinuationSourceClasses": (
-            '{"Local", "ConditionalTransport", "VolatileBody"}'
-        ),
-        "AsyncCandidateProducerContinuationConditionalResponsiveTransportKinds": (
-            '{"DeliverProposal", "DeliverVote", "DeliverQC", '
-            '"DeliverTimeout", "DeliverTC"}'
-        ),
-        "AsyncCandidateProducerContinuationVolatileBodyReconstructionKinds": (
-            '{"FetchBody", "RebindRetainedBody", "FetchCertifiedBody"}'
-        ),
-        "AsyncCandidateProducerContinuationLocallyReconstructibleKinds": (
-            '{"AssembleBody", "TimeoutElapsed", "StoreBody", '
-            '"ValidateBody", "Apply"}'
-        ),
-        "AsyncCandidateProducerContinuationExternalResidualKinds": (
-            "AsyncCandidateProducerContinuationConditionalResponsiveTransportKinds "
-            "\\cup "
-            "AsyncCandidateProducerContinuationVolatileBodyReconstructionKinds"
-        ),
-        "AsyncCandidateProducerContinuationSourceClass": (
-            "CASE candidate.kind \\in "
-            "AsyncCandidateProducerContinuationLocallyReconstructibleKinds -> "
-            '"Local" [] candidate.kind \\in '
-            "AsyncCandidateProducerContinuationConditionalResponsiveTransportKinds "
-            '-> "ConditionalTransport" [] OTHER -> "VolatileBody"'
-        ),
-        "AsyncCandidateProducerContinuationItemCarrierIn": (
-            "\\/ item \\in retainedControl \\/ \\E packet \\in transport: "
-            "packet.item = item \\/ \\E recipient \\in ValidatorIds, source "
-            "\\in AsyncIngressSources: item \\in "
-            "SequenceSet(ingressLanes[recipient][source])"
-        ),
-        "AsyncCandidateProducerContinuationDeclaredHandoffOwned": (
-            "\\E successor \\in record.handoffCandidates: \\/ "
-            "CandidateScheduled(successor) \\/ "
-            "AsyncCandidateServiceCoalesced(successor) \\/ "
-            "AsyncCandidateProducerContinuationActiveForIdentity( "
-            "AsyncCandidateServiceIdentity(successor)) \\/ "
-            "successor.causalOrigin \\in "
-            "AsyncCandidateLifecycleDurableReplayOriginsForNode( "
-            "successor.node)"
-        ),
-        "AsyncCandidateProducerContinuationDeclaredHandoffRetired": (
-            "\\/ record.handoffCandidates = {} \\/ \\A successor \\in "
-            "record.handoffCandidates: \\/ "
-            "AsyncCandidateInternalBodyAvailableStageRetired(successor) \\/ "
-            "AsyncCandidateProducerContinuationTerminalForIdentity( "
-            "AsyncCandidateServiceIdentity(successor))"
-        ),
-        "AsyncCandidateConditionalTransportCarrier": (
-            '/\\ record.sourceClass = "ConditionalTransport" /\\ '
-            "record.candidate.item # NoAsyncItem /\\ "
-            "AsyncCandidateProducerContinuationItemCarrier( "
-            "record.candidate.item)"
-        ),
-        "AsyncCandidateConditionalTransportRetired": (
-            '/\\ record.sourceClass = "ConditionalTransport" /\\ \\/ '
-            "AsyncCandidateServiceCoalesced(record.candidate) \\/ "
-            "AsyncControlServiceIdentityServicedOrAdvancedIn( "
-            "asyncControlServiceState, record.candidate.item) \\/ /\\ "
-            "record.handoffCandidates = {} /\\ "
-            "~AsyncCandidateConditionalTransportCarrier(record) /\\ "
-            "AsyncControlServiceSlotOwnedIn( asyncControlServiceState, "
-            "record.candidate.item) /\\ "
-            "AsyncControlServiceIdentityMatches( record.candidate.item, "
-            "AsyncControlServiceRecordForItemIn( asyncControlServiceState, "
-            "record.candidate.item))"
-        ),
-        "AsyncCandidateVolatileBodyExactRequestCarrierIn": (
-            '\\E request \\in activeRequests: /\\ request.kind = '
-            '"CertifiedRequest" /\\ request.source = candidate.node /\\ '
-            "request.envelope.height = candidate.height /\\ "
-            "request.envelope.view = candidate.view /\\ "
-            "request.envelope.subject = candidate.subject /\\ "
-            "candidate.evidence \\in QcRecordSet /\\ "
-            "request.envelope.certificate = candidate.evidence"
-        ),
-        "AsyncCandidateVolatileBodyCarrier": (
-            '/\\ record.sourceClass = "VolatileBody" /\\ \\/ '
-            "AsyncCandidateProducerContinuationDeclaredHandoffOwned(record) "
-            "\\/ AsyncCandidateInternalBodyAvailableStageRetired("
-            "record.candidate) \\/ "
-            "AsyncCandidateVolatileBodyExactRequestCarrierIn( "
-            "asyncActiveRequests, record.candidate) \\/ /\\ "
-            "record.candidate.evidence \\in AsyncNetworkItems /\\ "
-            "AsyncCandidateProducerContinuationItemCarrier( "
-            "record.candidate.evidence)"
-        ),
-        "AsyncCandidateVolatileBodyRetired": (
-            '/\\ record.sourceClass = "VolatileBody" /\\ \\/ '
-            "AsyncCandidateServiceCoalesced(record.candidate) \\/ /\\ "
-            "record.handoffCandidates = {} /\\ "
-            "AsyncCandidateInternalBodyAvailableStageRetired( "
-            "record.candidate) \\/ /\\ record.handoffCandidates # {} /\\ "
-            "AsyncCandidateProducerContinuationDeclaredHandoffRetired(record)"
-        ),
-        "AsyncCandidateConditionalTransportCarrierAfter": (
-            '/\\ record.sourceClass = "ConditionalTransport" /\\ '
-            "record.candidate.item # NoAsyncItem /\\ "
-            "AsyncCandidateProducerContinuationItemCarrierIn( "
-            "asyncRetainedControl', asyncTransport', asyncIngressLanes', "
-            "record.candidate.item)"
-        ),
-        "AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn": (
-            "\\E successor \\in record.handoffCandidates: \\/ "
-            "CandidateScheduledAfter(successor) \\/ \\E serviced \\in "
-            "state.candidateServiceMarkers \\cup "
-            "state.candidateTerminalTombstones: serviced.identity = "
-            "AsyncCandidateServiceIdentity(successor) \\/ "
-            "AsyncCandidateProducerContinuationActiveForIdentityIn( state, "
-            "AsyncCandidateServiceIdentity(successor)) \\/ "
-            "successor.causalOrigin \\in "
-            "AsyncCandidateLifecycleDurableReplayOriginsForNodeAfter( "
-            "successor.node)"
-        ),
-        "AsyncCandidateProducerContinuationDeclaredHandoffRetiredAfterIn": (
-            "\\/ record.handoffCandidates = {} \\/ \\A successor \\in "
-            "record.handoffCandidates: \\/ "
-            "AsyncCandidateInternalBodyAvailableStageRetiredAfter(successor) "
-            "\\/ AsyncCandidateProducerContinuationTerminalForIdentityIn( "
-            "state, AsyncCandidateServiceIdentity(successor))"
-        ),
-        "AsyncCandidateConditionalTransportRetiredAfterIn": (
-            '/\\ record.sourceClass = "ConditionalTransport" /\\ \\/ '
-            "AsyncCandidateProducerContinuationServiceCoalescedIn( state, "
-            "record.candidate) \\/ "
-            "AsyncControlServiceIdentityServicedOrAdvancedIn( state, "
-            "record.candidate.item) \\/ /\\ record.handoffCandidates = {} "
-            "/\\ ~AsyncCandidateConditionalTransportCarrierAfter(record) "
-            "/\\ AsyncControlServiceSlotOwnedIn( state, "
-            "record.candidate.item) /\\ "
-            "AsyncControlServiceIdentityMatches( record.candidate.item, "
-            "AsyncControlServiceRecordForItemIn( state, "
-            "record.candidate.item))"
-        ),
-        "AsyncCandidateVolatileBodyCarrierAfterIn": (
-            '/\\ record.sourceClass = "VolatileBody" /\\ \\/ '
-            "AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn( "
-            "state, record) \\/ "
-            "AsyncCandidateInternalBodyAvailableStageRetiredAfter( "
-            "record.candidate) \\/ "
-            "AsyncCandidateVolatileBodyExactRequestCarrierIn( "
-            "asyncActiveRequests', record.candidate) \\/ /\\ "
-            "record.candidate.evidence \\in AsyncNetworkItems /\\ "
-            "AsyncCandidateProducerContinuationItemCarrierIn( "
-            "asyncRetainedControl', asyncTransport', asyncIngressLanes', "
-            "record.candidate.evidence)"
-        ),
-        "AsyncCandidateVolatileBodyRetiredAfterIn": (
-            '/\\ record.sourceClass = "VolatileBody" /\\ \\/ '
-            "AsyncCandidateProducerContinuationServiceCoalescedIn( state, "
-            "record.candidate) \\/ /\\ record.handoffCandidates = {} /\\ "
-            "AsyncCandidateInternalBodyAvailableStageRetiredAfter( "
-            "record.candidate) \\/ /\\ record.handoffCandidates # {} /\\ "
-            "AsyncCandidateProducerContinuationDeclaredHandoffRetiredAfterIn( "
-            "state, record)"
-        ),
-        "AsyncCandidateProducerContinuationStatusRank": (
-            'CASE status = "Reserved" -> 2 [] status = "Materialized" -> 1 '
-            "[] OTHER -> 0"
-        ),
-        "AsyncCandidateProducerContinuationRecord": (
-            "[identity |-> AsyncCandidateServiceIdentity(candidate), "
-            "candidate |-> candidate, handoffCandidates |-> "
-            "handoffCandidates, address |-> [node |-> candidate.node, "
-            "slot |-> lifecycleSlot, stage |-> "
-            "AsyncCandidateServiceStageForKind(candidate.kind)], node |-> "
-            "candidate.node, context |-> candidate.consumerContext, height "
-            "|-> candidate.height, view |-> candidate.view, subject |-> "
-            "candidate.subject, phase |-> candidate.kind, sourceClass |-> "
-            "AsyncCandidateProducerContinuationSourceClass(candidate), "
-            "causalOrigin |-> candidate.causalOrigin, ordinal |-> ordinal, "
-            "sourcePhysicalOrdinal |-> sourcePhysicalOrdinal, physicalCut "
-            "|-> physicalCut, status |-> status]"
-        ),
-        "AsyncCandidateProducerContinuationActiveForIdentityIn": (
-            "\\E record \\in "
-            "AsyncCandidateProducerContinuationRecordsForIdentityIn( state, "
-            'identity): record.status \\in {"Reserved", "Materialized"}'
-        ),
-        "AsyncCandidateProducerContinuationTerminalForIdentityIn": (
-            "\\E record \\in "
-            "AsyncCandidateProducerContinuationRecordsForIdentityIn( state, "
-            'identity): record.status = "Terminal"'
-        ),
-        "AsyncCandidateProducerContinuationPartitionInvariantIn": (
-            "/\\ \\A left, right \\in state.producerContinuations: /\\ "
-            "(left.identity = right.identity => left = right) /\\ "
-            "(left.address = right.address => left = right) /\\ "
-            "((left.node = right.node /\\ left.ordinal = right.ordinal /\\ "
-            "left.phase = right.phase) => left = right) /\\ ((left.node = "
-            "right.node /\\ left.ordinal = right.ordinal /\\ left.status "
-            '\\in {"Reserved", "Materialized"} /\\ right.status \\in '
-            '{"Reserved", "Materialized"}) => left = right) /\\ \\A record '
-            "\\in state.producerContinuations: /\\ record.address \\in "
-            "AsyncCandidateServiceStageOwnerAddresses /\\ "
-            "record.address.node = record.node /\\ record.address.stage = "
-            "AsyncCandidateServiceStageForKind(record.phase) /\\ \\A "
-            "successor \\in record.handoffCandidates: /\\ successor.node = "
-            "record.node /\\ successor.causalOrigin = record.causalOrigin"
-        ),
-        "AsyncCandidateProducerContinuationScheduledExclusionInvariant": (
-            "\\A candidate \\in QueuedCandidates \\cup DeferredCandidates "
-            "\\cup CausalCandidates \\cup TrackedWorkCandidates: "
-            "\\/ ~AsyncCandidateProducerContinuationBlocks(candidate) \\/ "
-            "AsyncCandidateProducerContinuationExactReplayCarrier(candidate)"
-        ),
-        "AsyncCandidateProducerContinuationExactReplayCarrier": (
-            "\\E record \\in AsyncCandidateProducerContinuations: /\\ "
-            'record.status \\in {"Reserved", "Materialized"} /\\ '
-            'record.sourceClass = "Local" /\\ record.candidate = candidate '
-            "/\\ record.ordinal = AsyncCandidateLifecycleOrdinal(candidate)"
-        ),
-        "AsyncCandidateProducerContinuationLocalReplayCarrier": (
-            '/\\ record.sourceClass = "Local" /\\ '
-            "CandidateScheduled(record.candidate)"
-        ),
-        "AsyncCandidateProducerContinuationLocalReplayCarrierAfter": (
-            '/\\ record.sourceClass = "Local" /\\ '
-            "CandidateScheduledAfter(record.candidate)"
-        ),
-        "AsyncCandidateProducerContinuationExactLocalReplayStep": (
-            "LET record == "
-            "AsyncCandidateProducerContinuationSelectedReplayRecord(node) IN "
-            '/\\ record.status = "Reserved" /\\ '
-            'record.sourceClass = "Local" /\\ '
-            "~AsyncCandidateProducerContinuationRunnerResolutionReady(node) /\\ "
-            'asyncRunnerPhase[node] = "Local" /\\ '
-            "asyncRunnerBudget[node] > 0 /\\ "
-            "CanEnqueueClass(node, record.candidate.class) /\\ "
-            "AsyncCandidateProducerContinuationExactReplayIdentity( node, "
-            "AsyncCandidateProducerContinuationSelectedLocalCandidate(node)) "
-            "/\\ AsyncCandidateLifecycleOrdinal(record.candidate) = "
-            "record.ordinal /\\ "
-            "AsyncCandidateLifecycleSourcePhysicalOrdinal(record.candidate) "
-            "= record.sourcePhysicalOrdinal /\\ "
-            "AsyncCandidateLifecyclePhysicalCut(record.candidate) = "
-            "record.physicalCut /\\ EnqueueCandidate(record.candidate) /\\ "
-            "UNCHANGED vars /\\ UNCHANGED asyncCausalQueues /\\ UNCHANGED "
-            "AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService /\\ "
-            "asyncRunnerPhase' = asyncRunnerPhase /\\ asyncRunnerBudget' = "
-            "[asyncRunnerBudget EXCEPT ![node] = @ - 1]"
-        ),
-        "AsyncCandidateProducerContinuationHandoffCandidatesThisStep": (
-            "IF candidate \\in AsyncCandidateServicesThisStep THEN "
-            "SequenceSet(CommandSuccessors(candidate)) ELSE {}"
-        ),
-        "AsyncCandidateProducerContinuationInitialStatusAfter": '"Reserved"',
-        "AsyncCandidateProducerContinuationSourceAfter": (
-            "/\\ AsyncCandidateProducerContinuationDeparture(candidate) /\\ "
-            "~AsyncCandidateProducerContinuationGoalAfter(candidate) /\\ "
-            "candidate.kind \\in AsyncCandidateServiceTrackedKinds"
-        ),
-        "AsyncCandidateProducerContinuationAddressCanAdvanceIn": (
-            "LET address == "
-            "AsyncCandidateProducerContinuationAddressForIn(state, "
-            "candidate) ordinal == "
-            "AsyncCandidateProducerContinuationOrdinalForIn(state, "
-            "candidate) IN \\A record \\in "
-            "AsyncCandidateProducerContinuationRecordsForAddressIn( state, "
-            'address): /\\ record.status = "Terminal" /\\ record.context = '
-            "candidate.consumerContext /\\ record.height = candidate.height "
-            "/\\ record.view < candidate.view /\\ record.ordinal < ordinal"
-        ),
-        "AsyncCandidateProducerContinuationHandoffOwned": (
-            '\\/ /\\ record.sourceClass = "Local" /\\ '
-            "\\/ "
-            "AsyncCandidateProducerContinuationDeclaredHandoffOwned(record) "
-            "\\/ "
-            "AsyncCandidateProducerContinuationLocalReplayCarrier(record) "
-            '\\/ /\\ record.sourceClass = "ConditionalTransport" /\\ \\/ '
-            "AsyncCandidateProducerContinuationDeclaredHandoffOwned(record) "
-            "\\/ AsyncCandidateConditionalTransportCarrier(record) \\/ "
-            "AsyncCandidateVolatileBodyCarrier(record)"
-        ),
-        "AsyncCandidateProducerContinuationHandoffRetired": (
-            '\\/ /\\ record.sourceClass = "Local" /\\ '
-            "AsyncCandidateProducerContinuationDeclaredHandoffRetired(record) "
-            "\\/ AsyncCandidateConditionalTransportRetired(record) \\/ "
-            "AsyncCandidateVolatileBodyRetired(record)"
-        ),
-        "AsyncCandidateProducerContinuationConcreteSuccessorOwned": (
-            "AsyncCandidateProducerContinuationHandoffOwned(record)"
-        ),
-        "AsyncCandidateProducerContinuationResolutionPredecessorsFor": (
-            "{other \\in "
-            "AsyncCandidateProducerContinuationPhysicallyEligibleResolutionRecordsForNode( "
-            "node): AsyncCandidateProducerContinuationLogicalPrecedes(other, "
-            "record)}"
-        ),
-        "AsyncCandidateProducerContinuationSelectedResolutionRecord": (
-            "CHOOSE record \\in "
-            "AsyncCandidateProducerContinuationPhysicallyEligibleResolutionRecordsForNode( "
-            "node): "
-            "AsyncCandidateProducerContinuationResolutionPredecessorsFor( "
-            "node, record) = {}"
-        ),
-        "AsyncCandidateProducerContinuationResolutionRequired": (
-            "AsyncCandidateProducerContinuationResolutionRecordsForNode(node) "
-            "# {}"
-        ),
-        "AsyncCandidateProducerContinuationSelectedSourceClass": (
-            "/\\ AsyncCandidateProducerContinuationResolutionRequired(node) "
-            "/\\ sourceClass \\in "
-            "AsyncCandidateProducerContinuationSourceClasses /\\ "
-            "(AsyncCandidateProducerContinuationSelectedResolutionRecord(node)) "
-            ".sourceClass = sourceClass"
-        ),
-        "AsyncCandidateProducerContinuationResolutionReady": (
-            "LET record == "
-            "AsyncCandidateProducerContinuationSelectedResolutionRecord(node) "
-            "IN /\\ "
-            "AsyncCandidateProducerContinuationResolutionRequired(node) /\\ "
-            '\\/ record.status = "Materialized" \\/ '
-            "AsyncCandidateProducerContinuationConcreteSuccessorOwned(record) "
-            "\\/ "
-            "AsyncCandidateProducerContinuationHandoffRetired(record)"
-        ),
-        "AsyncCandidateProducerContinuationRunnerMayPrecedeIngress": (
-            "\\/ ~AsyncIngressSchedulerBarrierActive(node) "
-            "\\/ record.physicalCut <= "
-            "AsyncEarliestIngressPhysicalOrdinal(node) \\/ /\\ "
-            "AsyncEarliestIngressPhysicalOrdinal(node) < record.physicalCut "
-            "/\\ record.ordinal <= AsyncEarliestIngressSchedulerOrdinal(node)"
-        ),
-        "AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode": (
-            "{record \\in "
-            "AsyncCandidateProducerContinuationRuntimePhysicallyEligibleRecordsForNode( "
-            "node): "
-            "AsyncCandidateProducerContinuationRunnerMayPrecedeIngress("
-            "node, record)}"
-        ),
-        "AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord": (
-            "AsyncCandidateProducerContinuationRuntimeSelectedResolutionRecord("
-            "node)"
-        ),
-        "AsyncCandidateProducerContinuationRunnerResolutionRequired": (
-            "/\\ AsyncCandidateProducerContinuationIngressResolutionRequired("
-            "node) "
-            "/\\ AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord("
-            "node) \\in "
-            "AsyncCandidateProducerContinuationRunnableResolutionRecordsForNode( "
-            "node)"
-        ),
-        "AsyncCandidateProducerContinuationRunnerResolutionReady": (
-            "/\\ "
-            "AsyncCandidateProducerContinuationRunnerResolutionRequired(node) "
-            "/\\ AsyncCandidateProducerContinuationRuntimeResolutionReady("
-            "node)"
-        ),
-        "ResolveCandidateProducerContinuation": (
-            "/\\ node \\in AsyncCurrentResponsiveVoters /\\ "
-            "AsyncCandidateProducerContinuationResolutionReady(node) /\\ "
-            "UNCHANGED vars /\\ UNCHANGED asyncCausalQueues /\\ UNCHANGED "
-            "AsyncSchedulerExceptCausalAndControlService"
-        ),
-        "ResolveLocalCandidateProducerContinuation": (
-            "/\\ AsyncCandidateProducerContinuationSelectedSourceClass(node, "
-            '"Local") /\\ ResolveCandidateProducerContinuation(node)'
-        ),
-        "ServiceConditionalTransportProducerContinuation": (
-            "/\\ AsyncCandidateProducerContinuationSelectedSourceClass( node, "
-            '"ConditionalTransport") /\\ '
-            "ResolveCandidateProducerContinuation(node)"
-        ),
-        "ServiceVolatileBodyProducerContinuation": (
-            "/\\ AsyncCandidateProducerContinuationSelectedSourceClass( node, "
-            '"VolatileBody") /\\ ResolveCandidateProducerContinuation(node)'
-        ),
-        "PostGstResolveLocalCandidateProducerContinuation": (
-            "/\\ gst /\\ ResolveLocalCandidateProducerContinuation(node) /\\ "
-            "AsyncNonRunnerOuterFrame"
-        ),
-        "PostGstServiceConditionalTransportProducerContinuation": (
-            "/\\ gst /\\ "
-            "ServiceConditionalTransportProducerContinuation(node) /\\ "
-            "AsyncNonRunnerOuterFrame"
-        ),
-        "PostGstServiceVolatileBodyProducerContinuation": (
-            "/\\ gst /\\ ServiceVolatileBodyProducerContinuation(node) /\\ "
-            "AsyncNonRunnerOuterFrame"
-        ),
-        "AsyncCandidateProducerContinuationSelectedForResolution": (
-            "/\\ ResolveCandidateProducerContinuation(record.node) /\\ "
-            "AsyncCandidateProducerContinuationSelectedResolutionRecord( "
-            "record.node) = record"
-        ),
-        "AsyncCandidateProducerContinuationSelectedForRunnerResolution": (
-            "/\\ ResolveRunNodeCandidateProducerContinuation(record.node) "
-            "/\\ AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord( "
-            "record.node) = record"
-        ),
-        "AsyncCandidateProducerContinuationSelectedForRunnerReplay": (
-            "/\\ ReplayRunNodeCandidateProducerContinuation(record.node) "
-            "/\\ AsyncCandidateProducerContinuationExactRuntimeReplayStep( "
-            "record.node) /\\ "
-            "AsyncCandidateProducerContinuationSelectedReplayRecord( "
-            "record.node) = record"
-        ),
-        "AsyncCandidateProducerContinuationSelectedForAcknowledgement": (
-            "\\/ AsyncCandidateProducerContinuationSelectedForResolution(record) "
-            "\\/ "
-            "AsyncCandidateProducerContinuationSelectedForRunnerResolution(record) "
-            "\\/ "
-            "AsyncCandidateProducerContinuationSelectedForRunnerReplay(record)"
-        ),
-        "AsyncCandidateProducerContinuationHandoffOwnedAfterIn": (
-            '\\/ /\\ record.sourceClass = "Local" /\\ '
-            "\\/ "
-            "AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn( "
-            "state, record) \\/ "
-            "AsyncCandidateProducerContinuationLocalReplayCarrierAfter(record) "
-            '\\/ /\\ record.sourceClass = '
-            '"ConditionalTransport" /\\ \\/ '
-            "AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn( "
-            "state, record) \\/ "
-            "AsyncCandidateConditionalTransportCarrierAfter(record) \\/ "
-            "AsyncCandidateVolatileBodyCarrierAfterIn(state, record)"
-        ),
-        "AsyncCandidateProducerContinuationConcreteSuccessorOwnedAfterIn": (
-            "AsyncCandidateProducerContinuationHandoffOwnedAfterIn(state, "
-            "record)"
-        ),
-        "AsyncCandidateProducerContinuationHandoffRetiredAfterIn": (
-            '\\/ /\\ record.sourceClass = "Local" /\\ '
-            "AsyncCandidateProducerContinuationDeclaredHandoffRetiredAfterIn( "
-            "state, record) \\/ "
-            "AsyncCandidateConditionalTransportRetiredAfterIn(state, record) "
-            "\\/ AsyncCandidateVolatileBodyRetiredAfterIn(state, record)"
-        ),
-        "AsyncCandidateProducerContinuationRecordAfterStep": (
-            'IF record.status = "Terminal" THEN record ELSE IF \\/ '
-            "AsyncCandidateProducerContinuationTerminalAfter(record) \\/ "
-            "/\\ AsyncCandidateProducerContinuationSelectedForAcknowledgement( "
-            'record) /\\ \\/ record.status = "Materialized" \\/ /\\ '
-            'record.status = "Reserved" /\\ '
-            "AsyncCandidateProducerContinuationHandoffRetiredAfterIn( state, "
-            'record) THEN [record EXCEPT !.status = "Terminal"] ELSE IF /\\ '
-            "AsyncCandidateProducerContinuationSelectedForAcknowledgement( "
-            'record) /\\ record.status = "Reserved" /\\ '
-            "AsyncCandidateProducerContinuationConcreteSuccessorOwnedAfterIn( "
-            "state, "
-            'record) THEN [record EXCEPT !.status = "Materialized"] ELSE record'
-        ),
-    }
-    for operator_source, operator_path, exact_operators in (
-        (source, path, exact_proof_operators),
-        (network_source, network_path, exact_network_operators),
-    ):
-        for symbol, expected in exact_operators.items():
-            extracted = _top_level_operator_body(
-                operator_source,
-                symbol,
-                preserve_string_contents=True,
-            )
-            if extracted is None:
-                errors.append(
-                    f"{operator_path}: missing reviewed "
-                    f"producer-continuation operator {symbol}"
-                )
-                continue
-            body, line = extracted
-            observed = " ".join(body.split())
-            if observed != expected:
-                errors.append(
-                    f"{operator_path}:{line}: {symbol} must retain the exact "
-                    "finite producer-continuation contract; "
-                    f"expected {expected!r}; found {observed!r}"
-                )
-    proof_code = strip_tla_comments(source, preserve_string_contents=True)
-    for symbol in (
-        "AsyncCandidateProducerContinuationFrozenPrefixDescentProperty",
-        "AsyncCandidateProducerContinuationFrozenPrefixClosureProperty",
-        "AsyncCandidateProducerContinuationDormantReservationClosureProperty",
-    ):
-        declaration = re.search(
-            rf"(?m)^[ \t]*{re.escape(symbol)}[ \t]*"
-            r"\([ \t\r\n]*specification[ \t\r\n]*,"
-            r"[ \t\r\n]*initialContext[ \t\r\n]*\)[ \t]*==",
-            proof_code,
-        )
-        if declaration is None:
-            errors.append(
-                f"{path}: {symbol} must retain exactly the reviewed "
-                "two-argument (specification, initialContext) contract"
-            )
-    exact_proof_theorem_statements = {
-        "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight": (
-            "\\A command \\in AsyncCandidateSet: "
-            "AsyncCandidateProducerContinuationSuccessorBatchWeight(command) "
-            '+ AsyncCandidateProducerContinuationStatusRank("Reserved") < '
-            "AsyncCandidateProducerContinuationCausalWeight(command.kind)"
-        ),
-        "CandidateProducerContinuationFrozenCandidateCarrierHasConfiguredBound": (
-            "\\A node \\in ValidatorIds, targetOrdinal \\in Nat: /\\ "
-            "AsyncStrongTypeInvariant /\\ "
-            "AsyncCandidateServiceLifecycleInvariant => /\\ IsFiniteSet( "
-            "AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
-            "targetOrdinal)) /\\ Cardinality( "
-            "AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
-            "targetOrdinal)) <= AsyncCandidateProducerEpisodeCapacity + "
-            "AsyncCandidateProducerContinuationCapacity + "
-            "AsyncOrdinaryIngressCarrierEvidenceCapacity"
-        ),
-        "CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge": (
-            "\\A node \\in ValidatorIds, targetOrdinal \\in Nat: /\\ gst "
-            "/\\ AsyncStrongTypeInvariant /\\ "
-            "AsyncProgressOwnershipInvariant /\\ "
-            "AsyncCandidateServiceLifecycleInvariant /\\ "
-            "(AsyncCandidateProducerContinuationTargetPhysicalCut( node, "
-            "targetOrdinal))' = "
-            "AsyncCandidateProducerContinuationTargetPhysicalCut( node, "
-            "targetOrdinal) /\\ AsyncNext => "
-            "((AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates( "
-            "node, targetOrdinal))' \\ "
-            "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates( "
-            "node, targetOrdinal)) \\subseteq "
-            "AsyncCandidateProducerContinuationFrozenCausalCandidates( node, "
-            "targetOrdinal)"
-        ),
-        "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge": (
-            "\\A node \\in ValidatorIds, targetOrdinal \\in Nat: /\\ "
-            "AsyncStrongTypeInvariant /\\ AsyncProgressOwnershipInvariant "
-            "/\\ AsyncCandidateServiceLifecycleInvariant /\\ AsyncNext /\\ "
-            "AsyncControlServiceSlotTransition /\\ "
-            "AsyncCandidateProducerContinuationExactLocalReplayStep(node) /\\ "
-            "(AsyncCandidateProducerContinuationTargetPhysicalCut( node, "
-            "targetOrdinal))' = "
-            "AsyncCandidateProducerContinuationTargetPhysicalCut( node, "
-            "targetOrdinal) => "
-            "(AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
-            "targetOrdinal))' = "
-            "AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
-            "targetOrdinal)"
-        ),
-        "CandidateProducerContinuationFrozenPrefixStepCannotReplenish": (
-            "\\A node \\in ValidatorIds, identity \\in AsyncCandidateServiceIdentities, "
-            "targetOrdinal \\in Nat "
-            "\\ {0}, targetStage \\in "
-            "AsyncCandidateServiceStageClasses, status \\in "
-            '{"Reserved", "Materialized"}, budget \\in '
-            "AsyncCandidateProducerContinuationFrozenPrefixRankCarrier: /\\ "
-            "AsyncStrongTypeInvariant /\\ AsyncProgressOwnershipInvariant "
-            "/\\ AsyncCandidateServiceLifecycleInvariant /\\ "
-            "AsyncCandidateProducerContinuationFrozenPrefixAtBudget( node, "
-            "identity, targetOrdinal, targetStage, status, budget) /\\ "
-            "[AsyncNext]_AsyncAllVars => \\/ "
-            "AsyncCandidateProducerContinuationFrozenPrefixAtBudget( node, "
-            "identity, targetOrdinal, targetStage, status, budget)' \\/ "
-            "(AsyncCandidateProducerContinuationPrefixDescentGoal( node, "
-            "identity, targetOrdinal, targetStage, status, budget))'"
-        ),
-    }
-    for symbol, expected in exact_proof_theorem_statements.items():
-        extracted = _top_level_theorem_body(
-            source,
-            symbol,
-            preserve_string_contents=True,
-        )
-        if extracted is None:
-            errors.append(
-                f"{path}: missing reviewed producer-continuation theorem "
-                f"{symbol}"
-            )
-            continue
-        body, line = extracted
-        statement = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
-            body,
-            maxsplit=1,
-        )[0]
-        observed = " ".join(statement.split())
-        if observed != expected:
-            errors.append(
-                f"{path}:{line}: {symbol} must retain the exact reviewed "
-                "producer-continuation rank statement; "
-                f"expected {expected!r}; found {observed!r}"
-            )
-    exact_leader_wire_producer_statement_sha256 = {
-        "AsyncFrozenServeSourceCannotResurrectAtGst": (
-            "9c7153b36e085242cbb711e2f4ae749aead7d6e93c55bef96ab28bb2b3ada029"
-        ),
-        "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier": (
-            "8c51cc12d6520bfb08211907a9576cc5ef9d0713bb8fafa5098bbd61b08b05d9"
-        ),
-        "CandidateProducerContinuationActionInertDormantHasZeroFrozenStage": (
-            "1b256ad8b6e371ddf207e72d8aaaa75f89f867cadb36b2704c49e03e914e9f71"
-        ),
-        "CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix": (
-            "c6d4e93d4b7f3a7215d2ff2a4f246286cd6a3a26187eb7f182db98cfdb6b06c8"
-        ),
-        "CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame": (
-            "82204af3840d76e420e671fad567b20995bd649e7c5c53e6a7d96a358c0e0fc1"
-        ),
-        "CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage": (
-            "4b3f6929001c71087c7dd18356338478b08d5e8453ef10839cca9974412116cb"
-        ),
-        "AsyncFrozenLeaderWireIngressRankOrderingIsWellFounded": (
-            "f42decd8d5a9b10dae1f22827c5c843f6dcefbdafdfba0f22fc769e80ddc8a4c"
-        ),
-        "AsyncFrozenLeaderWireIngressDependencyOrderingIsWellFounded": (
-            "70aa067368776f24476ddb5f2996fec56facda720290835d19b585c9b97c0843"
-        ),
-        "AsyncFrozenLeaderWireBarrierRankOrderingIsWellFounded": (
-            "d715302c130ef21e1e420bedc8c1ba59ab688a132c9809a293aa5bedb6eb2411"
-        ),
-        "AsyncFrozenLeaderWireBarrierRankIsFinite": (
-            "0ad5e1e602a4a49f5c4831be8871953ff94a03fd99a6b5e81f7bc888e41d3089"
-        ),
-        "AsyncCertifiedResponsePhysicalBarrierRankIsFinite": (
-            "168d7a958824266232560350961095a2c622914a9ace3cd710a8d51b17b5ba36"
-        ),
-        "CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell": (
-            "e1f1dd69579e3bbd611ab72d59e10646d447af05222e3aa5373958448079730f"
-        ),
-        "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst": (
-            "bd9dfed86b8e68fc564a7635a7a0415989debe3dde4d28058adda53f6601eb3b"
-        ),
-        "CandidateProducerContinuationFrozenSourcePrefixStepCannotReplenish": (
-            "7402b0b99d66537dd7bcd34c4165cb90b04e871b7530f13b25e27a4117bb8f51"
-        ),
-        "CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends": (
-            "93613b25fe6f3385483165e67268a3b54a679d8e8f6829c17cf7a970e8c7b3bd"
-        ),
-    }
-    for symbol, expected_sha256 in (
-        exact_leader_wire_producer_statement_sha256.items()
-    ):
-        extracted = _top_level_theorem_body(
-            source,
-            symbol,
-            preserve_string_contents=True,
-        )
-        if extracted is None:
-            errors.append(
-                f"{path}: missing reviewed leader-wire producer theorem {symbol}"
-            )
-            continue
-        body, line = extracted
-        statement = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
-            body,
-            maxsplit=1,
-        )[0]
-        observed = " ".join(statement.split())
-        observed_sha256 = hashlib.sha256(observed.encode("utf-8")).hexdigest()
-        if observed_sha256 != expected_sha256:
-            errors.append(
-                f"{path}:{line}: {symbol} must retain the exact leader-wire "
-                "producer statement SHA-256 "
-                f"{expected_sha256}; found {observed_sha256}"
-            )
-
-    source_class_split = _top_level_theorem_body(
-        network_source,
-        "CandidateProducerContinuationResolutionSplitsReviewedSourceClass",
-        preserve_string_contents=True,
-    )
-    expected_source_class_split = (
-        "\\A node \\in ValidatorIds: /\\ "
-        "AsyncControlServiceStateTypeInvariant /\\ "
-        "ResolveCandidateProducerContinuation(node) => \\/ "
-        "ResolveLocalCandidateProducerContinuation(node) \\/ "
-        "ServiceConditionalTransportProducerContinuation(node) \\/ "
-        "ServiceVolatileBodyProducerContinuation(node)"
-    )
-    if source_class_split is None:
-        errors.append(
-            f"{network_path}: missing reviewed producer-continuation "
-            "source-class split theorem"
-        )
-    else:
-        body, line = source_class_split
-        statement = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
-            body,
-            maxsplit=1,
-        )[0]
-        observed_statement = " ".join(statement.split())
-        if observed_statement != expected_source_class_split:
-            errors.append(
-                f"{network_path}:{line}: "
-                "CandidateProducerContinuationResolutionSplitsReviewedSourceClass "
-                "must retain the exact Local/ConditionalTransport/VolatileBody "
-                f"action partition; expected {expected_source_class_split!r}; "
-                f"found {observed_statement!r}"
-            )
-
-    dormant_goal = _top_level_operator_body(
-        source,
-        "AsyncCandidateProducerContinuationDormantReservationGoal",
-        preserve_string_contents=True,
-    )
-    if dormant_goal is None:
-        errors.append(
-            f"{path}: missing reviewed dormant producer-continuation goal"
-        )
-    else:
-        body, line = dormant_goal
-        if not _tla_dependency_present(
-            body,
-            "AsyncCandidateProducerContinuationHandoffRetired",
-        ):
-            errors.append(
-                f"{path}:{line}: dormant producer-continuation goal must "
-                "retain deterministic retired-handoff resolution"
-            )
-
-    dormant_property = _top_level_operator_body(
-        source,
-        "AsyncCandidateProducerContinuationDormantReservationClosureProperty",
-        preserve_string_contents=True,
-    )
-    if dormant_property is None:
-        errors.append(
-            f"{path}: missing reviewed dormant producer-continuation closure"
-        )
-    else:
-        body, line = dormant_property
-        if not _tla_dependency_present(body, "gst"):
-            errors.append(
-                f"{path}:{line}: dormant producer-continuation closure must "
-                "remain explicitly post-GST; pre-GST restart/replay belongs "
-                "to the reset/replay kernel"
-            )
-
-    reviewed_theorems = (
-        "AsyncCandidateProducerContinuationConstructorIsTyped",
-        "AsyncCandidateProducerContinuationStatusRankIsNatural",
-        "AsyncCandidateProducerContinuationHandoffRetainsExactLifecycle",
-        "AsyncCandidateIgnoredDepartureDeclaresNoReplayHandoff",
-        "AsyncCandidateProducerContinuationDepartureSplitsSourceOrGoal",
-        "AsyncCandidateProducerContinuationDepartureSplitsSourceResidualOrGoal",
-        "AsyncCandidateProducerContinuationLocalSourceExcludesTransportResidual",
-        "AsyncCandidateProducerTransportResidualIsContinuationSource",
-        "AsyncCandidateProducerTransportResidualSplitsPhysicalClass",
-        "AsyncCandidateLifecycleDeparturesThisStepIsSingleton",
-        "AsyncCandidateIgnoredExactProtocolDepartureIsContinuationSourceOrGoal",
-        "AsyncCandidateSuccessfulExactProtocolServiceIsContinuationSourceOrGoal",
-        "AsyncCandidateProducerContinuationStateInstallsExactSourceRecord",
-        "AsyncCandidateProducerDepartureCreatesContinuationOrGoal",
-        "AsyncCandidateProducerSourceTransitionInstallsExactContinuation",
-        "AsyncCandidateProducerContinuationTerminalRecordIsFixed",
-        "AsyncCandidateProducerContinuationStatusIsMonotone",
-        "AsyncCandidateProducerContinuationResolvedReservedRankStrictlyDrops",
-        "AsyncCandidateProducerContinuationMaterializedIsOneStep",
-        "AsyncCandidateProducerContinuationUnselectedActiveRecordIsFixed",
-        "ResolveCandidateProducerContinuationNeverReplaysDrainedParent",
-        "CandidateProducerContinuationBlocksRunnerUntilHandoffResolution",
-        "CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner",
-        "ExternalCandidateProducerContinuationSelectionIsReady",
-        "AsyncCandidateProducerContinuationGstExcludesResetReplay",
-        "ConditionalTransportContinuationReadyEnablesFairService",
-        "VolatileBodyContinuationReadyEnablesFairService",
-        "LocalContinuationReadyEnablesFairResolution",
-        "ExternalContinuationFairServiceStrictlyDropsStatusRank",
-        "LocalContinuationFairResolutionStrictlyDropsStatusRank",
-        "ExternalContinuationPersistsOrDescendsOrReplayExits",
-        "LocalContinuationPersistsOrDescendsOrReplayExits",
-        "CandidateProducerContinuationSuccessorBatchConsumesFrozenWeight",
-        "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
-        "CandidateProducerContinuationPostCutCausalRootCannotEnterFrozenPrefix",
-        "CandidateProducerContinuationCausalSuccessorRetainsFrozenPhysicalClass",
-        "CandidateProducerContinuationPostCutServeCannotEnterFrozenPrefix",
-        "CandidateProducerContinuationFrozenPrefixRankOrderingIsWellFounded",
-        "AsyncFrozenServeSourceCannotResurrectAtGst",
-        "AsyncProtectedCandidateTargetPhysicalCutMatchesLifecycle",
-        "AsyncProtectedCandidateTargetPhysicalCutPersists",
-        "AsyncProtectedCandidateSelectedServeOwnerGeometryIsComplete",
-        "AsyncProtectedCandidateSelectedOwnerIsConcreteAndEnabled",
-        "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier",
-        "CandidateProducerContinuationActionInertDormantHasZeroFrozenStage",
-        "CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix",
-        "CandidateProducerContinuationPostCutOrdinaryAdmissionCannotEnterFrozenPrefix",
-        "CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame",
-        "CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage",
-        "CandidateProducerContinuationPreCutOrdinaryIngressConsumesBarrierStage",
-        "AsyncFrozenLeaderWireIngressRankOrderingIsWellFounded",
-        "AsyncFrozenLeaderWireIngressDependencyOrderingIsWellFounded",
-        "AsyncFrozenLeaderWireBarrierRankOrderingIsWellFounded",
-        "AsyncFrozenLeaderWireBarrierRankIsFinite",
-        "AsyncProtectedCandidateIngressEpisodeRankOrderingIsWellFounded",
-        "AsyncProtectedCandidateIngressEpisodeRankIsFinite",
-        "AsyncCertifiedResponsePhysicalBarrierRankIsFinite",
-        "CandidateProducerContinuationFrozenCandidateCarrierHasConfiguredBound",
-        "AsyncCandidateProducerContinuationReclamationPreservesIdentity",
-        "AsyncCandidateProducerContinuationPreservedOrTerminal",
-        "CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge",
-        "CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell",
-        "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
-        "CandidateProducerContinuationFrozenOrdinaryIngressChargeCannotAppearAtGst",
-        "CandidateProducerContinuationFrozenServeCutCannotReplenish",
-        "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge",
-        "AsyncProtectedCandidateFrozenPrefixStepIsDescentOrFrame",
-        "AsyncProtectedCandidateIngressEpisodeStepIsDescentOrFrame",
-        "CandidateProducerContinuationTargetPhysicalCutIsStableUntilStatusExit",
-        "HistoricalCandidateProducerContinuationTurnIsResolutionOrExactReplay",
-        "HistoricalCandidateProducerContinuationNonreadyTurnUsesLocalReplay",
-        "HistoricalCandidateProducerContinuationLocalReplayTurnApproachesReady",
-        "HistoricalCandidateProducerContinuationReadyTurnConsumesExactStage",
-        "HistoricalCandidateProducerContinuationReadyTurnExitsSelectedStatus",
-        "CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive",
-        "CandidateProducerContinuationFrozenOriginsCannotReplenish",
-        "CandidateProducerContinuationFrozenPrefixStepCannotReplenish",
-        "CandidateProducerContinuationFrozenSourcePrefixStepCannotReplenish",
-        "CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends",
-        "CandidateProducerContinuationFairResolutionStrictlyDescendsFrozenPrefix",
-        "CandidateProducerContinuationDormantGoalIsReadyOrExited",
-        "AsyncCandidateProducerContinuationSameHeightRestartPreserved",
-        "AsyncCandidateProducerContinuationResetPreservesActiveReservation",
-        "AsyncCandidateProducerContinuationResetReopensOnlyUnstableTerminal",
-        "AsyncCandidateProducerContinuationResetCannotResurrectDifferentOwner",
-        "AsyncCandidateProducerContinuationReplacementRetiresOnlyTerminal",
-        "AsyncCandidateProducerContinuationExactRetryCoalesces",
-        "AsyncCandidateProducerContinuationHighWatermarkBlocksOldStage",
-        "AsyncCandidateProducerContinuationRolloverOnlyStartsEmpty",
-        "LocalCandidateProducerContinuationResolutionUsesReviewedFairAction",
-        "ConditionalTransportProducerContinuationServiceUsesReviewedFairAction",
-        "VolatileBodyProducerContinuationServiceUsesReviewedFairAction",
-    )
-    observed_theorems = tuple(
-        re.findall(
-            r"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
-            r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
-            r"([A-Za-z_][A-Za-z0-9_]*)\b",
-            proof_code,
-        )
-    )
-    if observed_theorems != reviewed_theorems:
-        errors.append(
-            f"{path}: producer-continuation proof must declare exactly the "
-            f"reviewed theorem inventory {reviewed_theorems!r}; found "
-            f"{observed_theorems!r}"
-        )
-
-    required_theorem_dependencies = {
-        "AsyncCandidateProducerContinuationResolvedReservedRankStrictlyDrops": (
-            "AsyncCandidateProducerContinuationSelectedForResolution",
-            "AsyncCandidateProducerContinuationConcreteSuccessorOwnedAfterIn",
-            "AsyncCandidateProducerContinuationHandoffRetiredAfterIn",
-            "AsyncCandidateProducerContinuationStatusRank",
-        ),
-        "AsyncCandidateProducerContinuationMaterializedIsOneStep": (
-            "AsyncCandidateProducerContinuationSelectedForResolution",
-            "AsyncCandidateProducerContinuationRecordAfterStep",
-        ),
-        "AsyncCandidateProducerContinuationUnselectedActiveRecordIsFixed": (
-            "AsyncCandidateProducerContinuationTerminalAfter",
-            "AsyncCandidateProducerContinuationSelectedForResolution",
-            "AsyncCandidateProducerContinuationSelectedForAcknowledgement",
-            "AsyncCandidateProducerContinuationRecordAfterStep",
-        ),
-        "CandidateProducerContinuationFrozenCandidateCarrierHasConfiguredBound": (
-            "AsyncCandidateProducerContinuationFrozenCandidateOwners",
-            "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates",
-            "AsyncCandidateProducerContinuationFrozenOrdinaryIngressCandidates",
-            "AsyncCandidateProducerEpisodeCapacity",
-            "AsyncCandidateProducerContinuationCapacity",
-            "AsyncOrdinaryIngressCarrierEvidenceCapacity",
-        ),
-        "AsyncFrozenServeSourceCannotResurrectAtGst": (
-            "AsyncFreshServeIngressCannotReacquirePriorSchedulerOrdinal",
-            "AsyncIngressPhysicalHighWatermarkIsMonotone",
-            "AsyncSharedSchedulerHighWatermarkIsMonotone",
-            "AsyncServeQueuedIdentityDepartureInstallsTombstone",
-            "AsyncServeTombstonedIdentityCannotRequeueAtGst",
-        ),
-        "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier": (
-            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates",
-            "AsyncFrozenLeaderWireBarrierRecords",
-            "AsyncLeaderWireLifecycleActive",
-        ),
-        "CandidateProducerContinuationActionInertDormantHasZeroFrozenStage": (
-            "AsyncFrozenLeaderWireBarrierRemainingStage",
-            "AsyncFrozenLeaderWireBarrierRecords",
-            "AsyncLeaderWireActionInertDormant",
-        ),
-        "CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix": (
-            "AdmitHiddenPacketReservesFreshSharedPhysicalOrdinal",
-            "AsyncIngressPhysicalHighWatermarkIsMonotone",
-            "AsyncFrozenLeaderWireBarrierRecords",
-        ),
-        "CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame": (
-            "DropPolicyRejectedHiddenPacket",
-            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates",
-            "AsyncFrozenLeaderWireBarrierStageTokens",
-            "AsyncFrozenLeaderWireBarrierRecords",
-        ),
-        "CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage": (
-            "LeaderWireIngressDrainNeverInventsRuntimeOwner",
-            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates",
-            "AsyncFrozenLeaderWireBarrierStageBudget",
-            "AsyncLeaderWireLifecyclesAfterIngressDrain",
-        ),
-        "AsyncFrozenLeaderWireIngressRankOrderingIsWellFounded": (
-            "NatLessThanWellFounded",
-            "WFLexPairOrdering",
-            "AsyncFrozenLeaderWireIngressRankOrdering",
-            "AsyncFrozenLeaderWireIngressRankCarrier",
-        ),
-        "AsyncFrozenLeaderWireIngressDependencyOrderingIsWellFounded": (
-            "AsyncFrozenLeaderWireIngressRankOrderingIsWellFounded",
-            "AsyncFrozenLeaderWireIngressDependencyRankOrdering",
-            "AsyncFrozenLeaderWireIngressDependencyRankCarrier",
-            "AsyncFrozenLeaderWirePhysicalRankOrdering",
-        ),
-        "AsyncFrozenLeaderWireBarrierRankOrderingIsWellFounded": (
-            "CandidateProducerContinuationFrozenPrefixRankOrderingIsWellFounded",
-            "AsyncFrozenLeaderWireIngressDependencyOrderingIsWellFounded",
-            "AsyncFrozenLeaderWireBarrierRankOrdering",
-            "AsyncFrozenLeaderWireBarrierRankCarrier",
-        ),
-        "AsyncFrozenLeaderWireBarrierRankIsFinite": (
-            "AsyncLeaderWirePotentialPredecessorUniverseIsFinite",
-            "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier",
-            "AsyncFrozenLeaderWireBarrierRank",
-            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates",
-        ),
-        "AsyncCertifiedResponsePhysicalBarrierRankIsFinite": (
-            "AsyncCertifiedResponsePhysicalBarrierRank",
-            "AsyncCertifiedResponseFrozenLeaderWireRecords",
-            "AsyncCertifiedResponseFrozenLeaderWireStageTokens",
-            "AsyncFrozenLeaderWireIngressDependencyRankCarrier",
-        ),
-        "CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell": (
-            "AsyncLeaderWireLifecycleSharedOrdinalInvariant",
-            "AsyncCandidateProducerContinuationLifecycleCoverageInvariant",
-            "AsyncLeaderWireContinuationSharedOrdinalNoCollisionInvariant",
-            "CandidateAdmissionCoalesced",
-        ),
-        "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst": (
-            "AsyncSharedSchedulerHighWatermarkIsMonotone",
-            "AsyncIngressPhysicalHighWatermarkIsMonotone",
-            "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier",
-            "AtomicDormantLeaderWireAdmissionConsumesRealPacketWithFreshCarrier",
-            "AdmitHiddenPacketReservesFreshSharedPhysicalOrdinal",
-            "RuntimeLeaderWireCannotRetireMerelyFromIngressPop",
-            "RetireLeaderWireLifecycleRetainsTerminalTombstone",
-        ),
-        "CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge": (
-            "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates",
-            "AsyncCandidateProducerContinuationFrozenCausalCandidates",
-            "AsyncCandidateProducerContinuationTargetPhysicalCut",
-            "AsyncCandidateProducerContinuationGstExcludesResetReplay",
-            "AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck",
-            "AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor",
-            "AsyncCandidateProducerSemanticHandoffRetirementRequiresAck",
-        ),
-        "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge": (
-            "AsyncCandidateProducerContinuationFrozenCandidateOwners",
-            "AsyncCandidateProducerContinuationExactLocalReplayStep",
-            "AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation",
-            "AsyncCandidateProducerContinuationExactLocalReplayPublishesStoredCarrier",
-        ),
-        "CandidateProducerContinuationFrozenPrefixStepCannotReplenish": (
-            "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
-            "CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge",
-            "CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell",
-            "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
-            "CandidateProducerContinuationFrozenOrdinaryIngressChargeCannotAppearAtGst",
-            "CandidateProducerContinuationFrozenServeCutCannotReplenish",
-            "CandidateProducerContinuationTargetPhysicalCutIsStableUntilStatusExit",
-            "CandidateProducerContinuationActionInertDormantHasZeroFrozenStage",
-            "CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix",
-            "CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame",
-            "CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage",
-            "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge",
-            "AsyncCandidateProducerContinuationFrozenCandidateOwners",
-            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates",
-            "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates",
-        ),
-        "CandidateProducerContinuationFrozenSourcePrefixStepCannotReplenish": (
-            "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
-            "CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge",
-            "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge",
-            "MatchingClaimedCertifiedResponseIsAuthorized",
-            "FirstDrainableIngressIndexIsDrainable",
-            "FirstDrainableIngressLaneIndexIsDrainable",
-            "DrainFairIngressSelectedClaimPopShape",
-            "AsyncFrozenServeSourceCannotResurrectAtGst",
-            "AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain",
-            "AsyncServeQueuedIdentityDepartureInstallsTombstone",
-            "AsyncServeTombstonedIdentityCannotRequeueAtGst",
-        ),
-        "CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends": (
-            "ExternalContinuationFairServiceStrictlyDropsStatusRank",
-            "LocalContinuationFairResolutionStrictlyDropsStatusRank",
-            "CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner",
-            "AsyncCandidateProducerContinuationFrozenSourcePrefixRank",
-            "AsyncCandidateProducerContinuationFrozenPrefixRankOrdering",
-        ),
-        "ResolveCandidateProducerContinuationNeverReplaysDrainedParent": (
-            "ResolveCandidateProducerContinuation",
-            "asyncCausalQueues",
-            "vars",
-        ),
-        "CandidateProducerContinuationBlocksRunnerUntilHandoffResolution": (
-            "RunNodeWork",
-            "AsyncCandidateProducerContinuationRunnerResolutionRequired",
-        ),
-        "CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner": (
-            "AsyncCandidateProducerContinuationResolutionRecordsForNode",
-            "AsyncCandidateProducerContinuationResolutionPredecessorsFor",
-            "AsyncCandidateProducerContinuationSelectedResolutionRecord",
-        ),
-        "AsyncCandidateProducerContinuationSameHeightRestartPreserved": (
-            "AsyncControlServiceStateAfterReset",
-            "producerContinuations",
-        ),
-        "AsyncCandidateProducerContinuationReplacementRetiresOnlyTerminal": (
-            "AsyncCandidateProducerContinuationReservationAvailableIn",
-            "AsyncCandidateProducerContinuationStateAfterDeparture",
-            "record.status",
-            "record.ordinal",
-        ),
-        "AsyncCandidateProducerContinuationExactRetryCoalesces": (
-            "AsyncCandidateProducerContinuationRecorded",
-            "CandidateAdmissionCoalesced",
-        ),
-        "LocalCandidateProducerContinuationResolutionUsesReviewedFairAction": (
-            "PostGstResolveLocalCandidateProducerContinuation",
-            "AsyncFairActionAt",
-        ),
-        "ConditionalTransportProducerContinuationServiceUsesReviewedFairAction": (
-            "PostGstServiceConditionalTransportProducerContinuation",
-            "AsyncFairActionAt",
-        ),
-        "VolatileBodyProducerContinuationServiceUsesReviewedFairAction": (
-            "PostGstServiceVolatileBodyProducerContinuation",
-            "AsyncFairActionAt",
-        ),
-    }
-    for theorem, dependencies in required_theorem_dependencies.items():
-        extracted = _top_level_theorem_body(
-            source,
-            theorem,
-            preserve_string_contents=True,
-        )
-        if extracted is None:
-            continue
-        body, line = extracted
-        missing = [
-            dependency
-            for dependency in dependencies
-            if not _tla_dependency_present(body, dependency)
-        ]
-        if missing:
-            errors.append(
-                f"{path}:{line}: {theorem} must retain reviewed "
-                f"producer-continuation dependencies {missing!r}"
-            )
-
-    required_network_fragments = {
-        "AsyncCandidateServiceLifecycleInvariant": (
-            "AsyncCandidateProducerContinuationScheduledExclusionInvariant",
-        ),
-        "RunNodeWork": (
-            "IF AsyncCandidateProducerContinuationOwnsRunNodeTurn(node) "
-            "THEN IF "
-            "AsyncCandidateProducerContinuationRunnerResolutionReady(node) THEN "
-            "ResolveRunNodeCandidateProducerContinuation(node) ELSE "
-            "ReplayRunNodeCandidateProducerContinuation(node)",
-        ),
-        "AsyncControlServiceStateAfterReset": (
-            "producerContinuations |-> "
-            "AsyncCandidateProducerContinuationsAfterReset(state, resetNodes)",
-        ),
-        "AsyncTransportInit": (
-            "producerContinuations |-> {}",
-        ),
-        "AsyncControlServiceSlotTransition": (
-            "AsyncCandidateProducerContinuationStateAfterDeparture",
-            "AsyncCandidateProducerContinuationPartitionInvariantIn",
-            "AsyncCandidateProducerContinuationCapacity",
-        ),
-    }
-    for symbol, required in required_network_fragments.items():
-        extracted = _top_level_operator_body(
-            network_source,
-            symbol,
-            preserve_string_contents=True,
-        )
-        if extracted is None:
-            errors.append(
-                f"{network_path}: missing producer-continuation host "
-                f"operator {symbol}"
-            )
-            continue
-        body, line = extracted
-        normalized = " ".join(body.split())
-        missing_or_repeated = [
-            fragment for fragment in required if normalized.count(fragment) != 1
-        ]
-        if missing_or_repeated:
-            errors.append(
-                f"{network_path}:{line}: {symbol} must retain each reviewed "
-                "producer-continuation dependency exactly once; "
-                f"missing_or_repeated={missing_or_repeated!r}"
-            )
-
-    preservation = _top_level_theorem_body(
-        network_source,
-        "AsyncNextPreservesCandidateProducerContinuationScheduledExclusion",
-        preserve_string_contents=True,
-    )
-    if preservation is None:
-        errors.append(
-            f"{network_path}: missing producer-continuation scheduled "
-            "exclusion preservation theorem"
-        )
-    else:
-        body, line = preservation
-        required = (
-            "AsyncStrongTypeInvariant",
-            "AsyncProgressOwnershipInvariant",
-            "AsyncCandidateServiceLifecycleInvariant",
-            "AsyncNext",
-            "AsyncCandidateProducerContinuationScheduledExclusionInvariant'",
-            "AsyncCandidateProducerContinuationBlocks",
-            "CandidateAdmissionCoalesced",
-            "AsyncControlServiceSlotTransition",
-        )
-        missing = [
-            dependency
-            for dependency in required
-            if not _tla_dependency_present(body, dependency)
-        ]
-        if missing:
-            errors.append(
-                f"{network_path}:{line}: producer-continuation scheduled "
-                f"exclusion preservation must retain {missing!r}"
-            )
-    return errors
-
-
-def _producer_continuation_physical_cut_mutation_contract_errors(
-    repo_root: Path,
-) -> list[str]:
-    """Pin positive/failing TLC pairs for each repaired physical-cut lasso."""
-    errors: list[str] = []
-    formal_dir = repo_root / "formal" / "sumeragi_v2"
-    expected_formal = set(
-        PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_FORMAL_ARTIFACTS
-    )
-    expected_digest_paths = expected_formal | {
-        PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER
-    }
-    if (
-        len(PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_FORMAL_ARTIFACTS)
-        != 11
-        or len(expected_formal) != 11
-        or set(PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_SHA256)
-        != expected_digest_paths
-    ):
-        errors.append(
-            "producer-continuation physical-cut mutation inventory must "
-            "contain exactly eleven formal artifacts plus one runner"
-        )
-    for relative, expected_sha256 in (
-        PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_SHA256.items()
-    ):
-        path = (
-            formal_dir / relative
-            if relative in expected_formal
-            else repo_root / relative
-        )
-        if not path.is_file() or path.is_symlink():
-            continue
-        observed_sha256 = _sha256_file(path)
-        if observed_sha256 != expected_sha256:
-            errors.append(
-                f"{path}: physical-cut mutation source SHA-256 must equal "
-                f"{expected_sha256}; found {observed_sha256}"
-            )
-    model_path = (
-        formal_dir / "SumeragiV2ProducerContinuationPhysicalCutMutation.tla"
-    )
-    if not model_path.is_file() or model_path.is_symlink():
-        return [
-            f"{model_path}: producer-continuation physical-cut mutation "
-            "model must be a regular file"
-        ]
-    try:
-        model_source = model_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        return [f"{model_path}: cannot read physical-cut mutation model: {error}"]
-
-    required_model_operators = {
-        "CurrentIngressFixedSpec": (
-            "CurrentIngressInit",
-            "CurrentIngressFixedRunner",
-            "WF_mutationVars",
-        ),
-        "CurrentIngressChurnBugSpec": (
-            "CurrentIngressInit",
-            "CurrentIngressChurnBugRunner",
-            "WF_mutationVars",
-        ),
-        "ContinuationPhysicalCutFixedSpec": (
-            "ContinuationInit",
-            "ContinuationPhysicalCutFixedRunner",
-            "WF_mutationVars",
-        ),
-        "ContinuationLogicalOnlyBugSpec": (
-            "ContinuationInit",
-            "ContinuationLogicalOnlyBugRunner",
-            "WF_mutationVars",
-        ),
-        "TimeoutCutSelectionInit": (
-            "phase",
-            "replaySourcePhysicalOrdinal",
-            "targetHasPhysicalSource",
-        ),
-        "TimeoutCutFilteredSelectsPreCutTarget": (
-            "SourcePhysicalOrdinal",
-            "LogicalOrdinal",
-            "targetDone",
-            "lastSelected",
-        ),
-        "TimeoutCutLogicalMinimumSelectsPostCutReplay": (
-            "SourcePhysicalOrdinal",
-            "LogicalOnlyPrecedes",
-            "replayEpoch",
-            "lastSelected",
-        ),
-        "TimeoutCutFilteredFixedSpec": (
-            "TimeoutCutSelectionInit",
-            "TimeoutCutFilteredFixedRunner",
-            "WF_mutationVars",
-        ),
-        "TimeoutCutLogicalMinimumBugSpec": (
-            "TimeoutCutSelectionInit",
-            "TimeoutCutLogicalMinimumBugRunner",
-            "WF_mutationVars",
-        ),
-        "CausalSuccessorRetainsPostCutPhysicalRoot": (
-            "replayStage",
-            "replaySourcePhysicalOrdinal",
-        ),
-        "TimeoutCutFilterNeverSelectsPostCutReplay": (
-            "phase",
-            "lastSelected",
-        ),
-        "EventuallyExactTargetCompletes": ("targetDone",),
-    }
-    for symbol, required in required_model_operators.items():
-        extracted = _top_level_operator_body(
-            model_source,
-            symbol,
-            preserve_string_contents=True,
-        )
-        if extracted is None:
-            errors.append(
-                f"{model_path}: missing physical-cut mutation operator {symbol}"
-            )
-            continue
-        body, line = extracted
-        tokens = set(tla_code_tokens(body))
-        missing = tuple(token for token in required if token not in tokens)
-        if missing:
-            errors.append(
-                f"{model_path}:{line}: {symbol} must retain the exact "
-                "physical-cut mutation contract; "
-                f"missing={missing!r}"
-            )
-
-    required_model_fragments = {
-        "TimeoutCutSelectionInit": (
-            'phase = "TimeoutSelection"',
-            'lastSelected = "None"',
-        ),
-        "TimeoutCutFilteredSelectsPreCutTarget": (
-            'SourcePhysicalOrdinal("Target") < 2',
-            'SourcePhysicalOrdinal("Replay") >= 2',
-            'lastSelected\' = "Target"',
-        ),
-        "TimeoutCutLogicalMinimumSelectsPostCutReplay": (
-            'SourcePhysicalOrdinal("Replay") >= 2',
-            'LogicalOnlyPrecedes("Replay", "Target")',
-            'lastSelected\' = "Replay"',
-        ),
-        "TimeoutCutFilterNeverSelectsPostCutReplay": (
-            'phase # "TimeoutSelection"',
-            'lastSelected # "Replay"',
-        ),
-    }
-    for symbol, required in required_model_fragments.items():
-        extracted = _top_level_operator_body(
-            model_source,
-            symbol,
-            preserve_string_contents=True,
-        )
-        if extracted is None:
-            continue
-        body, line = extracted
-        normalized = " ".join(body.split())
-        missing = tuple(fragment for fragment in required if fragment not in normalized)
-        if missing:
-            errors.append(
-                f"{model_path}:{line}: {symbol} must retain exact timeout-cut "
-                f"selection identities; missing={missing!r}"
-            )
-
-    periodic_model_path = (
-        formal_dir / "SumeragiV2AdequateLeaderPeriodicPrefixMutation.tla"
-    )
-    if not periodic_model_path.is_file() or periodic_model_path.is_symlink():
-        errors.append(
-            f"{periodic_model_path}: adequate-leader periodic-prefix "
-            "mutation model must be a regular file"
-        )
-    else:
-        try:
-            periodic_model_source = periodic_model_path.read_text(
-                encoding="utf-8"
-            )
-        except (OSError, UnicodeDecodeError) as error:
-            errors.append(
-                f"{periodic_model_path}: cannot read periodic-prefix "
-                f"mutation model: {error}"
-            )
-        else:
-            periodic_operators = {
-                "PeriodicPredecessorOrdinals": (
-                    "retransmitOrdinal",
-                    "TimeoutOrdinal",
-                ),
-                "FixedInit": (
-                    "candidateAhead",
-                    "frozenSnapshot",
-                    "nextOrdinal",
-                ),
-                "ServiceFrozenPeriodicIdentity": (
-                    "PeriodicRuntimeReady",
-                    "frozenSnapshot",
-                    "retiredOrdinals",
-                ),
-                "AcquireFreshPeriodicAtSharedHighWatermark": (
-                    "nextOrdinal",
-                    "retransmitOrdinal",
-                    "FrozenSnapshotRetired",
-                ),
-                "StartFiniteOwnerEpisodeWithHiddenPeriodicPrefix": (
-                    "frozenSnapshot",
-                    "candidateAhead",
-                    "phase",
-                ),
-                "ReplaceRetiredPeriodicAtSameOrdinal": (
-                    "retiredOrdinals",
-                    "replacementEpoch",
-                    "retransmitOrdinal",
-                ),
-                "FixedSpec": ("FixedInit", "FixedNext", "WF_mutationVars"),
-                "HiddenPrefixBugSpec": (
-                    "HiddenPrefixBugInit",
-                    "HiddenPrefixBugNext",
-                    "WF_mutationVars",
-                ),
-                "ReplenishmentBugSpec": (
-                    "ReplenishmentBugInit",
-                    "ReplenishmentBugNext",
-                    "WF_mutationVars",
-                ),
-                "FrozenPeriodicSnapshotCannotReplenish": (
-                    "PeriodicPredecessorOrdinals",
-                    "frozenSnapshot",
-                ),
-                "FiniteOwnerEpisodeStartsAfterPeriodicPrefixDrains": (
-                    "FrozenSnapshotRetired",
-                    "PeriodicPredecessorOrdinals",
-                ),
-                "TargetEventuallyDone": ("targetDone",),
-            }
-            for symbol, required in periodic_operators.items():
-                extracted = _top_level_operator_body(
-                    periodic_model_source,
-                    symbol,
-                    preserve_string_contents=True,
-                )
-                if extracted is None:
-                    errors.append(
-                        f"{periodic_model_path}: missing periodic-prefix "
-                        f"mutation operator {symbol}"
-                    )
-                    continue
-                body, line = extracted
-                missing = tuple(
-                    token
-                    for token in required
-                    if not _tla_dependency_present(body, token)
-                )
-                if missing:
-                    errors.append(
-                        f"{periodic_model_path}:{line}: {symbol} must retain "
-                        "the exact periodic-prefix mutation contract; "
-                        f"missing={missing!r}"
-                    )
-
-    config_contracts = {
-        "current_ingress_physical_cut_fixed.cfg": (
-            "SPECIFICATION CurrentIngressFixedSpec",
-            "INVARIANT CurrentIngressTurnSelectsExactCarrier",
-            "PROPERTY EventuallyExactTargetCompletes",
-        ),
-        "current_ingress_replenishment_churn_bug.cfg": (
-            "SPECIFICATION CurrentIngressChurnBugSpec",
-            "PROPERTY EventuallyExactTargetCompletes",
-        ),
-        "producer_continuation_physical_cut_fixed.cfg": (
-            "SPECIFICATION ContinuationPhysicalCutFixedSpec",
-            "INVARIANT CausalSuccessorRetainsPostCutPhysicalRoot",
-            "PROPERTY EventuallyExactTargetCompletes",
-        ),
-        "producer_continuation_logical_only_replay_bug.cfg": (
-            "SPECIFICATION ContinuationLogicalOnlyBugSpec",
-            "INVARIANT CausalSuccessorRetainsPostCutPhysicalRoot",
-        ),
-        "producer_continuation_timeout_cut_fixed.cfg": (
-            "SPECIFICATION TimeoutCutFilteredFixedSpec",
-            "INVARIANT TimeoutCutFilterNeverSelectsPostCutReplay",
-            "PROPERTY EventuallyExactTargetCompletes",
-        ),
-        "producer_continuation_timeout_cut_logical_minimum_bug.cfg": (
-            "SPECIFICATION TimeoutCutLogicalMinimumBugSpec",
-            "PROPERTY EventuallyExactTargetCompletes",
-        ),
-        "adequate_leader_periodic_prefix_fixed.cfg": (
-            "SPECIFICATION FixedSpec",
-            "INVARIANT FrozenPeriodicSnapshotCannotReplenish",
-            "INVARIANT RetiredPeriodicIdentityCannotResurrect",
-            "INVARIANT FiniteOwnerEpisodeStartsAfterPeriodicPrefixDrains",
-            "PROPERTY TargetEventuallyDone",
-        ),
-        "adequate_leader_periodic_hidden_prefix_bug.cfg": (
-            "SPECIFICATION HiddenPrefixBugSpec",
-            "INVARIANT FiniteOwnerEpisodeStartsAfterPeriodicPrefixDrains",
-        ),
-        "adequate_leader_periodic_replenishment_bug.cfg": (
-            "SPECIFICATION ReplenishmentBugSpec",
-            "PROPERTY TargetEventuallyDone",
-        ),
-    }
-    for filename, required in config_contracts.items():
-        config_path = formal_dir / filename
-        if not config_path.is_file() or config_path.is_symlink():
-            errors.append(
-                f"{config_path}: physical-cut mutation config must be a "
-                "regular file"
-            )
-            continue
-        try:
-            config_source = config_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as error:
-            errors.append(f"{config_path}: cannot read mutation config: {error}")
-            continue
-        missing_or_repeated = [
-            fragment
-            for fragment in required
-            if config_source.count(fragment) != 1
-        ]
-        if missing_or_repeated:
-            errors.append(
-                f"{config_path}: physical-cut mutation config must retain "
-                "each reviewed obligation exactly once; "
-                f"missing_or_repeated={missing_or_repeated!r}"
-            )
-
-    runner_path = (
-        repo_root / PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER
-    )
-    if not runner_path.is_file() or runner_path.is_symlink():
-        errors.append(
-            f"{runner_path}: physical-cut mutation runner must be a regular file"
-        )
-        return errors
-    try:
-        runner_source = runner_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        errors.append(f"{runner_path}: cannot read mutation runner: {error}")
-        return errors
-    required_runner_fragments = (
-        'readonly TLA2TOOLS_VERSION="1.7.4"',
-        'readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"',
-        "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
-        'readonly EXPECTED_JAVA_VERSION=\'openjdk version "21.0.12"\'',
-        'readonly MODEL="SumeragiV2ProducerContinuationPhysicalCutMutation.tla"',
-        'readonly CURRENT_FIXED_CONFIG="current_ingress_physical_cut_fixed.cfg"',
-        'readonly CURRENT_CHURN_BUG_CONFIG="current_ingress_replenishment_churn_bug.cfg"',
-        'readonly CONTINUATION_FIXED_CONFIG="producer_continuation_physical_cut_fixed.cfg"',
-        'readonly CONTINUATION_LOGICAL_BUG_CONFIG="producer_continuation_logical_only_replay_bug.cfg"',
-        'readonly TIMEOUT_FIXED_CONFIG="producer_continuation_timeout_cut_fixed.cfg"',
-        'readonly TIMEOUT_LOGICAL_BUG_CONFIG="producer_continuation_timeout_cut_logical_minimum_bug.cfg"',
-        'readonly PERIODIC_MODEL="SumeragiV2AdequateLeaderPeriodicPrefixMutation.tla"',
-        'readonly PERIODIC_FIXED_CONFIG="adequate_leader_periodic_prefix_fixed.cfg"',
-        'readonly PERIODIC_HIDDEN_BUG_CONFIG="adequate_leader_periodic_hidden_prefix_bug.cfg"',
-        'readonly PERIODIC_REPLENISHMENT_BUG_CONFIG="adequate_leader_periodic_replenishment_bug.cfg"',
-        'current_fixed_log="$(run_tlc current-ingress-fixed "$CURRENT_FIXED_CONFIG" 0)"',
-        'continuation_fixed_log="$(run_tlc continuation-cut-fixed "$CONTINUATION_FIXED_CONFIG" 0)"',
-        'timeout_fixed_log="$(run_tlc timeout-cut-fixed "$TIMEOUT_FIXED_CONFIG" 0)"',
-        'current_bug_log="$(run_tlc current-ingress-churn "$CURRENT_CHURN_BUG_CONFIG" 13)"',
-        'timeout_bug_log="$(run_tlc timeout-logical-minimum "$TIMEOUT_LOGICAL_BUG_CONFIG" 13)"',
-        'run_tlc adequate-periodic-fixed "$PERIODIC_FIXED_CONFIG" 0 "$PERIODIC_MODEL"',
-        '"$PERIODIC_HIDDEN_BUG_CONFIG" 12 "$PERIODIC_MODEL"',
-        '"$PERIODIC_REPLENISHMENT_BUG_CONFIG" 13 "$PERIODIC_MODEL"',
-        "run_tlc continuation-logical-only \"$CONTINUATION_LOGICAL_BUG_CONFIG\" 12",
-        "Error: Temporal properties were violated.",
-        "Error: Invariant CausalSuccessorRetainsPostCutPhysicalRoot is violated.",
-        "Error: Invariant FiniteOwnerEpisodeStartsAfterPeriodicPrefixDrains is violated.",
-        "Back to state",
-        "sumeragi_v2_tlc_assert_fixed_success",
-        "sumeragi_v2_tlc_assert_nonzero_state_space",
-    )
-    normalized_runner = " ".join(runner_source.split())
-    missing_or_repeated = [
-        fragment
-        for fragment in required_runner_fragments
-        if normalized_runner.count(fragment) != 1
-    ]
-    if missing_or_repeated:
-        errors.append(
-            f"{runner_path}: physical-cut mutation runner must retain each "
-            "pinned tool, scenario, status, and diagnostic exactly once; "
-            f"missing_or_repeated={missing_or_repeated!r}"
-        )
-    diagnostic_contract = "SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN"
-    if normalized_runner.count(diagnostic_contract) != 4:
-        errors.append(
-            f"{runner_path}: physical-cut mutation runner must apply the "
-            "shared primary-diagnostic contract exactly four times"
-        )
-    return errors
+_execute_checker_component("sumeragi_v2_proof_ledger_candidate_continuation_contracts.py")
 
 
 def _historical_candidate_producer_continuation_contract_errors(
@@ -20179,6 +18074,84 @@ def _timeout_view_liveness_contract_source_fidelity_errors(
     return errors
 
 
+_BYZANTINE_PROPOSAL_DOMAIN_PROOF_BINDINGS = {
+    "SumeragiV2Proofs.tla": (
+        ("NextLockFootprintClassification", "Next"),
+    ),
+    "SumeragiV2AsyncRecoveryVoteEpochProofs.tla": (
+        ("CoreNextSerializedBusyActionClassification", "Next"),
+        ("AsyncFaultStepLeavesOutstandingTags", "AsyncFaultStep"),
+    ),
+    "SumeragiV2AsyncRecoveryProgressWitnessProofs.tla": (
+        ("CoreNextPreservesDecisionTimeoutFrontier", "Next"),
+    ),
+    "SumeragiV2AsyncFairServiceProofs.tla": (
+        ("AsyncFaultStepLeavesDiscoveryClock", "AsyncFaultStep"),
+    ),
+    "SumeragiV2AsyncProgressOwnershipProofs.tla": (
+        ("AsyncFaultPreservesProgressOwnership", "AsyncFaultStep"),
+    ),
+    "SumeragiV2AsyncTimeoutKernelProofs.tla": (
+        ("CoreNextKeepsPrepareQcsMonotone", "Next"),
+        ("AsyncFaultStepKeepsTimeoutPool", "AsyncFaultStep"),
+        ("AsyncFaultStepPreservesSchedulerType", "AsyncFaultStep"),
+    ),
+}
+
+
+def _byzantine_proposal_domain_proof_binding_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Require every affected case split to unfold the new pair domain."""
+
+    errors: list[str] = []
+    for relative, bindings in _BYZANTINE_PROPOSAL_DOMAIN_PROOF_BINDINGS.items():
+        path = formal_dir / relative
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8")
+        for symbol, transition in bindings:
+            extracted = _top_level_theorem_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{path}: missing Byzantine-proposal domain proof binding "
+                    f"theorem {symbol}"
+                )
+                continue
+            body, line = extracted
+            parts = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+            )
+            proof = parts[1] if len(parts) == 2 else ""
+            proof_tokens = tla_code_tokens(proof)
+            transition_def_positions = _token_sequence_positions(
+                proof_tokens, ("DEF", transition)
+            )
+            exact_def_positions = _token_sequence_positions(
+                proof_tokens,
+                (
+                    "DEF",
+                    transition,
+                    ",",
+                    "ByzantineProposalJustificationDomain",
+                ),
+            )
+            if (
+                len(transition_def_positions) != 1
+                or exact_def_positions != transition_def_positions
+            ):
+                errors.append(
+                    f"{path}:{line}: {symbol} must unfold "
+                    "ByzantineProposalJustificationDomain exactly once in "
+                    f"the only adjacent DEF {transition} list; found "
+                    f"transition_defs={transition_def_positions!r}, "
+                    f"exact_defs={exact_def_positions!r}"
+                )
+    return errors
+
+
 def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     """Pin executable progress witnesses and the post-Decision timeout boundary."""
 
@@ -20299,6 +18272,17 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "FiniteGenerations": "0..MaxGeneration",
             "FiniteGenerationCanIncrement": "value < MaxGeneration",
+            "ByzantineProposalJustificationDomain": (
+                "[timeoutCertificate: TimeoutCertificateOptionSet, "
+                "highestPrepareQc: PrepareQcOptionSet]"
+            ),
+            "FiniteByzantineProposalJustificationDomain": (
+                "{[timeoutCertificate |-> NoTimeoutCertificate, "
+                "highestPrepareQc |-> NoPrepareQC]} "
+                "\\cup {[timeoutCertificate |-> installed.tc, "
+                "highestPrepareQc |-> installed.tc.highestPrepareQc]: "
+                "installed \\in installedTCs}"
+            ),
             "NoDecisionForNode": (
                 "~\\E decision \\in decisions: "
                 "/\\ decision.node = node "
@@ -28679,6 +26663,183 @@ def _transport_geometry_production_source_fidelity_errors(
                     f"digest {expected_sha256}; found {observed_sha256}"
                 )
 
+    _require_rust_source_token_sequence(
+        core_path,
+        core_source,
+        """
+configured_network_id: Option<NetworkId>,
+leader_wire_context: Option<(
+    iroha_data_model::block::consensus_v2::HeightContextId,
+    iroha_data_model::block::consensus_v2::Height,
+)>,
+""",
+        "the active fair-ingress context must retain its exact genesis-derived network identity",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        core_path,
+        core_source,
+        """
+leader_wire_token: Option<FairV2IngressLeaderWireToken>,
+history_serve_request: Option<FairV2IngressHistoryServeRequest>,
+encoded_bytes: Arc<[u8]>,
+""",
+        "each queued occurrence must retain its pre-authenticated historical-release projection",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        core_path,
+        core_source,
+        """
+struct FairV2IngressHistoryServeRequest {
+    height: u64,
+    required_network_id: Option<NetworkId>,
+}
+""",
+        "historical release authority must contain only predecessor height and optional signed network identity",
+        errors,
+    )
+    history_height = _require_qualified_rust_item(
+        core_path,
+        core_source,
+        "FairV2IngressHistoryServeRequest",
+        "height",
+        errors,
+        "historical release predecessor-height projection",
+    )
+    history_network = _require_qualified_rust_item(
+        core_path,
+        core_source,
+        "FairV2IngressHistoryServeRequest",
+        "matches_configured_network",
+        errors,
+        "historical release signed-network comparison",
+    )
+    history_request = _require_rust_item(
+        core_path,
+        core_source,
+        "fair_v2_ingress_history_serve_request",
+        errors,
+    )
+    _require_rust_item_context(
+        core_path,
+        history_request,
+        (),
+        "historical release pre-authentication projection",
+        errors,
+    )
+    expected_history_item_keys = {
+        "FairV2IngressHistoryServeRequest::height",
+        "FairV2IngressHistoryServeRequest::matches_configured_network",
+        "fair_v2_ingress_history_serve_request",
+    }
+    observed_history_item_keys = set(
+        _PRODUCTION_FAIR_V2_INGRESS_HISTORY_ITEM_SHA256
+    )
+    if observed_history_item_keys != expected_history_item_keys:
+        errors.append(
+            "historical-release item source-seal inventory must be exact; "
+            f"missing={sorted(expected_history_item_keys - observed_history_item_keys)}, "
+            f"extra={sorted(observed_history_item_keys - expected_history_item_keys)}"
+        )
+    for key, item, description in (
+        (
+            "FairV2IngressHistoryServeRequest::height",
+            history_height,
+            "historical release predecessor-height projection",
+        ),
+        (
+            "FairV2IngressHistoryServeRequest::matches_configured_network",
+            history_network,
+            "historical release signed-network comparison",
+        ),
+        (
+            "fair_v2_ingress_history_serve_request",
+            history_request,
+            "historical release pre-authentication projection",
+        ),
+    ):
+        _require_rust_item_token_sha256(
+            core_path,
+            item,
+            _PRODUCTION_FAIR_V2_INGRESS_HISTORY_ITEM_SHA256[key],
+            description,
+            errors,
+        )
+    _require_rust_token_sequence(
+        core_path,
+        history_height,
+        """
+self.height
+""",
+        "historical release height must be the authenticated request height",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        history_network,
+        """
+self.required_network_id
+    .is_none_or(|network_id| configured_network_id == Some(&network_id))
+""",
+        "a signed request network must exactly equal the active genesis-derived network while legacy body requests remain context-validated downstream",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        history_request,
+        """
+let BlockMessage::V2(message) = inbound.message() else {
+    return None;
+};
+if message.validate_version().is_err() {
+    return None;
+}
+match &message.payload {
+    ConsensusMessageV2Payload::CertifiedBodyRequest(request)
+        if request.certificate.proposal_round == request.round
+            && request.certificate.subject == request.subject
+            && v2_transport::authenticate_certified_body_request_identity(
+                request,
+                inbound.sender(),
+            )
+            .is_ok() =>
+    {
+        Some(FairV2IngressHistoryServeRequest {
+            height: request.round.height,
+            required_network_id: None,
+        })
+    }
+    ConsensusMessageV2Payload::CommitCertificateRequest(request)
+        if v2_transport::authenticate_commit_certificate_request_identity(
+            request,
+            inbound.sender(),
+        )
+        .is_ok() =>
+    {
+        Some(FairV2IngressHistoryServeRequest {
+            height: request.height,
+            required_network_id: Some(request.network_id),
+        })
+    }
+    ConsensusMessageV2Payload::Proposal(_)
+    | ConsensusMessageV2Payload::Vote(_)
+    | ConsensusMessageV2Payload::QuorumCertificate(_)
+    | ConsensusMessageV2Payload::TimeoutVote(_)
+    | ConsensusMessageV2Payload::TimeoutCertificate(_)
+    | ConsensusMessageV2Payload::PayloadManifest(_)
+    | ConsensusMessageV2Payload::PayloadChunk(_)
+    | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+    | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+    | ConsensusMessageV2Payload::CommitCertificateRequest(_)
+    | ConsensusMessageV2Payload::CommitCertificateResponse(_)
+    | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
+}
+""",
+        "only exact signed body or commit-certificate requests may acquire historical-release scheduling authority",
+        errors,
+    )
+
     reply_route_constructor = _require_rust_item(
         core_path,
         core_source,
@@ -28854,18 +27015,111 @@ pub(crate) struct FairV2Ingress {
         errors,
     )
 
+    constructor = _require_qualified_rust_item(
+        core_path,
+        core_source,
+        "FairV2Ingress",
+        "new_with_source_geometry_and_transport_frame_caps",
+        errors,
+        "fair-ingress source-geometry constructor",
+    )
+    _require_rust_token_sequence(
+        core_path,
+        constructor,
+        """
+requires_leader_wire_lifecycle_gate: false,
+leader_wire_lifecycle_gate: None,
+leader_wire_lifecycle_ordinals: None,
+configured_network_id: None,
+leader_wire_context: None,
+open: false,
+""",
+        "an unconfigured ingress must begin closed and without network or lifecycle authority",
+        errors,
+    )
+
     push = _require_rust_item(core_path, core_source, "try_push_at", errors)
     _require_rust_token_sequence(
         core_path,
         push,
         """
+let encoded_len = encoded.len();
+let history_serve_request = fair_v2_ingress_history_serve_request(&inbound);
+let wire_hash = CryptoHash::new(encoded.as_ref());
+""",
+        "historical request signatures must be pre-authenticated before the ingress state lock",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+let mut state = self.state.lock();
+if !state.open {
+    return Err(FairV2IngressPushError::Closed(inbound));
+}
+let history_serve_request = history_serve_request.filter(|request| {
+    request.matches_configured_network(state.configured_network_id.as_ref())
+});
+""",
+        "historical scheduling authority must be filtered against the exact open context network while holding its state lock",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+class,
+wire_key,
+leader_wire_token,
+history_serve_request,
+encoded_bytes: encoded,
+""",
+        "the queued occurrence must retain the filtered historical-release authority beside its immutable owner",
+        errors,
+    )
+    if push is not None:
+        push_tokens = rust_code_tokens(push.source)
+        history_order_sequences = (
+            "let history_serve_request = fair_v2_ingress_history_serve_request(&inbound);",
+            "let _producer_publication_guard = self.producer_publication_lock.lock();",
+            "let mut state = self.state.lock();",
+            "let history_serve_request = history_serve_request.filter(|request|",
+            "lane.entries.push_back(FairV2IngressEntry",
+        )
+        history_order_positions = [
+            _token_sequence_positions(push_tokens, rust_code_tokens(sequence))
+            for sequence in history_order_sequences
+        ]
+        if any(len(found) != 1 for found in history_order_positions) or any(
+            left[0] >= right[0]
+            for left, right in zip(
+                history_order_positions,
+                history_order_positions[1:],
+            )
+            if left and right
+        ):
+            errors.append(
+                f"{core_path}:{push.line}: historical request authentication, "
+                "publication exclusion, active-network filtering, and immutable "
+                "queue ownership must occur in the exact reviewed order"
+            )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
 let is_current_validator_origin = state.roster.contains(inbound.sender());
-let is_historical_recovery_response =
-    message_kind == FairV2IngressMessageKind::LaneHistoricalRecoveryResponse;
-let authenticated_historical_recovery_response = is_historical_recovery_response;
+let authenticated_request_bound_response = matches!(
+    message_kind,
+    FairV2IngressMessageKind::LaneHistoricalRecoveryResponse
+        | FairV2IngressMessageKind::V2CertifiedBodyResponse
+);
+let request_bound_non_roster_completion = state.requires_leader_wire_lifecycle_gate
+    && message_kind == FairV2IngressMessageKind::V2CertifiedBodyResponse
+    && !is_current_validator_origin;
 if is_transport_completion
     && !is_current_validator_origin
-    && !authenticated_historical_recovery_response
+    && !authenticated_request_bound_response
 {
     return Err(FairV2IngressPushError::rejected(
         inbound,
@@ -28873,7 +27127,7 @@ if is_transport_completion
     ));
 }
 """,
-        "current-roster or proof-carrying historical authority premise for completion relayed through an authenticated hop",
+        "current-roster or exact request-bound historical/certified authority premise and non-roster lifecycle binding for completion relayed through an authenticated hop",
         errors,
     )
     _require_rust_token_sequence(
@@ -29126,9 +27380,20 @@ left.sender() == right.sender()
     _require_rust_token_sequence(
         selector_path,
         queue_gate,
+        _CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES[
+            "historical_replica_release_dependency"
+        ],
+        "historical replica release must require a nonzero older request, "
+        "authenticated writable return ownership, and an exact blocked "
+        "Control-or-Chunk owner without spending certified-fence capacity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        selector_path,
+        queue_gate,
         _CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES["queue_gate_verdict"],
         "live control predecessor blocks strict-newer carrier authorization "
-        "while preserving the three exact dependency classes",
+        "while preserving the three exact gate verdicts",
         errors,
     )
     control_regression_path, control_regression_source = (
@@ -29541,6 +27806,28 @@ assert!(
     configure_context = _require_rust_item(
         core_path, core_source, "configure_roster_for_context", errors
     )
+    configure_test = _require_rust_item(
+        core_path, core_source, "configure_roster", errors
+    )
+    _require_rust_item_context(
+        core_path,
+        configure_test,
+        (("impl", "FairV2Ingress"),),
+        "generic test-only fair-ingress roster configuration",
+        errors,
+        expected_attributes=(
+            '#[cfg(any(test, feature = "sumeragi-main-loop-tests"))]',
+        ),
+    )
+    _require_rust_token_sequence(
+        core_path,
+        configure_test,
+        """
+self.configure_roster_with_byte_requirements(roster, None, 0, 0, 0, 0, 0, 0, 0)
+""",
+        "generic test ingress must not fabricate production network identity",
+        errors,
+    )
     _require_rust_token_sequence(
         core_path,
         configure_context,
@@ -29634,9 +27921,46 @@ BODY_ENVELOPE_HEADROOM_BYTES
         "ordinary source geometry must include the exact Kura replica-advert network ceiling",
         errors,
     )
+    _require_rust_token_sequence(
+        core_path,
+        configure_context,
+        """
+let configured = self.configure_roster_with_byte_requirements(
+    roster,
+    Some(*network_id),
+    BODY_ENVELOPE_HEADROOM_BYTES
+        .max(required_control_message_bytes)
+        .max(required_recovery_request_bytes)
+        .max(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES)
+        .max(crate::MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES),
+    required_certified_fence_escape_bytes,
+    required_transport_completion_bytes,
+    required_consensus_frame_bytes,
+    required_control_frame_bytes,
+    required_block_sync_frame_bytes,
+    required_outbound_high_frame_bytes,
+);
+""",
+        "production context setup must atomically hand off the exact genesis-derived network identity with every byte requirement",
+        errors,
+    )
 
     configure = _require_rust_item(
         core_path, core_source, "configure_roster_with_byte_requirements", errors
+    )
+    _require_rust_token_sequence(
+        core_path,
+        configure,
+        """
+state.open = false;
+state.roster = roster;
+state.lanes = lanes;
+state.pending_wire_owners.clear();
+state.leader_wire_lifecycles.clear();
+state.configured_network_id = configured_network_id;
+""",
+        "roster rollover must close admission, retire prior owners, and publish the matching network identity as one locked transition",
+        errors,
     )
     open_ingress = _require_rust_item(core_path, core_source, "open", errors)
     for item, stage in ((configure, "configure"), (open_ingress, "open")):
@@ -38338,8 +36662,10 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "AsyncRetransmitLifecycleOrdinal(node)"
             ),
             "AsyncServeOrdinalInvariant": (
-                "/\\ asyncNextServeIngressOrdinal \\in [ValidatorIds -> "
-                "1..(AsyncIngressPhysicalOrdinalMaximum + 1)] /\\ "
+                "/\\ DOMAIN asyncNextServeIngressOrdinal = ValidatorIds "
+                "/\\ \\A node \\in ValidatorIds: "
+                "asyncNextServeIngressOrdinal[node] \\in "
+                "1..(AsyncIngressPhysicalOrdinalMaximum + 1) /\\ "
                 "asyncNextServeAdmissionOrdinal \\in "
                 "[ValidatorIds -> Nat \\ {0}] /\\ \\A admission \\in "
                 "asyncServeIngressAdmissions: admission.ordinal < "
@@ -47751,6 +46077,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     source = path.read_text(encoding="utf-8")
     stripped = strip_tla_comments(source)
     errors = _async_network_reviewed_contract_errors(path, source)
+    errors.extend(_byzantine_proposal_domain_proof_binding_errors(formal_dir))
     for retired_symbol in (
         "RetainedCertifiedFenceEscapePhases",
         "RetainedCertifiedFenceEscapePhase",
@@ -53302,6 +51629,9 @@ asyncServeProducerTurnReady' =
         ),
         "AsyncFaultStep": (
             "InjectUntrustedTransportCompletion(kind, recipient, nonce)",
+            "justification \\in ByzantineProposalJustificationDomain",
+            "justification.timeoutCertificate",
+            "justification.highestPrepareQc",
         ),
         "AsyncCandidateTyped": (
             "AsyncEvidenceTyped(candidate.evidence)",
@@ -53961,6 +52291,47 @@ asyncServeProducerTurnReady' =
             errors.append(
                 f"{path}:{line}: {symbol} omits required production behavior {missing}"
             )
+        if symbol == "AsyncFaultStep":
+            expected_byzantine_proposal_arm = (
+                "\\/ \\E signer \\in ValidatorIds, roundView \\in Views, "
+                "subject \\in Subjects, justification \\in "
+                "ByzantineProposalJustificationDomain: "
+                "AsyncByzantineProposal( signer, roundView, subject, "
+                "justification.timeoutCertificate, "
+                "justification.highestPrepareQc)"
+            )
+            arm_start = normalized.find(
+                "\\/ \\E signer \\in ValidatorIds, roundView \\in Views, "
+                "subject \\in Subjects,"
+            )
+            arm_end = normalized.find(
+                "\\/ \\E signer \\in ValidatorIds, roundView \\in Views, "
+                "phase \\in Phases,",
+                arm_start + 1,
+            )
+            actual_arm = (
+                ""
+                if arm_start < 0 or arm_end < 0
+                else normalized[arm_start:arm_end].strip()
+            )
+            if actual_arm != expected_byzantine_proposal_arm:
+                errors.append(
+                    f"{path}:{line}: AsyncFaultStep must range Byzantine "
+                    "proposal justifications over the exact reviewed domain"
+                )
+            proposal_action_count = len(
+                _tla_dependency_positions(body, "AsyncByzantineProposal")
+            )
+            if proposal_action_count != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncFaultStep must contain exactly one "
+                    f"Byzantine proposal action; found {proposal_action_count}"
+                )
+            if _tla_dependency_positions(body, "TimeoutCertificateOptionSet"):
+                errors.append(
+                    f"{path}:{line}: AsyncFaultStep must not eagerly enumerate "
+                    "the timeout-certificate powerset"
+                )
         if symbol == "CurrentLockedReproposalPrepareItem":
             if "ProposalAt" in normalized:
                 errors.append(
@@ -53973,7 +52344,27 @@ asyncServeProducerTurnReady' =
                     "round binding across same-view consumer-generation changes"
                 )
 
+    for symbol, expected in {
+        "AsyncIngressPhysicalOrdinalMaximum": "(2 ^ 64) - 1",
+        "FiniteAsyncIngressPhysicalOrdinalMaximum": "4096",
+    }.items():
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{path}: missing finite-TLC ordinal operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{path}:{line}: {symbol} must equal only the exact reviewed "
+                f"production/finite ordinal ceiling {expected!r}; found "
+                f"{normalized!r}"
+            )
+
     exact_capacity_operator_bodies = {
+        **_FINITE_ASYNC_NETWORK_OPERATOR_BODIES,
         "AsyncNormalLimit": (
             "AsyncQueueCapacity - AsyncProgressReserve - "
             "AsyncCompletionReserve - 1"
@@ -54715,15 +53106,17 @@ self.pending_runner_decision_cleanup = None;
             effects_path,
             dispatch_available,
             """
-Ok(self.pending_work() == 0
-    && self.recovered_decision_fetch_request_index_is_exact_and_empty()
-    && self.retained_effect_batch.is_none()
-    && self.parked_effect_batch.is_none()
-    && self.finality_completion.is_none()
-    && queued_ingress_is_allowed
-    && self.runtime.lifecycle_decision_apply_dispatch_available())
+Ok(
+    self.pending_work() == self.pending_lifecycle_output_admissions.len()
+        && successor_debt_is_exact
+        && self.recovered_decision_fetch_request_index_is_exact_and_empty()
+        && self.parked_effect_batch.is_none()
+        && self.finality_completion.is_none()
+        && self.runtime.queued_commands() == 0
+        && self.runtime.lifecycle_decision_apply_dispatch_available(),
+)
 """,
-            "lifecycle Apply dispatch must freeze every executor mutation owner and the runtime barrier",
+            "lifecycle Apply dispatch must bind the exact attested successor debt while freezing every other executor mutation owner and the runtime barrier",
             errors,
         )
 
@@ -54734,16 +53127,30 @@ Ok(self.pending_work() == 0
             effects_path,
             prepare_dispatch,
             """
-if !self.lifecycle_decision_apply_dispatch_available()? {
+if successor_outputs
+    .as_ref()
+    .is_some_and(|attestation| attestation.dispatch_key() != prepared.dispatch_key())
+    || !self.lifecycle_decision_apply_dispatch_available(successor_outputs.as_ref())?
+{
     return Err(EffectExecutorError::Contract(
         "lifecycle Apply dispatch overtook retained executor work".to_owned(),
     ));
 }
 let Some(evidence) = self.pending_tip_recovery.as_ref() else {
-    return Ok(PreparedLifecycleDecisionApplyExecutorDispatchV1 { pending: None });
+    let successor_outputs = successor_outputs.map(|attestation| {
+        PendingLifecycleDecisionApplySuccessorOutputsTransitionV1 {
+            installed: &mut self.lifecycle_decision_apply_successor_outputs,
+            retained_effect_batch: &mut self.retained_effect_batch,
+            attestation,
+        }
+    });
+    return Ok(PreparedLifecycleDecisionApplyExecutorDispatchV1 {
+        pending: None,
+        successor_outputs,
+    });
 };
 """,
-            "ordinary lifecycle Apply dispatch must remain inert unless exact pending-Kura evidence exists",
+            "ordinary lifecycle Apply dispatch must transfer only the exact attested successor debt while recovered dispatch remains pending-Kura owned",
             errors,
         )
         _require_rust_token_sequence(
@@ -54797,17 +53204,18 @@ let lineage_owner_is_exact = match authority.lineage() {
             effects_path,
             prepare_completion,
             """
-if self.pending_work() != 0
+if self.pending_work() != self.pending_lifecycle_output_admissions.len()
+    || !successor_outputs_are_exact
     || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
     || self.retained_effect_batch.is_some()
     || self.parked_effect_batch.is_some()
     || !pending_recovery_is_exact
     || self.finality_completion.is_some()
-    || (recovered_requires_empty_ingress && self.runtime.queued_commands() != 0)
+    || self.runtime.queued_commands() != 0
     || !lineage_owner_is_exact
 {
 """,
-            "lifecycle Apply completion preparation must reject every competing executor owner",
+            "lifecycle Apply completion preparation must bind the exact successor-output census and reject every competing executor owner",
             errors,
         )
 
@@ -54818,10 +53226,10 @@ if self.pending_work() != 0
             effects_path,
             commit_finality,
             """
-let (dispatch_key, tag, receipt, artifact, committed_status) =
+let (dispatch_key, validate_predecessor_ordinal, tag, receipt, artifact, committed_status) =
     finality.consume_for_executor(LifecycleDecisionApplyExecutorFinalityPermitV1::new());
 """,
-            "lifecycle Apply finality must consume the move-only post-Ledger permit",
+            "lifecycle Apply finality must consume the move-only post-Ledger permit and its exact recovered Validate predecessor",
             errors,
         )
         _require_rust_token_sequence(
@@ -54831,7 +53239,8 @@ let (dispatch_key, tag, receipt, artifact, committed_status) =
 assert!(
     lineage_owner_is_exact
         && self.finality_completion.is_none()
-        && self.pending_work() == 0
+        && self.pending_work() == self.pending_lifecycle_output_admissions.len()
+        && successor_outputs_are_exact
         && self.recovered_decision_fetch_request_index_is_exact_and_empty()
         && pending_recovery_is_exact
         && dispatch_key.matches_height_context(&self.context)
@@ -54843,6 +53252,14 @@ assert!(
         && self.runtime.driver().ready_to_finish(),
     "pre-Ledger lifecycle Apply finality proof remains exact"
 );
+if dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Recovered {
+    self.release_recovered_apply_validate_retry_predecessor(
+        dispatch_key,
+        (artifact.commit_qc.proposal_round, artifact.subject),
+        validate_predecessor_ordinal,
+    )
+    .expect("preflighted recovered Apply Validate predecessor remains exact");
+}
 self.finality_completion = Some(FinalityCompletion {
     tag,
     receipt,
@@ -54850,7 +53267,7 @@ self.finality_completion = Some(FinalityCompletion {
     ownership: FinalityCompletionOwner::LifecycleDecisionApply(dispatch_key),
 });
 """,
-            "lifecycle Apply finality must install only an exact drained lineage-owned tombstone",
+            "lifecycle Apply finality must release the exact recovered Validate predecessor and install only an exact drained lineage-owned tombstone after binding successor-output debt",
             errors,
         )
 
@@ -55229,7 +53646,7 @@ Err(
                 rust_code_tokens("batch.effects.front()"),
                 rust_code_tokens(
                     "self.consume_one(owned.effect, owned.ownership, "
-                    "owned.highest_prepare_retention, services)"
+                    "owned.highest_prepare_retention, services,)"
                 ),
                 rust_code_tokens("batch.effects.pop_front()"),
             )
@@ -55885,6 +54302,47 @@ let count = self.consume_effects_with_runner_decision_cleanup(
                     f"{core_path}:{line}: Core Next must expose certificate-first "
                     "decision body validation"
                 )
+            expected_byzantine_proposal_arm = (
+                "\\/ \\E signer \\in ValidatorIds, roundView \\in Views, "
+                "subject \\in Subjects, justification \\in "
+                "ByzantineProposalJustificationDomain: "
+                "ByzantineBroadcastProposal( signer, roundView, subject, "
+                "justification.timeoutCertificate, "
+                "justification.highestPrepareQc)"
+            )
+            byzantine_arm_start = normalized_next.find(
+                "\\/ \\E signer \\in ValidatorIds, roundView \\in Views, "
+                "subject \\in Subjects,"
+            )
+            byzantine_arm_end = normalized_next.find(
+                "\\/ \\E envelope \\in proposalNetwork:",
+                byzantine_arm_start + 1,
+            )
+            actual_byzantine_proposal_arm = (
+                ""
+                if byzantine_arm_start < 0 or byzantine_arm_end < 0
+                else normalized_next[
+                    byzantine_arm_start:byzantine_arm_end
+                ].strip()
+            )
+            if actual_byzantine_proposal_arm != expected_byzantine_proposal_arm:
+                errors.append(
+                    f"{core_path}:{line}: Core Next must range Byzantine "
+                    "proposal justifications over the exact reviewed domain"
+                )
+            proposal_action_count = len(
+                _tla_dependency_positions(body, "ByzantineBroadcastProposal")
+            )
+            if proposal_action_count != 1:
+                errors.append(
+                    f"{core_path}:{line}: Core Next must contain exactly one "
+                    f"Byzantine proposal action; found {proposal_action_count}"
+                )
+            if _tla_dependency_positions(body, "TimeoutCertificateOptionSet"):
+                errors.append(
+                    f"{core_path}:{line}: Core Next must not eagerly enumerate "
+                    "the timeout-certificate powerset"
+                )
             expected_import_arm = (
                 "\\/ \\E envelope \\in QcEnvelopeSet: "
                 "ImportAuthenticatedCommitCertificate(envelope)"
@@ -55922,6 +54380,19 @@ let count = self.consume_effects_with_runner_decision_cleanup(
     liveness_cfg = formal_dir / "liveness.cfg"
     if liveness_cfg.is_file():
         cfg_source = liveness_cfg.read_text(encoding="utf-8")
+        liveness_properties = re.findall(
+            r"(?m)^PROPERTY ([A-Za-z][A-Za-z0-9_]*)$", cfg_source
+        )
+        if liveness_properties != [
+            "PostGstEventuallyAsyncDecision",
+            "ResponsiveDecisionEventuallyApplied",
+            "PostGstEventuallyAsyncApplication",
+            "PostGstEventuallyAsyncHeightCompletion",
+        ]:
+            errors.append(
+                f"{liveness_cfg}: finite TLC must check the exact reviewed "
+                "decision/application/aggregate liveness property inventory"
+            )
         if "INVARIANT AsyncInstallGenerationBudget\n" in cfg_source:
             errors.append(
                 f"{liveness_cfg}: diagnostic AsyncInstallGenerationBudget "
@@ -55987,7 +54458,7 @@ let count = self.consume_effects_with_runner_decision_cleanup(
 
 
 _OWNERSHIP_N1_MODEL_SHA256 = (
-    "e17ccb5ece6ab20e132328f8f462b2506a9d0674c60bb030a18806551e5d4664"
+    "5277f2f19b458103b7c8612832c8d8f96058a7fdc09a67fdbd4fbd1b17ee3b7a"
 )
 _OWNERSHIP_N1_CONFIG_SHA256 = (
     "4947346091a0400e6c64ea0a90b935064798063b7542b28d8414c0d46b66e67b"
@@ -56065,7 +54536,7 @@ _OWNERSHIP_N1_STRUCTURAL_OPERATOR_SHA256 = {
         "8308ae015870d2875953ef751e239048b1df47249e490017cd85217261338069"
     ),
     "OwnershipCertifiedResponseClaimProjectionAuthenticated": (
-        "9e598deb0c60585047771b74d4e1ebc2f4bfba7f07d0a5f298e5b3a0152ed2a9"
+        "e8b796c94fc0288cc1ce1d1b5475c3224946847c8767b922c3b567b503a3eea0"
     ),
     "OwnershipAsyncDeferredHandoffTyped": (
         "9170f34a12ca7a4deb9c1273451b6b4cbd5818bf1d7f65ca4233e5514f5184df"
@@ -56680,6 +55151,29 @@ self.server_streams
         "only outbound-response capacity and an exact late route-retirement race may leave the gate retryable",
         errors,
         count=2,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_materialization,
+        """
+let requester_has_corridor = self.frozen_roster_contains(&requester)
+    || self
+        .immediate_predecessor_sidecar_requesters()
+        .is_some_and(|requesters| requesters.contains(&requester));
+let local_is_authenticated_custodian = certified_merge_sidecar_holders(&reference)
+    .is_ok_and(|holders| holders.contains(&self.local_peer))
+    || preferred_merge_sidecar_holder(&self.context, &reference)
+        .is_ok_and(|leader| leader == self.local_peer);
+let local_is_holder = requester_has_corridor
+    && self.authenticates_certified_merge_sidecar_service_for_requester(
+        &entry,
+        &reference,
+        Some(&requester),
+    )
+    && local_is_authenticated_custodian;
+""",
+        "sidecar materialization must bind the current/predecessor requester corridor, full entry authentication, and local QC-holder or exact proposal-leader custody",
+        errors,
     )
     lane_request = _require_qualified_rust_item(
         lane_path,
@@ -57781,7 +56275,7 @@ match QueuePlanAdmissionBindingV1::new(
     &transaction,
     &routing_plan,
     context,
-    enqueue_timestamp_ms,
+    ingress_validation_timestamp_ms,
 )
 """,
         "Torii QueuePlan construction must not inject a separate request identity",
@@ -58130,6 +56624,12 @@ def _exact_output_production_source_fidelity_errors(
     effects_source = loaded_sources[effects_path]
     ordinary_ingress_consumer_source = loaded_sources[ordinary_ingress_consumer_path]
 
+    _require_merge_execution_validation_cache_contract(
+        lane_path,
+        lane_source,
+        errors,
+    )
+
     semantic_peer_capacity_tokens = rust_code_tokens(
         """
 const MAX_CERTIFIED_MERGE_SEMANTIC_PEERS: usize =
@@ -58442,6 +56942,7 @@ fn validate_shared_ownership_geometry(
     for item_name in (
         "accept_payload_chunk_with_ingress_ownership",
         "classify_payload_chunk_lifecycle",
+        "classify_payload_chunk_lifecycle_for_token",
         "begin_apply", "matches_apply",
         "complete_application",
     ):
@@ -58576,7 +57077,9 @@ self.identity.phase == FairV2IngressLeaderWirePhase::Chunk
     )
     _require_rust_token_sequence(
         effects_path,
-        ingress_seam_items["effects::classify_payload_chunk_lifecycle"][1],
+        ingress_seam_items[
+            "effects::classify_payload_chunk_lifecycle_for_token"
+        ][1],
         """
 let exact_pending_fetch = self.pending_fetches.values().any(|pending| {
     token.matches_body_coordinates(pending.task.round, pending.task.subject)
@@ -58611,9 +57114,9 @@ self.finality_completion = Some(FinalityCompletion {
         effects_path,
         effects_source,
         "finality_completion",
-        "the durable Apply completion tombstone field must have exactly its twenty-one reviewed runtime and lifecycle uses and no additional mutation surface",
+        "the durable Apply completion tombstone field must have exactly its twenty-three reviewed runtime and lifecycle uses and no additional mutation surface",
         errors,
-        count=21,
+        count=23,
     )
     for expected, description in (
         (
@@ -58638,7 +57141,7 @@ let finality = self
         ),
         (
             "|| self.finality_completion.is_some()",
-            "runtime and both lifecycle lineages must reject a second terminal installation",
+            "runtime, both lifecycle lineages, and terminal Validate readmission must reject a second terminal installation",
         ),
         (
             """
@@ -58655,7 +57158,7 @@ self.finality_completion
             expected,
             description,
             errors,
-            count=6 if expected == "|| self.finality_completion.is_some()" else 1,
+            count=7 if expected == "|| self.finality_completion.is_some()" else 1,
         )
     prepare_lifecycle_finality = _require_rust_item(effects_path, effects_source, "prepare_lifecycle_decision_apply_completion", errors)
     commit_lifecycle_finality = _require_rust_item(effects_path, effects_source, "commit_lifecycle_decision_apply_finality", errors)
@@ -58692,12 +57195,16 @@ authority.exactly_matches_pending_kura_recovery(&self.context, evidence)
         errors)
     _require_rust_token_sequence(
         effects_path, prepare_lifecycle_finality,
-        """self.pending_work() != 0 || !self.recovered_decision_fetch_request_index_is_exact_and_empty() || self.retained_effect_batch.is_some()
-|| self.parked_effect_batch.is_some() || !pending_recovery_is_exact
+        """self.pending_work() != self.pending_lifecycle_output_admissions.len()
+|| !successor_outputs_are_exact
+|| !self.recovered_decision_fetch_request_index_is_exact_and_empty()
+|| self.retained_effect_batch.is_some()
+|| self.parked_effect_batch.is_some()
+|| !pending_recovery_is_exact
 || self.finality_completion.is_some()
-|| (recovered_requires_empty_ingress && self.runtime.queued_commands() != 0)
+|| self.runtime.queued_commands() != 0
 || !lineage_owner_is_exact""",
-        "lifecycle Decision Apply completion must not overtake retained work, pending recovery, or recovered-lineage ingress",
+        "lifecycle Decision Apply completion must bind exact successor-output debt and not overtake retained work, pending recovery, or ingress",
         errors)
     _require_rust_token_sequence(
         effects_path, commit_lifecycle_finality,
@@ -58742,7 +57249,8 @@ self.live_lifecycle_decision_apply.is_none()
         effects_path, commit_lifecycle_finality,
         """assert!(lineage_owner_is_exact
 && self.finality_completion.is_none()
-&& self.pending_work() == 0
+&& self.pending_work() == self.pending_lifecycle_output_admissions.len()
+&& successor_outputs_are_exact
 && self.recovered_decision_fetch_request_index_is_exact_and_empty()
 && pending_recovery_is_exact
 && dispatch_key.matches_height_context(&self.context)
@@ -58752,7 +57260,19 @@ self.live_lifecycle_decision_apply.is_none()
 && receipt.height() == self.context.height
 && receipt.artifact_hash() == HashOf::new(&artifact)
 && self.runtime.driver().ready_to_finish()""",
-        "lifecycle Decision Apply finality must authenticate lineage, recovery, height, artifact, receipt, and drained runtime",
+        "lifecycle Decision Apply finality must authenticate lineage, successor debt, recovery, height, artifact, receipt, and drained runtime",
+        errors)
+    _require_rust_token_sequence(
+        effects_path, commit_lifecycle_finality,
+        """if dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Recovered {
+self.release_recovered_apply_validate_retry_predecessor(
+dispatch_key,
+(artifact.commit_qc.proposal_round, artifact.subject),
+validate_predecessor_ordinal,
+)
+.expect("preflighted recovered Apply Validate predecessor remains exact");
+}""",
+        "recovered lifecycle Decision Apply finality must release its exact Validate predecessor after finality preflight",
         errors)
     _require_rust_token_sequence(
         effects_path, commit_lifecycle_finality,
@@ -58819,7 +57339,9 @@ if let Some(existing) = self.pending_applications.values().next() {
     )
     _require_rust_token_sequence(
         effects_path,
-        ingress_seam_items["effects::classify_payload_chunk_lifecycle"][1],
+        ingress_seam_items[
+            "effects::classify_payload_chunk_lifecycle_for_token"
+        ][1],
         """
 if is_older_view && !installed_protected && !pending_protected {
     return Ok(PayloadChunkLifecycleDisposition::Volatile);
@@ -59061,7 +57583,22 @@ true
         ingress_path,
         ingress_seam_items["ingress::validate_exact"][1],
         """
-self.first.lifecycle_ordinal == self.latest.lifecycle_ordinal
+self.first.action == FairV2IngressOwnershipAction::New
+    && self.admission_count != 0
+    && self.action_counts[FairV2IngressOwnershipAction::New.index()] == self.admission_count
+    && self
+        .action_counts
+        .iter()
+        .copied()
+        .try_fold(0u128, |total, count| total.checked_add(count))
+        == Some(self.occurrence_count)
+    && self.action_counts[self.latest.action.index()] != 0
+    &&
+self.first.physical_admission_ordinal != 0
+    && self.first.physical_admission_ordinal == self.latest.physical_admission_ordinal
+    && self.runtime_physical_cut.is_none_or(|cut|
+        u128::from(self.first.physical_admission_ordinal) < cut)
+    && self.first.lifecycle_ordinal == self.latest.lifecycle_ordinal
     && self.first.lifecycle_ordinal.is_none_or(|ordinal| ordinal != 0)
     && self.first.wire_key == self.latest.wire_key
     && self.first.semantic_origin == self.latest.semantic_origin
@@ -59086,6 +57623,11 @@ self.first.lifecycle_ordinal == self.latest.lifecycle_ordinal
         }
         (None, Some(_)) => false,
     }
+    && (!self.request_bound_non_roster_completion
+        || (self.first.message_kind == FairV2IngressMessageKind::V2CertifiedBodyResponse
+            && self.first.class == FairV2IngressClass::TransportCompletion
+            && self.leader_wire_token.is_none()
+            && self.leader_wire_runtime_receipt.is_none()))
     && self.first.validate_exact()
     && self.latest.validate_exact()
     && self.attempts_hash == fair_v2_ingress_attempt_cursor_hash(&self.attempts)
@@ -59219,6 +57761,14 @@ if ingress_ownership.as_ref().is_some_and(|ownership| {
 let Some(ingress_ownership) = inbound.ingress_ownership() else {
     return true;
 };
+if let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload {
+    if terminal_subject.is_some() {
+        return true;
+    }
+    if !executor.payload_chunk_ingress_can_drain(chunk.manifest_hash, ingress_ownership) {
+        return false;
+    }
+}
 executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
 """,
         "effect-executor preflight must preserve the exact fair-ingress carrier into owned runtime capacity admission",
@@ -59916,7 +58466,8 @@ if self.pending_server_closures.is_empty() {
         (
             "PendingExactOutput",
             (
-                "new", "is_pending", "remove_fanouts_matching",
+                "new", "is_pending", "plan_fanout_removal",
+                "commit_fanout_removal", "remove_fanouts_matching",
                 "close_certified_sidecar_prefix", "cancel_historical_lane_recovery_requests",
                 "cancel_certified_merge_sidecar_requests", "cancel_acknowledged_certified_merge_sidecar_closes",
                 "pending_sidecar_flushes", "sidecar_control_units",
@@ -60192,8 +58743,15 @@ if self.pending_server_closures.is_empty() {
         lifecycle_runner_path,
         lifecycle_runner_items.get("ordinary_active"),
         """
-let finalization_ready =
-    ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);
+let finalization_ready = if ready_to_finish {
+    activated.ready_for_finalized_rollover(&mut active_runner)?
+} else {
+    false
+};
+if ready_to_finish && !finalization_ready {
+    let _ = wake_rx.recv_timeout(IDLE_POLL);
+    continue;
+}
 let rollover_ready = if finalization_ready {
     activated.with_runner_runtime(
         &mut active_runner,
@@ -60213,12 +58771,40 @@ let rollover_ready = if finalization_ready {
 } else {
     false
 };
-if ready_to_finish && !rollover_ready {
-    let _ = wake_rx.recv_timeout(IDLE_POLL);
-    continue;
-}
+if finalization_ready && !rollover_ready {
+    let drained_terminal_ingress = activated.with_runner_runtime(
+        &mut active_runner,
+        |_owner, executor, services, _local_proposal| {
+            let drained = drain_decided_lane_recovery_ingress(
+                receiver,
+                executor,
+                services,
+                &mut lane_work,
+                executor.current_tag().view(),
+                output_guard.as_ref(),
+                kura.as_ref(),
+                &common_config.key_pair,
+                block_sync_server,
+                DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
+            )?;
+            dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
+            Ok::<_, V2RunnerError>(drained.is_some())
+        },
+    )?;
 """,
-        "ordinary lifecycle must keep servicing the active predecessor until finalized-lane durability preflight succeeds",
+        "ordinary lifecycle must keep only authenticated decided-lane recovery service alive until finalized-lane durability preflight succeeds",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lifecycle_runner_path,
+        lifecycle_runner_items.get("ordinary_active"),
+        """
+if !drained_terminal_ingress {
+    let _ = wake_rx.recv_timeout(IDLE_POLL);
+}
+continue;
+""",
+        "ordinary finalized-lane recovery service must wait without reopening ordinary ownership when no authenticated terminal ingress was consumed",
         errors,
     )
     _require_rust_token_sequence(
@@ -60950,7 +59536,7 @@ match (directory_exists, marker_exists) {
         merge_path,
         merge_lifecycle_items.get("MergeSidecarLifecycleJournal::read_bounded_regular"),
         """
-let path_before = fs::symlink_metadata(path)
+let path_before = secure_file_metadata::from_path(path)
     .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
 if path_before.file_type().is_symlink()
     || lifecycle_artifact_is_reparse_point(&path_before)
@@ -64868,7 +63454,7 @@ self.admitted_sidecar_chunks.retain(|admission| {
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_ack_items.get("PendingExactOutput::remove_fanouts_matching"),
+        worker_ack_items.get("PendingExactOutput::plan_fanout_removal"),
         """
 if current_sources != self.source_fifo_owners
     || current_reservations != self.reservation_owner_counts
@@ -64883,20 +63469,40 @@ if current_sources != self.source_fifo_owners
     )
     _require_rust_token_sequence(
         worker_path,
-        worker_ack_items.get("PendingExactOutput::remove_fanouts_matching"),
+        worker_ack_items.get("PendingExactOutput::commit_fanout_removal"),
         """
-self.fanouts.retain(|fanout| !covered(fanout));
-self.source_fifo_owners = retained_sources;
-self.reservation_owner_counts = retained_reservations;
-self.ownership_units = retained_units;
-self.shared_ownership_units = retained_shared_units;
-self.next_fanout_index = if self.fanouts.is_empty() {
-    0
-} else {
-    self.next_fanout_index % self.fanouts.len()
-};
+let PendingExactOutputRemovalPlan {
+    existing_fifo_ids,
+    removed_fifo_ids,
+    retained_source_fifo_owners,
+    retained_reservation_owner_counts,
+    retained_ownership_units,
+    retained_shared_ownership_units,
+    retained_next_fanout_index,
+} = plan;
+debug_assert_eq!(
+    self.fanouts
+        .iter()
+        .map(|fanout| fanout.fifo_id.expect("preflighted exact-output FIFO owner"))
+        .collect::<Vec<_>>(),
+    existing_fifo_ids,
+    "an exclusive exact-output removal plan cannot observe intervening fanout mutation"
+);
+self.fanouts.retain(|fanout| {
+    !removed_fifo_ids.contains(
+        &fanout
+            .fifo_id
+            .expect("preflighted exact-output fanout remains FIFO-owned"),
+    )
+});
+self.source_fifo_owners = retained_source_fifo_owners;
+self.reservation_owner_counts = retained_reservation_owner_counts;
+self.ownership_units = retained_ownership_units;
+self.shared_ownership_units = retained_shared_ownership_units;
+self.next_fanout_index = retained_next_fanout_index;
+removed_fifo_ids.len()
 """,
-        "worker cancellation must atomically remove covered fanouts and install the recomputed ownership and fair-service cursors",
+        "worker cancellation must atomically commit only its exact preflighted FIFO set and install the recomputed ownership and fair-service cursors",
         errors,
     )
     _require_rust_token_sequence(
@@ -65609,6 +64215,7 @@ for proposal in raw_proposals {
         """
 self.merge_entries.clear();
 self.merge_claims.clear();
+self.validated_merge_execution_candidate = None;
 self.purge_queued_merge_broadcasts();
 let active_requests = self.merge_sidecars.active_request_hashes();
 self.merge_sidecars
@@ -67665,12 +66272,34 @@ if message.peer_id != attempted_peer {
         "Sumeragi v2 network actor changed an exact output target".to_owned()
     );
 }
+let release_to_discovery = ticket.is_none()
+    && matches!(&route, ExactTargetRoute::Topology)
+    && self.fanouts.get(fanout_index).is_some_and(
+        PendingExactFanout::is_commit_certificate_acquisition_topology_fanout,
+    );
+if release_to_discovery {
+    drop(message);
+    self.fanouts
+        .get_mut(fanout_index)
+        .expect("released discovery fanout must remain present")
+        .mark_admitted(target_index)?;
+    self.advance_after_attempt(
+        fanout_index,
+        target_index,
+        Some(&attempted_source),
+    )?;
+    continue;
+}
 self.fanouts
     .get_mut(fanout_index)
     .expect("backpressured exact fanout must remain present")
     .retain_returned(target_index, message, ticket)?;
+blocked_sources.insert(attempted_source);
+closest_backpressure_rank =
+    Some(closest_backpressure_rank.map_or(rank, |current| current.min(rank)));
+self.advance_after_attempt(fanout_index, target_index, None)?;
 """,
-        "actor backpressure must preserve both exact target and payload ownership",
+        "actor backpressure must preserve exact target and payload ownership, while ticketless discovery releases only to its durable rotating owner",
         errors,
     )
     _require_rust_token_sequence(
@@ -68829,9 +67458,26 @@ if certified_body_request_is_superseded_after_decision(request, terminal_subject
         ordinary_ingress_consumer_path,
         ordinary_ingress_consumer,
         """
-if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
-    admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
-    finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
+match inbound.message() {
+    BlockMessage::KuraReplicaAdvert(_) => {
+        admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
+        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
+    }
+    BlockMessage::LaneBlockProposal(_)
+    | BlockMessage::LaneExecutablePayload(_)
+    | BlockMessage::LaneBlockNewViewVote(_)
+    | BlockMessage::LaneBlockNewViewCertificate(_)
+    | BlockMessage::LaneBlockVote(_)
+    | BlockMessage::LaneBlockQc(_)
+    | BlockMessage::LaneBlockCertificate(_)
+    | BlockMessage::LaneHistoricalRecoveryRequest(_)
+    | BlockMessage::LaneHistoricalRecoveryResponse(_) => {
+        let _ = lane_work
+            .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
+        let _ = lane_work.service_next_historical_recovery()?;
+        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
+    }
+    BlockMessage::V2(_) => {}
 }
 """,
         "KuraReplicaAdvert ingress must bypass both consensus reducers through its exact durable admission seam",
@@ -68843,7 +67489,7 @@ if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
             consumer_tokens,
             rust_code_tokens(
                 """
-if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
+BlockMessage::KuraReplicaAdvert(_) => {
     admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
     finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
 }
@@ -68852,7 +67498,21 @@ if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
         )
         lane_local_positions = _token_sequence_positions(
             consumer_tokens,
-            rust_code_tokens("if inbound.message().is_lane_local()"),
+            rust_code_tokens(
+                """
+BlockMessage::LaneBlockProposal(_)
+| BlockMessage::LaneExecutablePayload(_)
+| BlockMessage::LaneBlockNewViewVote(_)
+| BlockMessage::LaneBlockNewViewCertificate(_)
+| BlockMessage::LaneBlockVote(_)
+| BlockMessage::LaneBlockQc(_)
+| BlockMessage::LaneBlockCertificate(_)
+| BlockMessage::LaneHistoricalRecoveryRequest(_)
+| BlockMessage::LaneHistoricalRecoveryResponse(_) => {
+    let _ = lane_work
+        .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
+"""
+            ),
         )
         consensus_owner_positions = _token_sequence_positions(
             consumer_tokens,
@@ -69154,7 +67814,7 @@ def _local_runner_service_contract_source_fidelity_errors(
             paths["ordinary"],
             ordinary,
             "ordinary lifecycle height",
-            4,
+            6,
             "activated.claim_producer_turn_for_local_proposal(&mut active_runner)",
         ),
         (
@@ -69730,6 +68390,95 @@ _execute_checker_component("sumeragi_v2_proof_ledger_release_inventory_contracts
 _execute_checker_component("sumeragi_v2_proof_ledger_terminal_discharge_contracts.py")
 
 
+def _finite_tlc_configuration_errors(formal_dir: Path) -> list[str]:
+    """Pin bounded-only operator projections to their reviewed configs."""
+
+    errors: list[str] = []
+    core_overrides = dict(
+        override.strip().split(" <- ", maxsplit=1)
+        for override in _FINITE_TLC_OPERATOR_OVERRIDES
+    )
+    async_overrides = dict(
+        override.strip().split(" <- ", maxsplit=1)
+        for override in _FINITE_TLC_ASYNC_OVERRIDES
+    )
+    for cfg_name in REQUIRED_TLC_CONFIGS:
+        cfg = formal_dir / cfg_name
+        if not cfg.is_file():
+            continue
+        source = cfg.read_text(encoding="utf-8")
+        stripped = strip_tla_comments(source, preserve_string_contents=True)
+        is_core_config = cfg_name in _FINITE_TLC_OPERATOR_OVERRIDE_CONFIGS
+        for lhs, rhs in core_overrides.items():
+            canonical = f"  {lhs} <- {rhs}\n"
+            canonical_count = len(
+                re.findall(
+                    rf"(?m)^{re.escape(canonical[:-1])}$",
+                    stripped,
+                )
+            )
+            expected_count = int(is_core_config)
+            if canonical_count != expected_count:
+                classification = "finite" if is_core_config else "non-core"
+                errors.append(
+                    f"{cfg}: {classification} TLC configuration must contain "
+                    f"the canonical operator override {canonical.strip()!r} "
+                    f"exactly {expected_count} time(s); found {canonical_count}"
+                )
+            assignments = re.findall(
+                rf"(?m)^[ \t]*{re.escape(lhs)}[ \t]*<-[ \t]*"
+                r"([A-Za-z][A-Za-z0-9_]*)[ \t]*$",
+                stripped,
+            )
+            expected_assignments = [rhs] if is_core_config else []
+            if assignments != expected_assignments:
+                errors.append(
+                    f"{cfg}: {lhs} finite override inventory must equal "
+                    f"{expected_assignments!r}; found {assignments!r}"
+                )
+        if is_core_config:
+            max_view = re.findall(r"(?m)^  MaxView = ([0-9]+)$", stripped)
+            max_generation = re.findall(
+                r"(?m)^  MaxGeneration = ([0-9]+)$", stripped
+            )
+            if len(max_view) != 1 or len(max_generation) != 1:
+                errors.append(
+                    f"{cfg}: finite TLC configuration must declare exactly "
+                    "one decimal MaxView and MaxGeneration"
+                )
+            elif int(max_generation[0]) < int(max_view[0]):
+                errors.append(
+                    f"{cfg}: finite TLC MaxGeneration {max_generation[0]} "
+                    f"must cover MaxView {max_view[0]}"
+                )
+        for lhs, rhs in async_overrides.items():
+            canonical = f"  {lhs} <- {rhs}\n"
+            expected_count = int(cfg_name == "liveness.cfg")
+            canonical_count = len(
+                re.findall(
+                    rf"(?m)^{re.escape(canonical[:-1])}$",
+                    stripped,
+                )
+            )
+            assignments = re.findall(
+                rf"(?m)^[ \t]*{re.escape(lhs)}[ \t]*<-[ \t]*"
+                r"([A-Za-z][A-Za-z0-9_]*)[ \t]*$",
+                stripped,
+            )
+            expected_assignments = [rhs] if expected_count else []
+            if (
+                canonical_count != expected_count
+                or assignments != expected_assignments
+            ):
+                errors.append(
+                    f"{cfg}: finite async operator override must occur "
+                    f"exactly {expected_count} time(s) with the canonical "
+                    f"target; found canonical={canonical_count}, "
+                    f"inventory={assignments!r}"
+                )
+    return errors
+
+
 def validate_ledger(
     ledger: dict[str, Any],
     *,
@@ -69752,6 +68501,7 @@ def validate_ledger(
     """Validate schema, source linkage, trust boundaries, and release evidence."""
 
     errors: list[str] = []
+    errors.extend(_finite_tlc_configuration_errors(formal_dir))
     expected_ledger_keys = {
         "schema_version",
         "protocol",

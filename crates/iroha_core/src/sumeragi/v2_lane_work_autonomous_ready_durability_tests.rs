@@ -132,6 +132,9 @@ fn enqueue_autonomous_test_transactions(
                 AccountId::new(key.public_key().clone()),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
+            .with_admission_intent(
+                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            )
             .with_instructions([Log::new(
                 Level::INFO,
                 format!("autonomous lane fixture {index}"),
@@ -225,7 +228,7 @@ fn autonomous_route_quota_for_test(
 #[test]
 fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vote() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
-    let (block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    let (block, proposal) = planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
     let entrypoint = block
         .external_entrypoints_cloned()
         .next()
@@ -791,7 +794,7 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
 #[test]
 fn authorized_ready_session_without_one_shot_token_fails_stop() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Npos);
-    let (block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    let (block, proposal) = planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
     let entrypoint = block
         .external_entrypoints_cloned()
         .next()
@@ -1236,13 +1239,14 @@ fn remote_hint_free_loser_without_queue_reservation_binds_empty_winner() {
         let queue =
             install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
 
-        let (source_block, mut proposal) = planned_lane_candidate_block_for_route_at_view(
-            &adapter,
-            &keys,
-            0,
-            lane_id,
-            dataspace_id,
-        );
+        let (source_block, mut proposal) =
+            planned_autonomous_lane_candidate_block_for_route_at_view(
+                &adapter,
+                &keys,
+                0,
+                lane_id,
+                dataspace_id,
+            );
         proposal.payload_block_hint = None;
         proposal.proposal_hash = proposal.computed_proposal_hash();
         let entrypoint = source_block
@@ -1292,7 +1296,7 @@ fn remote_hint_free_loser_without_queue_reservation_binds_empty_winner() {
         if retain_ordinary_fifo_copy {
             assert_eq!(
                 original_fifo,
-                vec![entrypoint.clone()],
+                vec![entrypoint.hash()],
                 "the observer fixture must retain the exact ordinary FIFO copy"
             );
         } else {
@@ -1698,7 +1702,8 @@ pub(in crate::sumeragi) struct HistoricalAutonomousLaneCertificateFixture {
 pub(in crate::sumeragi) fn historical_autonomous_lane_certificate_fixture()
 -> HistoricalAutonomousLaneCertificateFixture {
     let (adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
-    let (source_block, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    let (source_block, mut proposal) =
+        planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
     proposal.payload_block_hint = None;
     let entrypoint = source_block
         .external_entrypoints_cloned()
@@ -1826,7 +1831,8 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(
     } else {
         &keys[1..]
     };
-    let (source_block, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    let (source_block, mut proposal) =
+        planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
     proposal.payload_block_hint = None;
     proposal.proposal_hash = proposal.computed_proposal_hash();
     let entrypoint = source_block
@@ -2081,7 +2087,8 @@ fn canonical_autonomous_carrier_binds_after_direct_four_validator_decision() {
 #[test]
 fn recovered_autonomous_certificate_repairs_ready_before_certified_publication() {
     let (mut adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
-    let (source_block, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    let (source_block, mut proposal) =
+        planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
     proposal.payload_block_hint = None;
     let entrypoint = source_block
         .external_entrypoints_cloned()
@@ -2383,6 +2390,39 @@ fn repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible() {
         let unavailable = provider
             .prepare(&context, 0, &[candidate])
             .expect_err("autonomous route must remain unavailable to ordinary execution");
+        assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
+        assert_eq!(
+            unavailable.reason(),
+            "waiting for deterministic autonomous lane authors to publish durable FIFO reservations"
+        );
+    }
+
+    // QueuePlan-synchronized ownership remains autonomous even when the
+    // topology exposes only one route and the broader multi-lane exclusion is
+    // therefore disabled.
+    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    enable_single_custom_lane_nexus(&mut adapter, &keys, lane_id, dataspace_id);
+    let transaction_key = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::Ed25519)
+        .expect("deterministic single-lane QueuePlan transaction key");
+    let transaction = TransactionBuilder::new(
+        adapter.context.network_id,
+        AccountId::new(transaction_key.public_key().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
+    .sign(transaction_key.private_key());
+    let accepted =
+        crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(transaction));
+    let routing_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
+    let candidate = CandidateDescriptor::new(&accepted, &routing_plan);
+    let context = adapter.context.clone();
+    let mut provider = &mut adapter;
+    for _ in 0..3 {
+        let unavailable = provider
+            .prepare(&context, 0, &[candidate])
+            .expect_err("single-route QueuePlan work must remain autonomous");
         assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
         assert_eq!(
             unavailable.reason(),

@@ -48,14 +48,14 @@ OPENING_LOC = 11_725
 OPENING_BYTES = 432_298
 OPENING_SHA256 = "cfcc8798b026b9c5a697a2c895a4df0aea6a08c565bcba5332c9733a00b3f377"
 OPENING_GIT_BLOB = "ec7f6f8a9565b6cee290769439f1c7b7fb267224"
-POST_LOC = 10_663
-POST_BYTES = 401_534
-POST_SHA256 = "35d8e04cd862833684216d70c8ea093ab777089735f7d25f092e8b45abf756ab"
-POST_GIT_BLOB = "65a7c6740db45293bfd705bad17218a7126d8dd3"
+POST_LOC = 10_660
+POST_BYTES = 401_410
+POST_SHA256 = "3dc9157f52536b552e09cd03bc331ce8b87641b26d56e844e050c197e6e2c978"
+POST_GIT_BLOB = "b08dfda1467b244639195257c47dc4d25db9e99f"
 MINIMUM_RUST_LINE_REDUCTION = 1_000
-PRODUCTION_LOC = 7_576
+PRODUCTION_LOC = 7_573
 TEST_SUFFIX_LOC = 3_087
-TEST_SUFFIX_SHA256 = "30f4a813c3854998ab8c3d8356a15f5c1258d98c19be5329134a31bf77daed94"
+TEST_SUFFIX_SHA256 = "ce213a3672e31a7b62d241507f07ce1ece6437a4d2b5c806cee53abd33148b5e"
 
 PUBLIC_API_COUNT = 20
 PUBLIC_API_SHA256 = "7680ab2ee86f8127d2f8b3184b4672d25497b82e1a21512438ade78d8f9cc2d1"
@@ -68,7 +68,7 @@ ALL_TESTS_JSON_SHA256 = "86643e56fb23bd7356205c8e64e000998b89e2265d8bd8d2235d26b
 PUBLIC_LEAF_SHA256 = "9e7a57eb9ac866072caee317f2b5af503c300de58729e184305ba000e511c16b"
 TAIL_LEAF_SHA256 = "57a81a87cdf5a70ea8a8235c369cb42689a508c428f182d16e0f75b909e3b801"
 ASSET_COUNT = 54
-ASSET_LEDGER_SHA256 = "71d95ccfbc8075033d6c339e50669108d276df15818fe99481401a06d4dcf1a1"
+ASSET_LEDGER_SHA256 = "f453b53114ea7df3e05cebc3e0f089664ab3e603e6debabe686b94e2073fb2bc"
 PRODUCTION_LITERAL_COUNT = 163
 PRODUCTION_LITERALS_SHA256 = "deb507057cf7ee1f47cf4c30976192455accc7395fb16ccb805b09da11491e6a"
 
@@ -127,6 +127,16 @@ EXPECTED_MAP_FALLBACK_ROUTES = (
     ("Ensure", "ctx,&args[0],&args[1],&args[2],MapFallback::Insert,vars"),
 )
 TAKE2_ROUTING_SHA256 = "2d5f3d141b1f8fd640547ae19dba829cc68b8fd972c90d940831a0c2d742fa14"
+
+RETAINED_SORACLOUD_REQUEST_BUILTINS = (
+    "SoracloudReadConfig",
+    "SoracloudReadSecretEnvelope",
+)
+RETIRED_SORACLOUD_REQUEST_BUILTINS = (
+    "SoracloudReadSecret",
+    "SoracloudReadCredential",
+    "SoracloudEgressFetch",
+)
 
 DIRECT_INSTR_COUNTS = {
     "DataRef": 2,
@@ -380,6 +390,11 @@ def _split_candidate(source: str) -> tuple[str, str]:
     production, suffix = source[:position], source[position:]
     _require(len(production.splitlines()) == PRODUCTION_LOC, "production LOC changed")
     _require(len(suffix.splitlines()) == TEST_SUFFIX_LOC, "test-suffix LOC changed")
+    _require(
+        suffix.count('if *kind == DataRefKind::Json && value == "{}" {') == 1
+        and 'value == "{}\\n"' not in suffix,
+        "canonical JSON fixture spelling changed",
+    )
     _require(_sha256(suffix) == TEST_SUFFIX_SHA256, "test suffix changed")
     return production, suffix
 
@@ -555,6 +570,16 @@ def _validate_candidate(
     literals = tuple(sorted({match.group(0) for match in RUST_LITERAL_RE.finditer(production)}))
     _require(len(literals) == PRODUCTION_LITERAL_COUNT, "production literal surface changed")
     _require(_json_digest(literals) == PRODUCTION_LITERALS_SHA256, "diagnostic/literal text changed")
+    for name in RETIRED_SORACLOUD_REQUEST_BUILTINS:
+        _require(
+            re.search(rf"\bBuiltin::{re.escape(name)}\b", production) is None,
+            f"retired Soracloud request lowering returned: {name}",
+        )
+    for name in RETAINED_SORACLOUD_REQUEST_BUILTINS:
+        _require(
+            len(re.findall(rf"\bBuiltin::{re.escape(name)}\b", production)) == 1,
+            f"retained Soracloud request lowering changed: {name}",
+        )
 
     _require(_sha256(public_leaf) == PUBLIC_LEAF_SHA256, "public test leaf changed")
     _require(_sha256(tail_leaf) == TAIL_LEAF_SHA256, "tail test leaf changed")
@@ -690,6 +715,22 @@ class KotodamaIrCompactionMutationTest(unittest.TestCase):
                 1,
             ),
             "diagnostic/literal text",
+        )
+        self.assert_source_mutation_fails(
+            self.source.replace(
+                "Builtin::SoracloudReadConfig",
+                "Builtin::SoracloudReadSecret",
+                1,
+            ),
+            "retired Soracloud request lowering returned",
+        )
+        self.assert_source_mutation_fails(
+            self.source.replace(
+                'if *kind == DataRefKind::Json && value == "{}" {',
+                'if *kind == DataRefKind::Json && value == "{}\\n" {',
+                1,
+            ),
+            "canonical JSON fixture spelling changed",
         )
 
     def test_constructor_fallback_and_traversal_mutations_fail(self) -> None:

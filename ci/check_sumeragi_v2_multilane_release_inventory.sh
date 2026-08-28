@@ -1014,8 +1014,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "331123d12b08027a9ac0ed0157ed8400"
-    "7eac5a8659b1995bf4c77c3eedb231c2"
+    "2858dd2206f1374c044fa0b3c0d3f02a"
+    "02cb7b2190d65540e13ce34ee35c6470"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -1046,7 +1046,10 @@ if process_policy_source.count("run_cargo() {") != 1:
 for token in (
     "lock.mkdir(mode=0o700)",
     'pinned_arguments=("$subcommand" -j1)',
+    'pinned_arguments=("$subcommand" "$2")',
     'pinned_arguments+=("$@")',
+    'if ((!verus_job_bound_inserted)); then',
+    'run_cargo accepts only the pinned cargo verus verify action',
     'local RUSTUP_AUTO_INSTALL=0',
     'export RUSTUP_AUTO_INSTALL',
     'run_cargo forbids caller-owned rustup auto-install policy',
@@ -1936,7 +1939,12 @@ for forbidden in (
         )
 if policy.count('if "$IROHA_RELEASE_CARGO_BIN" "$@"; then') != 1:
     reject("shared process policy does not own the sole pinned Cargo execution")
-if 'pinned_arguments=("$subcommand" -j1)' not in policy or 'pinned_arguments+=("$@")' not in policy:
+if (
+    'pinned_arguments=("$subcommand" -j1)' not in policy
+    or 'pinned_arguments=("$subcommand" "$2")' not in policy
+    or 'if ((!verus_job_bound_inserted)); then' not in policy
+    or 'pinned_arguments+=("$@")' not in policy
+):
     reject("shared process policy does not impose the one global -j1 bound")
 if "local status" in policy:
     reject("shared process policy retains the zsh-reserved local status name")

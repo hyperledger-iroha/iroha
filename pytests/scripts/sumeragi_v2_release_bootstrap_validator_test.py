@@ -390,6 +390,22 @@ def _fixture_receipt_for_validator(
             "release_signature_ssh_keygen": path("--signature-ssh-keygen"),
             "corridor_completion": path("--corridor-completion"),
             "formal_completion": path("--formal-completion"),
+            "formal_replay_release": {
+                "source_receipt": path("--formal-replay-source-receipt"),
+                "receipt": {
+                    "path": str(
+                        Path(values["--formal-replay-release-root"][1])
+                        / "replay-receipt-v1.json"
+                    ),
+                    "sha256": "1" * 64,
+                },
+                "signature": {
+                    "sha256": values[
+                        "--expected-formal-replay-signature-sha256"
+                    ][1]
+                },
+                "principal": values["--formal-replay-principal"][1],
+            },
             "seed_matrix_completion": path("--seed-completion"),
             "chaos_completion": path("--chaos-completion"),
             "g4p_multilane": {"completion": path("--g4p-completion")},

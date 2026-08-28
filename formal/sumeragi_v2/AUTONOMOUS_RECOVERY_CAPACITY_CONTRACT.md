@@ -46,6 +46,13 @@ MergeExecution receipt revalidators. Their binding rejects use of hash-only
 snapshot helpers in the autonomous gate.
 
 Exact incomplete-carrier recovery is source-bound through
+the public `Queue::lane_reservation_reconciliation_snapshot` lock-and-fault
+boundary and its delegated
+`Queue::lane_reservation_reconciliation_snapshot_locked` implementation. The
+locked helper authenticates every live reservation against Queue FIFO and its
+durable claim, validates and canonically orders commit/prepared/completed
+release evidence, rejects duplicate FIFO ordinals, and reconstructs complete
+groups without mutating the store. Recovery then continues through
 `MergeLedgerLog::execution_entries_for_bounded_identities` and
 `Kura::rebuild_post_wsv_lane_artifact_budget_reservations_on_startup`. The
 first method performs one bounded chronological scan keyed by lane,
@@ -58,8 +65,11 @@ through the bounded scan before rebuilding the exact carrier reservation.
 Startup reconstruction is source-bound to `Kura::new_inner`: durable carrier
 reconciliation plus post-WSV and certified/bundle envelope rebuilding precede
 capacity-consuming frontier and bundle repair, configured-capacity validation,
-both disk-accounting cache publications, and the constructor's successful
-return.
+a single authenticated enforced/total disk scan that publishes both accounting
+caches, and the constructor's successful return. Strict startup performs this
+full sequence. Emergency Fast startup remains read-only, skips recovery and the
+full disk inventory, and leaves the local capacity cap suspended until a
+Strict restart.
 
 The certified-frontier obligation is source-bound through
 `Kura::persist_committed_lane_block_session_inner`, the exact pair planner,
@@ -112,15 +122,17 @@ first stage write.
 Debug append is source-bound from JSON encoding through the configured
 autonomous mutation preflight and carrier-reservation calculation before the
 accounting guard and bound append. Restart accounting is bound through the
-validated `blocks.jsonl` file length, active/retired enforced and total root
-scans, total-cache refresh, and startup cache publication.
+secure-metadata, single-link `blocks.jsonl` file length; one shared
+active/retired root scan that derives enforced and total usage without losing
+supplemental safety artifacts; the total-usage projection and cache refresh;
+and the Strict-only startup cache publication.
 
 Every split implementation file above is also bound to its exact `kura.rs`
-`include!` owner. The Queue reconciliation snapshot, certified merge stage,
-and lane-session entrypoint preflight remain stable production anchors rather
-than invariant-chain evidence. No editor placeholder remains; the checker
-rejects any reintroduced placeholder, source-token drift, split-owner drift,
-or critical-order drift.
+`include!` owner. The public Queue reconciliation observer, certified merge
+stage, and lane-session entrypoint preflight remain stable production anchors;
+the observer's delegated FIFO/group implementation is invariant-chain
+evidence. No editor placeholder remains; the checker rejects any reintroduced
+placeholder, source-token drift, split-owner drift, or critical-order drift.
 
 Formal-engine execution and integration with the release runners remain
 separate release evidence. The model and mutation configs must not be cited as

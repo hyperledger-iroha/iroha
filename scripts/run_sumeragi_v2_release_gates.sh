@@ -2013,8 +2013,8 @@ required_production_liveness_tests=(
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_coalesces_semantic_request_and_attaches_independent_routes
   sumeragi::authoritative_runtime_gate_tests::alternate_reply_route_attaches_before_authenticated_source_lane_cap
   sumeragi::v2_lifecycle_coordinator::ingress_position::tests::turn_cut_dequeues_exact_winner_once_and_preserves_ready_rotation
-  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve
-  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_churn
+  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_predicate_scan_selects_same_lane_request_without_queue_local_serve_gate
+  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_predicate_scan_does_not_create_queue_local_serve_gate
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_checked_dequeue_freezes_one_physical_cut_per_occurrence
   sumeragi::authoritative_runtime_gate_tests::restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire
@@ -2666,6 +2666,7 @@ required_production_liveness_tests=(
   network::tests::actor_broadcast_retry_targets_only_failed_peers
   network::tests::reliable_subscriber_is_single_consumer_under_clone_budget_pressure
   network::tests::reconnecting_peer_cannot_multiply_retained_source_credits
+  network::tests::failed_pre_handshake_dial_retains_exact_backoff_retry_owner
   network::handle_update_tests::progress_budget_preserves_fifo_for_three_registered_producers
   network::tests::reliable_progress_class_matches_actor_reservations_exactly
   network::tests::reply_flush_identity_binds_ticket_tenure_source_payload_and_delivery_occurrence
@@ -3044,6 +3045,8 @@ required_multilane_core_focus_tests=(
   kura::tests::historical_atomic_temp_rejects_collision_and_stale_incarnation_without_mutation
   kura::tests::shared_autonomous_mutation_gate_counts_pending_canonical_bytes_exactly
   kura::tests::startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation
+  queue::tests::restart_reconciliation_snapshot_is_fifo_group_complete_and_read_only
+  kura::tests::canonical_pending_capacity_preflights_full_set_and_consumes_reserved_slots_idempotently
   kura::tests::lane_history_compaction_recovers_crash_temp_before_tight_capacity_refusal
   kura::tests::lane_history_compaction_rejects_data_only_temp_before_capacity_refusal
   kura::tests::lane_history_compaction_rejects_corrupt_temp_index_before_capacity_refusal
@@ -3051,6 +3054,7 @@ required_multilane_core_focus_tests=(
   kura::tests::commit_marker_rejects_oversized_deterministic_temp
   kura::tests::commit_marker_rejects_symlinked_deterministic_temp
   kura::tests::kura_start_rejects_unbound_local_peer_identity
+  kura::tests::fast_init_skips_disabled_writer_capacity_validation
   kura::tests::eviction_requires_distinct_matching_replica_adverts
   kura::tests::deterministic_commit_qc_keepers_use_f_plus_one_and_pin_a_local_keeper
   kura::tests::nonkeeper_replica_advert_probe_never_reads_the_complete_body
@@ -3241,6 +3245,7 @@ required_multilane_queue_journal_focus_tests=(
   queue::reservation_journal::tests::snapshot_replay_seal_covers_empty_and_live_owner_replays
   queue::reservation_journal::tests::snapshot_replay_seal_rejects_changed_journal_before_publication
   queue::reservation_journal::tests::snapshot_replay_receipt_rejects_same_count_owner_identity_drift
+  queue::tests::startup_replica_queue_disposition_requires_exact_replay_cut_for_fifo_and_absence
   queue::tests::queue_plan_admission_context_binds_single_lane_topology_and_contiguous_generation
   queue::tests::queue_plan_journal_replays_matching_plan_after_restart
   queue::tests::strict_durable_claim_rejects_stale_context_before_ownership_and_binds_exact_record
@@ -4154,15 +4159,15 @@ source_manifest_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-source-seal:after-natural-completion" || exit $?
 source_manifest_pass_summary="$(
-  grep -Ec '^78 passed in [0-9]+([.][0-9]+)?s$' "$source_manifest_contract_log" || true
+  grep -Ec '^80 passed in [0-9]+([.][0-9]+)?s$' "$source_manifest_contract_log" || true
 )"
 if ((source_manifest_pipeline_status[0] != 0 || source_manifest_pipeline_status[1] != 0)) \
   || [[ "$source_manifest_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 source-manifest/seal contract preflight did not run exactly 78 passing tests (pytest=${source_manifest_pipeline_status[0]}, tee=${source_manifest_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 source-manifest/seal contract preflight did not run exactly 80 passing tests (pytest=${source_manifest_pipeline_status[0]}, tee=${source_manifest_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-source-seal pytest 78 \
+  preflight-source-seal pytest 80 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${source_manifest_contract_tests[*]}" \
   "$source_manifest_contract_log" \
   "${source_manifest_pipeline_status[0]}" "${source_manifest_pipeline_status[1]}"
@@ -4285,16 +4290,16 @@ if [[ "$profile" == "--release" ]]; then
   release_gate_boundary "preflight-release-bootstrap:after-natural-completion" \
     || exit $?
   release_bootstrap_pass_summary="$(
-    grep -Ec '^258 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+    grep -Ec '^261 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
       "$release_bootstrap_contract_log" || true
   )"
   if ((release_bootstrap_pipeline_status[0] != 0 || release_bootstrap_pipeline_status[1] != 0)) \
     || [[ "$release_bootstrap_pass_summary" != 1 ]]; then
-    echo "Sumeragi v2 release-bootstrap preflight did not run exactly 258 passing tests (pytest=${release_bootstrap_pipeline_status[0]}, tee=${release_bootstrap_pipeline_status[1]})" >&2
+    echo "Sumeragi v2 release-bootstrap preflight did not run exactly 261 passing tests (pytest=${release_bootstrap_pipeline_status[0]}, tee=${release_bootstrap_pipeline_status[1]})" >&2
     exit 1
   fi
   record_corridor_log \
-    preflight-release-bootstrap pytest 258 \
+    preflight-release-bootstrap pytest 261 \
     "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_bootstrap_contract_files[*]}" \
     "$release_bootstrap_contract_log" \
     "${release_bootstrap_pipeline_status[0]}" "${release_bootstrap_pipeline_status[1]}"
@@ -4315,17 +4320,17 @@ if [[ "$profile" == "--release" ]]; then
   release_gate_boundary \
     "preflight-release-bootstrap-validator:after-natural-completion" || exit $?
   release_bootstrap_validator_pass_summary="$(
-    grep -Ec '^44 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+    grep -Ec '^50 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
       "$release_bootstrap_validator_contract_log" || true
   )"
   if ((release_bootstrap_validator_pipeline_status[0] != 0 \
     || release_bootstrap_validator_pipeline_status[1] != 0)) \
     || [[ "$release_bootstrap_validator_pass_summary" != 1 ]]; then
-    echo "Sumeragi v2 bootstrap-validator preflight did not run exactly 44 passing tests (pytest=${release_bootstrap_validator_pipeline_status[0]}, tee=${release_bootstrap_validator_pipeline_status[1]})" >&2
+    echo "Sumeragi v2 bootstrap-validator preflight did not run exactly 50 passing tests (pytest=${release_bootstrap_validator_pipeline_status[0]}, tee=${release_bootstrap_validator_pipeline_status[1]})" >&2
     exit 1
   fi
   record_corridor_log \
-    preflight-release-bootstrap-validator pytest 44 \
+    preflight-release-bootstrap-validator pytest 50 \
     "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_bootstrap_validator_contract_files[*]}" \
     "$release_bootstrap_validator_contract_log" \
     "${release_bootstrap_validator_pipeline_status[0]}" \
@@ -4350,16 +4355,16 @@ release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-release-receipt:after-natural-completion" || exit $?
 release_receipt_pass_summary="$(
-  grep -Ec '^368 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^362 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 368 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 362 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 368 \
+  preflight-release-receipt pytest 362 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -4385,17 +4390,17 @@ set -e
 release_gate_boundary "preflight-multilane-scaling:after-natural-completion" \
   || exit $?
 multilane_scaling_pass_summary="$(
-  grep -Ec '^52 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^53 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$multilane_scaling_contract_log" || true
 )"
 if ((multilane_scaling_pipeline_status[0] != 0 \
     || multilane_scaling_pipeline_status[1] != 0)) \
   || [[ "$multilane_scaling_pass_summary" != 1 ]]; then
-  echo "G-SCALE runner/validator preflight did not run exactly 52 passing tests (pytest=${multilane_scaling_pipeline_status[0]}, tee=${multilane_scaling_pipeline_status[1]})" >&2
+  echo "G-SCALE runner/validator preflight did not run exactly 53 passing tests (pytest=${multilane_scaling_pipeline_status[0]}, tee=${multilane_scaling_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-multilane-scaling pytest 52 \
+  preflight-multilane-scaling pytest 53 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${multilane_scaling_contract_files[*]}" \
   "$multilane_scaling_contract_log" \
   "${multilane_scaling_pipeline_status[0]}" \
@@ -4426,9 +4431,9 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_semantic_source_mutation
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
-# Collection is source-bound as 5,410 ledger/checker cases (including the
+# Collection is source-bound as 5,373 ledger/checker cases (including the
 # lexically executed case components), 29 pinned-Verus evidence cases,
-# 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 31 Native/passive
+# 27 TLC-normalizer cases, 14 reviewed-Rust closure cases, 31 Native/passive
 # multilane source-contract cases, and twenty cases from twelve selected
 # layout/wire selectors.
 release_gate_boundary "preflight-proof-fidelity:before" || exit $?
@@ -4439,15 +4444,15 @@ proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^5513 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^5494 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5513 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5494 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 5513 \
+  preflight-proof-fidelity pytest 5494 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"

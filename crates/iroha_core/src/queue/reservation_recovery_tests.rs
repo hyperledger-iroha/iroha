@@ -3066,9 +3066,34 @@ fn publish_startup_replica_disposition_cursor(
 #[test]
 fn startup_replica_queue_disposition_requires_exact_replay_cut_for_fifo_and_absence() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let state = lane_reservation_test_state();
+    let kura_dir = tempdir().expect("authenticated startup replica Kura root");
+    let kura_config = KuraConfig {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        store_dir: WithOrigin::inline(kura_dir.path().join("kura")),
+        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+        debug_output_new_blocks: false,
+        merge_ledger_cache_capacity:
+            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: iroha_config::kura::FsyncMode::Batched,
+        fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
+    };
+    let lane_config = iroha_config::parameters::actual::LaneConfig::default();
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
+        .expect("open authenticated startup replica Kura");
+    let mut state = State::new(
+        world_with_test_domains(),
+        kura,
+        LiveQueryStore::start_test(),
+    );
+    install_single_validator_topology_for_queue_test(&mut state, 0xD5);
+    let state = Arc::new(state);
     let journal_dir = tempdir().expect("startup replica Queue journal directory");
-    let plan_path = test_lane_reservation_plan_path(&journal_dir);
+    let plan_path = journal_dir
+        .path()
+        .join("queue-plans-for-reservations.norito");
     let (reservation_path, fifo_payload, fifo_cursor, absent_payload, absent_cursor) = {
         let writer = Queue::test(config_factory(), &time_source);
         let reservation_path =
@@ -3259,4 +3284,160 @@ fn startup_replica_queue_disposition_requires_exact_replay_cut_for_fifo_and_abse
             .expect("recapture startup replica reconciliation snapshot"),
         snapshot
     );
+
+    // Publish the unrelated replay owner, then prove a temporary exact-hash
+    // durability transition is awaited before the live FIFO cut is revalidated.
+    drop(fifo_disposition);
+    drop(absent_disposition);
+    queue
+        .complete_lane_reservation_startup_reconciliation(receipt)
+        .expect("publish unrelated startup replay ownership");
+    assert!(!queue.lane_reservation_startup_reconciliation_pending());
+    let active_transition = {
+        let _queue_guard = queue.push_remove_lock.lock();
+        queue
+            .begin_durability_transition_locked([fifo_keys[0].entrypoint_hash])
+            .expect("install temporary exact-hash durability transition")
+    };
+    std::thread::scope(|scope| {
+        let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
+        let queue_ref = &queue;
+        let fifo_cursor_ref = &fifo_cursor;
+        let fifo_keys_ref = fifo_keys;
+        let worker = scope.spawn(move || {
+            let result = queue_ref
+                .authorize_autonomous_lane_replica_queue_disposition(fifo_cursor_ref, fifo_keys_ref)
+                .map_err(|error| error.to_string())
+                .and_then(|authorization| {
+                    authorization
+                        .consume_for_kura(fifo_cursor_ref, fifo_keys_ref)
+                        .ok_or_else(|| {
+                            "temporary-transition authorization changed before consumption"
+                                .to_owned()
+                        })
+                })
+                .map(drop);
+            finished_tx
+                .send(result)
+                .expect("report temporary-transition authorization result");
+        });
+        let lock_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match finished_rx.try_recv() {
+                Ok(result) => panic!(
+                    "replica disposition returned before its temporary transition ended: {result:?}"
+                ),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    panic!("temporary-transition authorization worker disconnected")
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+            if queue.lane_reservation_transition_lock.try_lock().is_none() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < lock_deadline,
+                "temporary-transition authorization did not enter its serialized Queue section"
+            );
+            std::thread::yield_now();
+        }
+        assert!(
+            matches!(
+                finished_rx.recv_timeout(Duration::from_secs(1)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "replica disposition must remain fenced while the exact transition is live"
+        );
+        drop(active_transition);
+        finished_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("replica disposition did not resume after the exact transition ended")
+            .expect("replica disposition failed after the exact transition ended");
+        worker
+            .join()
+            .expect("temporary-transition authorization worker panicked");
+    });
+
+    let replica_fee_hold = || FeeAdmissionReservation {
+        program_revision: None,
+        beneficiary: AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+        asset_charges: BTreeMap::new(),
+        window_charges: BTreeMap::new(),
+        relay_lease_charges: BTreeMap::new(),
+        asset_remaining: BTreeMap::new(),
+        window_remaining: BTreeMap::new(),
+        relay_lease_remaining: BTreeMap::new(),
+    };
+    queue
+        .fee_admission_reservations
+        .lock()
+        .reserve(fifo_keys[0].entrypoint_hash, replica_fee_hold())
+        .expect("install exact FIFO fee-admission hold");
+    let fifo_with_fee = queue
+        .authorize_autonomous_lane_replica_queue_disposition(&fifo_cursor, fifo_keys)
+        .expect("exact FIFO replica may retain its canonical-cleanup fee hold")
+        .consume_for_kura(&fifo_cursor, fifo_keys)
+        .expect("consume fee-held FIFO authorization against the same cursor and keys");
+    assert!(matches!(
+        fifo_with_fee,
+        AutonomousLaneReplicaQueueDisposition::ExactOrdinaryFifo(_)
+    ));
+    drop(fifo_with_fee);
+    assert!(
+        queue
+            .fee_admission_reservations
+            .lock()
+            .live_by_entrypoint
+            .contains_key(&fifo_keys[0].entrypoint_hash),
+        "replica FIFO observation must preserve the fee hold for canonical cleanup"
+    );
+    queue
+        .fee_admission_reservations
+        .lock()
+        .release(&fifo_keys[0].entrypoint_hash);
+
+    queue
+        .fee_admission_reservations
+        .lock()
+        .reserve(absent_keys[0].entrypoint_hash, replica_fee_hold())
+        .expect("install orphaned strict-absence fee-admission hold");
+    assert!(matches!(
+        queue.authorize_autonomous_lane_replica_queue_disposition(&absent_cursor, absent_keys),
+        Err(LaneQueueReservationError::TerminalConflict { hash, owners })
+            if hash == absent_keys[0].entrypoint_hash && owners.contains("fee_reservation")
+    ));
+    queue
+        .fee_admission_reservations
+        .lock()
+        .release(&absent_keys[0].entrypoint_hash);
+
+    // FIFO authority still fails closed both without an installed journal and
+    // after the exact QueuePlan record is durably tombstoned behind Queue's
+    // in-memory indexes.
+    let installed_journal = queue
+        .plan_journal
+        .lock()
+        .take()
+        .expect("remove installed QueuePlan journal for negative control");
+    assert!(matches!(
+        queue.authorize_autonomous_lane_replica_queue_disposition(&fifo_cursor, fifo_keys),
+        Err(LaneQueueReservationError::JournalNotInstalled)
+    ));
+    *queue.plan_journal.lock() = Some(installed_journal);
+    queue
+        .plan_journal
+        .lock()
+        .as_mut()
+        .expect("installed QueuePlan journal")
+        .remove_exact_global_admission_binding_strict_durable(&fifo_keys[0])
+        .expect("tombstone FIFO QueuePlan behind its in-memory owner");
+    assert_eq!(
+        queue.fifo_snapshot_for_test(),
+        vec![fifo_keys[0].entrypoint_hash],
+        "negative control must retain the exact physical FIFO copy",
+    );
+    assert!(matches!(
+        queue.authorize_autonomous_lane_replica_queue_disposition(&fifo_cursor, fifo_keys),
+        Err(LaneQueueReservationError::Journal(_))
+    ));
 }

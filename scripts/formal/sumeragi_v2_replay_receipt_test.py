@@ -174,7 +174,12 @@ class ReplayReceiptTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.temporary = tempfile.TemporaryDirectory(prefix="sumeragi-receipt-test.")
-        cls.work = Path(cls.temporary.name).resolve()
+        temporary_root = Path(cls.temporary.name).resolve()
+        temporary_root.chmod(0o700)
+        private_root = temporary_root / "private"
+        private_root.mkdir(mode=0o700)
+        cls.work = private_root / "fixture"
+        cls.work.mkdir(mode=0o700)
         cls.fake_jar = cls.work / "tla2tools.jar"
         cls.fake_jar.write_bytes(b"fake pinned TLA2Tools for local tests\n")
         cls.projection = cls.work / "projection"
@@ -250,7 +255,7 @@ class ReplayReceiptTest(unittest.TestCase):
         cls.receipt_bytes = cls.receipt_path.read_bytes()
         cls.receipt = json.loads(cls.receipt_bytes.decode("utf-8"))
 
-        cls.principal = "sumeragi-release@test.invalid"
+        cls.principal = "release@example.test"
         cls.signing_key = cls.work / "release-signing-key"
         subprocess.run(
             [
@@ -302,7 +307,12 @@ class ReplayReceiptTest(unittest.TestCase):
         cls.signature.chmod(0o400)
         cls.ssh_keygen = cls.work / "ssh-keygen.release-tool"
         cls.ssh_keygen.write_text(
-            "#!/bin/sh\nexec /usr/bin/ssh-keygen \"$@\"\n",
+            "#!/bin/sh\n"
+            "if test \"$#\" = 1 && test \"$1\" = -?; then\n"
+            "  printf '%s\\n' 'fixture ssh-keygen usage' >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            "exec /usr/bin/ssh-keygen \"$@\"\n",
             encoding="ascii",
         )
         cls.ssh_keygen.chmod(0o500)
@@ -404,6 +414,34 @@ class ReplayReceiptTest(unittest.TestCase):
             expected_signer_fingerprint=inputs.expected_signer_fingerprint,
         )
 
+    @contextlib.contextmanager
+    def _finalized_release(self, prefix: str):
+        with tempfile.TemporaryDirectory(prefix=prefix, dir=self.work) as raw_parent:
+            output_root = Path(raw_parent).resolve() / "release"
+            FINALIZER.finalize(self._finalizer_args(output_root))
+            try:
+                yield output_root
+            finally:
+                if output_root.exists() and not output_root.is_symlink():
+                    for directory, child_directories, files in os.walk(
+                        output_root, topdown=False
+                    ):
+                        current = Path(directory)
+                        for name in files:
+                            try:
+                                (current / name).chmod(0o600)
+                            except OSError:
+                                pass
+                        for name in child_directories:
+                            try:
+                                (current / name).chmod(0o700)
+                            except OSError:
+                                pass
+                        try:
+                            current.chmod(0o700)
+                        except OSError:
+                            pass
+
     def _reject_mutation(self, mutate) -> None:
         value = copy.deepcopy(self.receipt)
         mutate(value)
@@ -433,6 +471,49 @@ class ReplayReceiptTest(unittest.TestCase):
             "Sumeragi V2 replay receipt verification failed: release verification "
             "requires every detached SSHSIG input\n",
         )
+
+        checker_result = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-I",
+                "-S",
+                str(FORMAL / "check_sumeragi_v2_replay_receipt.py"),
+                str(self.receipt_path),
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(checker_result.returncode, 2, checker_result.stderr)
+        self.assertEqual(checker_result.stdout, "")
+        self.assertEqual(
+            checker_result.stderr,
+            "Sumeragi V2 replay receipt verification failed: release verification "
+            "requires every detached SSHSIG input\n",
+        )
+        for script in (
+            "collect_sumeragi_v2_replay_receipt.py",
+            "finalize_sumeragi_v2_replay_receipt.py",
+            "verify_sumeragi_v2_replay_release.py",
+        ):
+            help_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-I",
+                    "-S",
+                    str(FORMAL / script),
+                    "--help",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(help_result.returncode, 0, help_result.stderr)
+            self.assertIn("usage:", help_result.stdout)
 
     def test_schema_and_collector_expose_one_release_contract(self) -> None:
         schema = json.loads(
@@ -481,7 +562,35 @@ class ReplayReceiptTest(unittest.TestCase):
                 "allowed_signers",
                 "revocation.krl",
                 "release-attestation.json",
+                "tlapm-projection",
             })
+            projection = output_root / "tlapm-projection"
+            self.assertEqual(stat.S_IMODE(projection.stat().st_mode), 0o555)
+            self.assertEqual(
+                [item.name for item in sorted(projection.iterdir())],
+                ["Folds.tla", "Functions.tla"],
+            )
+            for item in projection.iterdir():
+                self.assertEqual(stat.S_IMODE(item.stat().st_mode), 0o444)
+                self.assertEqual(item.stat().st_nlink, 1)
+                self.assertEqual(
+                    item.read_bytes(), (self.projection / item.name).read_bytes()
+                )
+            attested_paths = {
+                item["path"] for item in attestation["artifacts"]
+            }
+            self.assertEqual(
+                attested_paths,
+                {
+                    "receipt.json",
+                    "receipt.json.sig",
+                    "ssh-keygen.release-tool",
+                    "allowed_signers",
+                    "revocation.krl",
+                    "tlapm-projection/Folds.tla",
+                    "tlapm-projection/Functions.tla",
+                },
+            )
 
     def test_release_checker_binds_structure_to_the_signed_snapshot(self) -> None:
         replacement = self.work / "receipt.structure-snapshot-replacement.json"
@@ -539,6 +648,8 @@ class ReplayReceiptTest(unittest.TestCase):
                         output_root / "allowed_signers",
                         output_root / "revocation.krl",
                         output_root / "release-attestation.json",
+                        output_root / "tlapm-projection/Folds.tla",
+                        output_root / "tlapm-projection/Functions.tla",
                     }.issubset(watched_paths)
                 )
                 output_root.rename(held)
@@ -675,6 +786,8 @@ class ReplayReceiptTest(unittest.TestCase):
                 ),
             )
 
+        self._assert_missing_input_and_wrong_principal_fail()
+
     def test_wrong_sshsig_namespace_fails(self) -> None:
         with tempfile.TemporaryDirectory(prefix="wrong-namespace.", dir=self.work) as raw:
             temporary = Path(raw)
@@ -706,6 +819,25 @@ class ReplayReceiptTest(unittest.TestCase):
                         expected_signature_sha256=self._sha256(wrong_signature),
                     ),
                 )
+
+    def _assert_missing_input_and_wrong_principal_fail(self) -> None:
+        inputs = self._signature_inputs()
+        held_signature = self.signature.with_name("receipt.release.sig.held")
+        self.signature.rename(held_signature)
+        try:
+            with self.assertRaises(SIGNING.SigningError):
+                CHECKER.check_release(
+                    self.receipt_path, inputs
+                )
+        finally:
+            held_signature.rename(self.signature)
+            self.signature.chmod(0o400)
+
+        with self.assertRaisesRegex(SIGNING.SigningError, "principal|verification"):
+            CHECKER.check_release(
+                self.receipt_path,
+                self._signature_inputs(principal="wrong-principal@test.invalid"),
+            )
 
     def test_replace_restore_path_races_fail_closed(self) -> None:
         for target in (self.receipt_path, self.signature, self.ssh_keygen):
@@ -775,6 +907,8 @@ class ReplayReceiptTest(unittest.TestCase):
                 if paths["moved"].exists():
                     paths["moved"].rmdir()
                 paths["root"].parent.rmdir()
+
+        self._assert_finalizer_projection_cleanup_refuses_replacement()
 
     def test_finalizer_rejects_unsafe_output_roots(self) -> None:
         with self.assertRaisesRegex(FINALIZER.FinalizationError, "absolute"):
@@ -883,6 +1017,8 @@ class ReplayReceiptTest(unittest.TestCase):
                 (alternate / "receipt.json").read_bytes(), self.receipt_bytes
             )
 
+        self._assert_release_verifier_rejects_projection_replacement()
+
     def test_release_attestation_tampering_is_rederived_and_rejected(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="attestation-parent.", dir=self.work
@@ -901,6 +1037,139 @@ class ReplayReceiptTest(unittest.TestCase):
                 RELEASE_VERIFIER.verify_release(
                     self._release_verifier_args(output_root)
                 )
+
+        self._assert_release_projection_rejects_extra_link_mode_digest_and_hardlink()
+
+    def _assert_release_projection_rejects_extra_link_mode_digest_and_hardlink(
+        self,
+    ) -> None:
+        for mutation in ("extra", "symlink", "mode", "digest", "hardlink"):
+            with self.subTest(mutation=mutation), self._finalized_release(
+                f"projection-{mutation}."
+            ) as output_root:
+                projection = output_root / "tlapm-projection"
+                folds = projection / "Folds.tla"
+                projection.chmod(0o700)
+                if mutation == "extra":
+                    extra = projection / "Unexpected.tla"
+                    extra.write_bytes(b"---- MODULE Unexpected ----\n====\n")
+                    extra.chmod(0o444)
+                elif mutation == "symlink":
+                    outside = output_root.parent / "outside.tla"
+                    outside.write_bytes(folds.read_bytes())
+                    folds.unlink()
+                    folds.symlink_to(outside)
+                elif mutation == "mode":
+                    folds.chmod(0o644)
+                elif mutation == "digest":
+                    original = folds.read_bytes()
+                    folds.chmod(0o600)
+                    folds.write_bytes(b"X" + original[1:])
+                    folds.chmod(0o444)
+                else:
+                    hardlink = output_root.parent / "folds-hardlink.tla"
+                    os.link(folds, hardlink)
+                projection.chmod(0o555)
+                try:
+                    with self.assertRaises(
+                        RELEASE_VERIFIER.ReleaseVerificationError
+                    ):
+                        RELEASE_VERIFIER.verify_release(
+                            self._release_verifier_args(output_root)
+                        )
+                finally:
+                    if mutation == "hardlink" and hardlink.exists():
+                        hardlink.unlink()
+
+    def _assert_release_verifier_rejects_projection_replacement(self) -> None:
+        with self._finalized_release(
+            "projection-replacement."
+        ) as output_root:
+            projection = output_root / "tlapm-projection"
+            held = output_root.parent / "projection-held"
+            alternate = output_root.parent / "projection-alternate"
+            shutil.copytree(projection, alternate, copy_function=shutil.copy2)
+            alternate.chmod(0o555)
+            original_run = SIGNING._run_verifier
+
+            def replace_projection(*args, **kwargs):
+                result = original_run(*args, **kwargs)
+                projection.chmod(0o700)
+                projection.rename(held)
+                alternate.chmod(0o700)
+                alternate.rename(projection)
+                projection.chmod(0o555)
+                return result
+
+            SIGNING._run_verifier = replace_projection
+            try:
+                with self.assertRaisesRegex(
+                    RELEASE_VERIFIER.ReleaseVerificationError,
+                    "changed|identity|renamed",
+                ):
+                    RELEASE_VERIFIER.verify_release(
+                        self._release_verifier_args(output_root)
+                    )
+            finally:
+                SIGNING._run_verifier = original_run
+                if held.exists():
+                    if projection.exists():
+                        projection.chmod(0o700)
+                        projection.rename(alternate)
+                    held.rename(projection)
+                    projection.chmod(0o555)
+                if alternate.exists():
+                    alternate.chmod(0o700)
+                    for item in alternate.iterdir():
+                        item.chmod(0o600)
+                    shutil.rmtree(alternate)
+
+    def _assert_finalizer_projection_cleanup_refuses_replacement(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="projection-cleanup-parent.", dir=self.work
+        ) as raw_parent:
+            parent = Path(raw_parent).resolve()
+            output_root = parent / "release"
+            moved = parent / "projection-owned"
+            victim = output_root / "tlapm-projection/must-survive"
+            original_validate = FINALIZER._validate_exact_output
+
+            def replace_before_validation(output, expected):
+                projection = output_root / "tlapm-projection"
+                projection.chmod(0o700)
+                projection.rename(moved)
+                replacement = output_root / "tlapm-projection"
+                replacement.mkdir(mode=0o700)
+                victim.write_bytes(b"replacement\n")
+                victim.chmod(0o400)
+                replacement.chmod(0o555)
+                raise FINALIZER.FinalizationError("injected projection failure")
+
+            FINALIZER._validate_exact_output = replace_before_validation
+            try:
+                with self.assertRaisesRegex(
+                    FINALIZER.FinalizationError,
+                    "could not be reclaimed",
+                ):
+                    FINALIZER.finalize(self._finalizer_args(output_root))
+                self.assertEqual(victim.read_bytes(), b"replacement\n")
+            finally:
+                FINALIZER._validate_exact_output = original_validate
+                if output_root.exists():
+                    replacement = output_root / "tlapm-projection"
+                    if replacement.exists():
+                        replacement.chmod(0o700)
+                        if victim.exists():
+                            victim.chmod(0o600)
+                            victim.unlink()
+                        replacement.rmdir()
+                    output_root.rmdir()
+                if moved.exists():
+                    moved.chmod(0o700)
+                    for item in moved.iterdir():
+                        item.chmod(0o600)
+                        item.unlink()
+                    moved.rmdir()
 
     def test_non_v1_signing_contract_substitution_is_rejected(self) -> None:
         value = copy.deepcopy(self.receipt)

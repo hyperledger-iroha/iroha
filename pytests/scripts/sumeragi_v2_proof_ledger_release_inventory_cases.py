@@ -1482,11 +1482,11 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
             '        "production-v2-lifecycle-coordinator",\n'
             '        "sumeragi::v2_lifecycle_coordinator",\n'
-            "        39,\n"
+            "        42,\n"
             "    ),",
             '        "production-v2-lifecycle-coordinator",\n'
             '        "sumeragi::v2_lifecycle_coordinator",\n'
-            "        38,\n"
+            "        41,\n"
             "    ),",
             "production module receipt tuple must equal the exact shell",
         ),

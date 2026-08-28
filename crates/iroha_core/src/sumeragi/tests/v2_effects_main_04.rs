@@ -1872,6 +1872,128 @@ fn certified_fetch_capacity_release_after_timeout_cleanup_retries_without_restar
 }
 #[test]
 #[allow(clippy::too_many_lines)]
+fn fresh_certified_fetch_queues_after_capacity_consumes_its_target() {
+    let mut fixture = ProductionTransportFixture::new();
+    fixture.executor.recovered_bodies.clear();
+    let mut effect_services = FakeServices {
+        requester_key: Some(fixture.requester_key.clone()),
+        ..FakeServices::default()
+    };
+    let prepare =
+        fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
+    let effects = vec![AdapterEffect::FetchBody {
+        tag: fixture.executor.current_tag(),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: fixture.certified_sources(&prepare),
+        certificate: Some(prepare),
+    }];
+    fixture
+        .executor
+        .runtime
+        .retain_retransmit_effect_ownership_for_test(&effects)
+        .expect("bind the certified Fetch before its selected response arrives");
+    fixture
+        .executor
+        .consume_effects(effects, &mut effect_services)
+        .expect("admit one pending certified Fetch");
+    let task = effect_services.fetch_tasks[0].clone();
+    let mut response = wire::CertifiedBodyResponse {
+        request_hash: HashOf::new(
+            task.certified_request()
+                .expect("the selected Fetch owns its signed request"),
+        ),
+        manifest: fixture.manifest.clone(),
+        body: fixture.body.clone(),
+        responder: fixture.context.roster[0].validator.clone(),
+        signature: Vec::new(),
+    };
+    response.signature = Signature::new(
+        fixture.validator_keys[0].private_key(),
+        &response.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let (_ingress_directory, ingress, _ingress_gate) = fixture.bound_certified_response_ingress();
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+            )),
+            fixture.context.roster[0].validator.clone(),
+        )),
+        Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let response_ordinal = ingress.state.lock().last_admission_ordinal;
+    let prepared = fixture
+        .executor
+        .prepare_lifecycle_ingress_selector(&ingress, response_ordinal)
+        .expect("prepare the exact selected response");
+    let (_, _, _, _, _, _, wake_source) = prepared
+        .certified_fetch_ready_authority_for_test()
+        .expect("derive the exact request-scoped wake authority");
+
+    let proofs = fixture
+        .validator_keys
+        .iter()
+        .map(|key| {
+            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                .expect("validator proof of possession")
+        })
+        .collect::<Vec<_>>();
+    let verified = VerifiedHeightContext::genesis(fixture.context.clone(), proofs)
+        .expect("verified owner context");
+    let owner_directory = TempDir::new().expect("temporary lifecycle owner storage");
+    let mut owner = crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::empty_owner_for_ingress_test(
+        verified,
+        &fixture.validator_keys[0],
+        owner_directory.path(),
+    );
+    let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    let planner_io = owner.bind_body_store_to_planner_io_for_test(
+        &mut production_services,
+        Arc::clone(&fixture.executor.output_guard),
+        1,
+    );
+    production_services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+    V2EffectServices::enqueue_body_fetch(&mut production_services, task)
+        .expect("install the exact certified-Fetch service owner");
+    let registry_before = owner.fetch_registry_snapshot_for_test();
+
+    let planned = owner.plan_ingress_turn_for_test(
+        &production_services,
+        &fixture.executor,
+        fixture.executor.lifecycle_mode_rank_snapshot(),
+        prepared,
+        crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
+    );
+    let queued = match planned {
+        Ok(ProductionIngressTurnPreparation::Queued(queued)) => queued,
+        Ok(ProductionIngressTurnPreparation::CapacityWait(_)) => {
+            panic!("available capacity cannot defer the exact selected Fetch")
+        }
+        Err(error) => panic!(
+            "the reservation-owned target must authenticate and queue once: {}",
+            error.reason()
+        ),
+    };
+    assert_eq!(queued.ordinal(), 1);
+    assert!(matches!(
+        owner.fetch_wait_projection_for_test(1, wake_source),
+        (
+            Some(LifecycleState::Waiting(wait)),
+            Some(1),
+            None,
+            false,
+        ) if wait.source() == wake_source && wait.observed_generation() == 1
+    ));
+    assert_ne!(owner.fetch_registry_snapshot_for_test(), registry_before);
+    assert_eq!(planner_io.queued_certified_fetch_count(), 1);
+    assert!(!fixture.executor.output_guard.restart_required());
+}
+#[test]
+#[allow(clippy::too_many_lines)]
 fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() {
     let mut fixture = ProductionTransportFixture::new();
     fixture.executor.recovered_bodies.clear();
@@ -2277,7 +2399,10 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         Ok(ProductionIngressTurnPreparation::CapacityWait(_)) => {
             panic!("available exact capacity must not produce a capacity wait")
         }
-        Err(_) => panic!("the exact locked Fetch transaction must publish its command"),
+        Err(error) => panic!(
+            "the exact locked Fetch transaction must publish its command: {}",
+            error.reason()
+        ),
     };
     assert_eq!(queued.ordinal(), lifecycle_ordinal);
     assert!(matches!(

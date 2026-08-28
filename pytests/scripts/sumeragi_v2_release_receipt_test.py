@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import atexit
 import base64
 import hashlib
 import io
@@ -72,6 +73,84 @@ IDENTITY_ARCHIVE_IDS = {
     "ssh_revocation": "release-identity.ssh-revocation.v1",
     "verify_transcript": "release-identity.verify-transcript.v1",
 }
+
+_SHARED_FORMAL_REPLAY_OWNER: tuple[ModuleType, type[object], Path] | None = None
+_SHARED_FORMAL_REPLAY: dict[str, object] | None = None
+
+
+def shared_formal_replay_evidence() -> dict[str, object]:
+    """Build one genuine detached-Ed25519 replay release for this test process."""
+
+    global _SHARED_FORMAL_REPLAY_OWNER, _SHARED_FORMAL_REPLAY
+    if _SHARED_FORMAL_REPLAY is not None:
+        return _SHARED_FORMAL_REPLAY
+
+    path = ROOT_DIR / "scripts/formal/sumeragi_v2_replay_receipt_test.py"
+    spec = importlib.util.spec_from_file_location(
+        "sumeragi_v2_release_receipt_shared_replay_fixture", path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    fixture_type = module.ReplayReceiptTest
+    fixture_type.setUpClass()
+    fixture = fixture_type(
+        methodName="test_release_signature_checker_and_finalizer_pass"
+    )
+    release_root = fixture_type.work / "aggregate-release"
+    try:
+        module.FINALIZER.finalize(fixture._finalizer_args(release_root))
+    except BaseException:
+        fixture_type.tearDownClass()
+        raise
+
+    _SHARED_FORMAL_REPLAY_OWNER = (module, fixture_type, release_root)
+    _SHARED_FORMAL_REPLAY = {
+        "source_receipt": fixture_type.receipt_path,
+        "release_root": release_root,
+        "signature_sha256": sha256(release_root / "receipt.json.sig"),
+        "ssh_keygen": fixture_type.ssh_keygen,
+        "allowed_signers": fixture_type.allowed_signers,
+        "revocation": fixture_type.revocation,
+        "principal": fixture_type.principal,
+        "fingerprint": fixture_type.fingerprint,
+        "tla2tools_sha256": module.CHECKER.TLA2TOOLS_SHA256,
+        "tlapm_hashes": dict(module.CHECKER.TLAPM_HASHES),
+    }
+    return _SHARED_FORMAL_REPLAY
+
+
+def _cleanup_shared_formal_replay_evidence() -> None:
+    """Make the read-only release removable, then release its temporary root."""
+
+    owner = _SHARED_FORMAL_REPLAY_OWNER
+    if owner is None:
+        return
+    _module, fixture_type, release_root = owner
+    if release_root.exists() and not release_root.is_symlink():
+        for directory, child_directories, files in os.walk(
+            release_root, topdown=False
+        ):
+            current = Path(directory)
+            for name in files:
+                try:
+                    (current / name).chmod(0o600)
+                except OSError:
+                    pass
+            for name in child_directories:
+                try:
+                    (current / name).chmod(0o700)
+                except OSError:
+                    pass
+            try:
+                current.chmod(0o700)
+            except OSError:
+                pass
+    fixture_type.tearDownClass()
+
+
+atexit.register(_cleanup_shared_formal_replay_evidence)
 
 FIXTURE_TOOL_PROBE_OPERATION_IDS = {
     "awk": "release-tool.awk-program.v1",
@@ -469,6 +548,32 @@ def fixture_writer(tmp_path: Path) -> Path:
         destination = project / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
+    for name in (
+        "check_sumeragi_v2_replay_receipt.py",
+        "sumeragi_v2_replay_signing.py",
+        "verify_sumeragi_v2_replay_release.py",
+    ):
+        shutil.copy2(ROOT_DIR / "scripts" / "formal" / name, formal / name)
+    replay = shared_formal_replay_evidence()
+    replay_checker = formal / "check_sumeragi_v2_replay_receipt.py"
+    checker_source = replay_checker.read_text(encoding="utf-8")
+    checker_source, replacements = re.subn(
+        r'(?m)^TLA2TOOLS_SHA256 = "[0-9a-f]{64}"$',
+        f'TLA2TOOLS_SHA256 = "{replay["tla2tools_sha256"]}"',
+        checker_source,
+    )
+    assert replacements == 1
+    tlapm_hashes = replay["tlapm_hashes"]
+    assert isinstance(tlapm_hashes, dict)
+    for logical_name, digest in tlapm_hashes.items():
+        checker_source, replacements = re.subn(
+            rf'(?m)^(    {re.escape(json.dumps(logical_name))}: )'
+            r'"[0-9a-f]{64}",$',
+            rf'\g<1>{json.dumps(digest)},',
+            checker_source,
+        )
+        assert replacements == 1
+    replay_checker.write_text(checker_source, encoding="utf-8")
     shutil.copy2(
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh",
         scripts / "run_sumeragi_v2_release_gates.sh",
@@ -564,6 +669,10 @@ def make_bootstrap_evidence(
     scaling_irohad_sha256: str,
     scaling_iroha_cli_sha256: str,
     sdk_source_manifest_data: bytes,
+    formal_replay_source_receipt: Path,
+    formal_replay_release_root: Path,
+    formal_replay_signature_sha256: str,
+    formal_replay_principal: str,
 ) -> dict[str, Path | str]:
     candidate_root = tmp_path / "bootstrap-candidate"
     (candidate_root / "scripts").mkdir(parents=True)
@@ -586,7 +695,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "38e5ce3632e1d7dc0471b49d90350a165fb8326c34ea3d70187a309c3d96358f"
+        "99e0b382c1c4960ffed95f34dc3cd347d5a225df6a8d85d1caf2ae1429cc0ef2"
     )
     python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
     python_launcher = (
@@ -1134,6 +1243,16 @@ def make_bootstrap_evidence(
         ),
         "IROHA_RELEASE_SCALING_IROHAD_SHA256": scaling_irohad_sha256,
         "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256": scaling_iroha_cli_sha256,
+        "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT": str(
+            formal_replay_source_receipt
+        ),
+        "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT": str(
+            formal_replay_release_root
+        ),
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256": (
+            formal_replay_signature_sha256
+        ),
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL": formal_replay_principal,
         **policy_environment,
         **alias_environment,
     }
@@ -2231,14 +2350,15 @@ def make_sdk_dependency_evidence(
 
 
 def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
+    formal_replay = shared_formal_replay_evidence()
     candidate_manifest = "a" * 64
     sealed_manifest = "b" * 64
     multilane_manifest = "c" * 64
     tree = "2" * 40
     lock_bytes = b"fixture Cargo.lock\n"
     lock = hashlib.sha256(lock_bytes).hexdigest()
-    signer_fingerprint = "SHA256:" + "A" * 43
-    signer_principal = "release@example.test"
+    signer_fingerprint = str(formal_replay["fingerprint"])
+    signer_principal = str(formal_replay["principal"])
     signature_payload = base64.b64encode(b"SSHSIG fixture signature").decode("ascii")
     raw_commit = (
         f"tree {tree}\n"
@@ -2284,11 +2404,14 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
 
     signature_raw_commit.write_bytes(raw_commit)
     signature_cargo_lock.write_bytes(lock_bytes)
-    signature_allowed_signers.write_text(
-        f"{signer_principal} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureKey\n",
-        encoding="utf-8",
-    )
-    signature_revocation.write_bytes(b"")
+    formal_allowed_signers = formal_replay["allowed_signers"]
+    formal_revocation = formal_replay["revocation"]
+    formal_ssh_keygen = formal_replay["ssh_keygen"]
+    assert isinstance(formal_allowed_signers, Path)
+    assert isinstance(formal_revocation, Path)
+    assert isinstance(formal_ssh_keygen, Path)
+    signature_allowed_signers.write_bytes(formal_allowed_signers.read_bytes())
+    signature_revocation.write_bytes(formal_revocation.read_bytes())
     fake_git = (
         "#!/bin/sh\n"
         "case \"$*\" in\n"
@@ -2306,10 +2429,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "esac\n"
     )
     signature_git.write_text(fake_git, encoding="utf-8")
-    signature_ssh_keygen.write_text(
-        "#!/bin/sh\nprintf '%s\\n' 'fixture ssh-keygen usage' >&2\nexit 1\n",
-        encoding="utf-8",
-    )
+    signature_ssh_keygen.write_bytes(formal_ssh_keygen.read_bytes())
     for path in (
         signature_raw_commit,
         signature_cargo_lock,
@@ -2501,6 +2621,10 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         sdk_source_manifest_data=_sdk_source_manifest_fixture(
             signature_git, sha256(signature_git),
         ),
+        formal_replay_source_receipt=formal_replay["source_receipt"],
+        formal_replay_release_root=formal_replay["release_root"],
+        formal_replay_signature_sha256=str(formal_replay["signature_sha256"]),
+        formal_replay_principal=signer_principal,
     )
     bootstrap_evidence_dir = bootstrap["bootstrap_evidence_dir"]
     assert isinstance(bootstrap_evidence_dir, Path)
@@ -2939,7 +3063,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 f"{'4' * 64}\t{'5' * 64}\t{'6' * 64}",
                 "result\tautonomous-reservation-carrier\t"
                 "SumeragiV2AutonomousReservationCarrier\t"
-                "multilane_autonomous_reservation_carrier_fixed.cfg\t10\tNoError\t"
+                "multilane_autonomous_reservation_carrier_fixed.cfg\t12\tNoError\t"
                 f"{'7' * 64}\t{'8' * 64}\t{'9' * 64}",
                 "result\tqueue-plan-admission-registry\t"
                 "SumeragiV2QueuePlanAdmissionRegistry\t"
@@ -3333,6 +3457,10 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "formal_tlaps_resource_jsonl": formal_tlaps_resource_jsonl,
         "formal_tlaps_resource_summary": formal_tlaps_resource_summary,
         "formal_verus_tool": tool_paths["verus"],
+        "formal_replay_source_receipt": formal_replay["source_receipt"],
+        "formal_replay_release_root": formal_replay["release_root"],
+        "formal_replay_signature_sha256": formal_replay["signature_sha256"],
+        "formal_replay_principal": formal_replay["principal"],
         "corridor_cargo_tool": tool_paths["cargo"],
         "corridor_rustc_tool": tool_paths["rustc"],
         "corridor_cargo_home": isolated_cargo_home,
@@ -3382,6 +3510,9 @@ def run_writer(
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/formal/check_sumeragi_v2_proof_ledger.py"),
         *proof_ledger_checker_components(source_root),
+        Path("scripts/formal/check_sumeragi_v2_replay_receipt.py"),
+        Path("scripts/formal/sumeragi_v2_replay_signing.py"),
+        Path("scripts/formal/verify_sumeragi_v2_replay_release.py"),
         Path("scripts/formal/sumeragi_v2_verus_evidence.py"),
         Path("scripts/nexus/validate_multilane_scaling_evidence.py"),
         Path("scripts/deploy_localnet.sh"),
@@ -3450,6 +3581,14 @@ def run_writer(
             str(evidence["corridor_completion"]),
             "--formal-completion",
             str(evidence["formal_completion"]),
+            "--formal-replay-source-receipt",
+            str(evidence["formal_replay_source_receipt"]),
+            "--formal-replay-release-root",
+            str(evidence["formal_replay_release_root"]),
+            "--expected-formal-replay-signature-sha256",
+            str(evidence["formal_replay_signature_sha256"]),
+            "--formal-replay-principal",
+            str(evidence["formal_replay_principal"]),
             "--seed-completion",
             str(evidence["seed_completion"]),
             "--chaos-completion",
@@ -4675,6 +4814,39 @@ def test_receipt_rejects_legacy_formal_completion_without_trace_extraction(
         "formal completion is release-ineligible without authenticated "
         "production trace-extraction evidence"
     ) in result.stderr
+
+
+def test_formal_replay_release_binds_private_tlapm_projection_end_to_end() -> None:
+    """Keep both receipt publications bound to the finalized two-file projection."""
+
+    finalizer = (
+        ROOT_DIR / "scripts/formal/finalize_sumeragi_v2_replay_receipt.py"
+    ).read_text(encoding="utf-8")
+    verifier = (
+        ROOT_DIR / "scripts/formal/verify_sumeragi_v2_replay_release.py"
+    ).read_text(encoding="utf-8")
+    aggregate = (
+        ROOT_DIR / "scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"
+    ).read_text(encoding="utf-8")
+    bootstrap = BOOTSTRAP_COMPONENT_FILES[0].read_text(encoding="utf-8")
+
+    assert finalizer.count("_create_projection(output, projection_sources)") == 1
+    assert finalizer.count(
+        '"mode": 0o555,\n                "read_only": True,'
+    ) == 1
+    assert verifier.count(
+        '"archived TLAPM projection differs from the signed receipt"'
+    ) == 1
+    for label, name in (
+        ("tlapm_folds", "Folds.tla"),
+        ("tlapm_functions", "Functions.tla"),
+    ):
+        assert aggregate.count(f'"{label}",') == 1
+        assert aggregate.count(f'projection_root / "{name}",') == 1
+        assert bootstrap.count(f'"tlapm-projection/{name}",') == 1
+    assert bootstrap.count(
+        '"terminal formal replay finalized TLAPM projection",'
+    ) == 1
 
 
 def test_receipt_rejects_trace_extraction_not_authenticated_by_checker(

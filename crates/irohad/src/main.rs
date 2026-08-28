@@ -7284,6 +7284,22 @@ impl Iroha {
         ),
         StartError,
     > {
+        // Compile and validate immutable privacy profiles before any public
+        // service begins accepting requests. In particular, the ZK-X.509
+        // profile validates six fixed algebraic schedules; doing that work in
+        // a Torii handler would make the first capability request CPU-bound.
+        let privacy_catalog_started = Instant::now();
+        let privacy_catalog = iroha_core::privacy_profiles::compiled_privacy_profile_catalog_v1()
+            .map_err(|error| {
+            Report::new(StartError::StartTorii).attach(format!(
+                "failed to initialize compiled privacy profile catalog: {error}"
+            ))
+        })?;
+        iroha_logger::info!(
+            protocol_count = privacy_catalog.protocols.len(),
+            elapsed_ms = privacy_catalog_started.elapsed().as_millis(),
+            "compiled privacy profile catalog initialized before Torii startup"
+        );
         let nts_params = iroha_core::time::Params::from(&config.nts);
         let emergency_fast = config.kura.init_mode == InitMode::Fast;
         // A successful reservation publishes policy and ownership as one

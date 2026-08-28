@@ -1,5 +1,60 @@
+fn assert_locked_external_queue_plan_body_rejects_before_retiring_autonomous_owner() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
+    let queue = install_autonomous_test_queue(
+        &mut adapter,
+        lane_id,
+        dataspace_id,
+        &journal_dir.path().join("lane-reservations.norito"),
+    );
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("produce one Queue-owned autonomous payload");
+
+    let pending_before = adapter.pending_autonomous_anchor_payloads.clone();
+    let reservations_before = queue.live_lane_reservations();
+    let fifo_before = queue.fifo_snapshot_for_test();
+    let (forbidden, _) = planned_lane_candidate_block_for_route_at_view_with_intent(
+        &adapter,
+        &keys,
+        0,
+        lane_id,
+        dataspace_id,
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    );
+    mark_global_body_locked_for_block(&mut adapter, &forbidden);
+
+    assert_eq!(
+        adapter.bind_locked_global_body(&forbidden),
+        V2LaneIngressOutcome::Rejected
+    );
+    assert_eq!(adapter.pending_autonomous_anchor_payloads, pending_before);
+    assert_eq!(queue.live_lane_reservations(), reservations_before);
+    assert_eq!(queue.fifo_snapshot_for_test(), fifo_before);
+    for payload in pending_before.values() {
+        assert!(
+            adapter
+                .kura
+                .read_autonomous_lane_slot_retirement(
+                    payload.origin_proposal.descriptor.lane_id,
+                    payload.origin_proposal.descriptor.lane_block_height,
+                    adapter.native_network_id(),
+                    adapter.context.epoch,
+                )
+                .expect("read autonomous retirement state")
+                .is_none(),
+            "role-invalid global ownership must not retire the autonomous attempt"
+        );
+    }
+}
+
 #[test]
 fn losing_autonomous_carrier_is_durably_retired_before_cache_drop() {
+    assert_locked_external_queue_plan_body_rejects_before_retiring_autonomous_owner();
     let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(7);
@@ -278,25 +333,126 @@ fn canonical_kura_anchor_cannot_bypass_route_reset_or_incarnation_guards() {
     }
 }
 #[test]
-fn merge_certificates_require_exact_equal_vote_quorum() {
+fn merge_certificates_require_exact_equal_vote_quorum_and_leader_custody() {
     let (adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let all_signatures = (0_u32..4)
+        .map(|signer| (signer, Vec::new()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        exact_merge_certificate_signers(&all_signatures, 3, 3),
+        Some(vec![0, 1, 3]),
+        "exact QC construction must retain a high-index round leader"
+    );
+    let signatures_without_leader = (0_u32..3)
+        .map(|signer| (signer, Vec::new()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        exact_merge_certificate_signers(&signatures_without_leader, 3, 3),
+        None,
+        "new QC construction waits for its durable round-leader custodian"
+    );
     assert!(!adapter.frozen_certificate_quorum_met(&[0, 1]));
     assert!(adapter.frozen_certificate_quorum_met(&[1, 2, 3]));
     assert!(adapter.frozen_certificate_quorum_met(&[0, 1, 3]));
     assert!(!adapter.frozen_certificate_quorum_met(&[0, 1, 2, 3]));
-    let subquorum = missing_sidecar_reference_with_signers(&adapter, &keys, 0, &[1, 2]);
+    let carrier_view = 0;
+    let leader = usize::try_from(adapter.context.leader(carrier_view))
+        .expect("fixture leader index fits usize");
+    let subquorum = missing_sidecar_reference_with_signers(&adapter, &keys, carrier_view, &[1, 2]);
     assert!(matches!(
         authenticate_bounded_merge_sidecar_holders(&adapter.context, &subquorum),
         Err(reason) if reason.contains("signer count mismatch")
     ));
-    let quorum = missing_sidecar_reference_with_signers(&adapter, &keys, 0, &[0, 1, 3]);
-    authenticate_bounded_merge_sidecar_holders(&adapter.context, &quorum)
-        .expect("the same verifier accepts any three distinct committee votes");
-    let superset = missing_sidecar_reference_with_signers(&adapter, &keys, 0, &[0, 1, 2, 3]);
+    let without_leader = (0..adapter.context.roster.len())
+        .filter(|index| *index != leader)
+        .collect::<Vec<_>>();
+    let legacy_without_leader =
+        missing_sidecar_reference_with_signers(&adapter, &keys, carrier_view, &without_leader);
+    let legacy_holders =
+        authenticate_bounded_merge_sidecar_holders(&adapter.context, &legacy_without_leader)
+            .expect("a pre-fix V1 quorum retains implicit carrier-leader custody");
+    assert_eq!(
+        legacy_holders.first(),
+        Some(&adapter.context.roster[leader].validator),
+        "the authenticated carrier leader precedes legacy bitmap signers"
+    );
+    let quorum = missing_sidecar_reference(&adapter, &keys, carrier_view);
+    let holders = authenticate_bounded_merge_sidecar_holders(&adapter.context, &quorum)
+        .expect("an exact quorum with leader custody is authenticated");
+    assert_eq!(
+        holders.first(),
+        Some(&adapter.context.roster[leader].validator),
+        "the durable round-leader custodian must be first"
+    );
+    let superset =
+        missing_sidecar_reference_with_signers(&adapter, &keys, carrier_view, &[0, 1, 2, 3]);
     assert!(matches!(
         authenticate_bounded_merge_sidecar_holders(&adapter.context, &superset),
         Err(reason) if reason.contains("expected exactly 3, got 4")
     ));
+}
+#[test]
+fn missing_merge_sidecar_contacts_durable_round_leader_before_other_signers() {
+    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let local_index = adapter
+        .context
+        .roster
+        .iter()
+        .position(|entry| entry.validator == adapter.local_peer)
+        .expect("fixture local peer belongs to the frozen roster");
+    let carrier_view = (0..u64::try_from(adapter.context.roster.len()).expect("roster fits u64"))
+        .find(|view| {
+            usize::try_from(adapter.context.leader(*view)).expect("leader index fits usize")
+                != local_index
+        })
+        .expect("four-validator fixture has a remote round leader");
+    let leader_index =
+        usize::try_from(adapter.context.leader(carrier_view)).expect("leader index fits usize");
+    let leader = adapter.context.roster[leader_index].validator.clone();
+    let reference = missing_sidecar_reference(&adapter, &keys, carrier_view);
+    let round = wire::ConsensusRound {
+        context_id: adapter.context.id(),
+        height: adapter.context.height,
+        view: carrier_view,
+    };
+    let subject = wire::BlockSubject {
+        parent_block_hash: adapter
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .map(|qc| qc.subject.block_hash),
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"leader-first merge sidecar carrier",
+        )),
+        payload_hash: Hash::new(b"leader-first merge sidecar payload"),
+    };
+    assert_eq!(
+        adapter
+            .defer_missing_merge_sidecar(round, subject, reference)
+            .expect("authenticate and register the missing exact sidecar"),
+        MergeSidecarDeferralDisposition::Fetching
+    );
+    let effect = adapter
+        .drain_effects(usize::MAX)
+        .into_iter()
+        .find(|effect| {
+            matches!(
+                effect,
+                V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                    message,
+                    ..
+                } if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Request(_))
+            )
+        })
+        .expect("registration emits one exact sidecar request");
+    let V2LaneWorkEffect::PostCertifiedMergeSidecar { peer, message, .. } = effect else {
+        unreachable!("selected effect is a sidecar post")
+    };
+    let CertifiedMergeSidecarMessage::Request(request) = message.as_ref() else {
+        unreachable!("selected sidecar post is a request")
+    };
+    assert_eq!(peer, leader);
+    assert_eq!(request.responder, leader);
 }
 fn merge_candidate_for_persistence_retry(
     adapter: &V2LaneWorkAdapter,
@@ -1512,6 +1668,12 @@ fn quorate_merge_persistence_failure_latches_restart_required() {
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let expected_signers = exact_merge_certificate_signers(
+        &signatures,
+        adapter.context.quorum.min_signers as usize,
+        adapter.context.leader(candidate.view),
+    )
+    .expect("complete fixture shares include the round leader");
     adapter.merge_entries.insert(
         key,
         PendingMerge {
@@ -1551,15 +1713,23 @@ fn quorate_merge_persistence_failure_latches_restart_required() {
         }
     };
     assert_eq!(certified_entry.merge_qc.message_digest, key.digest);
-    assert_eq!(certified_entry.merge_qc.signers_bitmap, vec![0b0000_0111]);
+    let certified_signers = certified_entry
+        .merge_qc
+        .signer_proofs
+        .iter()
+        .map(|proof| proof.signer)
+        .collect::<Vec<_>>();
+    assert_eq!(certified_signers, expected_signers);
+    assert!(
+        certified_signers.contains(&adapter.context.leader(candidate.view)),
+        "the exact-cardinality QC must retain its durable round-leader custodian"
+    );
+    let expected_bitmap = certified_signers
+        .iter()
+        .fold(0_u8, |bitmap, signer| bitmap | (1_u8 << *signer));
     assert_eq!(
-        certified_entry
-            .merge_qc
-            .signer_proofs
-            .iter()
-            .map(|proof| proof.signer)
-            .collect::<Vec<_>>(),
-        vec![0, 1, 2]
+        certified_entry.merge_qc.signers_bitmap,
+        vec![expected_bitmap]
     );
     assert_eq!(certified_entry.epoch_id, candidate.epoch_id);
     assert_eq!(certified_entry.lane_snapshots, candidate.lane_snapshots);

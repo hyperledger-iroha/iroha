@@ -1190,7 +1190,7 @@ _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256 = {
         "e2d69a7243f71d2818ffabcbdd78e9585c6245b447a882e8f6dc319067a956ee"
     ),
     "aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate": (
-        "f0e4b3f696d8f60ab210ceaceb27b37566fda8ade17ce4712ad9fe3f6598f027"
+        "14dd2ba38ea6a93eff72c740b1fe0e10f39a7c85865f28f4107ad8f1a34e2f27"
     ),
     "serviced_candidate_capacity_exhaustion_never_evicts_an_old_owner": (
         "ed7172e200b6ebe76d6c6048a08e6610b83e709b66dc8e0dd972998d5e8f2b0f"
@@ -1358,7 +1358,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "61dab9fb549388aaff80edf3ae6b568c9d806b1d59469bff831ab85ae67b93b6"
+        "e03c0c18c92f903db9776f1bd43f1a3de0e99d9f4c518142800b6a2c18134731"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"
@@ -1412,13 +1412,13 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "e198c896e7ea6c3cc6862b48d6dc9432f578dc4e95231f621c3079d79855c77d"
     ),
     "step_with_defer_policy": (
-        "f61873fdbedf7727cc0c0575a67721e089fda4c9aac2d7e31eb45bbb096befc6"
+        "d77f689df1bae02017c80599ccc59363a448964cb64c8ee6faf65a67bfe0e0d9"
     ),
     "drain_deferred_with_handoff_for_ordinals": (
         "b0f80b64612e436979c51bef1a607147f2fcc3c4c5b127a3738a4ca3410cc40f"
     ),
     "drive_effects": (
-        "228291c466d581465006e2b731591caea95750c08dd0c5cea836b8d3c7de6e95"
+        "9ad900f12ec31351eac3d2b0a19547a0150b1908a8a91cfb4dea93c3dee48fbc"
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNTIME_STRUCT_SHA256 = {
@@ -1480,7 +1480,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "aa0a41501d13d502e119566bb4fc55e202f820ece97cf66e486ac851b458c64d"
     ),
     "dispatch_one_pacemaker_progress": (
-        "fc7d5f12b41f703242826e8926dd91f4267b78d775b1d8c2453d85006a3ac965"
+        "5260b9beb639c080ec41742c604b19372f887a62e6e522d68dd8661ecb4b42e2"
     ),
     "dispatch_one_fence_dependency": (
         "539239fa96fca8ea08dc56ac89041b7be0bb6f5f3d33f65259ad8e7833173b69"
@@ -1490,7 +1490,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256 = {
-    "launch": "d3b9a9f68ce361cb3609c5b181869ae483ca76ac3eea33c0a72ad6f57ba76b48",
+    "launch": "cbe4fea117c6b3071b9518c169439d99daef76a3f45019091c7ed1df162f851e",
     "into_serialized_runtime": "87068a8d2dee32dfba73139870cb7c2cd3128d452ad38f5c478be9c4503bd192",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {
@@ -1613,7 +1613,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256 = {
         "e2d69a7243f71d2818ffabcbdd78e9585c6245b447a882e8f6dc319067a956ee"
     ),
     "aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate": (
-        "5101761ebb164505896814130b9260cce1644306e914d27f2a72fe5e5f701dd6"
+        "14dd2ba38ea6a93eff72c740b1fe0e10f39a7c85865f28f4107ad8f1a34e2f27"
     ),
     "serviced_candidate_capacity_exhaustion_never_evicts_an_old_owner": (
         "ed7172e200b6ebe76d6c6048a08e6610b83e709b66dc8e0dd972998d5e8f2b0f"
@@ -1761,6 +1761,22 @@ let has_live_control_predecessor = lane
     .take(index)
     .any(|prior| fair_v2_ingress_same_control_slot(&prior.inbound, &entry.inbound));
 """,
+    "historical_replica_release_dependency": """
+let historical_replica_release_dependency = leader_wire_barrier.is_some_and(|owner| {
+    entry.history_serve_request.is_some_and(|request| {
+        let height = request.height();
+        height != 0 && height < owner.token.identity.height
+    }) && entry.inbound.reply_routes().is_some_and(|routes| {
+        !routes.is_empty()
+            && routes.semantic_target() == entry.inbound.sender()
+            && routes.iter().any(NetworkReplyRoute::is_reply_writable)
+    })
+});
+let dependency_bypass = !ingress_barrier_allows
+    && ((leader_wire_control_barrier && (earlier_dependency || timeout_control_dependency))
+        || ((leader_wire_control_barrier || leader_wire_chunk_barrier)
+            && (certified_fence_escape_dependency || historical_replica_release_dependency)));
+""",
     "queue_gate_verdict": """
 if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {
     FairV2IngressQueueGateVerdict::Blocked
@@ -1826,7 +1842,7 @@ _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
         "30e1e0f718530767610746544385b9ff5a86c4d10ab2988deb6841bc67ac3d0e"
     ),
     "admit_authenticated_payload": (
-        "390d2b42206ed4055e4b3907561fa8aa94f49c54018950a6c47074e9661efe2f"
+        "75847fc4c1eab251ef73c3c05ca08b1a32b1b103585b3c0b5ff0049456ccb00e"
     ),
     "prune_ingress_records": (
         "7aabe892539e8914e9fe3486e439efe6e04e8b625183897f8c9d5d128bc0e73b"
@@ -1843,13 +1859,13 @@ _LOCKED_REPROPOSAL_PREPARE_PROGRESS_ITEM_SHA256 = {
         "20671a4c6258e8ee23db86701ef84c8f0fd10c196d4c8c1c8e971c29a5e72243"
     ),
     "append_deferred_projection_admission": (
-        "40f8ec33c6ae190899cb965946100cf9f94a3a9b5f17f616f3d4bfadfac16bd7"
+        "045a741eed5b9d8f6756fbc7ea175c2143ef4a1c5b64ad5d3973db38d2ed0338"
     ),
     "deferred_service_projection_hash": (
         "9315322199c53abe3b1ac6b9b81a9a1c12025aac1b283fc75375cf7c0c28ccf2"
     ),
     "DeferredServiceEvidence::validate_exact": (
-        "09f86a10667e6cafd2ab628798b199e72fde0df4aa73f7650ff549b6404d4e93"
+        "3111af5fdb03f363bad27bfebeb7cc0643fb19a9fa466e3562230f894294ebd8"
     ),
     "authenticated_ingress_is_progress": (
         "3a958aed971bd3666f7d9d0187ae6f57c67613736f949426a19f4b851c48915f"
@@ -1861,7 +1877,7 @@ _LOCKED_REPROPOSAL_PREPARE_PROGRESS_ITEM_SHA256 = {
         "fd2a239e9a2bb08e81a7ef8d07ec10eee80ef75f6cb8a06415778808ca6b6b55"
     ),
     "record_ingress_delivery": (
-        "118156a73c589bcf758e527ca285330007b76f18d1a16482ad5b9270074ac86d"
+        "d52e9c6e1c16df452fb3921094a7022149f98ae21142bade1caa2defba87bbd3"
     ),
     "enqueue_deferred": (
         "f22c283acd092ce9f4646caa7081f51c8295a669c951609af5dde2cc91b6c979"
@@ -1878,7 +1894,7 @@ _LOCKED_REPROPOSAL_PREPARE_PROGRESS_REGRESSION_TEST_SHA256 = {
         "e6a2c477fb64d4bd6fea8bd377ae8bde4f1a2c07def2b53f27a2d1e82dc62bdc"
     ),
     "deferred_progress_partition_owns_every_vote_and_certificate_class": (
-        "2f3a00157a704f7cc78705daf13f56abe52a865c58f215e6ffba558388957322"
+        "a16b8febe5bd3d7441458a728a4cd495d3ee007e372f7dc4a72aa5a37d094e60"
     ),
 }
 _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256 = {

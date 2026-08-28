@@ -207,6 +207,37 @@ impl Drop for PendingExpr {
         }
     }
 }
+struct PendingType(Option<TypeExpr>);
+impl PendingType {
+    fn empty() -> Self {
+        Self(None)
+    }
+    fn new(ty: TypeExpr) -> Self {
+        Self(Some(ty))
+    }
+    fn take(&mut self) -> TypeExpr {
+        self.0.take().expect("pending type must be present")
+    }
+    fn replace(&mut self, ty: TypeExpr) {
+        assert!(
+            self.0.replace(ty).is_none(),
+            "pending type must be empty before replacement"
+        );
+    }
+    fn into_inner(mut self) -> TypeExpr {
+        self.take()
+    }
+    fn into_option(mut self) -> Option<TypeExpr> {
+        self.0.take()
+    }
+}
+impl Drop for PendingType {
+    fn drop(&mut self) {
+        if let Some(ty) = self.0.take() {
+            crate::ast::drop_type_iterative(ty);
+        }
+    }
+}
 struct PendingStatement(Option<Statement>);
 impl PendingStatement {
     fn new(statement: Statement) -> Self {
@@ -300,6 +331,9 @@ impl<T> PendingValues<T> {
     }
     fn iter(&self) -> std::slice::Iter<'_, T> {
         self.values.iter()
+    }
+    fn len(&self) -> usize {
+        self.values.len()
     }
     fn into_inner(mut self) -> Vec<T> {
         std::mem::take(&mut self.values)
@@ -1997,14 +2031,14 @@ impl<'a> CstAstLowerer<'a> {
             None,
         );
         self.expect(TokenKind::LBrace)?;
-        let mut fields = Vec::new();
+        let mut fields = PendingValues::new(|(_, ty)| crate::ast::drop_type_iterative(ty));
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             // Allow stray separators.
             if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
                 self.bump();
                 continue;
             }
-            let ty = self.parse_type_expr()?;
+            let mut ty = PendingType::new(self.parse_type_expr()?);
             let field_name = if self.peek(TokenKind::Colon) {
                 let token = self.bump();
                 return Err(self.coded_error(
@@ -2015,20 +2049,23 @@ impl<'a> CstAstLowerer<'a> {
             } else {
                 self.expect_ident()?
             };
-            fields.push((field_name, ty));
+            fields.push((field_name, ty.take()));
             if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
                 self.bump();
             }
         }
         self.expect(TokenKind::RBrace)?;
         self.finish_node(node);
-        Ok(Item::Struct(super::ast::StructDef { name, fields }))
+        Ok(Item::Struct(super::ast::StructDef {
+            name,
+            fields: fields.into_inner(),
+        }))
     }
     fn parse_state_decl(&mut self) -> ParseResult<Item> {
         // Canonical V1 form: `state Type name;`.
         let node = self.begin_node(AstNodeKind::State, self.current_start());
         self.expect(TokenKind::State)?;
-        let ty = self.parse_type_expr()?;
+        let mut ty = PendingType::new(self.parse_type_expr()?);
         if self.peek(TokenKind::Colon) {
             let token = self.bump();
             return Err(self.coded_error(
@@ -2047,12 +2084,15 @@ impl<'a> CstAstLowerer<'a> {
         );
         self.expect(TokenKind::Semicolon)?;
         self.finish_node(node);
-        Ok(Item::State(super::ast::StateDecl { name, ty }))
+        Ok(Item::State(super::ast::StateDecl {
+            name,
+            ty: ty.take(),
+        }))
     }
     fn parse_const_decl(&mut self) -> ParseResult<Item> {
         let node = self.begin_node(AstNodeKind::Const, self.current_start());
         self.expect(TokenKind::Const)?;
-        let ty = Some(self.parse_type_expr()?);
+        let mut ty = PendingType::new(self.parse_type_expr()?);
         if self.peek(TokenKind::Colon) {
             let token = self.bump();
             return Err(self.coded_error(
@@ -2075,7 +2115,7 @@ impl<'a> CstAstLowerer<'a> {
         self.finish_node(node);
         Ok(Item::Const(super::ast::ConstDecl {
             name,
-            ty,
+            ty: Some(ty.take()),
             value: value.take(),
         }))
     }
@@ -2119,7 +2159,11 @@ impl<'a> CstAstLowerer<'a> {
             let params_start = self.current_start();
             let params = self.with_syntax(SyntaxKind::ParamList, params_start, |this| {
                 this.expect(TokenKind::LParen)?;
-                let mut params = Vec::new();
+                let mut params = PendingValues::new(|parameter: Param| {
+                    if let Some(ty) = parameter.ty {
+                        crate::ast::drop_type_iterative(ty);
+                    }
+                });
                 if !this.peek(TokenKind::RParen) {
                     loop {
                         params.push(this.parse_param()?);
@@ -2148,10 +2192,10 @@ impl<'a> CstAstLowerer<'a> {
                 .entry(name.clone())
                 .and_modify(|known| *known = None)
                 .or_insert_with(|| Some(parameter_names));
-            let mut ret_ty = None;
+            let mut ret_ty = PendingType::empty();
             if self.peek(TokenKind::Arrow) {
                 self.bump();
-                ret_ty = Some(self.parse_type_expr()?);
+                ret_ty.replace(self.parse_type_expr()?);
             }
             // Caller authorization is mandatory for mutating public kotoage
             // and optional for read-only views.
@@ -2226,8 +2270,8 @@ impl<'a> CstAstLowerer<'a> {
             let body = self.parse_block()?;
             Ok(Item::Function(Function {
                 name,
-                params,
-                ret_ty,
+                params: params.into_inner(),
+                ret_ty: ret_ty.into_option(),
                 body,
                 modifiers,
                 location,
@@ -2300,11 +2344,10 @@ impl<'a> CstAstLowerer<'a> {
             let owner = self.begin_node(AstNodeKind::Statement, statement_start);
             let mutable = self.peek(TokenKind::Var);
             self.bump();
-            let ty = if self.typed_local_starts_here() {
-                Some(self.parse_type_expr()?)
-            } else {
-                None
-            };
+            let mut ty = PendingType::empty();
+            if self.typed_local_starts_here() {
+                ty.replace(self.parse_type_expr()?);
+            }
             // pattern
             let pat = if self.peek(TokenKind::LParen) {
                 self.bump();
@@ -2350,7 +2393,7 @@ impl<'a> CstAstLowerer<'a> {
                 Statement::Let {
                     mutable,
                     pat,
-                    ty,
+                    ty: ty.into_option(),
                     value: expr.take(),
                 },
             )))
@@ -4141,16 +4184,16 @@ impl<'a> CstAstLowerer<'a> {
             Generic {
                 start: u32,
                 base: String,
-                args: Vec<TypeExpr>,
+                args: PendingValues<TypeExpr>,
             },
             Tuple {
                 opening: Token,
-                args: Vec<TypeExpr>,
+                args: PendingValues<TypeExpr>,
             },
         }
         let mut frames = Vec::new();
         'next_type: loop {
-            let mut current = loop {
+            let mut current = PendingType::new(loop {
                 if self.peek(TokenKind::LParen) {
                     let opening = self.bump();
                     if self.peek(TokenKind::RParen) {
@@ -4159,7 +4202,7 @@ impl<'a> CstAstLowerer<'a> {
                     }
                     frames.push(Frame::Tuple {
                         opening,
-                        args: Vec::new(),
+                        args: PendingValues::new(crate::ast::drop_type_iterative),
                     });
                     continue;
                 }
@@ -4231,15 +4274,15 @@ impl<'a> CstAstLowerer<'a> {
                     frames.push(Frame::Generic {
                         start: base_token.range.start,
                         base,
-                        args: Vec::new(),
+                        args: PendingValues::new(crate::ast::drop_type_iterative),
                     });
                     continue;
                 }
                 break self.source_type(base_token.range, TypeExpr::Path(base));
-            };
+            });
             loop {
                 let Some(frame) = frames.pop() else {
-                    return Ok(current);
+                    return Ok(current.into_inner());
                 };
                 match frame {
                     Frame::Generic {
@@ -4247,20 +4290,23 @@ impl<'a> CstAstLowerer<'a> {
                         base,
                         mut args,
                     } => {
-                        args.push(current);
+                        args.push(current.take());
                         if self.peek(TokenKind::Comma) {
                             self.bump();
                             frames.push(Frame::Generic { start, base, args });
                             continue 'next_type;
                         }
                         self.expect(TokenKind::Greater)?;
-                        current = self.source_type(
+                        current.replace(self.source_type(
                             TextRange::new(start, self.previous_end(start)),
-                            TypeExpr::Generic { base, args },
-                        );
+                            TypeExpr::Generic {
+                                base,
+                                args: args.into_inner(),
+                            },
+                        ));
                     }
                     Frame::Tuple { opening, mut args } => {
-                        args.push(current);
+                        args.push(current.take());
                         if self.peek(TokenKind::Comma) {
                             self.bump();
                             frames.push(Frame::Tuple { opening, args });
@@ -4271,10 +4317,10 @@ impl<'a> CstAstLowerer<'a> {
                         if args.len() < 2 {
                             return Err(self.tuple_type_arity_error(&opening, closing));
                         }
-                        current = self.source_type(
+                        current.replace(self.source_type(
                             TextRange::new(opening.range.start, closing.range.end),
-                            TypeExpr::Tuple(args),
-                        );
+                            TypeExpr::Tuple(args.into_inner()),
+                        ));
                     }
                 }
             }
@@ -4440,6 +4486,7 @@ impl<'a> CstAstLowerer<'a> {
     fn parse_param(&mut self) -> ParseResult<Param> {
         // Canonical V1 form: `Type name`.
         let (is_state, ty) = self.parse_param_type_annotation()?;
+        let mut ty = PendingType::new(ty);
         if self.peek(TokenKind::Colon) {
             let token = self.bump();
             return Err(self.coded_error(
@@ -4459,7 +4506,7 @@ impl<'a> CstAstLowerer<'a> {
         );
         self.finish_node(node);
         Ok(Param {
-            ty: Some(ty),
+            ty: Some(ty.take()),
             name,
             is_state,
         })
@@ -5340,6 +5387,23 @@ mod tests {
         };
         assert!(matches!(elements[0].kind(), TypeExpr::Path(path) if path == "bool"));
         assert!(matches!(elements[1].kind(), TypeExpr::Path(path) if path == "string"));
+
+        std::thread::Builder::new()
+            .name("kotodama-type-error-drop".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let depth = FrontendBudget::v1().max_nesting().saturating_sub(3);
+                let nested = format!("{}int{}", "Option<".repeat(depth), ">".repeat(depth));
+                let source = format!("module TestModule {{ struct Wrapper {{ {nested} : }} }}");
+                let error = parse(&source).expect_err("a field name is required after its type");
+                assert!(
+                    error.contains("type-first"),
+                    "the later declaration-order error must survive iterative type cleanup: {error}"
+                );
+            })
+            .expect("spawn small-stack type cleanup test")
+            .join()
+            .expect("small-stack type cleanup test");
     }
     #[test]
     fn parses_list_literals_and_filtered_comprehensions() {

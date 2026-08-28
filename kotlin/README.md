@@ -549,6 +549,18 @@ The registry has exactly twelve IDs: `zk-ace-pq-authorization-v0`,
 `pq-masp-stark-v0`. Parsing is exact: aliases, retired IDs, case changes, and
 whitespace normalization fail closed.
 
+### Shared Java transaction fixtures
+
+Kotlin/JVM and the mirrored Java Android SDK validate the same Rust-owned
+transaction corpus. The authority is `../fixtures/norito_rpc`: Kotlin's
+`AndroidFixtureSupport` resolves the descriptors and all 27 canonical
+`.norito` payloads there, while the owner publication also writes the identical
+descriptor-and-blob set into `../java/iroha_android/src/test/resources` for
+Java's classpath-based tests. There is no Kotlin-local fixture copy and the
+generated Java resource directory is never a regeneration input. Rotate both
+consumers only through the two-root `norito-rpc-fixtures` owner workflow and
+finish with `norito-rpc-verify`.
+
 ---
 
 ## Build Instructions

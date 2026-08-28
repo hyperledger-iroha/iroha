@@ -563,7 +563,10 @@ def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
         in policy
     )
     assert 'pinned_arguments=("$subcommand" -j1)' in policy
+    assert 'pinned_arguments=("$subcommand" "$2")' in policy
+    assert "if ((!verus_job_bound_inserted)); then" in policy
     assert 'pinned_arguments+=("$@")' in policy
+    assert "run_cargo accepts only the pinned cargo verus verify action" in policy
     assert "local status" not in policy
     assert "locked_count != 1 || offline_count != 1" in policy
 

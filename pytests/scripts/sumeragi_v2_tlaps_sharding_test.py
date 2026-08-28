@@ -122,7 +122,7 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
             kind == "theorem"
             for _, kind, _, _ in checker._top_level_declarations(sources[recovery])
         )
-        == 146
+        == 145
     )
     boundary_continuation_theorems = tuple(
         name
@@ -170,7 +170,7 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
         + sources[continuation][len(continuation_header) : -len(footer)]
     )
     assert hashlib.sha256(combined_body.encode("utf-8")).hexdigest() == (
-        "b3c47ede1eb792052dc7519df34ee070186415793364178666269592bbe63505"
+        "c270e703ef8dcc6b95bff5ca1351f214dcb37c0c4bb71e4422623dfefc1c1bac"
     )
 
     errors, providers = checker._async_liveness_shard_contract(sources)
@@ -204,8 +204,8 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
     sources[recovery] = sources[recovery].replace(
         footer,
         "".join(
-                f"THEOREM ReviewedRecoveryCeilingMutation{index} == TRUE\nBY PTL\n\n"
-                for index in range(5)
+            f"THEOREM ReviewedRecoveryCeilingMutation{index} == TRUE\nBY PTL\n\n"
+            for index in range(6)
         ) + footer,
         1,
     )
@@ -362,7 +362,7 @@ def test_global_mechanical_body_reconstruction_is_exact() -> None:
         checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256
     )
     assert checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 == (
-        "67f49ac8eb83b4227351562d23a614559c385c7540e547dee0d97d51f112f62a"
+        "f6fb4c0250f95c45d884ce38b56344c8f988655eb841835b3db76226d6440432"
     )
 
 

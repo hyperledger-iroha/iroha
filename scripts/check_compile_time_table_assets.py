@@ -40,6 +40,7 @@ STRUCTURED_TABLE_HASH_SCOPE = (
 CURRENT_INCLUDE_CONSUMER_SCOPE = "current Rust compile-time include consumer"
 CURRENT_INCLUDE_CONSUMER_MANIFESTS = frozenset(
     {
+        Path("crates/ivm/src/assets/iso20022_schema_v1/manifest.json"),
         Path("crates/iroha_cli/src/soracloud/assets/v1/template_manifest.json"),
         Path("crates/iroha_cli/src/soracloud/templates/v1/static/manifest.json"),
     }

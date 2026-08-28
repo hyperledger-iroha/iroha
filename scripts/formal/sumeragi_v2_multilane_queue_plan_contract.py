@@ -1,7 +1,440 @@
 #!/usr/bin/env python3
-"""Static QueuePlan startup-replay bindings for the multilane model gate."""
+"""Static QueuePlan bindings for the multilane model gate."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any
+
+
+def validate_queue_plan_autonomous_only_contract(
+    root: Path,
+    formal_dir: Path,
+    models: Any,
+    errors: list[str],
+    rust_binding_item: Any,
+    regular_file: Any,
+    tla_declaration_template: str,
+) -> None:
+    """Bind QueuePlan execution to the autonomous lane/merge corridor only."""
+
+    if not isinstance(models, list):
+        return
+    queue_models = [
+        model
+        for model in models
+        if isinstance(model, dict)
+        and model.get("module") == QUEUE_PLAN_STARTUP_REPLAY_MODULE
+    ]
+    if len(queue_models) != 1:
+        errors.append(
+            "QueuePlan autonomous-only source contract requires exactly one "
+            f"{QUEUE_PLAN_STARTUP_REPLAY_MODULE} model"
+        )
+        return
+    production_symbols = queue_models[0].get("production_symbols")
+    if not isinstance(production_symbols, list):
+        return
+
+    binding_items: dict[tuple[str, str, str], str] = {}
+    for relative, kind, symbol, expected_tokens in QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS:
+        matches = [
+            binding
+            for binding in production_symbols
+            if isinstance(binding, dict)
+            and binding.get("path") == relative
+            and binding.get("kind") == kind
+            and binding.get("symbol") == symbol
+        ]
+        if len(matches) != 1:
+            errors.append(
+                f"{QUEUE_PLAN_STARTUP_REPLAY_MODULE}: autonomous-only binding "
+                f"{relative}!{symbol} must occur exactly once, found {len(matches)}"
+            )
+        else:
+            actual_tokens = matches[0].get("required_tokens")
+            if (
+                not isinstance(actual_tokens, list)
+                or tuple(actual_tokens) != expected_tokens
+            ):
+                errors.append(
+                    f"{QUEUE_PLAN_STARTUP_REPLAY_MODULE}: autonomous-only "
+                    f"tokens changed for {relative}!{symbol}"
+                )
+
+        item = rust_binding_item(
+            root,
+            relative,
+            kind,
+            symbol,
+            "QueuePlan autonomous-only production binding",
+            errors,
+        )
+        if item is None:
+            continue
+        binding_items[(relative, kind, symbol)] = item
+        for token in expected_tokens:
+            if token not in item:
+                errors.append(
+                    f"{root / relative}: QueuePlan autonomous-only item {symbol} "
+                    f"is missing source-bound token {token!r}"
+                )
+
+    for relative, kind, symbol, tokens in (
+        QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS
+    ):
+        item = binding_items.get((relative, kind, symbol))
+        if item is None:
+            item = rust_binding_item(
+                root,
+                relative,
+                kind,
+                symbol,
+                "ordered QueuePlan autonomous-only production binding",
+                errors,
+            )
+        if item is None:
+            continue
+        cursor = -1
+        for token in tokens:
+            position = item.find(token, cursor + 1)
+            if position < 0:
+                errors.append(
+                    f"{root / relative}: ordered QueuePlan autonomous-only "
+                    f"item {symbol} is missing or reorders token {token!r}"
+                )
+                break
+            cursor = position
+
+    for relative, symbol, tokens in QUEUE_PLAN_AUTONOMOUS_ONLY_TEST_BINDINGS:
+        item = rust_binding_item(
+            root,
+            relative,
+            "fn",
+            symbol,
+            "QueuePlan autonomous-only static negative-control test",
+            errors,
+        )
+        if item is None:
+            continue
+        for token in tokens:
+            if token not in item:
+                errors.append(
+                    f"{root / relative}: QueuePlan autonomous-only test {symbol} "
+                    f"is missing negative-control token {token!r}"
+                )
+
+    module_path = formal_dir / f"{QUEUE_PLAN_STARTUP_REPLAY_MODULE}.tla"
+    if regular_file(module_path, "QueuePlan autonomous-only TLA+ module", errors):
+        source = module_path.read_text(encoding="utf-8")
+        cursor = -1
+        for token in QUEUE_PLAN_AUTONOMOUS_ONLY_TLA_ORDERED_TOKENS:
+            position = source.find(token, cursor + 1)
+            if position < 0:
+                errors.append(
+                    f"{module_path}: QueuePlan autonomous-only TLA token is "
+                    f"missing or reordered: {token!r}"
+                )
+                break
+            cursor = position
+        invariant_re = re.compile(
+            tla_declaration_template.format(
+                symbol=re.escape(QUEUE_PLAN_AUTONOMOUS_ONLY_INVARIANT)
+            )
+        )
+        if invariant_re.search(source) is None:
+            errors.append(
+                f"{module_path}: missing autonomous-only invariant "
+                f"{QUEUE_PLAN_AUTONOMOUS_ONLY_INVARIANT}"
+            )
+
+    positive_path = formal_dir / queue_models[0].get("positive_config", "")
+    if regular_file(
+        positive_path, "QueuePlan autonomous-only positive TLC config", errors
+    ):
+        marker = f"INVARIANT {QUEUE_PLAN_AUTONOMOUS_ONLY_INVARIANT}\n"
+        if positive_path.read_text(encoding="utf-8").count(marker) != 1:
+            errors.append(
+                f"{positive_path}: autonomous-only invariant must be checked "
+                "exactly once"
+            )
 
 QUEUE_PLAN_STARTUP_REPLAY_MODULE = "SumeragiV2QueuePlanAdmissionRegistry"
+
+QUEUE_PLAN_AUTONOMOUS_ONLY_INVARIANT = "MLQueuePlanExecutionAutonomousOnly"
+QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = (
+    (
+        "crates/iroha_core/src/block.rs",
+        "fn",
+        "external_queue_plan_synced_entrypoint_index",
+        (
+            "block.external_entrypoints_cloned()",
+            ".position(|entrypoint|",
+            "entrypoint.admission_intent()",
+            "TransactionAdmissionIntent::QueuePlanSynced",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/block.rs",
+        "fn",
+        "validate_staged_execution_controls",
+        (
+            "bundle.queue_plan_admissions()",
+            "if let Some(index) = external_queue_plan_synced_entrypoint_index(block)",
+            "must use autonomous lane ownership and a certified merge carrier",
+            "reference.is_some() && !native_queue_plan_admissions.is_empty()",
+            "native_queue_plan_admissions != state_block.staged_queue_plan_admissions()",
+            "staged_merge_entry",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_candidate.rs",
+        "method",
+        "V2CandidateAssembler::snapshot_routable_candidates",
+        (
+            "let queue_plan_synced =",
+            "TransactionAdmissionIntent::QueuePlanSynced",
+            "binding.validate_for_request(",
+            "report.routable = report.routable.saturating_add(1)",
+            "if queue_plan_synced",
+            "report.work_deferred = report.work_deferred.saturating_add(1)",
+            "records.push(CandidateRecord {",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::bounded_pending_snapshot",
+        (
+            "let live_reservations = self.lane_reservations.lock().live_hashes()",
+            "let mut live_reservation_fifo_cut = None",
+            "for hash in &live_reservations",
+            "let order = self.fifo_order_by_hash.get(hash)?",
+            "live_reservation_fifo_cut.map_or(order.value().ordinal",
+            "if live_reservations.contains(hash) || global_owners.contains_key(hash)",
+            "let Some(fifo_order) = self.fifo_order_by_hash.get(hash)",
+            "live_reservation_fifo_cut.is_some_and(|cut| fifo_order.value().ordinal >= cut)",
+            "blocked_by_fifo_predecessor = true",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/lane_consensus.rs",
+        "fn",
+        "validate_lane_executable_payload_body",
+        (
+            "entrypoints.is_empty()",
+            "entrypoints.iter().any(|entrypoint|",
+            "entrypoint.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced",
+            "LaneAutonomousArtifactError::InvalidAdmissionIntent",
+            "let encoded_payload_body_len = Encode::encode(&(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "method",
+        "&mut V2LaneWorkAdapter::prepare",
+        (
+            "if !candidates.is_empty()",
+            "let broad_autonomous_route_exclusion =",
+            "proposal_lookahead_enabled(&nexus, self.context.height)",
+            "let is_queue_plan_synced =",
+            "== iroha_data_model::transaction::TransactionAdmissionIntent::",
+            "QueuePlanSynced;",
+            "(is_queue_plan_synced",
+            "|| (broad_autonomous_route_exclusion",
+            ".contains_key(&(route.lane_id, route.dataspace_id))",
+            ".then_some(index)",
+            "CandidateWorkUnavailable::new(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "method",
+        "V2LaneWorkAdapter::bind_locked_global_body_from_origin",
+        (
+            "!origin_matches || block.header().height().get() != self.context.height",
+            "if crate::block::external_queue_plan_synced_entrypoint_index(block).is_some()",
+            "let canonical_recovery = canonical_v2_lane_payload_matches_kura(",
+            "retain_pending_certified_merge_entry_for_locked_carrier(",
+            "retire_autonomous_payload_batch(&losing_pending)",
+        ),
+    ),
+)
+
+QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS = (
+    (
+        "crates/iroha_core/src/block.rs",
+        "fn",
+        "validate_staged_execution_controls",
+        (
+            "let native_queue_plan_admissions =",
+            "external_queue_plan_synced_entrypoint_index(block)",
+            "return Err(Self::execution_context_error",
+            "reference.is_some() && !native_queue_plan_admissions.is_empty()",
+            "native_queue_plan_admissions != state_block.staged_queue_plan_admissions()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_candidate.rs",
+        "method",
+        "V2CandidateAssembler::snapshot_routable_candidates",
+        (
+            "let queue_plan_synced =",
+            "binding.validate_for_request(",
+            "report.routable = report.routable.saturating_add(1)",
+            "if queue_plan_synced",
+            "report.work_deferred = report.work_deferred.saturating_add(1)",
+            "break;",
+            "records.push(CandidateRecord {",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::bounded_pending_snapshot",
+        (
+            "let live_reservations = self.lane_reservations.lock().live_hashes()",
+            "let mut live_reservation_fifo_cut = None",
+            "for hash in &live_reservations",
+            "let order = self.fifo_order_by_hash.get(hash)?",
+            "live_reservation_fifo_cut = Some(",
+            "let mut global_owners = self.global_selection_owners.lock()",
+            "if live_reservations.contains(hash) || global_owners.contains_key(hash)",
+            "let Some(fifo_order) = self.fifo_order_by_hash.get(hash)",
+            "live_reservation_fifo_cut.is_some_and(|cut| fifo_order.value().ordinal >= cut)",
+            "if self.durability_transition_active(hash)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/lane_consensus.rs",
+        "fn",
+        "validate_lane_executable_payload_body",
+        (
+            "if entrypoints.is_empty()",
+            "if entrypoints.iter().any(|entrypoint|",
+            "entrypoint.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced",
+            "return Err(LaneAutonomousArtifactError::InvalidAdmissionIntent)",
+            "let encoded_payload_body_len = Encode::encode(&(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "method",
+        "&mut V2LaneWorkAdapter::prepare",
+        (
+            "let broad_autonomous_route_exclusion =",
+            "let is_queue_plan_synced =",
+            "(is_queue_plan_synced",
+            "|| (broad_autonomous_route_exclusion",
+            ".then_some(index)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "method",
+        "V2LaneWorkAdapter::bind_locked_global_body_from_origin",
+        (
+            "if !origin_matches || block.header().height().get() != self.context.height",
+            "external_queue_plan_synced_entrypoint_index(block).is_some()",
+            "return V2LaneIngressOutcome::Rejected;",
+            "let canonical_recovery = canonical_v2_lane_payload_matches_kura(",
+            "retain_pending_certified_merge_entry_for_locked_carrier(",
+            "retire_autonomous_payload_batch(&losing_pending)",
+        ),
+    ),
+)
+
+QUEUE_PLAN_AUTONOMOUS_ONLY_TEST_BINDINGS = (
+    (
+        "crates/iroha_core/src/sumeragi/v2_candidate.rs",
+        "queue_plan_intent_remains_an_autonomous_fifo_barrier_after_exact_binding",
+        (
+            "TransactionAdmissionIntent::QueuePlanSynced",
+            "vec![queue_plan.clone(), follower.clone()]",
+            "install_queue_plan_pending_binding_for_test(&binding)",
+            "assert!(bound.is_empty())",
+            "assert_eq!(bound_report.work_deferred, 1)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/global_guard_claim_conflict_tests.rs",
+        "globally_bound_absent_registry_blocks_selection_and_preserves_exact_fifo",
+        (
+            "reserve_transactions_for_lane(",
+            "assert_eq!(fixture.queue.fifo_snapshot_for_test(), vec![follower_hash])",
+            "assert!(predecessor_order < follower_order)",
+            ".bounded_pending_snapshot(&fixture.state.view(), nonzero!(2_usize))",
+            "assert!(fixture.queue.global_selection_owners.lock().is_empty())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/lane_consensus.rs",
+        "autonomous_payload_validator_rejects_ordinary_entrypoint",
+        (
+            "let (network_id, epoch, mut payload) = autonomous_payload_fixture(&keypairs)",
+            "payload.entrypoints[0] = TransactionEntrypoint::External(",
+            ".sign(transaction_key.private_key())",
+            "payload.validate(network_id, epoch)",
+            "Err(LaneAutonomousArtifactError::InvalidAdmissionIntent)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "candidate_provider_anchors_pending_autonomous_payload_and_defers_queue_conflict",
+        (
+            "planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0)",
+            "let conflicting = CandidateDescriptor::new(&accepted, &routing_plan)",
+            ".prepare(&context, 0, &[conflicting])",
+            ".expect_err(\"ordinary ownership cannot overlap a live lane reservation\")",
+            "assert_eq!(unavailable.indices(), &BTreeSet::from([0]))",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work/autonomous_retirement_and_merge_tests.rs",
+        "assert_locked_external_queue_plan_body_rejects_before_retiring_autonomous_owner",
+        (
+            "TransactionAdmissionIntent::QueuePlanSynced",
+            "mark_global_body_locked_for_block(&mut adapter, &forbidden)",
+            "V2LaneIngressOutcome::Rejected",
+            "assert_eq!(adapter.pending_autonomous_anchor_payloads, pending_before)",
+            "assert_eq!(queue.live_lane_reservations(), reservations_before)",
+            "assert_eq!(queue.fifo_snapshot_for_test(), fifo_before)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/block.rs",
+        "exact_parent_queue_plan_admission_rejects_ordinary_external_execution",
+        (
+            "TransactionAdmissionIntent::QueuePlanSynced",
+            "validate_queue_plan_ttl_fixture(&fixture)",
+            "QueuePlanSynced external execution must be rejected before voting",
+            "assert_external_queue_plan_role_rejected(error.as_ref())",
+            ".contains_key(&fixture.signed_hash)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/block.rs",
+        "assert_external_queue_plan_role_rejected",
+        (
+            "BlockValidationError::ExecutionContextInvalid(message)",
+            'message.contains("must use autonomous lane ownership")',
+            "unexpected external QueuePlan rejection",
+        ),
+    ),
+)
+
+QUEUE_PLAN_AUTONOMOUS_ONLY_TLA_ORDERED_TOKENS = (
+    'ExecutionRoles == {"None", "Autonomous", "Ordinary"}',
+    'executionRole = "None"',
+    "executionRole' =",
+    'THEN "Ordinary"',
+    'ELSE "Autonomous"',
+    "MLQueuePlanExecutionAutonomousOnly ==",
+    'executedBinding # "None" => executionRole = "Autonomous"',
+    "/\\ MLQueuePlanExecutionAutonomousOnly",
+)
+
 QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
     (
         "crates/iroha_core/src/queue/journal.rs",
@@ -216,10 +649,25 @@ QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
         "method",
         "Queue::lane_reservation_reconciliation_snapshot",
         (
+            "self.transaction_selection_durability_faulted()",
             "self.lane_reservation_transition_lock.lock()",
             "self.push_remove_lock.lock()",
+            "self.lane_reservation_journal.lock().is_none()",
+            "LaneQueueReservationError::JournalNotInstalled",
+            "self.lane_reservation_reconciliation_snapshot_locked()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::lane_reservation_reconciliation_snapshot_locked",
+        (
             "let store = self.lane_reservations.lock()",
             "store.live_by_entrypoint.values()",
+            "self.validate_live_reservation_against_queue(record)?",
+            "LaneQueueReservationError::ReconciliationFifoOrderMismatch",
+            "LaneQueueReservationError::ReconciliationMissingDurableClaim",
+            "reconciliation_record_from_durable_claim",
             "store.commit_barriers.clone()",
             "store.release_barriers.clone()",
             "store.completed_releases.clone()",
@@ -231,7 +679,11 @@ QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
             "commit_barriers.sort_by_key",
             "prepared_release_barriers.sort_by_key",
             "completed_releases.sort_by_key",
-            "LaneQueueReservationReconciliationSnapshotV1 {",
+            "let ordered_owner_phases = self.lane_reservation_recovery_phases_locked()?;",
+            "ordered_records.sort_by_key",
+            "LaneQueueReservationError::ReconciliationDuplicateFifoOrdinal",
+            "MAX_LANE_EXECUTABLE_ENTRYPOINTS",
+            "Ok(LaneQueueReservationReconciliationSnapshotV1 {",
         ),
     ),
     (
@@ -411,11 +863,22 @@ QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
         "method",
         "Queue::lane_reservation_reconciliation_snapshot",
         (
+            "if self.transaction_selection_durability_faulted()",
             "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();",
             "let _queue_guard = self.push_remove_lock.lock();",
+            "if self.transaction_selection_durability_faulted()",
             "if self.lane_reservation_journal.lock().is_none()",
+            "self.lane_reservation_reconciliation_snapshot_locked()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::lane_reservation_reconciliation_snapshot_locked",
+        (
             "let store = self.lane_reservations.lock();",
             "for record in store.live_by_entrypoint.values() {",
+            "self.validate_live_reservation_against_queue(record)?;",
             "let mut commit_barriers = store.commit_barriers.clone();",
             "commit_barriers.sort_by_key",
             "let mut prepared_release_barriers = store.release_barriers.clone();",
@@ -423,6 +886,7 @@ QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
             "let mut completed_releases = store.completed_releases.clone();",
             "completed_releases.sort_by_key",
             "drop(store);",
+            "let ordered_owner_phases = self.lane_reservation_recovery_phases_locked()?;",
             "ordered_records",
             "Ok(LaneQueueReservationReconciliationSnapshotV1 {",
         ),

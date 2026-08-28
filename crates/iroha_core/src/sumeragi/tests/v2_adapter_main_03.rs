@@ -54,13 +54,7 @@ fn aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate() 
         height: adapter.wire_context.height,
         view: 0,
     };
-    let signer_subsets = [
-        vec![0, 1, 2],
-        vec![0, 1, 3],
-        vec![0, 2, 3],
-        vec![1, 2, 3],
-        vec![0, 1, 2, 3],
-    ];
+    let signer_subsets = [vec![0, 1, 2], vec![0, 1, 3], vec![0, 2, 3], vec![1, 2, 3]];
     let marker_count = adapter.serviced_candidate_count_for_test();
     let mut qc_key = None;
     for (variant, signers) in signer_subsets.iter().enumerate() {

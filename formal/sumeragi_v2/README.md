@@ -581,7 +581,8 @@ height-context state are not migrated in place.
   recreation, exact pristine/post-block-pre-vote/finalized carrier metadata,
   at-most-once canonical application, exact global QueuePlan CAS,
   certificate-before-acceptance durability, Exact-gated queue eligibility,
-  immutable admission tombstones, and cancellation. The closure-ledger
+  autonomous-only QueuePlan execution, immutable admission tombstones, and
+  cancellation. The closure-ledger
   predicates additionally cover atomic route publication, quorum-bound drain
   certificates, exact-incarnation retirement, V4 Native source claims,
   contiguous active routes, exact grouped application, authenticated
@@ -676,8 +677,12 @@ height-context state are not migrated in place.
   bytes at metadata mint and State commit.
   The QueuePlan binding covers the shared V1 binding and coordinator quorum,
   Kura-before-wake-before-WSV public acceptance, immutable registry CAS,
-  Exact-gated autonomous ownership, restart/TTL retention, and exact
-  authenticated loser cleanup.
+  Exact-gated autonomous ownership, a strict candidate FIFO cut, unconditional
+  work-provider exclusion even for one route, common external-entrypoint
+  rejection, locked-body rejection before retention or retirement, restart/TTL
+  retention, and exact authenticated loser cleanup. The certificate remains
+  proposal-native control work; the transaction executes only in an
+  authenticated autonomous payload and certified merge.
   It also binds the bounded autonomous stage projection, its durable-stage
   reducer, and the data-model stage geometry/order validation; diagnostics
   cannot advance beyond revalidated evidence or authorize consensus state.
@@ -735,12 +740,12 @@ height-context state are not migrated in place.
   | --- | --- | ---: |
   | autoscale lifecycle | `multilane_autoscale_lifecycle_fixed.cfg` | 8 |
   | Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 8 |
-  | autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 10 |
+  | autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 12 |
   | QueuePlan admission registry | `multilane_queue_plan_admission_registry_fixed.cfg` | 8 |
   | Kura replica retention | `kura_replica_retention_fixed.cfg` | 8 |
   | in-flight carrier (layout-only) | `inflight_first_release_fixed.cfg` | 18 |
 
-  Twenty-one runner-contract negative controls reject tool-version or checksum
+  Twenty-two runner-contract negative controls reject tool-version or checksum
   drift, source-binding bypass, unauthenticated workspace-manifest authority,
   invalid workspace-digest grammar, omission or substitution of either
   source-manifest evidence field, a self-comparing drift check, reduced
@@ -1038,7 +1043,16 @@ branches while evaluating `ENABLED`. The structural checker pins the four
 frames, all 18 action classifications, both quantifier inventories, the typed
 claim, and the exact dedicated theorem inventory. The finite TLC specs and
 deductive specs share the same `AsyncAllVars` and `AsyncFairnessAt`; no
-TLC-only fairness relation exists. This promotes the fair-action refinement
+TLC-only fairness relation exists. Finite Core configurations replace the
+unbounded generation operators and model configuration and project Byzantine
+proposal justifications to the no-certificate pair plus exact pairs already
+authenticated in `installedTCs`. The production operator remains the complete
+timeout-certificate/PrepareQC Cartesian product. The liveness configuration
+also replaces the exact `(2 ^ 64) - 1` physical-ingress ordinal ceiling with a
+finite ceiling above its trace budget so TLC never evaluates the production
+`u64` endpoint through its signed-64-bit implementation. These are
+counterexample-search projections only and cannot change a proof-ledger
+status. This promotes the fair-action refinement
 entry. Independently, the complete post-Decision timeout-frontier induction
 described below is also `tlaps_proved`, as is the exact durable Commit-Decision
 crash/restart/replay lifecycle. Runner scheduler preservation and the dependent
@@ -1388,13 +1402,17 @@ has one success path and always requires a detached OpenSSH SSHSIG over the
 exact canonical `receipt.json` bytes. The finalizer verifies that signature
 against the pinned verifier, namespace, one-entry Ed25519 allowed-signers
 policy, and revocation input before it can publish a read-only release bundle.
+That private bundle contains its own exact `tlapm-projection/` directory: the
+finalizer copies the two receipt-authenticated modules as mode `0444` files
+under a mode `0555` directory, binds them into the terminal attestation, and
+the independent verifier rederives their signed tool records.
 No inspection mode, optional release mode, unsigned acceptance, or custom
 cryptography is retained. Until the external signing ceremony completes, no
 formal registry or proof status may be promoted from the request.
 
 The operator-facing conditional guarantee, liveness snapshot, watchdog
 classifications, and executable PR/release commands are documented in
-[`../../source/sumeragi_v2_liveness.md`](../../source/sumeragi_v2_liveness.md).
+[`../../specs/sumeragi_v2_liveness.md`](../../specs/sumeragi_v2_liveness.md).
 
 The release gate uses TLAPM commit
 `3ab43c7ff31db4ced850619d4746fa4c841a7681`, the immutable TLA2Tools 1.7.4
@@ -1725,7 +1743,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`331123d12b08027a9ac0ed0157ed84007eac5a8659b1995bf4c77c3eedb231c2`.
+`2858dd2206f1374c044fa0b3c0d3f02a02cb7b2190d65540e13ce34ee35c6470`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1929,7 +1947,7 @@ acknowledgment; the protected helper then prunes disposable runtime state and
 publishes the exact retained result/inventory. The external bootstrap
 authenticates those records before a separate no-clobber completion marker. The complete operator
 contract is documented in
-[`../../source/sumeragi_v2_liveness.md`](../../source/sumeragi_v2_liveness.md).
+[`../../specs/sumeragi_v2_liveness.md`](../../specs/sumeragi_v2_liveness.md).
 
 This authenticates the signed candidate and runner relative to the operator's
 protected inputs, but is not remote host attestation. The host image,

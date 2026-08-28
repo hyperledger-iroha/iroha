@@ -83,7 +83,7 @@ pub struct PrivacyReleaseOrchardNetworkActionV1 {
 /// One canonical verification-only revised-Jindo action.
 #[derive(Debug)]
 pub struct PrivacyReleaseJindoNetworkActionV1 {
-    /// Ordinary production transaction carrying exactly one revised-Jindo proof.
+    /// QueuePlan-synchronized production transaction carrying exactly one revised-Jindo proof.
     pub transaction: SignedTransaction,
 }
 /// One canonical verification-only Vega presentation and its issuer revision.

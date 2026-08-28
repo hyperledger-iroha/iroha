@@ -2771,7 +2771,7 @@ public final class HttpClientTransport implements IrohaClient {
       throw new IllegalStateException(
           errorContext + " request failed with status " + response.statusCode());
     }
-    requireExactHeader(response.headers(), "Content-Type", APPLICATION_JSON, errorContext);
+    requireUnambiguousApplicationJsonHeader(response.headers(), errorContext);
     if (body.length == 0) {
       throw new IllegalStateException(errorContext + " response must not be empty");
     }

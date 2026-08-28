@@ -112,6 +112,22 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering as AtomicOrdering},
     time::Duration,
 };
+
+/// Return the first ordinary external entrypoint which illegally claims the
+/// autonomous-only QueuePlan-synchronized admission intent.
+///
+/// QueuePlan-synchronized payloads enter a block only through authenticated
+/// autonomous lane ownership and a certified merge carrier. Keeping this
+/// predicate outside the block-validation state machine lets locked/recovered
+/// body ingress reject the same role conflict before it persists ownership or
+/// retires a competing autonomous reservation.
+pub(crate) fn external_queue_plan_synced_entrypoint_index(block: &SignedBlock) -> Option<usize> {
+    block.external_entrypoints_cloned().position(|entrypoint| {
+        entrypoint.admission_intent()
+            == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    })
+}
+
 fn ensure_confidential_features_match(
     expected: Option<ConfidentialFeatureDigest>,
     actual: Option<ConfidentialFeatureDigest>,
@@ -7186,6 +7202,11 @@ pub(crate) mod valid {
             let native_queue_plan_admissions = execution_context
                 .map(|bundle| bundle.queue_plan_admissions())
                 .unwrap_or_default();
+            if let Some(index) = external_queue_plan_synced_entrypoint_index(block) {
+                return Err(Self::execution_context_error(format!(
+                    "QueuePlanSynced external entrypoint at index {index} must use autonomous lane ownership and a certified merge carrier"
+                )));
+            }
             if reference.is_some() && !native_queue_plan_admissions.is_empty() {
                 return Err(Self::execution_context_error(
                     "a carrier cannot mix proposal-native QueuePlan controls with a certified merge entry",
@@ -7239,55 +7260,6 @@ pub(crate) mod valid {
                         "QueuePlan admission intent is not satisfied: {error}"
                     ))
                 })?;
-            if let Some(bundle) = block.execution_context() {
-                for (index, (entrypoint, context)) in block
-                    .external_entrypoints_cloned()
-                    .zip(bundle.external.iter())
-                    .enumerate()
-                {
-                    if entrypoint.admission_intent()
-                        != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-                    {
-                        continue;
-                    }
-                    let binding = state_block
-                        .queue_plan_pending_binding_for_entrypoint(entrypoint.hash())
-                        .map_err(|error| {
-                            Self::execution_context_error(format!(
-                                "QueuePlan binding lookup failed at index {index}: {error}"
-                            ))
-                        })?
-                        .ok_or_else(|| {
-                            Self::execution_context_error(format!(
-                                "QueuePlan entrypoint at index {index} has no pending immutable binding"
-                            ))
-                        })?;
-                    let routing_plan = binding.routing_plan().map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "QueuePlan binding routing plan is invalid at index {index}: {error}"
-                        ))
-                    })?;
-                    binding
-                        .validate_for_request(state_block.network_id(), &entrypoint, &routing_plan)
-                        .map_err(|error| {
-                            Self::execution_context_error(format!(
-                                "QueuePlan entrypoint differs from its binding at index {index}: {error}"
-                            ))
-                        })?;
-                    let coordinator = routing_plan.coordinator_route();
-                    if context.entrypoint_hash != entrypoint.hash()
-                        || context.lane_id != coordinator.lane_id
-                        || context.dataspace_id != coordinator.dataspace_id
-                        || context.routing_plan_digest != routing_plan.digest()
-                        || context.routing_plan_legs
-                            != crate::queue::execution_context_legs_for_routing_plan(&routing_plan)
-                    {
-                        return Err(Self::execution_context_error(format!(
-                            "QueuePlan execution context differs from its immutable binding at index {index}"
-                        )));
-                    }
-                }
-            }
             Ok(())
         }
         fn validate_staged_merge_execution_authorization(
@@ -7375,6 +7347,15 @@ pub(crate) mod valid {
                         timings.total_ms = to_ms(total_start.elapsed());
                     }
                 };
+            if let Some(index) = external_queue_plan_synced_entrypoint_index(&block) {
+                let stateless_elapsed = stateless_start.elapsed();
+                record_timings(&mut timings, stateless_elapsed, None);
+                let error = Self::execution_context_error(format!(
+                    "QueuePlanSynced external entrypoint at index {index} must use autonomous lane ownership and a certified merge carrier"
+                ));
+                emit_rejection(&block, &error);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
             let static_state_start = Instant::now();
             let static_data = {
                 let view = state.query_view();
@@ -7655,10 +7636,14 @@ pub(crate) mod valid {
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
+            validation_context: SumeragiV2ValidationContext,
             timings: &mut ValidationTimings,
             mut send_events: F,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
-            let validation_profile = Self::sumeragi_v2_fixture_profile(&block);
+            let validation_profile = ConsensusValidationProfile::SumeragiV2 {
+                block_cadence: Duration::from_millis(1),
+                context: validation_context,
+            };
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
@@ -16024,16 +16009,23 @@ pub(crate) mod valid {
             };
         }
         macro_rules! setup_stateless_cache_state {
-            ($kura:ident, $state:ident, $leader_private:ident, $topology:ident) => {
+            ($kura:ident, $state:ident, $leader_private:ident, $topology:ident, $validator_keys:ident) => {
                 let $kura = Arc::new(Kura::blank_kura_for_testing());
                 let query = LiveQueryStore::start_test();
-                let mut $state = State::new(World::new(), Arc::clone(&$kura), query);
+                let $validator_keys = core::iter::repeat_with(|| {
+                    crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+                })
+                .take(4)
+                .collect::<Vec<_>>();
+                let $topology = test_topology_with_keys(&$validator_keys);
+                let $leader_private = $validator_keys[0].private_key().clone();
+                let mut world = World::new();
+                insert_active_consensus_keys(&mut world, &$validator_keys);
+                let mut $state = State::new_for_testing(world, Arc::clone(&$kura), query);
+                install_test_lane_manifests_for_keypairs(&$state, &$validator_keys);
                 let mut pipeline = $state.view().pipeline().clone();
                 pipeline.stateless_cache_cap = 64;
                 $state.set_pipeline(pipeline);
-                let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-                let (leader_public, $leader_private) = leader.into_parts();
-                let $topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
                 let _ = commit_block_at_height(
                     &$state,
                     &$kura,
@@ -16044,6 +16036,124 @@ pub(crate) mod valid {
                     0,
                 );
             };
+        }
+        fn authenticated_permissioned_successor_context(
+            state: &State,
+            validator_keys: &[KeyPair],
+        ) -> iroha_data_model::block::consensus_v2::HeightContext {
+            use iroha_data_model::block::consensus_v2 as wire;
+
+            let parent = state
+                .view()
+                .latest_block()
+                .expect("authenticated cache fixture has a committed parent");
+            assert_eq!(parent.header().height().get(), 1);
+            let mut ordered_validator_keys = validator_keys.iter().collect::<Vec<_>>();
+            ordered_validator_keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+            let roster = ordered_validator_keys
+                .iter()
+                .map(|key| wire::ValidatorPower {
+                    validator: PeerId::new(key.public_key().clone()),
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+            let genesis_parameters = wire::SumeragiV2GenesisContextParameters::recommended();
+            let parent_context = wire::HeightContext {
+                network_id: state.network_id,
+                protocol_version: wire::PROTOCOL_VERSION,
+                height: 1,
+                epoch: 0,
+                epoch_end_height: u64::MAX,
+                next_epoch_snapshot: None,
+                mode: wire::ConsensusMode::Permissioned,
+                parent_commit_qc: None,
+                snapshot_bootstrap: None,
+                quorum: wire::DualQuorum::from_roster(&roster)
+                    .expect("cache fixture has canonical equal-vote quorum"),
+                roster,
+                nexus_amx_context_hash: Hash::new(b"cache fixture parent nexus context"),
+                execution_policy_hash: Hash::prehashed(genesis_parameters.execution_policy_hash),
+                da_layout: genesis_parameters.da_layout,
+                leader_seed: [0x41; 32],
+            };
+            parent_context
+                .validate()
+                .expect("cache fixture parent height context is canonical");
+            let subject = wire::BlockSubject {
+                parent_block_hash: parent.header().prev_block_hash(),
+                block_hash: parent.hash(),
+                payload_hash: parent
+                    .canonical_proposal_wire_hash()
+                    .expect("cache fixture parent has canonical proposal bytes"),
+            };
+            let round = wire::ConsensusRound {
+                context_id: parent_context.id(),
+                height: parent_context.height,
+                view: parent.header().view_change_index(),
+            };
+            let parent_wire = parent
+                .encode_wire()
+                .expect("cache fixture parent has canonical executed bytes");
+            let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"cache fixture parent state"),
+                Hash::new(b"cache fixture post state"),
+                Hash::new(b"cache fixture ordinary writes"),
+                u64::try_from(parent_wire.len()).expect("cache fixture parent length fits u64"),
+                parent
+                    .executed_block_wire_hash()
+                    .expect("cache fixture parent has a result-bearing wire hash"),
+            );
+            let vote = wire::Vote {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Commit,
+                subject,
+                execution_commitment,
+                signer: 0,
+                signature: Vec::new(),
+            };
+            let preimage = vote.signature_preimage();
+            let shares = ordered_validator_keys[..3]
+                .iter()
+                .map(|key| {
+                    Signature::new(key.private_key(), &preimage)
+                        .payload()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            let parent_qc = wire::QuorumCertificate {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Commit,
+                subject,
+                execution_commitment,
+                signers: vec![0, 1, 2],
+                aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                    &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                )
+                .expect("aggregate cache fixture parent CommitQC"),
+            };
+            let validator_set_pops = ordered_validator_keys
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("cache fixture validator PoP")
+                })
+                .collect::<Vec<_>>();
+            let parent_artifact = wire::finality::V2FinalityArtifact::new(
+                parent_context,
+                subject,
+                parent_qc,
+                validator_set_pops,
+            );
+            let verified_parent = VerifiedV2FinalityArtifact::verify(parent_artifact)
+                .expect("cache fixture parent finality is genuinely signed");
+            crate::sumeragi::v2_context::build_successor_height_context(
+                verified_parent.artifact(),
+                Hash::new(b"cache fixture successor nexus context"),
+                None,
+            )
+            .expect("cache fixture has a canonical successor height context")
         }
         macro_rules! setup_cacheable_transaction {
             ($state:ident, $tx_handle:ident, $tx_time_source:ident, $tx_hash:ident, $accepted:ident) => {
@@ -16064,10 +16174,45 @@ pub(crate) mod valid {
         macro_rules! build_cacheable_block {
             ($state:ident, $leader_private:ident, $accepted:ident, $block_handle:ident, $block_time_source:ident, $signed_block:ident) => {
                 let ($block_handle, $block_time_source) =
-                    TimeSource::new_mock(Duration::from_millis(10));
+                    TimeSource::new_mock(Duration::from_millis(1));
+                let entrypoint_hash = $accepted.hash_as_entrypoint();
                 let builder =
                     BlockBuilder::new_with_time_source(vec![$accepted], $block_time_source.clone());
                 let builder = builder.chain(0, $state.view().latest_block().as_deref());
+                let proposal_height = builder.0.header.height().get();
+                let proposal_view = builder.0.header.view_change_index();
+                let validator_set = $state
+                    .resolve_lane_committee_at_height(
+                        crate::state::LaneAuthorityRoute::new(
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        ),
+                        proposal_height,
+                    )
+                    .expect("cache fixture lane authority resolves")
+                    .into_validators();
+                let ownership = sample_lane_payload_ownership_for_context_at_slot(
+                    proposal_height,
+                    proposal_view,
+                    LaneId::SINGLE,
+                    DataSpaceId::UNIVERSAL,
+                    $state
+                        .lane_incarnation(LaneId::SINGLE)
+                        .expect("cache fixture default lane incarnation"),
+                    1,
+                    0,
+                    vec![0],
+                    vec![Hash::from(entrypoint_hash)],
+                    &validator_set,
+                );
+                let execution_context =
+                    BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                        entrypoint_hash,
+                        LaneId::SINGLE,
+                        DataSpaceId::UNIVERSAL,
+                    )])
+                    .with_lane_payload_ownerships(vec![ownership]);
+                let builder = builder.with_execution_context(Some(execution_context));
                 let new_block = with_current_state_da_sidecars(builder, &$state)
                     .sign(&$leader_private)
                     .unpack(|_| {});
@@ -16522,6 +16667,9 @@ pub(crate) mod valid {
                 Level::INFO,
                 "autonomous anchor control-only".to_owned(),
             )])
+            .with_admission_intent(
+                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            )
             .sign(signer.private_key());
             let entrypoint = TransactionEntrypoint::External(signed);
             let entrypoint_hash = Hash::from(entrypoint.hash());
@@ -22650,9 +22798,22 @@ pub(crate) mod valid {
                 header.set_height(nonzero!(1_u64));
                 header.set_prev_block_hash(None);
                 header.creation_time_ms = 1;
-            })
-            .commit_unchecked()
-            .unpack(|_| {});
+            });
+            let mut parent: SignedBlock = parent.into();
+            parent
+                .set_transaction_results_with_transcripts(
+                    Vec::new(),
+                    &[],
+                    Vec::new(),
+                    BTreeMap::new(),
+                    Vec::new(),
+                    AxtPolicySnapshot::default(),
+                )
+                .expect("QueuePlan TTL parent carries the canonical empty AXT snapshot");
+            parent.set_committed_fragment_count(0);
+            let parent = ValidBlock::new_unverified_for_tests(parent)
+                .commit_unchecked()
+                .unpack(|_| {});
             let predecessor_hash = parent.as_ref().hash();
             {
                 let mut state_block = state.block(parent.as_ref().header());
@@ -22806,11 +22967,21 @@ pub(crate) mod valid {
             )
             .unpack(|_| {})
         }
+        fn assert_external_queue_plan_role_rejected(error: &BlockValidationError) {
+            assert!(
+                matches!(
+                    error,
+                    BlockValidationError::ExecutionContextInvalid(message)
+                        if message.contains("must use autonomous lane ownership")
+                ),
+                "unexpected external QueuePlan rejection: {error:?}"
+            );
+        }
         #[test]
-        fn exact_parent_queue_plan_admission_uses_enqueue_time_for_follower_and_proposer() {
+        fn exact_parent_queue_plan_admission_rejects_ordinary_external_execution() {
             use iroha_data_model::transaction::TransactionAdmissionIntent;
             let fixture = queue_plan_ttl_fixture(
-                "queue-plan-expired-exact-follower",
+                "queue-plan-ordinary-external-follower",
                 TransactionAdmissionIntent::QueuePlanSynced,
                 QueuePlanTtlBindingFixture::Exact,
                 10,
@@ -22819,81 +22990,36 @@ pub(crate) mod valid {
                 100,
                 false,
             );
-            let (valid, state_block) = validate_queue_plan_ttl_fixture(&fixture)
-                .expect("exact parent QueuePlan admission must survive follower block-time expiry");
-            assert!(
-                valid.as_ref().results().next().expect("one result").is_ok(),
-                "follower execution must apply the exact admitted transaction"
-            );
-            drop(state_block);
+            let Err((_, error)) = validate_queue_plan_ttl_fixture(&fixture) else {
+                panic!("QueuePlanSynced external execution must be rejected before voting");
+            };
+            assert_external_queue_plan_role_rejected(error.as_ref());
             assert!(
                 !fixture
                     .state
                     .stateless_validation_cache()
                     .lock()
                     .contains_key(&fixture.signed_hash),
-                "state-authorized QueuePlan validation must not become a generic cache entry"
+                "rejected QueuePlan authority must not become a generic cache entry"
             );
-
-            let proposer = queue_plan_ttl_fixture(
-                "queue-plan-expired-exact-proposer",
+        }
+        #[test]
+        fn unbound_external_queue_plan_rejects_before_block_time_expiry() {
+            use iroha_data_model::transaction::TransactionAdmissionIntent;
+            let fixture = queue_plan_ttl_fixture(
+                "queue-plan-expired-without-binding",
                 TransactionAdmissionIntent::QueuePlanSynced,
-                QueuePlanTtlBindingFixture::Exact,
+                QueuePlanTtlBindingFixture::Missing,
                 10,
                 10,
                 10,
                 100,
                 false,
             );
-            let mut state_block = proposer.state.block(proposer.block.header());
-            let valid =
-                ValidBlock::validate_unchecked(proposer.block, &mut state_block).unpack(|_| {});
-            assert!(
-                valid.as_ref().results().next().expect("one result").is_ok(),
-                "local proposer execution must use the same exact admission time"
-            );
-            assert!(
-                !proposer
-                    .state
-                    .stateless_validation_cache()
-                    .lock()
-                    .contains_key(&proposer.signed_hash),
-                "local execution must not publish QueuePlan authority into the generic cache"
-            );
-        }
-        #[test]
-        fn block_time_expiry_still_rejects_ordinary_and_unbound_queue_plan_transactions() {
-            use iroha_data_model::transaction::TransactionAdmissionIntent;
-            for (label, intent) in [
-                (
-                    "ordinary-expired-at-block",
-                    TransactionAdmissionIntent::Ordinary,
-                ),
-                (
-                    "queue-plan-expired-without-binding",
-                    TransactionAdmissionIntent::QueuePlanSynced,
-                ),
-            ] {
-                let fixture = queue_plan_ttl_fixture(
-                    label,
-                    intent,
-                    QueuePlanTtlBindingFixture::Missing,
-                    10,
-                    10,
-                    10,
-                    100,
-                    false,
-                );
-                let Err((_, error)) = validate_queue_plan_ttl_fixture(&fixture) else {
-                    panic!("block-time-expired transaction must be rejected");
-                };
-                assert!(matches!(
-                    error.as_ref(),
-                    BlockValidationError::TransactionAccept(
-                        AcceptTransactionFail::TransactionExpired { .. }
-                    )
-                ));
-            }
+            let Err((_, error)) = validate_queue_plan_ttl_fixture(&fixture) else {
+                panic!("unbound external QueuePlan transaction must be rejected");
+            };
+            assert_external_queue_plan_role_rejected(error.as_ref());
         }
         #[test]
         fn queue_plan_enqueue_time_must_itself_be_within_signed_ttl() {
@@ -22911,29 +23037,19 @@ pub(crate) mod valid {
             let Err((_, error)) = validate_queue_plan_ttl_fixture(&fixture) else {
                 panic!("exact ownership cannot waive expiry at the certified enqueue time");
             };
-            assert!(matches!(
-                error.as_ref(),
-                BlockValidationError::TransactionAccept(
-                    AcceptTransactionFail::TransactionExpired {
-                        expires_at_ms: 20,
-                        now_ms: 21,
-                    }
-                )
-            ));
+            assert_external_queue_plan_role_rejected(error.as_ref());
         }
         #[test]
         fn conflicting_or_stale_queue_plan_parent_binding_fails_closed() {
             use iroha_data_model::transaction::TransactionAdmissionIntent;
-            for (label, binding_fixture, expected) in [
+            for (label, binding_fixture) in [
                 (
                     "queue-plan-conflicting-parent-owner",
                     QueuePlanTtlBindingFixture::Conflict,
-                    "conflicts with its immutable registry owner",
                 ),
                 (
                     "queue-plan-stale-parent-owner",
                     QueuePlanTtlBindingFixture::Stale,
-                    "does not retain its admitted incarnation",
                 ),
             ] {
                 let fixture = queue_plan_ttl_fixture(
@@ -22949,11 +23065,7 @@ pub(crate) mod valid {
                 let Err((_, error)) = validate_queue_plan_ttl_fixture(&fixture) else {
                     panic!("non-exact QueuePlan parent authority must fail closed");
                 };
-                assert!(matches!(
-                    error.as_ref(),
-                    BlockValidationError::ExecutionContextInvalid(message)
-                        if message.contains(expected)
-                ));
+                assert_external_queue_plan_role_rejected(error.as_ref());
             }
         }
         #[test]
@@ -22972,12 +23084,7 @@ pub(crate) mod valid {
             let Err((_, error)) = validate_queue_plan_ttl_fixture(&invalid_signature) else {
                 panic!("QueuePlan time authority must not bypass signature validation");
             };
-            assert!(matches!(
-                error.as_ref(),
-                BlockValidationError::TransactionAccept(
-                    AcceptTransactionFail::SignatureVerification(_)
-                )
-            ));
+            assert_external_queue_plan_role_rejected(error.as_ref());
 
             let max_ttl_ms = invalid_signature
                 .state
@@ -23000,10 +23107,7 @@ pub(crate) mod valid {
             let Err((_, error)) = validate_queue_plan_ttl_fixture(&invalid_limit) else {
                 panic!("QueuePlan time authority must not bypass governed limits");
             };
-            assert!(matches!(
-                error.as_ref(),
-                BlockValidationError::TransactionAccept(AcceptTransactionFail::TransactionLimit(_))
-            ));
+            assert_external_queue_plan_role_rejected(error.as_ref());
         }
         #[test]
         fn validate_keep_voting_block_uses_block_time_for_ttl_checks() {
@@ -23056,7 +23160,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_populates_stateless_cache() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology);
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
             setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
             build_cacheable_block!(
                 state,
@@ -23087,7 +23191,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn block_validation_rejects_invalid_signature_despite_warmed_stateless_cache() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology);
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
             let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
             let (authority, signer) = gen_account_in("cache-signature-test");
             let (other_authority, _) = gen_account_in("cache-signature-test");
@@ -23232,7 +23336,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn sumeragi_v2_fixture_with_events_and_timing_populates_stateless_cache() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology);
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
             setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
             build_cacheable_block!(
                 state,
@@ -23245,6 +23349,8 @@ pub(crate) mod valid {
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
             let mut timings = ValidationTimings::new();
+            let height_context =
+                authenticated_permissioned_successor_context(&state, &validator_keys);
             let result = ValidBlock::validate_sumeragi_v2_fixture_with_events_and_timing(
                 signed_block,
                 &topology,
@@ -23253,14 +23359,16 @@ pub(crate) mod valid {
                 &state,
                 &mut voting_block,
                 false,
+                SumeragiV2ValidationContext::from_height_context(&height_context),
                 &mut timings,
                 |event| events.push(event),
             )
             .unpack(|_| {});
-            assert!(
-                result.is_ok(),
-                "validation with events should succeed and warm stateless cache"
-            );
+            if let Err((_, error)) = result {
+                panic!(
+                    "validation with events should succeed and warm stateless cache: {error:?}; events={events:?}"
+                );
+            }
             assert!(events.is_empty(), "no rejection events expected");
             assert!(
                 timings.total_ms >= timings.stateless_ms,
@@ -23434,7 +23542,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn sumeragi_v2_fixture_populates_stateless_cache() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology);
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
             setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
             build_cacheable_block!(
                 state,
@@ -23453,7 +23561,9 @@ pub(crate) mod valid {
                 &mut state_block,
             )
             .unpack(|_| {});
-            assert!(result.is_ok(), "validation should warm stateless cache");
+            if let Err((_, error)) = result {
+                panic!("validation should warm stateless cache: {error:?}");
+            }
             drop(state_block);
             let cache = state.stateless_validation_cache().lock();
             assert!(
@@ -23463,7 +23573,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn sumeragi_v2_fixture_with_events_populates_stateless_cache() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology);
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
             setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
             build_cacheable_block!(
                 state,
@@ -27809,8 +27919,10 @@ mod tests {
     fn historical_native_amx_source_bundle_fixture() -> HistoricalNativeAmxSourceBundleFixture {
         let paynet = DataSpaceId::new(7);
         let cbuae = DataSpaceId::new(8);
-        let (tx, _tx_hash) =
-            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
+        let (tx, _tx_hash) = signed_domain_registration_tx_with_admission_intent(
+            &[("merchant", "paynet"), ("treasury", "cbuae")],
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        );
         let entrypoint = TransactionEntrypoint::External(tx);
         let entrypoint_hash = entrypoint.hash();
         let routing_plan = crate::queue::RoutingPlan::native_amx(
@@ -28014,6 +28126,15 @@ mod tests {
     fn signed_domain_registration_tx(
         domains: &[(&str, &str)],
     ) -> (SignedTransaction, HashOf<SignedTransaction>) {
+        signed_domain_registration_tx_with_admission_intent(
+            domains,
+            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
+        )
+    }
+    fn signed_domain_registration_tx_with_admission_intent(
+        domains: &[(&str, &str)],
+        admission_intent: iroha_data_model::transaction::TransactionAdmissionIntent,
+    ) -> (SignedTransaction, HashOf<SignedTransaction>) {
         let (authority_id, keypair) = gen_account_in("wonderland");
         let instructions = domains
             .iter()
@@ -28029,6 +28150,7 @@ mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
+        .with_admission_intent(admission_intent)
         .sign(keypair.private_key());
         let tx_hash = AcceptedTransaction::prepare_signed_metadata(&tx).signed_hash;
         (tx, tx_hash)

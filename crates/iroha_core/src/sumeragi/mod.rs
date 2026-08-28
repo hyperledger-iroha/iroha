@@ -809,6 +809,9 @@ struct FairV2IngressState {
     requires_leader_wire_lifecycle_gate: bool,
     leader_wire_lifecycle_gate: Option<Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>>,
     leader_wire_lifecycle_ordinals: Option<v2_runtime::RuntimeLifecycleOrdinalSource>,
+    /// Genesis-derived network identity frozen by the active context setup.
+    /// Generic test queues intentionally leave this absent.
+    configured_network_id: Option<NetworkId>,
     leader_wire_context: Option<(
         iroha_data_model::block::consensus_v2::HeightContextId,
         iroha_data_model::block::consensus_v2::Height,
@@ -839,12 +842,32 @@ struct FairV2IngressEntry {
     class: FairV2IngressClass,
     wire_key: Option<FairV2IngressWireKey>,
     leader_wire_token: Option<FairV2IngressLeaderWireToken>,
+    /// Signature-authenticated request which can serve one lagging replica
+    /// from immutable history without advancing or replacing a local owner.
+    history_serve_request: Option<FairV2IngressHistoryServeRequest>,
     encoded_bytes: Arc<[u8]>,
     encoded_len: usize,
     /// Admission/coalescence-minted immutable ownership snapshot. Lifecycle
     /// queue cuts clone this `Arc` under the state mutex, then perform all
     /// validation and integrity hashing after releasing that mutex.
     ownership_snapshot: Arc<FairV2IngressOwnershipEvidence>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FairV2IngressHistoryServeRequest {
+    height: u64,
+    /// `CommitCertificateRequest` carries a signed network ID; the older
+    /// `CertifiedBodyRequest` wire shape leaves this absent and relies on its
+    /// historical context/QC validation at the service seam.
+    required_network_id: Option<NetworkId>,
+}
+impl FairV2IngressHistoryServeRequest {
+    const fn height(self) -> u64 {
+        self.height
+    }
+    fn matches_configured_network(self, configured_network_id: Option<&NetworkId>) -> bool {
+        self.required_network_id
+            .is_none_or(|network_id| configured_network_id == Some(&network_id))
+    }
 }
 include!("fair_v2_ingress_leader_wire_identity.rs");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1171,6 +1194,63 @@ fn fair_v2_ingress_message_is_certified_fence_escape(message: &BlockMessage) -> 
     };
     message.validate_version().is_ok()
         && v2_effects::network_ingress_is_certified_fence_escape(&message.payload)
+}
+/// Pre-authenticate a request which can release a lagging replica from Kura.
+///
+/// Signature work happens once before the fair-ingress state lock is taken.
+/// This projection grants only dependency scheduling: the ordinary service
+/// seam still validates the historical context, QC, canonical subject/body,
+/// and immutable Kura artifact before emitting any response.
+fn fair_v2_ingress_history_serve_request(
+    inbound: &InboundBlockMessage,
+) -> Option<FairV2IngressHistoryServeRequest> {
+    use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
+    let BlockMessage::V2(message) = inbound.message() else {
+        return None;
+    };
+    if message.validate_version().is_err() {
+        return None;
+    }
+    match &message.payload {
+        ConsensusMessageV2Payload::CertifiedBodyRequest(request)
+            if request.certificate.proposal_round == request.round
+                && request.certificate.subject == request.subject
+                && v2_transport::authenticate_certified_body_request_identity(
+                    request,
+                    inbound.sender(),
+                )
+                .is_ok() =>
+        {
+            Some(FairV2IngressHistoryServeRequest {
+                height: request.round.height,
+                required_network_id: None,
+            })
+        }
+        ConsensusMessageV2Payload::CommitCertificateRequest(request)
+            if v2_transport::authenticate_commit_certificate_request_identity(
+                request,
+                inbound.sender(),
+            )
+            .is_ok() =>
+        {
+            Some(FairV2IngressHistoryServeRequest {
+                height: request.height,
+                required_network_id: Some(request.network_id),
+            })
+        }
+        ConsensusMessageV2Payload::Proposal(_)
+        | ConsensusMessageV2Payload::Vote(_)
+        | ConsensusMessageV2Payload::QuorumCertificate(_)
+        | ConsensusMessageV2Payload::TimeoutVote(_)
+        | ConsensusMessageV2Payload::TimeoutCertificate(_)
+        | ConsensusMessageV2Payload::PayloadManifest(_)
+        | ConsensusMessageV2Payload::PayloadChunk(_)
+        | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+        | ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | ConsensusMessageV2Payload::CommitCertificateResponse(_)
+        | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
+    }
 }
 fn fair_v2_ingress_subject_hash(
     subject: Option<&iroha_data_model::block::consensus_v2::BlockSubject>,
@@ -3221,6 +3301,12 @@ fn fair_v2_ingress_required_manifest_bytes(
         .checked_add(8)?;
     fair_v2_ingress_framed_bytes(hash_sequence_bytes)?.checked_add(228)
 }
+/// Exact bare-Norito bytes of a structurally maximal execution commitment.
+///
+/// The maximum carries the bounded top-up, Native AMX, lane-finality, and
+/// merge-carrier projections. The canonical structural proposal fixture below
+/// binds this allocation-free constant to the live wire codec.
+const FAIR_V2_INGRESS_MAX_EXECUTION_COMMITMENT_BYTES: usize = 306;
 fn fair_v2_ingress_required_quorum_certificate_bytes(roster_len: usize) -> Option<usize> {
     let signature_bytes = iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES;
     let signer_vector_bytes = roster_len.checked_mul(5)?.checked_add(8)?;
@@ -3229,7 +3315,9 @@ fn fair_v2_ingress_required_quorum_certificate_bytes(roster_len: usize) -> Optio
         .checked_add(53)?
         .checked_add(5)?
         .checked_add(102)?
-        .checked_add(fair_v2_ingress_framed_bytes(213)?)?
+        .checked_add(fair_v2_ingress_framed_bytes(
+            FAIR_V2_INGRESS_MAX_EXECUTION_COMMITMENT_BYTES,
+        )?)?
         .checked_add(fair_v2_ingress_framed_bytes(signer_vector_bytes)?)?
         .checked_add(fair_v2_ingress_framed_bytes(signature_vector_bytes)?)
 }
@@ -3703,9 +3791,9 @@ fn select_fair_v2_ingress_candidate<T>(
 /// releases that validator hop's sole completion owner.
 /// Every newly queued occurrence receives one immutable local admission
 /// ordinal; coalesced retransmissions retain their existing owner's ordinal.
-/// While a certified-body request is queued, its earliest ordinal is a global
-/// cutoff: preexisting occurrences and that request remain fairly selectable,
-/// but later traffic cannot acquire service ahead of it.
+/// Certified-body requests remain ordinary predicate-selected queue entries.
+/// Their authenticated request fence is owned by the lifecycle coordinator's
+/// executor join, not by a second queue-local Serve barrier.
 ///
 /// Non-empty lanes are serviced in round-robin order, so a source may use
 /// otherwise idle capacity but cannot starve an honest validator's progress.
@@ -3857,6 +3945,7 @@ impl FairV2Ingress {
                 requires_leader_wire_lifecycle_gate: false,
                 leader_wire_lifecycle_gate: None,
                 leader_wire_lifecycle_ordinals: None,
+                configured_network_id: None,
                 leader_wire_context: None,
                 open: false,
             }),
@@ -4186,7 +4275,7 @@ impl FairV2Ingress {
         &self,
         roster: impl IntoIterator<Item = PeerId>,
     ) -> Result<(), FairV2IngressCapacityError> {
-        self.configure_roster_with_byte_requirements(roster, 0, 0, 0, 0, 0, 0, 0)
+        self.configure_roster_with_byte_requirements(roster, None, 0, 0, 0, 0, 0, 0, 0)
     }
     /// Install a frozen roster and validate every progress envelope against
     /// its ingress, topic-frame, and outbound encrypted-frame byte owner.
@@ -4233,6 +4322,7 @@ impl FairV2Ingress {
         };
         let configured = self.configure_roster_with_byte_requirements(
             roster,
+            Some(*network_id),
             BODY_ENVELOPE_HEADROOM_BYTES
                 .max(required_control_message_bytes)
                 .max(required_recovery_request_bytes)
@@ -4253,6 +4343,7 @@ impl FairV2Ingress {
     fn configure_roster_with_byte_requirements(
         &self,
         roster: impl IntoIterator<Item = PeerId>,
+        configured_network_id: Option<NetworkId>,
         required_ordinary_bytes: usize,
         required_certified_fence_escape_bytes: usize,
         required_transport_completion_bytes: usize,
@@ -4280,6 +4371,7 @@ impl FairV2Ingress {
         state.lanes = lanes;
         state.pending_wire_owners.clear();
         state.leader_wire_lifecycles.clear();
+        state.configured_network_id = configured_network_id;
         // Keep `last_admission_ordinal`: queued ownership is reset at rollover,
         // but occurrence order remains monotone for the lifetime of this ingress.
         state.ready.clear();
@@ -5167,6 +5259,7 @@ impl FairV2Ingress {
             }
         };
         let encoded_len = encoded.len();
+        let history_serve_request = fair_v2_ingress_history_serve_request(&inbound);
         let wire_hash = CryptoHash::new(encoded.as_ref());
         // Delivery deduplication remains scoped to the semantic origin: two
         // requesters behind one trusted relay can require distinct responses.
@@ -5186,6 +5279,9 @@ impl FairV2Ingress {
         if !state.open {
             return Err(FairV2IngressPushError::Closed(inbound));
         }
+        let history_serve_request = history_serve_request.filter(|request| {
+            request.matches_configured_network(state.configured_network_id.as_ref())
+        });
         let source = if state.roster.contains(inbound.via()) {
             FairV2IngressSource::Validator(inbound.via.clone())
         } else {
@@ -5887,6 +5983,7 @@ impl FairV2Ingress {
             class,
             wire_key,
             leader_wire_token,
+            history_serve_request,
             encoded_bytes: encoded,
             encoded_len,
             ownership_snapshot,
@@ -5921,14 +6018,11 @@ impl FairV2Ingress {
     /// compared inside the retained predecessor set. Other proposal,
     /// certificate, body-response, or payload work may bypass an unrelated
     /// auxiliary request waiting for I/O capacity without dropping or duplicating
-    /// that request. If an active-height certified-body request is queued,
-    /// entries newer than its reservation-bearing carrier are excluded before
-    /// the downstream predicate runs. Historical requests do not own that
-    /// Serve gate and therefore cannot hide its exact target behind the cutoff;
-    /// ungated test queues retain the all-request cutoff. Once a blocked entry
-    /// becomes admissible, the head-first search selects it before later
-    /// entries. When every entry is rejected, the source order and total length
-    /// remain unchanged.
+    /// that request. Certified-body requests own no queue-local Serve barrier;
+    /// their exact authenticated request fence is enforced by the lifecycle
+    /// coordinator's executor join. Once a blocked entry becomes admissible,
+    /// the head-first search selects it before later entries. When every entry
+    /// is rejected, the source order and total length remain unchanged.
     #[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
     pub(crate) fn try_recv_if(
         &self,
@@ -7337,8 +7431,8 @@ mod authoritative_runtime_gate_tests {
     fn authenticated_non_validator_source_cap_retries_third_source_until_one_lane_drains() {
         const SOURCE_BYTES: usize = 1024 * 1024;
         let ingress = super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-            13,
-            4 * SOURCE_BYTES,
+            11,
+            3 * SOURCE_BYTES,
             SOURCE_BYTES,
             0,
             0,
@@ -7367,7 +7461,7 @@ mod authoritative_runtime_gate_tests {
                         &state,
                         ingress.authenticated_non_validator_source_capacity,
                     ),
-                13,
+                11,
                 "unmaterialized authenticated-source lanes retain their exact reservation"
             );
         }
@@ -7390,7 +7484,7 @@ mod authoritative_runtime_gate_tests {
                         &state,
                         ingress.authenticated_non_validator_source_capacity,
                     ),
-                13,
+                11,
                 "materializing both lanes consumes, but does not erase, their reservations"
             );
         }
@@ -7410,7 +7504,7 @@ mod authoritative_runtime_gate_tests {
                         &state,
                         ingress.authenticated_non_validator_source_capacity,
                     ),
-                13,
+                11,
                 "draining one source restores its latent first-message reservation"
             );
         }
@@ -8220,14 +8314,37 @@ mod authoritative_runtime_gate_tests {
         let required_proposal =
             super::fair_v2_ingress_required_proposal_bytes(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
         assert_eq!(
-            required_proposal, 70_940,
+            required_proposal, 73_916,
             "maximal proposal wire geometry is a regression boundary"
         );
         let proposal = v2_maximum_structural_proposal_wire(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
+        let maximum_execution_commitment_bytes = match &proposal {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
+                ..
+            }) => match &proposal.justification {
+                wire::ProposalJustification::Timeout(timeout) => timeout
+                    .highest_prepare_qc
+                    .as_ref()
+                    .expect("maximum proposal has a highest PrepareQC")
+                    .execution_commitment
+                    .encode()
+                    .len(),
+                wire::ProposalJustification::ParentCommit(_) => {
+                    unreachable!("maximum proposal uses Timeout justification")
+                }
+            },
+            _ => unreachable!("maximum proposal fixture is v2"),
+        };
+        assert_eq!(
+            maximum_execution_commitment_bytes,
+            super::FAIR_V2_INGRESS_MAX_EXECUTION_COMMITMENT_BYTES,
+            "allocation-free execution-commitment geometry must match canonical bare Norito",
+        );
         assert_eq!(
             encoded_v2_len(&proposal),
             required_proposal,
-            "checked activation geometry must equal canonical bare Norito"
+            "checked activation geometry must equal canonical bare Norito; execution commitment bytes={maximum_execution_commitment_bytes}"
         );
         let BlockMessage::V2(proposal_envelope) = &proposal else {
             unreachable!("maximum proposal fixture is v2");
@@ -8260,9 +8377,19 @@ mod authoritative_runtime_gate_tests {
             required_certified_fence_escape <= super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
             "the production certified partition must contain every legal TC/CommitQC envelope",
         );
-        let maximal_roster = validator_peers(
-            u8::try_from(wire::MAX_VALIDATORS_PER_HEIGHT).expect("validator bound fits u8"),
-        );
+        let maximal_roster = (0..wire::MAX_VALIDATORS_PER_HEIGHT)
+            .map(|index| {
+                let seed = u8::try_from(index)
+                    .expect("validator bound fits u8")
+                    .saturating_add(1);
+                PeerId::new(
+                    KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::BlsNormal)
+                        .expect("derive canonical relay-node roster fixture")
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
         assert!(
             required_proposal
                 >= super::fair_v2_ingress_required_commit_certificate_response_bytes(
@@ -8308,7 +8435,7 @@ mod authoritative_runtime_gate_tests {
         let minimal_layout = minimal_rs16_layout();
         let minimal_proposal_bytes =
             super::fair_v2_ingress_required_proposal_bytes(minimal_layout, 1);
-        assert_eq!(minimal_proposal_bytes, 2_523);
+        assert_eq!(minimal_proposal_bytes, 2_709);
         assert_eq!(
             encoded_v2_len(&v2_maximum_structural_proposal_wire(minimal_layout, 1)),
             minimal_proposal_bytes,
@@ -8397,7 +8524,12 @@ mod authoritative_runtime_gate_tests {
             max_payload_size_bytes: 8 * 1024 * 1024,
             max_chunk_count: 64,
         };
-        let validator = validator_peers(1).pop().expect("validator fixture");
+        let validator = PeerId::new(
+            KeyPair::try_from_seed(vec![0xD7; 32], iroha_crypto::Algorithm::BlsNormal)
+                .expect("derive canonical relay-node fixture")
+                .public_key()
+                .clone(),
+        );
         let (_, responder_key_bytes) = validator
             .public_key()
             .try_to_bytes()
@@ -8707,8 +8839,9 @@ mod authoritative_runtime_gate_tests {
     }
     include!("tests/mod_authoritative_runtime_gate_08_capacity_and_control.rs");
     #[test]
-    fn fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
+    fn fair_v2_ingress_predicate_scan_selects_same_lane_request_without_queue_local_serve_gate() {
+        let (handle, ingress, _relay_receiver) =
+            test_sumeragi_handle_with_source_geometry(10, Some(0));
         let validators = validator_peers(2);
         let first_ready_source = validators[0].clone();
         let target_source = validators[1].clone();
@@ -8731,14 +8864,14 @@ mod authoritative_runtime_gate_tests {
             ingress.try_push(v2_certified_body_request_inbound(&first_ready_source)),
             Ok(super::FairV2IngressPushDisposition::Enqueued)
         ));
+        let same_lane_request = ingress
+            .try_recv_if(fair_v2_ingress_is_certified_body_request)
+            .expect("the same-lane request bypasses an unrelated auxiliary predecessor");
+        assert_eq!(same_lane_request.sender(), &first_ready_source);
         let target = ingress
             .try_recv_if(fair_v2_ingress_is_certified_body_request)
-            .expect("the exact request passes the blocked first-ready source");
+            .expect("the next ready source receives its fair predicate-selected turn");
         assert_eq!(target.sender(), &target_source);
-        let later_request = ingress
-            .try_recv_if(fair_v2_ingress_is_certified_body_request)
-            .expect("the later Serve request becomes eligible after the target drains");
-        assert_eq!(later_request.sender(), &first_ready_source);
         let predecessor = ingress
             .try_recv_if(|_| true)
             .expect("the blocked preexisting entry remains queued");
@@ -8747,8 +8880,9 @@ mod authoritative_runtime_gate_tests {
         assert_eq!(ingress.len(), 0);
     }
     #[test]
-    fn fair_v2_ingress_certified_request_cutoff_blocks_later_churn() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(27);
+    fn fair_v2_ingress_predicate_scan_does_not_create_queue_local_serve_gate() {
+        let (handle, ingress, _relay_receiver) =
+            test_sumeragi_handle_with_source_geometry(25, Some(0));
         let validators = validator_peers(5);
         let target_source = validators[0].clone();
         let control_source = validators[1].clone();
@@ -8779,28 +8913,18 @@ mod authoritative_runtime_gate_tests {
             handle
                 .try_incoming_block_message_from(causal_source.clone(), v2_auxiliary_prepare(11),)
         );
-        assert!(
-            ingress
-                .try_recv_if(|inbound| !fair_v2_ingress_is_certified_body_request(inbound))
-                .is_none(),
-            "later control, completion, priority, and causal work cannot pass the target"
-        );
+        let control = ingress
+            .try_recv_if(|inbound| !fair_v2_ingress_is_certified_body_request(inbound))
+            .expect("ordinary control remains selectable without a queue-local Serve gate");
+        assert_eq!(control.sender(), &control_source);
+        assert_eq!(vote_phase(&control), Some(wire::GlobalPhase::Commit));
         let target = ingress
             .try_recv_if(fair_v2_ingress_is_certified_body_request)
-            .expect("the cutoff target remains selectable");
+            .expect("the request remains independently predicate-selectable");
         assert_eq!(target.sender(), &target_source);
-        let control = ingress
-            .try_recv_if(|_| true)
-            .expect("later control proceeds after the target drains");
-        assert_eq!(control.sender(), &control_source);
-        assert_eq!(
-            vote_phase(&control),
-            Some(wire::GlobalPhase::Commit),
-            "the first released occurrence is consensus control"
-        );
         let completion = ingress
             .try_recv_if(|_| true)
-            .expect("later completion proceeds after the target drains");
+            .expect("completion keeps its fair source turn");
         assert_eq!(completion.sender(), &completion_source);
         assert!(matches!(
             completion.message(),
@@ -8811,7 +8935,7 @@ mod authoritative_runtime_gate_tests {
         ));
         let priority = ingress
             .try_recv_if(|_| true)
-            .expect("later priority work proceeds after the target drains");
+            .expect("priority work keeps its fair source turn");
         assert_eq!(priority.sender(), &priority_source);
         assert!(matches!(
             priority.message(),
@@ -8822,7 +8946,7 @@ mod authoritative_runtime_gate_tests {
         ));
         let causal = ingress
             .try_recv_if(|_| true)
-            .expect("later causal work proceeds after the target drains");
+            .expect("causal work keeps its fair source turn");
         assert_eq!(causal.sender(), &causal_source);
         assert_eq!(vote_phase(&causal), Some(wire::GlobalPhase::Prepare));
         assert_eq!(vote_height(&causal), Some(12));

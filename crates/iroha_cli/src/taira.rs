@@ -1768,7 +1768,7 @@ fn prove_inrou_predecessor_applied(
                 args.mode,
             )?;
             if root.get("stage")
-                != Some(&json::to_value(PreparedInrouStageIdentityV1::from(&stage))?)
+                != Some(&json::to_value(&PreparedInrouStageIdentityV1::from(&stage))?)
             {
                 eyre::bail!("Inrou predecessor retained-stage identity was substituted");
             }

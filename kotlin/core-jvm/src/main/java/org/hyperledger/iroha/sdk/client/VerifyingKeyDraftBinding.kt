@@ -19,9 +19,16 @@ import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 internal enum class VerifyingKeyDraftOperation(
     val wireName: String,
+    val schemaPath: String,
 ) {
-    REGISTER("iroha.instruction.v1::verifying_keys::RegisterVerifyingKey"),
-    UPDATE("iroha.instruction.v1::verifying_keys::UpdateVerifyingKey"),
+    REGISTER(
+        "iroha.instruction.v1::verifying_keys::RegisterVerifyingKey",
+        "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+    ),
+    UPDATE(
+        "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey",
+        "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+    ),
 }
 
 /**
@@ -84,7 +91,7 @@ internal object VerifyingKeyDraftBinding {
         val expected = ExpectedInstruction.fromRequest(request)
         return InstructionBox.fromWirePayload(
             operation.wireName,
-            NoritoCodec.encode(expected, operation.wireName, ExpectedInstructionAdapter),
+            NoritoCodec.encode(expected, operation.schemaPath, ExpectedInstructionAdapter),
         )
     }
 

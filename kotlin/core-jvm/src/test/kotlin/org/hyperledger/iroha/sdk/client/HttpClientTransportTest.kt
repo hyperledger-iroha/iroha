@@ -1058,6 +1058,16 @@ class HttpClientTransportTest {
         assertTrue(Regex("(?:[0-9a-f]{2})+").matches(string(record, "norito_hex")))
 
         val boundary = obj(fixture, "torii_boundary")
+        val boundaryPayload = obj(boundary, "payload")
+        assertEquals(
+            "1606938044258990275541962092341162602522202993782792835301376",
+            string(boundaryPayload, "exact_int"),
+        )
+        assertEquals("-12345678901234567890.125", string(boundaryPayload, "exact_decimal"))
+        assertEquals(
+            "12345678901234567890.0000000000000000000000000001",
+            string(boundaryPayload, "exact_quantity"),
+        )
         val boundaryFeePayment = FeePaymentJson.parse(
             boundary["fee_payment"],
             "torii_boundary.fee_payment",
@@ -1068,7 +1078,7 @@ class HttpClientTransportTest {
             contractAddress = null,
             contractAlias = string(boundary, "contract_alias"),
             entrypoint = string(boundary, "entrypoint"),
-            payload = boundary["payload"],
+            payload = boundaryPayload,
         )
 
         assertEquals(string(boundary, "authority"), request["authority"])
@@ -1076,7 +1086,7 @@ class HttpClientTransportTest {
         assertEquals(string(boundary, "contract_alias"), request["contract_alias"])
         assertFalse(request.containsKey("contract_address"))
         assertEquals(string(boundary, "entrypoint"), request["entrypoint"])
-        assertEquals(boundary["payload"], request["payload"])
+        assertEquals(boundaryPayload, request["payload"])
         assertEquals(boundaryFeePayment.toJsonMap(), request["fee_payment"])
         assertFalse(request.containsKey("argument_record"))
         assertFalse(request.containsKey("argument_record_norito_hex"))
@@ -1651,7 +1661,11 @@ class HttpClientTransportTest {
                   "resolved_multisig_account_id": "$multisigAccountId",
                   "submitted": true,
                   "tx_hash_hex": "$txHash",
-                  "executed_tx_hash_hex": "$executedTxHash"
+                  "executed_tx_hash_hex": "$executedTxHash",
+                  "fee_payment": {
+                    "payer": "authority",
+                    "value": {"charge_limits": [], "gas_limit": null}
+                  }
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8)
         assertEquals(

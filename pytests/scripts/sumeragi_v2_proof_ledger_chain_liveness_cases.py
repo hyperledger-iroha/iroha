@@ -1393,8 +1393,8 @@ def test_async_partition_semantics_survive_digest_refresh(monkeypatch: pytest.Mo
 @pytest.mark.parametrize(
     ("target_module", "reviewed_limit"),
     (
-        ("SumeragiV2AsyncInstallRunnerProofs", 5_775),
-        ("SumeragiV2AsyncProgressOwnershipProofs", 5_662),
+        ("SumeragiV2AsyncInstallRunnerProofs", 5_879),
+        ("SumeragiV2AsyncProgressOwnershipProofs", 5_663),
     ),
 )
 def test_reviewed_async_shard_line_ceiling_rejects_one_more_line(

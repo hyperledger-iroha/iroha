@@ -427,6 +427,14 @@ NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS = (
         NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE,
         "historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application",
         (
+            "ApplyFixture::new_with_options_and_network(false, false, true, true, true)",
+            "lane_work.merge_execution_full_validation_checks_for_test(),\n"
+            "            0",
+            "for _ in 0..4 {",
+            ".validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)",
+            '"the locally built execution candidate must not be fully reexecuted by the adapter"',
+            "lane_work.merge_execution_full_validation_checks_for_test(),\n"
+            "            1",
             "fail_next_native_amx_prepublication_for_tests",
             '"pre-WSV Native AMX participant evidence publication"',
             '"failed live Native prepublication must not stage WSV"',

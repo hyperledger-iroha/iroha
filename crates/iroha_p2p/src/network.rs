@@ -5,6 +5,8 @@
     clippy::needless_pass_by_value
 )]
 use crate::boilerplate;
+#[cfg(test)]
+use crate::soranet_handshake_runtime::runtime_from_handshake_without_admission_for_test;
 use crate::{
     Broadcast, Error, NetworkMessage, OnlinePeers, P2pIdentityKeys, Post, Priority, RelayRole,
     UpdatePeers, UpdateTopology, UpdateTrustedPeers,
@@ -59,9 +61,8 @@ fn test_network_id(seed: &str) -> NetworkId {
 }
 #[cfg(test)]
 fn test_soranet_handshake_runtime() -> Arc<SoranetHandshakeRuntime> {
-    let mut handshake = ActualSoranetHandshake::default();
-    handshake.pow.required = false;
-    runtime_from_handshake(handshake).expect("test SoraNet handshake runtime")
+    runtime_from_handshake_without_admission_for_test(ActualSoranetHandshake::default())
+        .expect("test SoraNet handshake runtime")
 }
 #[cfg(feature = "quic")]
 static NEXT_QUIC_CONN_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -18053,14 +18054,20 @@ mod tests {
         let Some(mut network) = bare_network() else {
             return;
         };
+        let replay_dir = tempfile::tempdir().expect("temporary replay-ledger directory");
+        let replay_path = replay_dir.path().join("revocations.norito");
+        let mut initial_handshake = ActualSoranetHandshake::default();
+        initial_handshake.pow.revocation_store_path =
+            replay_path.to_string_lossy().into_owned().into();
+        network.soranet_handshake =
+            runtime_from_handshake(initial_handshake.clone()).expect("mandatory test runtime");
         let initial = network
             .soranet_handshake
             .snapshot()
             .expect("initial handshake policy");
         let initial_capacity = initial.puzzle_work_capacities().0;
         let changed_capacity = if initial_capacity.get() == 1 { 2 } else { 1 };
-        let mut rejected = ActualSoranetHandshake::default();
-        rejected.pow.required = false;
+        let mut rejected = initial_handshake.clone();
         rejected.pow.outbound_mint_capacity =
             std::num::NonZeroUsize::new(changed_capacity).expect("non-zero capacity");
         let (rejected_response, rejected_result) = oneshot::channel();
@@ -18084,8 +18091,7 @@ mod tests {
                 .expect("policy after rejection")
         ));
 
-        let mut accepted = ActualSoranetHandshake::default();
-        accepted.pow.required = false;
+        let mut accepted = initial_handshake;
         accepted.pow.difficulty = 6;
         let (accepted_response, accepted_result) = oneshot::channel();
         network.handle_soranet_handshake_update(message::UpdateHandshake {

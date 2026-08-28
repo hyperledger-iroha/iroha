@@ -4433,11 +4433,12 @@ impl V2ApplyService {
         context: &wire::HeightContext,
         body: &SignedBlock,
     ) -> Result<(), V2ApplyError> {
-        let reference = body
-            .execution_context()
-            .and_then(|bundle| bundle.merge_entry.as_ref());
         self.kura
-            .retain_pending_certified_merge_entry_for_locked_carrier(context.height, reference)?;
+            .retain_pending_certified_merge_entry_for_locked_carrier(
+                context.height,
+                body.header().prev_block_hash(),
+                body.header().view_change_index(),
+            )?;
         Ok(())
     }
     fn validate_prospective_autoscale_retirement_queue(

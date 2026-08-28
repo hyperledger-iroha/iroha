@@ -6751,16 +6751,14 @@ mod tests_null_decode {
             crate::sum::SumLayoutV1::option(1).expect("int Option layout"),
         )
         .expect("read int Option");
-        assert!(present, "numeric JSON integer tokens must be accepted");
-        assert_eq!(words.len(), 1);
-        let int = vm.validate_tlv(words[0]).expect("int TLV");
-        assert_eq!(int.type_id, PointerType::Int);
+        assert!(
+            !present,
+            "generic JSON_SET_I64 number tokens stay outside the exact-number surface"
+        );
+        assert!(words.is_empty());
         assert_eq!(
             get_gas,
-            WsvHost::json_gas(
-                object_with_value_len + key_name_bytes.len(),
-                int.payload.len() + 16,
-            )
+            WsvHost::json_gas(object_with_value_len + key_name_bytes.len(), 16)
         );
         let name: Name = "wonderland".parse().expect("name");
         let name_bytes = norito::to_bytes(&name).expect("encode name");

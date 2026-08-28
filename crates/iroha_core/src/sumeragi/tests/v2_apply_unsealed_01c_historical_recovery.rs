@@ -13,7 +13,8 @@ v2_apply_test!(
             block::consensus::{NativeAmxPhase, SumeragiAutonomousLaneExecutionStage},
             isi::SetKeyValue,
         };
-        let fixture = ApplyFixture::new_with_native_lane_lifecycle();
+        // Finality reauthentication binds the fixture context to the State network.
+        let fixture = ApplyFixture::new_with_options_and_network(false, false, true, true, true);
         let assert_fixture_context = |stage: &str| {
             assert_eq!(
                 crate::sumeragi::v2_recovery::committed_execution_policy_hash(
@@ -423,7 +424,9 @@ v2_apply_test!(
                 )
                 .expect("default Native AMX signing limits"),
             );
-        let local_key = validator_keys[0].clone();
+        let local_leader_index = usize::try_from(active_context.context().leader(0))
+            .expect("height-three leader index fits usize");
+        let local_key = validator_keys[local_leader_index].clone();
         let local_peer = PeerId::new(local_key.public_key().clone());
         let mut lane_work = crate::sumeragi::v2_lane_work::V2LaneWorkAdapter::new(
             active_context.context().clone(),
@@ -653,6 +656,68 @@ v2_apply_test!(
             .expect("autonomous candidate carries one execution batch");
         assert_eq!(batch.application_block_header, application_header);
         assert_eq!(batch.lanes.len(), 1);
+        let parent_header = fixture
+            .state
+            .latest_block_header_fast()
+            .expect("autonomous execution candidate has its exact committed parent");
+        assert_eq!(parent_header.hash(), successor.body.hash());
+        lane_work.drain_effects(usize::MAX);
+        lane_work
+            .retain_merge_sidecars_for_global_view(0, None, None)
+            .expect("refresh and sign the exact locally built execution candidate");
+        let candidate_bytes = candidate.canonical_bytes();
+        assert!(
+            lane_work
+                .drain_effects(usize::MAX)
+                .into_iter()
+                .any(|effect| matches!(
+                    effect,
+                    crate::sumeragi::v2_lane_work::V2LaneWorkEffect::BroadcastMerge(share)
+                        if share.leader_candidate_body.as_deref()
+                            == Some(candidate_bytes.as_slice())
+                )),
+            "the real leader refresh path must sign and broadcast the exact execution candidate"
+        );
+        assert_eq!(
+            lane_work.merge_execution_full_validation_checks_for_test(),
+            0,
+            "State's validating builder result must seed the exact adapter memo"
+        );
+        for _ in 0..4 {
+            lane_work
+                .validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)
+                .expect("validate the exact execution candidate through the adapter");
+        }
+        assert_eq!(
+            lane_work.merge_execution_full_validation_checks_for_test(),
+            0,
+            "the locally built execution candidate must not be fully reexecuted by the adapter"
+        );
+        let mut mutated_candidate = candidate.clone();
+        mutated_candidate
+            .execution_batch
+            .as_mut()
+            .expect("mutated candidate retains its execution batch")
+            .batch_hash = Hash::new(b"different execution batch bytes");
+        assert!(
+            lane_work
+                .validate_merge_execution_candidate_for_test(&mutated_candidate, &parent_header, 0,)
+                .is_err(),
+            "a byte-distinct execution candidate must miss the positive memo and fail closed"
+        );
+        assert_eq!(
+            lane_work.merge_execution_full_validation_checks_for_test(),
+            1,
+            "a byte-distinct execution candidate must take the full-validation path"
+        );
+        lane_work
+            .validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)
+            .expect("the exact memo remains valid after a rejected byte-distinct candidate");
+        assert_eq!(
+            lane_work.merge_execution_full_validation_checks_for_test(),
+            1,
+            "a rejected candidate must not replace the exact positive memo"
+        );
         let execution = &batch.lanes[0];
         assert_eq!(execution.source_bundle, source.source_bundle);
         assert_eq!(execution.source_bundle_hash, source.bundle_hash);

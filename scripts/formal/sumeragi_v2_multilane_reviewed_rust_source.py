@@ -76,7 +76,7 @@ API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/"
         "SumeragiHttpTransportContractTest.kt",
         (
-            "fun `status and diagnostics reject missing parameterized or ambiguous JSON content types`()",
+            "fun `status and diagnostics accept parameters and reject malformed or ambiguous JSON content types`()",
             "status endpoint must reject a diagnostics-shaped payload",
             "diagnostics endpoint must reject a status-shaped payload",
         ),
@@ -85,7 +85,7 @@ API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/"
         "SumeragiHttpTransportTests.java",
         (
-            "public void responsesRequireExactContentTypeCanonicalLengthAndBoundedBody()",
+            "public void responsesAcceptParametersAndRejectMalformedContentTypesLengthsAndBodies()",
             "status endpoint must reject a diagnostics-shaped payload",
             "diagnostics endpoint must reject a status-shaped payload",
         ),
@@ -154,7 +154,7 @@ FIXTURE_CANONICAL_OWNER_SOURCE_CHECKS = (
         "scripts/write_sumeragi_v2_release_receipt.py",
         (
             '"write_sumeragi_v2_release_receipt_gate_evidence.py": (',
-            "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b",
+            "0d89b39300b4d1b83e28623a75bcabdf31574451dfe68d8f1b67a49afd1dc440",
             '_SDK_SOURCE_CLOSURE_RESOLVER = "ci/'
             'resolve_sumeragi_v2_sdk_source_closure.py"',
             '_SDK_SOURCE_CLOSURE_MANIFEST = "ci/'
@@ -285,9 +285,9 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
             "observed_test_count=34",
             "ExactCertificateCardinalityTests",
             "SumeragiV2WireFixtureTests'",
-            "observed_test_count=43",
+            "observed_test_count=44",
             "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest",
-            "observed_test_count=42",
+            "observed_test_count=43",
             "--tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests",
         ),
     ),

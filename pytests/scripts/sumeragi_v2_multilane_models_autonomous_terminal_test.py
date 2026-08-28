@@ -79,8 +79,8 @@ def test_autonomous_terminal_recovery_rejects_prime_unchanged_vacuity(
     replace_once_after(
         path,
         "PublishCanonicalQueueTerminalEvidence ==",
-        "/\\ UNCHANGED canonicalTerminalBatchVars",
-        "/\\ UNCHANGED canonicalTerminalBatchVars\n"
+        "/\\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>",
+        "/\\ UNCHANGED <<canonicalOutcomeSetComplete, canonicalCarrierBatchPreflighted, partialCanonicalCleanup>>\n"
         "  /\\ UNCHANGED startupTerminalUnitVars",
     )
     errors = validate_autonomous_terminal_recovery_fixture(
