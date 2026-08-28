@@ -500,7 +500,7 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
         .expect("ordinary lane-only service follows the terminal branch");
     let terminal_branch = &run_inner[cut_start..cut_end];
     assert!(terminal_branch.contains("reconcile_decided_lane_certified_serve("));
-    assert!(terminal_branch.contains("retry_decided_lane_recovery_exact_output("));
+    assert!(terminal_branch.contains("reconcile_terminal_lane_output_handoffs("));
     assert!(
         !terminal_branch.contains("if pending_exact_output"),
         "source-retained output cannot yield before finalized lane preflight"
@@ -542,12 +542,13 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
         .expect("an incomplete boundary re-enters preflight");
     assert!(preflight < incomplete && incomplete < drain && drain < dispatch && dispatch < retry);
     let final_output_retry = open_preflight
-        .rfind("retry_decided_lane_recovery_exact_output(")
+        .rfind("reconcile_terminal_lane_output_handoffs(")
         .expect("successful preflight rechecks exact output immediately before closure");
-    let pending_output_yield = open_preflight
-        .find("if rollover_ready && terminal_exact_output_pending")
-        .expect("source-retained exact output keeps physical ingress open");
-    assert!(preflight < final_output_retry && final_output_retry < pending_output_yield);
+    assert!(preflight < final_output_retry);
+    assert!(
+        !open_preflight.contains("if rollover_ready && terminal_exact_output_pending"),
+        "successful preflight must close shared admission before waiting on exact output"
+    );
 
     let finite_drain = &run_inner[close_start..];
     let close = finite_drain
@@ -559,22 +560,30 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
     let retire_mode = finite_drain
         .find("DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix")
         .expect("closed-prefix lane-local traffic is retired without adapter admission");
+    let relay_drain = finite_drain
+        .find("drain_finalized_lane_relay_prefix(")
+        .expect("closed shared admission leaves a finite lane-relay prefix");
     let dispatch = finite_drain
         .find("dispatch_lane_work_effects(")
         .expect("the finite prefix publishes only monotonic-safe output");
     let final_output_retry = finite_drain[dispatch..]
-        .find("retry_decided_lane_recovery_exact_output(")
+        .find("reconcile_terminal_lane_output_handoffs(")
         .map(|offset| dispatch + offset)
         .expect("closed-prefix output is retried before empty-cut authentication");
+    let both_empty = finite_drain
+        .find("if drained_terminal_ingress || drained_terminal_relay")
+        .expect("both admitted ingress prefixes must empty before rollover");
     let authenticate = finite_drain
         .find("ensure_closed_drained_cut()")
         .expect("the finite prefix is authenticated empty");
     assert!(
         close < drain
             && drain < retire_mode
-            && retire_mode < dispatch
+            && retire_mode < relay_drain
+            && relay_drain < dispatch
             && dispatch < final_output_retry
-            && final_output_retry < authenticate
+            && final_output_retry < both_empty
+            && both_empty < authenticate
     );
 
     let late_cut = run_inner
@@ -677,12 +686,11 @@ fn finalized_closed_prefix_retires_historical_lane_certificate_without_adapter_a
         .expect("historical certificate retains one validator")
         .clone();
     let active_height = fixture.context.height.saturating_add(1);
-    let inbound = super::super::fair_v2_ingress_admit_for_test(
-        InboundBlockMessage::from_authenticated_peer(
+    let inbound =
+        super::super::fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::LaneBlockCertificate(Box::new(fixture.certificate)),
             sender,
-        ),
-    );
+        ));
     assert!(matches!(
         prepare_decided_lane_recovery_ingress(&inbound, active_height),
         DecidedLaneRecoveryIngressPreparation::LaneLocal

@@ -1625,13 +1625,8 @@ pub mod isi {
         NativeEscrow(Vec<u8>),
         /// Fund a VPN lease retained record.
         VpnLease(Vec<u8>),
-        /// Deposit into one exact governed SCCP route escrow.
-        SccpEscrowDeposit {
-            /// Stable transcript tag distinguishing owner funding from outbound locking.
-            tag: &'static str,
-            /// Complete route, asset, source, destination, and amount binding.
-            binding: Vec<u8>,
-        },
+        /// Lock one user's outbound transfer in an exact governed SCCP route escrow.
+        SccpOutboundEscrowLock(Vec<u8>),
         /// Fund one exact owner-funded native FX reserve.
         FxCorridorEscrowDeposit(Vec<u8>),
         /// Charge one exact SNS auto-renewal quote.
@@ -1672,8 +1667,6 @@ pub mod isi {
         SorafsReserve(Vec<u8>),
         /// Move value from verified fee-sponsor custody.
         FeeSponsor(Vec<u8>),
-        /// Refund one exact inactive governed SCCP route escrow to its owner.
-        SccpEscrowRefund(Vec<u8>),
         /// Refund one exact inactive native FX reserve to its immutable owner.
         FxCorridorEscrowRefund(Vec<u8>),
         /// Move one exact transparent balance effect authorized by a native privacy proof.
@@ -1710,7 +1703,7 @@ pub mod isi {
         ) -> Self {
             let is_sccp_deposit = matches!(
                 &purpose,
-                EmbeddedNumericAssetMovementPurpose::SccpEscrowDeposit { .. }
+                EmbeddedNumericAssetMovementPurpose::SccpOutboundEscrowLock(_)
             );
             let is_fx_deposit = matches!(
                 &purpose,
@@ -1789,9 +1782,9 @@ pub mod isi {
                     "vpn-lease-funding",
                     binding,
                 ),
-                EmbeddedNumericAssetMovementPurpose::SccpEscrowDeposit { tag, binding } => (
+                EmbeddedNumericAssetMovementPurpose::SccpOutboundEscrowLock(binding) => (
                     NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
-                    tag,
+                    "sccp-outbound-route-lock",
                     binding,
                 ),
                 EmbeddedNumericAssetMovementPurpose::FxCorridorEscrowDeposit(binding) => (
@@ -1923,12 +1916,6 @@ pub mod isi {
                     "fee-sponsor-custody",
                     binding,
                     NumericAssetTransferSourcePolicy::FeeSponsorCustody,
-                    NumericAssetTransferControlPolicy::Enforce,
-                ),
-                RetainedNumericAssetMovementPurpose::SccpEscrowRefund(binding) => (
-                    "sccp-route-escrow-refund",
-                    binding,
-                    NumericAssetTransferSourcePolicy::SccpEscrowRelease,
                     NumericAssetTransferControlPolicy::Enforce,
                 ),
                 RetainedNumericAssetMovementPurpose::FxCorridorEscrowRefund(binding) => (
@@ -5367,25 +5354,94 @@ pub mod isi {
         state_transaction.world.account(&escrow)?;
         Ok((route.settlement.custody_owner.clone(), escrow))
     }
+    fn sccp_liability_quantity(
+        outstanding_liability: u128,
+        payload_amount_scale: u32,
+    ) -> Result<Quantity, Error> {
+        let numeric = Numeric::try_new(outstanding_liability, payload_amount_scale).map_err(
+            |error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "SCCP liability {outstanding_liability} is not representable at governed scale {payload_amount_scale}: {error}"
+                    )
+                    .into(),
+                )
+            },
+        )?;
+        Quantity::from_canonical_numeric(numeric).map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("SCCP liability is outside the quantity domain: {error}").into(),
+            )
+            .into()
+        })
+    }
+    fn sccp_escrow_balance(
+        state_transaction: &StateTransaction<'_, '_>,
+        escrow_asset: &AssetId,
+    ) -> Quantity {
+        state_transaction
+            .world
+            .assets
+            .get(escrow_asset)
+            .map(|value| value.as_ref().clone())
+            .unwrap_or_else(Quantity::zero)
+    }
     fn execute_sccp_route_escrow_deposit(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
         asset_definition_id: &AssetDefinitionId,
+        payload_amount: u128,
         amount: Quantity,
-        owner_only: bool,
-        tag: &'static str,
     ) -> Result<(), Error> {
-        let (owner, escrow) =
+        let (_owner, escrow) =
             resolve_sccp_route_escrow_binding(state_transaction, route_key, asset_definition_id)?;
-        if owner_only && authority != &owner {
+        let route = state_transaction
+            .sccp_registry
+            .route(route_key)
+            .expect("resolved SCCP escrow route remains governed");
+        let payload_amount_scale = route.settlement.payload_amount_scale;
+        let maximum = route.settlement.max_outstanding_liability;
+        if amount != sccp_liability_quantity(payload_amount, payload_amount_scale)? {
             return Err(InstructionExecutionError::InvariantViolation(
-                "only the exact SCCP route custody owner may fund its protocol escrow".into(),
+                "SCCP outbound transfer amount differs from its canonical payload units".into(),
             )
             .into());
         }
+        let current = state_transaction
+            .world
+            .sccp_route_liabilities
+            .get(route_key)
+            .copied();
+        let current_units = current.map_or(0, |record| record.outstanding_liability);
+        let next = match current {
+            Some(record) => record.checked_credit(payload_amount, maximum),
+            None if payload_amount <= maximum => {
+                iroha_data_model::bridge::SccpRouteLiabilityV1::new(payload_amount)
+            }
+            None => None,
+        }
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "SCCP outbound liability overflow or immutable route cap exceeded: current={current_units}, amount={payload_amount}, maximum={maximum}"
+                )
+                .into(),
+            )
+        })?;
         let source_id = AssetId::new(asset_definition_id.clone(), authority.clone());
         let destination_id = AssetId::new(asset_definition_id.clone(), escrow);
+        let expected_before = sccp_liability_quantity(current_units, payload_amount_scale)?;
+        let actual_before = sccp_escrow_balance(state_transaction, &destination_id);
+        if actual_before != expected_before {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "SCCP route escrow is not fully backed before outbound lock: balance={actual_before}, liability={expected_before}"
+                )
+                .into(),
+            )
+            .into());
+        }
         let binding = canonical_numeric_movement_binding(&(
             route_key.clone(),
             asset_definition_id.clone(),
@@ -5396,31 +5452,30 @@ pub mod isi {
         execute_numeric_asset_movement(
             state_transaction,
             source_id,
-            destination_id,
+            destination_id.clone(),
             amount,
             NumericAssetMovementAuthorization::embedded_user(
                 authority,
-                EmbeddedNumericAssetMovementPurpose::SccpEscrowDeposit { tag, binding },
+                EmbeddedNumericAssetMovementPurpose::SccpOutboundEscrowLock(binding),
             ),
-        )
-    }
-    /// Fund one exact SCCP route escrow from its immutable custody owner.
-    pub(crate) fn execute_sccp_route_owner_funding(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
-        asset_definition_id: &AssetDefinitionId,
-        amount: Quantity,
-    ) -> Result<(), Error> {
-        execute_sccp_route_escrow_deposit(
-            state_transaction,
-            authority,
-            route_key,
-            asset_definition_id,
-            amount,
-            true,
-            "sccp-route-owner-funding",
-        )
+        )?;
+        let expected_after =
+            sccp_liability_quantity(next.outstanding_liability, payload_amount_scale)?;
+        let actual_after = sccp_escrow_balance(state_transaction, &destination_id);
+        if actual_after != expected_after {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "SCCP route escrow is not fully backed after outbound lock: balance={actual_after}, liability={expected_after}"
+                )
+                .into(),
+            )
+            .into());
+        }
+        state_transaction
+            .world
+            .sccp_route_liabilities
+            .insert(route_key.clone(), next);
+        Ok(())
     }
     /// Lock an outbound SCCP sender's funds in the exact governed route escrow.
     pub(crate) fn execute_sccp_outbound_route_lock(
@@ -5428,6 +5483,7 @@ pub mod isi {
         authority: &AccountId,
         route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
         asset_definition_id: &AssetDefinitionId,
+        payload_amount: u128,
         amount: Quantity,
     ) -> Result<(), Error> {
         execute_sccp_route_escrow_deposit(
@@ -5435,45 +5491,8 @@ pub mod isi {
             authority,
             route_key,
             asset_definition_id,
+            payload_amount,
             amount,
-            false,
-            "sccp-outbound-route-lock",
-        )
-    }
-    /// Refund an inactive SCCP route escrow only to its immutable custody owner.
-    pub(crate) fn execute_sccp_route_owner_refund(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
-        asset_definition_id: &AssetDefinitionId,
-        amount: Quantity,
-    ) -> Result<(), Error> {
-        let (owner, escrow) =
-            resolve_sccp_route_escrow_binding(state_transaction, route_key, asset_definition_id)?;
-        if authority != &owner {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "only the exact SCCP route custody owner may refund its protocol escrow".into(),
-            )
-            .into());
-        }
-        let source_id = AssetId::new(asset_definition_id.clone(), escrow);
-        let destination_id = AssetId::new(asset_definition_id.clone(), owner);
-        let binding = canonical_numeric_movement_binding(&(
-            route_key.clone(),
-            asset_definition_id.clone(),
-            source_id.clone(),
-            destination_id.clone(),
-            amount.clone(),
-        ))?;
-        execute_numeric_asset_movement(
-            state_transaction,
-            source_id,
-            destination_id,
-            amount,
-            NumericAssetMovementAuthorization::retained(
-                authority,
-                RetainedNumericAssetMovementPurpose::SccpEscrowRefund(binding),
-            ),
         )
     }
     fn resolve_fx_corridor_escrow_binding(
@@ -5584,9 +5603,13 @@ pub mod isi {
     /// applied twice by reusing a prepared plan.
     #[derive(Debug)]
     pub(crate) struct PreparedSccpInboundNumericAssetRelease {
+        route_key: iroha_data_model::bridge::SccpRouteKeyV1,
         source_id: AssetId,
         destination_id: AssetId,
         amount: Quantity,
+        liability_before: iroha_data_model::bridge::SccpRouteLiabilityV1,
+        liability_after: Option<iroha_data_model::bridge::SccpRouteLiabilityV1>,
+        expected_escrow_balance_after: Quantity,
         control_update: Option<AssetTransferControlRecord>,
         delta: TransferDeltaTranscript,
     }
@@ -5601,6 +5624,7 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
         destination: AccountId,
+        payload_amount: u128,
         amount: Quantity,
     ) -> Result<PreparedSccpInboundNumericAssetRelease, Error> {
         state_transaction.require_transfer_transcript_identity("SCCP native inbound settlement")?;
@@ -5614,9 +5638,53 @@ pub mod isi {
                 )
             })?;
         let asset_definition_id = route.settlement.asset_definition_id.clone();
+        let payload_amount_scale = route.settlement.payload_amount_scale;
+        if amount != sccp_liability_quantity(payload_amount, payload_amount_scale)? {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP inbound transfer amount differs from its canonical payload units".into(),
+            )
+            .into());
+        }
+        let liability_before = state_transaction
+            .world
+            .sccp_route_liabilities
+            .get(route_key)
+            .copied()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "SCCP inbound release has no outstanding route liability".into(),
+                )
+            })?;
+        let liability_after = liability_before
+            .checked_debit(payload_amount)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "SCCP inbound release exceeds outstanding route liability: liability={}, amount={payload_amount}",
+                        liability_before.outstanding_liability
+                    )
+                    .into(),
+                )
+            })?;
         let (_owner, escrow) =
             resolve_sccp_route_escrow_binding(state_transaction, route_key, &asset_definition_id)?;
         let source_id = AssetId::new(asset_definition_id, escrow);
+        let expected_escrow_balance_before =
+            sccp_liability_quantity(liability_before.outstanding_liability, payload_amount_scale)?;
+        let expected_escrow_balance_after = sccp_liability_quantity(
+            liability_after.map_or(0, |record| record.outstanding_liability),
+            payload_amount_scale,
+        )?;
+        let actual_before = sccp_escrow_balance(state_transaction, &source_id);
+        if actual_before != expected_escrow_balance_before {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "SCCP route escrow is not fully backed before inbound release: balance={actual_before}, liability={expected_escrow_balance_before}"
+                )
+                .into(),
+            )
+            .into());
+        }
         let destination_id = AssetId::new(source_id.definition().clone(), destination);
         let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
             state_transaction,
@@ -5630,10 +5698,22 @@ pub mod isi {
         let delta = state_transaction
             .world
             .precheck_numeric_asset_transfer_delta_exact(&source_id, &destination_id, &amount)?;
+        if delta.from_balance_before != expected_escrow_balance_before
+            || delta.from_balance_after != expected_escrow_balance_after
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "prepared SCCP inbound balance delta differs from its liability transition".into(),
+            )
+            .into());
+        }
         Ok(PreparedSccpInboundNumericAssetRelease {
+            route_key: route_key.clone(),
             source_id,
             destination_id,
             amount,
+            liability_before,
+            liability_after,
+            expected_escrow_balance_after,
             control_update,
             delta,
         })
@@ -5644,6 +5724,17 @@ pub mod isi {
         submitting_authority: &AccountId,
         prepared: PreparedSccpInboundNumericAssetRelease,
     ) -> Result<(), Error> {
+        if state_transaction
+            .world
+            .sccp_route_liabilities
+            .get(&prepared.route_key)
+            != Some(&prepared.liability_before)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP route liability changed between inbound preparation and apply".into(),
+            )
+            .into());
+        }
         state_transaction
             .world
             .apply_prechecked_numeric_asset_transfer_delta_exact(
@@ -5652,12 +5743,40 @@ pub mod isi {
                 &prepared.delta,
             )?;
         let PreparedSccpInboundNumericAssetRelease {
+            route_key,
             source_id,
             destination_id,
             amount,
+            liability_before: _,
+            liability_after,
+            expected_escrow_balance_after,
             control_update,
             delta,
         } = prepared;
+        match liability_after {
+            Some(record) => {
+                state_transaction
+                    .world
+                    .sccp_route_liabilities
+                    .insert(route_key, record);
+            }
+            None => {
+                state_transaction
+                    .world
+                    .sccp_route_liabilities
+                    .remove(route_key);
+            }
+        }
+        let actual_after = sccp_escrow_balance(state_transaction, &source_id);
+        if actual_after != expected_escrow_balance_after {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "SCCP route escrow is not fully backed after inbound release: balance={actual_after}, liability={expected_escrow_balance_after}"
+                )
+                .into(),
+            )
+            .into());
+        }
         if let Some(record) = control_update {
             update_control_record(state_transaction, source_id.account(), record)?;
         }

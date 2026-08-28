@@ -44,23 +44,18 @@ pub(in crate::sumeragi) struct AuthenticatedGenesisStoredReplayEvidenceV1 {
 enum AuthenticatedCertifiedLocalValidateFamilyV1 {
     Genesis(CertifiedBodyPipelineReplayFamilyV1),
     ProtectedLock(CertifiedBodyPipelineReplayFamilyV1),
-    ProtectedDecision(CertifiedBodyPipelineReplayFamilyV1),
 }
 
 impl AuthenticatedCertifiedLocalValidateFamilyV1 {
     const fn family(&self) -> &CertifiedBodyPipelineReplayFamilyV1 {
         match self {
-            Self::Genesis(family)
-            | Self::ProtectedLock(family)
-            | Self::ProtectedDecision(family) => family,
+            Self::Genesis(family) | Self::ProtectedLock(family) => family,
         }
     }
 
     fn family_mut(&mut self) -> &mut CertifiedBodyPipelineReplayFamilyV1 {
         match self {
-            Self::Genesis(family)
-            | Self::ProtectedLock(family)
-            | Self::ProtectedDecision(family) => family,
+            Self::Genesis(family) | Self::ProtectedLock(family) => family,
         }
     }
 
@@ -69,7 +64,7 @@ impl AuthenticatedCertifiedLocalValidateFamilyV1 {
             Self::Genesis(family) => {
                 authenticated_genesis_standalone_source(verified, &family.source)
             }
-            Self::ProtectedLock(family) | Self::ProtectedDecision(family) => {
+            Self::ProtectedLock(family) => {
                 authenticated_refined_proposal_standalone_source(verified, &family.source)
             }
         }
@@ -529,71 +524,6 @@ impl LocalValidateReplayEvidenceV1 {
         let evidence = Self {
             family: LocalValidateReplayFamilyV1::AuthenticatedCertified(
                 AuthenticatedCertifiedLocalValidateFamilyV1::ProtectedLock(family),
-            ),
-            validate_pending: Arc::new(pending),
-        };
-        evidence
-            .exactly_matches_validate_pending(effect, receipt, evidence.validate_pending.as_ref())
-            .then_some(evidence)
-    }
-
-    /// Reseal one already-validated body whose direct lifecycle row retired
-    /// before the exact durable Decision could project its Apply successor.
-    ///
-    /// The supplied CommitQC remains the complete restart authority. No Fetch
-    /// or Store shortcut is admitted: the manifest and durable receipt must
-    /// reproduce the same standalone Validate family, and the pending binding
-    /// must carry the exact Commit statement.
-    pub(in crate::sumeragi) fn from_exact_protected_decision_validate(
-        effect: &AdapterEffect,
-        manifest: &wire::PayloadManifest,
-        receipt: &DurableBodyReceipt,
-        validated_receipt: &ValidatedBodyReceipt,
-        certificate: &wire::QuorumCertificate,
-        pending: PendingRuntimeEffectBinding,
-    ) -> Option<Self> {
-        let AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject,
-        } = effect
-        else {
-            return None;
-        };
-        let statement = pending.candidate_statement()?;
-        if !pending.exactly_binds_adapter_effect(effect)
-            || certificate.phase != wire::GlobalPhase::Commit
-            || certificate.round != statement.round()
-            || certificate.proposal_round != *round
-            || certificate.proposal_round != manifest.round
-            || certificate.subject != *subject
-            || manifest.round != *round
-            || manifest.subject != *subject
-            || validated_receipt.durable() != receipt
-            || validated_receipt.execution_commitment() != certificate.execution_commitment
-            || statement.context_id() != certificate.round.context_id
-            || statement.proposal_round() != certificate.proposal_round
-            || statement.subject() != Some(certificate.subject)
-            || statement.phase() != Some(wire::GlobalPhase::Commit)
-            || statement.execution_commitment() != Some(certificate.execution_commitment)
-        {
-            return None;
-        }
-        let coordinates = CertifiedBodyPipelineCoordinatesV1 {
-            tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
-            certificate: certificate.clone(),
-            manifest: manifest.clone(),
-            fetch_manifest_present: true,
-            certified_sources: Vec::new(),
-        };
-        let family = exact_certified_body_pipeline_family(&coordinates, receipt)?;
-        if !certified_body_stage_matches(&family, effect, receipt, LifecycleStageKind::ValidateBody)
-        {
-            return None;
-        }
-        let evidence = Self {
-            family: LocalValidateReplayFamilyV1::AuthenticatedCertified(
-                AuthenticatedCertifiedLocalValidateFamilyV1::ProtectedDecision(family),
             ),
             validate_pending: Arc::new(pending),
         };

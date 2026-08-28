@@ -29,6 +29,8 @@ fn configure_subprocess_sanitizer_with_limits(
         iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_BYTES,
         iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
         8 * 1024 * 1024,
+        iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT,
+        iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_BYTES,
         iroha_config::parameters::defaults::torii::attachments_allowed_mime_types(),
         max_expanded_bytes,
         max_archive_depth,

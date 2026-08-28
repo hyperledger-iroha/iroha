@@ -95,9 +95,10 @@ The following gauges are exposed via Prometheus when telemetry is enabled:
 - `p2p_queue_depth{priority="Safety|Progress|High|Low"}`: bounded network actor queue depth by scheduling lane.
 - `p2p_queue_dropped_total{priority="High|Low",kind="Post|Broadcast"}`: bounded network actor queue drops by priority/kind.
 - `p2p_handshake_failures`: number of P2P handshake failures (timeouts, signature/verification errors).
-- `soranet_pow_revocation_store_total{reason}`: count of SoraNet PoW revocation store fallbacks
-  (e.g., load failures forcing an in-memory cache). Alert when this rises—replay protection relies
-  on a healthy on-disk snapshot.
+- `soranet_pow_revocation_store_total{reason}`: count of SoraNet PoW revocation-store failures
+  (for example, a poisoned store lock, exhausted capacity, or an unwritable snapshot). Alert when
+  this rises; the corresponding handshake fails closed and replay protection is never downgraded
+  to an in-memory-only fallback.
 - `p2p_low_post_throttled_total`: number of Low-priority post messages throttled by per-peer token-buckets.
 - `p2p_low_broadcast_throttled_total`: number of Low-priority broadcast deliveries throttled by per-peer token-buckets.
 - `p2p_post_overflow_total`: number of per-peer post channel overflows (bounded per-topic channels).
@@ -211,25 +212,37 @@ p2p_scion_outbound_total 0
   - High: `Consensus`, `Control` (biased priority)
   - Low: `BlockSync`, `TxGossip`, `PeerGossip`, `Health`, `Other` (fair scheduling)
 - Message payload types implement `iroha_p2p::network::message::ClassifyTopic` to supply their topic. `iroha_core::NetworkMessage` provides the mapping for core messages.
+- Inbound and forwarded egress scheduling derive their lanes exclusively from
+  that semantic topic. Relay envelopes carry no independent priority field, so
+  a remote peer cannot request promotion into a protected queue at either hop.
 - A small fairness budget guarantees Low topics make progress during sustained High traffic.
 
 ### Proxy Support (HTTP CONNECT / SOCKS5)
 
 - Knobs (`[network]`):
-  - `p2p_proxy` (string; optional): outbound proxy URL (e.g., `http://user:pass@proxy.example.com:8080` or `socks5://user:pass@proxy.example.com:1080`).
+  - `p2p_proxy` (string; optional): outbound proxy URL (e.g., `http://proxy.example.com:8080`, `socks5://proxy.example.com:1080`, or `https://user:pass@proxy.example.com:8443`). Credentials are accepted only on pinned HTTPS.
   - `p2p_proxy_required` (bool; default `false`): when true, require `p2p_proxy` to be set, disallow `p2p_no_proxy` exemptions, and fail startup otherwise. Note: QUIC bypasses the proxy, so `quic_enabled=true` is rejected when `p2p_proxy_required=true`.
   - `p2p_no_proxy` (array of strings): host suffixes to bypass the proxy (e.g., `.example.com`, `localhost`). Must be empty when `p2p_proxy_required=true`.
-  - `p2p_proxy_tls_verify` (bool; default `true`): verify an `https://` proxy hop (certificate pinning).
-  - `p2p_proxy_tls_pinned_cert_der_base64` (string; optional): pinned end-entity proxy certificate (DER, base64). Required when `p2p_proxy_tls_verify=true`.
+  - `outbound_dial_allow_cidrs` / `outbound_dial_deny_cidrs` (arrays of CIDRs): constrain every literal or resolved peer and proxy address. Empty allow-lists are unrestricted; deny entries take precedence.
+  - `outbound_dial_allow_dns_suffixes` / `outbound_dial_deny_dns_suffixes` (arrays of DNS suffixes): constrain peer and proxy hostnames at DNS label boundaries. Empty allow-lists are unrestricted; deny entries take precedence.
+  - `p2p_proxy_tls_verify` (bool; default `true`): must remain true for an `https://` proxy hop.
+  - `p2p_proxy_tls_pinned_cert_der_base64` (string; optional): pinned end-entity proxy certificate (DER, base64). Required for every `https://` proxy.
 - When `p2p_proxy` is set and the target host is not exempted, the dialer tunnels via:
   - HTTP `CONNECT host:port` for `http://...` / `https://...`
     - `http://...` uses plaintext TCP to the proxy.
     - `https://...` wraps the proxy connection in pinned TLS before issuing `CONNECT`. TLS support is an unconditional part of `iroha_p2p`.
   - SOCKS5 `CONNECT` for `socks5://...` / `socks5h://...`
 - Notes:
-  - Basic authentication is supported via `user:pass@...` in the proxy URL.
-  - Exemptions are matched as simple host suffixes (e.g., `.example.com`, `localhost`) when `p2p_proxy_required=false`.
-  - Disabling `p2p_proxy_tls_verify` may expose proxy credentials (and proxy traffic metadata) to MITM on the proxy hop.
+  - Basic authentication is supported via `user:pass@...` only for an `https://` proxy with an exact leaf-certificate pin. Credentials on HTTP or SOCKS5 are rejected before connecting or writing bytes.
+  - HTTP CONNECT authorities are constructed from the typed socket address.
+    Hostnames must be ASCII DNS names with valid LDH labels; malformed names
+    are rejected before credentials or any other bytes are written to the
+    proxy.
+  - Proxy exemptions and outbound DNS policy suffixes match only complete DNS labels, so `example.com` never matches `notexample.com`. IPv4-mapped IPv6 literals and mapped-specific (`/96` or narrower) CIDRs are canonicalized to IPv4 for both dial admission and exact-IP proxy exemptions; deny rules additionally retain the original IPv6 match so representation changes cannot weaken them.
+  - The outbound policy checks the logical name before lookup and every concrete address returned by the one lookup used for the dial. One lookup may retain at most 64 raw answers; a 65th answer fails the attempt before dialing. TCP, QUIC, SCION-preferred QUIC, SOCKS5, and HTTP(S) CONNECT share the same fail-closed policy.
+  - When a CIDR policy applies to a proxied hostname, the node resolves it locally before opening the proxy connection and tunnels to an admitted numeric endpoint. This prevents remote proxy DNS from bypassing the CIDR policy and avoids a second resolution window.
+  - Malformed proxy hosts, CIDRs, and DNS suffixes abort startup before listeners are bound.
+  - Disabling `p2p_proxy_tls_verify` for an HTTPS proxy is rejected before connecting.
   - Proxies apply only to the mandatory TLS-over-TCP dial. QUIC (UDP) bypasses the proxy; set `quic_enabled=false` and `p2p_proxy_required=true` (with no `p2p_no_proxy` exemptions) if you must force all outbound P2P traffic through a proxy.
   - If no proxy is configured, connections go direct.
 
@@ -238,8 +251,8 @@ p2p_scion_outbound_total 0
 Iroha can optionally use a relay hub to improve reachability when some peers are behind NAT/firewalls or in censored networks. This is an application-level relay (forwarding encrypted frames), not a special Internet routing mechanism.
 
 Every relay envelope carries an end-to-end origin signature over a
-domain-separated commitment to the origin, final target, priority, and
-canonical application payload. First-release node and target identities are
+domain-separated commitment to the origin, final target, and canonical
+application payload. First-release node and target identities are
 BLS-normal, so relay admission has one fixed 96-byte signature geometry and no
 per-algorithm verification branch. Hubs preserve that signature and may only
 decrement the unsigned hop-limit (`relay_ttl`). Receivers verify the signature
@@ -249,6 +262,31 @@ peer's semantic origin. Unsigned relay envelopes are not accepted. TTL is
 deliberately hop-local rather than cryptographically monotonic: the shipped
 forwarder only decrements it, while a Byzantine relay can still replay a valid
 envelope or replace its TTL without changing any signed semantic field.
+Ingress and forwarded-egress scheduling derive priority from the authenticated
+payload topic; the envelope has no competing priority metadata.
+Every receiver clamps that mutable TTL to its own configured `relay_ttl` before
+delivery/forwarding decisions. A hub address learned from topology gossip is a
+dial candidate, not relay authority: a spoke or assist node grants hub
+authority only after its own exact address-and-PeerId dial authenticates a peer
+advertising the Hub role. That proof remains pinned until local configuration or
+the peer ACL revokes it, and its exact outbound attempt is not suppressed by an
+unproven inbound connection for the same identity. Assist and Spoke nodes reserve
+one slot below `max_total_connections` while no authenticated hub or exact hub
+dial occupies it. Ordinary inbound and outbound connections cannot spend that
+slot; only a current address-snapshot entry whose PeerId and address match a
+configured hub candidate may do so, and the physical hard cap is never exceeded.
+For Assist mode, operators must size `max_total_connections` for the direct
+protected-source topology plus the hub. An invalid origin signature or a
+mismatch between the signed origin and the authenticated direct sender rejects
+and quarantines that exact connection tenure until queued deliveries drain. A
+violation without an exact connection tenure is dropped and cannot evict a
+replacement session by PeerId alone.
+
+Reliable semantic-progress delivery signs its relay envelope once on first
+actor dispatch and retains that exact allocation across direct, broadcast, and
+hub-fallback retries. The target cursor, writer-flush receipts, byte lease, and
+topology/reply authority remain in one bounded actor-owned item, so retry cannot
+repeat BLS signing or create an uncharged payload copy.
 
 - Knobs (`[network]`):
   - `relay_mode` (string; `disabled` | `hub` | `spoke` | `assist`)
@@ -412,6 +450,30 @@ trust_min_score = -20              # drop trust gossip at or below this score
 - Trusted peers configured locally remain in the P2P topology even if they are not in the
   world-state topology (e.g., observers). They still receive gossip and block sync but do not
   change the consensus roster.
+- Peer-address gossip is accepted only from a current topology member or a
+  locally configured peer; runtime trust promotion does not create metadata
+  authority. Address votes are narrower: only active validators contribute,
+  the complete roster must have exact `3f + 1` geometry (including the local
+  node exactly when it is an active validator),
+  and a uniquely top-ranked mapping backed by at least `f + 1` distinct
+  active-validator reports is required before a non-configured mapping reaches
+  the dialer. Conflicting top-count mappings fail closed.
+  Honest nodes advertise only their operator-provided startup mappings, never a
+  connected peer's self-asserted handshake address, so one Byzantine peer
+  cannot manufacture independent echo endorsements. Startup mappings retain
+  precedence over all gossip. Before the first committed block, the configured
+  validator roster is authoritative. After replay and after every applied block,
+  a supervised daemon task publishes the exact committed roster to the gossiper;
+  a lagged event receiver reconciles directly from the latest committed state,
+  so removed validators lose address-vote authority without a restart.
+  A new or rotated non-startup mapping cannot bootstrap from its target's
+  handshake claim; at least `f + 1` active validators must be configured with
+  the identical mapping and observe that peer online.
+- Transport capability metadata is self-authoritative only: a gossiped
+  capability entry is accepted only when its subject is the authenticated
+  sender. Third-party capability hints cannot force preferred-transport dial
+  attempts for another peer; directly observed signed handshake capabilities
+  remain available for reconnect scheduling.
 - Trust gossip capability: peers advertise `trust_gossip` during the handshake. When a peer sets
   `trust_gossip=false`, it will neither send nor accept trust gossip frames, but regular peer-address
   gossip continues unaffected. The default is `true`, and public (NPoS) deployments should leave it on
@@ -498,31 +560,56 @@ admission API.
 ### Optional QUIC Transport
 
 - Build-time: enable `iroha_p2p/quic` to include QUIC support.
-- Runtime: set `[network].quic_enabled = true` to make the QUIC listener and dialer mandatory startup components. A runtime QUIC connection failure may fall back only to authenticated TLS.
-- Current status: inbound QUIC accepts authenticated bidirectional streams. Outbound dialing can attempt QUIC to hostnames with mandatory TLS as the only fallback.
-- Authentication: nodes use self-signed transport certificates. Rustls verifies
+- Current shipping status: `[network].quic_enabled = true` is rejected before
+  any UDP socket is created. The lockfile resolves quinn-proto 0.11.15, while
+  released 0.11.17 fixes unauthenticated remote-memory exhaustion in stream
+  reassembly and connection-ID retirement as well as DATAGRAM accounting.
+  Mandatory authenticated TLS-over-TCP remains the active P2P transport.
+- The QUIC implementation and its focused tests remain as dormant
+  requalification material. After the lockfile reaches quinn-proto 0.11.17 or
+  later, rerun the abuse and interoperability suites before allowing
+  `[network].quic_enabled = true` again.
+- Dormant QUIC authentication: nodes use self-signed transport certificates. Rustls verifies
   the TLS `CertificateVerify` proof, then the Iroha identity handshake signs the
   certificate fingerprint together with the active SoraNet session and V5
   transport-delegation binding. A certificate issued by an untrusted root is
   therefore acceptable, but replaying another node's certificate without its
   private key is not.
-- Best-effort datagrams: when `[network].quic_datagrams_enabled = true` (default), small best-effort topics (`TxGossip`, `PeerGossip`, `TrustGossip`, `Health`) may be sent over QUIC DATAGRAM instead of streams. This avoids retransmission/head-of-line blocking for "green" traffic and is safe to drop. Reliable topics remain stream-only.
-  - `[network].quic_datagram_max_payload_bytes` (default: 1200) caps the QUIC DATAGRAM payload size conservatively to avoid fragmentation.
-  - `[network].quic_datagram_receive_buffer_bytes` / `[network].quic_datagram_send_buffer_bytes` control the QUIC DATAGRAM buffers **per active QUIC connection** (default: 1 MiB each; both must be non-zero to enable the extension). Their process-level memory term is `max_total_connections × (receive + send)`, in addition to the bounded actor, connected-stream, deferred-frame, and subscriber owners; they are not aggregate endpoint-wide caps.
+- Best-effort datagrams are independently fail-closed. The default is
+  `[network].quic_datagrams_enabled = false`, and startup rejects an explicit
+  `true` before binding sockets. QUIC endpoints advertise no DATAGRAM receive
+  support and retain no DATAGRAM send queue; `TxGossip`, `PeerGossip`,
+  `TrustGossip`, and `Health` therefore use their reliable-stream fallback.
+  - The payload and per-connection buffer knobs remain in the schema for
+    requalification but cannot currently enable the extension.
+  - Locked `quinn-proto` 0.11.15 charges its private receive queue by payload
+    bytes only, so zero-length entries can consume no configured budget before
+    application polling. Released quinn-proto 0.11.17 fixes this with
+    `DatagramBuffer::memory_used()` (payload plus fixed `Datagram` overhead).
+    Upgrade the lockfile to released quinn-proto 0.11.17 or later before
+    re-enabling DATAGRAM.
+  - The dormant P2P ingress still has eager pre-authentication draining,
+    exact-size payload compaction, a serialized authentication boundary, and a
+    256-entry handoff charged to the process-wide low-priority byte budget.
+    These defenses and focused tests remain for dependency-upgrade
+    requalification; they are not presented as a bound on Quinn's vulnerable
+    pre-poll queue.
 
 ### Mandatory TLS-over-TCP
 
 - TLS-over-TCP is compiled unconditionally; there is no feature or supported build profile that removes it.
 - `[network].address` is the TLS 1.3 listener and outbound TCP dials always upgrade to TLS 1.3 with the exact `iroha-p2p/1` ALPN. There is no plaintext listener, retry, or runtime downgrade knob.
 - Identity remains authenticated by the canonical V5 application handshake, which binds the certificate fingerprint and configured `NetworkId`; rustls separately verifies possession of the self-signed certificate key.
-- Requesting QUIC without compiled support, or failing to initialize its dialer or listener, aborts startup. A runtime QUIC connection failure may fall back only to this authenticated TLS path.
+- Requesting QUIC currently aborts startup because of the locked dependency;
+  requesting it without compiled support also remains an error. There is no
+  silent downgrade from an explicitly requested transport.
 
 ### No WebSocket peer transport
 
 The first release exposes no Torii WebSocket peer route, build feature, dialer,
-or external stream adapter. Peer traffic enters only through the process-owned
-TLS 1.3 or QUIC listeners that provide the exact certificate fingerprint used
-by V5 channel-binding admission.
+or external stream adapter. Shipping peer traffic enters through the
+process-owned TLS 1.3 listener; dormant QUIC uses the same exact certificate
+fingerprint in V5 channel-binding admission.
 
 ### First-release SoraNet P2P authentication (V5)
 
@@ -715,4 +802,6 @@ Recommended:
 
 - TLS: TLS 1.3 and the exact raw-P2P ALPN are unconditional.
 - QUIC: configure idle timeout via `[network].quic_max_idle_timeout_ms`.
-- QUIC DATAGRAM (best-effort): tune via `[network].quic_datagrams_enabled`, `[network].quic_datagram_max_payload_bytes`, `[network].quic_datagram_receive_buffer_bytes`, and `[network].quic_datagram_send_buffer_bytes`.
+- QUIC DATAGRAM (best-effort): unavailable in the shipping profile until
+  quinn-proto 0.11.17 or later is locked and requalified. Leave
+  `[network].quic_datagrams_enabled = false`; an explicit `true` aborts startup.

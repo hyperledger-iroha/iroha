@@ -1060,6 +1060,13 @@ fn with_stateful_admission_keys(
     expand_authority_placeholders(&mut set, tx.authority());
     set.add_read(key_account(tx.authority()));
     set.add_write(key_tx_sequence(tx.authority()));
+    match crate::tx::faucet_claim_consumption_marker(tx) {
+        Ok(Some((path, _))) => {
+            set.add_write(access_key_from_state_log(&path.to_string()));
+        }
+        Ok(None) => {}
+        Err(_) => return (AccessSet::global(), source),
+    }
     if let Executable::ContractCall(invocation) = tx.instructions() {
         set.add_read(format!("contract.instance:{}", invocation.contract_address));
         let lifecycle_marker =
@@ -2531,8 +2538,13 @@ mod tests {
     use iroha_data_model::{
         isi::Log,
         level::Level,
-        transaction::{Executable, ExecutableBatchItem, IvmBytecode, TransactionBuilder},
+        metadata::Metadata,
+        transaction::{
+            Executable, ExecutableBatchItem, IvmBytecode, PREPARED_FAUCET_OPERATION,
+            TransactionBuilder,
+        },
     };
+    use iroha_primitives::json::Json;
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
     const TEST_GAS_LIMIT: u64 = 50_000_000;
     fn test_network_id() -> iroha_data_model::NetworkId {
@@ -2821,6 +2833,54 @@ mod tests {
         let non_main_entrypoints = vec![run, hajimari];
         assert!(select_entrypoint(&non_main_entrypoints, None).is_none());
         assert!(select_entrypoint(&[view_main], None).is_none());
+    }
+    #[test]
+    fn duplicate_faucet_claims_share_one_scheduler_write_key() {
+        let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
+        let marked = |message: &str| {
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
+                    .parse()
+                    .expect("marker version key"),
+                Json::new(iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1),
+            );
+            metadata.insert(
+                iroha_data_model::transaction::PREPARED_OPERATION_METADATA_KEY
+                    .parse()
+                    .expect("operation key"),
+                Json::new(PREPARED_FAUCET_OPERATION.to_owned()),
+            );
+            metadata.insert(
+                iroha_data_model::transaction::PREPARED_SEMANTIC_HASH_METADATA_KEY
+                    .parse()
+                    .expect("semantic key"),
+                Json::new("ab".repeat(iroha_crypto::Hash::LENGTH)),
+            );
+            TransactionBuilder::new(
+                test_network_id(),
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_metadata(metadata)
+            .with_instructions([Log::new(Level::INFO, message.to_owned())])
+            .sign(keypair.private_key())
+        };
+        let first = marked("first binding");
+        let second = marked("second binding");
+        assert_ne!(first.hash(), second.hash());
+        let marker_key = crate::tx::faucet_claim_consumption_marker(&first)
+            .expect("valid marker")
+            .expect("present marker")
+            .0;
+        let expected = access_key_from_state_log(&marker_key.to_string());
+        for transaction in [&first, &second] {
+            let (set, _) = with_stateful_admission_keys(transaction, AccessSet::new(), None);
+            assert!(
+                set.write_keys.contains(&expected),
+                "same authority and semantic claim must serialize through one marker key"
+            );
+        }
     }
     #[test]
     fn lifecycle_calls_write_the_instance_marker_scheduler_key() {

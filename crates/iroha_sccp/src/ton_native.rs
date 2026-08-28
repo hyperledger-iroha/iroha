@@ -14,15 +14,20 @@ use super::{
     sccp_lane_id_hash_v1, sccp_lane_source_event_digest_v1, sccp_message_id,
     sccp_source_identity_hash_v1, verify_sccp_payload_structure,
 };
-use alloc::{collections::BTreeSet, vec, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec,
+    vec::Vec,
+};
 use core::fmt;
 use iroha_data_model::bridge::{
     SCCP_TON_BASECHAIN_WORKCHAIN_V1, SCCP_TON_MAINNET_GLOBAL_ID_V1,
     SCCP_TON_MAINNET_ZERO_STATE_FILE_HASH_V1, SCCP_TON_MAINNET_ZERO_STATE_ROOT_HASH_V1,
     SCCP_TON_MASTERCHAIN_SHARD_V1, SCCP_TON_MASTERCHAIN_WORKCHAIN_V1,
     SCCP_TON_TESTNET_GLOBAL_ID_V1, SCCP_TON_TESTNET_ZERO_STATE_FILE_HASH_V1,
-    SCCP_TON_TESTNET_ZERO_STATE_ROOT_HASH_V1, SCCP_TON_ZERO_STATE_SEQNO_V1, SccpNetworkV1,
-    SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTonAddressV1,
+    SCCP_TON_TESTNET_ZERO_STATE_ROOT_HASH_V1, SCCP_TON_ZERO_STATE_SEQNO_V1,
+    SCCP_V1_TON_STORAGE_VERSION, SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
+    SccpTonAddressV1,
 };
 use sha2::{Digest as _, Sha256, Sha512};
 
@@ -56,7 +61,6 @@ const TON_CONSENSUS_CANDIDATE_EMPTY_TL_CONSTRUCTOR: u32 = 0x72b4_d933;
 const TON_CONSENSUS_SIMPLEX_FINALIZE_TL_CONSTRUCTOR: u32 = 0x40a7_e105;
 const TON_SCCP_EVENT_OP_V1: u32 = 0x5343_4350;
 const TON_SCCP_EVENT_VERSION_V1: u16 = 1;
-const TON_SOURCE_STORAGE_VERSION_V1: u8 = 1;
 const TON_MAX_CELL_DATA_BYTES: usize = 128;
 const TON_MAX_BOC_BYTES: usize = 64 * 1024;
 const TON_MAX_BOC_CELLS: usize = 4_096;
@@ -569,13 +573,29 @@ fn push_u64_le(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static TON_ROSTER_KEY_PARSE_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+fn parse_ton_validator_public_key(public_key: &H256) -> Option<()> {
+    #[cfg(test)]
+    TON_ROSTER_KEY_PARSE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+    iroha_crypto::ed25519_parse_public_key(public_key).ok()?;
+    Some(())
+}
+
 /// Return the native short node id of one strict Ed25519 validator key.
 pub fn ton_validator_node_id_short_v1(public_key: &H256) -> Option<H256> {
-    iroha_crypto::ed25519_parse_public_key(public_key).ok()?;
+    parse_ton_validator_public_key(public_key)?;
+    Some(ton_validator_node_id_short_from_validated(public_key))
+}
+
+fn ton_validator_node_id_short_from_validated(public_key: &H256) -> H256 {
     let mut boxed = Vec::with_capacity(36);
     push_u32_le(&mut boxed, TON_PUB_ED25519_TL_CONSTRUCTOR);
     boxed.extend_from_slice(public_key);
-    Some(Sha256::digest(&boxed).into())
+    Sha256::digest(&boxed).into()
 }
 
 /// Reproduce TON's native CRC32C validator-list hash exactly.
@@ -584,6 +604,13 @@ pub fn ton_validator_list_hash_short_v1(
     validators: &[TonValidatorV1],
 ) -> Option<u32> {
     validate_validator_roster(validators)?;
+    ton_validator_list_hash_short_from_validated(catchain_seqno, validators)
+}
+
+fn ton_validator_list_hash_short_from_validated(
+    catchain_seqno: u32,
+    validators: &[TonValidatorV1],
+) -> Option<u32> {
     let mut bytes = Vec::with_capacity(12usize.checked_add(validators.len().checked_mul(72)?)?);
     push_i32_le(&mut bytes, -1_877_581_587);
     push_u32_le(&mut bytes, catchain_seqno);
@@ -614,7 +641,8 @@ fn validate_validator_roster(validators: &[TonValidatorV1]) -> Option<u64> {
         if nonzero(&validator.adnl_address) && !adnl.insert(validator.adnl_address) {
             return None;
         }
-        let node_id = ton_validator_node_id_short_v1(&validator.public_key)?;
+        parse_ton_validator_public_key(&validator.public_key)?;
+        let node_id = ton_validator_node_id_short_from_validated(&validator.public_key);
         if !node_ids.insert(node_id) {
             return None;
         }
@@ -625,7 +653,7 @@ fn validate_validator_roster(validators: &[TonValidatorV1]) -> Option<u64> {
 
 fn validate_active_validator_set(set: &TonValidatorSetV1) -> Option<u64> {
     let total = validate_validator_roster(&set.validators)?;
-    (ton_validator_list_hash_short_v1(set.catchain_seqno, &set.validators)?
+    (ton_validator_list_hash_short_from_validated(set.catchain_seqno, &set.validators)?
         == set.validator_list_hash_short)
         .then_some(total)
 }
@@ -644,18 +672,22 @@ fn validate_validator_config(config: &TonValidatorConfigV1) -> Option<()> {
 /// Canonical bytes committed by the governed TON native anchor hash.
 pub fn canonical_ton_native_anchor_bytes_v1(anchor: &TonNativeAnchorV1) -> Option<Vec<u8>> {
     validate_ton_native_anchor(anchor)?;
+    canonical_ton_native_anchor_bytes_from_validated(anchor)
+}
+
+fn canonical_ton_native_anchor_bytes_from_validated(anchor: &TonNativeAnchorV1) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     out.push(anchor.version);
     out.push(ton_network_tag(anchor.network)?);
     push_block_id_canonical(&mut out, anchor.zero_state);
     push_block_id_canonical(&mut out, anchor.checkpoint);
     out.extend_from_slice(&anchor.checkpoint_state_root);
-    push_validator_set_canonical(&mut out, &anchor.active_validator_set)?;
+    push_validator_set_canonical_from_validated(&mut out, &anchor.active_validator_set)?;
     match &anchor.pending_validator_config {
         None => out.push(0),
         Some(config) => {
             out.push(1);
-            push_validator_config_canonical(&mut out, config)?;
+            push_validator_config_canonical_from_validated(&mut out, config)?;
         }
     }
     Some(out)
@@ -675,8 +707,10 @@ fn push_validator_canonical(out: &mut Vec<u8>, validator: &TonValidatorV1) {
     out.extend_from_slice(&validator.adnl_address);
 }
 
-fn push_validator_set_canonical(out: &mut Vec<u8>, set: &TonValidatorSetV1) -> Option<()> {
-    validate_active_validator_set(set)?;
+fn push_validator_set_canonical_from_validated(
+    out: &mut Vec<u8>,
+    set: &TonValidatorSetV1,
+) -> Option<()> {
     push_u32_le(out, set.catchain_seqno);
     push_u32_le(out, set.validator_list_hash_short);
     push_u32_le(out, u32::try_from(set.validators.len()).ok()?);
@@ -686,8 +720,10 @@ fn push_validator_set_canonical(out: &mut Vec<u8>, set: &TonValidatorSetV1) -> O
     Some(())
 }
 
-fn push_validator_config_canonical(out: &mut Vec<u8>, config: &TonValidatorConfigV1) -> Option<()> {
-    validate_validator_config(config)?;
+fn push_validator_config_canonical_from_validated(
+    out: &mut Vec<u8>,
+    config: &TonValidatorConfigV1,
+) -> Option<()> {
     push_u32_le(out, config.valid_since);
     push_u32_le(out, config.valid_until);
     push_u16_le(out, config.main_validator_count);
@@ -718,9 +754,14 @@ fn validate_ton_native_anchor(anchor: &TonNativeAnchorV1) -> Option<()> {
 
 /// Hash one valid governed TON native checkpoint.
 pub fn ton_native_anchor_hash_v1(anchor: &TonNativeAnchorV1) -> Option<H256> {
+    validate_ton_native_anchor(anchor)?;
+    ton_native_anchor_hash_from_validated(anchor)
+}
+
+fn ton_native_anchor_hash_from_validated(anchor: &TonNativeAnchorV1) -> Option<H256> {
     Some(prefixed_blake2b(
         TON_NATIVE_ANCHOR_PREFIX_V1,
-        &canonical_ton_native_anchor_bytes_v1(anchor)?,
+        &canonical_ton_native_anchor_bytes_from_validated(anchor)?,
     ))
 }
 
@@ -914,10 +955,12 @@ fn verify_block_signatures(
         .validators
         .iter()
         .map(|validator| {
-            ton_validator_node_id_short_v1(&validator.public_key).map(|id| (id, validator))
+            (
+                ton_validator_node_id_short_from_validated(&validator.public_key),
+                validator,
+            )
         })
-        .collect::<Option<Vec<_>>>()
-        .ok_or(TonNativeSourceError::InvalidValidatorSet)?;
+        .collect::<BTreeMap<_, _>>();
     let mut seen = BTreeSet::new();
     let mut signed_weight = 0_u64;
     let mut raw_signatures = Vec::<&[u8]>::with_capacity(entries.len());
@@ -928,8 +971,8 @@ fn verify_block_signatures(
             return Err(TonNativeSourceError::InvalidSignatures);
         }
         let validator = by_node
-            .iter()
-            .find_map(|(id, validator)| (*id == signature.node_id_short).then_some(*validator))
+            .get(&signature.node_id_short)
+            .copied()
             .ok_or(TonNativeSourceError::InvalidSignatures)?;
         signed_weight = signed_weight
             .checked_add(validator.weight)
@@ -941,6 +984,9 @@ fn verify_block_signatures(
     if u128::from(signed_weight) * 3 <= u128::from(total_weight) * 2 {
         return Err(TonNativeSourceError::InvalidSignatures);
     }
+    // The batch verifier's signer-key parsing is charged by
+    // `ed25519_signature_checks`; roster parsing above is charged separately
+    // by `validator_key_checks_upper_bound`.
     iroha_crypto::ed25519_verify_batch_deterministic(&messages, &raw_signatures, &raw_keys)
         .map_err(|_| TonNativeSourceError::InvalidSignatures)
 }
@@ -1247,23 +1293,17 @@ fn parse_ton_boc(bytes: &[u8]) -> Option<TonBoc> {
     let roots_count = ton_read_sized_uint(bytes, &mut cursor, size_bytes)?;
     let absent_count = ton_read_sized_uint(bytes, &mut cursor, size_bytes)?;
     let total_cells_size = ton_read_sized_uint(bytes, &mut cursor, offset_bytes)?;
-    if cells_count == 0
-        || cells_count > TON_MAX_BOC_CELLS
-        || roots_count == 0
-        || roots_count > cells_count
-        || absent_count != 0
+    if cells_count == 0 || cells_count > TON_MAX_BOC_CELLS || roots_count != 1 || absent_count != 0
     {
         return None;
     }
-    let mut roots = Vec::with_capacity(roots_count);
-    for _ in 0..roots_count {
-        let root = ton_read_sized_uint(bytes, &mut cursor, size_bytes)?;
-        if root >= cells_count || roots.contains(&root) {
-            return None;
-        }
-        roots.push(root);
+    let root = ton_read_sized_uint(bytes, &mut cursor, size_bytes)?;
+    if root >= cells_count {
+        return None;
     }
-    if has_index {
+    let roots = vec![root];
+    let index_offsets = if has_index {
+        let mut offsets = Vec::with_capacity(cells_count);
         let mut previous = 0_usize;
         for index in 0..cells_count {
             let offset = ton_read_sized_uint(bytes, &mut cursor, offset_bytes)?;
@@ -1274,8 +1314,12 @@ fn parse_ton_boc(bytes: &[u8]) -> Option<TonBoc> {
                 return None;
             }
             previous = offset;
+            offsets.push(offset);
         }
-    }
+        Some(offsets)
+    } else {
+        None
+    };
     let cell_data_start = cursor;
     let cell_data_end = cell_data_start.checked_add(total_cells_size)?;
     let expected_end = cell_data_end.checked_add(if has_crc32c { 4 } else { 0 })?;
@@ -1314,6 +1358,12 @@ fn parse_ton_boc(bytes: &[u8]) -> Option<TonBoc> {
                 return None;
             }
             refs.push(reference);
+        }
+        if index_offsets
+            .as_ref()
+            .is_some_and(|offsets| offsets.get(cell_index) != Some(&cell_cursor))
+        {
+            return None;
         }
         cells.push(TonBocCell {
             descriptor: descriptor & !0x10,
@@ -1509,34 +1559,117 @@ fn ton_boc_cell_hashes(boc: &TonBoc) -> Option<Vec<TonComputedCell>> {
 
 fn parse_single_root_boc(bytes: &[u8]) -> Option<(TonBoc, Vec<TonComputedCell>, usize)> {
     let boc = parse_ton_boc(bytes)?;
-    let computed = ton_boc_cell_hashes(&boc)?;
     if boc.roots.len() != 1 {
         return None;
     }
     let root = *boc.roots.first()?;
+    let computed = ton_boc_cell_hashes(&boc)?;
     Some((boc, computed, root))
 }
 
-fn ton_virtual_root_index(boc: &TonBoc, index: usize) -> Option<usize> {
-    match ton_cell_type(boc.cells.get(index)?)? {
-        TonCellType::Ordinary => Some(index),
-        TonCellType::MerkleProof => boc.cells.get(index)?.refs.first().copied(),
-        TonCellType::PrunedBranch | TonCellType::MerkleUpdate => None,
+fn ton_merkle_opened_index(boc: &TonBoc, mut index: usize) -> Option<usize> {
+    let mut remaining = boc.cells.len().checked_add(1)?;
+    loop {
+        remaining = remaining.checked_sub(1)?;
+        match ton_cell_type(boc.cells.get(index)?)? {
+            TonCellType::Ordinary | TonCellType::PrunedBranch => return Some(index),
+            TonCellType::MerkleProof => {
+                index = *boc.cells.get(index)?.refs.first()?;
+            }
+            TonCellType::MerkleUpdate => return None,
+        }
     }
+}
+
+fn ton_virtual_root_index(boc: &TonBoc, index: usize) -> Option<usize> {
+    let index = ton_merkle_opened_index(boc, index)?;
+    (ton_cell_type(boc.cells.get(index)?)? == TonCellType::Ordinary).then_some(index)
+}
+
+fn ton_original_tree_hash(computed: &[TonComputedCell], index: usize) -> Option<H256> {
+    Some(computed.get(index)?.hashes[0])
+}
+
+fn ton_opened_original_tree_hash(
+    boc: &TonBoc,
+    computed: &[TonComputedCell],
+    index: usize,
+) -> Option<H256> {
+    ton_original_tree_hash(computed, ton_merkle_opened_index(boc, index)?)
 }
 
 fn ton_proven_root_hash(boc: &TonBoc, computed: &[TonComputedCell], root: usize) -> Option<H256> {
     match ton_cell_type(boc.cells.get(root)?)? {
-        TonCellType::Ordinary => Some(computed.get(root)?.hashes[3]),
+        TonCellType::Ordinary => ton_original_tree_hash(computed, root),
         TonCellType::MerkleProof => boc.cells.get(root)?.data.get(1..33)?.try_into().ok(),
         TonCellType::PrunedBranch | TonCellType::MerkleUpdate => None,
     }
 }
 
-/// Derive the authenticated representation hash of one bounded single-root BoC.
+/// Derive the authenticated hash-zero identity of one bounded single-root BoC.
 pub fn ton_boc_single_root_hash_v1(bytes: &[u8]) -> Option<H256> {
     let (boc, computed, root) = parse_single_root_boc(bytes)?;
     ton_proven_root_hash(&boc, &computed, root)
+}
+
+// Parse one complete ordinary-cell DAG for strict deployment evidence.
+fn parse_complete_ordinary_single_root_boc(
+    bytes: &[u8],
+) -> Option<(TonBoc, Vec<TonComputedCell>, usize)> {
+    let (boc, computed, root) = parse_single_root_boc(bytes)?;
+    if boc
+        .cells
+        .iter()
+        .any(|cell| ton_cell_type(cell) != Some(TonCellType::Ordinary))
+    {
+        return None;
+    }
+    let mut reachable = vec![false; boc.cells.len()];
+    let mut pending = vec![root];
+    while let Some(index) = pending.pop() {
+        if *reachable.get(index)? {
+            continue;
+        }
+        *reachable.get_mut(index)? = true;
+        pending.extend_from_slice(&boc.cells.get(index)?.refs);
+    }
+    if reachable.iter().any(|seen| !seen) {
+        return None;
+    }
+    Some((boc, computed, root))
+}
+
+/// Derive the representation hash of one bounded single-root BOC whose complete
+/// cell DAG contains only ordinary cells rather than exotic proof wrappers.
+/// Deployment evidence uses this form so every committed cell is present and
+/// no unreachable trailing cell can masquerade as part of the artifact.
+#[must_use]
+pub fn ton_boc_single_ordinary_root_hash_v1(bytes: &[u8]) -> Option<H256> {
+    let (_boc, computed, root) = parse_complete_ordinary_single_root_boc(bytes)?;
+    ton_original_tree_hash(&computed, root)
+}
+
+/// Derive the basechain account id for the canonical SCCP TON `StateInit` made
+/// from exact code and data BOCs.
+///
+/// The constructed root has absent `split_depth` and `special`, present code
+/// and data references, and an empty library (`00110` in TL-B field order).
+/// Both supplied BOCs must be complete, single-root ordinary-cell DAGs.
+#[must_use]
+pub fn ton_state_init_address_hash_v1(code_boc: &[u8], data_boc: &[u8]) -> Option<H256> {
+    let (_code, code_cells, code_root) = parse_complete_ordinary_single_root_boc(code_boc)?;
+    let (_data, data_cells, data_root) = parse_complete_ordinary_single_root_boc(data_boc)?;
+    let (code_hash, code_depth) = ton_child_hash_depth(code_cells.get(code_root)?, 0)?;
+    let (data_hash, data_depth) = ton_child_hash_depth(data_cells.get(data_root)?, 0)?;
+    let mut repr = Vec::with_capacity(71);
+    repr.push(2); // two ordinary references, level mask zero
+    repr.push(1); // five data bits require one top-upped byte
+    repr.push(0x34); // 00110 plus the TON completion bit
+    repr.extend_from_slice(&code_depth.to_be_bytes());
+    repr.extend_from_slice(&data_depth.to_be_bytes());
+    repr.extend_from_slice(&code_hash);
+    repr.extend_from_slice(&data_hash);
+    Some(Sha256::digest(&repr).into())
 }
 
 fn ton_hashmap_uint_len_bits(max_value: usize) -> usize {
@@ -1991,7 +2124,6 @@ fn ton_read_validator_descr(reader: &mut TonBitReader<'_>) -> Option<TonValidato
         return None;
     }
     let public_key = reader.read_h256()?;
-    iroha_crypto::ed25519_parse_public_key(&public_key).ok()?;
     let weight = reader.read_u64(64)?;
     if weight == 0 {
         return None;
@@ -2089,7 +2221,8 @@ fn ton_parse_validator_config(boc: &TonBoc, cell_index: usize) -> Option<TonVali
     let valid_until = u32::try_from(reader.read_u64(32)?).ok()?;
     let total = u16::try_from(reader.read_u64(16)?).ok()?;
     let main_validator_count = u16::try_from(reader.read_u64(16)?).ok()?;
-    if total == 0
+    if valid_since >= valid_until
+        || total == 0
         || usize::from(total) > TON_MAX_VALIDATORS
         || main_validator_count == 0
         || main_validator_count > total
@@ -2146,15 +2279,13 @@ fn ton_parse_validator_config(boc: &TonBoc, cell_index: usize) -> Option<TonVali
     if declared_total_weight.is_some_and(|declared| declared != total_weight) {
         return None;
     }
-    let config = TonValidatorConfigV1 {
+    Some(TonValidatorConfigV1 {
         valid_since,
         valid_until,
         main_validator_count,
         shuffle_masterchain_validators: false,
         validators,
-    };
-    validate_validator_config(&config)?;
-    Some(config)
+    })
 }
 
 fn ton_parse_catchain_shuffle(boc: &TonBoc, cell_index: usize) -> Option<bool> {
@@ -2196,7 +2327,6 @@ fn ton_config_from_dictionary(boc: &TonBoc, root: usize) -> Option<TonValidatorC
     )?;
     let mut config = ton_parse_validator_config(boc, validators_cell)?;
     config.shuffle_masterchain_validators = ton_parse_catchain_shuffle(boc, catchain_cell)?;
-    validate_validator_config(&config)?;
     Some(config)
 }
 
@@ -2279,7 +2409,8 @@ fn ton_select_masterchain_validator_set(
     } else {
         config.validators.get(..count)?.to_vec()
     };
-    let validator_list_hash_short = ton_validator_list_hash_short_v1(catchain_seqno, &validators)?;
+    let validator_list_hash_short =
+        ton_validator_list_hash_short_from_validated(catchain_seqno, &validators)?;
     Some(TonValidatorSetV1 {
         catchain_seqno,
         validator_list_hash_short,
@@ -2429,7 +2560,7 @@ fn verify_masterchain_finality(
         return Err(TonNativeSourceError::WrongNetwork);
     }
     validate_ton_native_anchor(&proof.anchor).ok_or(TonNativeSourceError::InvalidAnchor)?;
-    if ton_native_anchor_hash_v1(&proof.anchor) != Some(expected_anchor_hash) {
+    if ton_native_anchor_hash_from_validated(&proof.anchor) != Some(expected_anchor_hash) {
         return Err(TonNativeSourceError::AnchorHashMismatch);
     }
     if proof.blocks.is_empty() || proof.blocks.len() > TON_MAX_MASTERCHAIN_BLOCKS {
@@ -2785,6 +2916,7 @@ fn ton_parse_transaction(
     if !reader.exhausted() {
         return None;
     }
+    let state_update = ton_virtual_root_index(boc, state_update)?;
     let update_cell = boc.cells.get(state_update)?;
     let mut update_reader = TonBitReader::new(update_cell)?;
     if update_reader.read_u64(8)? != 0x72 {
@@ -2796,7 +2928,7 @@ fn ton_parse_transaction(
         return None;
     }
     Some(TonParsedTransaction {
-        hash: computed.get(index)?.hashes[3],
+        hash: ton_original_tree_hash(computed, index)?,
         logical_time,
         previous_logical_time,
         old_account_hash,
@@ -3153,7 +3285,7 @@ fn ton_parse_external_event_message(
             payload,
         )?;
     }
-    Some(computed.get(index)?.hashes[3])
+    ton_original_tree_hash(computed, index)
 }
 
 fn ton_parse_shard_state_accounts(
@@ -3207,15 +3339,30 @@ fn ton_skip_storage_extra_info(reader: &mut TonBitReader<'_>) -> Option<()> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TonLastTransactionLtRequirement {
-    Exact(u64),
-    AtLeast(u64),
+    /// AccountStorage records the previous transaction's end LT, while the
+    /// current Transaction records that transaction's start LT in
+    /// `prev_trans_lt`. The next transaction may begin at the same LT as the
+    /// stored end, but never before it.
+    BetweenPreviousAndCurrent {
+        previous_start_lt: u64,
+        current_start_lt: u64,
+    },
+    /// AccountStorage records an end LT strictly after the corresponding
+    /// ShardAccount/Transaction start LT.
+    After(u64),
 }
 
 impl TonLastTransactionLtRequirement {
     fn accepts(self, actual: u64) -> bool {
         match self {
-            Self::Exact(expected) => actual == expected,
-            Self::AtLeast(minimum) => actual >= minimum,
+            Self::BetweenPreviousAndCurrent {
+                previous_start_lt,
+                current_start_lt,
+            } => {
+                (previous_start_lt == 0 && actual == 0 || previous_start_lt < actual)
+                    && actual <= current_start_lt
+            }
+            Self::After(minimum) => actual > minimum,
         }
     }
 }
@@ -3270,7 +3417,9 @@ fn ton_parse_account_deployment(
     if reader.read_bit()? {
         reader.read_ref()?;
     }
-    if !reader.exhausted() || computed.get(code)?.hashes[3] != expected_code_hash {
+    if !reader.exhausted()
+        || ton_opened_original_tree_hash(boc, computed, code)? != expected_code_hash
+    {
         return None;
     }
     let data = ton_virtual_root_index(boc, data)?;
@@ -3279,7 +3428,7 @@ fn ton_parse_account_deployment(
         return None;
     }
     let mut data_reader = TonBitReader::new(data_cell)?;
-    if u8::try_from(data_reader.read_u64(8)?).ok()? != TON_SOURCE_STORAGE_VERSION_V1
+    if u8::try_from(data_reader.read_u64(8)?).ok()? != SCCP_V1_TON_STORAGE_VERSION
         || data_reader.read_h256()? != expected_route_config_hash
     {
         return None;
@@ -3297,6 +3446,7 @@ fn ton_verify_transaction_pre_state(
     code_hash: H256,
     route_config_hash: H256,
     previous_transaction_lt: u64,
+    transaction_lt: u64,
 ) -> Result<(), TonNativeSourceError> {
     let (boc, computed, root) =
         parse_single_root_boc(proof_boc).ok_or(TonNativeSourceError::SourceDeploymentMismatch)?;
@@ -3310,7 +3460,10 @@ fn ton_verify_transaction_pre_state(
         emitter,
         code_hash,
         route_config_hash,
-        TonLastTransactionLtRequirement::Exact(previous_transaction_lt),
+        TonLastTransactionLtRequirement::BetweenPreviousAndCurrent {
+            previous_start_lt: previous_transaction_lt,
+            current_start_lt: transaction_lt,
+        },
     )
     .ok_or(TonNativeSourceError::SourceDeploymentMismatch)
 }
@@ -3366,7 +3519,8 @@ fn ton_verify_source_account_state(
         return Err(TonNativeSourceError::InvalidShardState);
     }
     if last_transaction_lt == transaction_lt
-        && ton_proven_root_hash(&boc, &computed, account_ref) != Some(transaction_new_account_hash)
+        && ton_opened_original_tree_hash(&boc, &computed, account_ref)
+            != Some(transaction_new_account_hash)
     {
         return Err(TonNativeSourceError::InvalidShardState);
     }
@@ -3377,7 +3531,7 @@ fn ton_verify_source_account_state(
         emitter,
         code_hash,
         route_config_hash,
-        TonLastTransactionLtRequirement::AtLeast(transaction_lt),
+        TonLastTransactionLtRequirement::After(last_transaction_lt),
     )
     .ok_or(TonNativeSourceError::SourceDeploymentMismatch)
 }
@@ -3517,6 +3671,7 @@ pub fn verify_ton_native_source(
         emitter.code_hash,
         emitter.route_config_hash,
         transaction.previous_logical_time,
+        transaction.logical_time,
     )?;
     if !ton_transaction_succeeded(&shard_boc, transaction)
         .ok_or(TonNativeSourceError::InvalidTransaction)?
@@ -3636,6 +3791,47 @@ mod tests {
         }
     }
 
+    fn pruned_branch_cell(mask: u8, hashes: &[H256], depths: &[u16]) -> TonBocCell {
+        let count = usize::from(ton_level_mask_level(mask));
+        assert_eq!(hashes.len(), count);
+        assert_eq!(depths.len(), count);
+        let mut data = vec![1, mask];
+        for hash in hashes {
+            data.extend_from_slice(hash);
+        }
+        for depth in depths {
+            data.extend_from_slice(&depth.to_be_bytes());
+        }
+        TonBocCell {
+            descriptor: 0x08 | (mask << 5),
+            data_descriptor: u8::try_from(data.len() * 2).expect("fixture cell byte count"),
+            data,
+            refs: Vec::new(),
+            exotic: true,
+        }
+    }
+
+    fn merkle_proof_cell(reference: usize, child_mask: u8, hash: H256, depth: u16) -> TonBocCell {
+        let mut data = vec![3];
+        data.extend_from_slice(&hash);
+        data.extend_from_slice(&depth.to_be_bytes());
+        TonBocCell {
+            descriptor: 0x09 | (ton_level_mask_value(child_mask >> 1) << 5),
+            data_descriptor: u8::try_from(data.len() * 2).expect("fixture cell byte count"),
+            data,
+            refs: vec![reference],
+            exotic: true,
+        }
+    }
+
+    fn reset_roster_key_parse_count() {
+        TON_ROSTER_KEY_PARSE_COUNT.with(|count| count.set(0));
+    }
+
+    fn roster_key_parse_count() -> usize {
+        TON_ROSTER_KEY_PARSE_COUNT.with(core::cell::Cell::get)
+    }
+
     #[derive(Default)]
     struct TestBits(Vec<bool>);
 
@@ -3710,7 +3906,7 @@ mod tests {
         account.bit(true); // data reference
         account.bit(false); // no library
 
-        let mut data = vec![TON_SOURCE_STORAGE_VERSION_V1];
+        let mut data = vec![SCCP_V1_TON_STORAGE_VERSION];
         data.extend_from_slice(&route_config_hash);
         TonBoc {
             roots: vec![0],
@@ -3730,17 +3926,26 @@ mod tests {
             .iter()
             .map(|cell| 2 + cell.data.len() + cell.refs.len())
             .sum::<usize>();
-        assert!(total_cells_size < 256);
+        assert!(total_cells_size < usize::from(u16::MAX));
+        let offset_bytes = if total_cells_size < 256 { 1 } else { 2 };
         let mut out = TON_BOC_MAGIC.to_vec();
         out.extend_from_slice(&[
             1,
-            1,
+            offset_bytes,
             u8::try_from(boc.cells.len()).expect("fixture cell count"),
             1,
             0,
-            u8::try_from(total_cells_size).expect("fixture serialized size"),
-            0,
         ]);
+        if offset_bytes == 1 {
+            out.push(u8::try_from(total_cells_size).expect("fixture serialized size"));
+        } else {
+            out.extend_from_slice(
+                &u16::try_from(total_cells_size)
+                    .expect("fixture serialized size")
+                    .to_be_bytes(),
+            );
+        }
+        out.push(0);
         for cell in &boc.cells {
             out.push(cell.descriptor);
             out.push(cell.data_descriptor);
@@ -3791,6 +3996,112 @@ mod tests {
             TON_CONSENSUS_CANDIDATE_WITHOUT_PARENTS_TL_CONSTRUCTOR,
         );
         candidate
+    }
+
+    fn masterchain_continuation_fixture(
+        previous: TonBlockIdExtV1,
+        active: &TonValidatorSetV1,
+    ) -> (TonBlockIdExtV1, Vec<u8>, H256, H256) {
+        let old_state = ordinary_cell(vec![0xa1], Vec::new());
+        let new_state = ordinary_cell(vec![0xa2], Vec::new());
+        let state_cells = TonBoc {
+            roots: vec![0],
+            cells: vec![old_state.clone(), new_state.clone()],
+        };
+        let state_hashes = ton_boc_cell_hashes(&state_cells).expect("state hashes");
+        let old_state_hash = state_hashes[0].hashes[0];
+        let new_state_hash = state_hashes[1].hashes[0];
+
+        let mut root = TestBits::default();
+        root.uint(u64::from(TON_BLOCK_CONSTRUCTOR), 32);
+        root.uint(
+            u64::from(u32::from_be_bytes(
+                SCCP_TON_MAINNET_GLOBAL_ID_V1.to_be_bytes(),
+            )),
+            32,
+        );
+
+        let mut info = TestBits::default();
+        info.uint(u64::from(TON_BLOCK_INFO_CONSTRUCTOR), 32);
+        info.uint(0, 32); // version
+        for _ in 0..8 {
+            info.bit(false);
+        }
+        info.uint(0, 8); // flags
+        info.uint(u64::from(previous.seqno + 1), 32);
+        info.uint(0, 32); // vertical seqno
+        info.uint(0, 2); // ShardIdent constructor
+        info.uint(0, 6); // masterchain prefix length
+        info.uint(u64::from(u32::MAX), 32);
+        info.uint(SCCP_TON_MASTERCHAIN_SHARD_V1, 64);
+        info.uint(1, 32); // generation time
+        info.uint(1, 64); // start logical time
+        info.uint(2, 64); // end logical time
+        info.uint(u64::from(active.validator_list_hash_short), 32);
+        info.uint(u64::from(active.catchain_seqno), 32);
+        info.uint(0, 32); // minimum referenced masterchain seqno
+        info.uint(0, 32); // previous key-block seqno
+
+        let mut previous_ref = TestBits::default();
+        previous_ref.uint(1, 64); // end logical time
+        previous_ref.uint(u64::from(previous.seqno), 32);
+        previous_ref.bytes(&previous.root_hash);
+        previous_ref.bytes(&previous.file_hash);
+
+        let mut update_data = vec![4];
+        update_data.extend_from_slice(&old_state_hash);
+        update_data.extend_from_slice(&new_state_hash);
+        update_data.extend_from_slice(&state_hashes[0].depths[0].to_be_bytes());
+        update_data.extend_from_slice(&state_hashes[1].depths[0].to_be_bytes());
+        let state_update = TonBocCell {
+            descriptor: 0x0a,
+            data_descriptor: u8::try_from(update_data.len() * 2)
+                .expect("fixture update descriptor"),
+            data: update_data,
+            refs: vec![4, 5],
+            exotic: true,
+        };
+
+        let mut extra = TestBits::default();
+        extra.bytes(&[0; 64]); // random seed and creator
+        extra.bit(true); // custom masterchain extra is present
+        let mut custom = TestBits::default();
+        custom.uint(u64::from(TON_MC_BLOCK_EXTRA_CONSTRUCTOR), 16);
+        custom.bit(false); // not a key block
+        custom.bit(false); // no ShardHashes dictionary needed for this finality-only fixture
+        custom.bit(false); // no shard-fees dictionary
+        for _ in 0..2 {
+            custom.uint(0, 4); // zero grams
+            custom.bit(false); // no extra currencies
+        }
+
+        let boc = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                root.cell(vec![1, 2, 3, 6]),
+                info.cell(vec![7]),
+                ordinary_cell(Vec::new(), Vec::new()),
+                state_update,
+                old_state,
+                new_state,
+                extra.cell(vec![8, 9, 10, 11]),
+                previous_ref.cell(Vec::new()),
+                ordinary_cell(Vec::new(), Vec::new()),
+                ordinary_cell(Vec::new(), Vec::new()),
+                ordinary_cell(Vec::new(), Vec::new()),
+                custom.cell(vec![12]),
+                ordinary_cell(Vec::new(), Vec::new()),
+            ],
+        };
+        let bytes = serialize_test_boc(&boc);
+        let block_id = TonBlockIdExtV1 {
+            workchain: SCCP_TON_MASTERCHAIN_WORKCHAIN_V1,
+            shard: SCCP_TON_MASTERCHAIN_SHARD_V1,
+            seqno: previous.seqno + 1,
+            root_hash: ton_boc_single_root_hash_v1(&bytes).expect("fixture block root"),
+            file_hash: Sha256::digest(&bytes).into(),
+        };
+        (block_id, bytes, old_state_hash, new_state_hash)
     }
 
     fn work_estimate_fixture() -> TonNativeSourceProofV1 {
@@ -3900,6 +4211,56 @@ mod tests {
         duplicate = validators.clone();
         duplicate[2].adnl_address = duplicate[0].adnl_address;
         assert_eq!(ton_validator_list_hash_short_v1(17, &duplicate), None);
+
+        let invalid_key = [0xff; 32];
+        assert_eq!(ton_validator_node_id_short_v1(&invalid_key), None);
+        duplicate = validators;
+        duplicate[2].public_key = invalid_key;
+        assert_eq!(ton_validator_list_hash_short_v1(17, &duplicate), None);
+    }
+
+    #[test]
+    fn governed_rosters_are_parsed_once_per_metered_validation_pass() {
+        let mut anchor = work_estimate_fixture().finality.anchor;
+        let (_, pending_validator) = fixture_validator(2, 2);
+        anchor.pending_validator_config = Some(TonValidatorConfigV1 {
+            valid_since: 1,
+            valid_until: u32::MAX,
+            main_validator_count: 1,
+            shuffle_masterchain_validators: false,
+            validators: vec![pending_validator],
+        });
+
+        reset_roster_key_parse_count();
+        assert!(canonical_ton_native_anchor_bytes_v1(&anchor).is_some());
+        assert_eq!(roster_key_parse_count(), 2);
+
+        reset_roster_key_parse_count();
+        assert_eq!(validate_ton_native_anchor(&anchor), Some(()));
+        assert_eq!(roster_key_parse_count(), 2);
+        assert!(ton_native_anchor_hash_from_validated(&anchor).is_some());
+        assert_eq!(
+            roster_key_parse_count(),
+            2,
+            "hashing validated anchor material must not reparse validator keys"
+        );
+
+        reset_roster_key_parse_count();
+        assert!(
+            ton_select_masterchain_validator_set(
+                anchor
+                    .pending_validator_config
+                    .as_ref()
+                    .expect("pending fixture"),
+                8,
+            )
+            .is_some()
+        );
+        assert_eq!(roster_key_parse_count(), 1);
+
+        anchor.active_validator_set.validators[0].public_key = [0xff; 32];
+        assert_eq!(canonical_ton_native_anchor_bytes_v1(&anchor), None);
+        assert_eq!(ton_native_anchor_hash_v1(&anchor), None);
     }
 
     #[test]
@@ -3950,7 +4311,9 @@ mod tests {
             account: [0x91; 32],
         };
         let governed_route_config = [0xa1; 32];
-        let governed = account_deployment_boc(emitter, 41, 0x11, governed_route_config);
+        // Transaction.prev_trans_lt is the previous transaction's start LT;
+        // AccountStorage.last_trans_lt is its later end LT.
+        let governed = account_deployment_boc(emitter, 42, 0x11, governed_route_config);
         let governed_computed = ton_boc_cell_hashes(&governed).expect("governed account hashes");
         let governed_account_hash = governed_computed[0].hashes[3];
         let governed_code_hash = governed_computed[1].hashes[3];
@@ -3963,13 +4326,108 @@ mod tests {
                 governed_code_hash,
                 governed_route_config,
                 41,
+                43,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            ton_verify_transaction_pre_state(
+                &governed_boc,
+                governed_account_hash,
+                emitter,
+                governed_code_hash,
+                governed_route_config,
+                41,
+                42,
+            ),
+            Ok(()),
+            "the next transaction may start at the previous transaction end LT"
+        );
+
+        // Content opening follows bounded proof wrappers while the governed
+        // code identity remains the terminal cell's TON hash zero.
+        let mut opened_account = governed.cells[0].clone();
+        opened_account.refs = vec![1, 3];
+        let code_proof = merkle_proof_cell(
+            2,
+            governed_computed[1].mask,
+            governed_computed[1].hashes[0],
+            governed_computed[1].depths[0],
+        );
+        let opened = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                opened_account,
+                code_proof,
+                governed.cells[1].clone(),
+                governed.cells[2].clone(),
+            ],
+        };
+        let opened_hashes = ton_boc_cell_hashes(&opened).expect("opened account proof hashes");
+        let mut nested_account = opened.cells[0].clone();
+        nested_account.refs = vec![2, 4];
+        let mut nested_code_proof = opened.cells[1].clone();
+        nested_code_proof.refs = vec![3];
+        let nested = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                merkle_proof_cell(
+                    1,
+                    opened_hashes[0].mask,
+                    opened_hashes[0].hashes[0],
+                    opened_hashes[0].depths[0],
+                ),
+                nested_account,
+                nested_code_proof,
+                opened.cells[2].clone(),
+                opened.cells[3].clone(),
+            ],
+        };
+        assert_eq!(
+            ton_verify_transaction_pre_state(
+                &serialize_test_boc(&nested),
+                opened_hashes[0].hashes[0],
+                emitter,
+                governed_code_hash,
+                governed_route_config,
+                41,
+                43,
+            ),
+            Ok(())
+        );
+
+        let mut pruned_account = governed.cells[0].clone();
+        pruned_account.descriptor |= 1 << 5;
+        let pruned_code = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                pruned_account,
+                pruned_branch_cell(
+                    1,
+                    &[governed_computed[1].hashes[0]],
+                    &[governed_computed[1].depths[0]],
+                ),
+                governed.cells[2].clone(),
+            ],
+        };
+        let pruned_hashes = ton_boc_cell_hashes(&pruned_code).expect("pruned code proof hashes");
+        assert_eq!(pruned_hashes[0].hashes[0], governed_account_hash);
+        assert_eq!(
+            ton_verify_transaction_pre_state(
+                &serialize_test_boc(&pruned_code),
+                governed_account_hash,
+                emitter,
+                governed_code_hash,
+                governed_route_config,
+                41,
+                43,
             ),
             Ok(())
         );
 
         // A transaction executed by different code cannot pass merely because
         // a later transaction restores the governed post-state.
-        let malicious = account_deployment_boc(emitter, 41, 0x22, [0xb2; 32]);
+        let malicious = account_deployment_boc(emitter, 42, 0x22, [0xb2; 32]);
         let malicious_hash =
             ton_boc_cell_hashes(&malicious).expect("malicious account hashes")[0].hashes[3];
         let malicious_boc = serialize_test_boc(&malicious);
@@ -3981,6 +4439,7 @@ mod tests {
                 governed_code_hash,
                 governed_route_config,
                 41,
+                43,
             ),
             Err(TonNativeSourceError::SourceDeploymentMismatch)
         );
@@ -3992,6 +4451,7 @@ mod tests {
                 governed_code_hash,
                 governed_route_config,
                 41,
+                43,
             ),
             Err(TonNativeSourceError::SourceDeploymentMismatch)
         );
@@ -4002,9 +4462,42 @@ mod tests {
                 emitter,
                 governed_code_hash,
                 governed_route_config,
-                40,
+                42,
+                43,
             ),
             Err(TonNativeSourceError::SourceDeploymentMismatch)
+        );
+        assert_eq!(
+            ton_verify_transaction_pre_state(
+                &governed_boc,
+                governed_account_hash,
+                emitter,
+                governed_code_hash,
+                governed_route_config,
+                41,
+                41,
+            ),
+            Err(TonNativeSourceError::SourceDeploymentMismatch)
+        );
+
+        // A preloaded active account can legitimately emit its first
+        // transaction with both prior start/end clocks still at zero.
+        let never_transacted = account_deployment_boc(emitter, 0, 0x11, governed_route_config);
+        let never_transacted_computed =
+            ton_boc_cell_hashes(&never_transacted).expect("preloaded account hashes");
+        let never_transacted_hash = never_transacted_computed[0].hashes[3];
+        let never_transacted_code_hash = never_transacted_computed[1].hashes[3];
+        assert_eq!(
+            ton_verify_transaction_pre_state(
+                &serialize_test_boc(&never_transacted),
+                never_transacted_hash,
+                emitter,
+                never_transacted_code_hash,
+                governed_route_config,
+                0,
+                1,
+            ),
+            Ok(())
         );
     }
 
@@ -4083,9 +4576,15 @@ mod tests {
             verify_block_signatures(block, &active, &proof(entries[..2].to_vec())),
             Err(TonNativeSourceError::InvalidSignatures)
         );
+        reset_roster_key_parse_count();
         assert_eq!(
             verify_block_signatures(block, &active, &proof(entries.clone())),
             Ok(())
+        );
+        assert_eq!(
+            roster_key_parse_count(),
+            active.validators.len(),
+            "signature verification must charge one roster-key pass separately from signer checks"
         );
         assert_eq!(
             verify_block_signatures(
@@ -4115,6 +4614,109 @@ mod tests {
             verify_block_signatures(block, &active, &proof(corrupted)),
             Err(TonNativeSourceError::InvalidSignatures)
         );
+    }
+
+    #[test]
+    fn native_masterchain_continuation_accepts_ordinary_and_simplex_finality() {
+        let (pair, validator) = fixture_validator(1, 1);
+        let validators = vec![validator];
+        let active = TonValidatorSetV1 {
+            catchain_seqno: 9,
+            validator_list_hash_short: ton_validator_list_hash_short_v1(9, &validators)
+                .expect("fixture set hash"),
+            validators,
+        };
+        let checkpoint = TonBlockIdExtV1 {
+            workchain: SCCP_TON_MASTERCHAIN_WORKCHAIN_V1,
+            shard: SCCP_TON_MASTERCHAIN_SHARD_V1,
+            seqno: 41,
+            root_hash: [0x11; 32],
+            file_hash: [0x22; 32],
+        };
+        let (block, block_proof_boc, checkpoint_state_root, expected_new_state) =
+            masterchain_continuation_fixture(checkpoint, &active);
+        let anchor = TonNativeAnchorV1 {
+            version: 1,
+            network: SccpNetworkV1::TonMainnet,
+            zero_state: ton_expected_zero_state(SccpNetworkV1::TonMainnet)
+                .expect("mainnet zero state"),
+            checkpoint,
+            checkpoint_state_root,
+            active_validator_set: active.clone(),
+            pending_validator_config: None,
+        };
+        let anchor_hash = ton_native_anchor_hash_v1(&anchor).expect("valid anchor hash");
+        let ordinary_transcript = ton_block_id_tl_bytes(block);
+        let ordinary = TonBlockSignaturesV1::Ordinary(TonOrdinaryBlockSignaturesV1 {
+            catchain_seqno: active.catchain_seqno,
+            validator_list_hash_short: active.validator_list_hash_short,
+            signatures: vec![signed_entry(&pair, validator, &ordinary_transcript)],
+        });
+        let proof_with = |signatures| TonNativeFinalityProofV1 {
+            version: 1,
+            anchor: anchor.clone(),
+            blocks: vec![TonMasterchainBlockProofV1 {
+                block_id: block,
+                block_proof_boc: block_proof_boc.clone(),
+                signatures,
+            }],
+        };
+
+        reset_roster_key_parse_count();
+        let ordinary_verified = verify_masterchain_finality(
+            &proof_with(ordinary),
+            SccpNetworkV1::TonMainnet,
+            anchor_hash,
+        )
+        .expect("ordinary finality");
+        assert_eq!(ordinary_verified.block_id, block);
+        assert_eq!(
+            ton_proven_root_hash(
+                &ordinary_verified.boc,
+                &ton_boc_cell_hashes(&ordinary_verified.boc).expect("verified block hashes"),
+                ordinary_verified.boc.roots[0],
+            ),
+            Some(block.root_hash)
+        );
+        assert_eq!(roster_key_parse_count(), 2);
+
+        let candidate_data = simplex_candidate_without_parents(block);
+        let unsigned_simplex = TonSimplexBlockSignaturesV1 {
+            catchain_seqno: active.catchain_seqno,
+            validator_list_hash_short: active.validator_list_hash_short,
+            session_id: [0x44; 32],
+            slot: 7,
+            candidate_data,
+            signatures: Vec::new(),
+        };
+        let simplex_transcript =
+            simplex_finality_transcript(block, &unsigned_simplex).expect("Simplex transcript");
+        let simplex = TonBlockSignaturesV1::Simplex(TonSimplexBlockSignaturesV1 {
+            signatures: vec![signed_entry(&pair, validator, &simplex_transcript)],
+            ..unsigned_simplex
+        });
+        let simplex_verified = verify_masterchain_finality(
+            &proof_with(simplex.clone()),
+            SccpNetworkV1::TonMainnet,
+            anchor_hash,
+        )
+        .expect("Simplex finality");
+        assert_eq!(simplex_verified.block_id, block);
+
+        let TonBlockSignaturesV1::Simplex(mut wrong_session) = simplex else {
+            unreachable!("fixture uses Simplex signatures")
+        };
+        wrong_session.session_id[0] ^= 1;
+        assert!(matches!(
+            verify_masterchain_finality(
+                &proof_with(TonBlockSignaturesV1::Simplex(wrong_session)),
+                SccpNetworkV1::TonMainnet,
+                anchor_hash,
+            ),
+            Err(TonNativeSourceError::InvalidSignatures)
+        ));
+
+        assert_ne!(checkpoint_state_root, expected_new_state);
     }
 
     #[test]
@@ -4174,6 +4776,66 @@ mod tests {
         ];
         let expected = hex32("96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7");
         assert_eq!(ton_boc_single_root_hash_v1(EMPTY), Some(expected));
+        assert_eq!(ton_boc_single_ordinary_root_hash_v1(EMPTY), Some(expected));
+        let mut proof_data = vec![3];
+        proof_data.extend_from_slice(&expected);
+        proof_data.extend_from_slice(&0_u16.to_be_bytes());
+        let merkle_proof = serialize_test_boc(&TonBoc {
+            roots: vec![0],
+            cells: vec![
+                TonBocCell {
+                    descriptor: 0x09,
+                    data_descriptor: 70,
+                    data: proof_data,
+                    refs: vec![1],
+                    exotic: true,
+                },
+                ordinary_cell(Vec::new(), Vec::new()),
+            ],
+        });
+        assert_eq!(ton_boc_single_root_hash_v1(&merkle_proof), Some(expected));
+        assert_eq!(ton_boc_single_ordinary_root_hash_v1(&merkle_proof), None);
+        let unused_cell = serialize_test_boc(&TonBoc {
+            roots: vec![0],
+            cells: vec![
+                ordinary_cell(Vec::new(), Vec::new()),
+                ordinary_cell(vec![0x42], Vec::new()),
+            ],
+        });
+        assert_eq!(ton_boc_single_root_hash_v1(&unused_cell), Some(expected));
+        assert_eq!(ton_boc_single_ordinary_root_hash_v1(&unused_cell), None);
+        let code_boc = serialize_test_boc(&TonBoc {
+            roots: vec![0],
+            cells: vec![ordinary_cell(vec![0x11], Vec::new())],
+        });
+        let data_boc = serialize_test_boc(&TonBoc {
+            roots: vec![0],
+            cells: vec![ordinary_cell(vec![0x22], Vec::new())],
+        });
+        let mut state_init_bits = TestBits::default();
+        state_init_bits.bit(false); // split_depth absent
+        state_init_bits.bit(false); // special absent
+        state_init_bits.bit(true); // code reference present
+        state_init_bits.bit(true); // data reference present
+        state_init_bits.bit(false); // empty library
+        let state_init_boc = serialize_test_boc(&TonBoc {
+            roots: vec![0],
+            cells: vec![
+                state_init_bits.cell(vec![1, 2]),
+                ordinary_cell(vec![0x11], Vec::new()),
+                ordinary_cell(vec![0x22], Vec::new()),
+            ],
+        });
+        let state_init_hash =
+            ton_state_init_address_hash_v1(&code_boc, &data_boc).expect("canonical StateInit hash");
+        assert_eq!(
+            ton_boc_single_ordinary_root_hash_v1(&state_init_boc),
+            Some(state_init_hash)
+        );
+        assert_ne!(
+            ton_state_init_address_hash_v1(&data_boc, &code_boc),
+            Some(state_init_hash)
+        );
         assert_eq!(ton_boc_single_root_hash_v1(EMPTY_WITH_CRC), Some(expected));
         let mut corrupted = EMPTY_WITH_CRC.to_vec();
         *corrupted.last_mut().expect("fixture crc") ^= 1;
@@ -4181,6 +4843,211 @@ mod tests {
         let mut trailing = EMPTY.to_vec();
         trailing.push(0);
         assert_eq!(ton_boc_single_root_hash_v1(&trailing), None);
+    }
+
+    #[test]
+    fn boc_hash_zero_preserves_original_tree_identity_across_pruned_levels() {
+        let complete = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                ordinary_cell(vec![0x41], vec![1]),
+                ordinary_cell(vec![0x42], Vec::new()),
+            ],
+        };
+        let complete_hashes = ton_boc_cell_hashes(&complete).expect("complete tree hashes");
+        let expected_root = complete_hashes[0].hashes[0];
+        let child_hash = complete_hashes[1].hashes[0];
+        let child_depth = complete_hashes[1].depths[0];
+
+        for mask in [1_u8, 3, 7] {
+            let count = usize::from(ton_level_mask_level(mask));
+            let mut root = ordinary_cell(vec![0x41], vec![1]);
+            root.descriptor |= mask << 5;
+            let stored_hashes = [child_hash; 3];
+            let stored_depths = [child_depth; 3];
+            let pruned = TonBoc {
+                roots: vec![0],
+                cells: vec![
+                    root,
+                    pruned_branch_cell(mask, &stored_hashes[..count], &stored_depths[..count]),
+                ],
+            };
+            let computed = ton_boc_cell_hashes(&pruned).expect("pruned proof hashes");
+            assert_eq!(computed[0].hashes[0], expected_root);
+            assert_ne!(
+                computed[0].hashes[3], expected_root,
+                "higher virtual hashes must not replace TON hash-zero identity"
+            );
+            assert_eq!(
+                ton_boc_single_root_hash_v1(&serialize_test_boc(&pruned)),
+                Some(expected_root)
+            );
+        }
+    }
+
+    #[test]
+    fn virtual_root_resolution_unwraps_nested_merkle_proofs() {
+        let leaf = TonBoc {
+            roots: vec![0],
+            cells: vec![ordinary_cell(vec![0x42], Vec::new())],
+        };
+        let leaf_hashes = ton_boc_cell_hashes(&leaf).expect("leaf hashes");
+        let inner = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                merkle_proof_cell(
+                    1,
+                    leaf_hashes[0].mask,
+                    leaf_hashes[0].hashes[0],
+                    leaf_hashes[0].depths[0],
+                ),
+                ordinary_cell(vec![0x42], Vec::new()),
+            ],
+        };
+        let inner_hashes = ton_boc_cell_hashes(&inner).expect("inner proof hashes");
+        let nested = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                merkle_proof_cell(
+                    1,
+                    inner_hashes[0].mask,
+                    inner_hashes[0].hashes[0],
+                    inner_hashes[0].depths[0],
+                ),
+                merkle_proof_cell(
+                    2,
+                    leaf_hashes[0].mask,
+                    leaf_hashes[0].hashes[0],
+                    leaf_hashes[0].depths[0],
+                ),
+                ordinary_cell(vec![0x42], Vec::new()),
+            ],
+        };
+        assert!(ton_boc_cell_hashes(&nested).is_some());
+        assert_eq!(ton_virtual_root_index(&nested, 0), Some(2));
+        assert_eq!(
+            ton_boc_single_root_hash_v1(&serialize_test_boc(&nested)),
+            Some(inner_hashes[0].hashes[0])
+        );
+
+        let terminal = pruned_branch_cell(7, &[[0x71; 32], [0x72; 32], [0x73; 32]], &[5, 6, 7]);
+        let terminal_boc = TonBoc {
+            roots: vec![0],
+            cells: vec![terminal.clone()],
+        };
+        let terminal_hashes = ton_boc_cell_hashes(&terminal_boc).expect("terminal proof hashes");
+        let inner_cell = merkle_proof_cell(
+            1,
+            terminal_hashes[0].mask,
+            terminal_hashes[0].hashes[0],
+            terminal_hashes[0].depths[0],
+        );
+        let inner_boc = TonBoc {
+            roots: vec![0],
+            cells: vec![inner_cell.clone(), terminal.clone()],
+        };
+        let inner_hashes = ton_boc_cell_hashes(&inner_boc).expect("level-three proof hashes");
+        let middle_cell = merkle_proof_cell(
+            1,
+            inner_hashes[0].mask,
+            inner_hashes[0].hashes[0],
+            inner_hashes[0].depths[0],
+        );
+        let mut shifted_inner = inner_cell.clone();
+        shifted_inner.refs = vec![2];
+        let middle_boc = TonBoc {
+            roots: vec![0],
+            cells: vec![middle_cell.clone(), shifted_inner.clone(), terminal.clone()],
+        };
+        let middle_hashes = ton_boc_cell_hashes(&middle_boc).expect("level-two proof hashes");
+        let outer_cell = merkle_proof_cell(
+            1,
+            middle_hashes[0].mask,
+            middle_hashes[0].hashes[0],
+            middle_hashes[0].depths[0],
+        );
+        let mut shifted_middle = middle_cell;
+        shifted_middle.refs = vec![2];
+        shifted_inner.refs = vec![3];
+        let nested_pruned = TonBoc {
+            roots: vec![0],
+            cells: vec![outer_cell, shifted_middle, shifted_inner, terminal],
+        };
+        let nested_hashes =
+            ton_boc_cell_hashes(&nested_pruned).expect("nested pruned proof hashes");
+        assert_eq!(ton_merkle_opened_index(&nested_pruned, 0), Some(3));
+        assert_eq!(ton_virtual_root_index(&nested_pruned, 0), None);
+        assert_eq!(
+            ton_opened_original_tree_hash(&nested_pruned, &nested_hashes, 0),
+            Some([0x71; 32])
+        );
+    }
+
+    #[test]
+    fn transaction_parser_opens_a_merkle_wrapped_hash_update() {
+        let account = [0x31; 32];
+        let old_account_hash = [0x41; 32];
+        let new_account_hash = [0x42; 32];
+        let mut transaction = TestBits::default();
+        transaction.uint(u64::from(TON_TRANSACTION_CONSTRUCTOR), 4);
+        transaction.bytes(&account);
+        transaction.uint(10, 64);
+        transaction.bytes(&[0x51; 32]);
+        transaction.uint(9, 64);
+        transaction.uint(1, 32);
+        transaction.uint(1, 15);
+        transaction.uint(2, 2);
+        transaction.uint(2, 2);
+        transaction.uint(0, 4); // zero grams
+        transaction.bit(false); // no extra currencies
+
+        let mut hash_update_data = vec![0x72];
+        hash_update_data.extend_from_slice(&old_account_hash);
+        hash_update_data.extend_from_slice(&new_account_hash);
+        let hash_update = TonBoc {
+            roots: vec![0],
+            cells: vec![ordinary_cell(hash_update_data.clone(), Vec::new())],
+        };
+        let update_hashes = ton_boc_cell_hashes(&hash_update).expect("HashUpdate hashes");
+        let mut description = ordinary_cell(Vec::new(), vec![5]);
+        description.descriptor |= 7 << 5;
+        let boc = TonBoc {
+            roots: vec![0],
+            cells: vec![
+                transaction.cell(vec![1, 2, 4]),
+                ordinary_cell(Vec::new(), Vec::new()),
+                merkle_proof_cell(
+                    3,
+                    update_hashes[0].mask,
+                    update_hashes[0].hashes[0],
+                    update_hashes[0].depths[0],
+                ),
+                ordinary_cell(hash_update_data, Vec::new()),
+                description,
+                pruned_branch_cell(7, &[[0x81; 32], [0x82; 32], [0x83; 32]], &[1, 2, 3]),
+            ],
+        };
+        let computed = ton_boc_cell_hashes(&boc).expect("transaction proof hashes");
+        let parsed = ton_parse_transaction(&boc, &computed, 0, account, 10)
+            .expect("wrapped HashUpdate must parse");
+        assert_eq!(parsed.old_account_hash, old_account_hash);
+        assert_eq!(parsed.new_account_hash, new_account_hash);
+        assert_eq!(parsed.hash, computed[0].hashes[0]);
+        assert_ne!(parsed.hash, computed[0].hashes[3]);
+    }
+
+    #[test]
+    fn boc_parser_rejects_noncanonical_intermediate_index_offsets() {
+        // Root cell (three serialized bytes) references one empty child (two
+        // bytes), so the only canonical cumulative index is [3, 5].
+        let indexed = [
+            0xb5, 0xee, 0x9c, 0x72, 0x81, 0x01, 0x02, 0x01, 0x00, 0x05, 0x00, 0x03, 0x05, 0x01,
+            0x00, 0x01, 0x00, 0x00,
+        ];
+        assert!(parse_ton_boc(&indexed).is_some());
+        let mut malformed = indexed;
+        malformed[11] = 2;
+        assert_eq!(parse_ton_boc(&malformed), None);
     }
 
     #[test]
@@ -4198,6 +5065,26 @@ mod tests {
             0x00,
         ];
         assert_eq!(parse_ton_boc(&excessive_cells), None);
+    }
+
+    #[test]
+    fn boc_parser_rejects_maximum_multi_root_framing_at_the_header() {
+        let count = u16::try_from(TON_MAX_BOC_CELLS).expect("TON cell cap fits u16");
+        let total_cells_size = count.checked_mul(2).expect("empty cells fit u16");
+        let mut multi_root = TON_BOC_MAGIC.to_vec();
+        multi_root.extend_from_slice(&[2, 2]);
+        multi_root.extend_from_slice(&count.to_be_bytes());
+        multi_root.extend_from_slice(&count.to_be_bytes());
+        multi_root.extend_from_slice(&0_u16.to_be_bytes());
+        multi_root.extend_from_slice(&total_cells_size.to_be_bytes());
+        for root in 0..count {
+            multi_root.extend_from_slice(&root.to_be_bytes());
+        }
+        for _ in 0..count {
+            multi_root.extend_from_slice(&[0, 0]);
+        }
+        assert_eq!(multi_root.len(), 16_398);
+        assert_eq!(parse_ton_boc(&multi_root), None);
     }
 
     #[test]

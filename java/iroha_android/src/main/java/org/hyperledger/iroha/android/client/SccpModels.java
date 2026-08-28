@@ -81,8 +81,14 @@ public final class SccpModels {
     public final long maxBlsAggregateChecksPerBlock;
     public final long maxBlsSignerContributionsPerTransaction;
     public final long maxBlsSignerContributionsPerBlock;
+    public final long maxEd25519SignatureChecksPerTransaction;
+    public final long maxEd25519SignatureChecksPerBlock;
+    public final long maxEd25519ValidatorKeyChecksPerTransaction;
+    public final long maxEd25519ValidatorKeyChecksPerBlock;
     public final long maxBn254PairingChecksPerTransaction;
     public final long maxBn254PairingChecksPerBlock;
+    public final long maxBls12381PairingChecksPerTransaction;
+    public final long maxBls12381PairingChecksPerBlock;
 
     ResourceLimits(
         final long maxOutboundMessagesPerBlock,
@@ -106,8 +112,14 @@ public final class SccpModels {
         final long maxBlsAggregateChecksPerBlock,
         final long maxBlsSignerContributionsPerTransaction,
         final long maxBlsSignerContributionsPerBlock,
+        final long maxEd25519SignatureChecksPerTransaction,
+        final long maxEd25519SignatureChecksPerBlock,
+        final long maxEd25519ValidatorKeyChecksPerTransaction,
+        final long maxEd25519ValidatorKeyChecksPerBlock,
         final long maxBn254PairingChecksPerTransaction,
-        final long maxBn254PairingChecksPerBlock) {
+        final long maxBn254PairingChecksPerBlock,
+        final long maxBls12381PairingChecksPerTransaction,
+        final long maxBls12381PairingChecksPerBlock) {
       this.maxOutboundMessagesPerBlock = maxOutboundMessagesPerBlock;
       this.maxOutboundMessagePayloadBytes = maxOutboundMessagePayloadBytes;
       this.maxPendingOutboundMessages = maxPendingOutboundMessages;
@@ -130,8 +142,15 @@ public final class SccpModels {
       this.maxBlsAggregateChecksPerBlock = maxBlsAggregateChecksPerBlock;
       this.maxBlsSignerContributionsPerTransaction = maxBlsSignerContributionsPerTransaction;
       this.maxBlsSignerContributionsPerBlock = maxBlsSignerContributionsPerBlock;
+      this.maxEd25519SignatureChecksPerTransaction = maxEd25519SignatureChecksPerTransaction;
+      this.maxEd25519SignatureChecksPerBlock = maxEd25519SignatureChecksPerBlock;
+      this.maxEd25519ValidatorKeyChecksPerTransaction =
+          maxEd25519ValidatorKeyChecksPerTransaction;
+      this.maxEd25519ValidatorKeyChecksPerBlock = maxEd25519ValidatorKeyChecksPerBlock;
       this.maxBn254PairingChecksPerTransaction = maxBn254PairingChecksPerTransaction;
       this.maxBn254PairingChecksPerBlock = maxBn254PairingChecksPerBlock;
+      this.maxBls12381PairingChecksPerTransaction = maxBls12381PairingChecksPerTransaction;
+      this.maxBls12381PairingChecksPerBlock = maxBls12381PairingChecksPerBlock;
     }
   }
 
@@ -300,6 +319,9 @@ public final class SccpModels {
     public final SccpNetworkV1 targetNetwork;
     public final String messageIdHex;
     public final String requestHash;
+    public final Map<String, String> publicSignals;
+    public final String verifierCircuitHash;
+    public final String proofProfileCommitment;
     public final SemanticProofProfileV1 semanticProofProfile;
     public final SoraFinalityAnchorV1 soraFinalityAnchor;
     public final Map<String, Object> raw;
@@ -311,6 +333,9 @@ public final class SccpModels {
         final SccpNetworkV1 targetNetwork,
         final String messageIdHex,
         final String requestHash,
+        final Map<String, String> publicSignals,
+        final String verifierCircuitHash,
+        final String proofProfileCommitment,
         final SemanticProofProfileV1 semanticProofProfile,
         final SoraFinalityAnchorV1 soraFinalityAnchor,
         final Map<String, Object> raw) {
@@ -320,6 +345,9 @@ public final class SccpModels {
       this.targetNetwork = targetNetwork;
       this.messageIdHex = messageIdHex;
       this.requestHash = requestHash;
+      this.publicSignals = publicSignals == null ? null : Collections.unmodifiableMap(new LinkedHashMap<>(publicSignals));
+      this.verifierCircuitHash = verifierCircuitHash;
+      this.proofProfileCommitment = proofProfileCommitment;
       this.semanticProofProfile = semanticProofProfile;
       this.soraFinalityAnchor = soraFinalityAnchor;
       this.raw = immutableMap(raw);

@@ -1,7 +1,10 @@
 //! End-to-end supervisor integration tests backed by the gated Kagami test stub.
 #![cfg(feature = "dev-tools")]
 use color_eyre::{Result, eyre::eyre};
-use iroha_data_model::{block::stream::BlockMessage, events::EventBox};
+use iroha_data_model::{
+    block::stream::BlockMessage, events::EventBox, hijiri::HijiriParametersV1, isi::GrantBox,
+};
+use iroha_genesis::RawGenesisTransaction;
 use mochi_core::{
     ProfilePreset, Supervisor, SupervisorBuilder, resolve_selected_peer_storage_paths,
     torii::{BlockStreamEvent, EventCategory, EventStreamEvent},
@@ -42,6 +45,61 @@ fn build_supervisor_with_bases(
 fn build_supervisor(temp: &TempDir, port: u16, preset: ProfilePreset) -> Result<Supervisor> {
     let p2p_base = port.checked_add(1_000).unwrap_or(10_000);
     build_supervisor_with_bases(temp, port, p2p_base, preset)
+}
+#[test]
+#[ignore = "ci/check_mochi.sh supplies a source-built real Kagami binary"]
+fn supervisor_real_kagami_preserves_first_release_hijiri_bootstrap() -> Result<()> {
+    let kagami = std::env::var_os("MOCHI_REAL_KAGAMI")
+        .ok_or_else(|| eyre!("MOCHI_REAL_KAGAMI must name a source-built Kagami binary"))?;
+    let temp = TempDir::new()?;
+    let torii_base = reserve_port()?;
+    let p2p_base = torii_base.checked_add(1_000).unwrap_or(10_000);
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
+        .data_root(temp.path())
+        .torii_base_port(torii_base)
+        .p2p_base_port(p2p_base)
+        .kagami_path(kagami)
+        .build()?;
+
+    let manifest = RawGenesisTransaction::from_path(supervisor.genesis_manifest())?;
+    let parameters = manifest.effective_parameters()?;
+    let custom = parameters
+        .custom()
+        .get(&HijiriParametersV1::parameter_id())
+        .ok_or_else(|| eyre!("real Kagami manifest omitted Hijiri parameters"))?;
+    let actual = HijiriParametersV1::from_custom_parameter(custom)?
+        .ok_or_else(|| eyre!("real Kagami manifest changed the reserved Hijiri identity"))?;
+    assert_eq!(
+        actual,
+        HijiriParametersV1::first_release_genesis(),
+        "Mochi must preserve Kagami's exact neutral first-release Hijiri snapshot"
+    );
+
+    let mut parameter_operator = None;
+    let mut hijiri_operators = Vec::new();
+    for instruction in manifest.instructions() {
+        let Some(GrantBox::Permission(grant)) = instruction.as_any().downcast_ref::<GrantBox>()
+        else {
+            continue;
+        };
+        if grant.object().name() == "CanSetParameters" {
+            assert!(
+                parameter_operator.is_none(),
+                "real Kagami manifest must name exactly one parameter operator"
+            );
+            parameter_operator = Some(grant.destination().clone());
+        } else if grant.object().name() == "CanSetHijiriParameters" {
+            hijiri_operators.push(grant.destination().clone());
+        }
+    }
+    let parameter_operator = parameter_operator
+        .ok_or_else(|| eyre!("real Kagami manifest omitted the parameter operator"))?;
+    assert_eq!(
+        hijiri_operators.as_slice(),
+        std::slice::from_ref(&parameter_operator),
+        "Mochi must preserve exactly one Hijiri grant for the parameter operator"
+    );
+    Ok(())
 }
 fn peer_addr(supervisor: &Supervisor) -> SocketAddr {
     parse_socket_addr(supervisor.peers()[0].torii_address()).expect("parse torii address")

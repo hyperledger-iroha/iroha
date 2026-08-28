@@ -119,6 +119,18 @@ impl PreauthDeadline {
         Instant::now().checked_add(timeout).map(Self)
     }
 
+    /// Wait until the immutable absolute deadline expires.
+    #[cfg(feature = "quic")]
+    pub(crate) async fn wait(self) {
+        sleep_until(self.0).await;
+    }
+
+    /// Return whether the immutable absolute deadline has elapsed.
+    #[cfg(feature = "quic")]
+    pub(crate) fn has_elapsed(self) -> bool {
+        Instant::now() >= self.0
+    }
+
     /// Run one stage under both this total deadline and an optional local stage timeout.
     pub(crate) async fn run<F>(
         self,

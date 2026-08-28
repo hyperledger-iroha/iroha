@@ -250,6 +250,7 @@ test("package smoke rejects every non-portable or missing required artifact", ()
   ];
   const requiredPaths = [
     "package.json",
+    "index.d.ts",
     "browser.d.ts",
     "ivm-artifact.d.ts",
     "kotodama-compiler.d.ts",
@@ -265,6 +266,7 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     "dist/privacyCapabilities.js",
     "dist/sorafsOrderbookSubmission.js",
     "dist/sorafsOrderbookSubmission.d.ts",
+    "dist/tairaTestnetProfile.js",
     ...requiredLazyPaths,
     "nexus-app.d.ts",
     ...PORTABLE_RECIPES,
@@ -275,7 +277,12 @@ test("package smoke rejects every non-portable or missing required artifact", ()
   };
   assert.doesNotThrow(() => validatePackPaths(metadata));
 
-  for (const requiredPath of [...PORTABLE_RECIPES, ...requiredLazyPaths]) {
+  for (const requiredPath of [
+    "index.d.ts",
+    "dist/tairaTestnetProfile.js",
+    ...PORTABLE_RECIPES,
+    ...requiredLazyPaths,
+  ]) {
     assert.throws(
       () =>
         validatePackPaths({

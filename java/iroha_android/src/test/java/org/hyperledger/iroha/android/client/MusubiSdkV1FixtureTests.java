@@ -1663,7 +1663,10 @@ public final class MusubiSdkV1FixtureTests {
               200,
               body,
               "OK",
-              Collections.singletonMap("Content-Type", Collections.singletonList("application/json"))));
+              Collections.singletonMap(
+                  "Content-Type", Collections.singletonList("application/json")),
+              null,
+              false));
     }
   }
 }

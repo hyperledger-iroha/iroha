@@ -23,7 +23,9 @@ public final class HttpTransportExecutorFakeTests {
     final FakeHttpTransportExecutor executor = new FakeHttpTransportExecutor();
     final TransportResponse pathResponse =
         new TransportResponse(
-            202, "ok".getBytes(StandardCharsets.UTF_8), "", Collections.emptyMap());
+            202, "ok".getBytes(StandardCharsets.UTF_8), "", Collections.emptyMap(),
+            null,
+            false);
     executor.enqueueResponse("/v1/pipeline/transactions", pathResponse);
 
     final TransportRequest request =
@@ -42,7 +44,9 @@ public final class HttpTransportExecutorFakeTests {
     final FakeHttpTransportExecutor executor = new FakeHttpTransportExecutor();
     final TransportResponse globalResponse =
         new TransportResponse(
-            201, "global".getBytes(StandardCharsets.UTF_8), "", Collections.emptyMap());
+            201, "global".getBytes(StandardCharsets.UTF_8), "", Collections.emptyMap(),
+            null,
+            false);
     executor.enqueueResponse(globalResponse);
 
     final TransportRequest request =
@@ -58,7 +62,7 @@ public final class HttpTransportExecutorFakeTests {
   private static void shouldUseDefaultResponseWhenQueuesEmpty() {
     final FakeHttpTransportExecutor executor = new FakeHttpTransportExecutor();
     executor.setDefaultResponse(
-        new TransportResponse(503, new byte[0], "", Collections.emptyMap()));
+        new TransportResponse(503, new byte[0], "", Collections.emptyMap(), null, false));
 
     final TransportRequest request =
         TransportRequest.builder()
@@ -72,11 +76,12 @@ public final class HttpTransportExecutorFakeTests {
   private static void shouldResetQueues() {
     final FakeHttpTransportExecutor executor = new FakeHttpTransportExecutor();
     executor.enqueueResponse(
-        "/foo", new TransportResponse(200, new byte[0], "", Collections.emptyMap()));
-    executor.enqueueResponse(new TransportResponse(201, new byte[0], "", Collections.emptyMap()));
+        "/foo", new TransportResponse(200, new byte[0], "", Collections.emptyMap(), null, false));
+    executor.enqueueResponse(
+        new TransportResponse(201, new byte[0], "", Collections.emptyMap(), null, false));
     executor.clear();
     executor.setDefaultResponse(
-        new TransportResponse(404, new byte[0], "", Collections.emptyMap()));
+        new TransportResponse(404, new byte[0], "", Collections.emptyMap(), null, false));
 
     final TransportRequest request =
         TransportRequest.builder()

@@ -25,10 +25,7 @@ pub use asset_definition::{
     visit_transfer_asset_definition, visit_unregister_asset_definition,
 };
 /// Re-export bridge visitor helpers.
-pub use bridge::{
-    visit_apply_sccp_route_governance, visit_fund_sccp_route_escrow, visit_record_bridge_receipt,
-    visit_refund_sccp_route_escrow,
-};
+pub use bridge::{visit_apply_sccp_route_governance, visit_record_bridge_receipt};
 /// Re-export domain visitor helpers used by the default executor.
 pub use domain::{
     visit_register_domain, visit_remove_domain_key_value, visit_set_domain_key_value,
@@ -73,10 +70,7 @@ use iroha_smart_contract::data_model::{
             RebindAccountAlias, RenewAliasLease,
         },
         asset_alias::SetAssetDefinitionAlias,
-        bridge::{
-            ApplySccpRouteGovernance, FundSccpRouteEscrow, RecordBridgeReceipt,
-            RefundSccpRouteEscrow,
-        },
+        bridge::{ApplySccpRouteGovernance, RecordBridgeReceipt},
         contract_alias::SetContractAlias,
         defi::DeFiInstructionBox,
         governance::{
@@ -1225,14 +1219,6 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<ApplySccpRouteGovernance>() {
             bridge::visit_apply_sccp_route_governance(executor, isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<FundSccpRouteEscrow>() {
-            bridge::visit_fund_sccp_route_escrow(executor, isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<RefundSccpRouteEscrow>() {
-            bridge::visit_refund_sccp_route_escrow(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<ProposeSccpRouteGovernance>() {
@@ -6212,11 +6198,5 @@ pub mod bridge {
             executor,
             "direct SCCP route mutation is retired; an exact due Parliament certificate must apply the action"
         )
-    }
-    declare_execute_visitors! {
-        /// Dispatch owner-bound route escrow funding to Core.
-        visit_fund_sccp_route_escrow(FundSccpRouteEscrow);
-        /// Dispatch owner-bound inactive-route escrow refund to Core.
-        visit_refund_sccp_route_escrow(RefundSccpRouteEscrow);
     }
 }

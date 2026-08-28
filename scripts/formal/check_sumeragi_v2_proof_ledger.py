@@ -43084,6 +43084,65 @@ fn command_matches_deferred_authenticated_owner(
                 errors,
             )
 
+        for item_name, digest_name, expected_source, description in (
+            (
+                "pacemaker_progress_blocked_target_view",
+                "runtime_driver_default_pacemaker_progress_blocked_target_view",
+                """
+fn pacemaker_progress_blocked_target_view(&self, _command: &Self::Command) -> Option<u64> {
+    None
+}
+""",
+                "closed RuntimeDriver future-PrepareQC blocker default",
+            ),
+            (
+                "pacemaker_progress_releases_view_block",
+                "runtime_driver_default_pacemaker_progress_releases_view_block",
+                """
+fn pacemaker_progress_releases_view_block(
+    &self,
+    _command: &Self::Command,
+    _target_view: u64,
+) -> bool {
+    false
+}
+""",
+                "closed RuntimeDriver view-release default",
+            ),
+        ):
+            matching = tuple(
+                item
+                for item in rust_items(runtime_source, item_name)
+                if item.brace_context == runtime_driver_trait_context
+            )
+            if len(matching) != 1:
+                errors.append(
+                    f"{runtime_path}: require exactly one {description}; found "
+                    f"{len(matching)}"
+                )
+                continue
+            _require_rust_item_context(
+                runtime_path,
+                matching[0],
+                runtime_driver_trait_context,
+                description,
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                matching[0],
+                _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[digest_name],
+                description,
+                errors,
+            )
+            _require_exact_rust_tokens(
+                runtime_path,
+                matching[0],
+                expected_source,
+                description,
+                errors,
+            )
+
         production_driver_context = (
             ("impl", "RuntimeDriver", "for", "SumeragiV2Adapter"),
         )
@@ -43235,6 +43294,17 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
 
         for item_name, delegate, description in (
             (
+                "pacemaker_progress_blocked_target_view",
+                "certificate.phase == wire::GlobalPhase::Prepare "
+                "&& certificate.round.view > self.current_tag().view()",
+                "production authenticated future-PrepareQC blocker classifier",
+            ),
+            (
+                "pacemaker_progress_releases_view_block",
+                "wire_payload_matches_current_strict_timeout_recovery_round(",
+                "production authenticated current-round view-release classifier",
+            ),
+            (
                 "certified_progress_bypasses_signature_fence",
                 "wire_payload_is_certified_fence_escape(authenticated.payload())",
                 "production certified Progress signature-fence escape delegate",
@@ -43299,6 +43369,68 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
                 description,
                 errors,
             )
+
+        _require_rust_token_sequence(
+            runtime_path,
+            next(
+                (
+                    item
+                    for item in rust_items(
+                        runtime_source,
+                        "pacemaker_progress_blocked_target_view",
+                    )
+                    if item.brace_context == production_driver_context
+                ),
+                None,
+            ),
+            """
+match command {
+    AdapterCommand::Authenticated(authenticated) => match authenticated.payload() {
+        wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
+            if certificate.phase == wire::GlobalPhase::Prepare
+                && certificate.round.view > self.current_tag().view() =>
+        {
+            Some(certificate.round.view)
+        }
+        _ => None,
+    },
+    _ => None,
+}
+""",
+            "only an authenticated future-view PrepareQC may authorize an ordinary view-release turn",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            next(
+                (
+                    item
+                    for item in rust_items(
+                        runtime_source,
+                        "pacemaker_progress_releases_view_block",
+                    )
+                    if item.brace_context == production_driver_context
+                ),
+                None,
+            ),
+            """
+let current_view = self.current_tag().view();
+if target_view <= current_view {
+    return false;
+}
+matches!(
+    command,
+    AdapterCommand::Authenticated(authenticated)
+        if wire_payload_matches_current_strict_timeout_recovery_round(
+            authenticated.payload(),
+            self.wire_context(),
+            self.current_tag(),
+        )
+)
+""",
+            "ordinary view release accepts only authenticated strict current-round TimeoutVote, TC, or CommitQC",
+            errors,
+        )
 
         bounded_ingress_context = (
             (
@@ -43426,6 +43558,287 @@ debug_assert_eq!(
                 f"non-forgeable queue/signature-fence helper {item_name}",
                 errors,
             )
+        view_blocked_authorization_context = (
+            ("impl", "RuntimeViewBlockedProgressAuthorization"),
+        )
+        _require_rust_item_context(
+            runtime_path,
+            nonforgeable_helper_items.get(
+                "runtime_view_blocked_progress_authorization_projection_hash"
+            ),
+            (),
+            "view-blocked Progress authorization projection hash",
+            errors,
+        )
+        strict_timeout_recovery_round = nonforgeable_helper_items.get(
+            "wire_payload_matches_current_strict_timeout_recovery_round"
+        )
+        _require_rust_item_context(
+            runtime_path,
+            strict_timeout_recovery_round,
+            (),
+            "strict current-round timeout-recovery classifier",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            strict_timeout_recovery_round,
+            """
+let round = match payload {
+    wire::ConsensusMessageV2Payload::TimeoutVote(vote) => vote.round,
+    wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => certificate.round,
+    wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
+        if certificate.phase == wire::GlobalPhase::Commit =>
+    {
+        certificate.round
+    }
+""",
+            "view release must accept only TimeoutVote, TimeoutCertificate, or CommitQC round carriers",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            strict_timeout_recovery_round,
+            """
+round.context_id == context.id()
+    && round.height == tag.height()
+    && round.view == tag.view()
+""",
+            "view release must match the exact current context, height, and view",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            nonforgeable_helper_items.get("validates_retained_blocker"),
+            view_blocked_authorization_context,
+            "retained future-PrepareQC authorization validator",
+            errors,
+        )
+        for struct_name, digest_name, description in (
+            (
+                "RuntimeViewBlockedProgressAuthorization",
+                "view_blocked_authorization_struct",
+                "view-blocked Progress authorization carrier layout",
+            ),
+            (
+                "RuntimeSchedulerArbitrationInputs",
+                "scheduler_arbitration_inputs_struct",
+                "scheduler arbitration input carrier layout",
+            ),
+            (
+                "RuntimeSchedulerOwnershipEvidence",
+                "scheduler_ownership_evidence_struct",
+                "scheduler ownership evidence carrier layout",
+            ),
+        ):
+            matching = rust_struct_items(runtime_source, struct_name)
+            if len(matching) != 1:
+                errors.append(
+                    f"{runtime_path}: require exactly one {description}; found "
+                    f"{len(matching)}"
+                )
+                continue
+            _require_rust_item_context(
+                runtime_path,
+                matching[0],
+                (),
+                description,
+                errors,
+                expected_attributes=("#[derive(Clone, Debug, PartialEq, Eq)]",),
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                matching[0],
+                _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[digest_name],
+                description,
+                errors,
+            )
+        authorization_projection = nonforgeable_helper_items.get(
+            "runtime_view_blocked_progress_authorization_projection_hash"
+        )
+        if authorization_projection is not None:
+            domain = b'iroha:sumeragi:v2:view-blocked-progress-authorization:v1'
+            observed_domains = authorization_projection.source.encode("utf-8").count(domain)
+            if observed_domains != 1:
+                errors.append(
+                    f"{runtime_path}:{authorization_projection.line}: view-blocked "
+                    "Progress authorization projection must contain its exact v1 "
+                    f"domain literal once; found {observed_domains}"
+                )
+        view_blocked_authorization_new = tuple(
+            item
+            for item in rust_items(runtime_source, "new")
+            if item.brace_context == view_blocked_authorization_context
+        )
+        if len(view_blocked_authorization_new) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one view-blocked Progress "
+                "authorization constructor; found "
+                f"{len(view_blocked_authorization_new)}"
+            )
+        else:
+            _require_rust_item_context(
+                runtime_path,
+                view_blocked_authorization_new[0],
+                view_blocked_authorization_context,
+                "view-blocked Progress authorization constructor",
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                view_blocked_authorization_new[0],
+                _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[
+                    "view_blocked_authorization_new"
+                ],
+                "view-blocked Progress authorization constructor",
+                errors,
+            )
+        bounded_view_blocked_authorization = tuple(
+            item
+            for item in rust_items(
+                runtime_source,
+                "ordinary_view_blocked_progress_authorization",
+            )
+            if item.brace_context == bounded_ingress_context
+        )
+        if len(bounded_view_blocked_authorization) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one bounded-ingress "
+                "view-blocked Progress authorization mint; found "
+                f"{len(bounded_view_blocked_authorization)}"
+            )
+        else:
+            _require_rust_item_context(
+                runtime_path,
+                bounded_view_blocked_authorization[0],
+                bounded_ingress_context,
+                "bounded-ingress view-blocked Progress authorization mint",
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                bounded_view_blocked_authorization[0],
+                _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[
+                    "bounded_ingress_ordinary_view_blocked_progress_authorization"
+                ],
+                "bounded-ingress view-blocked Progress authorization mint",
+                errors,
+            )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get(
+                "runtime_view_blocked_progress_authorization_projection_hash"
+            ),
+            """
+append_runtime_identity_field(
+    &mut projection,
+    authorization.blocker.projection_hash.as_ref(),
+);
+append_runtime_identity_field(
+    &mut projection,
+    &authorization.blocker_lifecycle_ordinal.to_le_bytes(),
+);
+append_runtime_identity_u64(&mut projection, authorization.blocker_fifo_position);
+append_runtime_identity_u64(&mut projection, authorization.target_view);
+""",
+            "view-release authorization hashing must bind the exact blocker, lifecycle, position, and target view",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            view_blocked_authorization_new[0]
+            if len(view_blocked_authorization_new) == 1
+            else None,
+            """
+authorization.projection_hash =
+    runtime_view_blocked_progress_authorization_projection_hash(&authorization);
+(authorization.blocker.validate_exact()
+    && authorization.blocker.identity.kind == RuntimeCommandKind::Authenticated
+    && authorization.blocker_lifecycle_ordinal != 0)
+    .then_some(authorization)
+""",
+            "view-release authorization construction must seal one authenticated nonzero-lifecycle blocker",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("validates_retained_blocker"),
+            """
+let blocker_is_exact_minimum = position
+    .and_then(|position| before.occurrence_owners.get(position))
+    == Some(&self.blocker)
+    && before.progress_minimum_lifecycle_ordinal == Some(self.blocker_lifecycle_ordinal);
+""",
+            "view-release authorization must bind the exact ordinary-selected Progress minimum and FIFO position",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("validates_retained_blocker"),
+            """
+after
+    .occurrence_index
+    .get(&self.blocker.admission_ordinal)
+    .and_then(|position| after.occurrence_owners.get(*position))
+    == Some(&self.blocker);
+""",
+            "view-release authorization must retain the exact blocker across the exceptional selection",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("validates_retained_blocker"),
+            """
+self.target_view > round_tag.view()
+    && ordinary.selected == SERVICE_CLASS_PROGRESS
+    && blocker_is_exact_minimum
+    && blocker_remains_owned
+""",
+            "view-release authorization must remain future-directed and owned by ordinary Progress service",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            bounded_view_blocked_authorization[0]
+            if len(bounded_view_blocked_authorization) == 1
+            else None,
+            """
+let selection = select_bounded_service_class(
+    self.next_class.service_code(),
+    completion_ready,
+    progress_ready,
+    normal_ready,
+);
+if selection.selected != SERVICE_CLASS_PROGRESS {
+    return Ok(None);
+}
+""",
+            "only an ordinary Progress class turn may mint view-release authorization",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            bounded_view_blocked_authorization[0]
+            if len(bounded_view_blocked_authorization) == 1
+            else None,
+            """
+if !selected.validate_admission_identity()
+    || selected.identity.kind != RuntimeCommandKind::Authenticated
+    || selected.ingress_ownership.is_none()
+{
+    return Err(EnqueueError::FailClosed);
+}
+let Some(target_view) = blocked_target_view(selected) else {
+    return Ok(None);
+};
+let blocker = selected
+    .cached_queue_occurrence_owner(&self.selection_source_identity)
+    .cloned()
+    .ok_or(EnqueueError::FailClosed)?;
+""",
+            "view-release authorization must derive only from the exact authenticated queue occurrence",
+            errors,
+        )
         _require_rust_item_context(
             runtime_path,
             nonforgeable_helper_items.get("cached_queue_occurrence_owner"),
@@ -43569,6 +43982,70 @@ RuntimeQueueOccurrenceOwner::from_candidate(candidate).is_some_and(|selected| {
             "pre-selection snapshot hash",
             errors,
         )
+        require_runtime_item_order(
+            nonforgeable_helper_items.get("pop_pacemaker_progress_with_ownership"),
+            (
+                "if (advance_ordinary_progress_service && forced_selection_kind.is_some())",
+                "let queue_before = self.ownership_snapshot();",
+                "let ordinary_service = if advance_ordinary_progress_service",
+                "if selection.selected != SERVICE_CLASS_PROGRESS",
+                "check_production_body_service_effective_lock_transition(trace)",
+                "let selected = self.commands.iter().enumerate().filter_map",
+                "let Some((index, _, certified_fence_escape)) = selected else",
+                "return Ok(None);",
+                "advance_ordinary_progress_service && (selected.class != CommandClass::Progress",
+                "RuntimeQueueSelectionKind::OrdinaryViewProgress",
+                "candidate.projection_hash = runtime_fifo_candidate_projection_hash(&candidate);",
+                "oldest.eligible_skips.checked_add(1).is_none()",
+                "self.next_class = CommandClass::from_service_code(selection.next)",
+                "oldest.eligible_skips = oldest.eligible_skips.checked_add(1)",
+                "self.commands.remove(index)",
+            ),
+            "ordinary view-release selection must preflight exact Progress service, return without mutation when absent, then rotate the cursor and accrue skipped-class debt exactly once before removal",
+        )
+
+        queue_selection_kind_code = tuple(
+            item
+            for item in rust_items(runtime_source, "code")
+            if item.brace_context == (("impl", "RuntimeQueueSelectionKind"),)
+        )
+        if len(queue_selection_kind_code) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one queue selection kind code "
+                f"projection; found {len(queue_selection_kind_code)}"
+            )
+        else:
+            _require_rust_item_context(
+                runtime_path,
+                queue_selection_kind_code[0],
+                (("impl", "RuntimeQueueSelectionKind"),),
+                "queue selection kind code projection",
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                queue_selection_kind_code[0],
+                _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[
+                    "queue_selection_kind_code"
+                ],
+                "queue selection kind code projection",
+                errors,
+            )
+            _require_rust_token_sequence(
+                runtime_path,
+                queue_selection_kind_code[0],
+                """
+Self::Ordinary => 1,
+Self::OrdinaryViewProgress => 7,
+Self::FenceCompletion => 2,
+Self::PacemakerProgress => 3,
+Self::PacemakerCertifiedProgress => 4,
+Self::FencePredecessor => 5,
+Self::PreTimeoutLockedPrepareQc => 6,
+""",
+                "the ordinary view-release selection kind must have one distinct sealed code",
+                errors,
+            )
 
         contextual_nonforgeable_items: dict[str, RustItem | None] = {}
         for item_name, context_name, item_context, description in (
@@ -43685,6 +44162,23 @@ self.queue_before.len != 0
         )
         _require_rust_token_sequence(
             runtime_path,
+            contextual_nonforgeable_items.get("queue_selection_validate_identity"),
+            """
+RuntimeQueueSelectionKind::OrdinaryViewProgress => {
+    self.selected_class == SERVICE_CLASS_PROGRESS
+        && self.selected_identity.kind == RuntimeCommandKind::Authenticated
+        && self.selected_ingress_ownership_hash.is_some()
+        && selected_by_ordinary_cursor.selected == SERVICE_CLASS_PROGRESS
+        && selected_by_ordinary_cursor.next == self.cursor_after_removal
+        && self.max_debt_after_upper_bound
+            == self.queue_before.max_service_debt.saturating_add(1)
+}
+""",
+            "ordinary view-release selection seals must preserve authenticated Progress ownership and ordinary cursor/debt bounds",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
             contextual_nonforgeable_items.get("scheduler_evidence_validate_exact"),
             """
 let queue_snapshots_are_exact = self.queue_before_snapshot.validate_identity()
@@ -43708,6 +44202,96 @@ let fence_retry_sets_are_exact = runtime_queue_occurrence_set_matches_snapshot(
 """,
             "scheduler evidence must bind every retry exclusion to an exact "
             "occurrence present in the corresponding private snapshot",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            contextual_nonforgeable_items.get("scheduler_evidence_validate_exact"),
+            """
+let view_blocked_progress_kind_is_exact = self
+    .view_blocked_progress_authorization
+    .as_ref()
+    .is_none_or(|_| {
+        matches!(
+            self.selected,
+            RuntimeSelectedOwnerKind::PacemakerProgress
+                | RuntimeSelectedOwnerKind::PacemakerProgressRetryRetained
+        )
+    });
+""",
+            "non-pacemaker selections, including pre-timeout PrepareQC, must carry no view-blocked authorization",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            contextual_nonforgeable_items.get("scheduler_evidence_validate_exact"),
+            """
+RuntimeQueueSelectionKind::OrdinaryViewProgress => {
+    self.view_blocked_progress_authorization.is_some()
+        && candidate.class == SERVICE_CLASS_PROGRESS
+        && candidate.kind == RuntimeCommandKind::Authenticated
+        && candidate.ingress_ownership.is_some()
+}
+""",
+            "scheduler evidence must admit the special selection kind only with authenticated blocked-view authorization",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            contextual_nonforgeable_items.get("scheduler_evidence_validate_exact"),
+            """
+authorization.validates_retained_blocker(
+    self.round_tag,
+    &self.queue_before_snapshot,
+    &self.queue_after_snapshot,
+) && scheduled == ScheduledWork::Fifo
+    && self.fifo_owed_after == schedule_after.fifo_owed
+    && !retry_retained
+    && candidate.class == SERVICE_CLASS_PROGRESS
+    && candidate.kind == RuntimeCommandKind::Authenticated
+    && candidate.ingress_ownership.is_some()
+    && RuntimeQueueOccurrenceOwner::from_candidate(candidate)
+        .is_some_and(|selected| selected != authorization.blocker)
+""",
+            "ordinary view-release evidence must retain its exact blocker, consume the predicted FIFO turn, and select a distinct authenticated Progress owner",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            contextual_nonforgeable_items.get("scheduler_evidence_validate_exact"),
+            """
+service.selected == SERVICE_CLASS_PROGRESS
+    && self.queue_after.service_cursor == service.next
+    && self.queue_after.max_service_debt
+        <= self.queue_before.max_service_debt.saturating_add(1)
+""",
+            "ordinary view-release evidence must validate the ordinary Progress cursor and bounded skipped-class debt transition",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            contextual_nonforgeable_items.get("scheduler_evidence_validate_exact"),
+            """
+let service_debt_transition_is_exact =
+    if self.view_blocked_progress_authorization.is_some() {
+        let readiness = self.queue_before_snapshot.class_readiness();
+        let service = select_bounded_service_class(
+            self.queue_before.service_cursor,
+            readiness.0,
+            readiness.1,
+            readiness.2,
+        );
+        service.selected == SERVICE_CLASS_PROGRESS
+            && self.queue_after.service_cursor == service.next
+            && self.queue_after.max_service_debt
+                <= self.queue_before.max_service_debt.saturating_add(1)
+    } else {
+        self.queue_before.service_cursor == self.queue_after.service_cursor
+            && self.queue_after.max_service_debt <= self.queue_before.max_service_debt
+            && self.fifo_owed_before == self.fifo_owed_after
+    };
+""",
+            "generic pacemaker escape evidence must retain its unchanged cursor and FIFO debt semantics",
             errors,
         )
         _require_rust_token_sequence(
@@ -43775,6 +44359,21 @@ append_runtime_identity_field(
 """,
             "queue selection hashing must bind the private snapshot and the "
             "selected physical/logical occurrence coordinates",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("runtime_scheduler_projection_hash"),
+            """
+match &evidence.view_blocked_progress_authorization {
+    None => projection.push(0),
+    Some(authorization) => {
+        projection.push(1);
+        append_runtime_identity_field(&mut projection, authorization.projection_hash.as_ref());
+    }
+}
+""",
+            "scheduler ownership hashing must bind the exact optional view-blocked Progress authorization",
             errors,
         )
         _require_rust_token_sequence(
@@ -44575,6 +45174,121 @@ assert!(!runtime.can_admit_network_payload(&mismatched_prepare_vote));
                 f"production causal-FIFO regression {name}",
                 errors,
             )
+        ordinary_view_release_regression = causal_runtime_regressions.get(
+            "ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc"
+        )
+        for required, description in (
+            (
+                """
+assert_eq!(
+    retained.selected,
+    RuntimeSelectedOwnerKind::FifoRetryRetained
+);
+assert_eq!(retained.validate_exact(), Ok(()));
+assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+assert_eq!(runtime.queued_commands(), 1);
+""",
+                "the future PrepareQC must first retain its exact ordinary FIFO owner",
+            ),
+            (
+                """
+runtime
+    .enqueue_network(signed_runtime_proposal(&context, &keys, 0xC2))
+    .expect("enqueue ordinary work whose class debt must remain fair");
+runtime
+    .enqueue_network(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
+    ))
+    .expect("enqueue the matching timeout certificate");
+runtime.schedule.fifo_owed = true;
+runtime.ingress.next_class = CommandClass::Progress;
+""",
+                "the liveness regression must queue skipped Normal work and matching certified progress on an owed FIFO turn",
+            ),
+            (
+                """
+let entered = runtime
+    .step(now)
+    .expect("ordinary production step admits the matching TC");
+""",
+                "the release must use the ordinary production step path",
+            ),
+            (
+                """
+assert!(
+    tc_scheduler.view_blocked_progress_authorization.is_some(),
+    "ordinary TC bypass must retain its exact blocked-PrepareQC authorization"
+);
+assert!(tc_scheduler.fifo_owed_before);
+assert!(!tc_scheduler.fifo_owed_after);
+assert!(!runtime.schedule.fifo_owed);
+assert_eq!(runtime.ingress.next_class, CommandClass::Normal);
+""",
+                "successful TC release must consume FIFO debt, rotate from Progress, and publish exact authorization",
+            ),
+            (
+                """
+assert_eq!(normal_debt_after, normal_debt_before + 1);
+let RuntimeSelectedCandidateOwnership::Exact(tc_candidate) = &tc_scheduler.candidate else {
+    panic!("ordinary TC bypass must retain its exact queue candidate")
+};
+assert_eq!(
+    tc_candidate.selection_seal.kind,
+    RuntimeQueueSelectionKind::OrdinaryViewProgress
+);
+assert_eq!(tc_scheduler.validate_exact(), Ok(()));
+""",
+                "successful release must accrue exactly one skipped-class debt and validate the dedicated selection kind",
+            ),
+            (
+                """
+authorization.target_view = selected_view;
+authorization.projection_hash =
+    runtime_view_blocked_progress_authorization_projection_hash(authorization);
+forged_target.projection_hash = runtime_scheduler_projection_hash(&forged_target);
+assert!(
+    forged_target.validate_exact().is_err(),
+    "scheduler evidence must reject a target view which cannot unblock the retained QC"
+);
+""",
+                "coherently rehashed non-future authorization must fail exact validation",
+            ),
+            (
+                """
+let normal_scheduler = runtime
+    .take_last_scheduler_ownership()
+    .expect("ordinary class receives the turn after Progress rotates");
+assert_eq!(normal_scheduler.selected, RuntimeSelectedOwnerKind::Fifo);
+assert_eq!(normal_scheduler.validate_exact(), Ok(()));
+assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
+assert_eq!(runtime.queued_commands(), 2);
+""",
+                "the skipped unowned Normal owner must receive the next ordinary FIFO service turn without fabricating a route terminal",
+            ),
+            (
+                """
+assert_eq!(runtime.queued_commands(), 1);
+assert!(matches!(
+    runtime.ingress.commands.front().map(|queued| &queued.command),
+    Some(AdapterCommand::Authenticated(message))
+        if matches!(
+            message.payload(),
+            wire::ConsensusMessageV2Payload::QuorumCertificate(remaining)
+                if remaining == &intervening_certificate
+        )
+));
+""",
+                "the later future PrepareQC must remain the sole queued owner after the newly unblocked PrepareQC runs",
+            ),
+        ):
+            _require_rust_token_sequence(
+                runtime_path,
+                ordinary_view_release_regression,
+                required,
+                description,
+                errors,
+            )
         busy_alias_regression_name = (
             "pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_"
             "into_live_busy_producer"
@@ -45046,6 +45760,11 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                 "scheduler_arbitration_inputs",
                 "physical-cut clock and FIFO arbitration projection",
             ),
+            (
+                "try_step_pre_timeout_locked_prepare_qc",
+                "try_step_pre_timeout_locked_prepare_qc",
+                "exact pre-timeout locked-PrepareQC dispatcher",
+            ),
             ("step", "runtime_step", "live serialized runtime step"),
             (
                 "dispatch_one_adapter_deferred",
@@ -45094,6 +45813,49 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                         f"reviewed token digest {expected_sha256}; found "
                         f"{observed_sha256}"
                     )
+        runtime_view_blocked_authorization = tuple(
+            item
+            for item in rust_items(
+                runtime_source,
+                "ordinary_view_blocked_progress_authorization",
+            )
+            if item.brace_context == runtime_context
+        )
+        if len(runtime_view_blocked_authorization) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one serialized-runtime "
+                "view-blocked Progress authorization wrapper; found "
+                f"{len(runtime_view_blocked_authorization)}"
+            )
+        else:
+            _require_rust_item_context(
+                runtime_path,
+                runtime_view_blocked_authorization[0],
+                runtime_context,
+                "serialized-runtime view-blocked Progress authorization wrapper",
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                runtime_view_blocked_authorization[0],
+                _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[
+                    "runtime_ordinary_view_blocked_progress_authorization"
+                ],
+                "serialized-runtime view-blocked Progress authorization wrapper",
+                errors,
+            )
+            _require_rust_token_sequence(
+                runtime_path,
+                runtime_view_blocked_authorization[0],
+                """
+self.ingress
+    .ordinary_view_blocked_progress_authorization(|queued| {
+        driver.pacemaker_progress_blocked_target_view(&queued.command)
+    })
+""",
+                "serialized-runtime authorization must derive its target from the production driver over the exact queued command",
+                errors,
+            )
         for item_name in (
             "physically_eligible_deferred_admission_ordinals",
             "current_signature_fence_identity",
@@ -45225,7 +45987,7 @@ self.fence_retry_blocked_fifo_owners.push(owner);
                 "return self.step(now).map(Some)",
                 "self.dispatch_one_fence_dependency(now, Some(SERVICE_CLASS_PROGRESS))?",
                 "self.dispatch_one_adapter_deferred(now, Some(SERVICE_CLASS_PROGRESS))?",
-                "self.dispatch_one_pacemaker_progress(now)",
+                "self.dispatch_one_pacemaker_progress(now, None)",
             ),
             "typed pacemaker escape must preserve replay/persistence parking, "
             "prefer the absolute timeout, and otherwise admit only an exact "
@@ -45278,6 +46040,48 @@ self.fence_retry_blocked_fifo_owners.push(owner);
             "unblocked Progress roots, "
             "restore retry ownership with one bounded fence marker, and retain "
             "exact selection evidence through shared completion",
+        )
+        require_runtime_item_order(
+            pacemaker_progress,
+            (
+                "let ordinary_view_escape_selected = ordinary_view_escape.is_some();",
+                "let view_release_target = ordinary_view_escape.as_ref()",
+                """
+if driver
+    .pacemaker_progress_blocked_target_view(&queued.command)
+    .is_some()
+{
+    return false;
+}
+""",
+                "view_release_target.is_some_and(|target_view|",
+                "queued.class != CommandClass::Progress",
+                "queued.identity.kind != RuntimeCommandKind::Authenticated",
+                "queued.ingress_ownership.is_none()",
+                "driver.pacemaker_progress_releases_view_block(&queued.command, target_view,)",
+                "ordinary_view_escape_selected, None",
+                "let Some((command, candidate)) = selected else { return Ok(None); };",
+                "let schedule_after = if let Some((arbitration, _)) = &ordinary_view_escape",
+                "if work != ScheduledWork::Fifo",
+                "self.schedule = next_schedule;",
+                "candidate.selection_seal.kind == RuntimeQueueSelectionKind::OrdinaryViewProgress",
+                "candidate.selection_seal.kind, RuntimeQueueSelectionKind::PacemakerCertifiedProgress",
+                "if ordinary_view_escape_selected && (retry_unadmitted || retained_deferred_ingress)",
+                "arbitration.view_blocked_progress_authorization = Some(authorization);",
+                """
+self.retain_scheduler_ownership(
+    RuntimeSelectedOwnerKind::PacemakerProgress,
+    selected_round_tag,
+    RuntimeSelectedCandidateOwnership::Exact(candidate),
+    queue_before,
+    queue_after,
+    arbitration,
+    schedule,
+    schedule_after,
+)?;
+""",
+            ),
+            "ordinary view-release dispatch must reject blocked/unrelated work, avoid mutation when no candidate exists, consume only a predicted FIFO turn, preserve certified selection semantics, fail closed on retry, and publish exact authorization",
         )
         _require_rust_token_sequence(
             runtime_path,
@@ -45546,6 +46350,36 @@ let owner = self.mint_fresh_lifecycle_owner(
             "runnable FIFO class, and compare clocks only through frozen cuts",
         )
         require_runtime_item_order(
+            observed_runtime_items.get("try_step_pre_timeout_locked_prepare_qc"),
+            (
+                """
+                },
+                |_| false,
+                false,
+                Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
+            )
+""",
+                "candidate.selection_seal.kind "
+                "!= RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc",
+            ),
+            "pre-timeout locked-PrepareQC dispatch must keep ordinary Progress "
+            "cursor/debt accounting disabled and require its dedicated selection seal",
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_runtime_items.get("scheduler_arbitration_inputs"),
+            "view_blocked_progress_authorization: None",
+            "ordinary arbitration must start without caller-supplied view-release authority",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("retain_scheduler_ownership"),
+            "view_blocked_progress_authorization: arbitration.view_blocked_progress_authorization",
+            "scheduler evidence must copy the exact internally minted view-release authorization",
+            errors,
+        )
+        require_runtime_item_order(
             observed_runtime_items.get("step"),
             (
                 "self.reconcile_fence_retry_blocked_fifo_owners()",
@@ -45560,6 +46394,32 @@ let owner = self.mint_fresh_lifecycle_owner(
             "live scheduling must reconcile exact retry markers, freeze clock "
             "owners, honor absolute timeout preemption, service one exact fence "
             "dependency, then service ordinary adapter debt before arbitration",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("step"),
+            (
+                """
+let (work, next_schedule) = self.schedule.select(
+    arbitration.timeout_due,
+    arbitration.periodic_timer_due,
+    arbitration.fifo_ready,
+);
+""",
+                "if work == ScheduledWork::Fifo",
+                "self.ordinary_view_blocked_progress_authorization()",
+                """
+if let Some(authorization) = authorization
+    && let Some(step) = self.dispatch_one_pacemaker_progress(
+        now,
+        Some((arbitration.clone(), authorization)),
+    )?
+{
+    return Ok(step);
+}
+""",
+                "self.schedule = next_schedule;",
+            ),
+            "ordinary scheduling must preview an exact blocked PrepareQC only for a selected FIFO turn, return a successful release, and otherwise fall through before mutating the normal schedule",
         )
         require_runtime_item_order(
             observed_runtime_items.get("step"),

@@ -7,16 +7,15 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 import org.hyperledger.iroha.android.client.LocalSigningContext;
+import org.hyperledger.iroha.android.client.TairaTestnetProfile;
 import org.hyperledger.iroha.android.client.transport.UrlConnectionTransportExecutor;
 import org.hyperledger.iroha.android.model.NetworkId;
-import org.junit.Assume;
 import org.junit.Test;
 
 /** Opt-in, credential-free public Taira Kagemusha capability probe. */
 public final class TairaKagemushaReadOnlyPublicTests {
   private static final String OPT_IN_ENV = "IROHA_TAIRA_KAGEMUSHA_READ_ONLY";
   private static final String PUBLIC_ROOT_ENV = "IROHA_TAIRA_PUBLIC_ROOT";
-  private static final String DEFAULT_PUBLIC_ROOT = "https://taira.sora.org";
   private static final Duration DEADLINE = Duration.ofSeconds(20);
 
   // The read-only endpoint never consumes this required construction context.
@@ -25,9 +24,10 @@ public final class TairaKagemushaReadOnlyPublicTests {
 
   @Test
   public void publicCapabilityMatchesExactUniversalContract() throws Exception {
-    Assume.assumeTrue(
-        "Set " + OPT_IN_ENV + "=1 to run the read-only public Taira probe.",
-        "1".equals(System.getenv(OPT_IN_ENV)));
+    assertEquals(URI.create("https://taira.sora.org"), TairaTestnetProfile.TORII_BASE_URI);
+    if (!"1".equals(System.getenv(OPT_IN_ENV))) {
+      return;
+    }
 
     final KagemushaRecursiveSpendProver.ToriiClient client =
         KagemushaRecursiveSpendProver.newToriiClient(
@@ -45,7 +45,8 @@ public final class TairaKagemushaReadOnlyPublicTests {
 
   private static URI publicRoot() {
     final String configured = System.getenv(PUBLIC_ROOT_ENV);
-    final String raw = configured == null ? DEFAULT_PUBLIC_ROOT : configured;
+    final String raw =
+        configured == null ? TairaTestnetProfile.TORII_BASE_URI.toString() : configured;
     if (!raw.equals(raw.trim())) {
       throw new IllegalArgumentException(
           PUBLIC_ROOT_ENV + " must not contain surrounding whitespace");

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts import check_native_sdk_abi22_artifact as checker
+from scripts import check_native_sdk_abi23_artifact as checker
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -49,10 +49,10 @@ NATIVE_ESCROW_SHARED_TRIGGER_PATHS = {
     "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
     "integration_tests/tests/native_escrow.rs",
     "rust-toolchain.toml",
-    "scripts/check_native_sdk_abi22_artifact.py",
+    "scripts/check_native_sdk_abi23_artifact.py",
     "scripts/compute_workspace_source_manifest.py",
     "scripts/check_sorafs_reference_sdk_fixtures.py",
-    "scripts/tests/check_native_sdk_abi22_artifact_test.py",
+    "scripts/tests/check_native_sdk_abi23_artifact_test.py",
     "scripts/tests/check_sorafs_fixture_workflow_contract_test.py",
 }
 NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
@@ -307,7 +307,7 @@ def test_checker_cli_loads_manifest_helper_under_python_isolation(
             sys.executable,
             "-I",
             "-S",
-            str(REPO_ROOT / "scripts/check_native_sdk_abi22_artifact.py"),
+            str(REPO_ROOT / "scripts/check_native_sdk_abi23_artifact.py"),
             "--help",
         ),
         cwd=tmp_path,
@@ -633,7 +633,7 @@ def test_record_cli_stages_cargo_hardlink_before_authentication(
     monkeypatch.setattr(
         "sys.argv",
         [
-            "check_native_sdk_abi22_artifact.py",
+            "check_native_sdk_abi23_artifact.py",
             "record",
             "--artifact",
             str(cargo_artifact),
@@ -696,7 +696,7 @@ def test_record_cli_rejects_staged_bytes_not_matching_pinned_source(
     monkeypatch.setattr(
         "sys.argv",
         [
-            "check_native_sdk_abi22_artifact.py",
+            "check_native_sdk_abi23_artifact.py",
             "record",
             "--artifact",
             str(cargo_artifact),
@@ -760,7 +760,7 @@ def test_record_cli_uses_authorized_canonical_parent_after_alias_retarget(
     monkeypatch.setattr(
         "sys.argv",
         [
-            "check_native_sdk_abi22_artifact.py",
+            "check_native_sdk_abi23_artifact.py",
             "record",
             "--artifact",
             str(cargo_artifact),
@@ -814,7 +814,7 @@ def test_descriptor_staging_support_failure_is_scoped_to_stage_operation(
     monkeypatch.setattr(
         "sys.argv",
         [
-            "check_native_sdk_abi22_artifact.py",
+            "check_native_sdk_abi23_artifact.py",
             "record",
             "--artifact",
             str(artifact),
@@ -833,7 +833,7 @@ def test_descriptor_staging_support_failure_is_scoped_to_stage_operation(
     monkeypatch.setattr(
         "sys.argv",
         [
-            "check_native_sdk_abi22_artifact.py",
+            "check_native_sdk_abi23_artifact.py",
             "verify",
             "--artifact",
             str(artifact),
@@ -857,7 +857,7 @@ def test_verify_cli_rejects_stage_artifact_argument(
     monkeypatch.setattr(
         "sys.argv",
         [
-            "check_native_sdk_abi22_artifact.py",
+            "check_native_sdk_abi23_artifact.py",
             "verify",
             "--artifact",
             str(artifact),
@@ -940,6 +940,29 @@ def test_record_and_verify_bind_exact_artifact_and_clean_revision(
         probe=exact_probe,
         symbol_inventory=exact_symbol_inventory,
     )
+
+
+def test_verify_rejects_retired_abi22_manifest_schema(tmp_path: Path) -> None:
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="csharp",
+        target="x86_64-unknown-linux-gnu",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+        symbol_inventory=exact_symbol_inventory,
+    )
+    manifest["schema"] = "iroha.native-sdk-abi22-artifact.v1"
+
+    with pytest.raises(checker.ArtifactContractError, match="schema is unsupported"):
+        checker.verify_manifest(
+            manifest,
+            artifact_path=artifact,
+            source_root=source,
+            probe=exact_probe,
+            symbol_inventory=exact_symbol_inventory,
+        )
 
 
 def test_record_and_verify_reject_missing_artifact(tmp_path: Path) -> None:
@@ -1078,6 +1101,122 @@ def test_privacy_c_export_inventory_rejects_stale_abi_markers(stale: str) -> Non
             (*checker.APPROVED_PRIVACY_C_EXPORTS, stale),
             require_exact=True,
         )
+
+
+def test_hijiri_quote_release_symbol_contract_is_closed() -> None:
+    c_exports = {
+        "connect_norito_validation_fee_hijiri_quote_request_v1",
+        "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+    }
+    assert c_exports <= set(checker.REQUIRED_SYMBOLS["c-jni"])
+    assert c_exports <= set(checker.REQUIRED_SYMBOLS["csharp"])
+    assert {
+        "validationFeeHijiriQuoteRequestV1",
+        "validationFeeVerifyHijiriQuoteResponseV1",
+    } <= set(checker.REQUIRED_SYMBOLS["node"])
+    assert {
+        "validation_fee_hijiri_quote_request_v1",
+        "validation_fee_verify_hijiri_quote_response_v1",
+    } <= set(checker.REQUIRED_SYMBOLS["python"])
+
+    napi = (REPO_ROOT / "crates/iroha_js_host/src/lib.rs").read_text(encoding="utf-8")
+    node_exports = (
+        "validationFeeHijiriQuoteRequestV1",
+        "validationFeeVerifyHijiriQuoteResponseV1",
+    )
+    node_packager = (
+        REPO_ROOT / "javascript/iroha_js/scripts/copy-native.mjs"
+    ).read_text(encoding="utf-8")
+    for export in node_exports:
+        assert f'#[napi(js_name = "{export}")]' in napi
+        assert f'"{export}",' in node_packager
+
+    pyo3 = (
+        REPO_ROOT / "python/iroha_python/iroha_python_rs/src/lib.rs"
+    ).read_text(encoding="utf-8")
+    for export in (
+        "validation_fee_hijiri_quote_request_v1",
+        "validation_fee_verify_hijiri_quote_response_v1",
+    ):
+        assert f'#[pyo3(name = "{export}")]' in pyo3
+        assert f"{export}_py," in pyo3
+
+    jni_source = (
+        REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/part_1.rs"
+    ).read_text(encoding="utf-8")
+    jni_gate = (REPO_ROOT / "ci/check_kagemusha_jvm_native_bridge.sh").read_text(
+        encoding="utf-8"
+    )
+    mobile_gate = (REPO_ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
+        encoding="utf-8"
+    )
+    mobile_gate_tests = (
+        REPO_ROOT / "scripts/check_mobile_sdk_artifacts_test.sh"
+    ).read_text(encoding="utf-8")
+    for namespace in ("sdk", "android"):
+        for method in (
+            "nativeBridgeAbiVersion",
+            "nativeEncodeRequestV1",
+            "nativeVerifyResponseV1",
+        ):
+            export = (
+                "Java_org_hyperledger_iroha_"
+                f"{namespace}_validationfee_ValidationFeeHijiriQuoteBridge_{method}"
+            )
+            assert export in jni_source
+            assert export in mobile_gate
+            assert export in mobile_gate_tests
+            assert method in jni_gate
+    assert 'for namespace in ("sdk", "android")' in jni_gate
+    assert "ValidationFeeHijiriQuoteBridge_{method}" in jni_gate
+
+    for relative in (
+        "scripts/validate_norito_bridge_xcframework.py",
+        "scripts/check_mobile_sdk_artifacts.sh",
+        "scripts/build_norito_xcframework.sh",
+        "scripts/tests/mobile_sdk_artifact_fixture_helpers.sh",
+        "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    ):
+        source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        for export in c_exports:
+            assert export in source
+
+    kotlin_test = (
+        REPO_ROOT
+        / "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/validationfee/"
+        "ValidationFeeHijiriQuoteTest.kt"
+    ).read_text(encoding="utf-8")
+    assert "ValidationFeeHijiriQuoteBridge.encodeRequestV1(request)" in kotlin_test
+    assert "ValidationFeeHijiriQuoteBridge.verifyResponseV1(byteArrayOf(0), first)" in kotlin_test
+    assert "missing additive JNI methods fail with the stable capability error" in kotlin_test
+
+    kotlin_bridge = (
+        REPO_ROOT
+        / "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/validationfee/"
+        "ValidationFeeHijiriQuoteBridge.kt"
+    ).read_text(encoding="utf-8")
+    assert 'invokeRequiredQuoteNative("nativeEncodeRequestV1")' in kotlin_bridge
+    assert 'invokeRequiredQuoteNative("nativeVerifyResponseV1")' in kotlin_bridge
+    assert "catch (failure: UnsatisfiedLinkError)" in kotlin_bridge
+    assert "required ABI-23 method $method is missing" in kotlin_bridge
+
+    java_test = (
+        REPO_ROOT
+        / "java/iroha_android/src/test/java/org/hyperledger/iroha/android/validationfee/"
+        "ValidationFeeHijiriQuoteTests.java"
+    ).read_text(encoding="utf-8")
+    assert "ValidationFeeHijiriQuoteBridge.encodeRequestV1(request)" in java_test
+    assert "ValidationFeeHijiriQuoteBridge.verifyResponseV1(new byte[] {0}, first)" in java_test
+    assert "missingAdditiveJniMethodsFailWithStableCapabilityError();" in java_test
+
+    java_bridge = (
+        REPO_ROOT
+        / "java/iroha_android/src/main/java/org/hyperledger/iroha/android/validationfee/"
+        "ValidationFeeHijiriQuoteBridge.java"
+    ).read_text(encoding="utf-8")
+    assert java_bridge.count("invokeRequiredQuoteNative(") >= 3
+    assert "catch (final UnsatisfiedLinkError failure)" in java_bridge
+    assert '" is missing"' in java_bridge
 
 
 def test_node_and_python_do_not_invent_a_c_export_contract(tmp_path: Path) -> None:
@@ -1346,7 +1485,7 @@ def test_cli_rejects_final_component_artifact_symlink(
     monkeypatch.setattr(
         "sys.argv",
         [
-            "check_native_sdk_abi22_artifact.py",
+            "check_native_sdk_abi23_artifact.py",
             "record",
             "--artifact",
             str(symlink),
@@ -1479,10 +1618,10 @@ def test_retained_native_manifest_is_private_canonical_and_payload_free(
         probe=exact_probe,
     )
 
-    assert retained == evidence_directory / "python-native-abi22.json"
+    assert retained == evidence_directory / "python-native-abi23.json"
     assert checker.load_manifest(retained) == manifest
     assert {path.name for path in evidence_directory.iterdir()} == {
-        "python-native-abi22.json"
+        "python-native-abi23.json"
     }
     directory_metadata = evidence_directory.lstat()
     manifest_metadata = retained.lstat()
@@ -1530,7 +1669,7 @@ def test_verify_cli_retains_native_manifest_only_after_reauthentication(
     monkeypatch.setattr(
         "sys.argv",
         [
-            "check_native_sdk_abi22_artifact.py",
+            "check_native_sdk_abi23_artifact.py",
             "verify",
             "--artifact",
             str(artifact),
@@ -1545,7 +1684,7 @@ def test_verify_cli_retains_native_manifest_only_after_reauthentication(
 
     assert checker.main() == 0
     assert checker.load_manifest(
-        evidence_directory / "python-native-abi22.json"
+        evidence_directory / "python-native-abi23.json"
     ) == manifest
 
 
@@ -1717,12 +1856,12 @@ def test_python_native_evidence_retention_is_opt_in_and_uploaded() -> None:
     assert skip_audit < runner.index('VERIFY_EVIDENCE_ARGS=()')
     assert runner.index('VERIFY_EVIDENCE_ARGS=()') < runner.rindex("  verify \\")
     assert "SDK_SESSION}/pytest.xml" in runner
-    assert "SDK_SESSION}/python-native-abi22.json" in runner
+    assert "SDK_SESSION}/python-native-abi23.json" in runner
 
     evidence_directory = (
-        "${{ runner.temp }}/iroha-sorafs-python-native-abi22-evidence"
+        "${{ runner.temp }}/iroha-sorafs-python-native-abi23-evidence"
     )
-    evidence_file = f"{evidence_directory}/python-native-abi22.json"
+    evidence_file = f"{evidence_directory}/python-native-abi23.json"
     assert f"SORAFS_PYTHON_SDK_EVIDENCE_DIR: {evidence_directory}" in workflow
     assert "name: Upload verified Python ABI-23 evidence" in workflow
     assert evidence_file in workflow
@@ -1745,6 +1884,8 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
         "connectNoritoBridgeAbiVersion() { return 23; },"
         "inspectSorafsOrderbookSubmissionForDiscriminantV1() {},"
         "sorafsValidateAppealFinanceCancelAssetLockJson() {}"
+        ",validationFeeHijiriQuoteRequestV1() {}"
+        ",validationFeeVerifyHijiriQuoteResponseV1() {}"
         ",verifySorafsOrderbookSubmissionReceiptV1() {}"
         "};\n",
         encoding="utf-8",
@@ -1760,6 +1901,8 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
     source = complete.read_text(encoding="utf-8")
     for symbol in (
         "inspectSorafsOrderbookSubmissionForDiscriminantV1",
+        "validationFeeHijiriQuoteRequestV1",
+        "validationFeeVerifyHijiriQuoteResponseV1",
         "verifySorafsOrderbookSubmissionReceiptV1",
     ):
         incomplete = tmp_path / f"missing-{symbol}.cjs"
@@ -1788,6 +1931,10 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
         "    return {}\n"
         "def sorafs_validate_appeal_finance_cancel_asset_lock_json():\n"
         "    return '{}'\n"
+        "def validation_fee_hijiri_quote_request_v1():\n"
+        "    return b'quote-request'\n"
+        "def validation_fee_verify_hijiri_quote_response_v1():\n"
+        "    return '{}'\n"
         "def verify_sorafs_orderbook_submission_receipt_v1():\n"
         "    return '{}'\n",
         encoding="utf-8",
@@ -1803,6 +1950,8 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
     source = complete.read_text(encoding="utf-8")
     for symbol in (
         "inspect_sorafs_orderbook_submission_for_discriminant_v1",
+        "validation_fee_hijiri_quote_request_v1",
+        "validation_fee_verify_hijiri_quote_response_v1",
         "verify_sorafs_orderbook_submission_receipt_v1",
     ):
         incomplete = tmp_path / f"missing-{symbol}.py"
@@ -1819,6 +1968,10 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
         "def inspect_sorafs_orderbook_submission_for_discriminant_v1():\n"
         "    return {}\n"
         "def sorafs_validate_appeal_finance_cancel_asset_lock_json():\n"
+        "    return '{}'\n"
+        "def validation_fee_hijiri_quote_request_v1():\n"
+        "    return b'quote-request'\n"
+        "def validation_fee_verify_hijiri_quote_response_v1():\n"
         "    return '{}'\n"
         "def verify_sorafs_orderbook_submission_receipt_v1():\n"
         "    return '{}'\n",
@@ -2007,7 +2160,7 @@ def test_kotlin_localnet_release_lane_is_mandatory_and_payload_free() -> None:
         assert token in gate
     assert gate.count('write_exclusive("') == 3
     assert 'write_exclusive("zk-asset-shield-localnet.junit.xml"' in gate
-    assert 'write_exclusive("c-jni-native-abi22.json"' in gate
+    assert 'write_exclusive("c-jni-native-abi23.json"' in gate
     assert 'write_exclusive("zk-asset-shield-localnet-summary.json"' in gate
     for forbidden in ("client.toml", "genesis.json", "private_key"):
         assert f'write_exclusive("{forbidden}' not in gate
@@ -2110,7 +2263,7 @@ def run_kotlin_localnet_evidence_program(
         skipped_node=aggregate_skipped_node,
     )
     host_target = "x86_64-unknown-linux-gnu"
-    native = tmp_path / "c-jni-native-abi22.json"
+    native = tmp_path / "c-jni-native-abi23.json"
     native.write_text(
         json.dumps(
             {
@@ -2155,7 +2308,7 @@ def test_kotlin_localnet_evidence_validator_emits_only_safe_success_files(
     completed, evidence_dir = run_kotlin_localnet_evidence_program(tmp_path)
     assert completed.returncode == 0, completed.stderr
     assert {path.name for path in evidence_dir.iterdir()} == {
-        "c-jni-native-abi22.json",
+        "c-jni-native-abi23.json",
         "zk-asset-shield-localnet-summary.json",
         "zk-asset-shield-localnet.junit.xml",
     }
@@ -2390,7 +2543,7 @@ def test_repository_wires_exact_abi23_release_contract() -> None:
     csharp_workflow = read(".github/workflows/pr_csharp.yml")
     python_lane = read("ci/check_sorafs_python_native_sdk.sh")
     for lane in (csharp_workflow, python_lane):
-        assert "check_native_sdk_abi22_artifact.py" in lane
+        assert "check_native_sdk_abi23_artifact.py" in lane
         assert "record" in lane
         assert "verify" in lane
     preflight = csharp_workflow.index("Preflight Windows native source manifest")
@@ -2417,7 +2570,7 @@ def test_repository_wires_exact_abi23_release_contract() -> None:
     node_lane = read("ci/sdk_sorafs_orchestrator.sh")
     assert "native/iroha_js_host.node" in node_lane
     assert "--sdk node" in node_lane
-    assert node_lane.count("check_native_sdk_abi22_artifact.py") == 2
+    assert node_lane.count("check_native_sdk_abi23_artifact.py") == 2
     assert "record" in node_lane
     assert "verify" in node_lane
 
@@ -2436,14 +2589,14 @@ def test_repository_wires_exact_abi23_release_contract() -> None:
         'grep -R -F -q "$REQUIRED_NATIVE_ASSERTION" "$log_file" "$result_directory"'
         in jni_lane
     )
-    assert 'ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"' in jni_lane
+    assert 'ABI23_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi23_artifact.py"' in jni_lane
     assert (
         'CARGO_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/'
         '$NATIVE_LIBRARY_NAME"' in jni_lane
     )
     assert 'NATIVE_LIBRARY_DIR="$BUILD_SESSION/native-runtime"' in jni_lane
-    record_call = jni_lane.index('"$ABI22_ARTIFACT_CHECKER" record')
-    verify_call = jni_lane.index('"$ABI22_ARTIFACT_CHECKER" verify')
+    record_call = jni_lane.index('"$ABI23_ARTIFACT_CHECKER" record')
+    verify_call = jni_lane.index('"$ABI23_ARTIFACT_CHECKER" verify')
     assert (
         record_call
         < jni_lane.index('--artifact "$CARGO_NATIVE_LIBRARY"', record_call)

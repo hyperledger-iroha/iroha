@@ -7,17 +7,15 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.LocalSigningContext
+import org.hyperledger.iroha.sdk.client.TairaTestnetProfile
 import org.hyperledger.iroha.sdk.client.transport.UrlConnectionTransportExecutor
 import org.hyperledger.iroha.sdk.core.model.NetworkId
-import org.junit.jupiter.api.Assumptions.assumeTrue
 
 class TairaKagemushaReadOnlyPublicTest {
     @Test
     fun publicCapabilityMatchesExactUniversalContract() {
-        assumeTrue(
-            System.getenv(OPT_IN_ENV) == "1",
-            "Set $OPT_IN_ENV=1 to run the read-only public Taira probe.",
-        )
+        assertEquals(URI.create("https://taira.sora.org"), TairaTestnetProfile.TORII_BASE_URI)
+        if (System.getenv(OPT_IN_ENV) != "1") return
 
         val transport = UrlConnectionTransportExecutor(DEADLINE)
         val client = KagemushaRecursiveSpendProver.newToriiClient(
@@ -34,7 +32,7 @@ class TairaKagemushaReadOnlyPublicTest {
     }
 
     private fun publicRoot(): URI {
-        val raw = System.getenv(PUBLIC_ROOT_ENV) ?: DEFAULT_PUBLIC_ROOT
+        val raw = System.getenv(PUBLIC_ROOT_ENV) ?: TairaTestnetProfile.TORII_BASE_URI.toString()
         require(raw == raw.trim()) {
             "$PUBLIC_ROOT_ENV must not contain surrounding whitespace"
         }
@@ -57,7 +55,6 @@ class TairaKagemushaReadOnlyPublicTest {
     private companion object {
         private const val OPT_IN_ENV = "IROHA_TAIRA_KAGEMUSHA_READ_ONLY"
         private const val PUBLIC_ROOT_ENV = "IROHA_TAIRA_PUBLIC_ROOT"
-        private const val DEFAULT_PUBLIC_ROOT = "https://taira.sora.org"
         private val DEADLINE: Duration = Duration.ofSeconds(20)
 
         // The read-only endpoint never consumes this required construction context.

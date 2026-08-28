@@ -751,10 +751,8 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 )
                 .expect("restore the exact long-lived Validate retry marker");
             assert_eq!(
-                executor.validate_retry_lifecycle_ordinal_for_test((
-                    validate_round,
-                    validate_subject,
-                )),
+                executor
+                    .validate_retry_lifecycle_ordinal_for_test((validate_round, validate_subject,)),
                 Some(Some(lease.ordinal())),
                 "{row:?}: recovered retry authority must bind the Ready parent"
             );
@@ -995,19 +993,23 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 assert!(!settled_status.fail_closed, "{row:?}");
                 assert!(!output_guard.restart_required(), "{row:?}");
             }
-            let expected_retry_ordinal = matches!(
-                row,
+            let expected_retry_owner = match row {
                 ProductionReadyValidateDispatchRow::ValidatedBusy
-                    | ProductionReadyValidateDispatchRow::RejectedBusy
-            )
-            .then_some(lease.ordinal());
+                | ProductionReadyValidateDispatchRow::RejectedBusy => Some(Some(lease.ordinal())),
+                ProductionReadyValidateDispatchRow::LocalValidatedBusy
+                | ProductionReadyValidateDispatchRow::ValidatedInactive
+                | ProductionReadyValidateDispatchRow::ValidatedNoEffect
+                | ProductionReadyValidateDispatchRow::RejectedInactive
+                | ProductionReadyValidateDispatchRow::RejectedNoEffect => Some(None),
+                ProductionReadyValidateDispatchRow::ValidatedApply
+                | ProductionReadyValidateDispatchRow::ValidatedPersist
+                | ProductionReadyValidateDispatchRow::RejectedReport => None,
+            };
             assert_eq!(
-                executor.validate_retry_lifecycle_ordinal_for_test((
-                    validate_round,
-                    validate_subject,
-                )),
-                Some(expected_retry_ordinal),
-                "{row:?}: only an unresolved Busy parent may retain its retry ordinal"
+                executor
+                    .validate_retry_lifecycle_ordinal_for_test((validate_round, validate_subject,)),
+                expected_retry_owner,
+                "{row:?}: retry state must distinguish an active owner, a released tombstone, and successor-consumed absence"
             );
             let mut expected_apply_successor_broadcast_ordinal = None;
             if let Some(child_ordinal) = expected_successor_ordinal {

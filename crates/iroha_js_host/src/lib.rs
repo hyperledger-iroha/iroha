@@ -394,6 +394,117 @@ pub fn validation_fee_verify_current_policy_proof_v1(
         .map_err(napi::Error::from_reason)?;
     json::to_json(&projection).map_err(norito_to_napi)
 }
+/// Encode one exact bounded native-Norito Hijiri validation-fee quote request.
+#[napi(js_name = "validationFeeHijiriQuoteRequestV1")]
+pub fn validation_fee_hijiri_quote_request_v1(
+    account_id: String,
+    qualifying_transfer_count: u32,
+) -> napi::Result<Buffer> {
+    const MAX_REQUEST_BYTES: usize =
+        iroha::client::VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1;
+    if account_id.is_empty()
+        || account_id.len() > MAX_REQUEST_BYTES
+        || account_id.trim() != account_id
+    {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "accountId must be one bounded canonical I105 account id",
+        ));
+    }
+    let address = AccountAddress::parse_encoded(&account_id, None).map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("accountId must be one canonical I105 account id: {error}"),
+        )
+    })?;
+    let request = iroha::client::ValidationFeeHijiriQuoteRequestV1 {
+        version: iroha::client::VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
+        account_id: address.to_account_id().map_err(|error| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("accountId must identify one universal account: {error}"),
+            )
+        })?,
+        qualifying_transfer_count,
+    };
+    request.validate().map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid Hijiri validation-fee quote request: {error}"),
+        )
+    })?;
+    let archive = norito::to_bytes(&request).map_err(norito_to_napi)?;
+    if archive.is_empty() || archive.len() > MAX_REQUEST_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::GenericFailure,
+            "encoded Hijiri validation-fee quote request exceeds its wire bound",
+        ));
+    }
+    Ok(Buffer::from(archive))
+}
+/// Verify one native-Norito Hijiri quote against the exact request archive.
+#[napi(js_name = "validationFeeVerifyHijiriQuoteResponseV1")]
+pub fn validation_fee_verify_hijiri_quote_response_v1(
+    response_norito: Uint8Array,
+    request_norito: Uint8Array,
+) -> napi::Result<String> {
+    const MAX_REQUEST_BYTES: usize =
+        iroha::client::VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1;
+    const MAX_RESPONSE_BYTES: usize =
+        iroha::client::VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1;
+    if request_norito.is_empty() || request_norito.len() > MAX_REQUEST_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("requestNorito must contain 1..{MAX_REQUEST_BYTES} bytes"),
+        ));
+    }
+    if response_norito.is_empty() || response_norito.len() > MAX_RESPONSE_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("responseNorito must contain 1..{MAX_RESPONSE_BYTES} bytes"),
+        ));
+    }
+    let request: iroha::client::ValidationFeeHijiriQuoteRequestV1 =
+        decode_from_bytes(request_norito.as_ref()).map_err(|error| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("requestNorito is not a Hijiri quote request: {error}"),
+            )
+        })?;
+    let canonical_request = norito::to_bytes(&request).map_err(norito_to_napi)?;
+    if canonical_request != request_norito.as_ref() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "requestNorito is not canonical",
+        ));
+    }
+    request.validate().map_err(napi::Error::from_reason)?;
+    let response: iroha::client::ValidationFeeHijiriQuoteResponseV1 =
+        decode_from_bytes(response_norito.as_ref()).map_err(|error| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("responseNorito is not a Hijiri quote response: {error}"),
+            )
+        })?;
+    let canonical_response = norito::to_bytes(&response).map_err(norito_to_napi)?;
+    if canonical_response != response_norito.as_ref() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "responseNorito is not canonical",
+        ));
+    }
+    response
+        .validate_for_request(&request)
+        .map_err(napi::Error::from_reason)?;
+    let projection = json::to_json(&response).map_err(norito_to_napi)?;
+    if projection.is_empty() || projection.len() > MAX_RESPONSE_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::GenericFailure,
+            "verified Hijiri quote projection exceeds its response bound",
+        ));
+    }
+    Ok(projection)
+}
 const SUPPORTED_CRYPTO_ALGORITHMS: &[Algorithm] = &[
     Algorithm::Ed25519,
     Algorithm::Secp256k1,
@@ -11989,6 +12100,26 @@ mod tests {
     }
     fn test_network_id_bytes(label: &[u8]) -> Uint8Array {
         Uint8Array::from(test_network_id(label).as_bytes().to_vec())
+    }
+    #[test]
+    fn hijiri_quote_napi_codec_encodes_and_rejects_malformed_response() {
+        let key_pair = KeyPair::try_from_seed(vec![0x37; 32], Algorithm::Ed25519)
+            .expect("derive Hijiri quote account");
+        let account = AccountId::new(key_pair.public_key().clone());
+        let archive = validation_fee_hijiri_quote_request_v1(account.to_string(), 2)
+            .expect("encode Hijiri quote request");
+        let decoded: iroha::client::ValidationFeeHijiriQuoteRequestV1 =
+            decode_from_bytes(archive.as_ref()).expect("decode encoded request");
+        assert_eq!(decoded.account_id, account);
+        assert_eq!(decoded.qualifying_transfer_count, 2);
+        assert!(validation_fee_hijiri_quote_request_v1(decoded.account_id.to_string(), 0).is_err());
+
+        let error = validation_fee_verify_hijiri_quote_response_v1(
+            Uint8Array::from(vec![0_u8]),
+            Uint8Array::from(archive.to_vec()),
+        )
+        .expect_err("malformed response must fail closed");
+        assert!(error.reason.contains("not a Hijiri quote response"));
     }
     #[test]
     fn crypto_algorithm_parser_accepts_supported_aliases() {

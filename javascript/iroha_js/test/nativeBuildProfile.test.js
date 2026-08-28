@@ -535,12 +535,12 @@ test("the live build rejects incomplete or redirected build envelopes", async (t
       },
     },
     {
-      label: /to name the root Cargo.lock/u,
+      label: /external Cargo.lock must remain outside the source tree/u,
       mutate(env) {
-        env.IROHA_JS_CARGO_LOCKFILE_PATH = path.join(
-          fixture.repoRoot,
-          "alternate.lock",
-        );
+        const nested = path.join(fixture.repoRoot, "private-lock");
+        mkdirSync(nested);
+        env.IROHA_JS_CARGO_LOCKFILE_PATH = path.join(nested, "Cargo.lock");
+        writeFileSync(env.IROHA_JS_CARGO_LOCKFILE_PATH, "version = 4\n");
       },
     },
     {
@@ -569,6 +569,39 @@ test("the live build rejects incomplete or redirected build envelopes", async (t
       );
     });
   }
+});
+
+test("the live build accepts an authenticated external Cargo.lock", (t) => {
+  const fixture = createFixture(t);
+  const lockDirectory = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-release-lock-")),
+  );
+  t.after(() => rmSync(lockDirectory, { recursive: true, force: true }));
+  const externalLock = path.join(lockDirectory, "Cargo.lock");
+  writeFileSync(externalLock, "version = 4\n");
+  const env = {
+    ...fixture.env,
+    IROHA_JS_CARGO_LOCKFILE_PATH: externalLock,
+  };
+  let cargoRuns = 0;
+
+  const status = runNativeBuild({
+    repoRoot: fixture.repoRoot,
+    env,
+    platform: "linux",
+    readSourceState: () => sourceState(),
+    runCargo(_cargo, args) {
+      cargoRuns += 1;
+      assert.deepEqual(
+        args.slice(args.indexOf("--lockfile-path"), args.indexOf("--lockfile-path") + 2),
+        ["--lockfile-path", externalLock],
+      );
+      return { status: 7, stdout: "" };
+    },
+  });
+
+  assert.equal(status, 7);
+  assert.equal(cargoRuns, 1);
 });
 
 test("failed Cargo leaves the output unauthenticated", (t) => {

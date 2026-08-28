@@ -93,7 +93,7 @@ until rebuilt from the final source state and accompanied by authenticated
 execution evidence.
 
 Host-native evidence now uses
-`scripts/check_native_sdk_abi22_artifact.py`. For C/JNI, C#, Node, and Python it
+`scripts/check_native_sdk_abi23_artifact.py`. For C/JNI, C#, Node, and Python it
 binds one non-linked artifact's stable byte length and SHA-256 to the exact clean
 Git commit, calls the bridge probe, requires ABI **exactly** 23, and verifies the
 lane's appeal-finance entrypoint inventory. Canonical evidence is reverified
@@ -118,7 +118,7 @@ artifacts still must be produced and exercised for Linux x86_64, Linux aarch64,
 macOS x86_64, macOS aarch64, and Windows x86_64 before this lane can close.
 
 The C# NuGet source path now consumes exactly those five target-host
-`iroha.native-sdk-abi22-artifact.v1` manifests, maps them to `linux-x64`,
+`iroha.native-sdk-abi23-artifact.v1` manifests, maps them to `linux-x64`,
 `linux-arm64`, `osx-x64`, `osx-arm64`, and `win-x64`, and packages only the
 matching `runtimes/<rid>/native/` libraries. The assembler and pre-pack/project
 gate reject missing or extra targets/files, source-commit drift, noncanonical

@@ -319,6 +319,42 @@ fn lifecycle_does_not_settle_an_unqueued_original() {
     );
 }
 #[test]
+fn lifecycle_apply_returns_snapshot_before_retention_compaction() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let mut runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("cfg")
+        .expect("enabled");
+    runtime.store_retention = std::time::Duration::from_nanos(1);
+    let parsed = parse_message(
+        "pacs.002",
+        b"MsgId=compact-lifecycle-response\nOrgnlMsgId=unknown-original\nTxSts=ACSP",
+    )
+    .expect("pacs.002 parsed");
+    record_lifecycle(&runtime, "compact-lifecycle-response", "pacs.002");
+
+    let (outcome, snapshot) = runtime
+        .apply_inbound_lifecycle_message_with_status(
+            "compact-lifecycle-response",
+            "pacs.002",
+            &parsed,
+        )
+        .expect("lifecycle response snapshot");
+    assert_eq!(outcome.action(), "recorded");
+    assert_eq!(snapshot.message_id(), "compact-lifecycle-response");
+    assert_eq!(snapshot.status_label(), "Accepted");
+
+    std::thread::sleep(std::time::Duration::from_millis(1));
+    runtime.compact_persisted_records();
+    assert!(
+        runtime
+            .message_status("compact-lifecycle-response")
+            .is_none()
+    );
+    assert_eq!(snapshot.status_label(), "Accepted");
+}
+#[test]
 fn checked_in_pacs002_fixture_settles_known_original() {
     let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
         .expect("cfg")
@@ -447,7 +483,7 @@ fn lifecycle_pacs002_ignores_non_payment_original() {
     );
 }
 #[test]
-fn lifecycle_pacs004_marks_original_returned() {
+fn lifecycle_pacs004_ignores_unsettled_original() {
     let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
         .expect("cfg")
         .expect("enabled");
@@ -466,16 +502,14 @@ fn lifecycle_pacs004_marks_original_returned() {
         .expect("lifecycle applied");
     assert_eq!(outcome.referenced_message_id(), Some("orig-return"));
     assert_eq!(outcome.lifecycle_reason_code(), Some("AC01"));
-    assert_eq!(outcome.action(), "marked_returned");
+    assert_eq!(outcome.action(), "ignored_unsettled_return");
     let original = runtime
         .message_status("orig-return")
         .expect("original status");
-    assert_eq!(original.status_label(), "Rejected");
-    assert_eq!(original.rejection_reason_code(), Some("AC01"));
-    assert_eq!(
-        original.detail(),
-        Some("payment returned by inbound pacs.004")
-    );
+    assert_eq!(original.status_label(), "Accepted");
+    assert_eq!(original.pacs002_code(), "ACSP");
+    assert_eq!(original.transaction_hash(), Some("tx-return"));
+    assert!(original.settled_at().is_none());
     let lifecycle = runtime
         .message_status("return-1")
         .expect("lifecycle status");
@@ -487,7 +521,7 @@ fn lifecycle_pacs004_marks_original_returned() {
     );
 }
 #[test]
-fn settled_original_ignores_late_pacs004_without_losing_success_evidence() {
+fn settled_original_accepts_pacs004_return_without_losing_success_evidence() {
     let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
         .expect("cfg")
         .expect("enabled");
@@ -503,13 +537,15 @@ fn settled_original_ignores_late_pacs004_without_losing_success_evidence() {
     let outcome = runtime
         .apply_inbound_lifecycle_message("late-return", "pacs.004", &parsed)
         .expect("late lifecycle recorded");
-    assert_eq!(outcome.action(), "ignored_stale_transition");
+    assert_eq!(outcome.action(), "marked_returned");
     let original = runtime
         .message_status("settled-return")
         .expect("settled original");
-    assert_eq!(original.status_label(), "Accepted");
-    assert_eq!(original.pacs002_code(), "ACSC");
+    assert_eq!(original.status_label(), "Rejected");
+    assert_eq!(original.pacs002_code(), "RJCT");
     assert_eq!(original.transaction_hash(), Some("tx-settled-return"));
+    assert!(original.settled_at().is_some());
+    assert_eq!(original.rejection_reason_code(), Some("AC01"));
 }
 #[test]
 fn rejected_original_ignores_late_success_status() {
@@ -547,6 +583,7 @@ fn checked_in_pacs004_fixture_marks_original_returned() {
         .expect("enabled");
     record_original(&runtime, "ORIGINAL-008", "pacs.008");
     runtime.mark_accepted("ORIGINAL-008", "tx-original-008");
+    assert!(runtime.mark_settled("ORIGINAL-008", SystemTime::now()));
     let parsed =
         parse_message("pacs.004", PACS004_FIXTURE_XML.as_bytes()).expect("pacs.004 fixture");
     let lifecycle_id =

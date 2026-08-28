@@ -281,7 +281,7 @@ run_focused_gates() {
   run_step "config production posture" \
     "env -u LOG_FORMAT cargo test -p iroha_config soracloud_runtime_ --lib -- --nocapture"
   run_step "config fixture posture" \
-    "env -u LOG_FORMAT cargo test -p iroha_config --test fixtures -- --nocapture"
+    "env -u LOG_FORMAT cargo test -p iroha_config --test iroha_config_integration fixtures:: -- --nocapture"
   run_step "torii signed mutation route pressure" \
     "env -u LOG_FORMAT cargo test -p iroha_torii --lib --features app_api,telemetry soracloud_signed_mutation_ -- --nocapture"
   run_step "torii public runtime route pressure" \
@@ -348,12 +348,13 @@ esac
 {
   printf "## Summary\n\n"
   if [ "$FAILED" -eq 0 ] && [ "$BLOCKED" -eq 0 ]; then
-    printf "All required Soracloud production readiness gates passed for profile \`%s\`.\n" "$PROFILE"
+    printf "Local Soracloud/Inrou readiness profile \`%s\` passed.\n" "$PROFILE"
   elif [ "$FAILED" -eq 0 ]; then
     printf "All runnable Soracloud readiness gates passed for profile \`%s\`, but production readiness is blocked by missing required gates.\n" "$PROFILE"
   else
     printf "One or more Soracloud production readiness gates failed for profile \`%s\`. Inspect the logs above.\n" "$PROFILE"
   fi
+  printf "\nNative Linux/KVM four-peer qualification and public Taira cutover are separate evidence gates; this local runner does not execute or satisfy them.\n"
   if [ "$BLOCKED" -ne 0 ]; then
     printf "\n### Open Blockers\n\n"
     for blocker in "${OPEN_BLOCKERS[@]}"; do

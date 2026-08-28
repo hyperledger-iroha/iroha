@@ -65,6 +65,15 @@ removes the complete tree, including configs, logs, state, and runtime
 credentials. If either proof fails, it preserves the tree or quarantined racing
 replacement for operator recovery.
 
+All three disposable-deployment commands require Linux pidfds and procfs.
+Kagami records each peer only as owner-only `peerN.process.json` schema V1,
+binding its boot ID, process start time, executable path/device/inode, exact
+argv/config, UID/GID, session, and process group. Every observation, restart,
+signal, and exit wait reopens and holds a pidfd; signaling uses only
+`pidfd_send_signal` and waiting uses the pidfd readiness event. Never add a
+`ps`, numeric-PID signal, shell-kill, or non-Linux fallback. Retired
+`peerN.pid` files are an error and are not migrated.
+
 `up` builds the current Kagami, daemon, CLI, and SoraFS node and replaces one
 marked owner-only directory under `/var/lib/iroha-taira-devnet/` by default. It
 generates exactly four fresh-key NPoS validators on the canonical Taira chain,
@@ -73,6 +82,9 @@ stages and preseeds the required Inrou guest, starts the validators, requires
 health/readiness, submits a signed ping, waits for its typed `Applied` status,
 requires four-peer height convergence, performs a semantic MCP
 initialize/tools-list smoke, and proves the exact four-replica workload route.
+The preseed helper emits one canonical ready receipt while holding every store
+lock, waits for parent stdin EOF, then emits the exact V1 `released`
+acknowledgment; the parent requires all three protocol events in that order.
 
 Treat `up` as the startup-boundary and guest-workload qualification command. It requires
 Linux/AArch64, uid 0, KVM API version 12, and the four canonical locked Inrou
@@ -159,12 +171,16 @@ Prefer curated `iroha.*` tools over raw route wrappers. Use each tool's current
 The first-release public contract is exact:
 
 - chain id: `fc56984b-2be7-431d-840e-21514d1883f0`
+- Kagemusha Digital Shekel asset definition: `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`
+- public Digital Shekel alias: `ds#boi.is`
+- Digital Shekel numeric scale: `2`
 - native/fee XOR asset definition: `6TEAJqbb8oEPmLncoNiMRbLEK6tw`
 - public XOR alias: `xor#universal`
 - XOR numeric scale: `9`
 
 Reject the retired `iroha3-taira` chain alias and legacy `<name>#<domain>`
-asset-definition literals in Taira signing inputs.
+asset-definition literals in Taira signing inputs. Do not substitute the XOR
+fee asset for Digital Shekel in Kagemusha top-up or redemption inputs.
 
 ## Public-node triage
 
@@ -219,15 +235,34 @@ with a parallel Python implementation.
 Deployment proof always runs a fresh same-revision read-only Inrou check;
 retained receipts are audit evidence and never substitute for current
 liveness. Host cleanup persists one request-bound plan before mutation, then
-removes only marker-admitted upload/release roots through crash-resumable
-tombstones within the signed reclaim-byte cap. It does not scan or prune live
-state, secrets, the selected release, or rollback state.
+removes only marker-admitted upload/release roots and older superseded
+marker-bound Inrou stage roots through crash-resumable tombstones within the
+signed reclaim-byte cap. It does not scan or prune live state, secrets, the
+selected release, its current Inrou stage, rollback state, or durable
+`.operator-preseed-v1` qualifications.
 
 Before other live writes, verify the account exists, holds a positive fee
 asset balance, and has the exact required permission. After any reset, treat
 cached or previously funded signers as suspect until rechecked.
 
 ## MCP transaction and package workflows
+
+When the deployed writer profile advertises
+`iroha.accounts.faucet.prepare` and `iroha.accounts.faucet.submit`, use them as
+one exact two-step workflow: send the typed PoW claim, public-reset mutation
+binding, and fee intent to `prepare`, persist its returned prepared envelope
+unchanged, then send that entire envelope to `submit`. Never reconstruct the
+faucet-signed transaction or place keys, bearer tokens, or runtime authorization
+material inside tool arguments. New prepared envelopes carry a
+signature-bound marker version; consensus consumes the authority-scoped claim
+marker atomically with successful execution, so a duplicate claim through a
+different binding, peer, generic transaction ingress, or restart must be
+treated as a deterministic rejection rather than retried as another payout.
+The marker version applies only to newly prepared transactions. On an in-place
+upgrade, keep writer MCP unavailable, quiesce legacy faucet prepare, wait for
+all legacy prepared envelopes to expire, and advance beyond the configured PoW
+anchor-age window before exposing these tools. A fresh public reset already
+satisfies this cutover condition.
 
 For a pre-signed transaction envelope, prefer
 `iroha.transactions.submit_and_wait`:

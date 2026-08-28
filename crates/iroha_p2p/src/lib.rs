@@ -12,6 +12,7 @@ pub use network::message::{UpdateTrustedPeers, *};
 use norito::codec::{Decode, Encode};
 use std::{io, net::AddrParseError};
 use thiserror::Error;
+mod dial_policy;
 pub mod network;
 pub mod peer;
 mod preauth;

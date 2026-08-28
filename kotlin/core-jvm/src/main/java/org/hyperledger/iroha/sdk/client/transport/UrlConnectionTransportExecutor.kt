@@ -101,7 +101,14 @@ class UrlConnectionTransportExecutor(
             )
             val body = readBody(connection, status, request.method, responseLimit)
             val headers = normalizeHeaders(connection.headerFields)
-            return TransportResponse(status, body, message, headers)
+            return TransportResponse(
+                status,
+                body,
+                message,
+                headers,
+                request.uri,
+                redirected = false,
+            )
         } catch (ex: IOException) {
             throw RuntimeException("HTTP request failed", ex)
         } finally {

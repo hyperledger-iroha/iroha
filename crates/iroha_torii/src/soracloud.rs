@@ -46,18 +46,18 @@ use iroha_data_model::{
         SoraConfigExportV1, SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1,
         SoraDeploymentBundleV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
         SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
-        SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraLeaseVolumeBindingV1,
-        SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
-        SoraModelProvenanceKindV1, SoraModelRegistryV1, SoraModelWeightActionV1,
-        SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1,
-        SoraRolloutStageV1, SoraRuntimeDeterministicValidatorHostV1, SoraRuntimeReceiptV1,
-        SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceConfigMutationV1,
-        SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
-        SoraServiceLeaseReportingEpochRolloverV1, SoraServiceLeaseStateV1,
-        SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1, SoraServiceLifecycleActionV1,
-        SoraServiceMutationPreconditionV1, SoraServiceRolloutStateV1, SoraServiceSecretEntryV1,
-        SoraServiceSecretMutationV1, SoraStateBindingV1, SoraStateEncryptionV1,
-        SoraStateMutabilityV1, SoraStateMutationOperationV1, SoraTlsModeV1,
+        SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraInrouHostCapabilityRecordV1,
+        SoraLeaseVolumeBindingV1, SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1,
+        SoraModelArtifactRecordV1, SoraModelProvenanceKindV1, SoraModelRegistryV1,
+        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
+        SoraNetworkPolicyV1, SoraRolloutStageV1, SoraRuntimeDeterministicValidatorHostV1,
+        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
+        SoraServiceConfigMutationV1, SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1,
+        SoraServiceHandlerClassV1, SoraServiceLeaseReportingEpochRolloverV1,
+        SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1,
+        SoraServiceLifecycleActionV1, SoraServiceMutationPreconditionV1, SoraServiceRolloutStateV1,
+        SoraServiceSecretEntryV1, SoraServiceSecretMutationV1, SoraStateBindingV1,
+        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateMutationOperationV1, SoraTlsModeV1,
         SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
         SoraTrainingJobStatusV1, SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
         SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheInputAdmissionProofV1,
@@ -101,10 +101,12 @@ use iroha_primitives::{
 };
 use mv::storage::StorageReadOnly;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use sorafs_car::{CarBuildPlan, CarWriter, FileEntry};
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroU64,
     path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
 };
 #[cfg(test)]
 use tokio::sync::RwLock;
@@ -112,6 +114,7 @@ mod bounded_public_response;
 const CONTROL_PLANE_SCHEMA_VERSION: u16 = 1;
 const PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME: &str = "soracloud/public_service_discovery";
 const PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1: u16 = 1;
+pub(crate) const PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT: &str = "index.json";
 const DEFAULT_AUDIT_LIMIT: usize = 20;
 const MAX_AUDIT_LIMIT: usize = 500;
 const AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS: u64 = 1_000;
@@ -1011,6 +1014,7 @@ pub(crate) struct ControlPlaneSnapshot {
     pub schema_version: u16,
     pub service_count: u32,
     pub audit_event_count: u32,
+    pub active_inrou_hosts: Vec<SoraInrouHostCapabilityRecordV1>,
     pub services: Vec<ControlPlaneServiceSnapshot>,
     pub recent_audit_events: Vec<ControlPlaneAuditEvent>,
 }
@@ -1126,10 +1130,29 @@ pub(crate) struct SoracloudPublicServiceDiscoveryV1 {
     pub service_manifest_hash: Hash,
     pub container_manifest_hash: Hash,
     pub deployment_bundle_hash: Hash,
+    pub document_hash: Hash,
     pub content_cid: String,
     pub public_discovery_url: String,
     pub public_discovery_cid_host_url: String,
     pub manifest_digest_hex: String,
+}
+#[derive(Clone, Debug, JsonSerialize)]
+struct SoracloudPublicServiceDiscoveryDocumentV1 {
+    schema_version: u16,
+    service_name: String,
+    service_version: String,
+    execution_plane: String,
+    runtime: String,
+    route_host: String,
+    path_prefix: String,
+    base_url: String,
+    #[norito(required)]
+    healthcheck_path: Option<String>,
+    #[norito(required)]
+    healthcheck_url: Option<String>,
+    service_manifest_hash: Hash,
+    container_manifest_hash: Hash,
+    deployment_bundle_hash: Hash,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -1166,16 +1189,7 @@ pub(crate) struct ControlPlaneServiceSnapshot {
     pub config_entry_count: u32,
     pub secret_entry_count: u32,
     #[norito(required)]
-    pub quota_class: Option<String>,
-    #[norito(required)]
-    pub service_lease_status: Option<SoraServiceLeaseStatusV1>,
-    #[norito(required)]
-    pub lease_expires_height: Option<u64>,
-    #[norito(required)]
-    pub prepaid_runtime_balance: Option<Quantity>,
-    #[norito(required)]
-    pub remaining_runtime_balance: Option<Quantity>,
-
+    pub service_lease: Option<ControlPlaneServiceLeaseSnapshot>,
     #[norito(required)]
     pub public_discovery_content_cid: Option<String>,
     #[norito(required)]
@@ -4149,11 +4163,137 @@ fn authoritative_public_service_discovery_for_version(
     };
     Ok(registry.revisions.get(service_version).cloned())
 }
+fn public_service_discovery_document(
+    discovery: &SoracloudPublicServiceDiscoveryV1,
+) -> SoracloudPublicServiceDiscoveryDocumentV1 {
+    SoracloudPublicServiceDiscoveryDocumentV1 {
+        schema_version: discovery.schema_version,
+        service_name: discovery.service_name.clone(),
+        service_version: discovery.service_version.clone(),
+        execution_plane: discovery.execution_plane.clone(),
+        runtime: discovery.runtime.clone(),
+        route_host: discovery.route_host.clone(),
+        path_prefix: discovery.path_prefix.clone(),
+        base_url: discovery.base_url.clone(),
+        healthcheck_path: discovery.healthcheck_path.clone(),
+        healthcheck_url: discovery.healthcheck_url.clone(),
+        service_manifest_hash: discovery.service_manifest_hash,
+        container_manifest_hash: discovery.container_manifest_hash,
+        deployment_bundle_hash: discovery.deployment_bundle_hash,
+    }
+}
+fn public_service_discovery_document_bytes(
+    discovery: &SoracloudPublicServiceDiscoveryV1,
+) -> Result<Vec<u8>, SoracloudError> {
+    norito::json::to_vec(&public_service_discovery_document(discovery)).map_err(|error| {
+        SoracloudError::internal(format!(
+            "failed to encode canonical public discovery document: {error}"
+        ))
+    })
+}
+#[cfg(test)]
+fn public_service_discovery_document_hash(
+    discovery: &SoracloudPublicServiceDiscoveryV1,
+) -> Result<Hash, SoracloudError> {
+    public_service_discovery_document_bytes(discovery).map(Hash::new)
+}
+fn public_service_discovery_artifact_root_cid(
+    document_bytes: Vec<u8>,
+) -> Result<ManifestRootCid, SoracloudError> {
+    let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+    let (plan, payload) = CarBuildPlan::from_files_with_profile(
+        vec![FileEntry {
+            path: vec![PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT.to_owned()],
+            data: document_bytes,
+        }],
+        descriptor.profile,
+    )
+    .map_err(|error| {
+        SoracloudError::internal(format!(
+            "failed to plan canonical public discovery artifact: {error}"
+        ))
+    })?;
+    let mut sink = Vec::new();
+    let car_stats = CarWriter::new(&plan, &payload)
+        .and_then(|writer| writer.write_to(&mut sink))
+        .map_err(|error| {
+            SoracloudError::internal(format!(
+                "failed to derive canonical public discovery artifact root: {error}"
+            ))
+        })?;
+    let [root_cid] = car_stats.root_cids.as_slice() else {
+        return Err(SoracloudError::internal(
+            "canonical public discovery artifact did not produce exactly one root CID",
+        ));
+    };
+    ManifestRootCid::try_from_slice(root_cid).map_err(|error| {
+        SoracloudError::internal(format!(
+            "canonical public discovery artifact produced an invalid root CID: {error}"
+        ))
+    })
+}
+fn is_canonical_public_service_discovery_content_cid(content_cid: &str) -> bool {
+    let Some(bytes) = crate::sorafs::site::decode_content_cid(content_cid) else {
+        return false;
+    };
+    crate::sorafs::site::encode_content_cid(&bytes) == content_cid
+        && ManifestRootCid::try_from_slice(&bytes).is_ok()
+}
+fn is_canonical_public_service_discovery_manifest_digest(digest: &str) -> bool {
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+fn sorafs_cid_host_suffix_for_public_service(hostname: &str) -> String {
+    let hostname = hostname.trim().trim_end_matches('.').to_ascii_lowercase();
+    if hostname == "taira.sora.org" || hostname.ends_with(".taira.sora.org") {
+        return "sorafs.taira.sora.org".to_owned();
+    }
+    if hostname == "sora.org" || hostname.ends_with(".sora.org") {
+        return "sorafs.sora.org".to_owned();
+    }
+    if let Some((_, suffix)) = hostname.split_once('.') {
+        return format!("sorafs.{suffix}");
+    }
+    format!("sorafs.{hostname}")
+}
+fn canonical_public_service_discovery_urls(
+    base_url: &str,
+    route_host: &str,
+    content_cid: &str,
+) -> Result<(String, String), SoracloudError> {
+    let mut public_discovery_url = reqwest::Url::parse(base_url).map_err(|error| {
+        SoracloudError::internal(format!(
+            "authoritative public discovery base URL is invalid: {error}"
+        ))
+    })?;
+    public_discovery_url.set_path(&format!(
+        "/sorafs/cid/{content_cid}/{PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT}"
+    ));
+    public_discovery_url.set_query(None);
+    public_discovery_url.set_fragment(None);
+    let cid_host_suffix = sorafs_cid_host_suffix_for_public_service(route_host);
+    let public_discovery_cid_host_url = format!(
+        "https://{content_cid}.{cid_host_suffix}/{PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT}"
+    );
+    Ok((
+        public_discovery_url.to_string(),
+        public_discovery_cid_host_url,
+    ))
+}
+#[derive(Debug)]
+struct ValidatedPublicServiceDiscoveryArtifactV1 {
+    document_bytes: Vec<u8>,
+    manifest_digest: ManifestDigest,
+    root_cid: ManifestRootCid,
+}
 fn validate_public_service_discovery_for_bundle(
+    world: &impl WorldReadOnly,
     deployment: &SoraServiceDeploymentStateV1,
     bundle: &SoraDeploymentBundleV1,
     discovery: &SoracloudPublicServiceDiscoveryV1,
-) -> Result<(), SoracloudError> {
+) -> Result<ValidatedPublicServiceDiscoveryArtifactV1, SoracloudError> {
     bundle.validate_for_admission().map_err(|error| {
         SoracloudError::internal(format!(
             "service `{}` public discovery revision `{}` is not an admitted V1 bundle: {error}",
@@ -4172,6 +4312,15 @@ fn validate_public_service_discovery_for_bundle(
             deployment.service_name
         ))
     })?;
+    if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
+        || bundle.container.runtime != SoraContainerRuntimeV1::Inrou
+        || route.visibility != iroha_data_model::soracloud::SoraRouteVisibilityV1::Public
+    {
+        return Err(SoracloudError::internal(format!(
+            "service `{}` authoritative public discovery is not bound to a public HttpService+Inrou revision",
+            deployment.service_name
+        )));
+    }
     let expected_base_url = bundle_base_url(bundle).ok_or_else(|| {
         SoracloudError::internal(format!(
             "service `{}` active route cannot form its authoritative base URL",
@@ -4200,29 +4349,175 @@ fn validate_public_service_discovery_for_bundle(
             deployment.service_name, bundle.service.service_version
         )));
     }
-    for (field, value) in [
-        ("content_cid", discovery.content_cid.as_str()),
-        (
-            "public_discovery_url",
-            discovery.public_discovery_url.as_str(),
-        ),
-        (
-            "public_discovery_cid_host_url",
-            discovery.public_discovery_cid_host_url.as_str(),
-        ),
-        (
-            "manifest_digest_hex",
-            discovery.manifest_digest_hex.as_str(),
-        ),
-    ] {
-        if value.trim().is_empty() {
+    let document_bytes = public_service_discovery_document_bytes(discovery)?;
+    if Hash::new(&document_bytes) != discovery.document_hash {
+        return Err(SoracloudError::internal(format!(
+            "service `{}` authoritative public discovery document hash does not bind its canonical index document",
+            deployment.service_name
+        )));
+    }
+    if !is_canonical_public_service_discovery_content_cid(&discovery.content_cid) {
+        return Err(SoracloudError::internal(format!(
+            "service `{}` authoritative public discovery content CID is not a canonical SoraFS manifest root CID",
+            deployment.service_name
+        )));
+    }
+    let artifact_root_cid = public_service_discovery_artifact_root_cid(document_bytes.clone())?;
+    let expected_content_cid =
+        crate::sorafs::site::encode_content_cid(artifact_root_cid.as_bytes());
+    if discovery.content_cid != expected_content_cid {
+        return Err(SoracloudError::internal(format!(
+            "service `{}` authoritative public discovery content CID does not bind its canonical index document",
+            deployment.service_name
+        )));
+    }
+    if !is_canonical_public_service_discovery_manifest_digest(&discovery.manifest_digest_hex) {
+        return Err(SoracloudError::internal(format!(
+            "service `{}` authoritative public discovery manifest digest is not canonical lowercase 32-byte hexadecimal",
+            deployment.service_name
+        )));
+    }
+    let manifest_digest_bytes: [u8; 32] = hex::decode(&discovery.manifest_digest_hex)
+        .map_err(|error| {
+            SoracloudError::internal(format!(
+                "service `{}` authoritative public discovery manifest digest cannot be decoded: {error}",
+                deployment.service_name
+            ))
+        })?
+        .try_into()
+        .map_err(|bytes: Vec<u8>| {
+            SoracloudError::internal(format!(
+                "service `{}` authoritative public discovery manifest digest decoded to {} bytes instead of 32",
+                deployment.service_name,
+                bytes.len()
+            ))
+        })?;
+    let manifest_digest = ManifestDigest::new(manifest_digest_bytes);
+    let pin = world.pin_manifests().get(&manifest_digest).ok_or_else(|| {
+        SoracloudError::internal(format!(
+            "service `{}` authoritative public discovery manifest digest is absent from the SoraFS pin registry",
+            deployment.service_name
+        ))
+    })?;
+    if pin.digest != manifest_digest || pin.root_cid != artifact_root_cid {
+        return Err(SoracloudError::internal(format!(
+            "service `{}` authoritative public discovery pin record does not bind its manifest digest and canonical index root CID",
+            deployment.service_name
+        )));
+    }
+    let expected_content_length = u64::try_from(document_bytes.len()).map_err(|_| {
+        SoracloudError::internal(format!(
+            "service `{}` authoritative public discovery document exceeds the V1 u64 content-length domain",
+            deployment.service_name
+        ))
+    })?;
+    if pin.content_length != expected_content_length {
+        return Err(SoracloudError::internal(format!(
+            "service `{}` authoritative public discovery pin record content length does not bind its canonical index document",
+            deployment.service_name
+        )));
+    }
+    match pin.status {
+        PinStatus::Approved(epoch) if pin.approved_epoch == Some(epoch) => {}
+        PinStatus::Approved(epoch) => {
             return Err(SoracloudError::internal(format!(
-                "service `{}` authoritative public discovery field `{field}` is empty",
+                "service `{}` authoritative public discovery manifest approval epoch {epoch} does not match its immutable approval history",
+                deployment.service_name
+            )));
+        }
+        PinStatus::Pending => {
+            return Err(SoracloudError::internal(format!(
+                "service `{}` authoritative public discovery manifest is pending governance approval and is not eligible for replication",
+                deployment.service_name
+            )));
+        }
+        PinStatus::Retired(epoch) => {
+            return Err(SoracloudError::internal(format!(
+                "service `{}` authoritative public discovery manifest was retired at epoch {epoch}",
                 deployment.service_name
             )));
         }
     }
-    Ok(())
+    let (expected_public_discovery_url, expected_public_discovery_cid_host_url) =
+        canonical_public_service_discovery_urls(
+            &discovery.base_url,
+            &discovery.route_host,
+            &discovery.content_cid,
+        )?;
+    if discovery.public_discovery_url != expected_public_discovery_url
+        || discovery.public_discovery_cid_host_url != expected_public_discovery_cid_host_url
+    {
+        return Err(SoracloudError::internal(format!(
+            "service `{}` authoritative public discovery URLs do not bind its canonical content CID and route",
+            deployment.service_name
+        )));
+    }
+    Ok(ValidatedPublicServiceDiscoveryArtifactV1 {
+        document_bytes,
+        manifest_digest,
+        root_cid: artifact_root_cid,
+    })
+}
+
+fn authoritative_public_service_discovery_artifact_for_content_cid(
+    world: &impl WorldReadOnly,
+    content_cid: &str,
+) -> Result<Option<ValidatedPublicServiceDiscoveryArtifactV1>, SoracloudError> {
+    let mut authorized: Option<ValidatedPublicServiceDiscoveryArtifactV1> = None;
+    for (service_id, deployment) in world.soracloud_service_deployments().iter() {
+        if service_id != &deployment.service_name {
+            return Err(SoracloudError::internal(format!(
+                "authoritative service deployment key `{service_id}` does not bind embedded service name `{}`",
+                deployment.service_name
+            )));
+        }
+        let Some(registry) = authoritative_public_service_discovery_registry(deployment)? else {
+            continue;
+        };
+        for (service_version, discovery) in &registry.revisions {
+            if discovery.content_cid != content_cid {
+                continue;
+            }
+            let bundle = world
+                .soracloud_service_revisions()
+                .get(&(service_id.to_string(), service_version.clone()))
+                .ok_or_else(|| {
+                    SoracloudError::internal(format!(
+                        "service `{service_id}` public discovery revision `{service_version}` is missing its admitted bundle"
+                    ))
+                })?;
+            let candidate =
+                validate_public_service_discovery_for_bundle(world, deployment, bundle, discovery)?;
+            if let Some(existing) = authorized.as_ref() {
+                if existing.document_bytes.as_slice() != candidate.document_bytes.as_slice()
+                    || &existing.manifest_digest != &candidate.manifest_digest
+                    || &existing.root_cid != &candidate.root_cid
+                {
+                    return Err(SoracloudError::internal(format!(
+                        "canonical public discovery content CID `{content_cid}` has conflicting authoritative service revision bindings"
+                    )));
+                }
+            } else {
+                authorized = Some(candidate);
+            }
+        }
+    }
+    Ok(authorized)
+}
+
+/// Reconstruct the one authoritative Inrou public-discovery document from committed state.
+///
+/// This deliberately does not provide a generic SoraFS lookup. The requested CID must be present
+/// in the committed Soracloud discovery registry, bind an admitted public HttpService+Inrou
+/// revision, and reference an exactly matching approved pin record. Returning the canonical bytes
+/// reconstructed from that state keeps public read availability independent of which validator
+/// receives the request while exposing no other preseeded or embedded-storage content.
+pub(crate) fn authoritative_public_discovery_document_for_content_cid(
+    world: &impl WorldReadOnly,
+    content_cid: &str,
+) -> Result<Option<Vec<u8>>, SoracloudError> {
+    authoritative_public_service_discovery_artifact_for_content_cid(world, content_cid)
+        .map(|artifact| artifact.map(|artifact| artifact.document_bytes))
 }
 fn bundle_base_url(bundle: &SoraDeploymentBundleV1) -> Option<String> {
     let route = bundle.service.route.as_ref()?;
@@ -4515,7 +4810,7 @@ fn authoritative_service_public_discovery_response(
                 "service `{service_name}` public discovery revision `{requested_version}` is missing its admitted bundle"
             ))
         })?;
-    validate_public_service_discovery_for_bundle(&deployment, &bundle, &discovery)?;
+    validate_public_service_discovery_for_bundle(world, &deployment, &bundle, &discovery)?;
     Ok(ServicePublicDiscoveryResponse {
         schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
         service_name: deployment.service_name.to_string(),
@@ -5278,6 +5573,7 @@ fn authoritative_health_compliance_report(
     })
 }
 fn deployment_bundle_to_control_plane_revision(
+    world: &impl WorldReadOnly,
     deployment: &SoraServiceDeploymentStateV1,
     bundle: &SoraDeploymentBundleV1,
     latest_audit: Option<&SoraServiceAuditEventV1>,
@@ -5342,7 +5638,7 @@ fn deployment_bundle_to_control_plane_revision(
         )));
     }
     if let Some(public_discovery) = public_discovery {
-        validate_public_service_discovery_for_bundle(deployment, bundle, public_discovery)?;
+        validate_public_service_discovery_for_bundle(world, deployment, bundle, public_discovery)?;
     }
     let route = bundle.service.route.as_ref();
     let state_binding_count = u32::try_from(bundle.service.state_bindings.len()).map_err(|_| {
@@ -5714,6 +6010,31 @@ pub(crate) fn control_plane_snapshot(
     let current_height = u64::try_from(state_view.height()).map_err(|_| {
         SoracloudError::internal("committed block height exceeds the V1 u64 domain")
     })?;
+    let latest_block_ms = state_view.latest_block().map_or(0, |block| {
+        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+    });
+    let wall_clock_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .unwrap_or(latest_block_ms);
+    let now_ms = wall_clock_ms.max(latest_block_ms);
+    let active_inrou_hosts = world
+        .soracloud_inrou_host_capabilities()
+        .iter()
+        .filter_map(|(validator_account_id, capability)| {
+            (capability.validate().is_ok()
+                && capability.validator_account_id == *validator_account_id
+                && capability.can_host_replicas_at(now_ms)
+                && iroha_core::soracloud_runtime::soracloud_validator_has_active_peer_binding(
+                    world,
+                    validator_account_id,
+                    &capability.peer_id,
+                    |lane_id| state_view.is_lane_active_for_authority(lane_id),
+                ))
+            .then(|| capability.clone())
+        })
+        .collect::<Vec<_>>();
 
     let mut services = Vec::new();
     for (service_id, deployment) in world.soracloud_service_deployments().iter() {
@@ -5779,9 +6100,19 @@ pub(crate) fn control_plane_snapshot(
                     deployment.current_service_version
                 ))
             })?;
-        let service_lease_status = deployment.hosted_service_lease_status_at(current_height)?;
-        let remaining_runtime_balance =
-            deployment.hosted_service_remaining_balance(current_height)?;
+        let accounted_storage_bytes = deployment.accounted_storage_bytes()?;
+        let service_lease = deployment
+            .service_lease
+            .as_ref()
+            .map(|lease| -> Result<_, NumericOperationError> {
+                Ok(ControlPlaneServiceLeaseSnapshot {
+                    authoritative_state: lease.clone(),
+                    effective_status: lease.status_at(current_height, accounted_storage_bytes)?,
+                    remaining_runtime_balance: lease
+                        .remaining_balance(current_height, accounted_storage_bytes)?,
+                })
+            })
+            .transpose()?;
 
         services.push(ControlPlaneServiceSnapshot {
             service_name: service_label.clone(),
@@ -5799,21 +6130,7 @@ pub(crate) fn control_plane_snapshot(
                     "service `{service_label}` secret count exceeds the V1 u32 response range"
                 ))
             })?,
-            quota_class: deployment
-                .service_lease
-                .as_ref()
-                .map(|lease| lease.quota_class.clone()),
-            service_lease_status,
-            lease_expires_height: deployment
-                .service_lease
-                .as_ref()
-                .map(|lease| lease.lease_expires_height),
-            prepaid_runtime_balance: deployment
-                .service_lease
-                .as_ref()
-                .map(|lease| lease.prepaid_runtime_balance.clone()),
-            remaining_runtime_balance,
-
+            service_lease,
             public_discovery_content_cid: current_public_discovery
                 .as_ref()
                 .map(|entry| entry.content_cid.clone()),
@@ -5824,6 +6141,7 @@ pub(crate) fn control_plane_snapshot(
                 .as_ref()
                 .map(|entry| entry.public_discovery_cid_host_url.clone()),
             latest_revision: Some(deployment_bundle_to_control_plane_revision(
+                world,
                 deployment,
                 &current_bundle,
                 Some(latest_audit),
@@ -5856,6 +6174,7 @@ pub(crate) fn control_plane_snapshot(
                 "Soracloud audit event count exceeds the V1 u32 response range",
             )
         })?,
+        active_inrou_hosts,
         services,
         recent_audit_events,
     })
@@ -8512,9 +8831,36 @@ mod tests {
             service,
         }
     }
+    fn fixture_inrou_placement_targets(
+        count: u16,
+    ) -> BTreeSet<iroha_data_model::soracloud::SoraInrouPlacementTargetV1> {
+        (0..count)
+            .map(|index| {
+                let index = u8::try_from(index).expect("fixture target index fits u8");
+                let validator_key_pair = KeyPair::try_from_seed(
+                    vec![0x60_u8.wrapping_add(index); 32],
+                    Algorithm::Ed25519,
+                )
+                .expect("fixture validator seed derives Ed25519 keypair");
+                let peer_key_pair = KeyPair::try_from_seed(
+                    vec![0x70_u8.wrapping_add(index); 32],
+                    Algorithm::BlsNormal,
+                )
+                .expect("fixture peer seed derives BLS keypair");
+                iroha_data_model::soracloud::SoraInrouPlacementTargetV1 {
+                    validator_account_id: AccountId::new(validator_key_pair.public_key().clone()),
+                    peer_id: iroha_data_model::peer::PeerId::from(
+                        peer_key_pair.public_key().clone(),
+                    )
+                    .to_string(),
+                }
+            })
+            .collect()
+    }
     fn fixture_hosted_http_inrou_bundle(version: &str) -> SoraDeploymentBundleV1 {
         let mut bundle = fixture_bundle(version);
         bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
+        bundle.container.capabilities.network = SoraNetworkPolicyV1::Isolated;
         bundle.container.entrypoint = "/app/main".to_owned();
         bundle.container.inrou = Some(iroha_data_model::soracloud::SoraInrouManifestV1 {
             schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
@@ -8553,6 +8899,8 @@ mod tests {
         });
         bundle.service.execution_plane =
             iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+        bundle.service.placement_targets =
+            fixture_inrou_placement_targets(bundle.service.replicas.get());
         bundle.service.state_bindings.clear();
         bundle.service.handlers.clear();
         bundle.service.artifacts.clear();
@@ -9841,9 +10189,15 @@ mod tests {
         let bundle = fixture_bundle("1.0.0");
         let deployment = fixture_service_deployment(&bundle);
         let audit = fixture_service_deploy_audit_event(&bundle);
-        let revision =
-            deployment_bundle_to_control_plane_revision(&deployment, &bundle, Some(&audit), None)
-                .expect("valid fixture revision should project");
+        let world = iroha_core::state::World::new();
+        let revision = deployment_bundle_to_control_plane_revision(
+            &world.view(),
+            &deployment,
+            &bundle,
+            Some(&audit),
+            None,
+        )
+        .expect("valid fixture revision should project");
         assert_required_nullable!(
             revision.clone(),
             ControlPlaneServiceRevision,
@@ -9880,12 +10234,7 @@ mod tests {
             secret_generation: 0,
             config_entry_count: 0,
             secret_entry_count: 0,
-            quota_class: None,
-            service_lease_status: None,
-            lease_expires_height: None,
-            prepaid_runtime_balance: None,
-            remaining_runtime_balance: None,
-
+            service_lease: None,
             public_discovery_content_cid: None,
             public_discovery_url: None,
             public_discovery_cid_host_url: None,
@@ -9897,11 +10246,7 @@ mod tests {
             service.clone(),
             ControlPlaneServiceSnapshot,
             [
-                "quota_class",
-                "service_lease_status",
-                "lease_expires_height",
-                "prepaid_runtime_balance",
-                "remaining_runtime_balance",
+                "service_lease",
                 "public_discovery_content_cid",
                 "public_discovery_url",
                 "public_discovery_cid_host_url",
@@ -9972,13 +10317,14 @@ mod tests {
             schema_version: CONTROL_PLANE_SCHEMA_VERSION,
             service_count: 1,
             audit_event_count: 1,
+            active_inrou_hosts: Vec::new(),
             services: vec![service],
             recent_audit_events: vec![audit],
         };
         assert_required_collection!(
             snapshot,
             ControlPlaneSnapshot,
-            ["services", "recent_audit_events"],
+            ["active_inrou_hosts", "services", "recent_audit_events"],
             "control-plane snapshot"
         );
 
@@ -10425,8 +10771,15 @@ mod tests {
     fn control_plane_revision_fails_closed_without_lifecycle_or_scr_admission_evidence() {
         let bundle = fixture_bundle("1.0.0");
         let deployment = fixture_service_deployment(&bundle);
-        let error = deployment_bundle_to_control_plane_revision(&deployment, &bundle, None, None)
-            .expect_err("a revision without lifecycle audit evidence must fail closed");
+        let world = iroha_core::state::World::new();
+        let error = deployment_bundle_to_control_plane_revision(
+            &world.view(),
+            &deployment,
+            &bundle,
+            None,
+            None,
+        )
+        .expect_err("a revision without lifecycle audit evidence must fail closed");
         assert_eq!(error.kind, SoracloudErrorKind::Internal);
         assert!(
             error
@@ -10441,6 +10794,7 @@ mod tests {
         let over_cap_deployment = fixture_service_deployment(&over_cap_bundle);
         let audit = fixture_service_deploy_audit_event(&over_cap_bundle);
         let error = deployment_bundle_to_control_plane_revision(
+            &world.view(),
             &over_cap_deployment,
             &over_cap_bundle,
             Some(&audit),
@@ -11345,21 +11699,29 @@ mod tests {
         let runtime = test_runtime()?;
         runtime.block_on(async move {
             let mut world = World::default();
-            let bundle = fixture_bundle("1.0.0");
+            let bundle = fixture_hosted_http_inrou_bundle("1.0.0");
             let service_name = bundle.service.service_name.clone();
-            let discovery = SoracloudPublicServiceDiscoveryV1 {
+            let content_cid = crate::sorafs::site::encode_content_cid(
+                &sorafs_manifest::canonical_manifest_root_cid([0xD0; 32]),
+            );
+            let base_url = bundle_base_url(&bundle).expect("fixture base URL");
+            let route_host = bundle
+                .service
+                .route
+                .as_ref()
+                .expect("fixture route")
+                .host
+                .clone();
+            let (public_discovery_url, public_discovery_cid_host_url) =
+                canonical_public_service_discovery_urls(&base_url, &route_host, &content_cid)
+                    .map_err(|error| eyre::eyre!(error.message))?;
+            let mut discovery = SoracloudPublicServiceDiscoveryV1 {
                 schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
                 service_name: service_name.to_string(),
                 service_version: bundle.service.service_version.clone(),
                 execution_plane: format!("{:?}", bundle.service.execution_plane),
                 runtime: format!("{:?}", bundle.container.runtime),
-                route_host: bundle
-                    .service
-                    .route
-                    .as_ref()
-                    .expect("fixture route")
-                    .host
-                    .clone(),
+                route_host,
                 path_prefix: bundle
                     .service
                     .route
@@ -11367,23 +11729,90 @@ mod tests {
                     .expect("fixture route")
                     .path_prefix
                     .clone(),
-                base_url: bundle_base_url(&bundle).expect("fixture base URL"),
+                base_url,
                 healthcheck_path: bundle.container.lifecycle.healthcheck_path.clone(),
                 healthcheck_url: bundle_healthcheck_url(&bundle),
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
                 deployment_bundle_hash: Hash::new(Encode::encode(&bundle)),
-                content_cid: "bafytestpublicdiscovery".to_owned(),
-                public_discovery_url:
-                    "https://taira.sora.org/sorafs/cid/bafytestpublicdiscovery/index.json"
-                        .to_owned(),
-                public_discovery_cid_host_url:
-                    "https://bafytestpublicdiscovery.sorafs.taira.sora.org/index.json".to_owned(),
+                document_hash: Hash::new([]),
+                content_cid,
+                public_discovery_url,
+                public_discovery_cid_host_url,
                 manifest_digest_hex: "de".repeat(32),
             };
+            discovery.document_hash = public_service_discovery_document_hash(&discovery)
+                .map_err(|error| eyre::eyre!(error.message))?;
+            let discovery_document_bytes = public_service_discovery_document_bytes(&discovery)
+                .map_err(|error| eyre::eyre!(error.message))?;
+            let discovery_root_cid =
+                public_service_discovery_artifact_root_cid(discovery_document_bytes.clone())
+                    .map_err(|error| eyre::eyre!(error.message))?;
+            discovery.content_cid =
+                crate::sorafs::site::encode_content_cid(discovery_root_cid.as_bytes());
+            (
+                discovery.public_discovery_url,
+                discovery.public_discovery_cid_host_url,
+            ) = canonical_public_service_discovery_urls(
+                &discovery.base_url,
+                &discovery.route_host,
+                &discovery.content_cid,
+            )
+            .map_err(|error| eyre::eyre!(error.message))?;
+            let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+            let (discovery_plan, discovery_payload) = CarBuildPlan::from_files_with_profile(
+                vec![FileEntry {
+                    path: vec![PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT.to_owned()],
+                    data: discovery_document_bytes.clone(),
+                }],
+                descriptor.profile,
+            )
+            .expect("plan canonical public discovery artifact");
+            let mut car_sink = io::sink();
+            let discovery_car_stats = CarWriter::new(&discovery_plan, &discovery_payload)
+                .expect("construct canonical public discovery CAR writer")
+                .write_to(&mut car_sink)
+                .expect("derive canonical public discovery CAR metadata");
+            assert_eq!(
+                discovery_car_stats.root_cids.as_slice(),
+                &[discovery_root_cid.as_bytes().to_vec()]
+            );
+            let discovery_manifest = sorafs_manifest::ManifestBuilder::new()
+                .root_cid(discovery_root_cid.as_bytes().to_vec())
+                .dag_codec(sorafs_manifest::DagCodecId(discovery_car_stats.dag_codec))
+                .chunking_profile(sorafs_manifest::ChunkingProfileV1::from_descriptor(
+                    descriptor,
+                ))
+                .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(
+                    &discovery_plan.chunks,
+                ))
+                .por_root(
+                    sorafs_car::compute_por_root(&discovery_payload, &discovery_plan)
+                        .expect("derive canonical public discovery PoR root"),
+                )
+                .content_length(discovery_plan.content_length)
+                .car_digest(*discovery_car_stats.car_archive_digest.as_bytes())
+                .car_size(discovery_car_stats.car_size)
+                .pin_policy(sorafs_manifest::PinPolicy::default())
+                .build()
+                .expect("build canonical public discovery manifest");
+            let discovery_manifest_digest = ManifestDigest::from_manifest(&discovery_manifest)
+                .expect("derive canonical public discovery manifest digest");
+            discovery.manifest_digest_hex = hex::encode(discovery_manifest_digest.as_bytes());
+            world.pin_manifests_mut_for_testing().insert(
+                discovery_manifest_digest,
+                sample_public_discovery_pin_record(
+                    discovery_manifest_digest,
+                    discovery_root_cid,
+                    u64::try_from(discovery_document_bytes.len())
+                        .expect("discovery document length"),
+                    PinStatus::Approved(1),
+                ),
+            );
             let mut substituted_discovery = discovery.clone();
             substituted_discovery.deployment_bundle_hash = Hash::new(b"substituted bundle");
             let error = validate_public_service_discovery_for_bundle(
+                &world.view(),
                 &fixture_service_deployment(&bundle),
                 &bundle,
                 &substituted_discovery,
@@ -11391,7 +11820,165 @@ mod tests {
             .expect_err("substituted public discovery bundle binding must fail closed");
             assert_eq!(error.kind, SoracloudErrorKind::Internal);
             assert!(error.message.contains("does not bind admitted revision"));
-            let historical_bundle = fixture_bundle("0.9.0");
+            let mut substituted_document_hash = discovery.clone();
+            substituted_document_hash.document_hash = Hash::new(b"substituted index document");
+            let error = validate_public_service_discovery_for_bundle(
+                &world.view(),
+                &fixture_service_deployment(&bundle),
+                &bundle,
+                &substituted_document_hash,
+            )
+            .expect_err("substituted public discovery document hash must fail closed");
+            assert!(error.message.contains("document hash does not bind"));
+            let mut noncanonical_cid = discovery.clone();
+            noncanonical_cid.content_cid.make_ascii_uppercase();
+            let error = validate_public_service_discovery_for_bundle(
+                &world.view(),
+                &fixture_service_deployment(&bundle),
+                &bundle,
+                &noncanonical_cid,
+            )
+            .expect_err("noncanonical public discovery CID must fail closed");
+            assert!(error.message.contains("content CID is not a canonical"));
+            let mut substituted_canonical_cid = discovery.clone();
+            substituted_canonical_cid.content_cid = crate::sorafs::site::encode_content_cid(
+                &sorafs_manifest::canonical_manifest_root_cid([0xD2; 32]),
+            );
+            (
+                substituted_canonical_cid.public_discovery_url,
+                substituted_canonical_cid.public_discovery_cid_host_url,
+            ) = canonical_public_service_discovery_urls(
+                &substituted_canonical_cid.base_url,
+                &substituted_canonical_cid.route_host,
+                &substituted_canonical_cid.content_cid,
+            )
+            .map_err(|error| eyre::eyre!(error.message))?;
+            let error = validate_public_service_discovery_for_bundle(
+                &world.view(),
+                &fixture_service_deployment(&bundle),
+                &bundle,
+                &substituted_canonical_cid,
+            )
+            .expect_err("substituted canonical public discovery CID must fail closed");
+            assert!(error.message.contains("does not bind its canonical index"));
+            let mut noncanonical_digest = discovery.clone();
+            noncanonical_digest
+                .manifest_digest_hex
+                .make_ascii_uppercase();
+            let error = validate_public_service_discovery_for_bundle(
+                &world.view(),
+                &fixture_service_deployment(&bundle),
+                &bundle,
+                &noncanonical_digest,
+            )
+            .expect_err("noncanonical public discovery manifest digest must fail closed");
+            assert!(error.message.contains("manifest digest is not canonical"));
+            let mut substituted_url = discovery.clone();
+            substituted_url
+                .public_discovery_url
+                .push_str("?substituted=1");
+            let error = validate_public_service_discovery_for_bundle(
+                &world.view(),
+                &fixture_service_deployment(&bundle),
+                &bundle,
+                &substituted_url,
+            )
+            .expect_err("substituted public discovery URL must fail closed");
+            assert!(error.message.contains("URLs do not bind"));
+            world.pin_manifests_mut_for_testing().insert(
+                discovery_manifest_digest,
+                sample_public_discovery_pin_record(
+                    discovery_manifest_digest,
+                    discovery_root_cid,
+                    u64::try_from(discovery_document_bytes.len())
+                        .expect("discovery document length"),
+                    PinStatus::Pending,
+                ),
+            );
+            let error = validate_public_service_discovery_for_bundle(
+                &world.view(),
+                &fixture_service_deployment(&bundle),
+                &bundle,
+                &discovery,
+            )
+            .expect_err("pending public discovery pin must fail closed");
+            assert!(error.message.contains("pending governance approval"));
+            world.pin_manifests_mut_for_testing().insert(
+                discovery_manifest_digest,
+                sample_public_discovery_pin_record(
+                    discovery_manifest_digest,
+                    discovery_root_cid,
+                    u64::try_from(discovery_document_bytes.len())
+                        .expect("discovery document length"),
+                    PinStatus::Retired(3),
+                ),
+            );
+            let error = validate_public_service_discovery_for_bundle(
+                &world.view(),
+                &fixture_service_deployment(&bundle),
+                &bundle,
+                &discovery,
+            )
+            .expect_err("retired public discovery pin must fail closed");
+            assert!(error.message.contains("retired at epoch 3"));
+            let mut inconsistent_approval = sample_public_discovery_pin_record(
+                discovery_manifest_digest,
+                discovery_root_cid,
+                u64::try_from(discovery_document_bytes.len()).expect("discovery document length"),
+                PinStatus::Approved(4),
+            );
+            inconsistent_approval.approved_epoch = Some(5);
+            world
+                .pin_manifests_mut_for_testing()
+                .insert(discovery_manifest_digest, inconsistent_approval);
+            let error = validate_public_service_discovery_for_bundle(
+                &world.view(),
+                &fixture_service_deployment(&bundle),
+                &bundle,
+                &discovery,
+            )
+            .expect_err("inconsistent public discovery approval history must fail closed");
+            assert!(
+                error
+                    .message
+                    .contains("does not match its immutable approval history")
+            );
+            world.pin_manifests_mut_for_testing().insert(
+                discovery_manifest_digest,
+                sample_public_discovery_pin_record(
+                    discovery_manifest_digest,
+                    discovery_root_cid,
+                    u64::try_from(discovery_document_bytes.len())
+                        .expect("discovery document length"),
+                    PinStatus::Approved(1),
+                ),
+            );
+            let mismatched_pin_digest = ManifestDigest::new([0xE1; 32]);
+            let mismatched_pin_root = ManifestRootCid::try_from_slice(
+                &sorafs_manifest::canonical_manifest_root_cid([0xD3; 32]),
+            )
+            .expect("canonical mismatched pin root");
+            world.pin_manifests_mut_for_testing().insert(
+                mismatched_pin_digest,
+                sample_public_discovery_pin_record(
+                    mismatched_pin_digest,
+                    mismatched_pin_root,
+                    u64::try_from(discovery_document_bytes.len())
+                        .expect("discovery document length"),
+                    PinStatus::Approved(1),
+                ),
+            );
+            let mut mismatched_pin = discovery.clone();
+            mismatched_pin.manifest_digest_hex = hex::encode(mismatched_pin_digest.as_bytes());
+            let error = validate_public_service_discovery_for_bundle(
+                &world.view(),
+                &fixture_service_deployment(&bundle),
+                &bundle,
+                &mismatched_pin,
+            )
+            .expect_err("public discovery pin root mismatch must fail closed");
+            assert!(error.message.contains("pin record does not bind"));
+            let historical_bundle = fixture_hosted_http_inrou_bundle("0.9.0");
             let mut historical_discovery = discovery.clone();
             historical_discovery.service_version =
                 historical_bundle.service.service_version.clone();
@@ -11400,13 +11987,56 @@ mod tests {
                 historical_bundle.container_manifest_hash();
             historical_discovery.deployment_bundle_hash =
                 Hash::new(Encode::encode(&historical_bundle));
-            historical_discovery.content_cid = "bafytestpublicdiscoveryhistorical".to_owned();
-            historical_discovery.public_discovery_url =
-                "https://taira.sora.org/sorafs/cid/bafytestpublicdiscoveryhistorical/index.json"
-                    .to_owned();
-            historical_discovery.public_discovery_cid_host_url =
-                "https://bafytestpublicdiscoveryhistorical.sorafs.taira.sora.org/index.json"
-                    .to_owned();
+            historical_discovery.content_cid = crate::sorafs::site::encode_content_cid(
+                &sorafs_manifest::canonical_manifest_root_cid([0xD1; 32]),
+            );
+            historical_discovery.manifest_digest_hex = "df".repeat(32);
+            (
+                historical_discovery.public_discovery_url,
+                historical_discovery.public_discovery_cid_host_url,
+            ) = canonical_public_service_discovery_urls(
+                &historical_discovery.base_url,
+                &historical_discovery.route_host,
+                &historical_discovery.content_cid,
+            )
+            .map_err(|error| eyre::eyre!(error.message))?;
+            historical_discovery.document_hash =
+                public_service_discovery_document_hash(&historical_discovery)
+                    .map_err(|error| eyre::eyre!(error.message))?;
+            let historical_document_bytes =
+                public_service_discovery_document_bytes(&historical_discovery)
+                    .map_err(|error| eyre::eyre!(error.message))?;
+            let historical_root_cid =
+                public_service_discovery_artifact_root_cid(historical_document_bytes.clone())
+                    .map_err(|error| eyre::eyre!(error.message))?;
+            historical_discovery.content_cid =
+                crate::sorafs::site::encode_content_cid(historical_root_cid.as_bytes());
+            (
+                historical_discovery.public_discovery_url,
+                historical_discovery.public_discovery_cid_host_url,
+            ) = canonical_public_service_discovery_urls(
+                &historical_discovery.base_url,
+                &historical_discovery.route_host,
+                &historical_discovery.content_cid,
+            )
+            .map_err(|error| eyre::eyre!(error.message))?;
+            let historical_manifest_digest = ManifestDigest::new(
+                hex::decode(&historical_discovery.manifest_digest_hex)
+                    .expect("decode historical discovery digest")
+                    .try_into()
+                    .expect("32-byte historical discovery digest"),
+            );
+            world.pin_manifests_mut_for_testing().insert(
+                historical_manifest_digest,
+                sample_public_discovery_pin_record(
+                    historical_manifest_digest,
+                    historical_root_cid,
+                    u64::try_from(historical_document_bytes.len())
+                        .expect("historical discovery document length"),
+                    PinStatus::Approved(2),
+                ),
+            );
+            let historical_content_cid = historical_discovery.content_cid.clone();
             let registry = SoracloudPublicServiceDiscoveryRegistryV1 {
                 schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
                 service_name: service_name.to_string(),
@@ -11435,6 +12065,28 @@ mod tests {
                 .expect_err("substituted public discovery registry hash must fail closed");
             assert_eq!(error.kind, SoracloudErrorKind::Internal);
             assert!(error.message.contains("hash does not bind its JSON value"));
+            let service_lease = iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
+                schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
+                economic_clock:
+                    iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
+                quota_class: "taira-open".to_string(),
+                replica_count: bundle.service.replicas,
+                deployment_deposit: "1".parse().expect("deployment deposit quantity"),
+                prepaid_runtime_balance: "50".parse().expect("prepaid runtime quantity"),
+                runtime_price_per_block: "0.00025".parse().expect("runtime price quantity"),
+                storage_price_per_gib_block: "0.000025".parse().expect("storage price quantity"),
+                egress_price_per_mib: "0.000005".parse().expect("egress price quantity"),
+                lease_started_height: 1,
+                lease_expires_height: 100,
+                reporting_epoch: 1,
+                settled_egress_bytes: 0,
+                egress_reporter_checkpoints: Vec::new(),
+                accounted_egress_bytes: 0,
+                last_status_reason: None,
+            };
+            let lease_volume_states =
+                fixture_service_lease_volume_states(&bundle, Some(&service_lease));
             insert_revision(&mut world, &bundle, service_name.as_ref().to_owned());
             insert_revision(
                 &mut world,
@@ -11465,23 +12117,37 @@ mod tests {
                         )]),
                         service_secrets: BTreeMap::new(),
                         fhe_policy_records: BTreeMap::new(),
-                        service_lease: None,
-                        lease_volume_states: Vec::new(),
+                        service_lease: Some(service_lease),
+                        lease_volume_states,
                     },
                 );
             world
                 .soracloud_service_audit_events_mut_for_testing()
                 .insert(1, fixture_service_deploy_audit_event(&bundle));
-            let app = mk_app_state_for_tests_with_world(world);
+            let mut app = mk_app_state_for_tests_with_world(world);
+            let mut app_inner = Arc::try_unwrap(app).unwrap_or_else(|_| {
+                panic!("public discovery test requires a unique Torii app state")
+            });
+            app_inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+            app_inner
+                .sorafs_gateway_config
+                .untrusted_hosting
+                .cid_host_suffixes
+                .taira = "sorafs.taira.sora.org".to_owned();
+            app = Arc::new(app_inner);
+            assert!(
+                !app.sorafs_node.is_enabled(),
+                "authoritative discovery readback must work on a storage-disabled validator"
+            );
             let response =
                 authoritative_service_public_discovery_response(&app, service_name.as_ref(), None)
                     .map_err(|err| {
                         eyre::eyre!("authoritative service public discovery query failed: {err:?}")
                     })?;
-            assert_eq!(response.discovery.content_cid, "bafytestpublicdiscovery");
+            assert_eq!(response.discovery.content_cid, discovery.content_cid);
             assert_eq!(
                 response.discovery.public_discovery_cid_host_url,
-                "https://bafytestpublicdiscovery.sorafs.taira.sora.org/index.json"
+                discovery.public_discovery_cid_host_url
             );
             let historical_response = authoritative_service_public_discovery_response(
                 &app,
@@ -11491,21 +12157,111 @@ mod tests {
             .map_err(|err| eyre::eyre!("historical public discovery query failed: {err:?}"))?;
             assert_eq!(
                 historical_response.discovery.content_cid,
-                "bafytestpublicdiscoveryhistorical"
+                historical_content_cid
             );
             let snapshot = control_plane_snapshot(&app, Some(service_name.as_ref()), 10)?;
             assert_eq!(snapshot.services.len(), 1);
             assert_eq!(
                 snapshot.services[0].public_discovery_content_cid.as_deref(),
-                Some("bafytestpublicdiscovery")
+                Some(discovery.content_cid.as_str())
             );
             assert_eq!(
                 snapshot.services[0]
                     .latest_revision
                     .as_ref()
                     .and_then(|revision| revision.public_discovery_url.as_deref()),
-                Some("https://taira.sora.org/sorafs/cid/bafytestpublicdiscovery/index.json")
+                Some(discovery.public_discovery_url.as_str())
             );
+            let path_response = crate::sorafs::api::handle_get_sorafs_cid_path(
+                State(Arc::clone(&app)),
+                HeaderMap::new(),
+                format!(
+                    "/sorafs/cid/{}/{PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT}",
+                    discovery.content_cid
+                )
+                .parse()
+                .expect("valid public discovery path-gateway URI"),
+                Path((
+                    discovery.content_cid.clone(),
+                    PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT.to_owned(),
+                )),
+            )
+            .await;
+            assert_eq!(path_response.status(), StatusCode::OK);
+            assert_eq!(
+                path_response
+                    .headers()
+                    .get(axum::http::header::CONTENT_TYPE),
+                Some(&axum::http::HeaderValue::from_static("application/json"))
+            );
+            assert_eq!(
+                path_response
+                    .headers()
+                    .get(crate::sorafs::api::HEADER_SORA_CONTENT_CID),
+                Some(
+                    &axum::http::HeaderValue::from_str(&discovery.content_cid)
+                        .expect("canonical content CID response header")
+                )
+            );
+            use http_body_util::BodyExt as _;
+            let path_body = path_response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect public discovery path response")
+                .to_bytes();
+            assert_eq!(path_body.as_ref(), discovery_document_bytes.as_slice());
+            let mut cid_host_headers = HeaderMap::new();
+            cid_host_headers.insert(
+                axum::http::header::HOST,
+                axum::http::HeaderValue::from_str(&format!(
+                    "{}.sorafs.taira.sora.org",
+                    discovery.content_cid
+                ))
+                .expect("canonical public discovery CID host"),
+            );
+            let cid_host_response = crate::sorafs::api::handle_get_sorafs_site_path(
+                State(Arc::clone(&app)),
+                cid_host_headers,
+                Path(PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT.to_owned()),
+            )
+            .await;
+            assert_eq!(cid_host_response.status(), StatusCode::OK);
+            let cid_host_body = cid_host_response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect public discovery CID-host response")
+                .to_bytes();
+            assert_eq!(cid_host_body.as_ref(), discovery_document_bytes.as_slice());
+            let blocked_other_path = crate::sorafs::api::handle_get_sorafs_cid_path(
+                State(Arc::clone(&app)),
+                HeaderMap::new(),
+                format!("/sorafs/cid/{}/manifest.to", discovery.content_cid)
+                    .parse()
+                    .expect("valid blocked preseed path URI"),
+                Path((discovery.content_cid.clone(), "manifest.to".to_owned())),
+            )
+            .await;
+            assert_eq!(blocked_other_path.status(), StatusCode::NOT_FOUND);
+            let unbound_content_cid = crate::sorafs::site::encode_content_cid(
+                &sorafs_manifest::canonical_manifest_root_cid([0xA7; 32]),
+            );
+            let blocked_unbound_index = crate::sorafs::api::handle_get_sorafs_cid_path(
+                State(Arc::clone(&app)),
+                HeaderMap::new(),
+                format!(
+                    "/sorafs/cid/{unbound_content_cid}/{PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT}"
+                )
+                .parse()
+                .expect("valid unbound discovery path URI"),
+                Path((
+                    unbound_content_cid,
+                    PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT.to_owned(),
+                )),
+            )
+            .await;
+            assert_eq!(blocked_unbound_index.status(), StatusCode::NOT_FOUND);
             Ok(())
         })
     }
@@ -12136,6 +12892,16 @@ mod tests {
             PinStatus::Approved(epoch) => record.approve(epoch, None),
             PinStatus::Retired(epoch) => record.retire(epoch, None),
         }
+        record
+    }
+    fn sample_public_discovery_pin_record(
+        digest: ManifestDigest,
+        root_cid: ManifestRootCid,
+        content_length: u64,
+        status: PinStatus,
+    ) -> PinManifestRecord {
+        let mut record = sample_uploaded_model_pin_record(digest, content_length, status);
+        record.root_cid = root_cid;
         record
     }
     fn insert_uploaded_model_finalization_projection(
@@ -12781,8 +13547,14 @@ mod tests {
     // Exact-quantity boundary coverage is kept in an included child so this
     // production route module remains within the repository source budget.
     include!("soracloud/wallet_quantity_tests.rs");
+    include!("soracloud/control_plane_lease_tests.rs");
     #[test]
     fn control_plane_snapshot_exposes_canonical_quantities_without_nano_aliases() {
+        let mut authoritative_state = fixture_control_plane_service_lease("1.0.0", 0x72);
+        authoritative_state.prepaid_runtime_balance =
+            "340282366920938463463374607431768211456.0000000001"
+                .parse()
+                .expect("wide exact prepaid quantity");
         let snapshot = ControlPlaneServiceSnapshot {
             service_name: "web_portal".to_owned(),
             current_version: "1.0.0".to_owned(),
@@ -12791,19 +13563,13 @@ mod tests {
             secret_generation: 0,
             config_entry_count: 0,
             secret_entry_count: 0,
-            quota_class: Some("taira-open".to_owned()),
-            service_lease_status: Some(SoraServiceLeaseStatusV1::Active),
-            lease_expires_height: Some(100),
-            prepaid_runtime_balance: Some(
-                "340282366920938463463374607431768211456.0000000001"
-                    .parse()
-                    .expect("wide exact prepaid quantity"),
-            ),
-            remaining_runtime_balance: Some(
-                "0.0000000000000000000000000001"
+            service_lease: Some(ControlPlaneServiceLeaseSnapshot {
+                authoritative_state,
+                effective_status: SoraServiceLeaseStatusV1::Active,
+                remaining_runtime_balance: "0.0000000000000000000000000001"
                     .parse()
                     .expect("scale-28 remaining quantity"),
-            ),
+            }),
             public_discovery_content_cid: None,
             public_discovery_url: None,
             public_discovery_cid_host_url: None,
@@ -12825,19 +13591,30 @@ mod tests {
                 .is_some_and(norito::json::Value::is_null),
             "missing rollout history must serialize as explicit null"
         );
+        let lease = object
+            .get("service_lease")
+            .and_then(norito::json::Value::as_object)
+            .expect("typed service lease snapshot");
         assert_eq!(
-            object
-                .get("prepaid_runtime_balance")
+            lease
+                .get("authoritative_state")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|state| state.get("prepaid_runtime_balance"))
                 .and_then(norito::json::Value::as_str),
             Some("340282366920938463463374607431768211456.0000000001")
         );
         assert_eq!(
-            object
+            lease
                 .get("remaining_runtime_balance")
                 .and_then(norito::json::Value::as_str),
             Some("0.0000000000000000000000000001")
         );
         for retired in [
+            "quota_class",
+            "service_lease_status",
+            "lease_expires_height",
+            "prepaid_runtime_balance",
+            "remaining_runtime_balance",
             "prepaid_runtime_balance_nanos",
             "remaining_runtime_balance_nanos",
         ] {
@@ -13260,9 +14037,15 @@ mod tests {
         assert!(admission.allow_model_inference);
         let deployment = fixture_service_deployment(&bundle);
         let audit = fixture_service_deploy_audit_event(&bundle);
-        let revision =
-            deployment_bundle_to_control_plane_revision(&deployment, &bundle, Some(&audit), None)
-                .expect("admitted fixture revision should project");
+        let world = iroha_core::state::World::new();
+        let revision = deployment_bundle_to_control_plane_revision(
+            &world.view(),
+            &deployment,
+            &bundle,
+            Some(&audit),
+            None,
+        )
+        .expect("admitted fixture revision should project");
         assert!(revision.allow_model_inference);
     }
     #[test]

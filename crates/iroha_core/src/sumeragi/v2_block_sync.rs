@@ -96,16 +96,16 @@ pub(crate) struct V2BlockSyncDiscovery {
 /// Chain-scoped bounded server state for historical CommitQC discovery.
 ///
 /// Exact retransmissions reuse the signed cached response without another disk
-/// read. Request signatures are deliberately excluded from the cache identity:
-/// ML-DSA signing is randomized, so a requester restart may produce different
-/// valid signature bytes for the same immutable request. Such a request rebinds
-/// the already-validated cached response to its new exact request hash instead
-/// of waiting forever for unrelated FIFO eviction. A request that changes any
-/// unsigned field still conflicts with the occupied logical slot. A serving-key
-/// rotation uses the same re-signing path so the response identity always
-/// matches the current authenticated outer peer. Historical body responses are
-/// bounded by both entry count and aggregate canonical wire bytes; a response
-/// larger than the cache byte ceiling is still served, but is not retained.
+/// read. Request signature bytes are deliberately excluded from the cache
+/// identity: after the transport boundary authenticates a signature variant
+/// over the same immutable request, the server rebinds the already-validated
+/// cached response to its new exact request hash instead of waiting for
+/// unrelated FIFO eviction. A request that changes any unsigned field still
+/// conflicts with the occupied logical slot. A serving-key rotation uses the
+/// same re-signing path so the response identity always matches the current
+/// authenticated outer peer. Historical body responses are bounded by both
+/// entry count and aggregate canonical wire bytes; a response larger than the
+/// cache byte ceiling is still served, but is not retained.
 pub(crate) struct V2BlockSyncServer {
     network_id: NetworkId,
     capacity: usize,
@@ -212,6 +212,19 @@ impl V2BlockSyncServer {
         ) -> Result<Option<wire::ConsensusMessageV2>, V2BlockSyncError>,
     {
         authenticate_certified_body_request_identity(&request, authenticated_requester)?;
+        self.serve_authenticated_historical_body_with(request, responder_key, build)
+    }
+    fn serve_authenticated_historical_body_with<Build>(
+        &mut self,
+        request: wire::CertifiedBodyRequest,
+        responder_key: &KeyPair,
+        build: Build,
+    ) -> Result<Option<wire::ConsensusMessageV2>, V2BlockSyncError>
+    where
+        Build: FnOnce(
+            &wire::CertifiedBodyRequest,
+        ) -> Result<Option<wire::ConsensusMessageV2>, V2BlockSyncError>,
+    {
         let request_hash = HashOf::new(&request);
         let unsigned_request_hash = Hash::new(&request.signature_preimage());
         let responder = PeerId::new(responder_key.public_key().clone());
@@ -320,6 +333,19 @@ impl V2BlockSyncServer {
         ) -> Result<Option<wire::ConsensusMessageV2>, V2BlockSyncError>,
     {
         authenticate_commit_certificate_request_identity(&request, authenticated_requester)?;
+        self.serve_authenticated_with(request, responder_key, build)
+    }
+    fn serve_authenticated_with<Build>(
+        &mut self,
+        request: wire::CommitCertificateRequest,
+        responder_key: &KeyPair,
+        build: Build,
+    ) -> Result<Option<wire::ConsensusMessageV2>, V2BlockSyncError>
+    where
+        Build: FnOnce(
+            &wire::CommitCertificateRequest,
+        ) -> Result<Option<wire::ConsensusMessageV2>, V2BlockSyncError>,
+    {
         if request.network_id != self.network_id || request.height == 0 {
             return Err(wire::ValidationError::WrongHeightContext.into());
         }
@@ -1220,6 +1246,7 @@ pub(super) mod tests {
             .expect("encode history-fixture proposal");
         let block = Arc::new(executed_block);
         let mut context = fixture.context.clone();
+        context.da_layout.chunk_size_bytes = 2_048;
         context.da_layout.max_payload_size_bytes = 1_048_576;
         context.da_layout.max_chunk_count = 1024;
         context.validate().expect("valid history-fixture context");
@@ -1674,31 +1701,17 @@ pub(super) mod tests {
         assert_eq!(server.len(), 1);
     }
     #[test]
-    fn server_rebinds_randomized_request_signature_without_waiting_for_eviction() {
+    fn server_rebinds_authenticated_signature_variant_without_waiting_for_eviction() {
         let fixture = Fixture::new();
-        let requester = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::MlDsa)
-            .expect("deterministic ML-DSA requester key");
-        let requester_peer = peer(&requester);
-        let mut first_discovery =
-            V2BlockSyncDiscovery::new(fixture.context.clone(), requester_peer.clone(), 1)
-                .expect("valid discovery");
-        let first = first_discovery
-            .begin(&requester)
-            .expect("first signed request");
+        let requester = &fixture.requester;
+        let requester_peer = peer(requester);
+        let mut discovery = fixture.discovery();
+        let first = discovery.begin(requester).expect("first signed request");
         let wire::ConsensusMessageV2Payload::CommitCertificateRequest(first) = first.payload else {
             panic!("discovery emits a certificate request")
         };
-        let mut restarted_discovery =
-            V2BlockSyncDiscovery::new(fixture.context.clone(), requester_peer.clone(), 1)
-                .expect("valid restarted discovery");
-        let restarted = restarted_discovery
-            .begin(&requester)
-            .expect("restarted signed request");
-        let wire::ConsensusMessageV2Payload::CommitCertificateRequest(restarted) =
-            restarted.payload
-        else {
-            panic!("restarted discovery emits a certificate request")
-        };
+        let mut restarted = first.clone();
+        restarted.signature[0] ^= 0x01;
         assert_eq!(first.signature_preimage(), restarted.signature_preimage());
         assert_ne!(first.signature, restarted.signature);
         let first_hash = HashOf::new(&first);
@@ -1721,9 +1734,11 @@ pub(super) mod tests {
             .expect("serve first signature")
             .expect("artifact exists");
         let rebound = server
-            .serve_with(
+            // Enter below the independently tested transport authenticator to
+            // isolate cache behavior for a distinct authenticated signature
+            // encoding over the same unsigned request.
+            .serve_authenticated_with(
                 restarted.clone(),
-                &requester_peer,
                 responder,
                 |_| -> Result<_, V2BlockSyncError> {
                     panic!("same unsigned request must reuse cached history")
@@ -1737,10 +1752,9 @@ pub(super) mod tests {
         };
         assert_eq!(rebound.request_hash, restarted_hash);
         assert_eq!(rebound.certificate, fixture.artifact.commit_qc);
-        let discovered = restarted_discovery
-            .authenticate_response(rebound.clone(), &peer(responder))
-            .expect("restarted requester accepts rebound response");
-        assert_eq!(discovered.response(), &rebound);
+        rebound
+            .validate_against(&fixture.context, &restarted)
+            .expect("rebound response names the exact signature variant");
         Signature::try_from_bytes(&rebound.signature)
             .expect("parse rebound response signature")
             .verify(responder.public_key(), &rebound.signature_preimage())
@@ -1833,22 +1847,13 @@ pub(super) mod tests {
         assert_eq!(server.body_len(), 0);
     }
     #[test]
-    fn historical_body_cache_rebinds_randomized_request_signature() {
+    fn historical_body_cache_rebinds_authenticated_signature_variant() {
         let fixture = Fixture::new();
-        let requester = KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::MlDsa)
-            .expect("deterministic ML-DSA requester key");
-        let requester_peer = peer(&requester);
-        let mut first = fixture.body_request(fixture.artifact.commit_qc.clone());
-        first.requester = requester_peer.clone();
-        first.signature.clear();
-        first.signature = Signature::new(requester.private_key(), &first.signature_preimage())
-            .payload()
-            .to_vec();
+        let requester = &fixture.requester;
+        let requester_peer = peer(requester);
+        let first = fixture.body_request(fixture.artifact.commit_qc.clone());
         let mut restarted = first.clone();
-        restarted.signature =
-            Signature::new(requester.private_key(), &restarted.signature_preimage())
-                .payload()
-                .to_vec();
+        restarted.signature[0] ^= 0x01;
         assert_eq!(first.signature_preimage(), restarted.signature_preimage());
         assert_ne!(first.signature, restarted.signature);
         let first_hash = HashOf::new(&first);
@@ -1866,9 +1871,11 @@ pub(super) mod tests {
             .expect("serve first signature")
             .expect("body exists");
         let rebound = server
-            .serve_historical_body_with(
+            // Enter below the independently tested transport authenticator to
+            // isolate cache behavior for a distinct authenticated signature
+            // encoding over the same unsigned request.
+            .serve_authenticated_historical_body_with(
                 restarted.clone(),
-                &requester_peer,
                 responder,
                 |_| -> Result<_, V2BlockSyncError> {
                     panic!("same unsigned body request must reuse cached history")
@@ -1895,18 +1902,10 @@ pub(super) mod tests {
 
         let mut changed_unsigned = restarted;
         changed_unsigned.certificate.aggregate_signature[0] ^= 0x01;
-        changed_unsigned.signature.clear();
-        changed_unsigned.signature = Signature::new(
-            requester.private_key(),
-            &changed_unsigned.signature_preimage(),
-        )
-        .payload()
-        .to_vec();
         let changed_hash = HashOf::new(&changed_unsigned);
         assert!(matches!(
-            server.serve_historical_body_with(
+            server.serve_authenticated_historical_body_with(
                 changed_unsigned,
-                &requester_peer,
                 responder,
                 |_| -> Result<_, V2BlockSyncError> {
                     panic!("changed unsigned request must not read history")

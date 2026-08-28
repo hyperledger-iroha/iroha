@@ -1,4 +1,6 @@
 // MCP dispatch, route, governance, and argument regressions.
+use base64::Engine as _;
+
 #[test]
 fn tool_registry_skips_ws_and_sse_routes() {
     let cfg = iroha_config::parameters::actual::ToriiMcp::default();
@@ -9,12 +11,7 @@ fn tool_registry_skips_ws_and_sse_routes() {
             && tool.path_template != iroha_torii_shared::uri::BLOCKS_STREAM
             && !tool.path_template.ends_with("/sse")
     }));
-    assert!(tools.iter().any(|tool| tool.name == "connect.ws.ticket"));
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "connect.session.create_and_ticket")
-    );
+    assert!(tools.iter().all(|tool| !tool.name.starts_with("connect.")));
     assert!(
         tools
             .iter()
@@ -23,8 +20,29 @@ fn tool_registry_skips_ws_and_sse_routes() {
     assert!(
         tools
             .iter()
-            .any(|tool| tool.name == "iroha.connect.session.create_and_ticket")
+            .any(|tool| tool.name == "iroha.connect.ws.ticket")
     );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.connect.session.delete")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.connect.session.status")
+    );
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool.name != "iroha.connect.session.create_and_ticket")
+    );
+    for name in [
+        "iroha.accounts.faucet.prepare",
+        "iroha.accounts.faucet.submit",
+    ] {
+        assert!(tools.iter().any(|tool| tool.name == name));
+    }
     assert!(tools.iter().any(|tool| tool.name == "iroha.health"));
     assert!(tools.iter().all(|tool| tool.name != "iroha.status"));
     assert!(tools.iter().any(|tool| tool.name == "iroha.parameters.get"));
@@ -60,10 +78,11 @@ fn tool_registry_skips_ws_and_sse_routes() {
             .iter()
             .any(|tool| tool.name == "torii.get_v1_api_version")
     );
-    assert!(
+    assert_eq!(
         tools
             .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.pacemaker")
+            .any(|tool| tool.name == "iroha.sumeragi.pacemaker"),
+        cfg!(feature = "telemetry")
     );
     for retired in [
         "iroha.sumeragi.commit_certificates",
@@ -607,6 +626,72 @@ fn tool_registry_skips_ws_and_sse_routes() {
     assert!(tools.iter().any(|tool| tool.name == "iroha.blocks.list"));
     assert!(tools.iter().any(|tool| tool.name == "iroha.blocks.get"));
 }
+
+#[test]
+fn faucet_tool_schemas_are_closed_ref_free_exact_envelopes() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+    for (name, expected_body_fields) in [
+        (
+            "iroha.accounts.faucet.prepare",
+            vec!["schema", "binding", "claim", "fee_payment"],
+        ),
+        (
+            "iroha.accounts.faucet.submit",
+            vec![
+                "schema",
+                "binding",
+                "operation",
+                "claim",
+                "semantic_hash_hex",
+                "account_id",
+                "asset_definition_id",
+                "asset_id",
+                "amount",
+                "transaction_hash_hex",
+                "signed_transaction_wire_hex",
+                "signed_transaction_wire_sha256",
+                "fee_payment",
+                "server_signature",
+            ],
+        ),
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("missing faucet tool {name}"));
+        reject_unresolved_schema_refs(&tool.input_schema, name).expect("fully inlined schema");
+        let schema = sanitize_tool_input_schema(&tool.input_schema);
+        let root = schema.as_object().expect("root object schema");
+        assert_eq!(root.get("additionalProperties"), Some(&Value::Bool(false)));
+        assert_eq!(
+            root.get("required")
+                .and_then(Value::as_array)
+                .expect("required fields"),
+            &[Value::String("body".to_owned())]
+        );
+        let properties = root
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("root properties");
+        assert!(properties.contains_key("body"));
+        assert!(properties.contains_key("accept"));
+        assert!(!properties.contains_key("headers"));
+        let body = properties
+            .get("body")
+            .and_then(Value::as_object)
+            .expect("body object schema");
+        assert_eq!(body.get("additionalProperties"), Some(&Value::Bool(false)));
+        let required = body
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("body required fields")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(required, expected_body_fields.into_iter().collect());
+    }
+}
 #[test]
 fn musubi_mcp_dispatch_requires_a_fresh_exact_target_account_proof() {
     let path = route_catalog::musubi::RELEASE_PUBLISH.path();
@@ -703,7 +788,7 @@ async fn dispatch_route_preserves_inbound_remote_addr_for_internal_allowlist_che
         &app,
         &inbound_headers,
         Method::GET,
-        "/v1/remote-probe",
+        iroha_torii_shared::uri::HEALTH,
         None,
         Vec::new(),
         None,
@@ -1070,7 +1155,7 @@ async fn dispatch_route_blocks_remote_addr_spoofing_from_extra_headers() {
         &app,
         &HeaderMap::new(),
         Method::GET,
-        "/v1/remote-probe",
+        iroha_torii_shared::uri::HEALTH,
         Some(&extra_headers),
         Vec::new(),
         None,
@@ -1102,7 +1187,7 @@ async fn dispatch_route_fails_closed_when_required_api_tokens_are_unconfigured()
         &app,
         &HeaderMap::new(),
         Method::GET,
-        "/v1/api-token-probe",
+        iroha_torii_shared::uri::HEALTH,
         None,
         Vec::new(),
         None,
@@ -1123,7 +1208,7 @@ async fn dispatch_route_extra_headers_cannot_inject_an_api_token() {
         &app,
         &HeaderMap::new(),
         Method::GET,
-        "/v1/api-token-probe",
+        iroha_torii_shared::uri::HEALTH,
         Some(&extra_headers),
         Vec::new(),
         None,
@@ -1141,7 +1226,7 @@ async fn dispatch_route_extra_headers_cannot_inject_an_api_token() {
         &app,
         &inbound,
         Method::GET,
-        "/v1/api-token-probe",
+        iroha_torii_shared::uri::HEALTH,
         None,
         Vec::new(),
         None,
@@ -1175,10 +1260,12 @@ fn fill_path_template_percent_encodes_without_accepting_composites() {
 fn ws_ticket_uses_ws_url_and_protocol_token() {
     let mut headers = HeaderMap::new();
     headers.insert(header::HOST, HeaderValue::from_static("node.example"));
+    let token = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE";
     let args = norito::json!({
         "sid": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
         "role": "app",
-        "token": "my-token"
+        "token": token,
+        "node_url": "https://trusted.example"
     });
     let ticket =
         build_connect_ws_ticket(args.as_object().expect("object"), &headers).expect("ticket");
@@ -1186,13 +1273,14 @@ fn ws_ticket_uses_ws_url_and_protocol_token() {
         .get("ws_url")
         .and_then(Value::as_str)
         .expect("ws url");
-    assert!(ws_url.starts_with("ws://node.example/v1/connect/ws?"));
+    assert!(ws_url.starts_with("wss://trusted.example/v1/connect/ws?"));
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token.as_bytes());
     assert_eq!(
         ticket
             .get("sec_websocket_protocol")
             .and_then(Value::as_str)
             .expect("protocol"),
-        "iroha-connect.token.v1.bXktdG9rZW4"
+        format!("iroha-connect.token.v1.{encoded}")
     );
 }
 #[test]
@@ -1202,7 +1290,8 @@ fn ws_ticket_accepts_role_specific_token_aliases() {
     let args = norito::json!({
         "sid": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
         "role": "wallet",
-        "token_wallet": "wallet-token"
+        "token_wallet": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "node_url": "https://node.example"
     });
     let ticket =
         build_connect_ws_ticket(args.as_object().expect("object"), &headers).expect("ticket");
@@ -1211,8 +1300,51 @@ fn ws_ticket_accepts_role_specific_token_aliases() {
             .get("authorization_header")
             .and_then(Value::as_str)
             .expect("authorization"),
-        "Bearer wallet-token"
+        "Bearer AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
     );
+}
+#[test]
+fn ws_ticket_schema_requires_a_token_for_the_selected_role() {
+    let tool = iroha_connect_ws_ticket_tool();
+    let schema = sanitize_tool_input_schema(&tool.input_schema);
+    let base = norito::json!({
+        "sid": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "role": "wallet",
+        "node_url": "https://node.example"
+    });
+    assert!(validate_json_schema_value(&schema, &base, "arguments").is_err());
+
+    let mut selected = base.clone();
+    selected.as_object_mut().expect("object").insert(
+        "token_wallet".into(),
+        Value::String("AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI".into()),
+    );
+    validate_json_schema_value(&schema, &selected, "arguments")
+        .expect("selected-role token satisfies the descriptor");
+
+    let mut mismatched = base;
+    mismatched.as_object_mut().expect("object").insert(
+        "token_app".into(),
+        Value::String("AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI".into()),
+    );
+    assert!(validate_json_schema_value(&schema, &mismatched, "arguments").is_err());
+}
+#[test]
+fn ws_ticket_rejects_noncanonical_or_header_unsafe_tokens() {
+    for token in [
+        "short",
+        "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\r\nInjected: yes",
+        "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEextra",
+    ] {
+        let args = norito::json!({
+            "sid": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+            "role": "app",
+            "token": token,
+            "node_url": "https://node.example"
+        });
+        build_connect_ws_ticket(args.as_object().expect("object"), &HeaderMap::new())
+            .expect_err("noncanonical Connect role token must fail closed");
+    }
 }
 #[test]
 fn ws_ticket_rejects_retired_sid_and_node_aliases() {
@@ -1222,17 +1354,20 @@ fn ws_ticket_rejects_retired_sid_and_node_aliases() {
         norito::json!({
             "session_id": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
             "role": "app",
-            "token": "app-token"
+            "token": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+            "node_url": "https://node.example"
         }),
         norito::json!({
             "path": { "sid": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE" },
             "role": "app",
-            "token": "app-token"
+            "token": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+            "node_url": "https://node.example"
         }),
         norito::json!({
             "sid": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
             "role": "app",
-            "token": "app-token",
+            "token": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+            "node_url": "https://node.example",
             "node": "https://node.example"
         }),
     ] {
@@ -1338,10 +1473,7 @@ fn build_connect_session_create_body_rejects_missing_or_noncanonical_identity() 
 }
 #[test]
 fn connect_session_create_tool_schema_has_only_hard_cut_identity() {
-    for tool in [
-        connect_session_create_tool(),
-        connect_session_create_and_ticket_tool(),
-    ] {
+    for tool in [iroha_connect_session_create_tool()] {
         let schema = tool.input_schema.as_object().expect("schema object");
         let required = schema
             .get("required")
@@ -1823,14 +1955,6 @@ fn extract_ticket_argument_requires_canonical_path_field() {
     assert_eq!(ticket, "manifest-ticket-001");
 }
 #[test]
-fn extract_proof_record_id_argument_requires_canonical_path_field() {
-    let args = norito::json!({
-        "path": { "id": "proof-001" }
-    });
-    let proof_id = extract_proof_record_id_argument(args.as_object().expect("object")).expect("id");
-    assert_eq!(proof_id, "proof-001");
-}
-#[test]
 fn governance_entity_arguments_require_exact_canonical_paths() {
     let proposal_id = "ab".repeat(32);
     let proposal_args = norito::json!({
@@ -1916,8 +2040,8 @@ fn governance_entity_arguments_require_exact_canonical_paths() {
     }
 }
 #[test]
-fn canonical_message_ticket_and_proof_paths_reject_retired_aliases() {
-    let cases: [(Value, fn(&Map) -> Result<String, String>); 8] = [
+fn canonical_message_and_ticket_paths_reject_retired_aliases() {
+    let cases: [(Value, fn(&Map) -> Result<String, String>); 6] = [
         (
             norito::json!({ "msg_id": "msg-001" }),
             extract_iso20022_message_id_argument,
@@ -1941,14 +2065,6 @@ fn canonical_message_ticket_and_proof_paths_reject_retired_aliases() {
         (
             norito::json!({ "id": "manifest-ticket-001" }),
             extract_ticket_argument,
-        ),
-        (
-            norito::json!({ "id": "proof-001" }),
-            extract_proof_record_id_argument,
-        ),
-        (
-            norito::json!({ "proof_id": "proof-001" }),
-            extract_proof_record_id_argument,
         ),
     ];
     for (args, extract) in cases {
@@ -2009,25 +2125,18 @@ fn governance_mcp_catalog_publishes_exact_id_grammars() {
         );
     };
     let proposal = tool_schema("iroha.gov.proposals.get");
-    for path in [
-        &["properties", "id"][..],
-        &["properties", "proposal_id"][..],
-        &["properties", "path", "properties", "id"][..],
-    ] {
-        assert_grammar(&proposal, path, GOVERNANCE_PROPOSAL_ID_V1_PATTERN, 64);
-    }
-    for (tool, field, path_field) in [
-        ("iroha.gov.locks.get", "rid", "rid"),
-        ("iroha.gov.referenda.get", "referendum_id", "id"),
-        ("iroha.gov.tally.get", "tally_id", "id"),
+    assert_grammar(
+        &proposal,
+        &["properties", "path", "properties", "id"],
+        GOVERNANCE_PROPOSAL_ID_V1_PATTERN,
+        64,
+    );
+    for (tool, path_field) in [
+        ("iroha.gov.locks.get", "rid"),
+        ("iroha.gov.referenda.get", "id"),
+        ("iroha.gov.tally.get", "id"),
     ] {
         let schema = tool_schema(tool);
-        assert_grammar(
-            &schema,
-            &["properties", field],
-            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN,
-            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES as u64,
-        );
         assert_grammar(
             &schema,
             &["properties", "path", "properties", path_field],
@@ -2288,27 +2397,15 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
             "required fields at {path:?}"
         );
     };
-    let proposal = tool_schema("iroha.gov.proposals.get");
-    assert_required(&proposal, &["if", "required"], &["path"]);
-    assert_required(&proposal, &["else", "if", "required"], &["id"]);
-    assert_required(&proposal, &["else", "else", "required"], &["proposal_id"]);
-    let locks = tool_schema("iroha.gov.locks.get");
-    assert_required(&locks, &["if", "required"], &["path"]);
-    assert_required(&locks, &["else", "if", "required"], &["rid"]);
-    assert_required(&locks, &["else", "else", "if", "required"], &["id"]);
-    assert_required(
-        &locks,
-        &["else", "else", "else", "required"],
-        &["referendum_id"],
-    );
-    for (name, primary, alias) in [
-        ("iroha.gov.referenda.get", "id", "referendum_id"),
-        ("iroha.gov.tally.get", "id", "tally_id"),
+    for (name, path_field) in [
+        ("iroha.gov.proposals.get", "id"),
+        ("iroha.gov.locks.get", "rid"),
+        ("iroha.gov.referenda.get", "id"),
+        ("iroha.gov.tally.get", "id"),
     ] {
         let schema = tool_schema(name);
-        assert_required(&schema, &["if", "required"], &["path"]);
-        assert_required(&schema, &["else", "if", "required"], &[primary]);
-        assert_required(&schema, &["else", "else", "required"], &[alias]);
+        assert_required(&schema, &["required"], &["path", "headers"]);
+        assert_required(&schema, &["properties", "path", "required"], &[path_field]);
     }
     for (name, fields) in [
         (
@@ -2401,12 +2498,7 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
 fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
     let cfg = iroha_config::parameters::actual::ToriiMcp::default();
     let tools = build_tool_specs(&cfg);
-    for path in [
-        "/v1/zk/vote/tally",
-        "/v1/gov/ballots/zk-v1",
-        "/v1/gov/ballots/zk-v1/ballot-proof",
-        "/v1/gov/ballots/plain",
-    ] {
+    for path in ["/v1/zk/vote/tally"] {
         let tool = tools
             .iter()
             .find(|tool| {
@@ -2459,6 +2551,20 @@ fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
             "{path} must preserve its closed typed body schema"
         );
     }
+    for path in [
+        "/v1/gov/ballots/zk-v1",
+        "/v1/gov/ballots/zk-v1/ballot-proof",
+        "/v1/gov/ballots/plain",
+    ] {
+        assert!(
+            tools.iter().all(|tool| {
+                !(tool.name.starts_with("torii.")
+                    && tool.method == Method::POST
+                    && tool.path_template == path)
+            }),
+            "purpose-built governance tool must not have a generated alias for {path}"
+        );
+    }
     for retired_path in [
         "/v1/gov/parliament/ballots",
         "/v1/gov/finalize",
@@ -2500,15 +2606,6 @@ fn extract_view_argument_requires_canonical_path_field() {
     });
     let view = extract_view_argument(args.as_object().expect("object")).expect("view");
     assert_eq!(view, "3");
-}
-#[test]
-fn extract_entry_hash_argument_requires_canonical_path_field() {
-    let args = norito::json!({
-        "path": { "entry_hash": "abc123" }
-    });
-    let entry_hash =
-        extract_entry_hash_argument(args.as_object().expect("object")).expect("entry hash");
-    assert_eq!(entry_hash, "abc123");
 }
 #[test]
 fn build_iso20022_payload_body_accepts_only_canonical_base64_bytes() {
@@ -2629,26 +2726,6 @@ fn canonical_path_and_hash_extractors_reject_retired_aliases() {
             extract_height_argument,
         ),
         (norito::json!({ "view": 3 }), extract_view_argument),
-        (
-            norito::json!({ "entry_hash": "abc123" }),
-            extract_entry_hash_argument,
-        ),
-        (
-            norito::json!({ "tx_hash": "abc123" }),
-            extract_entry_hash_argument,
-        ),
-        (
-            norito::json!({ "hash": "abc123" }),
-            extract_entry_hash_argument,
-        ),
-        (
-            norito::json!({ "path": { "tx_hash": "abc123" } }),
-            extract_entry_hash_argument,
-        ),
-        (
-            norito::json!({ "path": { "hash": "abc123" } }),
-            extract_entry_hash_argument,
-        ),
         (
             norito::json!({ "definition_id": "definition" }),
             extract_definition_id_argument,

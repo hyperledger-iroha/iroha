@@ -682,6 +682,7 @@ fn number_to_string(number: &Number) -> String {
     match number {
         Number::I64(value) => value.to_string(),
         Number::U64(value) => value.to_string(),
+        Number::U128(value) => value.to_string(),
         Number::F64(value) => {
             let mut rendered = format!("{value}");
             if rendered.contains('.') {

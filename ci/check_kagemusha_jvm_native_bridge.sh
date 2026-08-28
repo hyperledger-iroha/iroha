@@ -7,7 +7,7 @@ export PATH
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 SOURCE_SEAL="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
-ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"
+ABI23_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi23_artifact.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 LOCALNET_DEPLOYER="$ROOT_DIR/scripts/deploy_localnet.sh"
 PINNED_TOOLCHAIN="1.93.1"
@@ -29,7 +29,7 @@ fi
 
 for required_file in \
   "$SOURCE_SEAL" \
-  "$ABI22_ARTIFACT_CHECKER" \
+  "$ABI23_ARTIFACT_CHECKER" \
   "$HERMETIC_RUNNER" \
   "$LOCALNET_DEPLOYER" \
   "$ROOT_DIR/rust-toolchain.toml" \
@@ -634,15 +634,15 @@ CARGO_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/$NATIVE_LIBRARY_NAME"
 NATIVE_LIBRARY_DIR="$BUILD_SESSION/native-runtime"
 mkdir -m 0700 -- "$NATIVE_LIBRARY_DIR"
 NATIVE_LIBRARY="$NATIVE_LIBRARY_DIR/$NATIVE_LIBRARY_NAME"
-NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi22.json"
-"$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" record \
+NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi23.json"
+"$PYTHON_BINARY" -I -S "$ABI23_ARTIFACT_CHECKER" record \
   --artifact "$CARGO_NATIVE_LIBRARY" \
   --stage-artifact "$NATIVE_LIBRARY" \
   --manifest "$NATIVE_EVIDENCE" \
   --source-root "$ROOT_DIR" \
   --sdk c-jni \
   --target "$HOST_TRIPLE"
-"$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" verify \
+"$PYTHON_BINARY" -I -S "$ABI23_ARTIFACT_CHECKER" verify \
   --artifact "$NATIVE_LIBRARY" \
   --manifest "$NATIVE_EVIDENCE" \
   --source-root "$ROOT_DIR"
@@ -673,6 +673,15 @@ for namespace in ("sdk", "android"):
         required.add(
             "Java_org_hyperledger_iroha_"
             f"{namespace}_offline_KagemushaRecursiveSpendProver_{method}"
+        )
+    for method in (
+        "nativeBridgeAbiVersion",
+        "nativeEncodeRequestV1",
+        "nativeVerifyResponseV1",
+    ):
+        required.add(
+            "Java_org_hyperledger_iroha_"
+            f"{namespace}_validationfee_ValidationFeeHijiriQuoteBridge_{method}"
         )
 forbidden = {
     "connect_norito_get_chain_discriminant",
@@ -975,7 +984,7 @@ if evidence_dir is not None:
         + "\n"
     ).encode("utf-8")
     write_exclusive("zk-asset-shield-localnet.junit.xml", target_bytes)
-    write_exclusive("c-jni-native-abi22.json", native_bytes)
+    write_exclusive("c-jni-native-abi23.json", native_bytes)
     write_exclusive("zk-asset-shield-localnet-summary.json", summary_bytes)
 PY
 

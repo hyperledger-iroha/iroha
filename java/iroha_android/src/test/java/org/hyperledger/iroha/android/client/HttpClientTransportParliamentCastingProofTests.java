@@ -50,7 +50,9 @@ public final class HttpClientTransportParliamentCastingProofTests {
                 200,
                 responseFrame,
                 "ok",
-                responseHeaders));
+                responseHeaders,
+                null,
+                false));
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
@@ -97,7 +99,9 @@ public final class HttpClientTransportParliamentCastingProofTests {
                 200,
                 responseFrame,
                 "ok",
-                encodedHeaders));
+                encodedHeaders,
+                null,
+                false));
     final HttpClientTransport encodedTransport =
         HttpClientTransport.withExecutor(
             encodedExecutor,
@@ -116,7 +120,8 @@ public final class HttpClientTransportParliamentCastingProofTests {
   public void castingContextGetIsAuthenticatedAndBounded() {
     final OneResponseExecutor executor =
         new OneResponseExecutor(
-            new TransportResponse(404, new byte[0], "not found", Collections.emptyMap()));
+            new TransportResponse(
+                404, new byte[0], "not found", Collections.emptyMap(), null, false));
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
@@ -358,7 +363,7 @@ public final class HttpClientTransportParliamentCastingProofTests {
       headers.put(
           "Content-Length", Collections.singletonList(Integer.toString(responseBody.length)));
       return CompletableFuture.completedFuture(
-          new TransportResponse(200, responseBody, "ok", headers));
+          new TransportResponse(200, responseBody, "ok", headers, null, false));
     }
   }
 }

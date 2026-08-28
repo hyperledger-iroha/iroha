@@ -88,7 +88,7 @@ public final class HttpClientTransportExportOptionsTests {
             HttpClientTransportSubmissionContractTests.compatibleCapabilitiesResponse());
       }
       return CompletableFuture.completedFuture(
-          new TransportResponse(202, new byte[0], "accepted", java.util.Map.of()));
+          new TransportResponse(202, new byte[0], "accepted", java.util.Map.of(), null, false));
     }
   }
 }

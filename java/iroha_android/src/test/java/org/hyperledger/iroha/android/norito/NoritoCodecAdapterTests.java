@@ -29,6 +29,7 @@ import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
+import org.hyperledger.iroha.android.crypto.SignatureAdmission;
 import org.hyperledger.iroha.android.tx.MultisigSignature;
 import org.hyperledger.iroha.android.tx.MultisigSignatures;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -492,7 +493,6 @@ public final class NoritoCodecAdapterTests {
     readField(signerDecoder, "request.signer_account_id.public_key");
     assert signerDecoder.remaining() == 0 : "Signer account payload has trailing bytes";
 
-    assertOptionPayloadEmpty(readField(decoder, "request.private_key"), "request.private_key");
     assert decodeOptionPayload(readField(decoder, "request.public_key_hex"), "request.public_key_hex").isPresent()
         : "public key hex must be present";
     assert decodeOptionPayload(readField(decoder, "request.signature_b64"), "request.signature_b64").isPresent()
@@ -701,7 +701,10 @@ public final class NoritoCodecAdapterTests {
     final byte[] mlDsaPublicKey =
         fill(0x5A, MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH);
     final MultisigSignature sigC =
-        MultisigSignature.fromCurveId(0x02, mlDsaPublicKey, fill(0x66, 64));
+        MultisigSignature.fromCurveId(
+            0x02,
+            mlDsaPublicKey,
+            fill(0x66, SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH));
     final MultisigSignatures multisig =
         MultisigSignatures.of(Arrays.asList(sigA, sigB, sigC));
 

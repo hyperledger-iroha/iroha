@@ -34,6 +34,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.FeeChargeKind
 import org.hyperledger.iroha.sdk.core.model.FeeChargeLimit
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.ContractInvocation
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
@@ -42,6 +43,8 @@ import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
+import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
+import org.hyperledger.iroha.sdk.core.model.instructions.ProofVerifierKeyRef
 import org.hyperledger.iroha.sdk.nexus.UaidPortfolioQuery
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -50,6 +53,10 @@ import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
+import org.hyperledger.iroha.sdk.tx.norito.TransactionPayloadAdapter
+
+private const val EMPTY_CONTRACT_PAYLOAD_DIGEST_HEX =
+    "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
 
 class HttpClientTransportTest {
     private val verifyingKeyNetworkId = NetworkId.parse(
@@ -954,13 +961,54 @@ class HttpClientTransportTest {
 
     @Test
     fun prepareContractCallPostsSecretFreeSelectorPayloadAndParsesDraft() {
-        val transactionPayload = sampleTransaction(
-            seed = 7,
-            creationTimeMs = 1_712_345_678_901L,
-            gasLimit = 5_000L,
-        ).encodedPayload()
+        val networkId = TestNetworkIds.fromSeed(7L)
+        val authority = testAccountId(0x17)
+        val contractAddress =
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+        val codeHash = ByteArray(32) { 0x44 }.also { it[it.lastIndex] = 0x45 }
+        val invocation = ContractInvocation(
+            contractAddress,
+            codeHash,
+            "contribute",
+            byteArrayOf(1, 2, 3),
+        )
+        val metadata = mapOf(
+            "validation_fee_hijiri_fee_quote_hash" to JsonValue.string("cd".repeat(32)),
+        )
+        val assetBytes = ByteArray(16) { (it + 11).toByte() }.also {
+            it[6] = 0x46
+            it[8] = 0x88.toByte()
+        }
+        val quotedFeePayment = FeePaymentIntent.authority(
+            listOf(
+                FeeChargeLimit(
+                    FeeChargeKind.NEXUS,
+                    AssetDefinitionIdEncoder.encodeFromBytes(assetBytes),
+                    "3",
+                ),
+            ),
+            5_000L,
+        )
+        val creationTimeMs = 1_712_345_678_901L
+        val transactionPayload = NoritoJavaCodecAdapter(
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
+        ).encodeTransaction(
+            TransactionPayload(
+                networkId = networkId,
+                authority = authority,
+                creationTimeMs = creationTimeMs,
+                executable = Executable.contractCall(invocation),
+                feePayment = quotedFeePayment,
+                metadata = metadata,
+            ),
+        )
         val transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
         val signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload))
+        val quotedFeePaymentJson = JsonEncoder.encode(quotedFeePayment.toJsonMap())
+        val codeHashHex = hex(codeHash).lowercase()
+        val contractPayload = linkedMapOf("payment_amount" to 1L, "buyer" to "alice")
+        val contractPayloadDigestHex =
+            "1a2bca00c0768c41d68cf221ca3bdad238de9009a821cf8c9d9c2cd767f5893b"
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
@@ -968,12 +1016,12 @@ class HttpClientTransportTest {
                   "ok": true,
                   "submitted": false,
                   "dataspace": "router",
-                  "code_hash_hex": "${"44".repeat(32)}",
+                  "code_hash_hex": "$codeHashHex",
                   "abi_hash_hex": "${"55".repeat(32)}",
-                  "creation_time_ms": 1712345678901,
-                  "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+                  "creation_time_ms": $creationTimeMs,
+                  "contract_address": "$contractAddress",
                   "entrypoint": "contribute",
-                  "transaction_ttl_ms": 60000,
+                  "transaction_ttl_ms": null,
                   "transaction_payload_b64": "$transactionPayloadB64",
                   "signing_message_b64": "$signingMessageB64",
                   "operation_receipt": {
@@ -982,44 +1030,46 @@ class HttpClientTransportTest {
                     "transport": "torii",
                     "dataspace": "router",
                     "contract_alias": "router::universal",
-                    "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-                    "code_hash_hex": "${"44".repeat(32)}",
+                    "contract_address": "$contractAddress",
+                    "code_hash_hex": "$codeHashHex",
                     "abi_hash_hex": "${"55".repeat(32)}",
                     "entrypoint": "contribute",
                     "gas_limit": 5000,
-                    "gas_used": 17,
-                    "fee_payment": {
-                      "payer": "authority",
-                      "value": {"charge_limits": [], "gas_limit": 5000}
-                    },
-                    "payload_digest_hex": "${"88".repeat(32)}"
+                    "gas_used": null,
+                    "fee_payment": $quotedFeePaymentJson,
+                    "payload_digest_hex": "$contractPayloadDigestHex"
                   }
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            config = ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .setLocalSigningContext(LocalSigningContext(networkId))
+                .build(),
         )
         val response = transport.prepareContractCall(
-            authority = "alice",
+            authority = authority,
             feePayment = testFeePayment(5_000L),
             contractAlias = "router::universal",
             entrypoint = "contribute",
-            payload = linkedMapOf("buyer" to "alice", "payment_amount" to 1L),
+            payload = contractPayload,
+            draftIntent = ContractCallDraftIntent(invocation, metadata),
         ).join()
 
         assertTrue(response.ok)
         assertFalse(response.submitted)
         assertEquals("router", response.dataspace)
         assertEquals("contribute", response.entrypoint)
-        assertEquals(60_000L, response.transactionTtlMs)
+        assertEquals(null, response.transactionTtlMs)
         assertEquals(null, response.entrypointHashHex)
         assertNull(response.pipelineStatus)
         assertEquals("contract_call", response.operationReceipt.operationKind)
         assertEquals(5_000L, response.operationReceipt.gasLimit)
         assertEquals(5_000L, response.operationReceipt.feePayment?.gasLimit)
-        assertEquals("88".repeat(32), response.operationReceipt.payloadDigestHex)
+        assertEquals(quotedFeePayment, response.operationReceipt.feePayment)
+        assertEquals(contractPayloadDigestHex, response.operationReceipt.payloadDigestHex)
         assertEquals(transactionPayloadB64, response.transactionPayloadB64)
         assertEquals(signingMessageB64, response.signingMessageB64)
 
@@ -1029,7 +1079,7 @@ class HttpClientTransportTest {
         assertEquals("https://torii.example/api/v1/contracts/call", request.uri.toString())
         @Suppress("UNCHECKED_CAST")
         val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
-        assertEquals("alice", payload["authority"])
+        assertEquals(authority, payload["authority"])
         assertFalse(payload.containsKey("private_key"))
         assertEquals("router::universal", payload["contract_alias"])
         assertFalse(payload.containsKey("contract_address"))
@@ -1045,6 +1095,252 @@ class HttpClientTransportTest {
         val args = payload["payload"] as Map<String, Any?>
         assertEquals("alice", args["buyer"])
         assertEquals(1L, (args["payment_amount"] as Number).toLong())
+    }
+
+    @Test
+    fun prepareContractCallRejectsRehashedSignatureBoundSubstitutions() {
+        val networkId = TestNetworkIds.fromSeed(0x31L)
+        val authority = testAccountId(0x31)
+        val contractAddress =
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+        val codeHash = ByteArray(32) { 0x21 }.also { it[it.lastIndex] = 0x23 }
+        val invocation = ContractInvocation(contractAddress, codeHash, "ping")
+        val metadata = mapOf(
+            "validation_fee_hijiri_fee_quote_hash" to JsonValue.string("ab".repeat(32)),
+        )
+        val feePayment = testFeePayment(5_000L)
+        val base = TransactionPayload(
+            networkId = networkId,
+            authority = authority,
+            creationTimeMs = 123_456L,
+            executable = Executable.contractCall(invocation),
+            feePayment = feePayment,
+            metadata = metadata,
+        )
+        val substitutedInvocation = ContractInvocation(
+            contractAddress,
+            ByteArray(32) { 0x31 }.also { it[it.lastIndex] = 0x33 },
+            "ping",
+        )
+        val attachment = ProofAttachment(
+            "halo2/ipa",
+            byteArrayOf(1, 2, 3),
+            ProofVerifierKeyRef("halo2/ipa", "draft_substitution"),
+        )
+        val substitutions = listOf(
+            base.copy(networkId = TestNetworkIds.fromSeed(0x32L)),
+            base.copy(authority = testAccountId(0x32)),
+            base.copy(executable = Executable.contractCall(substitutedInvocation)),
+            base.copy(metadata = mapOf("attacker" to JsonValue.bool(true))),
+            base.copy(timeToLiveMs = 99_999L),
+            base.copy(nonce = 7L),
+            base.copy(admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED),
+            base.copy(attachments = listOf(attachment)),
+            base.copy(feePayment = testFeePayment(5_001L)),
+        )
+
+        substitutions.forEachIndexed { index, substituted ->
+            val transport = HttpClientTransport.withExecutor(
+                StubResponseExecutor(
+                    200,
+                    contractDraftResponse(substituted, invocation),
+                ),
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .setLocalSigningContext(LocalSigningContext(networkId))
+                    .build(),
+            )
+
+            val error = assertFailsWith<CompletionException>("substitution $index must fail") {
+                transport.prepareContractCall(
+                    authority = authority,
+                    feePayment = feePayment,
+                    contractAddress = contractAddress,
+                    entrypoint = "ping",
+                    draftIntent = ContractCallDraftIntent(invocation, metadata),
+                ).join()
+            }
+            assertNotNull(error.cause)
+        }
+    }
+
+    @Test
+    fun prepareContractCallRejectsReceiptAndSelectorSubstitutions() {
+        val networkId = TestNetworkIds.fromSeed(0x35L)
+        val authority = testAccountId(0x35)
+        val contractAddress =
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+        val otherAddress =
+            "irohac1qyqqqqqqqqqqqqz6putm9wv6wkf4r22v02ktg4af7n3n7egd607g2"
+        val codeHash = ByteArray(32) { 0x41 }.also { it[it.lastIndex] = 0x43 }
+        val codeHashHex = hex(codeHash).lowercase()
+        val invocation = ContractInvocation(contractAddress, codeHash, "ping")
+        val intent = ContractCallDraftIntent(invocation, emptyMap())
+        val payload = TransactionPayload(
+            networkId = networkId,
+            authority = authority,
+            creationTimeMs = 654_321L,
+            executable = Executable.contractCall(invocation),
+            feePayment = testFeePayment(5_000L),
+        )
+        val encodedPayload = NoritoJavaCodecAdapter(
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
+        ).encodeTransaction(payload)
+        val signingMessage = Base64.getEncoder().encodeToString(IrohaHash.prehash(encodedPayload))
+        val base = String(
+            contractDraftResponse(payload, invocation, "router::universal"),
+            StandardCharsets.UTF_8,
+        )
+        val mutations = listOf(
+            replaceOccurrence(
+                base,
+                "\"contract_address\": \"$contractAddress\"",
+                "\"contract_address\": \"$otherAddress\"",
+                0,
+            ),
+            replaceOccurrence(
+                base,
+                "\"contract_address\": \"$contractAddress\"",
+                "\"contract_address\": \"$otherAddress\"",
+                1,
+            ),
+            replaceOccurrence(
+                base,
+                "\"code_hash_hex\": \"$codeHashHex\"",
+                "\"code_hash_hex\": \"${"11".repeat(32)}\"",
+                0,
+            ),
+            replaceOccurrence(
+                base,
+                "\"code_hash_hex\": \"$codeHashHex\"",
+                "\"code_hash_hex\": \"${"11".repeat(32)}\"",
+                1,
+            ),
+            base.replace(
+                "\"contract_alias\": \"router::universal\"",
+                "\"contract_alias\": null",
+            ),
+            base.replace(
+                "\"contract_alias\": \"router::universal\"",
+                "\"contract_alias\": \"attacker::universal\"",
+            ),
+            replaceOccurrence(
+                base,
+                "\"dataspace\": \"router\"",
+                "\"dataspace\": \"attacker\"",
+                0,
+            ),
+            replaceOccurrence(
+                base,
+                "\"dataspace\": \"router\"",
+                "\"dataspace\": \"attacker\"",
+                1,
+            ),
+            replaceOccurrence(
+                base,
+                "\"abi_hash_hex\": \"${"55".repeat(32)}\"",
+                "\"abi_hash_hex\": \"${"77".repeat(32)}\"",
+                0,
+            ),
+            replaceOccurrence(
+                base,
+                "\"abi_hash_hex\": \"${"55".repeat(32)}\"",
+                "\"abi_hash_hex\": \"${"77".repeat(32)}\"",
+                1,
+            ),
+            replaceOccurrence(
+                base,
+                "\"entrypoint\": \"ping\"",
+                "\"entrypoint\": \"steal\"",
+                0,
+            ),
+            replaceOccurrence(
+                base,
+                "\"entrypoint\": \"ping\"",
+                "\"entrypoint\": \"steal\"",
+                1,
+            ),
+            base.replace("\"transport\": \"torii\"", "\"transport\": \"proxy\""),
+            base.replace("\"gas_limit\": 5000", "\"gas_limit\": 5001"),
+            base.replace("\"gas_used\": null", "\"gas_used\": 1"),
+            base.replace("\"creation_time_ms\": 654321", "\"creation_time_ms\": 654322"),
+            base.replace("\"transaction_ttl_ms\": null", "\"transaction_ttl_ms\": 100000"),
+            base.replace(
+                "\"payload_digest_hex\": \"$EMPTY_CONTRACT_PAYLOAD_DIGEST_HEX\"",
+                "\"payload_digest_hex\": \"${"44".repeat(32)}\"",
+            ),
+            base.replace(
+                "\"payload_digest_hex\": \"$EMPTY_CONTRACT_PAYLOAD_DIGEST_HEX\"",
+                "\"payload_digest_hex\": \"${EMPTY_CONTRACT_PAYLOAD_DIGEST_HEX.uppercase()}\"",
+            ),
+            base.replace(
+                signingMessage,
+                Base64.getEncoder().encodeToString(ByteArray(32) { 0x5a }),
+            ),
+        )
+
+        mutations.forEachIndexed { index, mutation ->
+            val transport = HttpClientTransport.withExecutor(
+                StubResponseExecutor(200, mutation.toByteArray(StandardCharsets.UTF_8)),
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .setLocalSigningContext(LocalSigningContext(networkId))
+                    .build(),
+            )
+            val error = assertFailsWith<CompletionException>("receipt mutation $index must fail") {
+                transport.prepareContractCall(
+                    authority = authority,
+                    feePayment = testFeePayment(5_000L),
+                    contractAlias = "router::universal",
+                    entrypoint = "ping",
+                    draftIntent = intent,
+                ).join()
+            }
+            assertNotNull(error.cause)
+        }
+
+        val concreteResponse = String(
+            contractDraftResponse(payload, invocation),
+            StandardCharsets.UTF_8,
+        ).replace(
+            "\"contract_alias\": null",
+            "\"contract_alias\": \"attacker::universal\"",
+        )
+        val concreteTransport = HttpClientTransport.withExecutor(
+            StubResponseExecutor(200, concreteResponse.toByteArray(StandardCharsets.UTF_8)),
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .setLocalSigningContext(LocalSigningContext(networkId))
+                .build(),
+        )
+        assertFailsWith<CompletionException> {
+            concreteTransport.prepareContractCall(
+                authority = authority,
+                feePayment = testFeePayment(5_000L),
+                contractAddress = contractAddress,
+                entrypoint = "ping",
+                draftIntent = intent,
+            ).join()
+        }
+
+        val preflightExecutor = CapturingExecutor()
+        val preflightTransport = HttpClientTransport.withExecutor(
+            preflightExecutor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .setLocalSigningContext(LocalSigningContext(networkId))
+                .build(),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            preflightTransport.prepareContractCall(
+                authority = authority,
+                feePayment = testFeePayment(5_000L),
+                contractAddress = otherAddress,
+                entrypoint = "ping",
+                draftIntent = intent,
+            )
+        }
+        assertEquals(0, preflightExecutor.requestCount)
     }
 
     @Test
@@ -1084,14 +1380,65 @@ class HttpClientTransportTest {
 
     @Test
     fun proposeMultisigPostsNativeNoritoInstructionPayloadsAndParsesResponse() {
-        val instructionBytes = byteArrayOf(1, 2, 3, 4)
-        val proposalId = "aa".repeat(32)
+        val instructionBytes = NoritoJavaCodecAdapter.encodeInstructionBox(
+            InstructionBox.fromWirePayload(
+                "iroha.custom",
+                TransactionPayloadAdapter.encodeCanonicalCustomInstructionJson(
+                    """{"UserInstruction":{"value":1}}""",
+                ),
+            ),
+        )
         val multisigAccountId = testMultisigAccountId()
+        val signerAccountId = testAccountId(0x18)
         val creationTimeMs = 1_700_000_000_008L
-        val transactionPayload = sampleTransaction(
-            seed = 8,
+        val networkId = TestNetworkIds.fromSeed(8L)
+        val multisigRequest = MultisigProposeRequest(
+            feePayment = testFeePayment(),
+            multisigAccountId = multisigAccountId,
+            signerAccountId = signerAccountId,
+            instructions = listOf(instructionBytes),
+            publicKeyHex = "0X${validEd25519PublicKeyHex.uppercase()}",
             creationTimeMs = creationTimeMs,
-        ).encodedPayload()
+            memo = "QR invoice 42",
+            validationFeePolicyVersion = 7,
+            validationFeePolicyHash = "AB".repeat(32),
+            validationFeeHijiriFeeQuoteHash = "CD".repeat(32),
+            validationFeeInstructionIndex = 1,
+            validationFeeTransferEntryIndex = 2,
+        )
+        val proposalInstructions =
+            NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(multisigRequest)
+        val proposalId = hex(
+            NoritoJavaCodecAdapter.hashCanonicalInstructionBoxes(proposalInstructions),
+        ).lowercase()
+        val proposeJson = JsonEncoder.encode(
+            linkedMapOf(
+                "Propose" to linkedMapOf(
+                    "account" to multisigAccountId,
+                    "instructions" to proposalInstructions.map {
+                        Base64.getEncoder().encodeToString(it)
+                    },
+                    "transaction_ttl_ms" to null,
+                ),
+            ),
+        )
+        val proposeInstruction = InstructionBox.fromWirePayload(
+            "iroha.custom",
+            TransactionPayloadAdapter.encodeCanonicalCustomInstructionJson(proposeJson),
+        )
+        val requestPayload = HttpClientTransport.buildMultisigProposePayload(multisigRequest)
+        val transactionPayload = NoritoJavaCodecAdapter(
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
+        ).encodeTransaction(
+            TransactionPayload(
+                networkId = networkId,
+                authority = signerAccountId,
+                creationTimeMs = creationTimeMs,
+                executable = Executable.instructions(listOf(proposeInstruction)),
+                feePayment = testFeePayment(),
+                metadata = HttpClientTransport.canonicalMultisigMetadata(requestPayload),
+            ),
+        )
         val transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
         val signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload))
         val executor = StubResponseExecutor(
@@ -1117,24 +1464,12 @@ class HttpClientTransportTest {
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            config = ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .setLocalSigningContext(LocalSigningContext(networkId))
+                .build(),
         )
-        val response = transport.proposeMultisig(
-            MultisigProposeRequest(
-                feePayment = testFeePayment(),
-                multisigAccountAlias = "cbdc@banka",
-                signerAccountId = "alice",
-                instructions = listOf(instructionBytes),
-                publicKeyHex = "0X${validEd25519PublicKeyHex.uppercase()}",
-                creationTimeMs = creationTimeMs,
-                memo = "QR invoice 42",
-                validationFeePolicyVersion = 7,
-                validationFeePolicyHash = "AB".repeat(32),
-                validationFeeHijiriFeeQuoteHash = "CD".repeat(32),
-                validationFeeInstructionIndex = 1,
-                validationFeeTransferEntryIndex = 2,
-            )
-        ).join()
+        val response = transport.proposeMultisig(multisigRequest).join()
 
         assertTrue(response.ok)
         assertEquals(multisigAccountId, response.resolvedMultisigAccountId)
@@ -1151,8 +1486,8 @@ class HttpClientTransportTest {
         assertEquals("application/json", request.headers["Content-Type"]?.first())
         @Suppress("UNCHECKED_CAST")
         val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
-        assertEquals("cbdc@banka", payload["multisig_account_alias"])
-        assertEquals("alice", payload["signer_account_id"])
+        assertEquals(multisigAccountId, payload["multisig_account_id"])
+        assertEquals(signerAccountId, payload["signer_account_id"])
         assertEquals(validEd25519PublicKeyHex, payload["public_key_hex"])
         assertFalse(payload.containsKey("fee_sponsor"))
         @Suppress("UNCHECKED_CAST")
@@ -1171,6 +1506,132 @@ class HttpClientTransportTest {
         @Suppress("UNCHECKED_CAST")
         val instructions = payload["instructions"] as List<String>
         assertEquals(listOf(Base64.getEncoder().encodeToString(instructionBytes)), instructions)
+    }
+
+    @Test
+    fun proposeMultisigRejectsRehashedSignatureBoundSubstitutions() {
+        val networkId = TestNetworkIds.fromSeed(0x41L)
+        val multisigAccountId = testMultisigAccountId()
+        val signerAccountId = testAccountId(0x41)
+        val instruction = canonicalTestInstruction(1)
+        val request = MultisigProposeRequest(
+            multisigAccountId = multisigAccountId,
+            signerAccountId = signerAccountId,
+            instructions = listOf(instruction),
+            creationTimeMs = 777_000L,
+            feePayment = testFeePayment(),
+            memo = "trusted proposal",
+            validationFeePolicyVersion = 3,
+            validationFeePolicyHash = "ab".repeat(32),
+            validationFeeHijiriFeeQuoteHash = "cd".repeat(32),
+            validationFeeInstructionIndex = 0,
+        )
+        val proposalInstructions =
+            NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(request)
+        val proposalHashHex = hex(
+            NoritoJavaCodecAdapter.hashCanonicalInstructionBoxes(proposalInstructions),
+        ).lowercase()
+        val metadata = HttpClientTransport.canonicalMultisigMetadata(
+            HttpClientTransport.buildMultisigProposePayload(request),
+        )
+        val base = TransactionPayload(
+            networkId = networkId,
+            authority = signerAccountId,
+            creationTimeMs = 777_000L,
+            executable = Executable.instructions(
+                listOf(multisigProposeInstruction(multisigAccountId, proposalInstructions)),
+            ),
+            feePayment = testFeePayment(),
+            metadata = metadata,
+        )
+        val substitutedInner = listOf(canonicalTestInstruction(2))
+        val attachment = ProofAttachment(
+            "halo2/ipa",
+            byteArrayOf(4, 5, 6),
+            ProofVerifierKeyRef("halo2/ipa", "multisig_substitution"),
+        )
+        val substitutions = listOf(
+            base.copy(networkId = TestNetworkIds.fromSeed(0x42L)),
+            base.copy(authority = testAccountId(0x42)),
+            base.copy(creationTimeMs = 777_001L),
+            base.copy(
+                executable = Executable.instructions(
+                    listOf(multisigProposeInstruction(multisigAccountId, substitutedInner)),
+                ),
+            ),
+            base.copy(metadata = mapOf("attacker" to JsonValue.string("substituted"))),
+            base.copy(timeToLiveMs = 99_999L),
+            base.copy(nonce = 9L),
+            base.copy(admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED),
+            base.copy(attachments = listOf(attachment)),
+            base.copy(feePayment = testFeePayment(1L)),
+        )
+
+        substitutions.forEachIndexed { index, substituted ->
+            val transport = HttpClientTransport.withExecutor(
+                StubResponseExecutor(
+                    200,
+                    multisigDraftResponse(
+                        substituted,
+                        multisigAccountId,
+                        proposalHashHex,
+                    ),
+                ),
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .setLocalSigningContext(LocalSigningContext(networkId))
+                    .build(),
+            )
+
+            val error = assertFailsWith<CompletionException>("substitution $index must fail") {
+                transport.proposeMultisig(request).join()
+            }
+            assertNotNull(error.cause)
+        }
+    }
+
+    @Test
+    fun proposeMultisigRejectsUnsignedAliasResolutionEcho() {
+        val networkId = TestNetworkIds.fromSeed(0x43L)
+        val resolvedAccount = testMultisigAccountId()
+        val signerAccount = testAccountId(0x43)
+        val instruction = canonicalTestInstruction(3)
+        val request = MultisigProposeRequest(
+            multisigAccountAlias = "treasury@wonderland",
+            signerAccountId = signerAccount,
+            instructions = listOf(instruction),
+            creationTimeMs = 888_000L,
+            feePayment = testFeePayment(),
+        )
+        val proposalInstructions =
+            NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(request)
+        val proposalHashHex = hex(
+            NoritoJavaCodecAdapter.hashCanonicalInstructionBoxes(proposalInstructions),
+        ).lowercase()
+        val payload = TransactionPayload(
+            networkId = networkId,
+            authority = signerAccount,
+            creationTimeMs = 888_000L,
+            executable = Executable.instructions(
+                listOf(multisigProposeInstruction(resolvedAccount, proposalInstructions)),
+            ),
+            feePayment = testFeePayment(),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            StubResponseExecutor(
+                200,
+                multisigDraftResponse(payload, resolvedAccount, proposalHashHex),
+            ),
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .setLocalSigningContext(LocalSigningContext(networkId))
+                .build(),
+        )
+
+        val error = assertFailsWith<CompletionException> {
+            transport.proposeMultisig(request).join()
+        }
+        assertContains(error.cause?.message.orEmpty(), "caller-trusted resolved account")
     }
 
     @Test
@@ -1536,19 +1997,15 @@ class HttpClientTransportTest {
     }
 
     @Test
-    fun callContractRejectsAmbiguousSelector() {
-        val transport = HttpClientTransport.withExecutor(
-            executor = CapturingExecutor(),
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
-        )
-
+    fun contractCallDraftPayloadRejectsAmbiguousSelector() {
         val error = assertFailsWith<IllegalArgumentException> {
-            transport.prepareContractCall(
+            HttpClientTransport.buildContractCallDraftPayload(
                 authority = "alice",
                 feePayment = testFeePayment(5_000L),
                 contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                 contractAlias = "router::universal",
                 entrypoint = "contribute",
+                payload = null,
             )
         }
 
@@ -1651,7 +2108,11 @@ class HttpClientTransportTest {
                   "resolved_multisig_account_id": "$multisigAccountId",
                   "submitted": true,
                   "tx_hash_hex": "$txHash",
-                  "executed_tx_hash_hex": "$executedTxHash"
+                  "executed_tx_hash_hex": "$executedTxHash",
+                  "fee_payment": {
+                    "payer": "authority",
+                    "value": {"charge_limits": [], "gas_limit": null}
+                  }
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8)
         assertEquals(
@@ -4610,6 +5071,122 @@ class HttpClientTransportTest {
             publicKey,
             codec.schemaName(),
         )
+    }
+
+    private fun contractDraftResponse(
+        payload: TransactionPayload,
+        trustedInvocation: ContractInvocation,
+        contractAlias: String? = null,
+    ): ByteArray {
+        val encoded = NoritoJavaCodecAdapter(
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
+        ).encodeTransaction(payload)
+        val codeHashHex = hex(trustedInvocation.expectedCodeHash).lowercase()
+        val feeJson = JsonEncoder.encode(payload.feePayment.toJsonMap())
+        val aliasJson = contractAlias?.let { JsonEncoder.encode(it) } ?: "null"
+        return """
+            {
+              "ok": true,
+              "submitted": false,
+              "dataspace": "router",
+              "code_hash_hex": "$codeHashHex",
+              "abi_hash_hex": "${"55".repeat(32)}",
+              "creation_time_ms": ${payload.creationTimeMs},
+              "contract_address": "${trustedInvocation.contractAddress}",
+              "entrypoint": "${trustedInvocation.entrypoint}",
+              "transaction_ttl_ms": null,
+              "transaction_payload_b64": "${Base64.getEncoder().encodeToString(encoded)}",
+              "signing_message_b64": "${Base64.getEncoder().encodeToString(IrohaHash.prehash(encoded))}",
+              "operation_receipt": {
+                "operation_kind": "contract_call",
+                "status": "pending_signature",
+                "transport": "torii",
+                "dataspace": "router",
+                "contract_alias": $aliasJson,
+                "contract_address": "${trustedInvocation.contractAddress}",
+                "code_hash_hex": "$codeHashHex",
+                "abi_hash_hex": "${"55".repeat(32)}",
+                "entrypoint": "${trustedInvocation.entrypoint}",
+                "gas_limit": ${payload.feePayment.gasLimit},
+                "gas_used": null,
+                "fee_payment": $feeJson,
+                "payload_digest_hex": "$EMPTY_CONTRACT_PAYLOAD_DIGEST_HEX"
+              }
+            }
+        """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+    }
+
+    private fun multisigDraftResponse(
+        payload: TransactionPayload,
+        resolvedMultisigAccountId: String,
+        proposalHashHex: String,
+    ): ByteArray {
+        val encoded = NoritoJavaCodecAdapter(
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
+        ).encodeTransaction(payload)
+        return """
+            {
+              "ok": true,
+              "resolved_multisig_account_id": "$resolvedMultisigAccountId",
+              "submitted": false,
+              "proposal_id": "$proposalHashHex",
+              "instructions_hash": "$proposalHashHex",
+              "tx_hash_hex": null,
+              "executed_tx_hash_hex": null,
+              "creation_time_ms": ${payload.creationTimeMs},
+              "fee_payment": ${JsonEncoder.encode(payload.feePayment.toJsonMap())},
+              "transaction_payload_b64": "${Base64.getEncoder().encodeToString(encoded)}",
+              "signing_message_b64": "${Base64.getEncoder().encodeToString(IrohaHash.prehash(encoded))}"
+            }
+        """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+    }
+
+    private fun canonicalTestInstruction(value: Long): ByteArray =
+        NoritoJavaCodecAdapter.encodeInstructionBox(
+            InstructionBox.fromWirePayload(
+                "iroha.custom",
+                TransactionPayloadAdapter.encodeCanonicalCustomInstructionJson(
+                    """{"UserInstruction":{"value":$value}}""",
+                ),
+            ),
+        )
+
+    private fun multisigProposeInstruction(
+        multisigAccountId: String,
+        proposalInstructions: List<ByteArray>,
+    ): InstructionBox {
+        val json = JsonEncoder.encode(
+            linkedMapOf(
+                "Propose" to linkedMapOf(
+                    "account" to multisigAccountId,
+                    "instructions" to proposalInstructions.map {
+                        Base64.getEncoder().encodeToString(it)
+                    },
+                    "transaction_ttl_ms" to null,
+                ),
+            ),
+        )
+        return InstructionBox.fromWirePayload(
+            "iroha.custom",
+            TransactionPayloadAdapter.encodeCanonicalCustomInstructionJson(json),
+        )
+    }
+
+    private fun replaceOccurrence(
+        source: String,
+        target: String,
+        replacement: String,
+        occurrence: Int,
+    ): String {
+        require(occurrence >= 0) { "occurrence must be non-negative" }
+        var offset = 0
+        var match = -1
+        repeat(occurrence + 1) {
+            match = source.indexOf(target, offset)
+            require(match >= 0) { "target occurrence $occurrence was not found" }
+            offset = match + target.length
+        }
+        return source.substring(0, match) + replacement + source.substring(match + target.length)
     }
 
     private fun sampleOpening(): RamLfeOutputOpening =

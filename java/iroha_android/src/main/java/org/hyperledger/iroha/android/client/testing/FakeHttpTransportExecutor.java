@@ -21,7 +21,7 @@ public final class FakeHttpTransportExecutor implements HttpTransportExecutor {
       new ConcurrentHashMap<>();
 
   private volatile TransportResponse defaultResponse =
-      new TransportResponse(200, new byte[0], "", Collections.emptyMap());
+      new TransportResponse(200, new byte[0], "", Collections.emptyMap(), null, false);
 
   /** Enqueue a response that will be returned for any request when no path-specific response exists. */
   public void enqueueResponse(final TransportResponse response) {
@@ -60,7 +60,12 @@ public final class FakeHttpTransportExecutor implements HttpTransportExecutor {
     }
     return CompletableFuture.completedFuture(
         new TransportResponse(
-            response.statusCode(), response.body(), response.message(), response.headers()));
+            response.statusCode(),
+            response.body(),
+            response.message(),
+            response.headers(),
+            response.finalUri(),
+            response.redirected()));
   }
 
   private static TransportResponse poll(final ConcurrentLinkedQueue<TransportResponse> queue) {

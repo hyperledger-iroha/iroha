@@ -1584,22 +1584,36 @@ pub struct Network {
     ///
     /// Note: this list must be empty when `p2p_proxy_required=true`.
     pub p2p_no_proxy: Vec<String>,
+    /// CIDR ranges that outbound peer and proxy dials may resolve to.
+    ///
+    /// An empty list leaves IP ranges unrestricted. Deny entries take precedence.
+    pub outbound_dial_allow_cidrs: Vec<String>,
+    /// CIDR ranges that outbound peer and proxy dials must never reach.
+    pub outbound_dial_deny_cidrs: Vec<String>,
+    /// DNS suffixes allowed for outbound peer and proxy dials.
+    ///
+    /// An empty list leaves DNS names unrestricted. Matching is at DNS label boundaries.
+    pub outbound_dial_allow_dns_suffixes: Vec<String>,
+    /// DNS suffixes denied for outbound peer and proxy dials.
+    pub outbound_dial_deny_dns_suffixes: Vec<String>,
     /// Whether to verify an `https://` proxy hop.
     ///
-    /// When enabled, the proxy connection uses certificate pinning via
-    /// `p2p_proxy_tls_pinned_cert_der_base64`. If no pin is configured, dialing an `https://`
-    /// proxy fails. When disabled, the proxy hop is encrypted but susceptible to MITM (which can
-    /// leak proxy credentials).
+    /// HTTPS proxy dials require this to remain enabled and require an exact leaf-certificate
+    /// pin in `p2p_proxy_tls_pinned_cert_der_base64`; invalid settings fail before connecting.
     pub p2p_proxy_tls_verify: bool,
     /// Optional pinned end-entity certificate for `https://` proxies (DER, base64).
     ///
-    /// When `p2p_proxy_tls_verify` is enabled, the dialer pins the proxy certificate to this value.
+    /// Every HTTPS proxy dial pins the proxy leaf certificate to this value.
     pub p2p_proxy_tls_pinned_cert_der_base64: Option<String>,
-    /// Enable QUIC transport (feature-gated).
-    pub quic_enabled: bool,
-    /// Enable QUIC DATAGRAM support for best-effort topics (gossip/health).
+    /// Request QUIC transport (feature-gated).
     ///
-    /// Datagrams are used only for best-effort topics; reliable topics keep using streams.
+    /// Runtime startup rejects `true` before binding while the lockfile resolves
+    /// vulnerable quinn-proto 0.11.15. TLS-over-TCP remains available.
+    pub quic_enabled: bool,
+    /// Request QUIC DATAGRAM support for best-effort topics (gossip/health).
+    ///
+    /// Runtime startup rejects `true` until quinn-proto 0.11.17 or later is
+    /// locked and requalified. The disabled path uses reliable streams.
     pub quic_datagrams_enabled: bool,
     /// Upper bound (bytes) for QUIC datagram payloads.
     pub quic_datagram_max_payload_bytes: usize,
@@ -7734,6 +7748,10 @@ pub struct Torii {
     pub attachments_per_tenant_max_count: u64,
     /// Maximum aggregate attachment bytes retained per tenant (0 = unlimited).
     pub attachments_per_tenant_max_bytes: u64,
+    /// Maximum number of attachments retained by this node (1..=20,000).
+    pub attachments_global_max_count: u64,
+    /// Maximum aggregate attachment bytes retained by this node.
+    pub attachments_global_max_bytes: u64,
     /// Allowed MIME types for attachment payloads (post-sniff).
     pub attachments_allowed_mime_types: Vec<String>,
     /// Maximum expanded bytes allowed when decompressing attachments.
@@ -8231,6 +8249,10 @@ impl_default!(ToriiMcp => {
             enabled: defaults::torii::mcp::ENABLED,
             max_request_bytes: defaults::torii::mcp::MAX_REQUEST_BYTES,
             max_tools_per_list: defaults::torii::mcp::MAX_TOOLS_PER_LIST,
+            max_inflight_dispatches: NonZeroUsize::new(
+                defaults::torii::mcp::MAX_INFLIGHT_DISPATCHES,
+            )
+            .expect("default MCP in-flight dispatch limit is non-zero"),
             profile: ToriiMcpProfile::parse(defaults::torii::mcp::PROFILE)
                 .expect("default MCP profile label is valid"),
             expose_operator_routes: defaults::torii::mcp::EXPOSE_OPERATOR_ROUTES,

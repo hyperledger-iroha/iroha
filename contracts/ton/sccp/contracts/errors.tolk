@@ -23,5 +23,10 @@ enum SccpErrors {
     InvalidProofShape = 79
     InvalidVerificationKey = 80
     InvalidPublicSignals = 81
+    PendingCapacityExceeded = 82
+    MintingDisabled = 83
+    SupplyCapExceeded = 84
+    InvalidBreakerAuthorization = 85
+    ReserveInvariant = 86
     WrongWorkchain = 333
 }

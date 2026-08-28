@@ -490,6 +490,7 @@ impl WorkerResources {
                 Arc::clone(host_arc),
             )));
         }
+        vm.memory.begin_block_transaction_tracking();
         Self {
             vm,
             ctx: ExecutionContext::new(),
@@ -502,7 +503,7 @@ impl WorkerResources {
         self.vm.private_memory_bytes.clear();
         self.vm
             .memory
-            .reset_from_template(&self.template_memory)
+            .reset_for_block_transaction(&self.template_memory)
             .expect("transaction worker retains its template memory geometry");
         self.vm
             .private_memory_bytes
@@ -1240,7 +1241,7 @@ pub struct RuntimeTemplate {
     entrypoint_pc: Option<u64>,
     input_bump_next: u64,
 }
-/// A warmed VM cannot be reset from a different program or memory geometry.
+/// A warmed VM cannot be reset from a different program or memory baseline.
 ///
 /// Runtime pools must discard the mismatched VM instead of replacing its full
 /// memory image. A subsequent checkout can construct a correctly sized VM.
@@ -1254,6 +1255,11 @@ enum RuntimeTemplateResetErrorKind {
         current: [u8; 32],
         template: [u8; 32],
     },
+    MemoryLifecycle {
+        current_generation: u64,
+        template_generation: u64,
+    },
+    MemoryBaselineIdentity,
     MemoryGeometry {
         current_memory_bytes: usize,
         template_memory_bytes: usize,
@@ -1271,6 +1277,19 @@ impl RuntimeTemplateResetError {
     fn from_program_identity(current: [u8; 32], template: [u8; 32]) -> Self {
         Self {
             kind: RuntimeTemplateResetErrorKind::ProgramIdentity { current, template },
+        }
+    }
+    fn from_memory_lifecycle(current_generation: u64, template_generation: u64) -> Self {
+        Self {
+            kind: RuntimeTemplateResetErrorKind::MemoryLifecycle {
+                current_generation,
+                template_generation,
+            },
+        }
+    }
+    fn from_memory_baseline_identity() -> Self {
+        Self {
+            kind: RuntimeTemplateResetErrorKind::MemoryBaselineIdentity,
         }
     }
     fn from_memory(error: MemoryTemplateMismatch) -> Self {
@@ -1298,6 +1317,16 @@ impl std::fmt::Display for RuntimeTemplateResetError {
                 "runtime-template program mismatch: VM has code hash {}, template has code hash {}",
                 hex::encode(current),
                 hex::encode(template)
+            ),
+            RuntimeTemplateResetErrorKind::MemoryLifecycle {
+                current_generation,
+                template_generation,
+            } => write!(
+                formatter,
+                "runtime-template lifecycle mismatch: VM memory generation is {current_generation}, template generation is {template_generation}"
+            ),
+            RuntimeTemplateResetErrorKind::MemoryBaselineIdentity => formatter.write_str(
+                "runtime-template baseline identity mismatch: VM memory was independently replaced",
             ),
             RuntimeTemplateResetErrorKind::MemoryGeometry {
                 current_memory_bytes,
@@ -1332,6 +1361,9 @@ pub struct IVM {
     private_memory_bytes: PrivateMemoryRanges,
     pub pc: u64,
     host: Option<Box<dyn IVMHost + Send + Sync>>,
+    /// Sticky fail-stop marker set when a transactional host rollback fails.
+    /// A fresh host installation is the only recovery boundary.
+    host_rollback_failed: bool,
     gas_limit: u64,
     pub gas_remaining: u64,
     /// Gas pre-debited for the syscall currently executing.
@@ -1438,6 +1470,7 @@ impl Clone for IVM {
             private_memory_bytes: self.private_memory_bytes.clone(),
             pc: self.pc,
             host: None,
+            host_rollback_failed: self.host_rollback_failed,
             gas_limit: self.gas_limit,
             gas_remaining: self.remaining_gas(),
             // A clone is an independent VM, not a continuation of an active
@@ -1503,6 +1536,19 @@ impl Clone for IVM {
     }
 }
 impl IVM {
+    #[inline]
+    fn assert_host_rollback_healthy(&self) {
+        assert!(
+            !self.host_rollback_failed,
+            "IVM host is poisoned after a failed transactional rollback"
+        );
+    }
+
+    fn poison_sequential_host(&mut self) {
+        self.host_rollback_failed = true;
+        self.host = None;
+    }
+
     /// Construct a builder for configuring VM creation.
     #[must_use]
     pub fn builder(gas_limit: u64) -> IvmBuilder {
@@ -1739,6 +1785,7 @@ impl IVM {
             host: Some(Box::new(crate::runtime::SyscallDispatcher::new(
                 DefaultHost::new(),
             ))),
+            host_rollback_failed: false,
             gas_limit,
             gas_remaining: gas_limit,
             syscall_gas_reserve: 0,
@@ -1921,7 +1968,8 @@ impl IVM {
         self.vector_length = default_vector_length();
         self.max_cycles = 0;
         self.zk_mode = false;
-        // Preserve INPUT/STACK contents but reset OUTPUT for a clean run.
+        // Preserve INPUT/STACK contents but reset HEAP/OUTPUT for a clean run.
+        self.memory.clear_program_heap();
         self.memory.load_code(code);
         self.memory.clear_output();
         self.pc = 0;
@@ -2078,8 +2126,8 @@ impl IVM {
         } else {
             usize::from(image.metadata.vector_length)
         };
-        // Overlay code region while preserving INPUT/STACK contents that may
-        // have been preloaded by the host/tests. OUTPUT is cleared per load.
+        // Overlay code while preserving INPUT/STACK contents that may have
+        // been preloaded by the host/tests. HEAP/OUTPUT are cleared per load.
         self.predecoded = image.predecoded;
         self.prepared = image.prepared;
         self.prepared_required = true;
@@ -2087,6 +2135,7 @@ impl IVM {
         self.strict_return_integrity = image.strict_return_integrity;
         self.contract_return_stack.clear();
         self.contract_outer_return_pc = None;
+        self.memory.clear_program_heap();
         self.memory.load_code(image.code_region);
         self.memory.clear_output();
         self.registers.set(31, self.memory.stack_top());
@@ -3017,7 +3066,17 @@ impl IVM {
     /// Each transaction is run on a cloned instance of the VM so worker threads never share mutable
     /// state. Successful transactions publish their ordered write sets through
     /// the shared [`State`] lock.
+    ///
+    /// # Panics
+    ///
+    /// Panics and poisons this VM if a sequential host panics while taking a
+    /// checkpoint, cannot supply a checkpoint after a failed transaction, or
+    /// cannot durably restore its checkpoint. Installing a fresh host with
+    /// [`Self::set_host`] explicitly clears that fail-stop state. Block entry
+    /// during an active host syscall is rejected because its detached tracing
+    /// and gas-reservation state cannot be snapshotted independently.
     pub fn execute_block(&mut self, block: Block) -> BlockResult {
+        self.assert_host_rollback_healthy();
         let allow_parallel = self
             .host
             .as_ref()
@@ -3078,32 +3137,130 @@ impl IVM {
             Err(payload) => std::panic::resume_unwind(payload),
         }
     }
+    /// Restore a sequential host checkpoint or poison the VM before failing.
+    fn restore_sequential_host_checkpoint(&mut self, snapshot: &dyn std::any::Any) {
+        let Some(mut host) = self.host.take() else {
+            self.poison_sequential_host();
+            panic!("IVM host disappeared before transactional rollback");
+        };
+        // Poison before entering host code so a panicking restore also leaves
+        // no reusable host or VM execution path behind.
+        self.host_rollback_failed = true;
+        match host.restore(snapshot) {
+            Ok(()) => {
+                self.host = Some(host);
+                self.host_rollback_failed = false;
+            }
+            Err(error) => {
+                panic!("IVM host rollback failed; block execution cannot safely continue: {error}");
+            }
+        }
+    }
+
+    /// Restore the VM-owned half of a sequential block checkpoint.
+    fn restore_sequential_vm_checkpoint(&mut self, mut checkpoint: Self) {
+        // Host rollback is handled separately because host snapshots are
+        // type-erased. Preserve the current host outcome and fail-stop state
+        // while returning every guest-visible VM field to its pre-block value.
+        checkpoint.host = self.host.take();
+        checkpoint.host_rollback_failed = self.host_rollback_failed;
+        *self = checkpoint;
+    }
+
     /// Sequential block execution path used when the host is not concurrency-safe.
     fn execute_block_sequential(&mut self, block: Block) -> BlockResult {
-        let template_memory = self.memory.clone();
-        let template_private_memory_bytes = self.private_memory_bytes.clone();
-        let template_input_bump = self.input_bump_next;
-        let mut ctx = ExecutionContext::new();
-        let mut tx_results = Vec::with_capacity(block.transactions.len());
-        for tx in block.transactions {
-            self.private_memory_bytes.clear();
-            self.memory
-                .reset_from_template(&template_memory)
-                .expect("sequential block execution retains its template memory geometry");
-            self.private_memory_bytes
-                .clone_from(&template_private_memory_bytes);
-            self.input_bump_next = template_input_bump;
-            ctx.init_for_transaction(&tx, &self.state);
-            let snapshot = self.host.as_ref().and_then(|h| h.checkpoint());
-            let result = self.execute_transaction(&tx, &mut ctx);
-            if result.success {
-                self.commit_transaction(&mut ctx);
-            } else if let (Some(snap), Some(host)) = (snapshot, self.host.as_deref_mut()) {
-                let _ = host.restore(snap.as_ref());
+        let vm_checkpoint = self.sequential_block_checkpoint();
+        self.memory.begin_block_transaction_tracking();
+        let execution = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut ctx = ExecutionContext::new();
+            let mut tx_results = Vec::with_capacity(block.transactions.len());
+            for tx in block.transactions {
+                self.private_memory_bytes.clear();
+                self.memory
+                    .reset_for_block_transaction(&vm_checkpoint.memory)
+                    .expect("sequential block execution retains its template memory geometry");
+                self.private_memory_bytes
+                    .clone_from(&vm_checkpoint.private_memory_bytes);
+                self.input_bump_next = vm_checkpoint.input_bump_next;
+                ctx.init_for_transaction(&tx, &self.state);
+                let snapshot = match std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    self.host.as_ref().and_then(|host| host.checkpoint())
+                })) {
+                    Ok(snapshot) => snapshot,
+                    Err(payload) => {
+                        // A panicking checkpoint may already have mutated
+                        // interior host state, but it produced no snapshot that
+                        // could prove a rollback. Detach it before the outer
+                        // VM checkpoint handler restores guest-visible state.
+                        self.poison_sequential_host();
+                        std::panic::resume_unwind(payload);
+                    }
+                };
+                let transaction = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    self.execute_transaction(&tx, &mut ctx)
+                }));
+                let result = match transaction {
+                    Ok(result) => result,
+                    Err(payload) => {
+                        if let Some(snapshot) = snapshot.as_deref() {
+                            self.restore_sequential_host_checkpoint(snapshot);
+                        } else {
+                            // Without a checkpoint there is no proof that a
+                            // panicking host left its state transactionally clean.
+                            self.poison_sequential_host();
+                        }
+                        std::panic::resume_unwind(payload);
+                    }
+                };
+                if result.success {
+                    self.commit_transaction(&mut ctx);
+                } else if let Some(snapshot) = snapshot.as_deref() {
+                    self.restore_sequential_host_checkpoint(snapshot);
+                } else {
+                    self.poison_sequential_host();
+                    panic!(
+                        "IVM host cannot prove rollback after a failed transaction without a checkpoint"
+                    );
+                }
+                tx_results.push(result);
             }
-            tx_results.push(result);
+            BlockResult { tx_results }
+        }));
+        self.restore_sequential_vm_checkpoint(vm_checkpoint);
+        match execution {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
         }
-        BlockResult { tx_results }
+    }
+
+    /// Capture the exact reusable VM state accepted at sequential block entry.
+    fn sequential_block_checkpoint(&self) -> Self {
+        assert!(
+            self.staged_syscall.is_none()
+                && self.syscall_gas_reserve == 0
+                && !self.host_trace_log_detached
+                && self.host_trace_invocation_log.is_none(),
+            "IVM cannot enter block execution during an active host syscall"
+        );
+        let mut checkpoint = self.clone();
+        checkpoint
+            .memory
+            .preserve_checkpoint_tracking_from(&self.memory);
+        checkpoint.gas_remaining = self.gas_remaining;
+        checkpoint.syscall_gas_reserve = self.syscall_gas_reserve;
+        checkpoint.staged_syscall.clone_from(&self.staged_syscall);
+        checkpoint
+            .last_staged_syscall
+            .clone_from(&self.last_staged_syscall);
+        checkpoint.argument_decode_prepaid_gas = self.argument_decode_prepaid_gas;
+        #[cfg(test)]
+        {
+            checkpoint.decode_trace = self.decode_trace;
+            checkpoint.predecoded_misses = self.predecoded_misses;
+            checkpoint.program_parse_attempts = self.program_parse_attempts;
+            checkpoint.prepared_loads = self.prepared_loads;
+        }
+        checkpoint
     }
     /// Execute a single transaction using this VM instance.
     fn execute_transaction(&mut self, tx: &Transaction, _ctx: &mut ExecutionContext) -> TxResult {
@@ -3228,7 +3385,7 @@ impl IVM {
     #[must_use]
     pub fn runtime_template(&self) -> RuntimeTemplate {
         RuntimeTemplate {
-            memory: self.memory.clone(),
+            memory: self.memory.clone_for_runtime_template(),
             registers: self.registers.clone(),
             private_memory_bytes: self.private_memory_bytes.clone(),
             code_hash: self.code_hash,
@@ -3251,9 +3408,9 @@ impl IVM {
     /// # Errors
     ///
     /// Returns [`RuntimeTemplateResetError`] when the VM and template refer to
-    /// different programs or their memory geometries differ. The VM is left
-    /// unchanged so a runtime pool can discard it without performing a
-    /// full-memory clone.
+    /// different programs or memory baselines, or their memory geometries
+    /// differ. The VM is left unchanged so a runtime pool can discard it
+    /// without performing a full-memory clone.
     pub fn reset_from_runtime_template(
         &mut self,
         template: &RuntimeTemplate,
@@ -3263,6 +3420,20 @@ impl IVM {
                 self.code_hash,
                 template.code_hash,
             ));
+        }
+        self.memory
+            .ensure_template_geometry(&template.memory)
+            .map_err(RuntimeTemplateResetError::from_memory)?;
+        let current_generation = self.memory.template_generation();
+        let template_generation = template.memory.template_generation();
+        if current_generation != template_generation {
+            return Err(RuntimeTemplateResetError::from_memory_lifecycle(
+                current_generation,
+                template_generation,
+            ));
+        }
+        if !self.memory.shares_baseline_lineage(&template.memory) {
+            return Err(RuntimeTemplateResetError::from_memory_baseline_identity());
         }
         // The template restores dirty memory chunks, so stale tags must not
         // cause reset() to scrub bytes restored from that baseline.
@@ -3374,8 +3545,12 @@ impl IVM {
         self.vector_length
     }
     /// Replace the host environment used for syscalls.
+    ///
+    /// Installing a fresh host is the explicit recovery boundary for a VM
+    /// poisoned by a failed transactional rollback.
     pub fn set_host<H: IVMHost + Send + Sync + 'static>(&mut self, host: H) {
         self.host = Some(Box::new(crate::runtime::SyscallDispatcher::new(host)));
+        self.host_rollback_failed = false;
     }
     /// Get the remaining gas after execution.
     pub fn remaining_gas(&self) -> u64 {
@@ -4169,15 +4344,21 @@ impl IVM {
     /// register state is logged on every cycle so that a prover can later reconstruct a trace. The
     /// loop terminates on `HALT` or when an error is encountered.
     pub fn run(&mut self) -> Result<(), VMError> {
+        self.assert_host_rollback_healthy();
         let Some(mut host) = self.host.take() else {
             return Err(VMError::HostUnavailable);
         };
-        let result = self.run_with_host_ref(host.as_mut());
+        let outcome =
+            std::panic::catch_unwind(AssertUnwindSafe(|| self.run_with_host_ref(host.as_mut())));
         self.host = Some(host);
-        result
+        match outcome {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
     /// Execute the loaded program using a borrowed host without storing it in the VM.
     pub fn run_with_host(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
+        self.assert_host_rollback_healthy();
         self.run_with_host_ref(host)
     }
     #[inline]
@@ -7543,6 +7724,80 @@ mod tests {
         );
     }
     #[test]
+    fn runtime_template_rejects_same_program_reloaded_after_memory_writes() {
+        let program = program_with_imm(7);
+        let mut vm = quiet_vm(u64::MAX);
+        vm.load_program(&program).expect("template program loads");
+        let template = vm.runtime_template();
+        vm.memory
+            .store_u64(Memory::STACK_START, 0xDEAD_BEEF)
+            .expect("write invocation stack");
+        vm.load_program(&program)
+            .expect("same program can be reloaded by lifecycle API");
+        assert_eq!(vm.code_hash(), template.code_hash);
+
+        let error = vm
+            .reset_from_runtime_template(&template)
+            .expect_err("same-hash lifecycle change must reject warm reset");
+
+        assert!(error.to_string().contains("lifecycle mismatch"));
+        assert_eq!(
+            vm.memory.load_u64(Memory::STACK_START),
+            Ok(0xDEAD_BEEF),
+            "failed reset must leave the VM unchanged for pool discard"
+        );
+    }
+    #[test]
+    fn runtime_template_rejects_independent_same_generation_memory_image() {
+        let program = program_with_imm(7);
+        let mut target = quiet_vm(u64::MAX);
+        target.load_program(&program).expect("target program loads");
+        let template = target.runtime_template();
+
+        let mut replacement = quiet_vm(u64::MAX);
+        replacement
+            .preload_input(0, &[0xA5])
+            .expect("replacement input is writable");
+        replacement
+            .load_program(&program)
+            .expect("same program loads into replacement memory");
+        assert_eq!(
+            replacement.memory.template_generation(),
+            target.memory.template_generation()
+        );
+        target.memory = replacement.memory;
+
+        let error = target
+            .reset_from_runtime_template(&template)
+            .expect_err("independent same-generation memory must not match the template");
+
+        assert!(error.to_string().contains("baseline identity mismatch"));
+        assert_eq!(
+            target
+                .memory
+                .load_region(Memory::INPUT_START, 1)
+                .expect("replacement input remains readable"),
+            [0xA5],
+            "a rejected reset must leave the replacement memory unchanged"
+        );
+    }
+    #[test]
+    fn loading_a_program_clears_prior_heap_and_allocator_state() {
+        let first = program_with_imm(7);
+        let second = program_with_imm(8);
+        let mut vm = quiet_vm(u64::MAX);
+        vm.load_program(&first).expect("first program loads");
+        vm.memory
+            .store_u64(Memory::HEAP_START, 0xDEAD_BEEF)
+            .expect("dirty first program heap");
+        assert_eq!(vm.alloc_heap(16), Ok(Memory::HEAP_START));
+
+        vm.load_program(&second).expect("replacement program loads");
+
+        assert_eq!(vm.memory.load_u64(Memory::HEAP_START), Ok(0));
+        assert_eq!(vm.alloc_heap(8), Ok(Memory::HEAP_START));
+    }
+    #[test]
     fn runtime_template_geometry_mismatch_never_replaces_the_memory_image() {
         let mut vm = quiet_vm(u64::MAX);
         vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
@@ -7960,6 +8215,61 @@ mod tests {
         vm.consume_prepaid_argument_decode(40)
             .expect("consume matching argument decode escrow");
         assert!(!vm.argument_decode_is_prepaid(40));
+    }
+    struct SequentialCheckpointOnlyHost;
+    impl IVMHost for SequentialCheckpointOnlyHost {
+        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+            Ok(0)
+        }
+        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+            Ok(0)
+        }
+        fn as_any(&mut self) -> &mut dyn Any {
+            self
+        }
+        fn supports_concurrent_blocks(&self) -> bool {
+            false
+        }
+        fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
+            Some(Box::new(()))
+        }
+        fn restore(&mut self, snapshot: &dyn Any) -> Result<(), VMError> {
+            snapshot
+                .downcast_ref::<()>()
+                .map(|_| ())
+                .ok_or(VMError::HostUnavailable)
+        }
+    }
+    #[test]
+    fn sequential_empty_block_preserves_completed_metering_and_argument_escrow() {
+        let mut vm = quiet_vm(100);
+        let mut completed = StagedSyscallContext::new(0x0102_0001);
+        completed
+            .record_charge(SyscallMeteringPhase::Entry, 7)
+            .expect("record completed staged charge");
+        completed.finish(SyscallCompletion::Success);
+        vm.last_staged_syscall = Some(completed.clone());
+        vm.prepay_argument_decode(11)
+            .expect("escrow argument decode gas before block");
+        let raw_gas = vm.gas_remaining;
+        vm.decode_trace = true;
+        vm.predecoded_misses = 3;
+        vm.program_parse_attempts = 4;
+        vm.prepared_loads = 5;
+        vm.set_host(SequentialCheckpointOnlyHost);
+
+        let result = vm.execute_block(Block {
+            transactions: Vec::new(),
+        });
+
+        assert!(result.tx_results.is_empty());
+        assert_eq!(vm.last_staged_syscall_context(), Some(&completed));
+        assert!(vm.argument_decode_is_prepaid(11));
+        assert_eq!(vm.gas_remaining, raw_gas);
+        assert!(vm.decode_trace);
+        assert_eq!(vm.predecoded_misses, 3);
+        assert_eq!(vm.program_parse_attempts, 4);
+        assert_eq!(vm.prepared_loads, 5);
     }
     #[test]
     fn run_prefers_predecoded_instructions() {

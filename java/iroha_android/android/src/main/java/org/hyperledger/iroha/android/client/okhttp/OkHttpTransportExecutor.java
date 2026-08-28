@@ -118,7 +118,12 @@ public final class OkHttpTransportExecutor
                       responseMayHaveBody(request.method(), response.code()));
               final TransportResponse transportResponse =
                   new TransportResponse(
-                      response.code(), bodyBytes, response.message(), response.headers().toMultimap());
+                      response.code(),
+                      bodyBytes,
+                      response.message(),
+                      response.headers().toMultimap(),
+                      response.request().url().uri(),
+                      response.priorResponse() != null);
               future.complete(transportResponse);
             } catch (final IOException e) {
               future.completeExceptionally(e);

@@ -7724,7 +7724,7 @@ fields {
     pub soranet_privacy_circuit_events_total: int_counter_vec(&["mode", "kind"],);
     /// PoW validation failures grouped by relay mode and fixed reason.
     pub soranet_privacy_pow_rejects_total: int_counter_vec(&["mode", "reason"],);
-    /// Count of SoraNet PoW revocation store fallbacks grouped by reason.
+    /// Count of SoraNet PoW revocation-store failures grouped by reason.
     pub soranet_pow_revocation_store_total: int_counter_vec(&["reason"]);
     /// Aggregated SoraNet throttling events keyed by relay mode and fixed scope.
     pub soranet_privacy_throttles_total: int_counter_vec(&["mode", "scope"],);
@@ -9305,10 +9305,10 @@ const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
 const METRIC_CATALOG_V2_ROWS: usize = 801;
 const METRIC_CATALOG_V2_REGISTERED: usize = 756;
-const METRIC_CATALOG_V2_BYTES: usize = 109_411;
+const METRIC_CATALOG_V2_BYTES: usize = 109_426;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "1ed3d231a96bdadaf7d7d9b43c6e7216447a8889d4bf004883ad6c3ed7731d8d";
+    "62cba32dfc1d08ef52d5721497a312e0c879fcf9a2e5a2e5d69e8ebb2a5a0812";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {
@@ -12046,7 +12046,7 @@ impl Metrics {
             .with_label_values(&[action])
             .inc();
     }
-    /// Record a SoraNet PoW revocation store fallback.
+    /// Record a SoraNet PoW revocation-store failure.
     pub fn inc_soranet_pow_revocation_store(&self, reason: &str) {
         self.soranet_pow_revocation_store_total
             .with_label_values(&[reason])

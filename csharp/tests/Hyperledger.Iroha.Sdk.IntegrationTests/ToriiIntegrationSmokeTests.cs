@@ -34,9 +34,10 @@ public sealed class ToriiIntegrationSmokeTests
             return;
         }
 
-        var publicRoot = Environment.GetEnvironmentVariable("IROHA_TAIRA_PUBLIC_ROOT")
-            ?? "https://taira.sora.org";
-        using var client = new ToriiClient(new Uri(publicRoot, UriKind.Absolute));
+        var publicRoot = RequireCredentialFreeHttpsOrigin(
+            Environment.GetEnvironmentVariable("IROHA_TAIRA_PUBLIC_ROOT")
+                ?? TairaTestnetProfile.ToriiBaseUri.AbsoluteUri);
+        using var client = new ToriiClient(publicRoot);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(20));
@@ -46,6 +47,44 @@ public sealed class ToriiIntegrationSmokeTests
         Assert.Equal(23u, capability.RequiredBridgeAbiVersion);
         Assert.Equal(8u, capability.MaxHops);
         Assert.True(capability.Ready);
+    }
+
+    private static Uri RequireCredentialFreeHttpsOrigin(string raw)
+    {
+        if (!string.Equals(raw, raw.Trim(), StringComparison.Ordinal)
+            || !Uri.TryCreate(raw, UriKind.Absolute, out var origin)
+            || !string.Equals(origin.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrEmpty(origin.Host)
+            || !string.IsNullOrEmpty(origin.UserInfo)
+            || !string.IsNullOrEmpty(origin.Query)
+            || !string.IsNullOrEmpty(origin.Fragment)
+            || origin.AbsolutePath != "/")
+        {
+            throw new InvalidOperationException(
+                "IROHA_TAIRA_PUBLIC_ROOT must be a credential-free HTTPS origin without a path, query, or fragment.");
+        }
+
+        return origin;
+    }
+
+    [Theory]
+    [InlineData(" http://taira.sora.org")]
+    [InlineData("http://taira.sora.org")]
+    [InlineData("https://user@taira.sora.org")]
+    [InlineData("https://taira.sora.org/v1")]
+    [InlineData("https://taira.sora.org?query=1")]
+    [InlineData("https://taira.sora.org#fragment")]
+    public void TairaKagemushaReadOnlyProbeRejectsNonOriginRoots(string raw)
+    {
+        Assert.Throws<InvalidOperationException>(() => RequireCredentialFreeHttpsOrigin(raw));
+    }
+
+    [Fact]
+    public void TairaKagemushaReadOnlyProbeAcceptsCredentialFreeHttpsOrigin()
+    {
+        Assert.Equal(
+            new Uri("https://taira.sora.org"),
+            RequireCredentialFreeHttpsOrigin("https://taira.sora.org"));
     }
 
     [Fact]

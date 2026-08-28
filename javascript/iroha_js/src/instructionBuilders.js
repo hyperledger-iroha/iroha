@@ -18,6 +18,7 @@ import {
 } from "./normalizers.js";
 import { MultisigSpec, MultisigSpecBuilder } from "./multisig.js";
 import { getCurveEntryByPublicKeyMulticodec } from "./curveRegistry.js";
+import { validatePublicKeyForCurve } from "./address.js";
 import {
   createValidationError,
   ValidationErrorCode,
@@ -2586,6 +2587,7 @@ function normalizeManifestPublicKeyLiteral(value, name) {
       name,
     );
   }
+  validatePublicKeyForCurve(entry.id, payload, name);
   const fnHex = bytes.subarray(0, functionCode.nextIndex).toString("hex");
   const lenHex = bytes.subarray(functionCode.nextIndex, digestLength.nextIndex).toString("hex");
   const payloadHex = payload.toString("hex").toUpperCase();

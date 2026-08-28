@@ -35,7 +35,12 @@ public final class TairaTestnetProfileTests {
     assertEquals(deployedNetworkId, config.localSigningContext().get().networkId());
     assertEquals("fc56984b-2be7-431d-840e-21514d1883f0", TairaTestnetProfile.CHAIN_ID);
     assertEquals(369, TairaTestnetProfile.I105_DISCRIMINANT);
+    assertEquals(
+        "7ZepsJTHCVLKsrFFNZGSRGZgvBhv", TairaTestnetProfile.KAGEMUSHA_ASSET_DEFINITION_ID);
+    assertEquals("ds#boi.is", TairaTestnetProfile.KAGEMUSHA_ASSET_ALIAS);
+    assertEquals(2, TairaTestnetProfile.KAGEMUSHA_ASSET_SCALE);
     assertEquals("6TEAJqbb8oEPmLncoNiMRbLEK6tw", TairaTestnetProfile.XOR_ASSET_DEFINITION_ID);
+    assertEquals("xor#universal", TairaTestnetProfile.XOR_ASSET_ALIAS);
     assertEquals(9, TairaTestnetProfile.XOR_ASSET_SCALE);
   }
 
@@ -51,7 +56,9 @@ public final class TairaTestnetProfileTests {
                   CAPABILITY_JSON,
                   "OK",
                   Collections.singletonMap(
-                      "Content-Type", Collections.singletonList("application/json"))));
+                      "Content-Type", Collections.singletonList("application/json")),
+                  null,
+                  false));
         };
     final Duration requestTimeout = Duration.ofSeconds(37);
     final ClientConfig config =

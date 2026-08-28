@@ -2116,10 +2116,12 @@ mod handle_update_tests {
             .expect("first progress post must be queued");
         assert!(matches!(
             &first.message,
-            Some(NetworkMessage::Post(Post {
-                priority: Priority::High,
-                ..
-            }))
+            Some(AdmittedNetworkPayload::Unsigned(NetworkMessage::Post(
+                Post {
+                    priority: Priority::High,
+                    ..
+                }
+            )))
         ));
         drop(first);
         assert_eq!(handle.network_actor_progress_budget.retained(), 0);
@@ -2343,7 +2345,8 @@ mod handle_update_tests {
             .expect("responsive target is independently admitted");
         assert!(matches!(
             &second.message,
-            Some(NetworkMessage::Post(Post { peer_id, .. })) if peer_id == &responsive_peer
+            Some(AdmittedNetworkPayload::Unsigned(NetworkMessage::Post(Post { peer_id, .. })))
+                if peer_id == &responsive_peer
         ));
         drop(first);
         assert_eq!(

@@ -93,8 +93,9 @@ typed application errors; protocol streams remain documented transport
 exceptions after stream establishment.
 
 `POST /v1/mcp` is a JSON-only boundary and applies the same canonical JSON
-`Content-Type` rule before collecting its JSON-RPC body. `GET /v1/mcp` and CORS
-preflight remain bodyless and do not require `Content-Type`.
+`Content-Type` rule before collecting its JSON-RPC body. There is no bodyless
+capability document: `GET /v1/mcp` returns `405 Method Not Allowed`. CORS
+preflight remains bodyless and does not require `Content-Type`.
 
 Structured query DTOs accept at most one value for each decoded key. Literal
 duplicates and percent-encoded equivalents such as `limit` and `%6cimit` return
@@ -249,7 +250,7 @@ authentication and network policy rather than by claiming a separate socket.
 | `GET /metrics` | diagnostic, restricted on the public listener | Prometheus text | CIDR/API-token policy | scraper protocol; never an SDK or MCP tool |
 | `GET /debug/pprof/profile` | diagnostic, restricted on the public listener | profiler bytes | CIDR/API-token policy | diagnostic artifact |
 | `GET /openapi`, `GET /openapi.json`, `GET /v1/schema` | protocol documentation | JSON document | deployment policy | schema/document endpoints are JSON-only |
-| `GET /v1/mcp`, `POST /v1/mcp` | protocol | capability document / MCP JSON-RPC | GET is public; POST is a bounded nested-route boundary which preserves the selected catalog route's exact authentication and admission | tool transport, not ordinary generated REST operations |
+| `POST /v1/mcp` | protocol | MCP Streamable HTTP JSON-RPC | bounded nested-route boundary which preserves the selected catalog route's exact authentication and admission | tool transport, not an ordinary generated REST operation; GET returns 405 because no SSE stream is provided |
 | `GET /v1/ledger/block/{height}` and `GET /v1/ledger/block/{height}/proof/{entry_hash}` | public, OpenAPI and SDK | exact `application/x-norito` cryptographic carrier | listener policy | the executed `SignedBlockWire` and `BlockProofs` bytes must not be projected through a separately evolving JSON shape; the block carrier is finalized-state-bound and limited to 32 MiB |
 | `POST /v1/operator/auth/{registration,login}/{options,verify}` | operator, OpenAPI only | WebAuthn JSON | mTLS plus handler-enforced bootstrap/session, rate-limit, lockout, and WebAuthn challenge policy | credential exchange cannot require an already-established operator request signature; it never enters SDK or MCP projections |
 | `GET /v1/content/{bundle}/{*path}` and hosted-site reads | protocol | manifest-selected content type, ranges | content policy | raw/static content delivery; an empty wildcard is not a bundle-root alias |

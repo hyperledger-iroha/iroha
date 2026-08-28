@@ -70,6 +70,21 @@ fn hijiri_validation_fee_quote_contract_is_native_bounded_and_authenticated() {
             vec!["validation_fee_hijiri_quote_account_mismatch"],
             "{label} principal-mismatch code"
         );
+        assert!(
+            responses["403"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("direct signatory")),
+            "{label} member-aware forbidden response"
+        );
+        assert!(
+            operation["description"]
+                .as_str()
+                .is_some_and(|description| {
+                    description.contains("direct signatory")
+                        && description.contains("same snapshot")
+                }),
+            "{label} same-snapshot member authorization"
+        );
 
         let request = native_schema(operation, None);
         assert_eq!(
@@ -111,7 +126,10 @@ fn hijiri_validation_fee_quote_contract_is_native_bounded_and_authenticated() {
         assert!(
             request_properties["accountId"]["description"]
                 .as_str()
-                .is_some_and(|description| description.contains("authenticated")),
+                .is_some_and(|description| {
+                    description.contains("authenticated")
+                        && description.contains("direct signatory")
+                }),
             "{label} account-principal binding"
         );
         let response_properties = schemas["ValidationFeeHijiriQuoteResponseV1"]["properties"]

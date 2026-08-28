@@ -253,6 +253,44 @@ fn rejects_selected_kem_missing_from_capability_vectors() {
     ));
 }
 
+fn insert_strict_constant_rate_tlv(mut capabilities: Vec<u8>) -> Vec<u8> {
+    const STRICT_CONSTANT_RATE_TLV: [u8; 8] = [0x02, 0x03, 0x00, 0x04, 0x01, 0x01, 0x00, 0x04];
+    let grease_offset = capabilities
+        .windows(2)
+        .position(|window| window[0] == 0x7f)
+        .expect("default capabilities contain a trailing GREASE entry");
+    capabilities.splice(grease_offset..grease_offset, STRICT_CONSTANT_RATE_TLV);
+    capabilities
+}
+
+#[test]
+fn rejects_strict_constant_rate_claim_while_p2p_payload_bypasses_mux() {
+    let client_capabilities = insert_strict_constant_rate_tlv(
+        iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+    );
+    let relay_capabilities = insert_strict_constant_rate_tlv(
+        iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+    );
+    let error = SoranetHandshakeConfig::new(
+        iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+        client_capabilities,
+        relay_capabilities,
+        true,
+        1,
+        1,
+        None,
+        test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(30)),
+        Duration::from_secs(60),
+        test_ticket_revocation_store(),
+    )
+    .expect_err("strict traffic-shape claims must fail before peer payload is scheduler-bound");
+    assert!(matches!(
+        error,
+        Error::HandshakeSoranet(message)
+            if message.contains("strict SoraNet constant-rate capability is unavailable for iroha_p2p")
+    ));
+}
+
 #[test]
 fn rejects_descriptor_commitment_mismatching_relay_capability() {
     let error = SoranetHandshakeConfig::new(

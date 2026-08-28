@@ -506,10 +506,11 @@ test("package SCCP exports expose the exact Solana-aware inventory", () => {
   }
 });
 
-test("package SCCP exports reject retired TON and diagnostic helper surfaces", () => {
+test("package SCCP exports expose TON while rejecting diagnostic helper surfaces", () => {
+  for (const name of ["SCCP_DOMAIN_TON", "SCCP_CODEC_TON_ACCOUNT36"]) {
+    assert.equal(packageExports[name], packageSccpExports[name], `${name} root/subpath parity`);
+  }
   const retiredNames = [
-    "SCCP_DOMAIN_TON",
-    "SCCP_CODEC_TON_ACCOUNT36",
     "sccpBuildTonMessageBundleSourceProofWithDeployment",
     "sccpTonFixtureValidatorSetHash",
     "SCCP_DOMAIN_SOL",

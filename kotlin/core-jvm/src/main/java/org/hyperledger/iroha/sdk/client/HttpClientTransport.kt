@@ -18,8 +18,12 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Function
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+import org.hyperledger.iroha.sdk.crypto.Blake3
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsStatus
 import org.hyperledger.iroha.sdk.consensus.SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES
 import org.hyperledger.iroha.sdk.consensus.SUMERAGI_STATUS_JSON_MAX_BYTES
@@ -39,10 +43,20 @@ import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.validationfee.NativeValidationFeeHijiriQuoteCodec
+import org.hyperledger.iroha.sdk.validationfee.ValidationFeeHijiriQuoteCodec
+import org.hyperledger.iroha.sdk.validationfee.ValidationFeeHijiriQuoteRequestV1
+import org.hyperledger.iroha.sdk.validationfee.ValidationFeeHijiriQuoteV1
+import org.hyperledger.iroha.sdk.validationfee.VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1
+import org.hyperledger.iroha.sdk.validationfee.VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
 import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTag
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
+import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
+import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import org.hyperledger.iroha.sdk.alias.AliasSetupPlanRequestV1
 import org.hyperledger.iroha.sdk.alias.AliasAutoRenewPlanRequestV1
 import org.hyperledger.iroha.sdk.alias.AliasLeaseRenewPlanRequestV1
@@ -354,6 +368,17 @@ class HttpClientTransport(
             },
             "SCCP proof request",
         )
+    }
+
+    /** Fetch one concrete BN254 or TON BLS12-381 SCCP proof request as canonical Norito bytes. */
+    fun getSccpProofRequestNorito(messageIdHex: String): CompletableFuture<ByteArray> {
+        val messageId = normalizeExactNonZeroEvenLengthHex(messageIdHex, "messageIdHex", 32)
+        val request = buildExactNoritoGetRequest(
+            "/v1/sccp/proof-requests/$messageId",
+            SCCP_MAX_GROTH16_ARTIFACT_BYTES.toLong(),
+        )
+        return fetchExactNoritoBytes(request, "SCCP proof request")
+            .thenApply { validateCanonicalSccpProofRequestNorito(it, "SCCP proof request") }
     }
 
     /** Fetch newest-first exact-context SCCP outbound messages. */
@@ -1027,6 +1052,74 @@ class HttpClientTransport(
         }
     }
 
+    /**
+     * Post one account-signed, native-Norito Hijiri validation-fee quote request.
+     *
+     * The authenticated account may be [request]'s account or a direct signatory of that multisig
+     * controller; Torii resolves and authorizes that live relationship. The returned projection is
+     * exposed only after native canonical decoding, exact request binding, hash validation, and
+     * Q16 aggregate-fee verification succeed.
+     */
+    fun postValidationFeeHijiriQuote(
+        request: ValidationFeeHijiriQuoteRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ValidationFeeHijiriQuoteV1> =
+        postValidationFeeHijiriQuote(
+            request,
+            canonicalAuth,
+            NativeValidationFeeHijiriQuoteCodec,
+        )
+
+    /** Convenience overload constructing the frozen V1 request. */
+    fun postValidationFeeHijiriQuote(
+        accountId: String,
+        qualifyingTransferCount: Int,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ValidationFeeHijiriQuoteV1> =
+        postValidationFeeHijiriQuote(
+            ValidationFeeHijiriQuoteRequestV1(accountId, qualifyingTransferCount),
+            canonicalAuth,
+        )
+
+    internal fun postValidationFeeHijiriQuote(
+        request: ValidationFeeHijiriQuoteRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        codec: ValidationFeeHijiriQuoteCodec,
+    ): CompletableFuture<ValidationFeeHijiriQuoteV1> {
+        check(config.baseUri().scheme.equals("https", ignoreCase = true)) {
+            "Hijiri validation-fee quote requests require an HTTPS Torii base URL"
+        }
+        val body = codec.encode(request).copyOf()
+        require(body.isNotEmpty() &&
+            body.size <= VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1) {
+            "Hijiri validation-fee quote request must contain 1.." +
+                "$VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1 bytes"
+        }
+        val transportRequest = buildExactNoritoPostRequest(
+            "/v1/validation-fee/hijiri/quote",
+            body,
+            VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1.toLong(),
+            canonicalAuth,
+            requestNoStore = true,
+        )
+        return fetchExactNoritoBytes(
+            transportRequest,
+            "Hijiri validation-fee quote",
+            requireIdentityEncoding = true,
+            forbidRejectCodeHeader = true,
+            allowExplicitIdentityEncoding = true,
+            requirePrivateNoStoreResponse = true,
+            requireExactResponseProvenance = true,
+        ).thenApply { response ->
+            val quote = codec.verify(response.copyOf(), body.copyOf())
+            check(quote.qualifyingTransferCount == request.qualifyingTransferCount &&
+                sameCanonicalHijiriQuoteAccount(quote.accountId, request.accountId)) {
+                "Hijiri validation-fee quote response does not bind the exact request"
+            }
+            quote
+        }
+    }
+
     private fun requireNetworkTransactionDomain(
         unsignedPayload: Map<String, Any?>,
     ): NetworkId {
@@ -1076,11 +1169,10 @@ class HttpClientTransport(
     }
 
     /**
-     * Prepares an unsigned contract-call transaction for local signing.
+     * Prepares and verifies an unsigned contract call against an off-wire caller-trusted intent.
      *
-     * Private signing material is never accepted by or sent to Torii. Sign the
-     * returned canonical transaction payload locally and submit the resulting signed
-     * transaction through [submitTransaction].
+     * The intent must contain the exact resolved invocation and complete final transaction
+     * metadata. Torii may enrich fee charge maxima, but cannot select any other signed field.
      */
     fun prepareContractCall(
         authority: String,
@@ -1089,7 +1181,9 @@ class HttpClientTransport(
         contractAlias: String? = null,
         entrypoint: String,
         payload: Any? = null,
+        draftIntent: ContractCallDraftIntent,
     ): CompletableFuture<ContractCallResponse> {
+        val signingContext = config.requireLocalSigningContext()
         val requestPayload = buildContractCallDraftPayload(
             authority = authority,
             feePayment = feePayment,
@@ -1098,23 +1192,54 @@ class HttpClientTransport(
             entrypoint = entrypoint,
             payload = payload,
         )
+        requireCanonicalI105Address(requestPayload.getValue("authority") as String, "authority")
+        validateContractCallDraftIntent(draftIntent, requestPayload, payload != null)
         val body = encodeJsonBody(requestPayload)
         return fetchJson(
             buildJsonPostRequest("/v1/contracts/call", body),
             ContractJsonParser::parseCallResponse,
             "contract call draft",
         ).thenApply { response ->
-            validateContractCallDraft(response, requestPayload)
+            validateContractCallDraft(
+                response,
+                requestPayload,
+                draftIntent,
+                signingContext.networkId(),
+            )
         }
     }
 
     override fun proposeMultisig(request: MultisigProposeRequest): CompletableFuture<MultisigResponse> {
-        val body = encodeJsonBody(buildMultisigProposePayload(request))
+        val signingContext = config.requireLocalSigningContext()
+        val requestSnapshot = request.copy(
+            instructions = request.instructions.map(ByteArray::copyOf),
+        )
+        val requestPayload = buildMultisigProposePayload(requestSnapshot)
+        requireCanonicalI105Address(
+            requestPayload.getValue("signer_account_id") as String,
+            "signerAccountId",
+        )
+        (requestPayload["multisig_account_id"] as? String)?.let {
+            requireCanonicalI105Address(it, "multisigAccountId")
+        }
+        val proposalInstructions =
+            NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(requestSnapshot)
+        val expectedMetadata = canonicalMultisigMetadata(requestPayload)
+        val body = encodeJsonBody(requestPayload)
         return fetchJson(
             buildJsonPostRequest("/v1/multisig/propose", body),
             ContractJsonParser::parseMultisigResponse,
             "multisig propose",
-        ).thenApply { response -> validateMultisigResponse(response, request) }
+        ).thenApply { response ->
+            validateMultisigResponse(
+                response,
+                requestSnapshot,
+                requestPayload,
+                proposalInstructions,
+                expectedMetadata,
+                signingContext.networkId(),
+            )
+        }
     }
 
     fun getGovernanceContract(contractAddress: String, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<GovernanceContractResponse> {
@@ -1789,13 +1914,13 @@ class HttpClientTransport(
         body: ByteArray,
         maximumResponseBytes: Long,
         canonicalAuth: ToriiCanonicalRequestAuth,
+        requestNoStore: Boolean = false,
     ): TransportRequest {
-        val managedHeaders = listOf(
-            "Accept",
-            "Content-Type",
-            "Accept-Encoding",
-            "Content-Encoding",
-        )
+        val managedHeaders = if (requestNoStore) {
+            listOf("Accept", "Content-Type", "Accept-Encoding", "Content-Encoding", "Cache-Control")
+        } else {
+            listOf("Accept", "Content-Type", "Accept-Encoding", "Content-Encoding")
+        }
         require(config.defaultHeaders().keys.none { candidate ->
             managedHeaders.any { it.equals(candidate, ignoreCase = true) }
         }) { "exact Norito POST headers must not be overridden" }
@@ -1810,6 +1935,7 @@ class HttpClientTransport(
             .addHeader("Accept-Encoding", "identity")
             .setMaximumResponseBytes(maximumResponseBytes)
             .setTimeout(config.requestTimeout())
+        if (requestNoStore) builder.addHeader("Cache-Control", "no-store")
         for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
         val canonicalHeaders = buildCanonicalHeaders("POST", target, body, canonicalAuth)
         for ((key, value) in canonicalHeaders) builder.addHeader(key, value)
@@ -2036,6 +2162,10 @@ class HttpClientTransport(
         request: TransportRequest,
         errorContext: String,
         requireIdentityEncoding: Boolean = false,
+        forbidRejectCodeHeader: Boolean = false,
+        allowExplicitIdentityEncoding: Boolean = false,
+        requirePrivateNoStoreResponse: Boolean = false,
+        requireExactResponseProvenance: Boolean = false,
     ): CompletableFuture<ByteArray> {
         notifyRequest(request)
         val future = CompletableFuture<ByteArray>()
@@ -2055,21 +2185,58 @@ class HttpClientTransport(
                 extractRejectCode(response),
             )
             try {
-                require(response.statusCode == 200) {
-                    "$errorContext request failed with status ${response.statusCode}"
+                if (requireExactResponseProvenance) {
+                    requireExactSignedResponseProvenance(request, response, errorContext)
                 }
-                requireExactHeader(response.headers, "Content-Type", APPLICATION_NORITO, errorContext)
-                if (requireIdentityEncoding) {
-                    requireHeaderAbsent(response.headers, "Content-Encoding", errorContext)
-                }
-                require(body.isNotEmpty()) { "$errorContext response must not be empty" }
                 val maximumResponseBytes = requireNotNull(request.maximumResponseBytes) {
                     "$errorContext request must declare a response-body limit"
                 }
+                require(body.isNotEmpty()) { "$errorContext response must not be empty" }
                 require(body.size.toLong() <= maximumResponseBytes) {
                     "$errorContext response exceeds $maximumResponseBytes bytes"
                 }
                 requireExactOptionalContentLength(response.headers, body.size, errorContext)
+                if (requirePrivateNoStoreResponse) {
+                    requireExactHeader(
+                        response.headers,
+                        "Content-Type",
+                        APPLICATION_NORITO,
+                        errorContext,
+                    )
+                    if (requireIdentityEncoding) {
+                        if (allowExplicitIdentityEncoding) {
+                            requireAbsentOrIdentityEncoding(response.headers, errorContext)
+                        } else {
+                            requireHeaderAbsent(response.headers, "Content-Encoding", errorContext)
+                        }
+                    }
+                    requirePrivateNoStore(response.headers, errorContext)
+                }
+                require(response.statusCode == 200) {
+                    "$errorContext request failed with status ${response.statusCode}"
+                }
+                if (!requirePrivateNoStoreResponse) {
+                    requireExactHeader(
+                        response.headers,
+                        "Content-Type",
+                        APPLICATION_NORITO,
+                        errorContext,
+                    )
+                    if (requireIdentityEncoding) {
+                        if (allowExplicitIdentityEncoding) {
+                            requireAbsentOrIdentityEncoding(response.headers, errorContext)
+                        } else {
+                            requireHeaderAbsent(response.headers, "Content-Encoding", errorContext)
+                        }
+                    }
+                }
+                if (forbidRejectCodeHeader) {
+                    require(response.headers.keys.none {
+                        it.equals("x-iroha-reject-code", ignoreCase = true)
+                    }) {
+                        "$errorContext successful response carried x-iroha-reject-code"
+                    }
+                }
                 notifyResponse(request, clientResponse)
                 future.complete(body.copyOf())
             } catch (error: RuntimeException) {
@@ -2078,6 +2245,29 @@ class HttpClientTransport(
             }
         }
         return future
+    }
+
+    private fun sameCanonicalHijiriQuoteAccount(left: String, right: String): Boolean =
+        try {
+            AccountAddress.parseEncodedIgnoringCurveSupport(left, null).canonicalBytes
+                .contentEquals(
+                    AccountAddress.parseEncodedIgnoringCurveSupport(right, null).canonicalBytes,
+                )
+        } catch (_: AccountAddressException) {
+            false
+        }
+
+    private fun requireExactSignedResponseProvenance(
+        request: TransportRequest,
+        response: TransportResponse,
+        errorContext: String,
+    ) {
+        require(
+            !response.redirected &&
+                response.finalUri?.toASCIIString() == request.uri.toASCIIString(),
+        ) {
+            "$errorContext response must come from the exact signed URL without redirects"
+        }
     }
 
     private fun requireExactHeader(
@@ -2104,6 +2294,147 @@ class HttpClientTransport(
         require(headers.keys.none { it.equals(name, ignoreCase = true) }) {
             "$errorContext response must not contain $name"
         }
+    }
+
+    private fun requireAbsentOrIdentityEncoding(
+        headers: Map<String, List<String>>,
+        errorContext: String,
+    ) {
+        val values = headers.entries
+            .asSequence()
+            .filter { (name, _) -> name.equals("Content-Encoding", ignoreCase = true) }
+            .flatMap { (_, headerValues) -> headerValues.asSequence() }
+            .toList()
+        require(
+            values.isEmpty() ||
+                values.size == 1 && values.single().trim().equals("identity", ignoreCase = true),
+        ) {
+            "$errorContext response Content-Encoding must be absent or identity"
+        }
+    }
+
+    private fun requirePrivateNoStore(
+        headers: Map<String, List<String>>,
+        errorContext: String,
+    ) {
+        val headerValues = headers.entries
+            .asSequence()
+            .filter { (name, _) -> name.equals("Cache-Control", ignoreCase = true) }
+            .flatMap { (_, headerValues) -> headerValues.asSequence() }
+            .toList()
+        val directives = parseCacheControlDirectives(headerValues)
+        val validPolicy = directives?.let { parsed ->
+            parsed.any { it.name == "private" && !it.hasValue } &&
+                parsed.any { it.name == "no-store" && !it.hasValue } &&
+                parsed.none { it.name == "public" }
+        } ?: false
+        require(validPolicy) {
+            "$errorContext response must remain private and no-store"
+        }
+    }
+
+    private data class CacheControlDirective(
+        val name: String,
+        val hasValue: Boolean,
+    )
+
+    private fun parseCacheControlDirectives(
+        headerValues: List<String>,
+    ): List<CacheControlDirective>? {
+        val parsed = mutableListOf<CacheControlDirective>()
+        for (headerValue in headerValues) {
+            val rawDirectives = splitCacheControlDirectives(headerValue) ?: return null
+            for (rawDirective in rawDirectives) {
+                parsed += parseCacheControlDirective(rawDirective) ?: return null
+            }
+        }
+        return parsed
+    }
+
+    private fun splitCacheControlDirectives(headerValue: String): List<String>? {
+        val directives = mutableListOf<String>()
+        var start = 0
+        var inQuotes = false
+        var escaped = false
+        for (index in headerValue.indices) {
+            val character = headerValue[index]
+            if (inQuotes) {
+                when {
+                    escaped -> {
+                        if (!isHttpQuotedPairCharacter(character)) return null
+                        escaped = false
+                    }
+
+                    character == '\\' -> escaped = true
+                    character == '"' -> inQuotes = false
+                }
+            } else {
+                when (character) {
+                    '"' -> inQuotes = true
+                    ',' -> {
+                        directives += headerValue.substring(start, index)
+                        start = index + 1
+                    }
+                }
+            }
+        }
+        if (inQuotes || escaped) return null
+        directives += headerValue.substring(start)
+        return directives
+    }
+
+    private fun parseCacheControlDirective(rawDirective: String): CacheControlDirective? {
+        var index = skipHttpOws(rawDirective, 0)
+        val nameStart = index
+        while (index < rawDirective.length && isHttpTokenCharacter(rawDirective[index])) {
+            index += 1
+        }
+        if (index == nameStart) return null
+        val name = rawDirective.substring(nameStart, index).lowercase()
+        index = skipHttpOws(rawDirective, index)
+        if (index == rawDirective.length) return CacheControlDirective(name, false)
+        if (rawDirective[index] != '=') return null
+        index = skipHttpOws(rawDirective, index + 1)
+        if (index == rawDirective.length) return null
+
+        index = if (rawDirective[index] == '"') {
+            parseCacheControlQuotedValue(rawDirective, index) ?: return null
+        } else {
+            val valueStart = index
+            while (
+                index < rawDirective.length &&
+                isHttpTokenCharacter(rawDirective[index])
+            ) {
+                index += 1
+            }
+            if (index == valueStart) return null
+            index
+        }
+        index = skipHttpOws(rawDirective, index)
+        return if (index == rawDirective.length) CacheControlDirective(name, true) else null
+    }
+
+    private fun parseCacheControlQuotedValue(value: String, quoteIndex: Int): Int? {
+        var index = quoteIndex + 1
+        while (index < value.length) {
+            val character = value[index]
+            when {
+                character == '"' -> return index + 1
+                character == '\\' -> {
+                    index += 1
+                    if (
+                        index == value.length ||
+                        !isHttpQuotedPairCharacter(value[index])
+                    ) {
+                        return null
+                    }
+                }
+
+                !isHttpQuotedTextCharacter(character) -> return null
+            }
+            index += 1
+        }
+        return null
     }
 
     private fun requireExactOptionalContentLength(
@@ -2350,6 +2681,7 @@ class HttpClientTransport(
         private const val SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L
         private const val EXECUTED_BLOCK_WIRE_MAX_BYTES = 32L * 1024L * 1024L
         private const val ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES = 4L * 1024L
+        private const val DEFAULT_TRANSACTION_TTL_MS = 100_000L
         private const val APPLICATION_NORITO = "application/x-norito"
         private val CANONICAL_AUTH_HEADERS = setOf(
             CanonicalRequestSigner.HEADER_ACCOUNT,
@@ -2524,10 +2856,30 @@ class HttpClientTransport(
             return normalized
         }
 
-        /** Validates that Torii returned a secret-free draft bound to the requested call. */
+        private fun validateContractCallDraftIntent(
+            intent: ContractCallDraftIntent,
+            request: Map<String, Any>,
+            hasRequestPayload: Boolean,
+        ) {
+            require(intent.invocation.entrypoint == request["entrypoint"]) {
+                "contract call draft intent entrypoint does not match the request"
+            }
+            request["contract_address"]?.let { expected ->
+                require(intent.invocation.contractAddress == expected) {
+                    "contract call draft intent address does not match the request"
+                }
+            }
+            require((intent.invocation.arguments != null) == hasRequestPayload) {
+                "contract call draft intent argument presence does not match the request payload"
+            }
+        }
+
+        /** Validates that Torii returned a secret-free draft bound to the trusted call intent. */
         @JvmStatic internal fun validateContractCallDraft(
             response: ContractCallResponse,
             request: Map<String, Any>,
+            draftIntent: ContractCallDraftIntent,
+            expectedNetworkId: NetworkId,
         ): ContractCallResponse {
             check(response.ok) { "contract call draft.ok must be true" }
             check(!response.submitted) { "contract call draft must not be submitted" }
@@ -2538,7 +2890,11 @@ class HttpClientTransport(
                 "contract call draft entrypoint is not bound to the request"
             }
             val receipt = response.operationReceipt
-            check(receipt.operationKind == "contract_call" && receipt.status == "pending_signature") {
+            check(
+                receipt.operationKind == "contract_call" &&
+                    receipt.status == "pending_signature" &&
+                    receipt.transport == "torii",
+            ) {
                 "contract call draft receipt must be pending_signature"
             }
             check(receipt.entrypoint == response.entrypoint && receipt.txHashHex == null) {
@@ -2547,27 +2903,127 @@ class HttpClientTransport(
             check(response.transactionPayloadB64 != null) {
                 "contract call draft must contain one exact canonical transaction payload"
             }
-            val signingMessageB64 = response.signingMessageB64
-            check(signingMessageB64 != null) {
+            check(response.signingMessageB64 != null) {
                 "contract call draft must contain a signing message"
-            }
-            check(Base64.getDecoder().decode(signingMessageB64).size == 32) {
-                "contract call draft signing message must be 32 bytes"
             }
             check(response.entrypointHashHex == null && receipt.entrypointHashHex == null) {
                 "contract call draft must not claim a final entrypoint hash"
             }
-            request["contract_address"]?.let { expected ->
-                check(response.contractAddress == expected && receipt.contractAddress == expected) {
-                    "contract call draft address is not bound to the request"
-                }
+            val invocation = draftIntent.invocation
+            check(
+                response.contractAddress == invocation.contractAddress &&
+                    receipt.contractAddress == invocation.contractAddress,
+            ) {
+                "contract call draft resolved address does not match the trusted intent"
+            }
+            val expectedCodeHashHex = hexLower(invocation.expectedCodeHash)
+            check(
+                response.codeHashHex == expectedCodeHashHex &&
+                    receipt.codeHashHex == expectedCodeHashHex,
+            ) {
+                "contract call draft code hash does not match the trusted intent"
             }
             request["contract_alias"]?.let { expected ->
                 check(receipt.contractAlias == expected) {
                     "contract call draft alias is not bound to the request"
                 }
+            } ?: check(receipt.contractAlias == null) {
+                "contract call draft receipt unexpectedly contains an alias"
+            }
+            check(receipt.dataspace == response.dataspace && receipt.abiHashHex == response.abiHashHex) {
+                "contract call draft receipt target metadata is inconsistent"
+            }
+            check(response.transactionTtlMs == null) {
+                "contract call draft response unexpectedly selected a transaction TTL"
+            }
+            val responseFeePayment = checkNotNull(receipt.feePayment) {
+                "contract call draft receipt omitted fee_payment"
+            }
+            val requestedFeePayment = request["fee_payment"]
+            check(requestedFeePayment is Map<*, *>) {
+                "contract call draft request omitted fee_payment"
+            }
+            val payloadBase64 = checkNotNull(response.transactionPayloadB64) {
+                "contract call draft omitted transaction_payload_b64"
+            }
+            val transactionBytes = Base64.getDecoder().decode(payloadBase64)
+            check(Base64.getEncoder().encodeToString(transactionBytes) == payloadBase64) {
+                "contract call draft transaction payload must use exact standard-base64"
+            }
+            val signingBase64 = checkNotNull(response.signingMessageB64) {
+                "contract call draft omitted signing_message_b64"
+            }
+            val signingBytes = Base64.getDecoder().decode(signingBase64)
+            check(Base64.getEncoder().encodeToString(signingBytes) == signingBase64) {
+                "contract call draft signing message must use exact standard-base64"
+            }
+            check(
+                signingBytes.size == 32 &&
+                    signingBytes.contentEquals(IrohaHash.prehash(transactionBytes)),
+            ) {
+                "contract call draft signing message must be the exact transaction payload hash"
+            }
+            val decoded = NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
+                transactionBytes,
+                TransactionAdmissionIntent.ORDINARY,
+            )
+            check(decoded.networkId == expectedNetworkId) {
+                "contract call transaction payload changed the configured network"
+            }
+            check(
+                sameFeeQuoteAccountIdentity(
+                    decoded.authority,
+                    request.getValue("authority") as String,
+                ),
+            ) {
+                "contract call transaction payload changed the requested authority"
+            }
+            check(responseFeePayment.hasSamePayerAndGasBound(decoded.feePayment)) {
+                "contract call response fee_payment changed the payer, sponsor revision, or gas bound"
+            }
+            check(responseFeePayment == decoded.feePayment) {
+                "contract call response fee_payment does not match the transaction payload"
+            }
+            check(receipt.gasLimit == responseFeePayment.gasLimit) {
+                "contract call draft receipt gas limit is inconsistent"
+            }
+            check(receipt.payloadDigestHex == contractCallPayloadDigestHex(request)) {
+                "contract call draft receipt payload digest does not match the exact request payload"
+            }
+            check(receipt.gasUsed == null) {
+                "contract call draft receipt must not claim gas use before signing"
+            }
+            check(decoded.creationTimeMs == response.creationTimeMs) {
+                "contract call response creation_time_ms does not match the transaction payload"
+            }
+            check(decoded.executable == Executable.contractCall(invocation)) {
+                "contract call transaction payload changed the caller-trusted invocation"
+            }
+            check(decoded.metadata == draftIntent.metadata) {
+                "contract call transaction payload changed the caller-trusted metadata"
+            }
+            check(
+                decoded.timeToLiveMs == DEFAULT_TRANSACTION_TTL_MS &&
+                    decoded.nonce == null &&
+                    decoded.admissionIntent == TransactionAdmissionIntent.ORDINARY &&
+                    decoded.attachments == null,
+            ) {
+                "contract call transaction payload changed default lifetime, nonce, admission, or attachments"
+            }
+            val requestedFee = FeePaymentJson.parse(
+                requestedFeePayment,
+                "contract call draft request.fee_payment",
+            )
+            check(requestedFee.hasSamePayerAndGasBound(responseFeePayment)) {
+                "contract call response fee_payment changed the requested payer, sponsor revision, or gas bound"
             }
             return response
+        }
+
+        private fun contractCallPayloadDigestHex(request: Map<String, Any>): String {
+            val payload = request["payload"] ?: return hexLower(Blake3.hash(ByteArray(0)))
+            val canonical = JsonValue.parse(JsonEncoder.encode(payload)).canonicalJson
+            return hexLower(Blake3.hash(canonical.toByteArray(StandardCharsets.UTF_8)))
         }
 
         @JvmStatic internal fun buildMultisigProposePayload(request: MultisigProposeRequest): Map<String, Any> {
@@ -2615,7 +3071,12 @@ class HttpClientTransport(
         @JvmStatic internal fun validateMultisigResponse(
             response: MultisigResponse,
             request: MultisigProposeRequest,
+            requestPayload: Map<String, Any>,
+            proposalInstructions: List<ByteArray>,
+            expectedMetadata: Map<String, JsonValue>,
+            expectedNetworkId: NetworkId,
         ): MultisigResponse {
+            check(response.ok) { "multisig response.ok must be true" }
             check(request.feePayment.hasSamePayerAndGasBound(response.feePayment)) {
                 "multisig response fee_payment changed the requested payer, sponsor revision, or gas bound"
             }
@@ -2624,7 +3085,97 @@ class HttpClientTransport(
                     "multisig response creation_time_ms is not bound to the request"
                 }
             }
+            val expectedProposalHash = hexLower(
+                NoritoJavaCodecAdapter.hashCanonicalInstructionBoxes(proposalInstructions),
+            )
+            check(
+                response.proposalId == expectedProposalHash &&
+                    response.instructionsHash == expectedProposalHash,
+            ) {
+                "multisig response proposal hash does not match the exact requested instructions"
+            }
+            if (response.submitted) return response
+
+            val requestedMultisigAccount = requestPayload["multisig_account_id"] as? String
+                ?: throw IllegalStateException(
+                    "unsigned multisig alias drafts require a caller-trusted resolved account",
+                )
+            check(response.resolvedMultisigAccountId == requestedMultisigAccount) {
+                "multisig response resolved account does not match the requested account"
+            }
+            val transactionBytes = Base64.getDecoder().decode(
+                checkNotNull(response.transactionPayloadB64) {
+                    "unsigned multisig response omitted transaction_payload_b64"
+                },
+            )
+            val decoded = NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
+                transactionBytes,
+                TransactionAdmissionIntent.ORDINARY,
+            )
+            check(decoded.networkId == expectedNetworkId) {
+                "multisig response transaction changed the configured network"
+            }
+            check(
+                sameFeeQuoteAccountIdentity(
+                    decoded.authority,
+                    requestPayload.getValue("signer_account_id") as String,
+                ),
+            ) {
+                "multisig response transaction authority does not match the requested signer"
+            }
+            check(decoded.feePayment == response.feePayment) {
+                "multisig response fee_payment does not match the transaction payload"
+            }
+            check(decoded.creationTimeMs == response.creationTimeMs) {
+                "multisig response creation_time_ms does not match the transaction payload"
+            }
+            check(decoded.metadata == expectedMetadata) {
+                "multisig response transaction metadata does not match the exact request"
+            }
+            check(
+                decoded.timeToLiveMs == DEFAULT_TRANSACTION_TTL_MS &&
+                    decoded.nonce == null &&
+                    decoded.admissionIntent == TransactionAdmissionIntent.ORDINARY &&
+                    decoded.attachments == null,
+            ) {
+                "multisig response transaction changed default lifetime, nonce, admission, or attachments"
+            }
+            val executableHash = NoritoJavaCodecAdapter.verifyCanonicalMultisigProposeExecutable(
+                decoded,
+                requestedMultisigAccount,
+                proposalInstructions,
+            )
+            check(hexLower(executableHash) == expectedProposalHash) {
+                "multisig response executable changed the requested proposal hash"
+            }
             return response
+        }
+
+        @JvmStatic internal fun canonicalMultisigMetadata(
+            requestPayload: Map<String, Any>,
+        ): Map<String, JsonValue> {
+            val metadata = LinkedHashMap<String, JsonValue>()
+            (requestPayload["memo"] as? String)?.let {
+                metadata["memo"] = JsonValue.string(it)
+            }
+            for (key in listOf(
+                "validation_fee_policy_version",
+                "validation_fee_instruction_index",
+                "validation_fee_transfer_entry_index",
+            )) {
+                (requestPayload[key] as? String)?.let { value ->
+                    metadata[key] = JsonValue.number(value.toLong())
+                }
+            }
+            for (key in listOf(
+                "validation_fee_policy_hash",
+                "validation_fee_hijiri_fee_quote_hash",
+            )) {
+                (requestPayload[key] as? String)?.let { value ->
+                    metadata[key] = JsonValue.string(value)
+                }
+            }
+            return metadata
         }
 
         @JvmStatic internal fun putValidationFeePolicyMetadata(
@@ -3064,8 +3615,6 @@ class HttpClientTransport(
             "native_proof_b64", "creation_time_ms",
         )
         private const val SCCP_MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024
-        private const val SCCP_MAX_DESTINATION_ARTIFACT_BYTES =
-            SCCP_MAX_NATIVE_PROOF_BYTES + 64 * 1024
 
         private fun optionalSccpArtifact(fields: Map<*, *>, field: String): String? =
             when (val value = fields[field]) {

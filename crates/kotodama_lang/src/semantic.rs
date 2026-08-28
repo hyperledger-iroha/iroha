@@ -521,6 +521,7 @@ pub struct TypedParam {
     pub ty: Type,
     pub is_state: bool,
 }
+
 /// Resolved type signature made available to a separately analyzed module.
 ///
 /// Module bodies are type checked before linking.  Consequently an imported
@@ -540,6 +541,7 @@ pub struct FunctionSignature {
     /// Source-level function kind and authorization retained for test linking.
     pub modifiers: FunctionModifiers,
 }
+
 /// Complete typed interface exposed by a deployable target to local test modules.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TestTargetEnvironment {
@@ -549,7 +551,6 @@ pub(crate) struct TestTargetEnvironment {
     pub(crate) consts: IndexMap<String, TypedExpr>,
     pub(crate) error_codes: HashMap<String, u32>,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     /// Signed adaptive-width integer in `-2^511..=2^511-1`.
     Int,
@@ -600,12 +601,201 @@ pub enum Type {
     /// Forward reference to a declared struct, resolved before typed HIR leaves analysis.
     NamedStruct(String),
 }
+impl std::fmt::Debug for Type {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&render_source_type_name(self))
+    }
+}
+impl PartialEq for Type {
+    fn eq(&self, other: &Self) -> bool {
+        let mut pending = vec![(self, other)];
+        while let Some((left, right)) = pending.pop() {
+            match (left, right) {
+                (Self::Int, Self::Int)
+                | (Self::Decimal, Self::Decimal)
+                | (Self::Quantity, Self::Quantity)
+                | (Self::Bool, Self::Bool)
+                | (Self::String, Self::String)
+                | (Self::Bytes, Self::Bytes)
+                | (Self::DataSpaceId, Self::DataSpaceId)
+                | (Self::AxtDescriptor, Self::AxtDescriptor)
+                | (Self::AssetHandle, Self::AssetHandle)
+                | (Self::ProofBlob, Self::ProofBlob)
+                | (Self::SoracloudRequest, Self::SoracloudRequest)
+                | (Self::SoracloudResponse, Self::SoracloudResponse)
+                | (Self::AccountId, Self::AccountId)
+                | (Self::AssetDefinitionId, Self::AssetDefinitionId)
+                | (Self::AssetId, Self::AssetId)
+                | (Self::NftId, Self::NftId)
+                | (Self::DomainId, Self::DomainId)
+                | (Self::Name, Self::Name)
+                | (Self::Json, Self::Json)
+                | (Self::Unit, Self::Unit) => {}
+                (Self::Secret(left), Self::Secret(right))
+                | (Self::Option(left), Self::Option(right)) => {
+                    pending.push((left, right));
+                }
+                (Self::StateMap(left_key, left_value), Self::StateMap(right_key, right_value))
+                | (Self::Result(left_key, left_value), Self::Result(right_key, right_value)) => {
+                    pending.push((left_value, right_value));
+                    pending.push((left_key, right_key));
+                }
+                (
+                    Self::List(left_element, left_capacity),
+                    Self::List(right_element, right_capacity),
+                ) => {
+                    if left_capacity != right_capacity {
+                        return false;
+                    }
+                    pending.push((left_element, right_element));
+                }
+                (Self::Tuple(left), Self::Tuple(right)) => {
+                    if left.len() != right.len() {
+                        return false;
+                    }
+                    pending.extend(left.iter().zip(right).rev());
+                }
+                (
+                    Self::Struct {
+                        name: left_name,
+                        fields: left_fields,
+                    },
+                    Self::Struct {
+                        name: right_name,
+                        fields: right_fields,
+                    },
+                ) => {
+                    if left_name != right_name || left_fields.len() != right_fields.len() {
+                        return false;
+                    }
+                    for ((left_name, left_ty), (right_name, right_ty)) in
+                        left_fields.iter().zip(right_fields.iter()).rev()
+                    {
+                        if left_name != right_name {
+                            return false;
+                        }
+                        pending.push((left_ty, right_ty));
+                    }
+                }
+                (Self::NamedStruct(left), Self::NamedStruct(right)) => {
+                    if left != right {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+impl Eq for Type {}
+impl Clone for Type {
+    fn clone(&self) -> Self {
+        enum Pending<'a> {
+            Type(&'a Type),
+            Secret,
+            StateMap,
+            Option,
+            Result,
+            List(u8),
+            Tuple(usize),
+        }
+
+        let mut pending = vec![Pending::Type(self)];
+        let mut values = Vec::new();
+        while let Some(operation) = pending.pop() {
+            match operation {
+                Pending::Type(ty) => match ty {
+                    Self::Int => values.push(Self::Int),
+                    Self::Decimal => values.push(Self::Decimal),
+                    Self::Quantity => values.push(Self::Quantity),
+                    Self::Bool => values.push(Self::Bool),
+                    Self::String => values.push(Self::String),
+                    Self::Bytes => values.push(Self::Bytes),
+                    Self::DataSpaceId => values.push(Self::DataSpaceId),
+                    Self::AxtDescriptor => values.push(Self::AxtDescriptor),
+                    Self::AssetHandle => values.push(Self::AssetHandle),
+                    Self::ProofBlob => values.push(Self::ProofBlob),
+                    Self::SoracloudRequest => values.push(Self::SoracloudRequest),
+                    Self::SoracloudResponse => values.push(Self::SoracloudResponse),
+                    Self::AccountId => values.push(Self::AccountId),
+                    Self::AssetDefinitionId => values.push(Self::AssetDefinitionId),
+                    Self::AssetId => values.push(Self::AssetId),
+                    Self::NftId => values.push(Self::NftId),
+                    Self::DomainId => values.push(Self::DomainId),
+                    Self::Name => values.push(Self::Name),
+                    Self::Json => values.push(Self::Json),
+                    Self::Unit => values.push(Self::Unit),
+                    Self::Secret(inner) => {
+                        pending.push(Pending::Secret);
+                        pending.push(Pending::Type(inner));
+                    }
+                    Self::StateMap(key, value) => {
+                        pending.push(Pending::StateMap);
+                        pending.push(Pending::Type(value));
+                        pending.push(Pending::Type(key));
+                    }
+                    Self::Option(inner) => {
+                        pending.push(Pending::Option);
+                        pending.push(Pending::Type(inner));
+                    }
+                    Self::Result(ok, error) => {
+                        pending.push(Pending::Result);
+                        pending.push(Pending::Type(error));
+                        pending.push(Pending::Type(ok));
+                    }
+                    Self::List(element, capacity) => {
+                        pending.push(Pending::List(*capacity));
+                        pending.push(Pending::Type(element));
+                    }
+                    Self::Tuple(items) => {
+                        pending.push(Pending::Tuple(items.len()));
+                        pending.extend(items.iter().rev().map(Pending::Type));
+                    }
+                    Self::Struct { name, fields } => values.push(Self::Struct {
+                        name: name.clone(),
+                        fields: Arc::clone(fields),
+                    }),
+                    Self::NamedStruct(name) => values.push(Self::NamedStruct(name.clone())),
+                },
+                Pending::Secret => {
+                    let inner = values.pop().expect("visited secret type child");
+                    values.push(Self::Secret(Box::new(inner)));
+                }
+                Pending::StateMap => {
+                    let value = values.pop().expect("visited state-map value type");
+                    let key = values.pop().expect("visited state-map key type");
+                    values.push(Self::StateMap(Box::new(key), Box::new(value)));
+                }
+                Pending::Option => {
+                    let inner = values.pop().expect("visited option type child");
+                    values.push(Self::Option(Box::new(inner)));
+                }
+                Pending::Result => {
+                    let error = values.pop().expect("visited result error type");
+                    let ok = values.pop().expect("visited result success type");
+                    values.push(Self::Result(Box::new(ok), Box::new(error)));
+                }
+                Pending::List(capacity) => {
+                    let element = values.pop().expect("visited list element type");
+                    values.push(Self::List(Box::new(element), capacity));
+                }
+                Pending::Tuple(len) => {
+                    let start = values.len().saturating_sub(len);
+                    let items = values.split_off(start);
+                    values.push(Self::Tuple(items));
+                }
+            }
+        }
+        values.pop().expect("type traversal produces one root")
+    }
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedExpr {
     pub expr: ExprKind,
     pub ty: Type,
 }
-#[derive(Debug, Clone, PartialEq)]
+
 pub enum ExprKind {
     Binary {
         op: BinaryOp,
@@ -724,6 +914,1306 @@ pub enum ExprKind {
     Bytes(Vec<u8>),
     Ident(String),
 }
+impl std::fmt::Debug for ExprKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IntLiteral(value) => formatter.debug_tuple("IntLiteral").field(value).finish(),
+            Self::DecimalLiteral { value, spelling } => formatter
+                .debug_struct("DecimalLiteral")
+                .field("value", value)
+                .field("spelling", spelling)
+                .finish(),
+            Self::Bool(value) => formatter.debug_tuple("Bool").field(value).finish(),
+            Self::String(value) => formatter.debug_tuple("String").field(value).finish(),
+            Self::Bytes(value) => formatter.debug_tuple("Bytes").field(value).finish(),
+            Self::Ident(value) => formatter.debug_tuple("Ident").field(value).finish(),
+            other => formatter.write_str(match other {
+                Self::Binary { .. } => "Binary(..)",
+                Self::Unary { .. } => "Unary(..)",
+                Self::NumericCast { .. } => "NumericCast(..)",
+                Self::NumericTryCast { .. } => "NumericTryCast(..)",
+                Self::Conditional { .. } => "Conditional(..)",
+                Self::If { .. } => "If(..)",
+                Self::IfLet { .. } => "IfLet(..)",
+                Self::Match { .. } => "Match(..)",
+                Self::OptionSome { .. } => "OptionSome(..)",
+                Self::OptionNone => "OptionNone",
+                Self::ResultOk { .. } => "ResultOk(..)",
+                Self::ResultErr { .. } => "ResultErr(..)",
+                Self::Propagate { .. } => "Propagate(..)",
+                Self::Call { .. } => "Call(..)",
+                Self::NamedCall { .. } => "NamedCall(..)",
+                Self::StructLiteral { .. } => "StructLiteral(..)",
+                Self::Tuple(_) => "Tuple(..)",
+                Self::List(_) => "List(..)",
+                Self::ListComprehension { .. } => "ListComprehension(..)",
+                Self::JsonObject(_) => "JsonObject(..)",
+                Self::JsonArray(_) => "JsonArray(..)",
+                Self::Member { .. } => "Member(..)",
+                Self::Index { .. } => "Index(..)",
+                Self::IntLiteral(_)
+                | Self::DecimalLiteral { .. }
+                | Self::Bool(_)
+                | Self::String(_)
+                | Self::Bytes(_)
+                | Self::Ident(_) => unreachable!("scalar expressions were rendered above"),
+            }),
+        }
+    }
+}
+
+enum TypedEq<'a> {
+    Type(&'a Type, &'a Type),
+    Expr(&'a TypedExpr, &'a TypedExpr),
+    Kind(&'a ExprKind, &'a ExprKind),
+    Statement(&'a TypedStatement, &'a TypedStatement),
+    Block(&'a TypedBlock, &'a TypedBlock),
+    MatchArm(&'a TypedMatchArm, &'a TypedMatchArm),
+}
+
+#[allow(clippy::too_many_lines)]
+fn typed_semantic_eq(initial: TypedEq<'_>) -> bool {
+    let mut pending = vec![initial];
+    while let Some(comparison) = pending.pop() {
+        match comparison {
+            TypedEq::Type(left, right) => {
+                if left != right {
+                    return false;
+                }
+            }
+            TypedEq::Expr(left, right) => {
+                pending.push(TypedEq::Type(&left.ty, &right.ty));
+                pending.push(TypedEq::Kind(&left.expr, &right.expr));
+            }
+            TypedEq::Kind(left, right) => match (left, right) {
+                (
+                    ExprKind::Binary {
+                        op: left_op,
+                        left,
+                        right,
+                    },
+                    ExprKind::Binary {
+                        op: right_op,
+                        left: other_left,
+                        right: other_right,
+                    },
+                ) => {
+                    if left_op != right_op {
+                        return false;
+                    }
+                    pending.push(TypedEq::Expr(right, other_right));
+                    pending.push(TypedEq::Expr(left, other_left));
+                }
+                (
+                    ExprKind::Unary {
+                        op: left_op,
+                        expr: left_expr,
+                    },
+                    ExprKind::Unary {
+                        op: right_op,
+                        expr: right_expr,
+                    },
+                ) => {
+                    if left_op != right_op {
+                        return false;
+                    }
+                    pending.push(TypedEq::Expr(left_expr, right_expr));
+                }
+                (ExprKind::NumericCast { expr: left }, ExprKind::NumericCast { expr: right })
+                | (
+                    ExprKind::NumericTryCast { expr: left },
+                    ExprKind::NumericTryCast { expr: right },
+                ) => pending.push(TypedEq::Expr(left, right)),
+                (
+                    ExprKind::Conditional {
+                        cond: left_cond,
+                        then_expr: left_then,
+                        else_expr: left_else,
+                    },
+                    ExprKind::Conditional {
+                        cond: right_cond,
+                        then_expr: right_then,
+                        else_expr: right_else,
+                    },
+                ) => {
+                    pending.push(TypedEq::Expr(left_else, right_else));
+                    pending.push(TypedEq::Expr(left_then, right_then));
+                    pending.push(TypedEq::Expr(left_cond, right_cond));
+                }
+                (
+                    ExprKind::If {
+                        condition: left_condition,
+                        then_branch: left_then,
+                        else_branch: left_else,
+                    },
+                    ExprKind::If {
+                        condition: right_condition,
+                        then_branch: right_then,
+                        else_branch: right_else,
+                    },
+                ) => {
+                    pending.push(TypedEq::Block(left_else, right_else));
+                    pending.push(TypedEq::Block(left_then, right_then));
+                    pending.push(TypedEq::Expr(left_condition, right_condition));
+                }
+                (
+                    ExprKind::IfLet {
+                        pattern: left_pattern,
+                        value: left_value,
+                        then_branch: left_then,
+                        else_branch: left_else,
+                    },
+                    ExprKind::IfLet {
+                        pattern: right_pattern,
+                        value: right_value,
+                        then_branch: right_then,
+                        else_branch: right_else,
+                    },
+                ) => {
+                    if left_pattern != right_pattern {
+                        return false;
+                    }
+                    pending.push(TypedEq::Block(left_else, right_else));
+                    pending.push(TypedEq::Block(left_then, right_then));
+                    pending.push(TypedEq::Expr(left_value, right_value));
+                }
+                (
+                    ExprKind::Match {
+                        value: left_value,
+                        arms: left_arms,
+                    },
+                    ExprKind::Match {
+                        value: right_value,
+                        arms: right_arms,
+                    },
+                ) => {
+                    if left_arms.len() != right_arms.len() {
+                        return false;
+                    }
+                    pending.extend(
+                        left_arms
+                            .iter()
+                            .zip(right_arms)
+                            .rev()
+                            .map(|(left, right)| TypedEq::MatchArm(left, right)),
+                    );
+                    pending.push(TypedEq::Expr(left_value, right_value));
+                }
+                (ExprKind::OptionSome { value: left }, ExprKind::OptionSome { value: right })
+                | (ExprKind::ResultOk { value: left }, ExprKind::ResultOk { value: right })
+                | (ExprKind::ResultErr { error: left }, ExprKind::ResultErr { error: right })
+                | (ExprKind::Propagate { value: left }, ExprKind::Propagate { value: right }) => {
+                    pending.push(TypedEq::Expr(left, right))
+                }
+                (ExprKind::OptionNone, ExprKind::OptionNone) => {}
+                (
+                    ExprKind::Call {
+                        name: left_name,
+                        args: left_args,
+                    },
+                    ExprKind::Call {
+                        name: right_name,
+                        args: right_args,
+                    },
+                ) => {
+                    if left_name != right_name || left_args.len() != right_args.len() {
+                        return false;
+                    }
+                    pending.extend(
+                        left_args
+                            .iter()
+                            .zip(right_args)
+                            .rev()
+                            .map(|(left, right)| TypedEq::Expr(left, right)),
+                    );
+                }
+                (
+                    ExprKind::NamedCall {
+                        name: left_name,
+                        args: left_args,
+                        evaluation_order: left_order,
+                    },
+                    ExprKind::NamedCall {
+                        name: right_name,
+                        args: right_args,
+                        evaluation_order: right_order,
+                    },
+                ) => {
+                    if left_name != right_name
+                        || left_order != right_order
+                        || left_args.len() != right_args.len()
+                    {
+                        return false;
+                    }
+                    pending.extend(
+                        left_args
+                            .iter()
+                            .zip(right_args)
+                            .rev()
+                            .map(|(left, right)| TypedEq::Expr(left, right)),
+                    );
+                }
+                (
+                    ExprKind::StructLiteral {
+                        name: left_name,
+                        fields: left_fields,
+                    },
+                    ExprKind::StructLiteral {
+                        name: right_name,
+                        fields: right_fields,
+                    },
+                ) => {
+                    if left_name != right_name || left_fields.len() != right_fields.len() {
+                        return false;
+                    }
+                    for ((left_name, left), (right_name, right)) in
+                        left_fields.iter().zip(right_fields).rev()
+                    {
+                        if left_name != right_name {
+                            return false;
+                        }
+                        pending.push(TypedEq::Expr(left, right));
+                    }
+                }
+                (ExprKind::Tuple(left), ExprKind::Tuple(right))
+                | (ExprKind::List(left), ExprKind::List(right))
+                | (ExprKind::JsonArray(left), ExprKind::JsonArray(right)) => {
+                    if left.len() != right.len() {
+                        return false;
+                    }
+                    pending.extend(
+                        left.iter()
+                            .zip(right)
+                            .rev()
+                            .map(|(left, right)| TypedEq::Expr(left, right)),
+                    );
+                }
+                (
+                    ExprKind::ListComprehension {
+                        expression: left_expression,
+                        item: left_item,
+                        source: left_source,
+                        condition: left_condition,
+                    },
+                    ExprKind::ListComprehension {
+                        expression: right_expression,
+                        item: right_item,
+                        source: right_source,
+                        condition: right_condition,
+                    },
+                ) => {
+                    if left_item != right_item
+                        || left_condition.is_some() != right_condition.is_some()
+                    {
+                        return false;
+                    }
+                    if let (Some(left), Some(right)) = (left_condition, right_condition) {
+                        pending.push(TypedEq::Expr(left, right));
+                    }
+                    pending.push(TypedEq::Expr(left_source, right_source));
+                    pending.push(TypedEq::Expr(left_expression, right_expression));
+                }
+                (ExprKind::JsonObject(left), ExprKind::JsonObject(right)) => {
+                    if left.len() != right.len() {
+                        return false;
+                    }
+                    for ((left_name, left), (right_name, right)) in left.iter().zip(right).rev() {
+                        if left_name != right_name {
+                            return false;
+                        }
+                        pending.push(TypedEq::Expr(left, right));
+                    }
+                }
+                (
+                    ExprKind::Member {
+                        object: left_object,
+                        field: left_field,
+                    },
+                    ExprKind::Member {
+                        object: right_object,
+                        field: right_field,
+                    },
+                ) => {
+                    if left_field != right_field {
+                        return false;
+                    }
+                    pending.push(TypedEq::Expr(left_object, right_object));
+                }
+                (
+                    ExprKind::Index {
+                        target: left_target,
+                        index: left_index,
+                    },
+                    ExprKind::Index {
+                        target: right_target,
+                        index: right_index,
+                    },
+                ) => {
+                    pending.push(TypedEq::Expr(left_index, right_index));
+                    pending.push(TypedEq::Expr(left_target, right_target));
+                }
+                (ExprKind::IntLiteral(left), ExprKind::IntLiteral(right)) => {
+                    if left != right {
+                        return false;
+                    }
+                }
+                (
+                    ExprKind::DecimalLiteral {
+                        value: left_value,
+                        spelling: left_spelling,
+                    },
+                    ExprKind::DecimalLiteral {
+                        value: right_value,
+                        spelling: right_spelling,
+                    },
+                ) => {
+                    if left_value != right_value || left_spelling != right_spelling {
+                        return false;
+                    }
+                }
+                (ExprKind::Bool(left), ExprKind::Bool(right)) => {
+                    if left != right {
+                        return false;
+                    }
+                }
+                (ExprKind::String(left), ExprKind::String(right))
+                | (ExprKind::Ident(left), ExprKind::Ident(right)) => {
+                    if left != right {
+                        return false;
+                    }
+                }
+                (ExprKind::Bytes(left), ExprKind::Bytes(right)) => {
+                    if left != right {
+                        return false;
+                    }
+                }
+                _ => return false,
+            },
+            TypedEq::Statement(left, right) => match (left, right) {
+                (
+                    TypedStatement::Let {
+                        name: left_name,
+                        value: left_value,
+                    },
+                    TypedStatement::Let {
+                        name: right_name,
+                        value: right_value,
+                    },
+                ) => {
+                    if left_name != right_name {
+                        return false;
+                    }
+                    pending.push(TypedEq::Expr(left_value, right_value));
+                }
+                (TypedStatement::Expr(left), TypedStatement::Expr(right)) => {
+                    pending.push(TypedEq::Expr(left, right));
+                }
+                (TypedStatement::Return(left), TypedStatement::Return(right)) => {
+                    match (left, right) {
+                        (Some(left), Some(right)) => pending.push(TypedEq::Expr(left, right)),
+                        (None, None) => {}
+                        _ => return false,
+                    }
+                }
+                (TypedStatement::Break, TypedStatement::Break)
+                | (TypedStatement::Continue, TypedStatement::Continue) => {}
+                (
+                    TypedStatement::If {
+                        cond: left_cond,
+                        then_branch: left_then,
+                        else_branch: left_else,
+                    },
+                    TypedStatement::If {
+                        cond: right_cond,
+                        then_branch: right_then,
+                        else_branch: right_else,
+                    },
+                ) => {
+                    match (left_else, right_else) {
+                        (Some(left), Some(right)) => pending.push(TypedEq::Block(left, right)),
+                        (None, None) => {}
+                        _ => return false,
+                    }
+                    pending.push(TypedEq::Block(left_then, right_then));
+                    pending.push(TypedEq::Expr(left_cond, right_cond));
+                }
+                (
+                    TypedStatement::IfLet {
+                        pattern: left_pattern,
+                        value: left_value,
+                        then_branch: left_then,
+                        else_branch: left_else,
+                    },
+                    TypedStatement::IfLet {
+                        pattern: right_pattern,
+                        value: right_value,
+                        then_branch: right_then,
+                        else_branch: right_else,
+                    },
+                ) => {
+                    if left_pattern != right_pattern {
+                        return false;
+                    }
+                    match (left_else, right_else) {
+                        (Some(left), Some(right)) => pending.push(TypedEq::Block(left, right)),
+                        (None, None) => {}
+                        _ => return false,
+                    }
+                    pending.push(TypedEq::Block(left_then, right_then));
+                    pending.push(TypedEq::Expr(left_value, right_value));
+                }
+                (
+                    TypedStatement::While {
+                        cond: left_cond,
+                        body: left_body,
+                    },
+                    TypedStatement::While {
+                        cond: right_cond,
+                        body: right_body,
+                    },
+                ) => {
+                    pending.push(TypedEq::Block(left_body, right_body));
+                    pending.push(TypedEq::Expr(left_cond, right_cond));
+                }
+                (
+                    TypedStatement::For {
+                        line: left_line,
+                        init: left_init,
+                        cond: left_cond,
+                        step: left_step,
+                        body: left_body,
+                    },
+                    TypedStatement::For {
+                        line: right_line,
+                        init: right_init,
+                        cond: right_cond,
+                        step: right_step,
+                        body: right_body,
+                    },
+                ) => {
+                    if left_line != right_line
+                        || left_init.is_some() != right_init.is_some()
+                        || left_cond.is_some() != right_cond.is_some()
+                        || left_step.is_some() != right_step.is_some()
+                    {
+                        return false;
+                    }
+                    pending.push(TypedEq::Block(left_body, right_body));
+                    if let (Some(left), Some(right)) = (left_step, right_step) {
+                        pending.push(TypedEq::Statement(left, right));
+                    }
+                    if let (Some(left), Some(right)) = (left_cond, right_cond) {
+                        pending.push(TypedEq::Expr(left, right));
+                    }
+                    if let (Some(left), Some(right)) = (left_init, right_init) {
+                        pending.push(TypedEq::Statement(left, right));
+                    }
+                }
+                (
+                    TypedStatement::ForEachMap {
+                        key: left_key,
+                        value: left_value,
+                        map: left_map,
+                        body: left_body,
+                        start: left_start,
+                        bound: left_bound,
+                        bound_kind: left_bound_kind,
+                    },
+                    TypedStatement::ForEachMap {
+                        key: right_key,
+                        value: right_value,
+                        map: right_map,
+                        body: right_body,
+                        start: right_start,
+                        bound: right_bound,
+                        bound_kind: right_bound_kind,
+                    },
+                ) => {
+                    if left_key != right_key
+                        || left_value != right_value
+                        || left_start != right_start
+                        || left_bound != right_bound
+                        || left_bound_kind != right_bound_kind
+                    {
+                        return false;
+                    }
+                    pending.push(TypedEq::Block(left_body, right_body));
+                    pending.push(TypedEq::Expr(left_map, right_map));
+                }
+                (
+                    TypedStatement::MapSet {
+                        map: left_map,
+                        key: left_key,
+                        value: left_value,
+                    },
+                    TypedStatement::MapSet {
+                        map: right_map,
+                        key: right_key,
+                        value: right_value,
+                    },
+                ) => {
+                    pending.push(TypedEq::Expr(left_value, right_value));
+                    pending.push(TypedEq::Expr(left_key, right_key));
+                    pending.push(TypedEq::Expr(left_map, right_map));
+                }
+                _ => return false,
+            },
+            TypedEq::Block(left, right) => {
+                if left.statements.len() != right.statements.len() {
+                    return false;
+                }
+                match (&left.tail, &right.tail) {
+                    (Some(left), Some(right)) => pending.push(TypedEq::Expr(left, right)),
+                    (None, None) => {}
+                    _ => return false,
+                }
+                pending.extend(
+                    left.statements
+                        .iter()
+                        .zip(&right.statements)
+                        .rev()
+                        .map(|(left, right)| TypedEq::Statement(left, right)),
+                );
+            }
+            TypedEq::MatchArm(left, right) => {
+                if left.pattern != right.pattern {
+                    return false;
+                }
+                pending.push(TypedEq::Block(&left.body, &right.body));
+            }
+        }
+    }
+    true
+}
+
+impl PartialEq for ExprKind {
+    fn eq(&self, other: &Self) -> bool {
+        typed_semantic_eq(TypedEq::Kind(self, other))
+    }
+}
+
+enum TypedCloneTask<'a> {
+    Expr(&'a TypedExpr),
+    Kind(&'a ExprKind),
+    Statement(&'a TypedStatement),
+    Block(&'a TypedBlock),
+    MatchArm(&'a TypedMatchArm),
+    BuildExpr(&'a Type),
+    BuildKind(TypedKindClone<'a>),
+    BuildStatement(TypedStatementClone<'a>),
+    BuildBlock {
+        statement_count: usize,
+        has_tail: bool,
+    },
+    BuildMatchArm(&'a TypedSumPattern),
+}
+
+enum TypedKindClone<'a> {
+    Binary(BinaryOp),
+    Unary(UnaryOp),
+    NumericCast,
+    NumericTryCast,
+    Conditional,
+    If,
+    IfLet(&'a TypedSumPattern),
+    Match(usize),
+    OptionSome,
+    ResultOk,
+    ResultErr,
+    Propagate,
+    Call(&'a str, usize),
+    NamedCall(&'a str, usize, &'a [usize]),
+    StructLiteral(&'a str, &'a [(String, TypedExpr)]),
+    Tuple(usize),
+    List(usize),
+    ListComprehension { item: &'a str, has_condition: bool },
+    JsonObject(&'a [(String, TypedExpr)]),
+    JsonArray(usize),
+    Member(&'a str),
+    Index,
+}
+
+enum TypedStatementClone<'a> {
+    Let(&'a str),
+    Expr,
+    Return(bool),
+    If(bool),
+    IfLet(&'a TypedSumPattern, bool),
+    While,
+    For {
+        line: usize,
+        has_init: bool,
+        has_cond: bool,
+        has_step: bool,
+    },
+    ForEachMap {
+        key: &'a str,
+        value: &'a Option<String>,
+        start: u64,
+        bound: Option<usize>,
+        bound_kind: StateMapIterationBoundKind,
+    },
+    MapSet,
+}
+
+enum TypedCloneValue {
+    Expr(TypedExpr),
+    Kind(ExprKind),
+    Statement(TypedStatement),
+    Block(TypedBlock),
+    MatchArm(TypedMatchArm),
+}
+
+fn pop_cloned_expr(values: &mut Vec<TypedCloneValue>) -> TypedExpr {
+    match values.pop().expect("typed clone expression result") {
+        TypedCloneValue::Expr(value) => value,
+        _ => unreachable!("typed clone traversal preserves expression result kinds"),
+    }
+}
+
+fn pop_cloned_kind(values: &mut Vec<TypedCloneValue>) -> ExprKind {
+    match values.pop().expect("typed clone expression-kind result") {
+        TypedCloneValue::Kind(value) => value,
+        _ => unreachable!("typed clone traversal preserves expression-kind result kinds"),
+    }
+}
+
+fn pop_cloned_statement(values: &mut Vec<TypedCloneValue>) -> TypedStatement {
+    match values.pop().expect("typed clone statement result") {
+        TypedCloneValue::Statement(value) => value,
+        _ => unreachable!("typed clone traversal preserves statement result kinds"),
+    }
+}
+
+fn pop_cloned_block(values: &mut Vec<TypedCloneValue>) -> TypedBlock {
+    match values.pop().expect("typed clone block result") {
+        TypedCloneValue::Block(value) => value,
+        _ => unreachable!("typed clone traversal preserves block result kinds"),
+    }
+}
+
+fn pop_cloned_exprs(values: &mut Vec<TypedCloneValue>, len: usize) -> Vec<TypedExpr> {
+    let start = values
+        .len()
+        .checked_sub(len)
+        .expect("typed clone visited every expression child");
+    values
+        .split_off(start)
+        .into_iter()
+        .map(|value| match value {
+            TypedCloneValue::Expr(value) => value,
+            _ => unreachable!("typed clone traversal preserves expression child kinds"),
+        })
+        .collect()
+}
+
+fn pop_cloned_statements(values: &mut Vec<TypedCloneValue>, len: usize) -> Vec<TypedStatement> {
+    let start = values
+        .len()
+        .checked_sub(len)
+        .expect("typed clone visited every statement child");
+    values
+        .split_off(start)
+        .into_iter()
+        .map(|value| match value {
+            TypedCloneValue::Statement(value) => value,
+            _ => unreachable!("typed clone traversal preserves statement child kinds"),
+        })
+        .collect()
+}
+
+fn pop_cloned_match_arms(values: &mut Vec<TypedCloneValue>, len: usize) -> Vec<TypedMatchArm> {
+    let start = values
+        .len()
+        .checked_sub(len)
+        .expect("typed clone visited every match-arm child");
+    values
+        .split_off(start)
+        .into_iter()
+        .map(|value| match value {
+            TypedCloneValue::MatchArm(value) => value,
+            _ => unreachable!("typed clone traversal preserves match-arm child kinds"),
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_lines)]
+fn clone_typed_semantic(initial: TypedCloneTask<'_>) -> TypedCloneValue {
+    let mut pending = vec![initial];
+    let mut values = Vec::new();
+    while let Some(operation) = pending.pop() {
+        match operation {
+            TypedCloneTask::Expr(expr) => {
+                pending.push(TypedCloneTask::BuildExpr(&expr.ty));
+                pending.push(TypedCloneTask::Kind(&expr.expr));
+            }
+            TypedCloneTask::Kind(kind) => match kind {
+                ExprKind::Binary { op, left, right } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::Binary(*op)));
+                    pending.push(TypedCloneTask::Expr(right));
+                    pending.push(TypedCloneTask::Expr(left));
+                }
+                ExprKind::Unary { op, expr } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::Unary(*op)));
+                    pending.push(TypedCloneTask::Expr(expr));
+                }
+                ExprKind::NumericCast { expr } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::NumericCast));
+                    pending.push(TypedCloneTask::Expr(expr));
+                }
+                ExprKind::NumericTryCast { expr } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::NumericTryCast));
+                    pending.push(TypedCloneTask::Expr(expr));
+                }
+                ExprKind::Conditional {
+                    cond,
+                    then_expr,
+                    else_expr,
+                } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::Conditional));
+                    pending.push(TypedCloneTask::Expr(else_expr));
+                    pending.push(TypedCloneTask::Expr(then_expr));
+                    pending.push(TypedCloneTask::Expr(cond));
+                }
+                ExprKind::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::If));
+                    pending.push(TypedCloneTask::Block(else_branch));
+                    pending.push(TypedCloneTask::Block(then_branch));
+                    pending.push(TypedCloneTask::Expr(condition));
+                }
+                ExprKind::IfLet {
+                    pattern,
+                    value,
+                    then_branch,
+                    else_branch,
+                } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::IfLet(pattern)));
+                    pending.push(TypedCloneTask::Block(else_branch));
+                    pending.push(TypedCloneTask::Block(then_branch));
+                    pending.push(TypedCloneTask::Expr(value));
+                }
+                ExprKind::Match { value, arms } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::Match(arms.len())));
+                    for arm in arms.iter().rev() {
+                        pending.push(TypedCloneTask::MatchArm(arm));
+                    }
+                    pending.push(TypedCloneTask::Expr(value));
+                }
+                ExprKind::OptionSome { value } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::OptionSome));
+                    pending.push(TypedCloneTask::Expr(value));
+                }
+                ExprKind::OptionNone => values.push(TypedCloneValue::Kind(ExprKind::OptionNone)),
+                ExprKind::ResultOk { value } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::ResultOk));
+                    pending.push(TypedCloneTask::Expr(value));
+                }
+                ExprKind::ResultErr { error } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::ResultErr));
+                    pending.push(TypedCloneTask::Expr(error));
+                }
+                ExprKind::Propagate { value } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::Propagate));
+                    pending.push(TypedCloneTask::Expr(value));
+                }
+                ExprKind::Call { name, args } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::Call(
+                        name,
+                        args.len(),
+                    )));
+                    pending.extend(args.iter().rev().map(TypedCloneTask::Expr));
+                }
+                ExprKind::NamedCall {
+                    name,
+                    args,
+                    evaluation_order,
+                } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::NamedCall(
+                        name,
+                        args.len(),
+                        evaluation_order,
+                    )));
+                    pending.extend(args.iter().rev().map(TypedCloneTask::Expr));
+                }
+                ExprKind::StructLiteral { name, fields } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::StructLiteral(
+                        name, fields,
+                    )));
+                    pending.extend(
+                        fields
+                            .iter()
+                            .rev()
+                            .map(|(_, expr)| TypedCloneTask::Expr(expr)),
+                    );
+                }
+                ExprKind::Tuple(items) => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::Tuple(
+                        items.len(),
+                    )));
+                    pending.extend(items.iter().rev().map(TypedCloneTask::Expr));
+                }
+                ExprKind::List(items) => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::List(items.len())));
+                    pending.extend(items.iter().rev().map(TypedCloneTask::Expr));
+                }
+                ExprKind::ListComprehension {
+                    expression,
+                    item,
+                    source,
+                    condition,
+                } => {
+                    pending.push(TypedCloneTask::BuildKind(
+                        TypedKindClone::ListComprehension {
+                            item,
+                            has_condition: condition.is_some(),
+                        },
+                    ));
+                    if let Some(condition) = condition {
+                        pending.push(TypedCloneTask::Expr(condition));
+                    }
+                    pending.push(TypedCloneTask::Expr(source));
+                    pending.push(TypedCloneTask::Expr(expression));
+                }
+                ExprKind::JsonObject(entries) => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::JsonObject(
+                        entries,
+                    )));
+                    pending.extend(
+                        entries
+                            .iter()
+                            .rev()
+                            .map(|(_, expr)| TypedCloneTask::Expr(expr)),
+                    );
+                }
+                ExprKind::JsonArray(items) => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::JsonArray(
+                        items.len(),
+                    )));
+                    pending.extend(items.iter().rev().map(TypedCloneTask::Expr));
+                }
+                ExprKind::Member { object, field } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::Member(field)));
+                    pending.push(TypedCloneTask::Expr(object));
+                }
+                ExprKind::Index { target, index } => {
+                    pending.push(TypedCloneTask::BuildKind(TypedKindClone::Index));
+                    pending.push(TypedCloneTask::Expr(index));
+                    pending.push(TypedCloneTask::Expr(target));
+                }
+                ExprKind::IntLiteral(value) => {
+                    values.push(TypedCloneValue::Kind(ExprKind::IntLiteral(value.clone())));
+                }
+                ExprKind::DecimalLiteral { value, spelling } => {
+                    values.push(TypedCloneValue::Kind(ExprKind::DecimalLiteral {
+                        value: value.clone(),
+                        spelling: spelling.clone(),
+                    }));
+                }
+                ExprKind::Bool(value) => {
+                    values.push(TypedCloneValue::Kind(ExprKind::Bool(*value)));
+                }
+                ExprKind::String(value) => {
+                    values.push(TypedCloneValue::Kind(ExprKind::String(value.clone())));
+                }
+                ExprKind::Bytes(value) => {
+                    values.push(TypedCloneValue::Kind(ExprKind::Bytes(value.clone())));
+                }
+                ExprKind::Ident(value) => {
+                    values.push(TypedCloneValue::Kind(ExprKind::Ident(value.clone())));
+                }
+            },
+            TypedCloneTask::Statement(statement) => match statement {
+                TypedStatement::Let { name, value } => {
+                    pending.push(TypedCloneTask::BuildStatement(TypedStatementClone::Let(
+                        name,
+                    )));
+                    pending.push(TypedCloneTask::Expr(value));
+                }
+                TypedStatement::Expr(expr) => {
+                    pending.push(TypedCloneTask::BuildStatement(TypedStatementClone::Expr));
+                    pending.push(TypedCloneTask::Expr(expr));
+                }
+                TypedStatement::Return(value) => {
+                    pending.push(TypedCloneTask::BuildStatement(TypedStatementClone::Return(
+                        value.is_some(),
+                    )));
+                    if let Some(value) = value {
+                        pending.push(TypedCloneTask::Expr(value));
+                    }
+                }
+                TypedStatement::Break => {
+                    values.push(TypedCloneValue::Statement(TypedStatement::Break));
+                }
+                TypedStatement::Continue => {
+                    values.push(TypedCloneValue::Statement(TypedStatement::Continue));
+                }
+                TypedStatement::If {
+                    cond,
+                    then_branch,
+                    else_branch,
+                } => {
+                    pending.push(TypedCloneTask::BuildStatement(TypedStatementClone::If(
+                        else_branch.is_some(),
+                    )));
+                    if let Some(else_branch) = else_branch {
+                        pending.push(TypedCloneTask::Block(else_branch));
+                    }
+                    pending.push(TypedCloneTask::Block(then_branch));
+                    pending.push(TypedCloneTask::Expr(cond));
+                }
+                TypedStatement::IfLet {
+                    pattern,
+                    value,
+                    then_branch,
+                    else_branch,
+                } => {
+                    pending.push(TypedCloneTask::BuildStatement(TypedStatementClone::IfLet(
+                        pattern,
+                        else_branch.is_some(),
+                    )));
+                    if let Some(else_branch) = else_branch {
+                        pending.push(TypedCloneTask::Block(else_branch));
+                    }
+                    pending.push(TypedCloneTask::Block(then_branch));
+                    pending.push(TypedCloneTask::Expr(value));
+                }
+                TypedStatement::While { cond, body } => {
+                    pending.push(TypedCloneTask::BuildStatement(TypedStatementClone::While));
+                    pending.push(TypedCloneTask::Block(body));
+                    pending.push(TypedCloneTask::Expr(cond));
+                }
+                TypedStatement::For {
+                    line,
+                    init,
+                    cond,
+                    step,
+                    body,
+                } => {
+                    pending.push(TypedCloneTask::BuildStatement(TypedStatementClone::For {
+                        line: *line,
+                        has_init: init.is_some(),
+                        has_cond: cond.is_some(),
+                        has_step: step.is_some(),
+                    }));
+                    pending.push(TypedCloneTask::Block(body));
+                    if let Some(step) = step {
+                        pending.push(TypedCloneTask::Statement(step));
+                    }
+                    if let Some(cond) = cond {
+                        pending.push(TypedCloneTask::Expr(cond));
+                    }
+                    if let Some(init) = init {
+                        pending.push(TypedCloneTask::Statement(init));
+                    }
+                }
+                TypedStatement::ForEachMap {
+                    key,
+                    value,
+                    map,
+                    body,
+                    start,
+                    bound,
+                    bound_kind,
+                } => {
+                    pending.push(TypedCloneTask::BuildStatement(
+                        TypedStatementClone::ForEachMap {
+                            key,
+                            value,
+                            start: *start,
+                            bound: *bound,
+                            bound_kind: *bound_kind,
+                        },
+                    ));
+                    pending.push(TypedCloneTask::Block(body));
+                    pending.push(TypedCloneTask::Expr(map));
+                }
+                TypedStatement::MapSet { map, key, value } => {
+                    pending.push(TypedCloneTask::BuildStatement(TypedStatementClone::MapSet));
+                    pending.push(TypedCloneTask::Expr(value));
+                    pending.push(TypedCloneTask::Expr(key));
+                    pending.push(TypedCloneTask::Expr(map));
+                }
+            },
+            TypedCloneTask::Block(block) => {
+                pending.push(TypedCloneTask::BuildBlock {
+                    statement_count: block.statements.len(),
+                    has_tail: block.tail.is_some(),
+                });
+                if let Some(tail) = &block.tail {
+                    pending.push(TypedCloneTask::Expr(tail));
+                }
+                pending.extend(block.statements.iter().rev().map(TypedCloneTask::Statement));
+            }
+            TypedCloneTask::MatchArm(arm) => {
+                pending.push(TypedCloneTask::BuildMatchArm(&arm.pattern));
+                pending.push(TypedCloneTask::Block(&arm.body));
+            }
+            TypedCloneTask::BuildExpr(ty) => {
+                let expr = pop_cloned_kind(&mut values);
+                values.push(TypedCloneValue::Expr(TypedExpr {
+                    expr,
+                    ty: ty.clone(),
+                }));
+            }
+            TypedCloneTask::BuildKind(kind) => {
+                let kind = match kind {
+                    TypedKindClone::Binary(op) => {
+                        let right = pop_cloned_expr(&mut values);
+                        let left = pop_cloned_expr(&mut values);
+                        ExprKind::Binary {
+                            op,
+                            left: Box::new(left),
+                            right: Box::new(right),
+                        }
+                    }
+                    TypedKindClone::Unary(op) => ExprKind::Unary {
+                        op,
+                        expr: Box::new(pop_cloned_expr(&mut values)),
+                    },
+                    TypedKindClone::NumericCast => ExprKind::NumericCast {
+                        expr: Box::new(pop_cloned_expr(&mut values)),
+                    },
+                    TypedKindClone::NumericTryCast => ExprKind::NumericTryCast {
+                        expr: Box::new(pop_cloned_expr(&mut values)),
+                    },
+                    TypedKindClone::Conditional => {
+                        let else_expr = pop_cloned_expr(&mut values);
+                        let then_expr = pop_cloned_expr(&mut values);
+                        let cond = pop_cloned_expr(&mut values);
+                        ExprKind::Conditional {
+                            cond: Box::new(cond),
+                            then_expr: Box::new(then_expr),
+                            else_expr: Box::new(else_expr),
+                        }
+                    }
+                    TypedKindClone::If => {
+                        let else_branch = pop_cloned_block(&mut values);
+                        let then_branch = pop_cloned_block(&mut values);
+                        let condition = pop_cloned_expr(&mut values);
+                        ExprKind::If {
+                            condition: Box::new(condition),
+                            then_branch,
+                            else_branch,
+                        }
+                    }
+                    TypedKindClone::IfLet(pattern) => {
+                        let else_branch = pop_cloned_block(&mut values);
+                        let then_branch = pop_cloned_block(&mut values);
+                        let value = pop_cloned_expr(&mut values);
+                        ExprKind::IfLet {
+                            pattern: pattern.clone(),
+                            value: Box::new(value),
+                            then_branch,
+                            else_branch,
+                        }
+                    }
+                    TypedKindClone::Match(arm_count) => {
+                        let arms = pop_cloned_match_arms(&mut values, arm_count);
+                        let value = pop_cloned_expr(&mut values);
+                        ExprKind::Match {
+                            value: Box::new(value),
+                            arms,
+                        }
+                    }
+                    TypedKindClone::OptionSome => ExprKind::OptionSome {
+                        value: Box::new(pop_cloned_expr(&mut values)),
+                    },
+                    TypedKindClone::ResultOk => ExprKind::ResultOk {
+                        value: Box::new(pop_cloned_expr(&mut values)),
+                    },
+                    TypedKindClone::ResultErr => ExprKind::ResultErr {
+                        error: Box::new(pop_cloned_expr(&mut values)),
+                    },
+                    TypedKindClone::Propagate => ExprKind::Propagate {
+                        value: Box::new(pop_cloned_expr(&mut values)),
+                    },
+                    TypedKindClone::Call(name, len) => ExprKind::Call {
+                        name: name.to_owned(),
+                        args: pop_cloned_exprs(&mut values, len),
+                    },
+                    TypedKindClone::NamedCall(name, len, evaluation_order) => ExprKind::NamedCall {
+                        name: name.to_owned(),
+                        args: pop_cloned_exprs(&mut values, len),
+                        evaluation_order: evaluation_order.to_vec(),
+                    },
+                    TypedKindClone::StructLiteral(name, fields) => {
+                        let expressions = pop_cloned_exprs(&mut values, fields.len());
+                        ExprKind::StructLiteral {
+                            name: name.to_owned(),
+                            fields: fields
+                                .iter()
+                                .zip(expressions)
+                                .map(|((name, _), expr)| (name.clone(), expr))
+                                .collect(),
+                        }
+                    }
+                    TypedKindClone::Tuple(len) => {
+                        ExprKind::Tuple(pop_cloned_exprs(&mut values, len))
+                    }
+                    TypedKindClone::List(len) => ExprKind::List(pop_cloned_exprs(&mut values, len)),
+                    TypedKindClone::ListComprehension {
+                        item,
+                        has_condition,
+                    } => {
+                        let condition =
+                            has_condition.then(|| Box::new(pop_cloned_expr(&mut values)));
+                        let source = pop_cloned_expr(&mut values);
+                        let expression = pop_cloned_expr(&mut values);
+                        ExprKind::ListComprehension {
+                            expression: Box::new(expression),
+                            item: item.to_owned(),
+                            source: Box::new(source),
+                            condition,
+                        }
+                    }
+                    TypedKindClone::JsonObject(entries) => {
+                        let expressions = pop_cloned_exprs(&mut values, entries.len());
+                        ExprKind::JsonObject(
+                            entries
+                                .iter()
+                                .zip(expressions)
+                                .map(|((name, _), expr)| (name.clone(), expr))
+                                .collect(),
+                        )
+                    }
+                    TypedKindClone::JsonArray(len) => {
+                        ExprKind::JsonArray(pop_cloned_exprs(&mut values, len))
+                    }
+                    TypedKindClone::Member(field) => ExprKind::Member {
+                        object: Box::new(pop_cloned_expr(&mut values)),
+                        field: field.to_owned(),
+                    },
+                    TypedKindClone::Index => {
+                        let index = pop_cloned_expr(&mut values);
+                        let target = pop_cloned_expr(&mut values);
+                        ExprKind::Index {
+                            target: Box::new(target),
+                            index: Box::new(index),
+                        }
+                    }
+                };
+                values.push(TypedCloneValue::Kind(kind));
+            }
+            TypedCloneTask::BuildStatement(statement) => {
+                let statement = match statement {
+                    TypedStatementClone::Let(name) => TypedStatement::Let {
+                        name: name.to_owned(),
+                        value: pop_cloned_expr(&mut values),
+                    },
+                    TypedStatementClone::Expr => TypedStatement::Expr(pop_cloned_expr(&mut values)),
+                    TypedStatementClone::Return(has_value) => {
+                        TypedStatement::Return(has_value.then(|| pop_cloned_expr(&mut values)))
+                    }
+                    TypedStatementClone::If(has_else) => {
+                        let else_branch = has_else.then(|| pop_cloned_block(&mut values));
+                        let then_branch = pop_cloned_block(&mut values);
+                        let cond = pop_cloned_expr(&mut values);
+                        TypedStatement::If {
+                            cond,
+                            then_branch,
+                            else_branch,
+                        }
+                    }
+                    TypedStatementClone::IfLet(pattern, has_else) => {
+                        let else_branch = has_else.then(|| pop_cloned_block(&mut values));
+                        let then_branch = pop_cloned_block(&mut values);
+                        let value = pop_cloned_expr(&mut values);
+                        TypedStatement::IfLet {
+                            pattern: pattern.clone(),
+                            value,
+                            then_branch,
+                            else_branch,
+                        }
+                    }
+                    TypedStatementClone::While => {
+                        let body = pop_cloned_block(&mut values);
+                        let cond = pop_cloned_expr(&mut values);
+                        TypedStatement::While { cond, body }
+                    }
+                    TypedStatementClone::For {
+                        line,
+                        has_init,
+                        has_cond,
+                        has_step,
+                    } => {
+                        let body = pop_cloned_block(&mut values);
+                        let step = has_step.then(|| Box::new(pop_cloned_statement(&mut values)));
+                        let cond = has_cond.then(|| pop_cloned_expr(&mut values));
+                        let init = has_init.then(|| Box::new(pop_cloned_statement(&mut values)));
+                        TypedStatement::For {
+                            line,
+                            init,
+                            cond,
+                            step,
+                            body,
+                        }
+                    }
+                    TypedStatementClone::ForEachMap {
+                        key,
+                        value,
+                        start,
+                        bound,
+                        bound_kind,
+                    } => {
+                        let body = pop_cloned_block(&mut values);
+                        let map = pop_cloned_expr(&mut values);
+                        TypedStatement::ForEachMap {
+                            key: key.to_owned(),
+                            value: value.clone(),
+                            map,
+                            body,
+                            start,
+                            bound,
+                            bound_kind,
+                        }
+                    }
+                    TypedStatementClone::MapSet => {
+                        let value = pop_cloned_expr(&mut values);
+                        let key = pop_cloned_expr(&mut values);
+                        let map = pop_cloned_expr(&mut values);
+                        TypedStatement::MapSet {
+                            map,
+                            key,
+                            value: Box::new(value),
+                        }
+                    }
+                };
+                values.push(TypedCloneValue::Statement(statement));
+            }
+            TypedCloneTask::BuildBlock {
+                statement_count,
+                has_tail,
+            } => {
+                let tail = has_tail.then(|| Box::new(pop_cloned_expr(&mut values)));
+                let statements = pop_cloned_statements(&mut values, statement_count);
+                values.push(TypedCloneValue::Block(TypedBlock { statements, tail }));
+            }
+            TypedCloneTask::BuildMatchArm(pattern) => {
+                let body = pop_cloned_block(&mut values);
+                values.push(TypedCloneValue::MatchArm(TypedMatchArm {
+                    pattern: pattern.clone(),
+                    body,
+                }));
+            }
+        }
+    }
+    assert_eq!(values.len(), 1, "typed clone traversal produces one root");
+    values.pop().expect("typed clone traversal root")
+}
+
+impl Clone for ExprKind {
+    fn clone(&self) -> Self {
+        match clone_typed_semantic(TypedCloneTask::Kind(self)) {
+            TypedCloneValue::Kind(value) => value,
+            _ => unreachable!("expression-kind clone produces an expression kind"),
+        }
+    }
+}
+
 /// Semantically checked sum pattern and its active payload type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedSumPattern {
@@ -736,6 +2226,7 @@ pub struct TypedMatchArm {
     pub pattern: TypedSumPattern,
     pub body: TypedBlock,
 }
+
 /// One typed/effect-analysis failure with an explicit stable identity.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SemanticError {
@@ -746,6 +2237,13 @@ pub struct SemanticError {
 }
 fn sem_err(code: &'static str, message: String) -> SemanticError {
     SemanticError { code, message }
+}
+fn compiler_worker_unavailable_semantic_error() -> SemanticError {
+    sem_err(
+        "K0003",
+        "compiler could not allocate the bounded stack required to validate source nesting"
+            .to_owned(),
+    )
 }
 impl SemanticError {
     /// Return the stable machine-readable code.
@@ -819,7 +2317,7 @@ fn attach_pending_diagnostic(
         failure.diagnostic = Some(pending);
     }
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypedProgram {
     pub unit: SourceUnit,
     pub items: Vec<TypedItem>,
@@ -839,6 +2337,7 @@ pub struct TypedProgram {
     /// fail-closed across typed-module linking and compiler-internal typed-HIR builds.
     pub test_support_enabled: bool,
 }
+
 /// Graph-stable identity of one typed HIR node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypedHirNodeId {
@@ -848,7 +2347,7 @@ pub struct TypedHirNodeId {
     pub local: HirId,
 }
 /// Type and resolver target retained for one successfully typed expression.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypedHirNode {
     /// Graph-stable identity.
     pub id: TypedHirNodeId,
@@ -928,13 +2427,94 @@ impl SemanticContext {
             ..Self::default()
         }
     }
+    fn swap_state(&self, other: &Self) {
+        self.structs.swap(&other.structs);
+        self.states.swap(&other.states);
+        self.consts.swap(&other.consts);
+        self.function_returns.swap(&other.function_returns);
+        self.function_modifiers.swap(&other.function_modifiers);
+        self.function_params.swap(&other.function_params);
+        self.function_named_only_reasons
+            .swap(&other.function_named_only_reasons);
+        self.function_summaries.swap(&other.function_summaries);
+        self.global_declarations.swap(&other.global_declarations);
+        self.current_function_modifiers
+            .swap(&other.current_function_modifiers);
+        self.current_function_name
+            .swap(&other.current_function_name);
+        self.current_mutable_bindings
+            .swap(&other.current_mutable_bindings);
+        self.trigger_callback_functions
+            .swap(&other.trigger_callback_functions);
+        self.current_state_param_names
+            .swap(&other.current_state_param_names);
+        self.error_codes.swap(&other.error_codes);
+        self.external_functions.swap(&other.external_functions);
+        self.external_states.swap(&other.external_states);
+        self.resolved_arena.swap(&other.resolved_arena);
+        self.resolved_binding_types
+            .swap(&other.resolved_binding_types);
+        self.typed_hir_nodes.swap(&other.typed_hir_nodes);
+        self.pending_diagnostic.swap(&other.pending_diagnostic);
+        self.required_list_capacity
+            .swap(&other.required_list_capacity);
+        self.resolved_named_types.swap(&other.resolved_named_types);
+        self.resolved_named_type_resources
+            .swap(&other.resolved_named_type_resources);
+        self.next_synthetic_binding
+            .swap(&other.next_synthetic_binding);
+    }
+    fn run_on_compiler_stack<T, F>(
+        &self,
+        operation: F,
+    ) -> Result<T, crate::session::CompilerWorkerUnavailable>
+    where
+        T: Send,
+        F: FnOnce(&Self) -> T + Send,
+    {
+        let worker_context = Self::with_capabilities(self.zk_enabled, self.test_builtins_enabled);
+        self.swap_state(&worker_context);
+
+        // Keep a recoverable owner outside the spawn closure. If the OS cannot
+        // create the bounded worker, the caller's prior context state can be
+        // restored without dropping attacker-shaped types on the caller stack.
+        let pending_context = Arc::new(std::sync::Mutex::new(Some(worker_context)));
+        let worker_pending_context = Arc::clone(&pending_context);
+        match crate::session::run_with_compiler_stack(move || {
+            let worker_context = worker_pending_context
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .take()
+                .expect("semantic worker context is available exactly once");
+            let result = operation(&worker_context);
+            (worker_context, result)
+        }) {
+            Ok((worker_context, result)) => {
+                self.swap_state(&worker_context);
+                Ok(result)
+            }
+            Err(error) => {
+                let worker_context = pending_context
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .take()
+                    .expect("failed worker spawn retains the semantic context");
+                self.swap_state(&worker_context);
+                Err(error)
+            }
+        }
+    }
     /// Analyze one parsed program using only state owned by this context.
     ///
     /// The context is reset before every call so callers may reuse it
     /// sequentially without leaking declarations between source units.
     pub fn analyze(&self, program: &Program) -> Result<TypedProgram, SemanticError> {
-        self.analyze_all(program)
-            .map_err(SemanticFailures::into_first)
+        self.run_on_compiler_stack(move |context| {
+            context
+                .analyze_all(program)
+                .map_err(SemanticFailures::into_first)
+        })
+        .unwrap_or_else(|_| Err(compiler_worker_unavailable_semantic_error()))
     }
     /// Analyze one source unit with explicitly resolved imported functions.
     ///
@@ -947,8 +2527,12 @@ impl SemanticContext {
         program: &Program,
         external_functions: &BTreeMap<String, FunctionSignature>,
     ) -> Result<TypedProgram, SemanticError> {
-        self.analyze_all_with_external_functions(program, external_functions)
-            .map_err(SemanticFailures::into_first)
+        self.run_on_compiler_stack(move |context| {
+            context
+                .analyze_all_with_external_functions(program, external_functions)
+                .map_err(SemanticFailures::into_first)
+        })
+        .unwrap_or_else(|_| Err(compiler_worker_unavailable_semantic_error()))
     }
     pub(crate) fn analyze_all_with_external_functions(
         &self,
@@ -973,6 +2557,15 @@ impl SemanticContext {
     /// This is the resolution pass used to make locked module exports
     /// available while every module is still analyzed independently.
     pub fn resolve_function_signatures(
+        &self,
+        program: &Program,
+    ) -> Result<BTreeMap<String, FunctionSignature>, SemanticError> {
+        self.run_on_compiler_stack(move |context| {
+            context.resolve_function_signatures_inline(program)
+        })
+        .unwrap_or_else(|_| Err(compiler_worker_unavailable_semantic_error()))
+    }
+    fn resolve_function_signatures_inline(
         &self,
         program: &Program,
     ) -> Result<BTreeMap<String, FunctionSignature>, SemanticError> {
@@ -1060,7 +2653,7 @@ impl SemanticContext {
     ) -> Result<BTreeMap<String, FunctionSignature>, SemanticFailures> {
         self.reset();
         self.resolved_arena.replace(Some(program.arena()));
-        let result = self.resolve_function_signatures(program.program());
+        let result = self.resolve_function_signatures_inline(program.program());
         let pending = self.take_diagnostic();
         self.resolved_arena.borrow_mut().take();
         result.map_err(|error| {
@@ -2502,6 +4095,15 @@ pub fn validate_linked_program(
     program: &TypedProgram,
     zk_enabled: bool,
 ) -> Result<(), SemanticError> {
+    crate::session::run_with_compiler_stack(move || {
+        validate_linked_program_inline(program, zk_enabled)
+    })
+    .unwrap_or_else(|_| Err(compiler_worker_unavailable_semantic_error()))
+}
+fn validate_linked_program_inline(
+    program: &TypedProgram,
+    zk_enabled: bool,
+) -> Result<(), SemanticError> {
     for state in &program.states {
         validate_list_schemas(&state.ty)?;
     }
@@ -3382,39 +4984,97 @@ pub(crate) fn type_name(ty: &Type) -> String {
 /// schemas at the compiler boundary; this helper deliberately renders ordinary
 /// structs without the schema-only `struct ` prefix.
 pub fn render_type_name(ty: &Type) -> String {
+    crate::session::run_with_compiler_stack(move || render_type_name_inline(ty))
+        .expect("compiler must allocate the bounded stack required to render a semantic type")
+}
+fn render_type_name_inline(ty: &Type) -> String {
     render_source_type_name(ty)
 }
 fn render_source_type_name(ty: &Type) -> String {
-    match ty {
-        Type::Secret(inner) => format!("Secret<{}>", render_source_type_name(inner)),
-        Type::StateMap(key, value) => format!(
-            "StateMap<{}, {}>",
-            render_source_type_name(key),
-            render_source_type_name(value)
-        ),
-        Type::Option(inner) => format!("Option<{}>", render_source_type_name(inner)),
-        Type::Result(ok, error) => format!(
-            "Result<{}, {}>",
-            render_source_type_name(ok),
-            render_source_type_name(error)
-        ),
-        Type::List(element, capacity) => {
-            format!("List<{}, {capacity}>", render_source_type_name(element))
-        }
-        Type::Tuple(items) => format!(
-            "({})",
-            items
-                .iter()
-                .map(render_source_type_name)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Type::Struct { name, .. } => query_page_view_type(ty)
-            .and_then(core_query_view_name)
-            .map_or_else(|| name.clone(), |view| format!("QueryPage<{view}>")),
-        Type::NamedStruct(name) => name.clone(),
-        scalar => type_name(scalar),
+    enum Pending<'a> {
+        Type(&'a Type),
+        Text(&'static str),
+        Owned(String),
     }
+
+    let mut rendered = String::new();
+    let mut pending = vec![Pending::Type(ty)];
+    while let Some(part) = pending.pop() {
+        match part {
+            Pending::Text(text) => rendered.push_str(text),
+            Pending::Owned(text) => rendered.push_str(&text),
+            Pending::Type(ty) => match ty {
+                Type::Int => rendered.push_str("int"),
+                Type::Decimal => rendered.push_str("decimal"),
+                Type::Quantity => rendered.push_str("quantity"),
+                Type::Bool => rendered.push_str("bool"),
+                Type::String => rendered.push_str("string"),
+                Type::Bytes => rendered.push_str("bytes"),
+                Type::DataSpaceId => rendered.push_str("DataSpaceId"),
+                Type::AxtDescriptor => rendered.push_str("AxtDescriptor"),
+                Type::AssetHandle => rendered.push_str("AssetHandle"),
+                Type::ProofBlob => rendered.push_str("ProofBlob"),
+                Type::SoracloudRequest => rendered.push_str("SoracloudRequest"),
+                Type::SoracloudResponse => rendered.push_str("SoracloudResponse"),
+                Type::AccountId => rendered.push_str("AccountId"),
+                Type::AssetDefinitionId => rendered.push_str("AssetDefinitionId"),
+                Type::AssetId => rendered.push_str("AssetId"),
+                Type::NftId => rendered.push_str("NftId"),
+                Type::DomainId => rendered.push_str("DomainId"),
+                Type::Name => rendered.push_str("Name"),
+                Type::Json => rendered.push_str("Json"),
+                Type::Unit => rendered.push_str("()"),
+                Type::Secret(inner) => {
+                    rendered.push_str("Secret<");
+                    pending.push(Pending::Text(">"));
+                    pending.push(Pending::Type(inner));
+                }
+                Type::StateMap(key, value) => {
+                    rendered.push_str("StateMap<");
+                    pending.push(Pending::Text(">"));
+                    pending.push(Pending::Type(value));
+                    pending.push(Pending::Text(", "));
+                    pending.push(Pending::Type(key));
+                }
+                Type::Option(inner) => {
+                    rendered.push_str("Option<");
+                    pending.push(Pending::Text(">"));
+                    pending.push(Pending::Type(inner));
+                }
+                Type::Result(ok, error) => {
+                    rendered.push_str("Result<");
+                    pending.push(Pending::Text(">"));
+                    pending.push(Pending::Type(error));
+                    pending.push(Pending::Text(", "));
+                    pending.push(Pending::Type(ok));
+                }
+                Type::List(element, capacity) => {
+                    rendered.push_str("List<");
+                    pending.push(Pending::Text(">"));
+                    pending.push(Pending::Owned(format!(", {capacity}")));
+                    pending.push(Pending::Type(element));
+                }
+                Type::Tuple(items) => {
+                    rendered.push('(');
+                    pending.push(Pending::Text(")"));
+                    for (index, item) in items.iter().enumerate().rev() {
+                        pending.push(Pending::Type(item));
+                        if index > 0 {
+                            pending.push(Pending::Text(", "));
+                        }
+                    }
+                }
+                Type::Struct { name, .. } => {
+                    let name = query_page_view_type(ty)
+                        .and_then(core_query_view_name)
+                        .map_or_else(|| name.clone(), |view| format!("QueryPage<{view}>"));
+                    rendered.push_str(&name);
+                }
+                Type::NamedStruct(name) => rendered.push_str(name),
+            },
+        }
+    }
+    rendered
 }
 fn trigger_data_family_name(family: TriggerDataFamily) -> &'static str {
     match family {
@@ -4281,6 +5941,7 @@ fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
                 .try_to_i64()
                 .map(JsonNumber::I64)
                 .or_else(|| value.try_to_u64().map(JsonNumber::U64))
+                .or_else(|| value.try_to_u128().map(JsonNumber::U128))
                 .ok_or_else(|| SemanticError {
                 code: "E_TRIGGER_METADATA_VALUE",
                 message: "trigger metadata JSON cannot represent this int exactly; use an explicit string or typed state value"
@@ -5268,6 +6929,10 @@ fn is_eq_comparable_type(ty: &Type) -> bool {
     }
 }
 pub fn is_pointer_type(ty: &Type) -> bool {
+    crate::session::run_with_compiler_stack(move || is_pointer_type_inline(ty))
+        .expect("compiler must allocate the bounded stack required to inspect a semantic type")
+}
+fn is_pointer_type_inline(ty: &Type) -> bool {
     matches!(
         resolve_struct_type(ty),
         Type::AccountId
@@ -11740,7 +13405,7 @@ pub struct TypedTrigger {
     pub authority: Option<AccountId>,
     pub metadata: Metadata,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypedFunction {
     pub name: String,
     pub params: Vec<String>,
@@ -11754,12 +13419,14 @@ pub struct TypedFunction {
     /// Exact declared function/lifecycle name range, when source-backed.
     pub name_source: Option<crate::source::SourceRange>,
 }
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedBlock {
     pub statements: Vec<TypedStatement>,
     /// Final expression without a semicolon.
     pub tail: Option<Box<TypedExpr>>,
 }
+
 /// Source operation that supplied a compiler-proven StateMap iteration bound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateMapIterationBoundKind {
@@ -11778,7 +13445,6 @@ impl StateMapIterationBoundKind {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq)]
 pub enum TypedStatement {
     Let {
         name: String,
@@ -11830,6 +13496,36 @@ pub enum TypedStatement {
         key: TypedExpr,
         value: Box<TypedExpr>,
     },
+}
+impl std::fmt::Debug for TypedStatement {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Let { .. } => "Let(..)",
+            Self::Expr(_) => "Expr(..)",
+            Self::Return(_) => "Return(..)",
+            Self::Break => "Break",
+            Self::Continue => "Continue",
+            Self::If { .. } => "If(..)",
+            Self::IfLet { .. } => "IfLet(..)",
+            Self::While { .. } => "While(..)",
+            Self::For { .. } => "For(..)",
+            Self::ForEachMap { .. } => "ForEachMap(..)",
+            Self::MapSet { .. } => "MapSet(..)",
+        })
+    }
+}
+impl PartialEq for TypedStatement {
+    fn eq(&self, other: &Self) -> bool {
+        typed_semantic_eq(TypedEq::Statement(self, other))
+    }
+}
+impl Clone for TypedStatement {
+    fn clone(&self) -> Self {
+        match clone_typed_semantic(TypedCloneTask::Statement(self)) {
+            TypedCloneValue::Statement(value) => value,
+            _ => unreachable!("statement clone produces a statement"),
+        }
+    }
 }
 impl TypedExpr {
     /// View the typed expression kind.
@@ -12431,6 +14127,13 @@ pub fn function_state_accesses(
     func: &TypedFunction,
     states: &[TypedStateDecl],
 ) -> (IndexSet<String>, IndexSet<String>) {
+    crate::session::run_with_compiler_stack(move || function_state_accesses_inline(func, states))
+        .expect("compiler must allocate the bounded stack required to inspect typed state access")
+}
+fn function_state_accesses_inline(
+    func: &TypedFunction,
+    states: &[TypedStateDecl],
+) -> (IndexSet<String>, IndexSet<String>) {
     let state_names = states
         .iter()
         .map(|state| state.name.clone())
@@ -12693,10 +14396,14 @@ fn is_state_map_expr(context: &SemanticContext, expr: &TypedExpr) -> bool {
 /// Callers must validate that the returned root belongs to the current typed
 /// program; this helper deliberately carries no process-global environment.
 pub fn typed_state_handle_name(expr: &TypedExpr) -> Option<String> {
+    crate::session::run_with_compiler_stack(move || typed_state_handle_name_inline(expr))
+        .expect("compiler must allocate the bounded stack required to inspect a state handle")
+}
+fn typed_state_handle_name_inline(expr: &TypedExpr) -> Option<String> {
     match expr.kind() {
         ExprKind::Ident(name) => Some(name.clone()),
         ExprKind::Member { object, field } => {
-            let base = typed_state_handle_name(object)?;
+            let base = typed_state_handle_name_inline(object)?;
             let idx = field.parse::<usize>().ok()?;
             Some(format!("{base}#{idx}"))
         }
@@ -13567,6 +15274,227 @@ fn enforce_permission_requirements(
 mod tests {
     use super::*;
     use crate::parser::parse_test_fragment as parse;
+
+    #[test]
+    fn trigger_metadata_integer_domain_is_exact_through_u128() {
+        for raw in [
+            "18446744073709551616",
+            "340282366920938463463374607431768211455",
+        ] {
+            let value = raw.parse().expect("integer fits the Kotodama int domain");
+            let json = json_from_expr(&Expr::IntLiteral(value))
+                .expect("unsigned 128-bit metadata integer must lower exactly");
+            assert_eq!(json.to_string(), raw);
+        }
+
+        let above_max = "340282366920938463463374607431768211456"
+            .parse()
+            .expect("u128::MAX + 1 fits the Kotodama int domain");
+        let error = json_from_expr(&Expr::IntLiteral(above_max))
+            .expect_err("metadata integers above u128 must be rejected");
+        assert_eq!(error.code, "E_TRIGGER_METADATA_VALUE");
+    }
+
+    #[test]
+    fn typed_aggregate_traits_are_spawn_free_for_flat_width() {
+        let expressions: Vec<_> = (0..16_384)
+            .map(|_| TypedExpr {
+                expr: ExprKind::IntLiteral(BigInt::one()),
+                ty: Type::Int,
+            })
+            .collect();
+
+        crate::session::reset_compiler_worker_spawn_count();
+        let cloned_expressions = expressions.clone();
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+
+        crate::session::reset_compiler_worker_spawn_count();
+        assert_eq!(expressions, cloned_expressions);
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+        drop(cloned_expressions);
+
+        let statements: Vec<_> = expressions.into_iter().map(TypedStatement::Expr).collect();
+        crate::session::reset_compiler_worker_spawn_count();
+        let cloned_statements = statements.clone();
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+
+        crate::session::reset_compiler_worker_spawn_count();
+        assert_eq!(statements, cloned_statements);
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+        drop(cloned_statements);
+
+        let function = TypedFunction {
+            name: "wide".to_owned(),
+            params: Vec::new(),
+            param_types: Vec::new(),
+            body: TypedBlock {
+                statements,
+                tail: None,
+            },
+            ret_ty: None,
+            modifiers: FunctionModifiers::default(),
+            location: SourceLocation { line: 1, column: 1 },
+            source: None,
+            name_source: None,
+        };
+
+        crate::session::reset_compiler_worker_spawn_count();
+        let cloned_function = function.clone();
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+
+        crate::session::reset_compiler_worker_spawn_count();
+        assert_eq!(function, cloned_function);
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+        drop(cloned_function);
+
+        let items = vec![TypedItem::Function(function)];
+        crate::session::reset_compiler_worker_spawn_count();
+        let cloned_items = items.clone();
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+
+        crate::session::reset_compiler_worker_spawn_count();
+        assert_eq!(items, cloned_items);
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+        drop(cloned_items);
+
+        let program = TypedProgram {
+            unit: SourceUnit {
+                kind: SourceUnitKind::Module,
+                name: "Wide".to_owned(),
+            },
+            items,
+            states: Vec::new(),
+            error_codes: Vec::new(),
+            triggers: Vec::new(),
+            message_entries: Vec::new(),
+            hir_nodes: BTreeMap::new(),
+            source_files: BTreeMap::new(),
+            test_support_enabled: false,
+        };
+        crate::session::reset_compiler_worker_spawn_count();
+        let cloned_program = program.clone();
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+
+        crate::session::reset_compiler_worker_spawn_count();
+        assert_eq!(program, cloned_program);
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+        drop(cloned_program);
+
+        crate::session::reset_compiler_worker_spawn_count();
+        assert!(format!("{program:?}").contains("TypedProgram"));
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+    }
+
+    #[test]
+    fn semantic_type_and_expression_traits_are_iterative_at_the_depth_boundary() {
+        let mut ty = Type::Int;
+        for _ in 0..crate::source::MAX_NESTING_DEPTH {
+            ty = Type::Option(Box::new(ty));
+        }
+
+        let mut expression = TypedExpr {
+            expr: ExprKind::IntLiteral(BigInt::one()),
+            ty: Type::Int,
+        };
+        for _ in 0..crate::source::MAX_NESTING_DEPTH {
+            expression = TypedExpr {
+                expr: ExprKind::If {
+                    condition: Box::new(TypedExpr {
+                        expr: ExprKind::Bool(true),
+                        ty: Type::Bool,
+                    }),
+                    then_branch: TypedBlock {
+                        statements: vec![TypedStatement::Expr(expression)],
+                        tail: None,
+                    },
+                    else_branch: TypedBlock {
+                        statements: Vec::new(),
+                        tail: Some(Box::new(TypedExpr {
+                            expr: ExprKind::IntLiteral(BigInt::zero()),
+                            ty: Type::Int,
+                        })),
+                    },
+                },
+                ty: Type::Unit,
+            };
+        }
+
+        crate::session::reset_compiler_worker_spawn_count();
+        let (cloned_type, cloned_expression) = std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("kotodama-small-typed-traits".to_owned())
+                .stack_size(128 * 1024)
+                .spawn_scoped(scope, || {
+                    let cloned_type = ty.clone();
+                    assert_eq!(ty, cloned_type);
+                    let cloned_expression = expression.clone();
+                    assert_eq!(expression, cloned_expression);
+                    (cloned_type, cloned_expression)
+                })
+                .expect("spawn small typed-trait caller")
+                .join()
+                .expect("typed traits must not consume the caller stack")
+        });
+        assert_eq!(ty, cloned_type);
+        assert_eq!(expression, cloned_expression);
+        assert!(format!("{ty:?}").starts_with("Option<"));
+        assert!(format!("{:?}", expression.expr).starts_with("If("));
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
+    }
+
+    #[test]
+    fn public_semantic_apis_handoff_from_a_small_caller() {
+        let depth = crate::source::MAX_NESTING_DEPTH - 2;
+        let expression = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
+        let source =
+            format!("module StackMargin {{ fn value() {{ let nested = {expression}; }} }}");
+        std::thread::Builder::new()
+            .name("kotodama-small-semantic-caller".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                let program = crate::parser::parse(&source)
+                    .expect("boundary-depth semantic fixture must parse");
+                let context = SemanticContext::new();
+                let signatures = context
+                    .resolve_function_signatures(&program)
+                    .expect("boundary-depth signature resolution must use the compiler worker");
+                assert!(signatures.contains_key("value"));
+                let typed = context
+                    .analyze(&program)
+                    .expect("boundary-depth semantic analysis must use the compiler worker");
+                assert_eq!(typed.unit.name, "StackMargin");
+                let typed_clone = typed.clone();
+                assert_eq!(typed, typed_clone);
+                drop(typed_clone);
+                assert!(format!("{typed:?}").contains("TypedProgram"));
+                validate_linked_program(&typed, false)
+                    .expect("linked validation must use the compiler worker");
+                let TypedItem::Function(function) = &typed.items[0];
+                let TypedStatement::Let { value, .. } = function.body.statements[0].kind() else {
+                    panic!("boundary fixture must retain its nested binding");
+                };
+                let value_clone = value.clone();
+                assert_eq!(value, &value_clone);
+                drop(value_clone);
+                assert!(!format!("{value:?}").is_empty());
+                let type_clone = value.ty.clone();
+                assert_eq!(value.ty, type_clone);
+                drop(type_clone);
+                assert!(!format!("{:?}", value.ty).is_empty());
+                let rendered = render_type_name(&value.ty);
+                assert!(rendered.starts_with("List<"));
+                assert!(!is_pointer_type(&value.ty));
+                let (reads, writes) = function_state_accesses(function, &typed.states);
+                assert!(reads.is_empty());
+                assert!(writes.is_empty());
+                drop(typed);
+                drop(program);
+            })
+            .expect("spawn small semantic caller")
+            .join()
+            .expect("public semantic APIs must not consume the caller stack");
+    }
+
     macro_rules! analyze_ok_tests {
         ($($name:ident: $source:expr => $parse_message:expr, $analysis_message:expr;)+) => {
             $(#[test] fn $name() { let program = parse($source).expect($parse_message); analyze(&program).expect($analysis_message); })+

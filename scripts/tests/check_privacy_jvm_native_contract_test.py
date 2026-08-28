@@ -158,8 +158,8 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
     def test_jvm_runner_authenticates_the_only_loadable_bridge(self) -> None:
         source = read("ci/check_privacy_jvm_sdk.sh")
         for marker in (
-            'ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"',
-            '"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify',
+            'ABI23_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py"',
+            '"${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" verify',
             'export IROHA_NATIVE_LIBRARY_PATH="${NATIVE_LIBRARY_DIR}"',
             'export LD_LIBRARY_PATH="${NATIVE_LIBRARY_DIR}"',
             '-Djava.library.path="${NATIVE_LIBRARY_DIR}"',
@@ -177,10 +177,10 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
         )
         for marker in (
             "PRIVACY_JVM_SDK_PYTHON_BIN: ${{ steps.privacy-jvm-python.outputs.python-path }}",
-            "PRIVACY_JVM_NATIVE_EXPORT_DIR: ${{ runner.temp }}/privacy-jvm-native-abi22",
+            "PRIVACY_JVM_NATIVE_EXPORT_DIR: ${{ runner.temp }}/privacy-jvm-native-abi23",
             "run: ci/check_privacy_jvm_sdk.sh",
             "Upload source-bound privacy JVM native ABI23 input",
-            "privacy-jvm-native-abi22-${{ github.sha }}",
+            "privacy-jvm-native-abi23-${{ github.sha }}",
         ):
             self.assertIn(marker, job)
         self.assertNotIn("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE", job)

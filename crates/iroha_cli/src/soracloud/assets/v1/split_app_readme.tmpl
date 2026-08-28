@@ -89,10 +89,13 @@ CID gateway URL template for the frontend.
 ## Publish + deploy the mixed app
 
 ```bash
-TORII_URL=http://127.0.0.1:8080 ./release.sh
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+SORAFS_RETENTION_EPOCH=2000000000 TORII_URL=http://127.0.0.1:8080 ./release.sh
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --sorafs-retention-epoch 2000000000 --dry-run
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --sorafs-retention-epoch 2000000000
 ```
+
+Choose a future Unix-second SoraFS retention boundary for the release and
+reuse that exact value on every retry. It is part of each manifest identity.
 
 `doctor.sh` rebuilds the frontend and both services, verifies the vault
 bytecode, refreshes every manifest hash with `sync-manifests --app-manifest`,

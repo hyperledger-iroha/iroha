@@ -56,11 +56,14 @@ sync path updates the bundle hash automatically.
 ## Publish + deploy
 
 ```bash
-TORII_URL=http://127.0.0.1:8080 ./release.sh
+SORAFS_RETENTION_EPOCH=2000000000 TORII_URL=http://127.0.0.1:8080 ./release.sh
 iroha soracloud app doctor --manifest ./app_manifest.json
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --sorafs-retention-epoch 2000000000 --dry-run
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --sorafs-retention-epoch 2000000000
 ```
+
+Choose a future Unix-second SoraFS retention boundary for the release and
+reuse that exact value on every retry. It is part of each manifest identity.
 
 `app release` is the only first-release app mutation command. It does not
 accept a build bypass, and it returns overall success only after authoritative

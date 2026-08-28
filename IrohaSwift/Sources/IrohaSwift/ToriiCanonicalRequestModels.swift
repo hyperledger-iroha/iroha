@@ -22,7 +22,7 @@ public struct ToriiQueryEnvelope: Codable, Sendable, Equatable {
   public init(
     query: String? = nil,
     filter: ToriiJSONValue? = nil,
-    select: [String]? = nil,
+    select: [ToriiQuerySelectEntry]? = nil,
     sort: [ToriiQuerySortKey] = [],
     pagination: ToriiQueryPagination = ToriiQueryPagination(),
     fetchSize: UInt64? = nil,
@@ -30,25 +30,7 @@ public struct ToriiQueryEnvelope: Codable, Sendable, Equatable {
   ) {
     self.query = query
     self.filter = filter
-    self.select = select?.map { ToriiQuerySelectEntry.fieldPath($0) }
-    self.sort = sort
-    self.pagination = pagination
-    self.fetchSize = fetchSize
-    self.countMode = countMode
-  }
-
-  public init(
-    query: String? = nil,
-    filter: ToriiJSONValue? = nil,
-    selectEntries: [ToriiQuerySelectEntry]? = nil,
-    sort: [ToriiQuerySortKey] = [],
-    pagination: ToriiQueryPagination = ToriiQueryPagination(),
-    fetchSize: UInt64? = nil,
-    countMode: String? = nil
-  ) {
-    self.query = query
-    self.filter = filter
-    self.select = selectEntries
+    self.select = select
     self.sort = sort
     self.pagination = pagination
     self.fetchSize = fetchSize

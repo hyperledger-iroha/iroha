@@ -10,7 +10,7 @@ license.workspace = true
 workspace = true
 
 [features]
-dev-tools = []
+dev-tools = ["iroha_data_model/governance"]
 test-fixtures = [
     "iroha_data_model/test-fixtures",
     "iroha_data_model/transparent_api",

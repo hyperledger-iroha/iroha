@@ -5,6 +5,7 @@ import java.util.Objects;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
+import org.hyperledger.iroha.android.crypto.SignatureAdmission;
 
 /** Signature produced by a multisig member. */
 public final class MultisigSignature {
@@ -38,7 +39,15 @@ public final class MultisigSignature {
     if (this.publicKey.length == 0) {
       throw new IllegalArgumentException("publicKey must not be empty");
     }
-    if (this.signature.length == 0) {
+    if (!SignatureAdmission.isValidForCurveId(curveId, this.signature)) {
+      if (curveId == 0x01) {
+        throw new IllegalArgumentException(
+            "invalid Ed25519 signature: expected 64 nonzero bytes");
+      }
+      if (curveId == 0x02) {
+        throw new IllegalArgumentException(
+            "invalid ML-DSA-65 signature: expected 3309 nonzero bytes");
+      }
       throw new IllegalArgumentException("signature must not be empty");
     }
   }

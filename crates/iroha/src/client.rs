@@ -110,6 +110,8 @@ pub use iroha_torii_shared::parliament_api::{
 };
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
+    VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1,
+    VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
     VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1, VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1,
@@ -503,6 +505,175 @@ macro_rules! sorafs_reserve_detail_methods {
 #[norito(deny_unknown_fields)]
 struct ContractCodeBytesResponse {
     code_b64: String,
+}
+/// Caller-trusted contract-call intent used to validate a Torii unsigned draft.
+///
+/// The invocation must be constructed from a trusted contract artifact and exact
+/// argument schema. The metadata must contain the exact canonical metadata the
+/// caller intends to sign. Torii may choose quoted fee maxima and an omitted
+/// creation timestamp, but it cannot replace either signature-bound value.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct ContractCallDraftIntent {
+    /// Exact contract invocation, including resolved address, code hash, entrypoint,
+    /// and canonical argument-record bytes.
+    pub invocation: iroha_data_model::transaction::executable::ContractInvocation,
+    /// Exact transaction metadata authorized by the caller.
+    pub metadata: Metadata,
+}
+#[derive(Clone, Debug, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ContractCallOperationReceipt {
+    operation_kind: String,
+    status: String,
+    transport: String,
+    dataspace: String,
+    #[norito(required)]
+    contract_alias: Option<String>,
+    #[norito(required)]
+    contract_address: Option<String>,
+    #[norito(required)]
+    code_hash_hex: Option<String>,
+    #[norito(required)]
+    abi_hash_hex: Option<String>,
+    #[norito(required)]
+    tx_hash_hex: Option<String>,
+    #[norito(required)]
+    entrypoint: Option<String>,
+    #[norito(required)]
+    entrypoint_hash_hex: Option<String>,
+    #[norito(required)]
+    gas_limit: Option<u64>,
+    #[norito(required)]
+    gas_used: Option<u64>,
+    #[norito(required)]
+    fee_payment: Option<FeePaymentIntent>,
+    payload_digest_hex: String,
+}
+fn contract_call_payload_digest_hex(payload: Option<&JsonValue>) -> Result<String> {
+    let canonical = payload
+        .map(norito::json::to_json)
+        .transpose()
+        .wrap_err("encode canonical contract call payload for receipt validation")?
+        .unwrap_or_default();
+    Ok(hex::encode(blake3::hash(canonical.as_bytes()).as_bytes()))
+}
+fn validate_contract_call_prepare_response_fields(response: &JsonValue) -> Result<()> {
+    const REQUIRED_FIELDS: &[&str] = &[
+        "ok",
+        "submitted",
+        "dataspace",
+        "contract_address",
+        "code_hash_hex",
+        "abi_hash_hex",
+        "creation_time_ms",
+        "transaction_ttl_ms",
+        "tx_hash_hex",
+        "pipeline_status",
+        "entrypoint_hash_hex",
+        "transaction_payload_b64",
+        "signing_message_b64",
+        "entrypoint",
+        "operation_receipt",
+    ];
+    let response = response
+        .as_object()
+        .ok_or_else(|| eyre!("contract call prepare response must be a JSON object"))?;
+    if let Some(field) = REQUIRED_FIELDS
+        .iter()
+        .find(|field| !response.contains_key(**field))
+    {
+        return Err(eyre!(
+            "contract call prepare response omitted required root field `{field}`"
+        ));
+    }
+    if let Some(field) = response
+        .keys()
+        .find(|field| !REQUIRED_FIELDS.contains(&field.as_str()))
+    {
+        return Err(eyre!(
+            "contract call prepare response contains unsupported root field `{field}`"
+        ));
+    }
+    Ok(())
+}
+#[expect(
+    clippy::too_many_arguments,
+    reason = "receipt validation binds every independent public claim to its exact request or draft field"
+)]
+fn validate_contract_call_prepare_receipt(
+    response: &JsonValue,
+    requested_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+    expected_address: &iroha_data_model::smart_contract::ContractAddress,
+    expected_code_hash_hex: &str,
+    expected_entrypoint: &str,
+    payload: Option<&JsonValue>,
+    requested_fee_payment: &FeePaymentIntent,
+) -> Result<FeePaymentIntent> {
+    let response_dataspace = response
+        .get("dataspace")
+        .and_then(JsonValue::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| eyre!("contract call prepare response dataspace must be non-empty"))?;
+    if requested_alias.is_some_and(|alias| alias.dataspace_segment() != response_dataspace) {
+        return Err(eyre!(
+            "contract call prepare response dataspace does not match the requested alias"
+        ));
+    }
+    let response_abi_hash_hex = response
+        .get("abi_hash_hex")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| eyre!("contract call prepare response omitted abi_hash_hex"))?;
+    require_exact_lower_hex32_literal(
+        response_abi_hash_hex,
+        "contract call prepare response abi_hash_hex",
+    )?;
+    let receipt_value = response
+        .get("operation_receipt")
+        .ok_or_else(|| eyre!("contract call prepare response omitted operation_receipt"))?;
+    let receipt: ContractCallOperationReceipt = norito::json::from_value(receipt_value.clone())
+        .wrap_err("decode closed contract call operation_receipt")?;
+    let expected_alias = requested_alias.map(ToString::to_string);
+    let expected_address = expected_address.to_string();
+    if receipt.operation_kind != "contract_call"
+        || receipt.status != "pending_signature"
+        || receipt.transport != "torii"
+        || receipt.dataspace != response_dataspace
+        || receipt.contract_alias != expected_alias
+        || receipt.contract_address.as_deref() != Some(expected_address.as_str())
+        || receipt.code_hash_hex.as_deref() != Some(expected_code_hash_hex)
+        || receipt.abi_hash_hex.as_deref() != Some(response_abi_hash_hex)
+        || receipt.tx_hash_hex.is_some()
+        || receipt.entrypoint.as_deref() != Some(expected_entrypoint)
+        || receipt.entrypoint_hash_hex.is_some()
+        || receipt.gas_used.is_some()
+    {
+        return Err(eyre!(
+            "contract call operation_receipt does not match the exact pending draft binding"
+        ));
+    }
+    let response_fee_payment = receipt
+        .fee_payment
+        .ok_or_else(|| eyre!("contract call prepare response receipt omitted fee_payment"))?;
+    response_fee_payment
+        .validate()
+        .map_err(|error| eyre!("contract call prepare response fee_payment is invalid: {error}"))?;
+    if !requested_fee_payment.has_same_payer_and_gas_bound(&response_fee_payment) {
+        return Err(eyre!(
+            "contract call prepare response changed the requested payer, sponsor revision, or gas bound"
+        ));
+    }
+    if receipt.gas_limit != response_fee_payment.gas_limit().map(NonZeroU64::get) {
+        return Err(eyre!(
+            "contract call operation_receipt gas_limit does not match its fee_payment"
+        ));
+    }
+    let expected_payload_digest_hex = contract_call_payload_digest_hex(payload)?;
+    if receipt.payload_digest_hex != expected_payload_digest_hex {
+        return Err(eyre!(
+            "contract call operation_receipt payload digest does not match the exact request payload"
+        ));
+    }
+    Ok(response_fee_payment)
 }
 /// Preferred response wire format for Torii endpoints that support negotiation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -3163,7 +3334,9 @@ pub struct SccpDestinationProofSubmitRequest {
     /// both to be absent.
     #[norito(default)]
     pub transaction_payload_b64: Option<String>,
-    /// Canonical padded-base64 Norito SCCP Groth16 artifact.
+    /// Canonical padded-base64 Norito `BridgeSccpDestinationProofV1`.
+    ///
+    /// The closed envelope selects the governed BN254 or TON BLS12-381 backend.
     pub destination_proof_b64: String,
     /// Optional fixed creation timestamp for deterministic detached signing.
     #[norito(default)]
@@ -3816,7 +3989,7 @@ fn validate_sccp_route_governance_draft_response(
     }
     Ok(())
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum SccpBridgeExpectedProofPayload {
     Destination(iroha_data_model::bridge::BridgeSccpDestinationProofV1),
     Native {
@@ -4059,44 +4232,30 @@ fn preflight_sccp_destination_submit(
     let bytes = decode_canonical_sccp_base64(
         &request.destination_proof_b64,
         "destination_proof_b64",
-        iroha_sccp::SCCP_GROTH16_BN254_MAX_BASE64_ARTIFACT_BYTES_V1,
+        iroha_sccp::SCCP_DESTINATION_PROOF_MAX_BASE64_BYTES_V1,
     )?;
-    let artifact =
-        iroha_sccp::decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&bytes).ok_or_else(
+    let (destination, parsed) =
+        iroha_sccp::decode_and_parse_canonical_sccp_destination_proof_v1(&bytes).ok_or_else(
             || {
                 eyre!(
-                    "destination_proof_b64 must contain one canonical, bounded, pairing-verified SCCP Groth16 artifact"
+                    "destination_proof_b64 must contain one canonical, bounded closed SCCP destination-proof envelope"
                 )
             },
         )?;
-    let bundle =
-        iroha_sccp::decode_canonical_taira_sccp_message_bundle_v1(&artifact.request.bundle_bytes)
-            .ok_or_else(|| {
-            eyre!("destination proof request must contain one canonical finalized SCCP bundle")
-        })?;
+    let bundle = parsed.bundle();
     let lane = bundle.commitment.context.lane;
-    if artifact.request.version != 1
-        || artifact.version != 1
-        || artifact.request.source_network != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
-        || artifact.request.source_network != lane.source
-        || artifact.request.target_network != lane.target
-        || !lane.is_well_formed()
+    if !lane.is_well_formed()
         || !lane.source.is_sora()
         || !lane.target.is_external()
-        || artifact.request.public_inputs.message_id != bundle.commitment.message_id
-        || artifact.request.destination_binding_hash
-            != bundle.commitment.context.destination_binding_hash
-        || artifact.request.route_configuration_hash
+        || destination.backend != parsed.backend()
+        || destination.route_configuration_hash
             != bundle.commitment.context.route_configuration_hash
     {
         return Err(eyre!(
             "destination proof must be bound to one exact finalized Taira-to-external message and governed route"
         ));
     }
-    let destination = iroha_sccp::bridge_sccp_destination_proof_v1(&artifact).ok_or_else(|| {
-        eyre!("destination proof cannot be wrapped in the closed SCCP bridge container")
-    })?;
-    let height = artifact.request.public_inputs.finality_height;
+    let height = parsed.finality().block_header.height().get();
     if height == 0 {
         return Err(eyre!("destination proof finality height must be positive"));
     }
@@ -4107,10 +4266,8 @@ fn preflight_sccp_destination_submit(
         payload_kind: iroha_sccp::sccp_message_payload_kind_key(&bundle.payload).to_owned(),
         message_id: bundle.commitment.message_id,
         counterparty: lane.target,
-        backend: artifact.request.backend.backend_label().to_owned(),
-        route_binding: SccpBridgeExpectedRouteBinding::Exact(
-            artifact.request.route_configuration_hash,
-        ),
+        backend: destination.backend.backend_label().to_owned(),
+        route_binding: SccpBridgeExpectedRouteBinding::Exact(destination.route_configuration_hash),
         range_start_height: height,
         range_end_height: height,
         proof_payload: SccpBridgeExpectedProofPayload::Destination(destination),
@@ -4250,27 +4407,50 @@ fn validate_sccp_message_bundle_for_request(
     Ok(())
 }
 fn validate_sccp_proof_request_for_message(
-    request: &iroha_sccp::SccpGroth16Bn254ProofRequestV1,
+    request: &iroha_sccp::SccpDestinationProofRequestV1,
     expected_message_id: [u8; 32],
 ) -> Result<()> {
-    if iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_request_v1(request).is_none() {
+    if iroha_sccp::encode_canonical_sccp_destination_proof_request_v1(request).is_none() {
         return Err(eyre!(
             "node returned a noncanonical SCCP Groth16 proof request"
         ));
     }
-    if request.source_network != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
-        || !request.target_network.is_external()
+    if request.source_network() != iroha_data_model::bridge::SccpNetworkV1::SoraTaira
+        || !request.target_network().is_external()
     {
         return Err(eyre!(
             "node returned an SCCP Groth16 proof request outside the exact Taira-to-external surface"
         ));
     }
-    if request.public_inputs.message_id != expected_message_id {
+    if request.public_inputs().message_id != expected_message_id {
         return Err(eyre!(
             "node returned an SCCP Groth16 proof request for a different message id"
         ));
     }
     Ok(())
+}
+fn decode_sccp_destination_proof_request_json(
+    bytes: &[u8],
+) -> Result<iroha_sccp::SccpDestinationProofRequestV1> {
+    if let Ok(request) =
+        norito::json::from_slice::<iroha_sccp::SccpGroth16Bn254ProofRequestV1>(bytes)
+    {
+        let request = iroha_sccp::SccpDestinationProofRequestV1::Groth16Bn254(request);
+        if iroha_sccp::encode_canonical_sccp_destination_proof_request_v1(&request).is_some() {
+            return Ok(request);
+        }
+    }
+    if let Ok(request) =
+        norito::json::from_slice::<iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1>(bytes)
+    {
+        let request = iroha_sccp::SccpDestinationProofRequestV1::Groth16Bls12381(request);
+        if iroha_sccp::encode_canonical_sccp_destination_proof_request_v1(&request).is_some() {
+            return Ok(request);
+        }
+    }
+    Err(eyre!(
+        "failed to decode typed curve-specific SCCP Groth16 proof request JSON"
+    ))
 }
 fn decode_sccp_bridge_transaction_payload(
     encoded: &str,
@@ -7664,9 +7844,190 @@ fn canonicalize_hex32_literal(literal: &str, context: &str) -> Result<String> {
     }
     Ok(trimmed.to_ascii_lowercase())
 }
-fn validate_multisig_response(response: &MultisigResponse) -> Result<()> {
+fn normalized_multisig_request_string(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+fn canonical_multisig_propose_intent(
+    request: &MultisigProposeRequest,
+) -> Result<(Vec<InstructionBox>, Metadata, HashOf<Vec<InstructionBox>>)> {
+    use iroha_data_model::validation_fee::{
+        VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY,
+        VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
+        VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
+        VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY, ValidationFeeMultisigMarkerV1,
+    };
+
+    let mut proposal_instructions = request.instructions.clone();
+    if proposal_instructions.iter().any(|instruction| {
+        !matches!(
+            ValidationFeeMultisigMarkerV1::parse_instruction(instruction),
+            Ok(None)
+        )
+    }) {
+        return Err(eyre!(
+            "multisig propose request instructions must not contain a validation-fee marker"
+        ));
+    }
+
+    let mut metadata = Metadata::default();
+    if let Some(memo) = normalized_multisig_request_string(request.memo.as_deref()) {
+        metadata.insert(
+            "memo".parse().expect("static metadata key `memo`"),
+            iroha_primitives::json::Json::new(memo.to_owned()),
+        );
+    }
+
+    let version =
+        normalized_multisig_request_string(request.validation_fee_policy_version.as_deref());
+    let policy_hash =
+        normalized_multisig_request_string(request.validation_fee_policy_hash.as_deref());
+    let hijiri_hash =
+        normalized_multisig_request_string(request.validation_fee_hijiri_fee_quote_hash.as_deref());
+    let instruction_index =
+        normalized_multisig_request_string(request.validation_fee_instruction_index.as_deref());
+    let transfer_entry_index =
+        normalized_multisig_request_string(request.validation_fee_transfer_entry_index.as_deref());
+    if version.is_some()
+        || policy_hash.is_some()
+        || hijiri_hash.is_some()
+        || instruction_index.is_some()
+        || transfer_entry_index.is_some()
+    {
+        let (Some(version), Some(policy_hash)) = (version, policy_hash) else {
+            return Err(eyre!(
+                "multisig validation-fee metadata requires both policy version and hash"
+            ));
+        };
+        let policy_version = version
+            .parse::<u64>()
+            .wrap_err("multisig validation-fee policy version is not a canonical u64")?;
+        let policy_hash =
+            canonicalize_hex32_literal(policy_hash, "multisig validation-fee policy hash")?;
+        let policy_hash_bytes: [u8; 32] = hex::decode(&policy_hash)
+            .wrap_err("decode multisig validation-fee policy hash")?
+            .try_into()
+            .map_err(|_| eyre!("multisig validation-fee policy hash is not 32 bytes"))?;
+        let hijiri_hash = hijiri_hash
+            .map(|hash| {
+                canonicalize_hex32_literal(hash, "multisig validation-fee Hijiri quote hash")
+            })
+            .transpose()?;
+        let hijiri_hash_bytes = hijiri_hash
+            .as_deref()
+            .map(|hash| {
+                hex::decode(hash)
+                    .wrap_err("decode multisig validation-fee Hijiri quote hash")?
+                    .try_into()
+                    .map_err(|_| eyre!("multisig validation-fee Hijiri quote hash is not 32 bytes"))
+            })
+            .transpose()?;
+        let instruction_index = instruction_index
+            .map(|index| {
+                index
+                    .parse::<u64>()
+                    .wrap_err("multisig validation-fee instruction index is not a canonical u64")
+            })
+            .transpose()?;
+        let transfer_entry_index = transfer_entry_index
+            .map(|index| {
+                index
+                    .parse::<u64>()
+                    .wrap_err("multisig validation-fee transfer entry index is not a canonical u64")
+            })
+            .transpose()?;
+        if transfer_entry_index.is_some() && instruction_index.is_none() {
+            return Err(eyre!(
+                "multisig validation-fee transfer entry index requires an instruction index"
+            ));
+        }
+
+        metadata.insert(
+            VALIDATION_FEE_POLICY_VERSION_METADATA_KEY
+                .parse()
+                .expect("static validation-fee policy-version metadata key"),
+            iroha_primitives::json::Json::new(policy_version),
+        );
+        metadata.insert(
+            VALIDATION_FEE_POLICY_HASH_METADATA_KEY
+                .parse()
+                .expect("static validation-fee policy-hash metadata key"),
+            iroha_primitives::json::Json::new(policy_hash),
+        );
+        if let Some(hijiri_hash) = hijiri_hash {
+            metadata.insert(
+                VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY
+                    .parse()
+                    .expect("static Hijiri quote-hash metadata key"),
+                iroha_primitives::json::Json::new(hijiri_hash),
+            );
+        }
+        if let Some(instruction_index) = instruction_index {
+            metadata.insert(
+                VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY
+                    .parse()
+                    .expect("static validation-fee instruction-index metadata key"),
+                iroha_primitives::json::Json::new(instruction_index),
+            );
+            proposal_instructions.push(
+                ValidationFeeMultisigMarkerV1::new(
+                    policy_version,
+                    policy_hash_bytes,
+                    hijiri_hash_bytes,
+                    instruction_index,
+                    transfer_entry_index,
+                )
+                .into_instruction(),
+            );
+        }
+        if let Some(transfer_entry_index) = transfer_entry_index {
+            metadata.insert(
+                VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY
+                    .parse()
+                    .expect("static validation-fee transfer-entry-index metadata key"),
+                iroha_primitives::json::Json::new(transfer_entry_index),
+            );
+        }
+    }
+
+    let proposal_hash = HashOf::new(&proposal_instructions);
+    Ok((proposal_instructions, metadata, proposal_hash))
+}
+fn validate_multisig_response(
+    response: &MultisigResponse,
+    request: &MultisigProposeRequest,
+    network_id: NetworkId,
+) -> Result<()> {
     if !response.ok {
         return Err(eyre!("multisig response.ok must be true"));
+    }
+    if request
+        .multisig_account_id
+        .as_ref()
+        .is_some_and(|expected| expected != &response.resolved_multisig_account_id)
+    {
+        return Err(eyre!(
+            "multisig response resolved account does not match the requested account"
+        ));
+    }
+    if !request
+        .fee_payment
+        .has_same_payer_and_gas_bound(&response.fee_payment)
+    {
+        return Err(eyre!(
+            "multisig response fee_payment changed the requested payer, sponsor revision, or gas bound"
+        ));
+    }
+    response
+        .fee_payment
+        .validate()
+        .map_err(|error| eyre!("multisig response fee_payment is invalid: {error}"))?;
+    if request
+        .creation_time_ms
+        .is_some_and(|expected| response.creation_time_ms != Some(expected))
+    {
+        return Err(eyre!(
+            "multisig response creation_time_ms is not bound to the request"
+        ));
     }
     for (field, value) in [
         (
@@ -7682,6 +8043,21 @@ fn validate_multisig_response(response: &MultisigResponse) -> Result<()> {
         if let Some(value) = value {
             canonicalize_hex32_literal(value, field)?;
         }
+    }
+    if response.proposal_id.is_none()
+        || response.proposal_id.as_ref() != response.instructions_hash.as_ref()
+    {
+        return Err(eyre!(
+            "multisig propose response proposal_id and instructions_hash must be the same canonical proposal hash"
+        ));
+    }
+    let (proposal_instructions, expected_metadata, proposal_hash) =
+        canonical_multisig_propose_intent(request)?;
+    let expected_proposal_id = hex::encode(proposal_hash.as_ref());
+    if response.proposal_id.as_deref() != Some(expected_proposal_id.as_str()) {
+        return Err(eyre!(
+            "multisig response proposal hash does not match the exact requested instructions and validation-fee marker"
+        ));
     }
     match (
         response.submitted,
@@ -7725,9 +8101,49 @@ fn validate_multisig_response(response: &MultisigResponse) -> Result<()> {
                     "multisig response fee_payment does not match the transaction payload"
                 ));
             }
+            if builder.payload().authority() != &request.signer_account_id {
+                return Err(eyre!(
+                    "multisig response transaction authority does not match the requested signer"
+                ));
+            }
             if response.creation_time_ms != Some(builder.payload().creation_time_ms) {
                 return Err(eyre!(
                     "multisig response creation_time_ms does not match the transaction payload"
+                ));
+            }
+            let creation_time_ms = response
+                .creation_time_ms
+                .expect("creation time was matched to the decoded payload above");
+            let propose_instruction = InstructionBox::from(
+                iroha_executor_data_model::isi::multisig::MultisigPropose::new(
+                    response.resolved_multisig_account_id.clone(),
+                    proposal_instructions,
+                    None,
+                ),
+            );
+            let approve_instruction = InstructionBox::from(
+                iroha_executor_data_model::isi::multisig::MultisigApprove::new(
+                    response.resolved_multisig_account_id.clone(),
+                    proposal_hash,
+                ),
+            );
+            let mut expected_builder = TransactionBuilder::new(
+                network_id,
+                request.signer_account_id.clone(),
+                response.fee_payment.clone(),
+            );
+            expected_builder.set_creation_time(Duration::from_millis(creation_time_ms));
+            let expected_builder = expected_builder.with_metadata(expected_metadata);
+            let propose_only = expected_builder
+                .clone()
+                .with_instructions(core::iter::once(propose_instruction.clone()));
+            let propose_and_approve =
+                expected_builder.with_instructions([propose_instruction, approve_instruction]);
+            if builder.payload() != propose_only.payload()
+                && builder.payload() != propose_and_approve.payload()
+            {
+                return Err(eyre!(
+                    "multisig response transaction payload does not match the exact requested executable and metadata"
                 ));
             }
             if response.tx_hash_hex.is_some() || response.executed_tx_hash_hex.is_some() {
@@ -10496,7 +10912,6 @@ mod evidence_http_tests {
         let signer_account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let instruction: dm::InstructionBox =
             dm::Log::new(dm::Level::INFO, "hello multisig".to_owned()).into();
-        let proposal_id = "a".repeat(64);
         let request = MultisigProposeRequest {
             multisig_account_id: Some(multisig_account_id.clone()),
             multisig_account_alias: None,
@@ -10514,7 +10929,7 @@ mod evidence_http_tests {
             validation_fee_transfer_entry_index: Some("2".to_owned()),
         };
         let response_payload =
-            prepared_multisig_response(&client, multisig_account_id.clone(), &request, proposal_id);
+            prepared_multisig_response(&client, multisig_account_id.clone(), &request);
         let response = json_response(
             StatusCode::OK,
             &norito::json::to_json(&response_payload).expect("encode multisig response"),
@@ -10609,7 +11024,6 @@ mod evidence_http_tests {
         client: &Client,
         multisig_account_id: AccountId,
         request: &MultisigProposeRequest,
-        proposal_id: String,
     ) -> MultisigResponse {
         let creation_time_ms = request
             .creation_time_ms
@@ -10620,7 +11034,18 @@ mod evidence_http_tests {
             request.fee_payment.clone(),
         );
         builder.set_creation_time(Duration::from_millis(creation_time_ms));
-        let builder = builder.with_instructions(Vec::<InstructionBox>::new());
+        let (proposal_instructions, metadata, proposal_hash) =
+            canonical_multisig_propose_intent(request).expect("canonical multisig request intent");
+        let proposal_id = hex::encode(proposal_hash.as_ref());
+        let builder = builder
+            .with_metadata(metadata)
+            .with_instructions(core::iter::once(
+                iroha_executor_data_model::isi::multisig::MultisigPropose::new(
+                    multisig_account_id.clone(),
+                    proposal_instructions,
+                    None,
+                ),
+            ));
         MultisigResponse {
             ok: true,
             resolved_multisig_account_id: multisig_account_id,
@@ -10638,6 +11063,93 @@ mod evidence_http_tests {
                 base64::engine::general_purpose::STANDARD.encode(builder.payload_hash_bytes()),
             ),
         }
+    }
+    fn replace_prepared_multisig_payload(
+        response: &mut MultisigResponse,
+        builder: TransactionBuilder,
+    ) {
+        response.transaction_payload_b64 =
+            Some(base64::engine::general_purpose::STANDARD.encode(builder.encode_payload()));
+        response.signing_message_b64 =
+            Some(base64::engine::general_purpose::STANDARD.encode(builder.payload_hash_bytes()));
+    }
+    fn contract_call_fixture(
+        client: &Client,
+    ) -> (
+        iroha_data_model::smart_contract::ContractAddress,
+        ContractCallDraftIntent,
+        FeePaymentIntent,
+        TransactionBuilder,
+    ) {
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &client.network_id,
+            &client.account,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let code_hash = Hash::new(b"contract-call-client-binding-fixture");
+        let intent = ContractCallDraftIntent {
+            invocation: iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract_address.clone(),
+                expected_code_hash: code_hash,
+                entrypoint: "ping".to_owned(),
+                arguments: None,
+            },
+            metadata: Metadata::default(),
+        };
+        let fee_payment = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000));
+        let mut builder = TransactionBuilder::new(
+            client.network_id,
+            client.account.clone(),
+            fee_payment.clone(),
+        );
+        builder.set_creation_time(Duration::from_millis(123));
+        let builder = builder
+            .with_metadata(intent.metadata.clone())
+            .with_executable(iroha_data_model::transaction::Executable::ContractCall(
+                intent.invocation.clone(),
+            ));
+        (contract_address, intent, fee_payment, builder)
+    }
+    fn prepared_contract_call_response(
+        intent: &ContractCallDraftIntent,
+        builder: &TransactionBuilder,
+    ) -> Value {
+        let fee_payment = builder.payload().fee_payment.clone();
+        norito::json!({
+            "ok": true,
+            "submitted": false,
+            "dataspace": "universal",
+            "contract_address": (intent.invocation.contract_address.clone()),
+            "code_hash_hex": (hex::encode(intent.invocation.expected_code_hash.as_ref())),
+            "abi_hash_hex": ("11".repeat(32)),
+            "creation_time_ms": (builder.payload().creation_time_ms),
+            "transaction_ttl_ms": null,
+            "tx_hash_hex": null,
+            "pipeline_status": null,
+            "entrypoint_hash_hex": null,
+            "transaction_payload_b64": (base64::engine::general_purpose::STANDARD.encode(builder.encode_payload())),
+            "signing_message_b64": (base64::engine::general_purpose::STANDARD.encode(builder.payload_hash_bytes())),
+            "entrypoint": (intent.invocation.entrypoint.clone()),
+            "operation_receipt": {
+                "operation_kind": "contract_call",
+                "status": "pending_signature",
+                "transport": "torii",
+                "dataspace": "universal",
+                "contract_alias": null,
+                "contract_address": (intent.invocation.contract_address.to_string()),
+                "code_hash_hex": (hex::encode(intent.invocation.expected_code_hash.as_ref())),
+                "abi_hash_hex": ("11".repeat(32)),
+                "tx_hash_hex": null,
+                "entrypoint": (intent.invocation.entrypoint.clone()),
+                "entrypoint_hash_hex": null,
+                "gas_limit": 5_000,
+                "gas_used": null,
+                "fee_payment": (fee_payment),
+                "payload_digest_hex": (contract_call_payload_digest_hex(None).expect("empty payload digest")),
+            },
+        })
     }
     #[test]
     fn post_multisig_propose_propagates_server_rejection() {
@@ -10674,7 +11186,8 @@ mod evidence_http_tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let (multisig_account_id, request) = multisig_propose_request("bad metadata");
         let mut response_payload =
-            prepared_multisig_response(&client, multisig_account_id, &request, "a".repeat(64));
+            prepared_multisig_response(&client, multisig_account_id, &request);
+        let canonical_instructions_hash = response_payload.instructions_hash.clone();
         response_payload.instructions_hash = Some("aa".to_owned());
         let bad_hash_response = json_response(
             StatusCode::OK,
@@ -10690,7 +11203,7 @@ mod evidence_http_tests {
                 .contains("failed to validate multisig propose response"),
             "unexpected error: {err}"
         );
-        response_payload.instructions_hash = Some("a".repeat(64));
+        response_payload.instructions_hash = canonical_instructions_hash;
         response_payload.signing_message_b64 = Some("not base64".to_owned());
         let bad_signing_response = json_response(
             StatusCode::OK,
@@ -10738,6 +11251,508 @@ mod evidence_http_tests {
         );
         let store = snapshots.lock().expect("lock snapshot store");
         assert_eq!(store.len(), 4);
+    }
+    #[test]
+    fn post_multisig_propose_rejects_response_request_substitution() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let (multisig_account_id, request) = multisig_propose_request("bound response");
+        let response_payload = prepared_multisig_response(&client, multisig_account_id, &request);
+
+        let mut changed_fee = response_payload.clone();
+        changed_fee.fee_payment = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1));
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&changed_fee).expect("encode changed fee response"),
+        );
+        let err = with_mock_http(respond_with(&snapshots, response), || {
+            client
+                .post_multisig_propose(&request)
+                .expect_err("fee payer selection substitution must fail")
+        });
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("payer, sponsor revision, or gas bound"),
+            "unexpected error: {message}"
+        );
+
+        let mut changed_creation_time = response_payload.clone();
+        changed_creation_time.creation_time_ms = Some(124);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&changed_creation_time)
+                .expect("encode changed creation time response"),
+        );
+        let err = with_mock_http(respond_with(&snapshots, response), || {
+            client
+                .post_multisig_propose(&request)
+                .expect_err("creation time substitution must fail")
+        });
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("creation_time_ms is not bound"),
+            "unexpected error: {message}"
+        );
+
+        let mut changed_proposal_id = response_payload.clone();
+        changed_proposal_id.proposal_id = Some("b".repeat(64));
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&changed_proposal_id)
+                .expect("encode changed proposal id response"),
+        );
+        let err = with_mock_http(respond_with(&snapshots, response), || {
+            client
+                .post_multisig_propose(&request)
+                .expect_err("proposal hash substitution must fail")
+        });
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("must be the same canonical proposal hash"),
+            "unexpected error: {message}"
+        );
+
+        let mut changed_executable = response_payload.clone();
+        let payload = base64::engine::general_purpose::STANDARD
+            .decode(
+                changed_executable
+                    .transaction_payload_b64
+                    .as_deref()
+                    .expect("prepared transaction payload"),
+            )
+            .expect("decode prepared transaction payload");
+        let changed_builder = TransactionBuilder::decode_payload(&payload)
+            .expect("decode prepared transaction builder")
+            .with_instructions(core::iter::once(iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::WARN,
+                "substituted executable".to_owned(),
+            )));
+        replace_prepared_multisig_payload(&mut changed_executable, changed_builder);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&changed_executable)
+                .expect("encode changed executable response"),
+        );
+        let err = with_mock_http(respond_with(&snapshots, response), || {
+            client
+                .post_multisig_propose(&request)
+                .expect_err("transaction executable substitution must fail")
+        });
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("exact requested executable and metadata"),
+            "unexpected error: {message}"
+        );
+
+        let mut metadata_request = request.clone();
+        metadata_request.memo = Some("bound memo".to_owned());
+        metadata_request.validation_fee_policy_version = Some("7".to_owned());
+        metadata_request.validation_fee_policy_hash = Some("ab".repeat(32));
+        metadata_request.validation_fee_hijiri_fee_quote_hash = Some("cd".repeat(32));
+        metadata_request.validation_fee_instruction_index = Some("0".to_owned());
+        let mut changed_metadata = prepared_multisig_response(
+            &client,
+            response_payload.resolved_multisig_account_id.clone(),
+            &metadata_request,
+        );
+        let payload = base64::engine::general_purpose::STANDARD
+            .decode(
+                changed_metadata
+                    .transaction_payload_b64
+                    .as_deref()
+                    .expect("prepared transaction payload"),
+            )
+            .expect("decode prepared transaction payload");
+        let changed_builder = TransactionBuilder::decode_payload(&payload)
+            .expect("decode prepared transaction builder")
+            .with_metadata(Metadata::default());
+        replace_prepared_multisig_payload(&mut changed_metadata, changed_builder);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&changed_metadata).expect("encode changed metadata response"),
+        );
+        let err = with_mock_http(respond_with(&snapshots, response), || {
+            client
+                .post_multisig_propose(&metadata_request)
+                .expect_err("transaction metadata substitution must fail")
+        });
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("exact requested executable and metadata"),
+            "unexpected error: {message}"
+        );
+
+        let mut changed_signer_request = request.clone();
+        changed_signer_request.signer_account_id =
+            AccountId::new(checked_random_keypair().public_key().clone());
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&response_payload).expect("encode wrong signer response"),
+        );
+        let err = with_mock_http(respond_with(&snapshots, response), || {
+            client
+                .post_multisig_propose(&changed_signer_request)
+                .expect_err("transaction authority substitution must fail")
+        });
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("transaction authority"),
+            "unexpected error: {message}"
+        );
+    }
+    #[test]
+    fn post_contract_call_accepts_only_the_caller_trusted_draft_intent() {
+        let client = client_with_base_url(base_url());
+        let (contract_address, intent, fee_payment, builder) = contract_call_fixture(&client);
+        let response_value = prepared_contract_call_response(&intent, &builder);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&response_value).expect("encode contract call response"),
+        );
+        let (result, _) = capture_request(response, || {
+            client.post_contract_call_json(
+                &client.account,
+                None,
+                Some(&contract_address),
+                None,
+                "ping",
+                None,
+                None,
+                Some(123),
+                None,
+                &fee_payment,
+                &intent,
+            )
+        });
+        result.expect("exact contract call draft intent");
+
+        let mut caller_metadata = Metadata::default();
+        caller_metadata.insert(
+            "caller_note".parse().expect("caller metadata key"),
+            iroha_primitives::json::Json::new("trusted"),
+        );
+        let mut metadata_and_ttl_intent = intent.clone();
+        metadata_and_ttl_intent.metadata.insert(
+            "caller_note".parse().expect("caller metadata key"),
+            iroha_primitives::json::Json::new("trusted"),
+        );
+        let mut metadata_and_ttl_builder = builder
+            .clone()
+            .with_metadata(metadata_and_ttl_intent.metadata.clone());
+        metadata_and_ttl_builder.set_ttl(Duration::from_millis(42_000));
+        let mut response_value =
+            prepared_contract_call_response(&metadata_and_ttl_intent, &metadata_and_ttl_builder);
+        response_value
+            .as_object_mut()
+            .expect("contract call response object")
+            .insert("transaction_ttl_ms".to_owned(), JsonValue::from(42_000_u64));
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&response_value)
+                .expect("encode metadata-and-TTL contract response"),
+        );
+        let (result, snapshot) = capture_request(response, || {
+            client.post_contract_call_json(
+                &client.account,
+                None,
+                Some(&contract_address),
+                None,
+                "ping",
+                None,
+                Some(&caller_metadata),
+                Some(123),
+                Some(42_000),
+                &fee_payment,
+                &metadata_and_ttl_intent,
+            )
+        });
+        result.expect("caller metadata and explicit TTL remain exact");
+        let request: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode contract call request");
+        let encoded_metadata =
+            norito::json::to_value(&caller_metadata).expect("encode caller metadata");
+        assert_eq!(request.get("metadata"), Some(&encoded_metadata));
+        assert_eq!(
+            request
+                .get("transaction_ttl_ms")
+                .and_then(JsonValue::as_u64),
+            Some(42_000)
+        );
+
+        let mut substituted_metadata = Metadata::default();
+        substituted_metadata.insert(
+            "substituted".parse().expect("metadata key"),
+            iroha_primitives::json::Json::new(true),
+        );
+        let substituted_builder = builder.with_metadata(substituted_metadata);
+        let response_value = prepared_contract_call_response(&intent, &substituted_builder);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&response_value).expect("encode substituted contract response"),
+        );
+        let (result, _) = capture_request(response, || {
+            client.post_contract_call_json(
+                &client.account,
+                None,
+                Some(&contract_address),
+                None,
+                "ping",
+                None,
+                None,
+                Some(123),
+                None,
+                &fee_payment,
+                &intent,
+            )
+        });
+        let error = result.expect_err("rehashed metadata substitution must fail closed");
+        assert!(
+            format!("{error:#}").contains("caller-trusted executable and metadata"),
+            "unexpected error: {error:#}"
+        );
+    }
+    #[test]
+    fn post_contract_call_rejects_substituted_operation_receipt() {
+        let client = client_with_base_url(base_url());
+        let (contract_address, intent, fee_payment, builder) = contract_call_fixture(&client);
+        for (field, substitution, expected_error) in [
+            (
+                "status",
+                JsonValue::from("submitted"),
+                "exact pending draft binding",
+            ),
+            (
+                "transport",
+                JsonValue::from("relay"),
+                "exact pending draft binding",
+            ),
+            (
+                "dataspace",
+                JsonValue::from("private"),
+                "exact pending draft binding",
+            ),
+            (
+                "contract_alias",
+                JsonValue::from("substituted::universal"),
+                "exact pending draft binding",
+            ),
+            (
+                "abi_hash_hex",
+                JsonValue::from("aa".repeat(32)),
+                "exact pending draft binding",
+            ),
+            (
+                "gas_used",
+                JsonValue::from(1_u64),
+                "exact pending draft binding",
+            ),
+            (
+                "gas_limit",
+                JsonValue::from(1_u64),
+                "gas_limit does not match",
+            ),
+            (
+                "payload_digest_hex",
+                JsonValue::from("bb".repeat(32)),
+                "payload digest does not match",
+            ),
+        ] {
+            let mut response_value = prepared_contract_call_response(&intent, &builder);
+            response_value
+                .get_mut("operation_receipt")
+                .and_then(JsonValue::as_object_mut)
+                .expect("operation receipt")
+                .insert(field.to_owned(), substitution);
+            let response = json_response(
+                StatusCode::OK,
+                &norito::json::to_json(&response_value)
+                    .expect("encode substituted contract response"),
+            );
+            let (result, _) = capture_request(response, || {
+                client.post_contract_call_json(
+                    &client.account,
+                    None,
+                    Some(&contract_address),
+                    None,
+                    "ping",
+                    None,
+                    None,
+                    Some(123),
+                    None,
+                    &fee_payment,
+                    &intent,
+                )
+            });
+            let error = match result {
+                Ok(_) => panic!("substituted operation receipt field `{field}` must fail closed"),
+                Err(error) => error,
+            };
+            assert!(
+                format!("{error:#}").contains(expected_error),
+                "unexpected `{field}` error: {error:#}"
+            );
+        }
+    }
+    #[test]
+    fn post_contract_call_rejects_omitted_operation_receipt_fields() {
+        let client = client_with_base_url(base_url());
+        let (contract_address, intent, fee_payment, builder) = contract_call_fixture(&client);
+        let canonical = prepared_contract_call_response(&intent, &builder);
+        let receipt = canonical
+            .get("operation_receipt")
+            .expect("operation receipt fixture");
+        for field in [
+            "contract_alias",
+            "tx_hash_hex",
+            "entrypoint_hash_hex",
+            "gas_used",
+        ] {
+            assert!(
+                receipt.get(field).is_some_and(JsonValue::is_null),
+                "nullable operation receipt field `{field}` must be explicit null"
+            );
+        }
+        norito::json::from_value::<ContractCallOperationReceipt>(receipt.clone())
+            .expect("operation receipt accepts required explicit-null fields");
+
+        for field in [
+            "contract_alias",
+            "contract_address",
+            "code_hash_hex",
+            "abi_hash_hex",
+            "tx_hash_hex",
+            "entrypoint",
+            "entrypoint_hash_hex",
+            "gas_limit",
+            "gas_used",
+            "fee_payment",
+        ] {
+            let mut response_value = canonical.clone();
+            response_value
+                .get_mut("operation_receipt")
+                .and_then(JsonValue::as_object_mut)
+                .expect("operation receipt")
+                .remove(field);
+            let response = json_response(
+                StatusCode::OK,
+                &norito::json::to_json(&response_value)
+                    .expect("encode incomplete contract response"),
+            );
+            let (result, _) = capture_request(response, || {
+                client.post_contract_call_json(
+                    &client.account,
+                    None,
+                    Some(&contract_address),
+                    None,
+                    "ping",
+                    None,
+                    None,
+                    Some(123),
+                    None,
+                    &fee_payment,
+                    &intent,
+                )
+            });
+            let error = match result {
+                Ok(_) => panic!("omitted operation receipt field `{field}` must fail closed"),
+                Err(error) => error,
+            };
+            assert!(
+                format!("{error:#}").contains("decode closed contract call operation_receipt"),
+                "unexpected omitted `{field}` error: {error:#}"
+            );
+        }
+    }
+    #[test]
+    fn post_contract_call_rejects_unsupported_response_root_fields() {
+        let client = client_with_base_url(base_url());
+        let (contract_address, intent, fee_payment, builder) = contract_call_fixture(&client);
+        let mut response_value = prepared_contract_call_response(&intent, &builder);
+        response_value
+            .as_object_mut()
+            .expect("contract call response object")
+            .insert("ignored".to_owned(), JsonValue::from(true));
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&response_value).expect("encode contract call response"),
+        );
+        let (result, _) = capture_request(response, || {
+            client.post_contract_call_json(
+                &client.account,
+                None,
+                Some(&contract_address),
+                None,
+                "ping",
+                None,
+                None,
+                Some(123),
+                None,
+                &fee_payment,
+                &intent,
+            )
+        });
+        let error = result.expect_err("unsupported response root fields must fail closed");
+        assert!(
+            format!("{error:#}").contains("unsupported root field `ignored`"),
+            "unexpected error: {error:#}"
+        );
+    }
+    #[test]
+    fn post_contract_call_rejects_omitted_response_root_fields() {
+        let client = client_with_base_url(base_url());
+        let (contract_address, intent, fee_payment, builder) = contract_call_fixture(&client);
+        let canonical = prepared_contract_call_response(&intent, &builder);
+        for field in [
+            "ok",
+            "submitted",
+            "dataspace",
+            "contract_address",
+            "code_hash_hex",
+            "abi_hash_hex",
+            "creation_time_ms",
+            "transaction_ttl_ms",
+            "tx_hash_hex",
+            "pipeline_status",
+            "entrypoint_hash_hex",
+            "transaction_payload_b64",
+            "signing_message_b64",
+            "entrypoint",
+            "operation_receipt",
+        ] {
+            let mut response_value = canonical.clone();
+            response_value
+                .as_object_mut()
+                .expect("contract call response object")
+                .remove(field);
+            let response = json_response(
+                StatusCode::OK,
+                &norito::json::to_json(&response_value)
+                    .expect("encode incomplete contract response"),
+            );
+            let (result, _) = capture_request(response, || {
+                client.post_contract_call_json(
+                    &client.account,
+                    None,
+                    Some(&contract_address),
+                    None,
+                    "ping",
+                    None,
+                    None,
+                    Some(123),
+                    None,
+                    &fee_payment,
+                    &intent,
+                )
+            });
+            let error = match result {
+                Ok(_) => panic!("omitted contract call root field `{field}` must fail closed"),
+                Err(error) => error,
+            };
+            assert!(
+                format!("{error:#}").contains(&format!("omitted required root field `{field}`")),
+                "unexpected omitted `{field}` error: {error:#}"
+            );
+        }
     }
     #[test]
     fn post_zk_ivm_prove_json_builds_request() {
@@ -16665,7 +17680,7 @@ impl Client {
         }
         let decoded = norito::json::from_slice(response.body())
             .map_err(|err| eyre!("failed to decode multisig propose response: {err}"))?;
-        validate_multisig_response(&decoded)
+        validate_multisig_response(&decoded, request, self.network_id)
             .wrap_err("failed to validate multisig propose response")?;
         Ok(decoded)
     }
@@ -19153,7 +20168,8 @@ impl Client {
     ///
     /// The request and response use canonical Norito. The response is accepted only when its
     /// account, transfer count, arithmetic, policy/Hijiri bindings, and live next-height semantics
-    /// are coherent with the exact request.
+    /// are coherent with the exact request. Torii authorizes either the authenticated client
+    /// account itself or a live multisig controller for which that account is a direct signatory.
     ///
     /// # Errors
     ///
@@ -19166,11 +20182,6 @@ impl Client {
         request
             .validate()
             .map_err(|error| eyre!("invalid Hijiri validation-fee quote request: {error}"))?;
-        if request.account_id != self.account {
-            return Err(eyre!(
-                "Hijiri validation-fee quote account must match the authenticated client account"
-            ));
-        }
         let body = to_bytes(request)
             .wrap_err("failed to encode Hijiri validation-fee quote request as Norito")?;
         let url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_HIJIRI_QUOTE);
@@ -19674,7 +20685,11 @@ impl Client {
     /// POST `/v1/contracts/call` with a JSON body.
     ///
     /// Torii prepares and quotes the canonical unsigned transaction payload. This
-    /// client verifies the exact payload/signing-message pair and, when
+    /// client verifies the exact payload/signing-message pair against
+    /// `draft_intent`, which the caller must construct from a trusted contract
+    /// artifact and argument schema. Caller metadata and an explicit TTL, when
+    /// supplied, are sent to Torii and must be present in the exact trusted
+    /// payload. When
     /// `private_key` is present, signs that payload without rebuilding it before
     /// submitting it through the transaction pipeline. When `private_key` is
     /// absent, the verified unsigned draft is returned for external signing.
@@ -19694,9 +20709,48 @@ impl Client {
         contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
         entrypoint: &str,
         payload: Option<&norito::json::Value>,
+        caller_metadata: Option<&Metadata>,
         creation_time_ms: Option<u64>,
+        transaction_ttl_ms: Option<u64>,
         fee_payment: &FeePaymentIntent,
+        draft_intent: &ContractCallDraftIntent,
     ) -> Result<norito::json::Value> {
+        if draft_intent.invocation.entrypoint != entrypoint {
+            return Err(eyre!(
+                "contract call draft intent entrypoint does not match the request"
+            ));
+        }
+        if contract_address
+            .is_some_and(|address| address != &draft_intent.invocation.contract_address)
+        {
+            return Err(eyre!(
+                "contract call draft intent address does not match the request"
+            ));
+        }
+        if payload.is_some() != draft_intent.invocation.arguments.is_some() {
+            return Err(eyre!(
+                "contract call draft intent argument presence does not match the request payload"
+            ));
+        }
+        if caller_metadata.is_some_and(|metadata| {
+            metadata
+                .iter()
+                .any(|(key, value)| draft_intent.metadata.get(key) != Some(value))
+        }) {
+            return Err(eyre!(
+                "contract call caller metadata does not match the caller-trusted draft intent"
+            ));
+        }
+        if creation_time_ms == Some(0) {
+            return Err(eyre!(
+                "contract call creation_time_ms must be positive when provided"
+            ));
+        }
+        if transaction_ttl_ms == Some(0) {
+            return Err(eyre!(
+                "contract call transaction_ttl_ms must be positive when provided"
+            ));
+        }
         let url = join_torii_url(&self.torii_url, "v1/contracts/call");
         let mut body = norito::json::Map::new();
         body.insert("authority".into(), authority.to_string().into());
@@ -19716,16 +20770,22 @@ impl Client {
         if let Some(payload) = payload {
             body.insert("payload".into(), payload.clone());
         }
+        if let Some(metadata) = caller_metadata.filter(|metadata| !metadata.is_empty()) {
+            body.insert("metadata".into(), norito::json::to_value(metadata)?);
+        }
         if let Some(creation_time_ms) = creation_time_ms {
             body.insert("creation_time_ms".into(), creation_time_ms.into());
         }
+        if let Some(transaction_ttl_ms) = transaction_ttl_ms {
+            body.insert("transaction_ttl_ms".into(), transaction_ttl_ms.into());
+        }
         body.insert("fee_payment".into(), norito::json::to_value(fee_payment)?);
-        let payload = norito::json::to_vec(&norito::json::Value::Object(body))?;
+        let request_body = norito::json::to_vec(&norito::json::Value::Object(body))?;
         let response = self.send_builder(
             self.default_request(HttpMethod::POST, url)
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON)
-                .body(payload),
+                .body(request_body),
         )?;
         let mut response_value =
             Self::parse_json_ok_response(&response, "contract call prepare request")?;
@@ -19735,6 +20795,10 @@ impl Client {
                     "contract call prepare response contains retired `{retired}` field"
                 ));
             }
+        }
+        validate_contract_call_prepare_response_fields(&response_value)?;
+        if response_value.get("ok").and_then(JsonValue::as_bool) != Some(true) {
+            return Err(eyre!("contract call prepare response must report ok=true"));
         }
         if response_value.get("submitted").and_then(JsonValue::as_bool) != Some(false) {
             return Err(eyre!(
@@ -19798,6 +20862,94 @@ impl Client {
         {
             return Err(eyre!(
                 "contract call transaction payload changed the requested network or authority"
+            ));
+        }
+        let response_creation_time_ms = response_value
+            .get("creation_time_ms")
+            .and_then(norito::json::Value::as_u64)
+            .ok_or_else(|| {
+                eyre!("contract call prepare response creation_time_ms must be a canonical u64")
+            })?;
+        if creation_time_ms.is_some_and(|expected| expected != response_creation_time_ms) {
+            return Err(eyre!(
+                "contract call prepare response creation_time_ms does not match the request"
+            ));
+        }
+        let response_transaction_ttl_ms = match response_value.get("transaction_ttl_ms") {
+            None | Some(JsonValue::Null) => None,
+            Some(value) => Some(value.as_u64().ok_or_else(|| {
+                eyre!("contract call prepare response transaction_ttl_ms must be a canonical u64")
+            })?),
+        };
+        if response_transaction_ttl_ms != transaction_ttl_ms {
+            return Err(eyre!(
+                "contract call prepare response transaction_ttl_ms does not match the request"
+            ));
+        }
+        let response_contract_address = response_value
+            .get("contract_address")
+            .ok_or_else(|| eyre!("contract call prepare response omitted contract_address"))
+            .and_then(|value| {
+                norito::json::from_value::<iroha_data_model::smart_contract::ContractAddress>(
+                    value.clone(),
+                )
+                .wrap_err("decode contract call prepare response contract_address")
+            })?;
+        if response_contract_address != draft_intent.invocation.contract_address {
+            return Err(eyre!(
+                "contract call prepare response resolved a different contract address"
+            ));
+        }
+        let expected_code_hash_hex =
+            hex::encode(draft_intent.invocation.expected_code_hash.as_ref());
+        if response_value
+            .get("code_hash_hex")
+            .and_then(norito::json::Value::as_str)
+            != Some(expected_code_hash_hex.as_str())
+        {
+            return Err(eyre!(
+                "contract call prepare response code hash does not match the trusted draft intent"
+            ));
+        }
+        if response_value
+            .get("entrypoint")
+            .and_then(norito::json::Value::as_str)
+            != Some(entrypoint)
+        {
+            return Err(eyre!(
+                "contract call prepare response entrypoint does not match the request"
+            ));
+        }
+        let response_fee_payment = validate_contract_call_prepare_receipt(
+            &response_value,
+            contract_alias,
+            &response_contract_address,
+            &expected_code_hash_hex,
+            entrypoint,
+            payload,
+            fee_payment,
+        )?;
+        if builder.payload().admission_intent()
+            != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+        {
+            return Err(eyre!(
+                "contract call transaction payload must use Ordinary admission"
+            ));
+        }
+        let mut expected_builder =
+            TransactionBuilder::new(self.network_id, authority.clone(), response_fee_payment);
+        expected_builder.set_creation_time(Duration::from_millis(response_creation_time_ms));
+        if let Some(transaction_ttl_ms) = transaction_ttl_ms {
+            expected_builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
+        }
+        let expected_builder = expected_builder
+            .with_metadata(draft_intent.metadata.clone())
+            .with_executable(iroha_data_model::transaction::Executable::ContractCall(
+                draft_intent.invocation.clone(),
+            ));
+        if builder.payload() != expected_builder.payload() {
+            return Err(eyre!(
+                "contract call transaction payload does not match the exact caller-trusted executable and metadata"
             ));
         }
         if let Some(private_key) = private_key {
@@ -20656,12 +21808,17 @@ impl Client {
                 "SCCP Groth16 proof request response has invalid content type {content_type}"
             ));
         }
-        let request: iroha_sccp::SccpGroth16Bn254ProofRequestV1 =
-            norito::json::from_slice(resp.body())
-                .wrap_err("failed to decode typed SCCP Groth16 proof request JSON")?;
+        let request = decode_sccp_destination_proof_request_json(resp.body())?;
         validate_sccp_proof_request_for_message(&request, expected)?;
-        norito::json::to_value(&request)
-            .wrap_err("failed to render validated SCCP Groth16 proof request JSON")
+        match &request {
+            iroha_sccp::SccpDestinationProofRequestV1::Groth16Bn254(request) => {
+                norito::json::to_value(request)
+            }
+            iroha_sccp::SccpDestinationProofRequestV1::Groth16Bls12381(request) => {
+                norito::json::to_value(request)
+            }
+        }
+        .wrap_err("failed to render validated SCCP Groth16 proof request JSON")
     }
     /// GET /v1/sccp/proof-requests/{message_id}.
     /// Returns the canonical, self-consistent, state-derived Groth16 request.
@@ -20672,7 +21829,7 @@ impl Client {
     pub fn get_sccp_groth16_proof_request(
         &self,
         message_id_hex: &str,
-    ) -> Result<iroha_sccp::SccpGroth16Bn254ProofRequestV1> {
+    ) -> Result<iroha_sccp::SccpDestinationProofRequestV1> {
         let message_id_hex = normalize_message_id_hex(message_id_hex)?;
         let expected = decode_exact_nonzero_sccp_hex32(&message_id_hex, "message id")?;
         let path = format!("v1/sccp/proof-requests/{message_id_hex}");
@@ -20694,13 +21851,15 @@ impl Client {
                 "SCCP Groth16 proof request response has invalid content type {content_type}"
             ));
         }
-        let request = iroha_sccp::decode_canonical_sccp_groth16_bn254_proof_request_v1(resp.body())
-            .ok_or_else(|| eyre!("node returned a noncanonical SCCP Groth16 proof request"))?;
+        let request = iroha_sccp::decode_canonical_sccp_destination_proof_request_v1(resp.body())
+            .ok_or_else(|| {
+            eyre!("node returned a noncanonical curve-specific SCCP Groth16 proof request")
+        })?;
         validate_sccp_proof_request_for_message(&request, expected)?;
         Ok(request)
     }
     /// POST /v1/bridge/proofs/submit.
-    /// Preflights and submits one canonical, pairing-verified destination artifact.
+    /// Preflights and submits one canonical closed destination-proof envelope.
     ///
     /// # Errors
     /// Returns an error if the artifact or detached signature is noncanonical,
@@ -23413,22 +24572,36 @@ mod tests {
             error.to_string().contains("qualifying_transfer_count"),
             "unexpected invalid-request error: {error:#}"
         );
+    }
 
+    #[test]
+    fn validation_fee_hijiri_quote_leaves_cross_account_authorization_to_server() {
+        let client = client_with_base_url(base_url());
         let (other_account, _) = gen_account_in("other");
         let other_account_request = ValidationFeeHijiriQuoteRequestV1 {
             version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
             account_id: other_account,
             qualifying_transfer_count: 1,
         };
-        let error = with_mock_http(
-            |_| panic!("cross-account Hijiri quote request reached HTTP transport"),
-            || client.post_validation_fee_hijiri_quote(&other_account_request),
-        )
-        .expect_err("cross-account Hijiri quote request must fail locally");
-        assert!(
-            error.to_string().contains("authenticated client account"),
-            "unexpected cross-account error: {error:#}"
+        let response = mk_response(
+            StatusCode::FORBIDDEN,
+            br#"{"error":"authenticated caller is not a direct multisig member"}"#.to_vec(),
+            Some(APPLICATION_JSON),
         );
+        let (result, snapshot) = capture_request(response, || {
+            client.post_validation_fee_hijiri_quote(&other_account_request)
+        });
+        let error = result.expect_err("server authorization rejection must surface");
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to fetch Hijiri validation-fee quote"),
+            "unexpected server-authorization error: {error:#}"
+        );
+        let decoded_request: ValidationFeeHijiriQuoteRequestV1 =
+            decode_from_bytes(&snapshot.body).expect("decode cross-account Hijiri quote request");
+        assert_eq!(decoded_request, other_account_request);
+        assert_canonical_account_signed_request(&client, &snapshot);
     }
     #[test]
     fn validation_fee_hijiri_quote_rejects_malformed_or_unbound_responses() {
@@ -33702,7 +34875,10 @@ mod tests {
             )
         });
         assert_eq!(bundle.expect("typed SCCP bundle"), fixture.bundle);
-        assert_eq!(request.expect("typed SCCP proof request"), fixture.request);
+        assert_eq!(
+            request.expect("typed SCCP proof request"),
+            iroha_sccp::SccpDestinationProofRequestV1::Groth16Bn254(fixture.request)
+        );
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 2);
         for snapshot in snapshots.iter() {
@@ -33715,6 +34891,44 @@ mod tests {
             };
             assert_eq!(snapshot.max_response_bytes, expected_limit);
         }
+    }
+    #[test]
+    fn sccp_typed_and_json_readbacks_accept_concrete_ton_request() {
+        let fixture = iroha_sccp::sccp_exact_ton_outbound_test_fixture_v1();
+        let message_id = hex::encode(fixture.bundle.commitment.message_id);
+        let request_bytes =
+            iroha_sccp::encode_canonical_sccp_ton_groth16_bls12381_proof_request_v1(
+                &fixture.request,
+            )
+            .expect("canonical concrete TON proof request");
+        let expected =
+            iroha_sccp::SccpDestinationProofRequestV1::Groth16Bls12381(fixture.request.clone());
+        let response = mk_response(StatusCode::OK, request_bytes, Some(APPLICATION_NORITO));
+        let decoded = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_sccp_groth16_proof_request(&message_id),
+        )
+        .expect("typed TON proof-request readback");
+        assert_eq!(decoded, expected);
+
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&fixture.request).expect("TON request JSON"),
+        );
+        let decoded = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_sccp_groth16_proof_request_json(&message_id),
+        )
+        .expect("JSON TON proof-request readback");
+        let backend = decoded
+            .get("backend")
+            .and_then(JsonValue::as_object)
+            .expect("closed TON backend object");
+        assert_eq!(
+            backend.get("backend").and_then(JsonValue::as_str),
+            Some("ton_groth16_bls12381_v1")
+        );
+        assert!(backend.get("family").is_some_and(JsonValue::is_null));
     }
     #[test]
     fn sccp_typed_readbacks_reject_cross_message_and_trailing_data() {
@@ -33875,9 +35089,8 @@ mod tests {
             isi::bridge::SubmitBridgeProof,
         };
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
-        let artifact_bytes =
-            iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_artifact_v1(&fixture.artifact)
-                .expect("canonical shared SCCP destination artifact");
+        let artifact_bytes = norito::to_bytes(&fixture.bridge_proof)
+            .expect("canonical shared SCCP destination-proof envelope");
         let key_pair = KeyPair::try_from_seed(
             b"iroha:client:sccp:detached-submit".to_vec(),
             Algorithm::Secp256k1,
@@ -34202,14 +35415,45 @@ mod tests {
         );
     }
     #[test]
+    fn destination_submit_preflight_accepts_closed_ton_outer_envelope() {
+        use base64::Engine as _;
+        let fixture = iroha_sccp::sccp_exact_ton_outbound_test_fixture_v1();
+        let request = SccpDestinationProofSubmitRequest {
+            authority: ALICE_ID.clone(),
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+            signature_b64: None,
+            transaction_payload_b64: None,
+            destination_proof_b64: base64::engine::general_purpose::STANDARD.encode(
+                norito::to_bytes(&fixture.bridge_proof)
+                    .expect("canonical closed TON destination envelope"),
+            ),
+            creation_time_ms: Some(1),
+        };
+        let expectation = preflight_sccp_destination_submit(&request)
+            .expect("client accepts the closed TON destination envelope");
+        assert_eq!(expectation.message_id, fixture.bundle.commitment.message_id);
+        assert_eq!(
+            expectation.counterparty,
+            iroha_data_model::bridge::SccpNetworkV1::TonMainnet
+        );
+        assert_eq!(
+            expectation.backend,
+            iroha_data_model::bridge::BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381
+                .backend_label()
+        );
+        assert_eq!(
+            expectation.proof_payload,
+            SccpBridgeExpectedProofPayload::Destination(fixture.bridge_proof)
+        );
+    }
+    #[test]
     fn destination_submit_uses_the_shared_artifact_and_binds_the_prepared_transaction() {
         use base64::Engine as _;
         use iroha_data_model::bridge::{BridgeProof, BridgeProofPayload, BridgeProofRange};
         use iroha_data_model::isi::bridge::SubmitBridgeProof;
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
-        let artifact_bytes =
-            iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_artifact_v1(&fixture.artifact)
-                .expect("canonical shared SCCP destination artifact");
+        let artifact_bytes = norito::to_bytes(&fixture.bridge_proof)
+            .expect("canonical shared SCCP destination-proof envelope");
         let creation_time_ms = 1_700_000_000_123_u64;
         let request = SccpDestinationProofSubmitRequest {
             authority: ALICE_ID.clone(),
@@ -34284,11 +35528,10 @@ mod tests {
             .decode(request.destination_proof_b64.as_bytes())
             .expect("decode captured artifact");
         assert_eq!(submitted_artifact, artifact_bytes);
-        assert_eq!(
-            iroha_sccp::decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&submitted_artifact)
-                .expect("decode captured exact artifact"),
-            fixture.artifact
-        );
+        let (submitted_proof, _) =
+            iroha_sccp::decode_and_parse_canonical_sccp_destination_proof_v1(&submitted_artifact)
+                .expect("decode captured exact destination-proof envelope");
+        assert_eq!(submitted_proof, fixture.bridge_proof);
     }
     #[test]
     fn native_submit_preflight_rejects_malformed_envelopes_before_http() {

@@ -324,15 +324,24 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
 
 enum SccpSubmitValidation {
     static let destinationArtifactTypeName =
-        "iroha_sccp::SccpGroth16Bn254ProofArtifactV1"
+        "iroha_data_model::bridge::BridgeSccpDestinationProofV1"
     static let nativeInboundProofTypeName =
         "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
     static let registryTypeName =
         "iroha_data_model::bridge::sccp_registry::SccpRegistryV1"
     static let messageBundleTypeName = "iroha_sccp::TairaSccpMessageProofV1"
-    static let proofRequestTypeName = "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
+    static let bn254ProofRequestTypeName = "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
+    static let tonProofRequestTypeName =
+        "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1"
+    static let proofRequestTypeNames = [
+        bn254ProofRequestTypeName,
+        tonProofRequestTypeName,
+    ]
     static let maximumNativeArtifactBytes = 16 * 1024 * 1024
-    static let maximumDestinationArtifactBytes = maximumNativeArtifactBytes + 64 * 1024
+    static let maximumGroth16ArtifactBytes = maximumNativeArtifactBytes + 64 * 1024
+    static let maximumDestinationArtifactBytes = maximumGroth16ArtifactBytes + 64 * 1024
+    static let maximumDestinationArtifactBase64Bytes =
+        4 * ((maximumDestinationArtifactBytes + 2) / 3)
     static let maximumDetachedSignatureBytes = 16 * 1024
     static let maximumTransactionPayloadBytes = 16 * 1024 * 1024
     static let maximumArtifactBytes = maximumDestinationArtifactBytes

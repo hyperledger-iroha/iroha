@@ -7795,14 +7795,17 @@ pub struct Network {
     /// Maximum stream-wire bytes retained across every deferred outbound peer queue.
     #[config(default = "defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL")]
     pub deferred_send_max_bytes_total: usize,
-    /// Enable QUIC transport (feature-gated).
+    /// Request QUIC transport (feature-gated).
+    ///
+    /// Runtime startup rejects `true` before binding while the lockfile resolves
+    /// vulnerable quinn-proto 0.11.15. TLS-over-TCP remains available.
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
-    /// Enable QUIC DATAGRAM support for best-effort topics (feature-gated by QUIC).
+    /// Request QUIC DATAGRAM support for best-effort topics (feature-gated by QUIC).
     ///
-    /// When enabled and QUIC is negotiated, small best-effort frames (gossip/health)
-    /// may be sent over QUIC datagrams instead of streams to avoid retransmission and
-    /// head-of-line blocking.
+    /// The first-release runtime rejects `true` until quinn-proto 0.11.17 or
+    /// later is locked and requalified. Leave this disabled so gossip and
+    /// health frames use their reliable-stream fallback.
     #[config(default = "defaults::network::QUIC_DATAGRAMS_ENABLED")]
     pub quic_datagrams_enabled: bool,
     /// Upper bound (bytes) for QUIC datagram payloads.
@@ -7834,17 +7837,31 @@ pub struct Network {
     /// Note: this list must be empty when `p2p_proxy_required=true`.
     #[config(default)]
     pub p2p_no_proxy: Vec<String>,
+    /// CIDR ranges that outbound peer and proxy dials may resolve to.
+    ///
+    /// Empty permits every range not explicitly denied.
+    #[config(default)]
+    pub outbound_dial_allow_cidrs: Vec<String>,
+    /// CIDR ranges that outbound peer and proxy dials must never reach.
+    #[config(default)]
+    pub outbound_dial_deny_cidrs: Vec<String>,
+    /// DNS suffixes allowed for outbound peer and proxy dials.
+    ///
+    /// Empty permits every valid DNS name not explicitly denied.
+    #[config(default)]
+    pub outbound_dial_allow_dns_suffixes: Vec<String>,
+    /// DNS suffixes denied for outbound peer and proxy dials.
+    #[config(default)]
+    pub outbound_dial_deny_dns_suffixes: Vec<String>,
     /// Verify an `https://` proxy hop (default: true).
     ///
-    /// When enabled, the proxy connection uses certificate pinning via
-    /// `p2p_proxy_tls_pinned_cert_der_base64`. If no pin is configured, dialing an `https://`
-    /// proxy fails. When disabled, the proxy hop is encrypted but susceptible to MITM (which can
-    /// leak proxy credentials).
+    /// HTTPS proxy dials require this to remain enabled and require an exact leaf-certificate
+    /// pin in `p2p_proxy_tls_pinned_cert_der_base64`; invalid settings fail before connecting.
     #[config(default = "true")]
     pub p2p_proxy_tls_verify: bool,
     /// Optional pinned end-entity certificate for `https://` proxies (DER, base64).
     ///
-    /// When `p2p_proxy_tls_verify` is enabled, the dialer pins the proxy certificate to this value.
+    /// Every HTTPS proxy dial pins the proxy leaf certificate to this value.
     pub p2p_proxy_tls_pinned_cert_der_base64: Option<String>,
     /// Optional interval to refresh DNS hostnames (when `public_address` is a hostname).
     /// Disabled if not set. Useful to catch IP changes faster.
@@ -8072,6 +8089,10 @@ impl Network {
             p2p_proxy,
             p2p_proxy_required,
             p2p_no_proxy,
+            outbound_dial_allow_cidrs,
+            outbound_dial_deny_cidrs,
+            outbound_dial_allow_dns_suffixes,
+            outbound_dial_deny_dns_suffixes,
             p2p_proxy_tls_verify,
             p2p_proxy_tls_pinned_cert_der_base64,
             p2p_queue_cap_high,
@@ -8290,6 +8311,10 @@ impl Network {
                 p2p_proxy,
                 p2p_proxy_required,
                 p2p_no_proxy,
+                outbound_dial_allow_cidrs,
+                outbound_dial_deny_cidrs,
+                outbound_dial_allow_dns_suffixes,
+                outbound_dial_deny_dns_suffixes,
                 p2p_proxy_tls_verify,
                 p2p_proxy_tls_pinned_cert_der_base64,
                 quic_enabled,
@@ -14054,6 +14079,18 @@ pub struct Torii {
         default = "defaults::torii::ATTACHMENTS_PER_TENANT_MAX_BYTES"
     )]
     pub attachments_per_tenant_max_bytes: u64,
+    /// Maximum number of attachments retained by this node (1..=20,000).
+    #[config(
+        env = "TORII_ATTACHMENTS_GLOBAL_MAX_COUNT",
+        default = "defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT"
+    )]
+    pub attachments_global_max_count: u64,
+    /// Maximum aggregate attachment bytes retained by this node.
+    #[config(
+        env = "TORII_ATTACHMENTS_GLOBAL_MAX_BYTES",
+        default = "defaults::torii::ATTACHMENTS_GLOBAL_MAX_BYTES"
+    )]
+    pub attachments_global_max_bytes: u64,
     /// Allowed MIME types for attachment payloads (post-sniff).
     #[config(default = "defaults::torii::attachments_allowed_mime_types()")]
     pub attachments_allowed_mime_types: Vec<String>,
@@ -14892,6 +14929,27 @@ impl Torii {
                 ),
             );
         }
+        if self.attachments_global_max_count == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.attachments_global_max_count must be greater than zero",
+            );
+        }
+        if self.attachments_global_max_count > defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT_MAX {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.attachments_global_max_count must not exceed {}",
+                    defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT_MAX
+                ),
+            );
+        }
+        if self.attachments_global_max_bytes < self.attachments_max_bytes {
+            emit_torii_config_error(
+                emitter,
+                "torii.attachments_global_max_bytes must be at least torii.attachments_max_bytes so one maximum-size attachment can be retained",
+            );
+        }
         if self.zk_prover_max_scan_millis == 0 {
             emit_torii_config_error(
                 emitter,
@@ -15164,6 +15222,8 @@ impl Torii {
             attachments_max_bytes: self.attachments_max_bytes,
             attachments_per_tenant_max_count: self.attachments_per_tenant_max_count,
             attachments_per_tenant_max_bytes: self.attachments_per_tenant_max_bytes,
+            attachments_global_max_count: self.attachments_global_max_count,
+            attachments_global_max_bytes: self.attachments_global_max_bytes,
             attachments_allowed_mime_types: self.attachments_allowed_mime_types,
             attachments_max_expanded_bytes: self.attachments_max_expanded_bytes,
             attachments_max_archive_depth: self.attachments_max_archive_depth,
@@ -16069,6 +16129,9 @@ pub struct ToriiMcp {
     /// Maximum number of tools emitted in one `tools/list` response page.
     #[config(default = "defaults::torii::mcp::MAX_TOOLS_PER_LIST")]
     pub max_tools_per_list: usize,
+    /// Maximum number of MCP tool dispatches executing concurrently.
+    #[config(default = "defaults::torii::mcp::MAX_INFLIGHT_DISPATCHES")]
+    pub max_inflight_dispatches: usize,
     /// MCP tool profile (`read_only`, `writer`, `operator`).
     #[config(default = "defaults::torii::mcp::PROFILE.to_string()")]
     pub profile: String,
@@ -16102,6 +16165,8 @@ impl ToriiMcp {
             enabled: self.enabled,
             max_request_bytes: self.max_request_bytes.max(1),
             max_tools_per_list: self.max_tools_per_list.max(1),
+            max_inflight_dispatches: NonZeroUsize::new(self.max_inflight_dispatches.max(1))
+                .expect("clamped MCP in-flight dispatch limit is non-zero"),
             profile,
             expose_operator_routes: self.expose_operator_routes,
             allow_tool_prefixes: self.allow_tool_prefixes,
@@ -16137,6 +16202,18 @@ mod exact_torii_transport_label_tests {
             let _ = mcp.parse(&mut emitter);
             assert!(emitter.into_result().is_err(), "{profile:?}");
         }
+    }
+
+    #[test]
+    fn mcp_inflight_dispatch_limit_is_never_zero() {
+        let mut mcp = ToriiMcp::default();
+        mcp.max_inflight_dispatches = 0;
+        let mut emitter = Emitter::new();
+        let actual = mcp.parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("the canonical default MCP profile is valid");
+        assert_eq!(actual.max_inflight_dispatches.get(), 1);
     }
 }
 /// CORS response-header policy for Torii.
@@ -16496,6 +16573,7 @@ impl Default for ToriiMcp {
             enabled: defaults::torii::mcp::ENABLED,
             max_request_bytes: defaults::torii::mcp::MAX_REQUEST_BYTES,
             max_tools_per_list: defaults::torii::mcp::MAX_TOOLS_PER_LIST,
+            max_inflight_dispatches: defaults::torii::mcp::MAX_INFLIGHT_DISPATCHES,
             profile: defaults::torii::mcp::PROFILE.to_string(),
             expose_operator_routes: defaults::torii::mcp::EXPOSE_OPERATOR_ROUTES,
             allow_tool_prefixes: defaults::torii::mcp::allow_tool_prefixes(),
@@ -32796,6 +32874,7 @@ policy_digest_hex = "{policy_digest_hex}"
         );
     }
     include!("user/zk_prover_report_retention_tests.rs");
+    include!("user/zk_attachment_retention_tests.rs");
     include!("user/query_fanout_memory_tests.rs");
     include!("user/app_routed_read_body_timeout_tests.rs");
     include!("user/operator_signature_body_timeout_tests.rs");
@@ -34890,6 +34969,53 @@ publish_delay_seconds = 17
                 u64::try_from(i64::MAX).expect("positive i64 maximum fits u64"),
             ),
             "the largest TOML integer timeout must not overflow deadline construction"
+        );
+    }
+    #[test]
+    fn network_outbound_dial_policy_defaults_and_parses() {
+        let default = load_root(base_table());
+        assert!(default.network.outbound_dial_allow_cidrs.is_empty());
+        assert!(default.network.outbound_dial_deny_cidrs.is_empty());
+        assert!(default.network.outbound_dial_allow_dns_suffixes.is_empty());
+        assert!(default.network.outbound_dial_deny_dns_suffixes.is_empty());
+
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        for (key, values) in [
+            ("outbound_dial_allow_cidrs", &["192.0.2.0/24"][..]),
+            ("outbound_dial_deny_cidrs", &["127.0.0.0/8"][..]),
+            ("outbound_dial_allow_dns_suffixes", &[".example.com"][..]),
+            (
+                "outbound_dial_deny_dns_suffixes",
+                &["blocked.example.com"][..],
+            ),
+        ] {
+            network.insert(
+                key.to_owned(),
+                Value::Array(
+                    values
+                        .iter()
+                        .map(|value| Value::String((*value).to_owned()))
+                        .collect(),
+                ),
+            );
+        }
+        let configured = load_root(table);
+        assert_eq!(
+            configured.network.outbound_dial_allow_cidrs,
+            ["192.0.2.0/24"]
+        );
+        assert_eq!(configured.network.outbound_dial_deny_cidrs, ["127.0.0.0/8"]);
+        assert_eq!(
+            configured.network.outbound_dial_allow_dns_suffixes,
+            [".example.com"]
+        );
+        assert_eq!(
+            configured.network.outbound_dial_deny_dns_suffixes,
+            ["blocked.example.com"]
         );
     }
     #[test]

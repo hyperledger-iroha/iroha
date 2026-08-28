@@ -306,7 +306,9 @@ public final class TransportParityExtendedTests {
                         response.code(),
                         responseBody,
                         response.message(),
-                        response.headers().toMultimap()));
+                        response.headers().toMultimap(),
+                        response.request().url().uri(),
+                        response.priorResponse() != null));
               } catch (final IOException e) {
                 future.completeExceptionally(e);
               }

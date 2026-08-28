@@ -28,11 +28,11 @@ on:
       - "fixtures/kagemusha_recursive_spend_abi6/**"
       - "integration_tests/tests/native_escrow.rs"
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
-      - "scripts/check_native_sdk_abi22_artifact.py"
+      - "scripts/check_native_sdk_abi23_artifact.py"
       - "scripts/compute_workspace_source_manifest.py"
       - "scripts/csharp_linux_arm_cross_handoff.py"
       - "scripts/package_csharp_native_artifacts.py"
-      - "scripts/tests/check_native_sdk_abi22_artifact_test.py"
+      - "scripts/tests/check_native_sdk_abi23_artifact_test.py"
       - "scripts/tests/csharp_linux_arm_cross_handoff_test.py"
       - "scripts/tests/package_csharp_native_artifacts_test.py"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
@@ -119,16 +119,16 @@ jobs:
           target="${{ matrix.target }}"
           library_name="${{ matrix.library_name }}"
           artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi22.json"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi23.json"
           mkdir -p "$(dirname "$artifact")"
           cp "target/$target/release/$library_name" "$artifact"
-          python scripts/check_native_sdk_abi22_artifact.py record \
+          python scripts/check_native_sdk_abi23_artifact.py record \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE" \
             --sdk csharp \
             --target "$target"
-          python scripts/check_native_sdk_abi22_artifact.py verify \
+          python scripts/check_native_sdk_abi23_artifact.py verify \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE"
@@ -278,19 +278,19 @@ jobs:
           library_name="libconnect_norito_bridge.so"
           candidate_root="$RUNNER_TEMP/csharp-linux-arm-cross-candidate"
           artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi22.json"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi23.json"
           mkdir -p "$(dirname "$artifact")"
           python -I scripts/csharp_linux_arm_cross_handoff.py verify-stage \
             --candidate-root "$candidate_root" \
             --source-root "$GITHUB_WORKSPACE" \
             --stage-artifact "$artifact"
-          python scripts/check_native_sdk_abi22_artifact.py record \
+          python scripts/check_native_sdk_abi23_artifact.py record \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE" \
             --sdk csharp \
             --target "$target"
-          python scripts/check_native_sdk_abi22_artifact.py verify \
+          python scripts/check_native_sdk_abi23_artifact.py verify \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE"
@@ -359,19 +359,19 @@ jobs:
           library_name="libconnect_norito_bridge.so"
           candidate_root="$RUNNER_TEMP/csharp-linux-arm-cross-candidate"
           artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi22.json"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi23.json"
           mkdir -p "$(dirname "$artifact")"
           python -I scripts/csharp_linux_arm_cross_handoff.py verify-stage \
             --candidate-root "$candidate_root" \
             --source-root "$GITHUB_WORKSPACE" \
             --stage-artifact "$artifact"
-          python scripts/check_native_sdk_abi22_artifact.py record \
+          python scripts/check_native_sdk_abi23_artifact.py record \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE" \
             --sdk csharp \
             --target "$target"
-          python scripts/check_native_sdk_abi22_artifact.py verify \
+          python scripts/check_native_sdk_abi23_artifact.py verify \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE"
@@ -440,19 +440,19 @@ jobs:
           library_name="libconnect_norito_bridge.so"
           candidate_root="$RUNNER_TEMP/csharp-linux-arm-cross-candidate"
           artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi22.json"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi23.json"
           mkdir -p "$(dirname "$artifact")"
           python -I scripts/csharp_linux_arm_cross_handoff.py verify-stage \
             --candidate-root "$candidate_root" \
             --source-root "$GITHUB_WORKSPACE" \
             --stage-artifact "$artifact"
-          python scripts/check_native_sdk_abi22_artifact.py record \
+          python scripts/check_native_sdk_abi23_artifact.py record \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE" \
             --sdk csharp \
             --target "$target"
-          python scripts/check_native_sdk_abi22_artifact.py verify \
+          python scripts/check_native_sdk_abi23_artifact.py verify \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE"

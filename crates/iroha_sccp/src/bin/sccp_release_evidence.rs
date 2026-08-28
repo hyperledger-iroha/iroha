@@ -6,21 +6,28 @@
 //! receipt. It never accesses a network, signs data, or writes files.
 use iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as SUMERAGI_V2_PROTOCOL_VERSION;
 use iroha_data_model::bridge::{
-    BridgeSccpDestinationProofBackendV1, SccpDestinationDeploymentV1,
-    SccpEvmDestinationDeploymentV1, SccpGovernedRouteV1, SccpGroth16Bn254SemanticCircuitV1,
+    BridgeSccpDestinationProofBackendV1, SCCP_TON_BASECHAIN_WORKCHAIN_V1,
+    SCCP_TON_MAINNET_GLOBAL_ID_V1, SCCP_V1_TON_STORAGE_VERSION, SccpDestinationDeploymentV1,
+    SccpEvmDestinationDeploymentV1, SccpGovernedRouteV1, SccpGroth16Bls12381SemanticCircuitV1,
+    SccpGroth16Bls12381VerifyingKeyV1, SccpGroth16Bn254SemanticCircuitV1,
     SccpGroth16Bn254VerifyingKeyV1, SccpNativeTrustAnchorV1, SccpNetworkV1,
-    SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1, SccpSourceIdentityV1,
-    SccpTronDestinationDeploymentV1, sccp_groth16_bn254_public_signal_schema_hash_v1,
-    sccp_network_identity_hash_v1, sccp_semantic_proof_profile_hash_v1,
-    sccp_sora_finality_anchor_hash_v1,
+    SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1, SccpSourceIdentityV1, SccpTonAddressV1,
+    SccpTonDestinationDeploymentV1, SccpTronDestinationDeploymentV1,
+    sccp_groth16_bls12381_public_signal_schema_hash_v1,
+    sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_network_identity_hash_v1,
+    sccp_semantic_proof_profile_hash_v1, sccp_sora_finality_anchor_hash_v1,
 };
 use iroha_sccp::{
     SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1, SCCP_TAIRA_CHAIN_ID_V1,
     SccpNativeInboundMessageProofV1, SccpPayloadV1, ValidatedSccpNativeInboundMessageV1,
+    canonical_sccp_groth16_bls12381_verifying_key_bytes_v1,
     canonical_sccp_groth16_bn254_verifying_key_bytes_v1,
     decode_canonical_sccp_groth16_bn254_proof_artifact_v1,
-    decode_canonical_taira_sccp_message_bundle_v1, sccp_groth16_bn254_public_signal_words,
-    sccp_groth16_bn254_verifying_key_hash_v1, sccp_native_inbound_source_available_v1,
+    decode_canonical_sccp_ton_groth16_bls12381_proof_artifact_v1,
+    decode_canonical_taira_sccp_message_bundle_v1, sccp_groth16_bls12381_verifying_key_hash_v1,
+    sccp_groth16_bn254_public_signal_words, sccp_groth16_bn254_verifying_key_hash_v1,
+    sccp_native_inbound_source_available_v1, sccp_ton_groth16_bls12381_proof_profile_commitment_v1,
+    ton_boc_single_ordinary_root_hash_v1, ton_state_init_address_hash_v1,
     verify_sccp_native_inbound_message_proof_v1,
 };
 use sha2::{Digest, Sha256};
@@ -55,13 +62,20 @@ const MAX_TOTAL_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_RELEASE_ARTIFACTS: usize = 64;
 const MAX_OUTPUT_BYTES: usize = 16 * 1024;
 const MAX_RUNTIME_CODE_BYTES: usize = 24_576;
+const MAX_TON_CONTRACT_BOC_BYTES: usize = 64 * 1024;
 const MAX_DESTINATION_ATTESTATION_AGE_MS: u64 = 24 * 60 * 60 * 1_000;
 const BUILD_ID_DOMAIN: &[u8] = b"sccp:release-evidence-validator-build:v1\0";
 const DESTINATION_ATTESTATION_DOMAIN: &[u8] = b"iroha:sccp:destination-state-attestation:v1\0";
 const RELEASE_SIGNING_DOMAIN: &[u8] = b"iroha:sccp:release-evidence:v1\0";
 const CIRCUIT_AUDIT_DOMAIN: &[u8] = b"iroha:sccp:circuit-policy-audit:v1\0";
-const RELEASE_PROFILES: [&str; 3] = ["ethereum-mainnet", "bsc-mainnet", "tron-mainnet"];
-const RELEASE_DOMAINS: [u32; 3] = [1, 2, 5];
+const RELEASE_PROFILES: [&str; 4] = [
+    "ethereum-mainnet",
+    "bsc-mainnet",
+    "tron-mainnet",
+    "ton-mainnet",
+];
+const RELEASE_DOMAINS: [u32; 4] = [1, 2, 5, 4];
+const RELEASE_PROOF_CURVES: [&str; 4] = ["bn254", "bn254", "bn254", "bls12-381"];
 const RELEASE_ROLES: [&str; 2] = ["release-engineering", "release-security"];
 const CIRCUIT_AUDIT_ROLES: [&str; 2] = ["semantic-security-audit", "prover-reproducibility-audit"];
 const SEMANTIC_ARTIFACT_ROLES: [(&str, &str, &str); 7] = [
@@ -182,10 +196,11 @@ const REQUIRED_SEMANTICS: [&str; 7] = [
     "sora-taira-v2-dual-quorum-v1",
     "sora-taira-anchor-continuity-v1",
 ];
-const RELEASE_CIRCUIT_IDS: [&str; 3] = [
+const RELEASE_CIRCUIT_IDS: [&str; 4] = [
     "sccp-sora-taira-to-ethereum-mainnet-groth16-bn254-v1",
     "sccp-sora-taira-to-bsc-mainnet-groth16-bn254-v1",
     "sccp-sora-taira-to-tron-mainnet-groth16-bn254-v1",
+    "sccp-sora-taira-to-ton-mainnet-groth16-bls12381-v1",
 ];
 /// Exact SHA-256 of the diagnostic-only labeled-signal-binding circuit.
 ///
@@ -239,6 +254,7 @@ struct AvailableOutboundEvidenceV1 {
 enum DestinationStateStatementV1 {
     Evm(EvmDestinationStateV1),
     Tron(TronDestinationStateV1),
+    Ton(TonDestinationStateV1),
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 struct EvmDestinationStateV1 {
@@ -290,6 +306,72 @@ struct TronDestinationStateV1 {
     route_configuration_hash: [u8; 32],
     governed_route_configuration_hash: [u8; 32],
 }
+/// Pinned TON destination readback signed by the configured release attestor.
+///
+/// The attestor is the semantic decoder boundary: it supplies the exact data
+/// BOCs and the decoded mutable-field cardinalities from the same finalized
+/// account states. This validator independently binds each BOC root to route
+/// governance and requires every mutable field to be in canonical deployment
+/// zero state before the route may be activated.
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+struct TonDestinationStateV1 {
+    schema: String,
+    profile: SccpNetworkV1,
+    observed_at_unix_ms: u64,
+    finalized_masterchain_seqno: u32,
+    finalized_masterchain_root_hash: [u8; 32],
+    finalized_masterchain_file_hash: [u8; 32],
+    global_id: i32,
+    network_identity_hash: [u8; 32],
+    governed_route: SccpGovernedRouteV1,
+    route_revision: u32,
+    jetton_master_address: SccpTonAddressV1,
+    route_address: SccpTonAddressV1,
+    jetton_master_code_boc_hex: String,
+    jetton_wallet_code_boc_hex: String,
+    route_code_boc_hex: String,
+    embedded_verifier_code_boc_hex: String,
+    /// Authenticated initial Jetton master data BOC read back before activation.
+    jetton_master_initial_data_boc_hex: String,
+    /// Authenticated initial route data BOC read back before activation.
+    route_initial_data_boc_hex: String,
+    /// Semantically decoded Jetton master storage-layout version.
+    jetton_master_storage_version: u8,
+    /// Semantically decoded initial Jetton supply.
+    ///
+    /// This is a canonical unsigned decimal string because TON coin values
+    /// exceed the exact integer range of common JSON consumers.
+    jetton_master_total_supply: String,
+    /// Semantically decoded Jetton master mint-replay dictionary size.
+    jetton_master_mint_replay_entries: u64,
+    /// Semantically decoded Jetton master burn-replay dictionary size.
+    jetton_master_burn_replay_entries: u64,
+    /// Semantically decoded route storage-layout version.
+    route_storage_version: u8,
+    /// Semantically decoded rejected-deposit refund allocator.
+    route_refund_sequence: u64,
+    /// Semantically decoded route nonce dictionary size.
+    route_nonce_entries: u64,
+    /// Semantically decoded inbound replay dictionary size.
+    route_inbound_replay_entries: u64,
+    /// Semantically decoded outbound replay dictionary size.
+    route_outbound_replay_entries: u64,
+    /// Semantically decoded pending-mint dictionary size.
+    route_pending_mint_entries: u64,
+    /// Semantically decoded pending-burn dictionary size.
+    route_pending_burn_entries: u64,
+    /// Semantically decoded pending-refund dictionary size.
+    route_pending_refund_entries: u64,
+    verifier_circuit_hash: [u8; 32],
+    proof_profile_commitment: [u8; 32],
+    verifier_key_hash: [u8; 32],
+    semantic_proof_profile_hash: [u8; 32],
+    sora_finality_anchor_hash: [u8; 32],
+    verifying_key: SccpGroth16Bls12381VerifyingKeyV1,
+    destination_binding_hash: [u8; 32],
+    route_configuration_hash: [u8; 32],
+    governed_route_configuration_hash: [u8; 32],
+}
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 struct UnavailableDirectionV1 {
     reason: String,
@@ -329,6 +411,7 @@ struct ReleaseLaneValidationV1 {
     route_revision: Option<String>,
     verifying_key_sha256_hex: Option<String>,
     semantic_circuit_id: Option<String>,
+    proof_curve: Option<String>,
     circuit_artifact_sha256_hex: Option<String>,
     witness_generator_sha256_hex: Option<String>,
     public_signal_schema_hash_hex: Option<String>,
@@ -408,6 +491,7 @@ struct ValidatedSoraFinalityAnchorPolicyV1 {
 struct ProofSystemPolicyV1 {
     counterparty_profile: String,
     circuit_id: String,
+    proof_curve: String,
     semantics: Vec<String>,
     circuit_artifact_sha256_hex: String,
     witness_generator_sha256_hex: String,
@@ -525,6 +609,7 @@ struct SemanticProofClaimV1 {
     source_profile: String,
     target_profile: String,
     target_domain: u32,
+    proof_curve: String,
     route_revision: u32,
     message_id_hex: String,
     payload_hash_hex: String,
@@ -551,6 +636,7 @@ struct SemanticProofValidationV1 {
     evidence_sha256_hex: String,
     proof_artifact_path: String,
     proof_artifact_sha256_hex: String,
+    proof_curve: String,
     canonical_norito_verified: bool,
     pairing_verified: bool,
     claim: SemanticProofClaimV1,
@@ -558,6 +644,7 @@ struct SemanticProofValidationV1 {
 #[derive(Debug, Clone)]
 struct ApprovedProofSystemV1 {
     circuit_id: String,
+    proof_curve: String,
     circuit_artifact_sha256: [u8; 32],
     witness_generator_sha256: [u8; 32],
     public_signal_schema_hash: [u8; 32],
@@ -1182,6 +1269,7 @@ fn validate_proof_policy_header(
 ) -> Result<(), String> {
     if proof.counterparty_profile != RELEASE_PROFILES[profile_index]
         || proof.circuit_id != RELEASE_CIRCUIT_IDS[profile_index]
+        || proof.proof_curve != RELEASE_PROOF_CURVES[profile_index]
         || !canonical_identifier(&proof.circuit_id)
         || proof.circuit_id.contains("smoke")
         || proof.circuit_id.contains("test")
@@ -1218,17 +1306,33 @@ fn proof_policy_hash_roles(
         &proof.public_signal_schema_hash_hex,
         "public signal schema hash",
     )?;
-    if public_signal_schema != sccp_groth16_bn254_public_signal_schema_hash_v1() {
+    let expected_public_signal_schema = match proof.proof_curve.as_str() {
+        "bn254" => sccp_groth16_bn254_public_signal_schema_hash_v1(),
+        "bls12-381" => sccp_groth16_bls12381_public_signal_schema_hash_v1(),
+        _ => return Err("proof policy uses an unsupported curve".to_owned()),
+    };
+    if public_signal_schema != expected_public_signal_schema {
         return Err("proof policy uses a different public-signal schema".to_owned());
     }
-    let semantic_profile = SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(
-        SccpGroth16Bn254SemanticCircuitV1 {
-            version: 1,
-            circuit_commitment: circuit_artifact,
-            witness_generator_commitment: witness_generator,
-            public_signal_schema_hash: public_signal_schema,
-        },
-    );
+    let semantic_profile = match proof.proof_curve.as_str() {
+        "bn254" => SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(
+            SccpGroth16Bn254SemanticCircuitV1 {
+                version: 1,
+                circuit_commitment: circuit_artifact,
+                witness_generator_commitment: witness_generator,
+                public_signal_schema_hash: public_signal_schema,
+            },
+        ),
+        "bls12-381" => SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bls12381(
+            SccpGroth16Bls12381SemanticCircuitV1 {
+                version: 1,
+                circuit_commitment: circuit_artifact,
+                witness_generator_commitment: witness_generator,
+                public_signal_schema_hash: public_signal_schema,
+            },
+        ),
+        _ => return Err("proof policy uses an unsupported curve".to_owned()),
+    };
     let semantic_profile_hash = sccp_semantic_proof_profile_hash_v1(semantic_profile)
         .map_err(|_| "semantic proof profile is invalid".to_owned())?;
     if require_hash(
@@ -1413,7 +1517,12 @@ fn validate_release_semantic_inventory<'a>(
             *counts.entry(artifact.kind.as_str()).or_default() += 1;
         }
     }
-    if counts.get("circuit-audit-report").copied() != Some(6) {
+    let expected_audit_reports = policy
+        .proof_systems
+        .iter()
+        .map(|proof| proof.audit_attestations.len())
+        .sum::<usize>();
+    if counts.get("circuit-audit-report").copied() != Some(expected_audit_reports) {
         return Err(
             "production evidence requires exactly two circuit audit reports per profile".to_owned(),
         );
@@ -1636,6 +1745,22 @@ fn validate_release_context(
         }
         verify_ed25519_signature(&trust.release_keys[index], &signature, &payload)?;
     }
+    let release_signatures_verified = u8::try_from(policy.roles.len())
+        .map_err(|_| "release signer inventory exceeds the receipt bound".to_owned())?;
+    let circuit_audit_signatures_verified = u8::try_from(
+        policy
+            .proof_systems
+            .iter()
+            .map(|proof| proof.audit_attestations.len())
+            .sum::<usize>(),
+    )
+    .map_err(|_| "circuit auditor inventory exceeds the receipt bound".to_owned())?;
+    let destination_attestors_validated = u8::try_from(policy.destination_attestors.len())
+        .map_err(|_| "destination attestor inventory exceeds the receipt bound".to_owned())?;
+    let distinct_trust_identities = u8::try_from(
+        policy.roles.len() + policy.destination_attestors.len() + policy.circuit_auditors.len(),
+    )
+    .map_err(|_| "trust identity inventory exceeds the receipt bound".to_owned())?;
     let receipt = ReleaseSignatureValidationV1 {
         schema: RELEASE_SIGNATURE_OUTPUT_SCHEMA.to_owned(),
         environment: expected_environment.to_owned(),
@@ -1643,10 +1768,10 @@ fn validate_release_context(
         release_id: evidence.release_id.clone(),
         policy_sha256_hex: lowercase_hex(&sha256(policy_bytes)),
         evidence_sha256_hex: lowercase_hex(&sha256(evidence_bytes)),
-        release_signatures_verified: 2,
-        circuit_audit_signatures_verified: 6,
-        destination_attestors_validated: 3,
-        distinct_trust_identities: 7,
+        release_signatures_verified,
+        circuit_audit_signatures_verified,
+        destination_attestors_validated,
+        distinct_trust_identities,
     };
     Ok((policy, evidence, receipt))
 }
@@ -1662,6 +1787,9 @@ fn validate_semantic_profile_binding(
     artifact: &iroha_sccp::SccpGroth16Bn254ProofArtifactV1,
     policy: &ProofSystemPolicyV1,
 ) -> Result<(), String> {
+    if policy.proof_curve != "bn254" {
+        return Err("BN254 proof is paired with a different policy curve".to_owned());
+    }
     let circuit_artifact = require_hash(
         &policy.circuit_artifact_sha256_hex,
         "semantic circuit artifact digest",
@@ -1694,6 +1822,52 @@ fn validate_semantic_profile_binding(
         || artifact.request.semantic_proof_profile_hash != expected_semantic_hash
     {
         return Err("honest proof does not bind the audited semantic circuit".to_owned());
+    }
+    Ok(())
+}
+fn validate_ton_semantic_profile_binding(
+    artifact: &iroha_sccp::SccpTonGroth16Bls12381ProofArtifactV1,
+    policy: &ProofSystemPolicyV1,
+) -> Result<(), String> {
+    if policy.proof_curve != "bls12-381" {
+        return Err("TON proof is paired with a different policy curve".to_owned());
+    }
+    let circuit_artifact = require_hash(
+        &policy.circuit_artifact_sha256_hex,
+        "semantic circuit artifact digest",
+    )?;
+    let witness_generator = require_hash(
+        &policy.witness_generator_sha256_hex,
+        "semantic witness generator digest",
+    )?;
+    let public_signal_schema = require_hash(
+        &policy.public_signal_schema_hash_hex,
+        "semantic public signal schema hash",
+    )?;
+    let expected_semantic_profile =
+        SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bls12381(
+            SccpGroth16Bls12381SemanticCircuitV1 {
+                version: 1,
+                circuit_commitment: circuit_artifact,
+                witness_generator_commitment: witness_generator,
+                public_signal_schema_hash: public_signal_schema,
+            },
+        );
+    let expected_semantic_hash = sccp_semantic_proof_profile_hash_v1(expected_semantic_profile)
+        .map_err(|_| "TON semantic proof policy commitments are invalid".to_owned())?;
+    if public_signal_schema != sccp_groth16_bls12381_public_signal_schema_hash_v1()
+        || artifact.request.verifier_circuit_hash != circuit_artifact
+        || expected_semantic_hash
+            != require_hash(
+                &policy.semantic_proof_profile_hash_hex,
+                "semantic proof profile hash",
+            )?
+        || artifact.request.semantic_proof_profile != expected_semantic_profile
+        || artifact.request.semantic_proof_profile_hash != expected_semantic_hash
+        || artifact.request.proof_profile_commitment
+            != sccp_ton_groth16_bls12381_proof_profile_commitment_v1()
+    {
+        return Err("TON honest proof does not bind the audited BLS12-381 circuit".to_owned());
     }
     Ok(())
 }
@@ -1736,6 +1910,45 @@ fn validate_semantic_verifier_binding(
     }
     Ok(())
 }
+fn validate_ton_semantic_anchor_binding(
+    artifact: &iroha_sccp::SccpTonGroth16Bls12381ProofArtifactV1,
+    policy: &ProofSystemPolicyV1,
+) -> Result<(), String> {
+    let expected_anchor = validate_sora_finality_anchor_policy(&policy.sora_finality_anchor)?;
+    if expected_anchor.anchor_hash
+        != require_hash(
+            &policy.sora_finality_anchor_hash_hex,
+            "SORA finality anchor hash",
+        )?
+        || artifact.request.sora_finality_anchor != expected_anchor.anchor
+        || artifact.request.sora_finality_anchor_hash != expected_anchor.anchor_hash
+    {
+        return Err("TON honest proof does not bind the governed SORA finality anchor".to_owned());
+    }
+    Ok(())
+}
+fn validate_ton_semantic_verifier_binding(
+    artifact: &iroha_sccp::SccpTonGroth16Bls12381ProofArtifactV1,
+    policy: &ProofSystemPolicyV1,
+) -> Result<(), String> {
+    let expected_verifier_key_hash =
+        require_hash(&policy.verifier_key_hash_hex, "verifier key hash")?;
+    let verifying_key_bytes =
+        canonical_sccp_groth16_bls12381_verifying_key_bytes_v1(&artifact.request.verifying_key)
+            .ok_or_else(|| "TON honest proof verification key is not canonical".to_owned())?;
+    if artifact.request.verifier_key_hash != expected_verifier_key_hash
+        || sccp_groth16_bls12381_verifying_key_hash_v1(&artifact.request.verifying_key)
+            != Some(expected_verifier_key_hash)
+        || sha256(&verifying_key_bytes)
+            != require_hash(
+                &policy.verifying_key_sha256_hex,
+                "full verifying-key digest",
+            )?
+    {
+        return Err("TON honest proof substitutes the audited verification key".to_owned());
+    }
+    Ok(())
+}
 fn semantic_proof_claim_from_artifact(
     artifact: &iroha_sccp::SccpGroth16Bn254ProofArtifactV1,
     expected_profile: &str,
@@ -1754,6 +1967,7 @@ fn semantic_proof_claim_from_artifact(
         source_profile: "sora-taira".to_owned(),
         target_profile: expected_profile.to_owned(),
         target_domain: target_network.domain_id(),
+        proof_curve: "bn254".to_owned(),
         route_revision,
         message_id_hex: lowercase_hex(&artifact.request.public_inputs.message_id),
         payload_hash_hex: lowercase_hex(&artifact.request.public_inputs.payload_hash),
@@ -1776,6 +1990,41 @@ fn semantic_proof_claim_from_artifact(
             .collect(),
     }
 }
+fn semantic_proof_claim_from_ton_artifact(
+    artifact: &iroha_sccp::SccpTonGroth16Bls12381ProofArtifactV1,
+    expected_profile: &str,
+    route_revision: u32,
+) -> SemanticProofClaimV1 {
+    SemanticProofClaimV1 {
+        source_profile: "sora-taira".to_owned(),
+        target_profile: expected_profile.to_owned(),
+        target_domain: SccpNetworkV1::TonMainnet.domain_id(),
+        proof_curve: "bls12-381".to_owned(),
+        route_revision,
+        message_id_hex: lowercase_hex(&artifact.request.public_inputs.message_id),
+        payload_hash_hex: lowercase_hex(&artifact.request.public_inputs.payload_hash),
+        commitment_root_hex: lowercase_hex(&artifact.request.public_inputs.commitment_root),
+        finality_height: artifact.request.public_inputs.finality_height.to_string(),
+        finality_block_hash_hex: lowercase_hex(&artifact.request.public_inputs.finality_block_hash),
+        destination_binding_hash_hex: lowercase_hex(&artifact.request.destination_binding_hash),
+        route_configuration_hash_hex: lowercase_hex(&artifact.request.route_configuration_hash),
+        statement_hash_hex: lowercase_hex(&artifact.request.statement_hash),
+        request_hash_hex: lowercase_hex(&artifact.request.request_hash),
+        result_hash_hex: lowercase_hex(&artifact.result.result_hash),
+        verifier_key_hash_hex: lowercase_hex(&artifact.request.verifier_key_hash),
+        semantic_proof_profile_hash_hex: lowercase_hex(
+            &artifact.request.semantic_proof_profile_hash,
+        ),
+        sora_finality_anchor_hash_hex: lowercase_hex(&artifact.request.sora_finality_anchor_hash),
+        public_signal_words_hex: artifact
+            .request
+            .public_signals
+            .words()
+            .iter()
+            .map(|word| lowercase_hex(word))
+            .collect(),
+    }
+}
 fn semantic_proof_claim(
     proof_bytes: &[u8],
     expected_profile: &str,
@@ -1784,9 +2033,51 @@ fn semantic_proof_claim(
     if policy.counterparty_profile != expected_profile {
         return Err("semantic proof policy selects a different profile".to_owned());
     }
+    let profile_index = RELEASE_PROFILES
+        .iter()
+        .position(|profile| *profile == expected_profile)
+        .ok_or_else(|| "semantic proof profile is not in the production launch set".to_owned())?;
+    if policy.circuit_id != RELEASE_CIRCUIT_IDS[profile_index]
+        || policy.proof_curve != RELEASE_PROOF_CURVES[profile_index]
+    {
+        return Err("semantic proof policy selects the wrong exact circuit or curve".to_owned());
+    }
     let target_network = SccpNetworkV1::from_profile_key(expected_profile)
         .filter(|network| release_profile_supported(*network))
         .ok_or_else(|| "semantic proof profile is not in the production launch set".to_owned())?;
+    if policy.proof_curve == "bls12-381" {
+        if target_network != SccpNetworkV1::TonMainnet {
+            return Err("BLS12-381 production proof is not bound to TON mainnet".to_owned());
+        }
+        let artifact = decode_canonical_sccp_ton_groth16_bls12381_proof_artifact_v1(proof_bytes)
+            .ok_or_else(|| {
+                "honest proof is not one canonical, pairing-valid TON BLS12-381 artifact".to_owned()
+            })?;
+        if artifact.request.source_network != SccpNetworkV1::SoraTaira
+            || artifact.request.target_network != SccpNetworkV1::TonMainnet
+            || artifact.request.backend != BridgeSccpDestinationProofBackendV1::TonGroth16Bls12381
+            || artifact.request.public_inputs.target_domain != SccpNetworkV1::TonMainnet.domain_id()
+        {
+            return Err("TON honest proof selects the wrong source, target, or backend".to_owned());
+        }
+        validate_ton_semantic_profile_binding(&artifact, policy)?;
+        validate_ton_semantic_anchor_binding(&artifact, policy)?;
+        validate_ton_semantic_verifier_binding(&artifact, policy)?;
+        let bundle = decode_canonical_taira_sccp_message_bundle_v1(&artifact.request.bundle_bytes)
+            .ok_or_else(|| "TON honest proof embeds a non-canonical SCCP bundle".to_owned())?;
+        let SccpPayloadV1::Transfer(transfer) = bundle.payload;
+        if transfer.route_revision != policy.route_revision {
+            return Err("TON honest proof selects the wrong governed route revision".to_owned());
+        }
+        return Ok(semantic_proof_claim_from_ton_artifact(
+            &artifact,
+            expected_profile,
+            transfer.route_revision,
+        ));
+    }
+    if policy.proof_curve != "bn254" || target_network == SccpNetworkV1::TonMainnet {
+        return Err("production proof curve does not match its destination family".to_owned());
+    }
     let expected_backend = if target_network == SccpNetworkV1::TronMainnet {
         BridgeSccpDestinationProofBackendV1::TronGroth16Bn254
     } else {
@@ -1842,6 +2133,7 @@ fn validate_semantic_proof_in_release_context(
         expected_profile,
         &policy.proof_systems[profile_index],
     )?;
+    let proof_curve = policy.proof_systems[profile_index].proof_curve.clone();
     let proof_digest = lowercase_hex(&sha256(proof_bytes));
     let proof_path = semantic_artifact_path("honest-proof", &proof_digest, "honest-proof.norito");
     let metadata = evidence
@@ -1866,6 +2158,7 @@ fn validate_semantic_proof_in_release_context(
         evidence_sha256_hex: lowercase_hex(&sha256(evidence_bytes)),
         proof_artifact_path: proof_path,
         proof_artifact_sha256_hex: proof_digest,
+        proof_curve,
         canonical_norito_verified: true,
         pairing_verified: true,
         claim,
@@ -1885,9 +2178,16 @@ fn value_without_field(
     Ok(norito::json::Value::Object(object))
 }
 fn decode_runtime_code(value: &str, label: &str) -> Result<Vec<u8>, String> {
+    decode_lowercase_hex_bounded(value, label, MAX_RUNTIME_CODE_BYTES)
+}
+fn decode_lowercase_hex_bounded(
+    value: &str,
+    label: &str,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, String> {
     if value.is_empty()
         || !value.len().is_multiple_of(2)
-        || value.len() > MAX_RUNTIME_CODE_BYTES * 2
+        || value.len() > maximum_bytes * 2
         || !value
             .as_bytes()
             .iter()
@@ -1917,6 +2217,7 @@ fn keccak256(bytes: &[u8]) -> [u8; 32] {
 }
 #[derive(Debug)]
 struct ValidatedDestinationStateV1 {
+    proof_curve: &'static str,
     observed_at_unix_ms: u64,
     finality_height: u64,
     finality_block_hash: [u8; 32],
@@ -2077,6 +2378,7 @@ fn validate_destination_readback(
         return Err("authenticated EVM destination state differs from governed route".to_owned());
     }
     Ok(ValidatedDestinationStateV1 {
+        proof_curve: "bn254",
         observed_at_unix_ms: readback.observed_at_unix_ms,
         finality_height: readback.finality_height,
         finality_block_hash: readback.finality_block_hash,
@@ -2191,6 +2493,7 @@ fn validate_tron_destination_readback(
         return Err("authenticated TRON destination state differs from governed route".to_owned());
     }
     Ok(ValidatedDestinationStateV1 {
+        proof_curve: "bn254",
         observed_at_unix_ms: state.observed_at_unix_ms,
         finality_height: state.solid_block_height,
         finality_block_hash: state.solid_block_hash,
@@ -2204,6 +2507,204 @@ fn validate_tron_destination_readback(
         verifying_key_sha256: sha256(&verifying_key_bytes),
         token_runtime_hash: token_code_hash,
         verifier_runtime_hash: verifier_code_hash,
+        route_runtime_hash: route_code_hash,
+    })
+}
+fn validate_ton_destination_state(
+    expected_profile: SccpNetworkV1,
+    state: &TonDestinationStateV1,
+) -> Result<ValidatedDestinationStateV1, String> {
+    if expected_profile != SccpNetworkV1::TonMainnet
+        || state.schema != "sccp-ton-destination-state-v1"
+        || state.profile != expected_profile
+        || state.global_id != SCCP_TON_MAINNET_GLOBAL_ID_V1
+        || state.network_identity_hash != sccp_network_identity_hash_v1(expected_profile)
+        || state.observed_at_unix_ms == 0
+        || state.finalized_masterchain_seqno == 0
+        || state
+            .finalized_masterchain_root_hash
+            .iter()
+            .all(|byte| *byte == 0)
+        || state
+            .finalized_masterchain_file_hash
+            .iter()
+            .all(|byte| *byte == 0)
+        || state.finalized_masterchain_root_hash == state.finalized_masterchain_file_hash
+    {
+        return Err("TON destination chain identity/finality is not canonical".to_owned());
+    }
+    let route = &state.governed_route;
+    route
+        .validate()
+        .map_err(|error| format!("governed TON route is invalid: {error}"))?;
+    if route.lane_id.source != expected_profile
+        || route.lane_id.target != SccpNetworkV1::SoraTaira
+        || !route.activation.allows_outbound()
+    {
+        return Err("governed TON route is not outbound-active for mainnet".to_owned());
+    }
+    let SccpDestinationDeploymentV1::Ton(deployment) = route.destination else {
+        return Err("governed TON route has a different destination family".to_owned());
+    };
+    validate_ton_destination_readback(state, route, &deployment)
+}
+fn validate_ton_destination_readback(
+    state: &TonDestinationStateV1,
+    route: &SccpGovernedRouteV1,
+    deployment: &SccpTonDestinationDeploymentV1,
+) -> Result<ValidatedDestinationStateV1, String> {
+    let expected_binding = route
+        .destination_binding_hash()
+        .map_err(|error| format!("TON destination binding derivation failed: {error}"))?;
+    let expected_route_configuration = route
+        .destination
+        .route_configuration_hash(
+            route.lane_id,
+            &route.route_id,
+            &route.asset_key,
+            route.revision,
+            route.settlement.payload_amount_scale,
+        )
+        .map_err(|error| format!("TON route configuration derivation failed: {error}"))?;
+    let expected_governed_configuration = route
+        .route_configuration_hash()
+        .map_err(|error| format!("governed TON route derivation failed: {error}"))?;
+    let decode_boc = |value: &str, label: &str| {
+        decode_lowercase_hex_bounded(value, label, MAX_TON_CONTRACT_BOC_BYTES)
+    };
+    let boc_root = |bytes: &[u8], label: &str| {
+        ton_boc_single_ordinary_root_hash_v1(bytes)
+            .ok_or_else(|| format!("{label} is not one canonical single-root ordinary TON BOC"))
+    };
+    let jetton_master_code_boc = decode_boc(
+        &state.jetton_master_code_boc_hex,
+        "TON Jetton master code BOC",
+    )?;
+    let jetton_wallet_code_boc = decode_boc(
+        &state.jetton_wallet_code_boc_hex,
+        "TON Jetton wallet code BOC",
+    )?;
+    let route_code_boc = decode_boc(&state.route_code_boc_hex, "TON route code BOC")?;
+    let embedded_verifier_code_boc = decode_boc(
+        &state.embedded_verifier_code_boc_hex,
+        "TON embedded verifier code BOC",
+    )?;
+    let jetton_master_initial_data_boc = decode_boc(
+        &state.jetton_master_initial_data_boc_hex,
+        "TON Jetton master initial data BOC",
+    )?;
+    let route_initial_data_boc = decode_boc(
+        &state.route_initial_data_boc_hex,
+        "TON route initial data BOC",
+    )?;
+    let jetton_master_code_hash = boc_root(&jetton_master_code_boc, "TON Jetton master code BOC")?;
+    let jetton_wallet_code_hash = boc_root(&jetton_wallet_code_boc, "TON Jetton wallet code BOC")?;
+    let route_code_hash = boc_root(&route_code_boc, "TON route code BOC")?;
+    let embedded_verifier_code_hash = boc_root(
+        &embedded_verifier_code_boc,
+        "TON embedded verifier code BOC",
+    )?;
+    let jetton_master_initial_data_hash = boc_root(
+        &jetton_master_initial_data_boc,
+        "TON Jetton master initial data BOC",
+    )?;
+    let route_initial_data_hash = boc_root(&route_initial_data_boc, "TON route initial data BOC")?;
+    let jetton_master_state_init_hash =
+        ton_state_init_address_hash_v1(&jetton_master_code_boc, &jetton_master_initial_data_boc)
+            .ok_or_else(|| {
+                "TON Jetton master StateInit cannot be derived canonically".to_owned()
+            })?;
+    let route_state_init_hash =
+        ton_state_init_address_hash_v1(&route_code_boc, &route_initial_data_boc)
+            .ok_or_else(|| "TON route StateInit cannot be derived canonically".to_owned())?;
+    if state.jetton_master_address.workchain != SCCP_TON_BASECHAIN_WORKCHAIN_V1
+        || state.jetton_master_address.account != jetton_master_state_init_hash
+        || state.route_address.workchain != SCCP_TON_BASECHAIN_WORKCHAIN_V1
+        || state.route_address.account != route_state_init_hash
+    {
+        return Err(
+            "authenticated TON addresses do not match their exact StateInit cells".to_owned(),
+        );
+    }
+    if state.jetton_master_storage_version != SCCP_V1_TON_STORAGE_VERSION
+        || state.jetton_master_total_supply != "0"
+        || state.jetton_master_mint_replay_entries != 0
+        || state.jetton_master_burn_replay_entries != 0
+        || state.route_storage_version != SCCP_V1_TON_STORAGE_VERSION
+        || state.route_refund_sequence != 0
+        || state.route_nonce_entries != 0
+        || state.route_inbound_replay_entries != 0
+        || state.route_outbound_replay_entries != 0
+        || state.route_pending_mint_entries != 0
+        || state.route_pending_burn_entries != 0
+        || state.route_pending_refund_entries != 0
+    {
+        return Err(
+            "authenticated TON destination readback is not canonical deployment-zero state"
+                .to_owned(),
+        );
+    }
+    let verifying_key_bytes = canonical_sccp_groth16_bls12381_verifying_key_bytes_v1(
+        &state.verifying_key,
+    )
+    .ok_or_else(|| "authenticated TON verifying key is not a canonical subgroup key".to_owned())?;
+    let verifying_key_hash = sccp_groth16_bls12381_verifying_key_hash_v1(&state.verifying_key)
+        .ok_or_else(|| "authenticated TON verifying key cannot be hashed".to_owned())?;
+    let expected_semantic_profile_hash =
+        deployment
+            .outbound_proof_policy
+            .semantic_profile_hash()
+            .map_err(|_| "governed TON semantic proof profile is invalid".to_owned())?;
+    let expected_finality_anchor_hash = deployment
+        .outbound_proof_policy
+        .sora_finality_anchor_hash()
+        .map_err(|_| "governed TON finality anchor is invalid".to_owned())?;
+    let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bls12381(circuit) =
+        deployment.outbound_proof_policy.semantic_profile
+    else {
+        return Err("governed TON route does not use the BLS12-381 semantic profile".to_owned());
+    };
+    if state.jetton_master_address != deployment.jetton_master_address
+        || state.route_address != deployment.route_address
+        || jetton_master_code_hash != deployment.jetton_master_code_hash
+        || jetton_wallet_code_hash != deployment.jetton_wallet_code_hash
+        || route_code_hash != deployment.route_code_hash
+        || embedded_verifier_code_hash != deployment.embedded_verifier_code_hash
+        || jetton_master_initial_data_hash != deployment.jetton_master_initial_data_hash
+        || route_initial_data_hash != deployment.route_initial_data_hash
+        || state.verifier_circuit_hash != deployment.verifier_circuit_hash
+        || state.verifier_circuit_hash != circuit.circuit_commitment
+        || circuit.public_signal_schema_hash != sccp_groth16_bls12381_public_signal_schema_hash_v1()
+        || state.proof_profile_commitment != deployment.proof_profile_commitment
+        || state.proof_profile_commitment != sccp_ton_groth16_bls12381_proof_profile_commitment_v1()
+        || state.verifier_key_hash != deployment.verifier_key_hash
+        || state.semantic_proof_profile_hash != expected_semantic_profile_hash
+        || state.sora_finality_anchor_hash != expected_finality_anchor_hash
+        || state.verifying_key != deployment.verifying_key
+        || verifying_key_hash != state.verifier_key_hash
+        || state.route_revision == 0
+        || state.route_revision != route.revision
+        || state.destination_binding_hash != expected_binding
+        || state.route_configuration_hash != expected_route_configuration
+        || state.governed_route_configuration_hash != expected_governed_configuration
+    {
+        return Err("authenticated TON destination state differs from governed route".to_owned());
+    }
+    Ok(ValidatedDestinationStateV1 {
+        proof_curve: "bls12-381",
+        observed_at_unix_ms: state.observed_at_unix_ms,
+        finality_height: u64::from(state.finalized_masterchain_seqno),
+        finality_block_hash: state.finalized_masterchain_root_hash,
+        destination_binding_hash: state.destination_binding_hash,
+        route_configuration_hash: state.route_configuration_hash,
+        governed_route_configuration_hash: state.governed_route_configuration_hash,
+        verifier_key_hash: state.verifier_key_hash,
+        semantic_proof_profile_hash: state.semantic_proof_profile_hash,
+        sora_finality_anchor_hash: state.sora_finality_anchor_hash,
+        route_revision: state.route_revision,
+        verifying_key_sha256: sha256(&verifying_key_bytes),
+        token_runtime_hash: jetton_master_code_hash,
+        verifier_runtime_hash: embedded_verifier_code_hash,
         route_runtime_hash: route_code_hash,
     })
 }
@@ -2245,6 +2746,9 @@ fn authenticate_destination_state(
         DestinationStateStatementV1::Tron(state) => {
             validate_tron_destination_state(expected_profile, state)?
         }
+        DestinationStateStatementV1::Ton(state) => {
+            validate_ton_destination_state(expected_profile, state)?
+        }
     };
     validate_approved_proof_system(&validated, approved_proof_system)?;
     Ok((validated, sha256(statement_json.as_bytes())))
@@ -2266,6 +2770,8 @@ fn validate_approved_proof_system(
         || approved.circuit_id.contains("labeled-signal")
         || approved.circuit_artifact_sha256 == FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256
         || approved.verifier_key_hash == FORBIDDEN_ALGEBRAIC_SMOKE_VK
+        || !matches!(approved.proof_curve.as_str(), "bn254" | "bls12-381")
+        || validated.proof_curve != approved.proof_curve
         || validated.verifier_key_hash != approved.verifier_key_hash
         || validated.route_revision != approved.route_revision
         || validated.verifying_key_sha256 != approved.verifying_key_sha256
@@ -2288,6 +2794,7 @@ fn approved_proof_system_from_policy(
         .map_err(|_| "destination build policy cannot be canonically encoded".to_owned())?;
     Ok(ApprovedProofSystemV1 {
         circuit_id: proof.circuit_id.clone(),
+        proof_curve: proof.proof_curve.clone(),
         circuit_artifact_sha256: require_hash(
             &proof.circuit_artifact_sha256_hex,
             "circuit artifact digest",
@@ -2358,7 +2865,10 @@ fn exact_unavailable_reason(profile: SccpNetworkV1) -> Option<&'static str> {
 fn release_profile_supported(profile: SccpNetworkV1) -> bool {
     matches!(
         profile,
-        SccpNetworkV1::EthereumMainnet | SccpNetworkV1::BscMainnet | SccpNetworkV1::TronMainnet
+        SccpNetworkV1::EthereumMainnet
+            | SccpNetworkV1::BscMainnet
+            | SccpNetworkV1::TronMainnet
+            | SccpNetworkV1::TonMainnet
     )
 }
 #[cfg(unix)]
@@ -2500,6 +3010,7 @@ fn empty_lane_validation_receipt(
         route_revision: None,
         verifying_key_sha256_hex: None,
         semantic_circuit_id: None,
+        proof_curve: None,
         circuit_artifact_sha256_hex: None,
         witness_generator_sha256_hex: None,
         public_signal_schema_hash_hex: None,
@@ -2545,6 +3056,7 @@ fn validate_outbound_input(
             receipt.route_revision = Some(validated.route_revision.to_string());
             receipt.verifying_key_sha256_hex = Some(lowercase_hex(&validated.verifying_key_sha256));
             receipt.semantic_circuit_id = Some(approved_proof_system.circuit_id.clone());
+            receipt.proof_curve = Some(approved_proof_system.proof_curve.clone());
             receipt.circuit_artifact_sha256_hex = Some(lowercase_hex(
                 &approved_proof_system.circuit_artifact_sha256,
             ));
@@ -3079,17 +3591,19 @@ mod tests {
         }
     }
     #[test]
-    fn first_release_profiles_exclude_domains_three_and_four() {
+    fn production_release_profiles_require_ton_mainnet_but_exclude_testnets() {
         for supported in [
             SccpNetworkV1::EthereumMainnet,
             SccpNetworkV1::BscMainnet,
             SccpNetworkV1::TronMainnet,
+            SccpNetworkV1::TonMainnet,
         ] {
             assert!(release_profile_supported(supported));
         }
         for unsupported in [
             "solana-mainnet-beta",
-            "ton-mainnet",
+            "solana-testnet",
+            "ton-testnet",
             "ethereum-sepolia",
             "tron-nile",
         ] {
@@ -3267,11 +3781,11 @@ mod tests {
             assert_eq!(format!("{canonical}\n"), fixture);
         }
     }
-    fn release_trust_policy_with_proof_string(
+    fn release_proof_policy_with_string(
         proof_index: usize,
         field: &str,
         replacement: &str,
-    ) -> ReleaseTrustPolicyV1 {
+    ) -> ProofSystemPolicyV1 {
         let mut document = norito::json::parse_value(include_str!(
             "../../../../fixtures/sccp/release_evidence_v1/test-trust-policy.json"
         ))
@@ -3288,8 +3802,12 @@ mod tests {
         *value = norito::json::Value::String(replacement.to_owned());
         let json = norito::json::to_json(&document)
             .expect("mutated release trust policy must remain canonical JSON");
-        norito::json::from_str(&json)
+        norito::json::from_str::<ReleaseTrustPolicyV1>(&json)
             .expect("mutated release trust policy must retain the typed JSON shape")
+            .proof_systems
+            .into_iter()
+            .nth(proof_index)
+            .expect("mutated release trust policy must retain the selected proof policy")
     }
     #[test]
     fn full_release_trust_policy_json_path_rejects_retired_v3_and_diagnostic_circuits() {
@@ -3299,7 +3817,16 @@ mod tests {
         .expect("release trust-policy fixture must use the typed JSON schema");
         let error = validate_release_trust_policy(&baseline, "test-fixture", &mut BTreeSet::new())
             .expect_err("retired protocol-v3 fixture must fail current policy validation");
-        assert_eq!(error, "semantic proof-system policy is invalid");
+        assert_eq!(
+            error,
+            "release trust policy has the wrong schema, mode, or cardinality"
+        );
+        let error = proof_policy_hash_roles(&baseline.proof_systems[0], 0)
+            .expect_err("retired protocol-v3 finality anchor must be rejected independently");
+        assert_eq!(
+            error,
+            "SORA finality anchor must select exact Taira Sumeragi-v2"
+        );
         let forbidden_artifact_digest = lowercase_hex(&FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256);
         for (proof_index, field, replacement, expected_error) in [
             (
@@ -3321,11 +3848,9 @@ mod tests {
                 "labeled-signal-only circuit is forbidden in release policy",
             ),
         ] {
-            let candidate = release_trust_policy_with_proof_string(proof_index, field, replacement);
-            let error =
-                validate_release_trust_policy(&candidate, "test-fixture", &mut BTreeSet::new())
-                    .err()
-                    .expect("diagnostic circuit mutation must be rejected");
+            let candidate = release_proof_policy_with_string(proof_index, field, replacement);
+            let error = proof_policy_hash_roles(&candidate, proof_index)
+                .expect_err("diagnostic circuit mutation must be rejected");
             assert_eq!(error, expected_error);
         }
     }
@@ -3455,6 +3980,7 @@ mod tests {
             route_address: evm_deployment.route_address,
             route_code_hash: evm_deployment.route_code_hash,
             taira_to_token_multiplier: evm_deployment.taira_to_token_multiplier,
+            max_wrapped_supply: evm_deployment.max_wrapped_supply,
         };
         let lane = SccpLaneIdV1 {
             source: SccpNetworkV1::TronMainnet,
@@ -3544,8 +4070,333 @@ mod tests {
         state.sora_finality_anchor_hash[0] ^= 1;
         assert!(validate_tron_destination_readback(&state, &route, &deployment).is_err());
     }
+    #[cfg(feature = "test-fixtures")]
+    fn ton_test_verifying_key() -> SccpGroth16Bls12381VerifyingKeyV1 {
+        use halo2curves::{
+            bls12381::{G1Affine, G2Affine},
+            group::GroupEncoding,
+        };
+        use iroha_data_model::bridge::SccpGroth16Bls12381IcV1;
+        let g1 = G1Affine::generator().to_bytes();
+        let g2 = G2Affine::generator().to_bytes();
+        let mut g1_bytes = [0_u8; 48];
+        let mut g2_bytes = [0_u8; 96];
+        g1_bytes.copy_from_slice(g1.as_ref());
+        g2_bytes.copy_from_slice(g2.as_ref());
+        SccpGroth16Bls12381VerifyingKeyV1 {
+            version: 1,
+            alpha1: g1_bytes,
+            beta2: g2_bytes,
+            gamma2: g2_bytes,
+            delta2: g2_bytes,
+            ic: SccpGroth16Bls12381IcV1 {
+                constant: g1_bytes,
+                signal_0: g1_bytes,
+                signal_1: g1_bytes,
+                signal_2: g1_bytes,
+                signal_3: g1_bytes,
+                signal_4: g1_bytes,
+                signal_5: g1_bytes,
+                signal_6: g1_bytes,
+                signal_7: g1_bytes,
+                signal_8: g1_bytes,
+                signal_9: g1_bytes,
+                signal_10: g1_bytes,
+            },
+        }
+    }
+    #[cfg(feature = "test-fixtures")]
+    fn single_cell_code_boc(byte: u8) -> Vec<u8> {
+        vec![
+            0xb5, 0xee, 0x9c, 0x72, 0x01, 0x01, 0x01, 0x01, 0x00, 0x03, 0x00, 0x00, 0x02, byte,
+        ]
+    }
+    #[cfg(feature = "test-fixtures")]
+    fn exact_ton_destination_readback_route()
+    -> (SccpGovernedRouteV1, SccpTonDestinationDeploymentV1) {
+        use iroha_data_model::bridge::{
+            SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER, SccpLaneIdV1, SccpOutboundProofPolicyV1,
+            SccpSourceEmitterV1, SccpTonSourceEmitterV1,
+        };
+        let (mut route, evm_deployment) = exact_evm_destination_readback_route();
+        let code_hash = |byte| {
+            ton_boc_single_ordinary_root_hash_v1(&single_cell_code_boc(byte))
+                .expect("single-cell TON code BOC must hash")
+        };
+        let semantic_profile =
+            SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bls12381(
+                SccpGroth16Bls12381SemanticCircuitV1 {
+                    version: 1,
+                    circuit_commitment: [0x76; 32],
+                    witness_generator_commitment: [0x77; 32],
+                    public_signal_schema_hash: sccp_groth16_bls12381_public_signal_schema_hash_v1(),
+                },
+            );
+        let outbound_proof_policy = SccpOutboundProofPolicyV1 {
+            version: 1,
+            semantic_profile,
+            sora_finality_anchor: evm_deployment.outbound_proof_policy.sora_finality_anchor,
+        };
+        let verifying_key = ton_test_verifying_key();
+        let deployment = SccpTonDestinationDeploymentV1 {
+            jetton_master_address: SccpTonAddressV1 {
+                workchain: 0,
+                account: ton_state_init_address_hash_v1(
+                    &single_cell_code_boc(0x91),
+                    &single_cell_code_boc(0x89),
+                )
+                .expect("fixture Jetton master StateInit must hash"),
+            },
+            jetton_master_code_hash: code_hash(0x91),
+            jetton_master_initial_data_hash: code_hash(0x89),
+            jetton_wallet_code_hash: code_hash(0x92),
+            route_address: SccpTonAddressV1 {
+                workchain: 0,
+                account: ton_state_init_address_hash_v1(
+                    &single_cell_code_boc(0x93),
+                    &single_cell_code_boc(0x8a),
+                )
+                .expect("fixture route StateInit must hash"),
+            },
+            route_code_hash: code_hash(0x93),
+            route_initial_data_hash: code_hash(0x8a),
+            embedded_verifier_code_hash: code_hash(0x94),
+            verifier_circuit_hash: [0x76; 32],
+            verifying_key,
+            verifier_key_hash: sccp_groth16_bls12381_verifying_key_hash_v1(&verifying_key)
+                .expect("valid test BLS12-381 verifying key"),
+            proof_profile_commitment: sccp_ton_groth16_bls12381_proof_profile_commitment_v1(),
+            outbound_proof_policy,
+            taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER,
+            max_wrapped_supply: route
+                .settlement
+                .max_outstanding_liability
+                .checked_mul(u128::from(SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER))
+                .expect("exact TON readback fixture supply cap must fit u128"),
+        };
+        let lane = SccpLaneIdV1 {
+            source: SccpNetworkV1::TonMainnet,
+            target: SccpNetworkV1::SoraTaira,
+        };
+        route.lane_id = lane;
+        route.route_id = iroha_sccp::SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.to_owned();
+        route.destination = SccpDestinationDeploymentV1::Ton(deployment);
+        let route_configuration_hash = route
+            .destination
+            .route_configuration_hash(
+                route.lane_id,
+                &route.route_id,
+                &route.asset_key,
+                route.revision,
+                route.settlement.payload_amount_scale,
+            )
+            .expect("exact TON readback route configuration must be valid");
+        route.source_identity = SccpSourceIdentityV1 {
+            lane,
+            emitter: SccpSourceEmitterV1::Ton(SccpTonSourceEmitterV1 {
+                address: deployment.route_address,
+                code_hash: deployment.route_code_hash,
+                route_config_hash: route_configuration_hash,
+            }),
+        };
+        route
+            .validate()
+            .expect("exact TON readback route must remain governed and valid");
+        (route, deployment)
+    }
+    #[test]
+    #[cfg(feature = "test-fixtures")]
+    fn ton_destination_readback_binds_mainnet_bocs_curve_and_governance() {
+        let (route, deployment) = exact_ton_destination_readback_route();
+        let semantic_proof_profile_hash = deployment
+            .outbound_proof_policy
+            .semantic_profile_hash()
+            .expect("exact TON semantic profile must hash");
+        let sora_finality_anchor_hash = deployment
+            .outbound_proof_policy
+            .sora_finality_anchor_hash()
+            .expect("exact TON finality anchor must hash");
+        let mut state = TonDestinationStateV1 {
+            schema: "sccp-ton-destination-state-v1".to_owned(),
+            profile: SccpNetworkV1::TonMainnet,
+            observed_at_unix_ms: 1,
+            finalized_masterchain_seqno: 1,
+            finalized_masterchain_root_hash: [0xa1; 32],
+            finalized_masterchain_file_hash: [0xa2; 32],
+            global_id: SCCP_TON_MAINNET_GLOBAL_ID_V1,
+            network_identity_hash: sccp_network_identity_hash_v1(SccpNetworkV1::TonMainnet),
+            governed_route: route.clone(),
+            route_revision: route.revision,
+            jetton_master_address: deployment.jetton_master_address,
+            route_address: deployment.route_address,
+            jetton_master_code_boc_hex: lowercase_hex(&single_cell_code_boc(0x91)),
+            jetton_wallet_code_boc_hex: lowercase_hex(&single_cell_code_boc(0x92)),
+            route_code_boc_hex: lowercase_hex(&single_cell_code_boc(0x93)),
+            embedded_verifier_code_boc_hex: lowercase_hex(&single_cell_code_boc(0x94)),
+            jetton_master_initial_data_boc_hex: lowercase_hex(&single_cell_code_boc(0x89)),
+            route_initial_data_boc_hex: lowercase_hex(&single_cell_code_boc(0x8a)),
+            jetton_master_storage_version: SCCP_V1_TON_STORAGE_VERSION,
+            jetton_master_total_supply: "0".to_owned(),
+            jetton_master_mint_replay_entries: 0,
+            jetton_master_burn_replay_entries: 0,
+            route_storage_version: SCCP_V1_TON_STORAGE_VERSION,
+            route_refund_sequence: 0,
+            route_nonce_entries: 0,
+            route_inbound_replay_entries: 0,
+            route_outbound_replay_entries: 0,
+            route_pending_mint_entries: 0,
+            route_pending_burn_entries: 0,
+            route_pending_refund_entries: 0,
+            verifier_circuit_hash: deployment.verifier_circuit_hash,
+            proof_profile_commitment: deployment.proof_profile_commitment,
+            verifier_key_hash: deployment.verifier_key_hash,
+            semantic_proof_profile_hash,
+            sora_finality_anchor_hash,
+            verifying_key: deployment.verifying_key,
+            destination_binding_hash: route
+                .destination_binding_hash()
+                .expect("exact TON destination binding must hash"),
+            route_configuration_hash: route
+                .destination
+                .route_configuration_hash(
+                    route.lane_id,
+                    &route.route_id,
+                    &route.asset_key,
+                    route.revision,
+                    route.settlement.payload_amount_scale,
+                )
+                .expect("exact TON destination route configuration must hash"),
+            governed_route_configuration_hash: route
+                .route_configuration_hash()
+                .expect("exact governed TON route configuration must hash"),
+        };
+        let encoded_state = norito::json::to_json(&state)
+            .expect("TON canonical-zero destination state must encode");
+        state = norito::json::from_str(&encoded_state)
+            .expect("TON canonical-zero destination state must roundtrip");
+        let validated = validate_ton_destination_state(SccpNetworkV1::TonMainnet, &state)
+            .expect("exact TON destination readback must validate");
+        assert_eq!(validated.proof_curve, "bls12-381");
+        assert_eq!(
+            validated.token_runtime_hash,
+            deployment.jetton_master_code_hash
+        );
+        let mut substituted_route_address = state.clone();
+        substituted_route_address.route_address = SccpTonAddressV1 {
+            workchain: 0,
+            account: [0x83; 32],
+        };
+        assert!(
+            validate_ton_destination_state(SccpNetworkV1::TonMainnet, &substituted_route_address,)
+                .is_err()
+        );
+        let mut substituted_master_address = state.clone();
+        substituted_master_address.jetton_master_address = SccpTonAddressV1 {
+            workchain: 0,
+            account: [0x85; 32],
+        };
+        assert!(
+            validate_ton_destination_state(SccpNetworkV1::TonMainnet, &substituted_master_address,)
+                .is_err()
+        );
+        let mut substituted_governed_data_root = state.clone();
+        let SccpDestinationDeploymentV1::Ton(ref mut changed_deployment) =
+            substituted_governed_data_root.governed_route.destination
+        else {
+            unreachable!("TON fixture must contain a TON deployment")
+        };
+        changed_deployment.route_initial_data_hash[0] ^= 1;
+        assert!(
+            validate_ton_destination_state(
+                SccpNetworkV1::TonMainnet,
+                &substituted_governed_data_root,
+            )
+            .is_err()
+        );
+        let mut substituted_governed_master_root = state.clone();
+        let SccpDestinationDeploymentV1::Ton(ref mut changed_deployment) =
+            substituted_governed_master_root.governed_route.destination
+        else {
+            unreachable!("TON fixture must contain a TON deployment")
+        };
+        changed_deployment.jetton_master_initial_data_hash[0] ^= 1;
+        assert!(
+            validate_ton_destination_state(
+                SccpNetworkV1::TonMainnet,
+                &substituted_governed_master_root,
+            )
+            .is_err()
+        );
+        macro_rules! assert_nonzero_initial_state_rejected {
+            ($field:ident, $value:expr) => {{
+                let mut invalid = state.clone();
+                invalid.$field = $value;
+                assert!(
+                    validate_ton_destination_state(SccpNetworkV1::TonMainnet, &invalid).is_err(),
+                    "nonzero TON initial-state field `{}` unexpectedly validated",
+                    stringify!($field)
+                );
+            }};
+        }
+        assert_nonzero_initial_state_rejected!(jetton_master_total_supply, "1".to_owned());
+        assert_nonzero_initial_state_rejected!(jetton_master_mint_replay_entries, 1);
+        assert_nonzero_initial_state_rejected!(jetton_master_burn_replay_entries, 1);
+        assert_nonzero_initial_state_rejected!(route_refund_sequence, 1);
+        assert_nonzero_initial_state_rejected!(route_nonce_entries, 1);
+        assert_nonzero_initial_state_rejected!(route_inbound_replay_entries, 1);
+        assert_nonzero_initial_state_rejected!(route_outbound_replay_entries, 1);
+        assert_nonzero_initial_state_rejected!(route_pending_mint_entries, 1);
+        assert_nonzero_initial_state_rejected!(route_pending_burn_entries, 1);
+        assert_nonzero_initial_state_rejected!(route_pending_refund_entries, 1);
+        let mut wrong_storage_version = state.clone();
+        wrong_storage_version.route_storage_version = 2;
+        assert!(
+            validate_ton_destination_state(SccpNetworkV1::TonMainnet, &wrong_storage_version)
+                .is_err()
+        );
+        let mut wrong_master_storage_version = state.clone();
+        wrong_master_storage_version.jetton_master_storage_version = 2;
+        assert!(
+            validate_ton_destination_state(
+                SccpNetworkV1::TonMainnet,
+                &wrong_master_storage_version,
+            )
+            .is_err()
+        );
+        let mut reused_initial_data = state.clone();
+        reused_initial_data.route_initial_data_boc_hex = reused_initial_data
+            .jetton_master_initial_data_boc_hex
+            .clone();
+        assert!(
+            validate_ton_destination_state(SccpNetworkV1::TonMainnet, &reused_initial_data)
+                .is_err()
+        );
+        let mut swapped_initial_data = state.clone();
+        std::mem::swap(
+            &mut swapped_initial_data.jetton_master_initial_data_boc_hex,
+            &mut swapped_initial_data.route_initial_data_boc_hex,
+        );
+        assert!(
+            validate_ton_destination_state(SccpNetworkV1::TonMainnet, &swapped_initial_data)
+                .is_err()
+        );
+        let mut swapped_code = state.clone();
+        std::mem::swap(
+            &mut swapped_code.jetton_master_code_boc_hex,
+            &mut swapped_code.route_code_boc_hex,
+        );
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &swapped_code).is_err());
+        state.jetton_wallet_code_boc_hex = state.jetton_master_code_boc_hex.clone();
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &state).is_err());
+        state.jetton_wallet_code_boc_hex = lowercase_hex(&single_cell_code_boc(0x92));
+        state.global_id = 0;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonMainnet, &state).is_err());
+        state.global_id = SCCP_TON_MAINNET_GLOBAL_ID_V1;
+        assert!(validate_ton_destination_state(SccpNetworkV1::TonTestnet, &state).is_err());
+    }
     fn validated_destination() -> ValidatedDestinationStateV1 {
         ValidatedDestinationStateV1 {
+            proof_curve: "bn254",
             observed_at_unix_ms: 1,
             finality_height: 1,
             finality_block_hash: [1; 32],
@@ -3565,6 +4416,7 @@ mod tests {
     fn approved_proof_system() -> ApprovedProofSystemV1 {
         ApprovedProofSystemV1 {
             circuit_id: RELEASE_CIRCUIT_IDS[0].to_owned(),
+            proof_curve: "bn254".to_owned(),
             circuit_artifact_sha256: [9; 32],
             witness_generator_sha256: [16; 32],
             public_signal_schema_hash: [17; 32],
@@ -3662,7 +4514,7 @@ mod tests {
             lowercase_hex(&FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256),
             "d7049de0f0b0ecb7ec4f64b885646ab99f85fcbab05dfaf710d3002f17632bb9"
         );
-        for mutation in 0..=12 {
+        for mutation in 0..=13 {
             let mut candidate = approved.clone();
             match mutation {
                 0 => candidate.circuit_id = "algebraic-smoke-v1".to_owned(),
@@ -3684,6 +4536,7 @@ mod tests {
                 12 => {
                     candidate.circuit_artifact_sha256 = FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256;
                 }
+                13 => candidate.proof_curve = "bls12-381".to_owned(),
                 _ => unreachable!(),
             }
             assert!(validate_approved_proof_system(&validated, &candidate).is_err());
@@ -3696,7 +4549,10 @@ mod tests {
             iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_artifact_v1(&fixture.artifact)
                 .expect("fixture proof must encode canonically");
         let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(circuit) =
-            fixture.artifact.request.semantic_proof_profile;
+            fixture.artifact.request.semantic_proof_profile
+        else {
+            unreachable!("BN254 release fixture must retain its BN254 semantic profile")
+        };
         let anchor = fixture.artifact.request.sora_finality_anchor;
         let SccpPayloadV1::Transfer(transfer) = fixture.bundle.payload;
         let verifying_key_bytes = canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
@@ -3709,6 +4565,7 @@ mod tests {
             ProofSystemPolicyV1 {
                 counterparty_profile: "ethereum-mainnet".to_owned(),
                 circuit_id: RELEASE_CIRCUIT_IDS[0].to_owned(),
+                proof_curve: "bn254".to_owned(),
                 semantics: REQUIRED_SEMANTICS.iter().map(ToString::to_string).collect(),
                 circuit_artifact_sha256_hex: lowercase_hex(&circuit.circuit_commitment),
                 witness_generator_sha256_hex: lowercase_hex(&circuit.witness_generator_commitment),

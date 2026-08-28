@@ -44,7 +44,7 @@ use iroha_data_model::{
     bridge::{
         SccpGovernedRouteV1, SccpInboundAnchorHighWaterKeyV1, SccpOutboundMessageIndexKeyV1,
         SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpOutboundPendingUsageV1,
-        SccpOutboundProofRecordV1,
+        SccpOutboundProofRecordV1, SccpRouteKeyV1, SccpRouteLiabilityV1,
         sccp::{SccpInboundMessageKeyV1, SccpInboundMessageRecordV1},
     },
     confidential::ConfidentialFeatureDigest,
@@ -963,6 +963,7 @@ macro_rules! with_world_overlay_fields {
             axt_replay_ledger,
             axt_handle_budget_ledger,
             sccp_registry,
+            sccp_route_liabilities,
             sccp_outbound_pending_usage,
             sccp_outbound_pending_messages,
             sccp_outbound_message_locator,
@@ -4105,6 +4106,8 @@ pub struct World {
     pub(crate) axt_handle_budget_ledger: Storage<AxtHandleBudgetKey, AxtHandleBudgetRecord>,
     /// First-class typed SCCP governance registry.
     pub(crate) sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1>,
+    /// Exact nonzero outstanding SORA liability keyed by immutable SCCP route revision.
+    pub(crate) sccp_route_liabilities: Storage<SccpRouteKeyV1, SccpRouteLiabilityV1>,
     /// Exact consensus-accounted usage of payload-bearing pending outbox entries.
     pub(crate) sccp_outbound_pending_usage: Cell<SccpOutboundPendingUsageV1>,
     /// Payload-bearing pending outbox registry.
@@ -4793,6 +4796,8 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, AxtHandleBudgetKey, AxtHandleBudgetRecord>,
     /// First-class typed SCCP governance registry for this block scope.
     pub(crate) sccp_registry: CellBlock<'world, iroha_data_model::bridge::SccpRegistryV1>,
+    /// Outstanding SCCP route liabilities for this block scope.
+    pub(crate) sccp_route_liabilities: StorageBlock<'world, SccpRouteKeyV1, SccpRouteLiabilityV1>,
     /// Exact pending outbox usage for this block scope.
     pub(crate) sccp_outbound_pending_usage: CellBlock<'world, SccpOutboundPendingUsageV1>,
     /// Payload-bearing pending outbox registry for this block scope.
@@ -5379,6 +5384,7 @@ impl WorldBlock<'_> {
         collect_reverts!(self.axt_asset_incarnations, AxtAssetIncarnation);
         collect_reverts!(self.axt_replay_ledger, AxtReplay);
         collect_reverts!(self.axt_handle_budget_ledger, AxtHandleBudget);
+        collect_reverts!(self.sccp_route_liabilities, SccpRouteLiability);
         collect_reverts!(self.nfts, Nft);
         collect_reverts!(self.rwas, Rwa);
         collect_reverts!(self.roles, Role);
@@ -5469,6 +5475,7 @@ impl WorldBlock<'_> {
         collect_payload!(self.axt_asset_incarnations, AxtAssetIncarnation);
         collect_payload!(self.axt_replay_ledger, AxtReplay);
         collect_payload!(self.axt_handle_budget_ledger, AxtHandleBudget);
+        collect_payload!(self.sccp_route_liabilities, SccpRouteLiability);
         collect_payload!(self.nfts, Nft);
         collect_payload!(self.rwas, Rwa);
         collect_payload!(self.roles, Role);
@@ -5659,6 +5666,7 @@ impl WorldBlock<'_> {
             axt_asset_incarnations,
             axt_replay_ledger,
             axt_handle_budget_ledger,
+            sccp_route_liabilities,
             sccp_outbound_pending_messages,
             sccp_outbound_message_locator,
             sccp_outbound_message_index,
@@ -6052,6 +6060,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// First-class typed SCCP governance registry for this transaction.
     pub(crate) sccp_registry:
         CellTransaction<'block, 'world, iroha_data_model::bridge::SccpRegistryV1>,
+    /// Outstanding SCCP route liabilities for this transaction.
+    pub(crate) sccp_route_liabilities:
+        StorageTransaction<'block, 'world, SccpRouteKeyV1, SccpRouteLiabilityV1>,
     /// Exact pending outbox usage for this transaction.
     pub(crate) sccp_outbound_pending_usage:
         CellTransaction<'block, 'world, SccpOutboundPendingUsageV1>,
@@ -8236,6 +8247,8 @@ pub struct WorldView<'world> {
         StorageView<'world, AxtHandleBudgetKey, AxtHandleBudgetRecord>,
     /// First-class typed SCCP governance registry view.
     pub(crate) sccp_registry: CellView<'world, iroha_data_model::bridge::SccpRegistryV1>,
+    /// Outstanding SCCP route liability view.
+    pub(crate) sccp_route_liabilities: StorageView<'world, SccpRouteKeyV1, SccpRouteLiabilityV1>,
     /// Exact pending outbox usage view.
     pub(crate) sccp_outbound_pending_usage: CellView<'world, SccpOutboundPendingUsageV1>,
     /// Payload-bearing pending outbox registry view.
@@ -18582,6 +18595,8 @@ macro_rules! world_ro_accessors {
             storage axt_replay_ledger: AxtHandleReplayKey => AxtReplayRecord;
             /// Cumulative spend keyed by the complete issuer-signed handle family.
             storage axt_handle_budget_ledger: AxtHandleBudgetKey => AxtHandleBudgetRecord;
+            /// Exact nonzero outstanding liability keyed by immutable SCCP route revision.
+            storage sccp_route_liabilities: SccpRouteKeyV1 => SccpRouteLiabilityV1;
             /// Consensus-accounted usage of payload-bearing pending SCCP entries.
             cell_copy sccp_outbound_pending_usage: SccpOutboundPendingUsageV1;
             /// Pending outbound SCCP payload registry keyed by exact lane and lane-bound message id.
@@ -20292,6 +20307,7 @@ impl<'world> WorldBlock<'world> {
             axt_replay_ledger,
             axt_handle_budget_ledger,
             sccp_registry,
+            sccp_route_liabilities,
             sccp_outbound_pending_usage,
             sccp_outbound_pending_messages,
             sccp_outbound_message_locator,
@@ -20642,6 +20658,7 @@ impl<'world> WorldBlock<'world> {
         axt_replay_ledger.commit();
         axt_handle_budget_ledger.commit();
         sccp_registry.commit();
+        sccp_route_liabilities.commit();
         sccp_outbound_pending_usage.commit();
         sccp_outbound_pending_messages.commit();
         sccp_outbound_message_locator.commit();
@@ -22421,6 +22438,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             axt_replay_ledger,
             axt_handle_budget_ledger,
             sccp_registry,
+            sccp_route_liabilities,
             sccp_outbound_pending_usage,
             sccp_outbound_pending_messages,
             sccp_outbound_message_locator,
@@ -22819,6 +22837,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         axt_replay_ledger.apply();
         axt_handle_budget_ledger.apply();
         sccp_registry.apply();
+        sccp_route_liabilities.apply();
         sccp_outbound_pending_usage.apply();
         sccp_outbound_pending_messages.apply();
         sccp_outbound_message_locator.apply();
@@ -23593,6 +23612,13 @@ impl State {
             ),
         );
     }
+    #[cfg(test)]
+    pub(crate) fn set_snapshot_v2_bootstrap_candidate_for_testing(
+        &mut self,
+        record: SnapshotV2BootstrapRecord,
+    ) {
+        self.snapshot_v2_bootstrap_candidate = Some(record);
+    }
     pub(crate) fn has_snapshot_v2_bootstrap_candidate(&self) -> bool {
         self.snapshot_v2_bootstrap_candidate.is_some()
     }
@@ -23712,7 +23738,17 @@ impl State {
                 ));
             }
         }
-        self.authenticated_snapshot_v2_bootstrap = self.snapshot_v2_bootstrap_candidate.take();
+        let promoted = self
+            .snapshot_v2_bootstrap_candidate
+            .take()
+            .expect("validated snapshot bootstrap candidate must remain available");
+        let previous_authenticated = self.authenticated_snapshot_v2_bootstrap.replace(promoted);
+        if let Err(error) = self.validate_kaigi_account_dependencies_at_authenticated_time() {
+            let rejected = self.authenticated_snapshot_v2_bootstrap.take();
+            self.authenticated_snapshot_v2_bootstrap = previous_authenticated;
+            self.snapshot_v2_bootstrap_candidate = rejected;
+            return Err(error);
+        }
         Ok(())
     }
     fn disable_nexus_fees_for_testing(&mut self) {
@@ -25185,16 +25221,23 @@ impl State {
         &self.telemetry
     }
     pub(crate) fn rebuild_derived_state_indexes(&mut self) -> core::result::Result<(), String> {
+        let kaigi_retained_timestamp_ceiling = self.latest_block_creation_time_ms_fast();
         crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut self.world)
             .map_err(|error| format!("failed to rebuild Kaigi relay registry: {error}"))?;
-        crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies(&mut self.world)
-            .map_err(|error| format!("failed to rebuild Kaigi account dependencies: {error}"))?;
+        crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies_at(
+            &mut self.world,
+            kaigi_retained_timestamp_ceiling,
+        )
+        .map_err(|error| format!("failed to rebuild Kaigi account dependencies: {error}"))?;
         let nexus = self.nexus_snapshot();
         let world = self.world_view_with_nexus(&nexus);
         crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_relay_registry(&world)
             .map_err(|error| format!("failed to validate Kaigi relay registry: {error}"))?;
-        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies(&world)
-            .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies_at(
+            &world,
+            kaigi_retained_timestamp_ceiling,
+        )
+        .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
         drop(world);
         self.world
             .rebuild_asset_definition_alias_indexes()
@@ -25237,12 +25280,16 @@ impl State {
             );
             return Ok(());
         }
+        let kaigi_retained_timestamp_ceiling = self.latest_block_creation_time_ms_fast();
         let nexus = self.nexus_snapshot();
         let world = self.world_view_with_nexus(&nexus);
         crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_relay_registry(&world)
             .map_err(|error| format!("failed to validate Kaigi relay registry: {error}"))?;
-        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies(&world)
-            .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies_at(
+            &world,
+            kaigi_retained_timestamp_ceiling,
+        )
+        .map_err(|error| format!("failed to validate Kaigi account dependencies: {error}"))?;
         drop(world);
         let leases = self.world.vpn_leases.view();
         for (_, record) in leases.iter() {
@@ -25250,6 +25297,21 @@ impl State {
         }
         drop(leases);
         self.rebuild_snapshot_root_indexes()
+    }
+
+    fn validate_kaigi_account_dependencies_at_authenticated_time(
+        &self,
+    ) -> core::result::Result<(), String> {
+        let kaigi_retained_timestamp_ceiling = self.latest_block_creation_time_ms_fast();
+        let nexus = self.nexus_snapshot();
+        let world = self.world_view_with_nexus(&nexus);
+        crate::smartcontracts::isi::kaigi::validate_rebuilt_kaigi_account_dependencies_at(
+            &world,
+            kaigi_retained_timestamp_ceiling,
+        )
+        .map_err(|error| {
+            format!("failed to validate authenticated snapshot Kaigi account dependencies: {error}")
+        })
     }
 
     fn rebuild_snapshot_root_indexes(&mut self) -> core::result::Result<(), String> {
@@ -27878,6 +27940,10 @@ impl State {
     /// Override the latest committed block-header cache in tests.
     pub fn update_latest_block_header_cache_for_tests(&self, header: BlockHeader) {
         self.update_latest_block_header_cache(header);
+    }
+    #[cfg(test)]
+    pub(crate) fn clear_latest_block_header_cache_for_testing(&self) {
+        *self.latest_block_header.write() = None;
     }
     /// Produce Merkle proofs for an entrypoint hash at the given block height.
     ///
@@ -44163,14 +44229,88 @@ fn recompute_sccp_pending_usage<'a>(
         },
     )
 }
+fn sccp_liability_quantity_v1(
+    outstanding_liability: u128,
+    payload_amount_scale: u32,
+) -> core::result::Result<Quantity, String> {
+    let numeric = Numeric::try_new(outstanding_liability, payload_amount_scale).map_err(|error| {
+        format!(
+            "SCCP route liability {outstanding_liability} is not representable at governed scale {payload_amount_scale}: {error}"
+        )
+    })?;
+    Quantity::from_canonical_numeric(numeric).map_err(|error| {
+        format!("SCCP route liability is outside the non-negative quantity domain: {error}")
+    })
+}
+fn validate_sccp_route_liabilities_v1(
+    world: &impl WorldReadOnly,
+    registry: &ValidatedSccpRegistryV1,
+    network_id: &iroha_data_model::NetworkId,
+) -> core::result::Result<(), String> {
+    for (key, liability) in world.sccp_route_liabilities().iter() {
+        if !liability.is_well_formed() {
+            return Err(format!(
+                "SCCP route liability for revision {} stores a noncanonical zero row",
+                key.revision
+            ));
+        }
+        let route = registry.route(key).ok_or_else(|| {
+            format!(
+                "SCCP route liability for revision {} has no retained governed route",
+                key.revision
+            )
+        })?;
+        if liability.outstanding_liability > route.settlement.max_outstanding_liability {
+            return Err(format!(
+                "SCCP route liability {} exceeds immutable maximum {} for revision {}",
+                liability.outstanding_liability,
+                route.settlement.max_outstanding_liability,
+                key.revision
+            ));
+        }
+    }
+    for lane in registry.lanes() {
+        for route in &lane.routes {
+            let route_key = route.key();
+            let outstanding_liability = world
+                .sccp_route_liabilities()
+                .get(&route_key)
+                .map_or(0, |record| record.outstanding_liability);
+            let expected = sccp_liability_quantity_v1(
+                outstanding_liability,
+                route.settlement.payload_amount_scale,
+            )?;
+            let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+                network_id,
+                &route_key,
+                &route.settlement.asset_definition_id,
+            );
+            let escrow_asset = AssetId::new(route.settlement.asset_definition_id.clone(), escrow);
+            let actual = world
+                .assets()
+                .get(&escrow_asset)
+                .map(|value| value.as_ref().clone())
+                .unwrap_or_else(Quantity::zero);
+            if actual != expected {
+                return Err(format!(
+                    "SCCP route escrow balance differs from outstanding liability for revision {}: balance={actual}, liability={expected}",
+                    route.revision
+                ));
+            }
+        }
+    }
+    Ok(())
+}
 fn validate_sccp_state_view(
     world: &impl WorldReadOnly,
     registry: &ValidatedSccpRegistryV1,
     chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     committed_height: usize,
     kura: &Kura,
     config: Option<&iroha_config::parameters::actual::Sccp>,
 ) -> core::result::Result<(), String> {
+    validate_sccp_route_liabilities_v1(world, registry, network_id)?;
     if kura.emergency_fast_startup_enabled() {
         warn!(
             "emergency Fast mode deferred historical SCCP archive-to-WSV reconciliation until a Strict restart"
@@ -44189,6 +44329,7 @@ fn validate_sccp_state_view(
     let pending_usage = world.sccp_outbound_pending_usage();
     let has_sccp_state = !retained_archive_inventory.is_empty()
         || !registry.lanes().is_empty()
+        || world.sccp_route_liabilities().iter().next().is_some()
         || pending_usage != SccpOutboundPendingUsageV1::default()
         || world
             .sccp_outbound_pending_messages()
@@ -44623,6 +44764,7 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
         &world,
         registry.as_ref(),
         &state.chain_id,
+        &state.network_id,
         state.committed_height(),
         state.kura(),
         None,
@@ -44644,6 +44786,7 @@ pub(crate) fn validate_sccp_snapshot_revert_candidate(
         &reverted_world,
         reverted_registry.as_ref(),
         &state.chain_id,
+        &state.network_id,
         state.committed_height().saturating_sub(1),
         state.kura(),
         Some(&state.zk.sccp),
@@ -45097,10 +45240,13 @@ pub(crate) fn validate_sccp_registry_cell_json_str(
                     return Err("snapshot SCCP registry cell duplicates `blocks`".to_owned());
                 }
                 blocks = Some(
-                    cell.parse_value::<SccpOnChainRegistryV1>()
-                        .map_err(|error| {
-                            format!("snapshot SCCP registry blocks is invalid: {error}")
-                        })?,
+                    cell.parse_value_with_parser(|parser| {
+                        let raw = parser.raw_value_slice()?;
+                        norito::json::from_json::<SccpOnChainRegistryV1>(raw)
+                    })
+                    .map_err(|error| {
+                        format!("snapshot SCCP registry blocks is invalid: {error}")
+                    })?,
                 );
             }
             "revert" => {
@@ -45108,10 +45254,18 @@ pub(crate) fn validate_sccp_registry_cell_json_str(
                     return Err("snapshot SCCP registry cell duplicates `revert`".to_owned());
                 }
                 revert = Some(
-                    cell.parse_value::<Option<SccpOnChainRegistryV1>>()
-                        .map_err(|error| {
-                            format!("snapshot SCCP registry revert is invalid: {error}")
-                        })?,
+                    cell.parse_value_with_parser(|parser| {
+                        parser.skip_ws();
+                        if parser.try_consume_null()? {
+                            Ok(None)
+                        } else {
+                            let raw = parser.raw_value_slice()?;
+                            norito::json::from_json::<SccpOnChainRegistryV1>(raw).map(Some)
+                        }
+                    })
+                    .map_err(|error| {
+                        format!("snapshot SCCP registry revert is invalid: {error}")
+                    })?,
                 );
             }
             field => {
@@ -51324,6 +51478,7 @@ mod tiered_snapshot_diff_tests {
         AssetHandleIssuerPayloadV1, AxtBinding, AxtHandleIssuerContextV1, GroupBinding,
         HandleBudget, HandleSubject,
     };
+    use iroha_test_samples::ALICE_ID;
     const SCCP_SNAPSHOT_CHAIN_ID: &str = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1;
     fn authenticated_sccp_archive_kura() -> Arc<Kura> {
         let catalog = LaneCatalog::default();
@@ -51396,17 +51551,33 @@ mod tiered_snapshot_diff_tests {
     fn seed_sccp_snapshot_height_one(state: &State, block_hash: HashOf<BlockHeader>) {
         seed_sccp_snapshot_block_hashes(state, [block_hash]);
     }
-    fn sccp_state_snapshot_value(world: World, chain_id: &str) -> norito::json::Value {
+    fn sccp_state_snapshot_value(mut world: World, chain_id: &str) -> norito::json::Value {
+        let (fixture, _) = exact_sccp_finalized_block_fixture();
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact SCCP finality fixture decodes");
+        let revision = MusubiResolverIndexRevisionV1::default();
+        let checkpoint = MusubiRegistrySnapshotV1 {
+            finalized_height: 1,
+            finalized_block_hash: *finality.finality_artifact.block_hash.as_ref(),
+            index_revision: revision.get(),
+        };
+        checkpoint
+            .validate()
+            .expect("SCCP snapshot fixture genesis resolver checkpoint is canonical");
+        assert!(
+            world
+                .musubi_resolver_index_checkpoints
+                .insert(revision, checkpoint)
+                .is_none(),
+            "SCCP snapshot fixture must not pre-seed a resolver checkpoint"
+        );
         let state = State::new_with_chain(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             chain_id.parse().expect("canonical SCCP snapshot chain id"),
         );
-        let (fixture, _) = exact_sccp_finalized_block_fixture();
-        let finality =
-            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
-                .expect("exact SCCP finality fixture decodes");
         seed_sccp_snapshot_height_one(&state, finality.finality_artifact.block_hash);
         norito::json::to_value(&state).expect("serialize authoritative state snapshot")
     }
@@ -53026,6 +53197,93 @@ mod tiered_snapshot_diff_tests {
         }
     }
     #[test]
+    fn sccp_route_liability_roundtrips_with_its_governed_route_key() {
+        let (mut world, _, _, route, _) = world_with_valid_sccp_inbound_history();
+        let route_key = route.key();
+        let liability = SccpRouteLiabilityV1::new(7).expect("nonzero route liability");
+        let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+            &DEFAULT_TEST_NETWORK_ID,
+            &route_key,
+            &route.settlement.asset_definition_id,
+        );
+        let escrow_asset =
+            AssetId::new(route.settlement.asset_definition_id.clone(), escrow.clone());
+        let escrow_balance = sccp_liability_quantity_v1(
+            liability.outstanding_liability,
+            route.settlement.payload_amount_scale,
+        )
+        .expect("governed route liability converts to its exact escrow quantity");
+        let (escrow_asset, escrow_value) =
+            Asset::new(escrow_asset.clone(), escrow_balance.clone()).into_key_value();
+        for account_id in [ALICE_ID.clone(), escrow] {
+            let (account_id, account_value) =
+                Account::new(account_id).build(&ALICE_ID).into_key_value();
+            world.accounts.insert(account_id, account_value);
+        }
+        let mut definition = AssetDefinition::new(
+            route.settlement.asset_definition_id.clone(),
+            "SCCP settlement snapshot fixture",
+            NumericSpec::fractional(route.settlement.payload_amount_scale),
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
+        definition.total_quantity = escrow_balance.clone();
+        world
+            .asset_definitions
+            .insert(route.settlement.asset_definition_id.clone(), definition);
+        let registration_header = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"SCCP liability snapshot asset registration",
+        ));
+        let incarnation = AxtAssetIncarnationV1::derive(
+            &DEFAULT_TEST_NETWORK_ID,
+            &route.settlement.asset_definition_id,
+            &registration_header,
+            &Hash::new(b"SCCP liability snapshot asset execution"),
+            0,
+        );
+        world
+            .axt_asset_incarnations
+            .insert(route.settlement.asset_definition_id.clone(), incarnation);
+        world.assets.insert(escrow_asset.clone(), escrow_value);
+        world
+            .sccp_route_liabilities
+            .insert(route_key.clone(), liability);
+
+        let decoded = decode_sccp_world_snapshot(world)
+            .expect("deserialize exactly backed governed SCCP route liability");
+        assert_eq!(
+            decoded.sccp_registry_snapshot().route(&route_key),
+            Some(&route),
+            "the liability key must still resolve to its exact governed route"
+        );
+        let decoded_world = decoded.world_view();
+        assert_eq!(
+            decoded_world.sccp_route_liabilities().get(&route_key),
+            Some(&liability)
+        );
+        assert_eq!(
+            decoded_world
+                .assets()
+                .get(&escrow_asset)
+                .map(|value| value.as_ref()),
+            Some(&escrow_balance),
+            "the roundtripped liability must retain exact escrow backing"
+        );
+    }
+    #[test]
+    fn sccp_registry_validators_accept_nonempty_canonical_cell() {
+        let (world, _, _, _, _) = world_with_valid_sccp_inbound_history();
+        let encoded = norito::json::to_json(&world.sccp_registry)
+            .expect("serialize nonempty SCCP registry cell");
+        validate_sccp_registry_cell_json_str(&encoded)
+            .expect("validate canonical nonempty SCCP registry directly from snapshot JSON");
+        let owned = norito::json::to_value(&world.sccp_registry)
+            .expect("materialize nonempty SCCP registry cell for test-only validation");
+        validate_sccp_registry_cell_json(&owned)
+            .expect("validate canonical nonempty SCCP registry from an owned JSON value");
+    }
+    #[test]
     fn sccp_replay_snapshot_roundtrips_and_requires_each_replay_index() {
         let (inbound_world, key, record, _, _) = world_with_valid_sccp_inbound_history();
         let decoded = decode_sccp_world_snapshot(inbound_world)
@@ -53065,6 +53323,7 @@ mod tiered_snapshot_diff_tests {
         );
         let encoded = sccp_state_snapshot_value(World::default(), SCCP_SNAPSHOT_CHAIN_ID);
         for field in [
+            "sccp_route_liabilities",
             "sccp_outbound_pending_usage",
             "sccp_outbound_pending_messages",
             "sccp_outbound_message_locator",

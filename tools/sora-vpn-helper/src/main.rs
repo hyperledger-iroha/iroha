@@ -9,6 +9,11 @@ use iroha_crypto::{
             is_public_relay_ip, leaf_certificate_spki_sha256, validate_quic_multiaddr,
             validate_tls_server_name,
         },
+        constant_rate::{
+            CONSTANT_RATE_CELL_BYTES, CONSTANT_RATE_MAX_PAYLOAD_BYTES,
+            CellClass as ConstantRateCellClass, FixedRateScheduler, MuxChannel, MuxFlags, MuxFrame,
+            MuxLifecycle, codec as constant_rate_codec,
+        },
         handshake::{
             DEFAULT_CLIENT_CAPABILITIES, DEFAULT_RELAY_CAPABILITIES, RelayAuthenticationVerifierV1,
             RuntimeParams, SORANET_QUIC_ALPN, SessionSecrets, build_client_hello,
@@ -71,7 +76,6 @@ use rustls::{
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::CertificateDer,
 };
-#[cfg(target_os = "linux")]
 use soranet_record_io::{RecordReader, RecordWriter};
 use thiserror::Error;
 use tokio::{
@@ -79,8 +83,8 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::lookup_host,
     signal::unix::{Signal, SignalKind, signal},
-    sync::Notify,
-    time::timeout,
+    sync::{Notify, mpsc},
+    time::{MissedTickBehavior, interval, timeout},
 };
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -94,8 +98,12 @@ const CONNECT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CONNECT_READY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
-#[cfg(target_os = "linux")]
-const VPN_STREAM_FINISH_TIMEOUT: Duration = Duration::from_secs(5);
+const STRICT_CONSTANT_RATE_TICK: Duration = Duration::from_millis(5);
+const STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS: u32 = 8;
+const STRICT_CONSTANT_RATE_QUEUE_CAPACITY: usize = 16;
+const STRICT_CONSTANT_RATE_CLOSE_CODE: u32 = 0x534e_01;
+const QUIC_DEPENDENCY_BLOCK_REASON: &str = "Sora VPN helper QUIC is unavailable with locked quinn-proto 0.11.15: released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 or later and requalify QUIC before re-enabling it";
+const VPN_STREAM_FINISH_TIMEOUT: Duration = Duration::from_secs(10);
 const SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(target_os = "linux")]
 const SYSTEM_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -178,17 +186,6 @@ const LINUX_IFF_TUN_EXCL_BITS: u16 = 0x8000;
 const LINUX_TUNSETIFF: nix::libc::c_ulong = 0x4004_54ca;
 #[cfg(target_os = "linux")]
 const LINUX_TUNGETIFF: nix::libc::c_ulong = 0x8004_54d2;
-fn record_stream_context(stream_id: StreamId) -> RecordStreamContext {
-    let initiator = match stream_id.initiator() {
-        Side::Client => RecordEndpoint::Client,
-        Side::Server => RecordEndpoint::Relay,
-    };
-    let kind = match stream_id.dir() {
-        Dir::Bi => RecordStreamKind::Bidirectional,
-        Dir::Uni => RecordStreamKind::Unidirectional,
-    };
-    RecordStreamContext::new(initiator, kind, stream_id.index())
-}
 #[derive(Debug)]
 struct Cli {
     command: Command,
@@ -4568,18 +4565,9 @@ async fn run_network_worker_session(
         ticket,
     } = authenticated;
     let (endpoint, connection, record_layer) = connect_and_handshake(&payload).await?;
-    let (mut send, mut recv) = match timeout(CONNECT_TIMEOUT, connection.open_bi()).await {
-        Ok(Ok(streams)) => streams,
-        Ok(Err(error)) => return Err(ControllerError::Connection(error)),
-        Err(_) => {
-            return Err(ControllerError::State(
-                "timed out opening relay VPN tunnel stream".to_owned(),
-            ));
-        }
-    };
-    let record_stream = record_layer
-        .stream(record_stream_context(send.id()))
-        .map_err(|error| ControllerError::Handshake(error.to_string()))?;
+    let circuit_id = ticket.session_id;
+    let (mut protected_send, mut protected_recv) =
+        open_record_protected_vpn_stream(&connection, record_layer.as_ref()).await?;
     let mut voucher_signer = UsageVoucherSigner::from_payload(&payload, ticket.clone())?;
     let expected_interface_name = desired_interface_name(payload.session_id.as_str())?;
     let expected_mtu = normalize_mtu(payload.mtu_bytes)?;
@@ -4625,7 +4613,6 @@ async fn run_network_worker_session(
     let ticket_expiry_deadline = authenticated_ticket_expiry_deadline(ticket.expires_at_ms)?;
     worker_send_ipc(&ipc, token, phase, NetworkIpcKind::Started, 0, 0).await?;
 
-    let circuit_id = ticket.session_id;
     let flow_label = vpn_flow_label_from_session_id(circuit_id)?;
     voucher_signer.begin_service();
     let voucher_counters = UsageVoucherCounters::default();
@@ -4635,8 +4622,6 @@ async fn run_network_worker_session(
         expected_supervisor,
         voucher_counters.clone(),
     );
-    let mut protected_send = RecordWriter::new(&mut send, record_stream.sealer);
-    let mut protected_recv = RecordReader::new(&mut recv, record_stream.opener);
     let shutdown = tunnel_packet_loop(
         device,
         &mut protected_send,
@@ -4664,12 +4649,9 @@ async fn run_network_worker_session(
         Ok(exit) => (0, exit.message.as_str()),
         Err(_) => (u64::MAX, "unprivileged network worker failed"),
     };
-    let finish_queued = protected_send.shutdown().await.is_ok();
+    finish_record_protected_vpn_stream(&mut protected_send).await;
     drop(protected_send);
     drop(protected_recv);
-    if finish_queued {
-        let _ = timeout(VPN_STREAM_FINISH_TIMEOUT, send.stopped()).await;
-    }
     connection.close(0u32.into(), close_message.as_bytes());
     endpoint.close(0u32.into(), close_message.as_bytes());
     endpoint.wait_idle().await;
@@ -4727,6 +4709,9 @@ async fn network_worker_control_loop(
 async fn connect_and_handshake(
     payload: &ConnectPayload,
 ) -> Result<(Endpoint, Connection, Arc<RecordLayer>), ControllerError> {
+    // Reject before constructing the endpoint so vulnerable Quinn cannot bind
+    // a socket or process unauthenticated traffic.
+    validate_shipping_quinn_dependency()?;
     let helper_ticket = WipeBytes(decode_hex(payload.helper_ticket_hex.as_str())?);
     let relay = parse_multiaddr(payload.relay_endpoint.as_str())?;
     let relay_addr = resolve_multiaddr_socket_addr(&relay)
@@ -4777,6 +4762,269 @@ async fn connect_and_handshake(
     let record_layer = RecordLayer::new(session.session_key, RecordEndpoint::Client)
         .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     Ok((endpoint, connection, Arc::new(record_layer)))
+}
+
+fn validate_shipping_quinn_dependency() -> Result<(), ControllerError> {
+    Err(ControllerError::State(
+        QUIC_DEPENDENCY_BLOCK_REASON.to_owned(),
+    ))
+}
+
+type ProtectedVpnSend = RecordWriter<SendStream>;
+type ProtectedVpnRecv = RecordReader<RecvStream>;
+
+async fn open_record_protected_vpn_stream(
+    connection: &Connection,
+    record_layer: &RecordLayer,
+) -> Result<(ProtectedVpnSend, ProtectedVpnRecv), ControllerError> {
+    let (send, recv) = match timeout(CONNECT_TIMEOUT, connection.open_bi()).await {
+        Ok(Ok(streams)) => streams,
+        Ok(Err(error)) => return Err(ControllerError::Connection(error)),
+        Err(_) => {
+            return Err(ControllerError::State(
+                "timed out opening VPN tunnel stream".to_owned(),
+            ));
+        }
+    };
+    let record_stream = record_layer
+        .stream(record_stream_context(send.id()))
+        .map_err(|error| ControllerError::Handshake(error.to_string()))?;
+    Ok((
+        RecordWriter::new(send, record_stream.sealer),
+        RecordReader::new(recv, record_stream.opener),
+    ))
+}
+
+async fn finish_record_protected_vpn_stream(send: &mut ProtectedVpnSend) {
+    if matches!(
+        timeout(VPN_STREAM_FINISH_TIMEOUT, send.shutdown()).await,
+        Ok(Ok(()))
+    ) {
+        let _ = timeout(VPN_STREAM_FINISH_TIMEOUT, send.get_ref().stopped()).await;
+    }
+}
+
+fn record_stream_context(stream_id: StreamId) -> RecordStreamContext {
+    let initiator = match stream_id.initiator() {
+        Side::Client => RecordEndpoint::Client,
+        Side::Server => RecordEndpoint::Relay,
+    };
+    let kind = match stream_id.dir() {
+        Dir::Bi => RecordStreamKind::Bidirectional,
+        Dir::Uni => RecordStreamKind::Unidirectional,
+    };
+    RecordStreamContext::new(initiator, kind, stream_id.index())
+}
+
+fn strict_vpn_lane_id(session_id: [u8; 16]) -> u64 {
+    let first = u64::from_be_bytes(
+        session_id[..8]
+            .try_into()
+            .expect("VPN session id prefix has fixed width"),
+    );
+    if first != 0 {
+        return first;
+    }
+    u64::from_be_bytes(
+        session_id[8..]
+            .try_into()
+            .expect("VPN session id suffix has fixed width"),
+    )
+    .max(1)
+}
+
+fn spawn_strict_vpn_transport(
+    connection: &Connection,
+    record_layer: &RecordLayer,
+    session_id: [u8; 16],
+) -> Result<(tokio::io::DuplexStream, tokio::task::JoinHandle<()>), ControllerError> {
+    if connection
+        .max_datagram_size()
+        .is_none_or(|maximum| maximum < CONSTANT_RATE_CELL_BYTES)
+    {
+        return Err(ControllerError::Handshake(
+            "strict SoraNet VPN requires QUIC DATAGRAM support for 1024-byte cells".to_owned(),
+        ));
+    }
+    let (sealer, opener) = constant_rate_codec(record_layer)
+        .map_err(|error| ControllerError::Handshake(error.to_string()))?;
+    let lane_id = strict_vpn_lane_id(session_id);
+    let (application_io, transport_io) =
+        tokio::io::duplex(CONSTANT_RATE_CELL_BYTES.saturating_mul(64));
+    let (source, sink) = tokio::io::split(transport_io);
+    let (outbound_tx, outbound_rx) = mpsc::channel(STRICT_CONSTANT_RATE_QUEUE_CAPACITY);
+    let task_connection = connection.clone();
+    let task = tokio::spawn(async move {
+        let producer = strict_vpn_producer(source, outbound_tx, task_connection.clone(), lane_id);
+        let sender = strict_vpn_sender(task_connection.clone(), sealer, outbound_rx);
+        let receiver = strict_vpn_receiver(task_connection.clone(), opener, sink, lane_id);
+        tokio::pin!(producer);
+        tokio::pin!(sender);
+        tokio::pin!(receiver);
+        let _failure = tokio::select! {
+            result = &mut producer => result.err(),
+            result = &mut sender => result.err(),
+            result = &mut receiver => result.err(),
+        };
+        task_connection.close(
+            VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
+            b"strict constant-rate VPN transport stopped",
+        );
+    });
+    Ok((application_io, task))
+}
+
+async fn strict_vpn_producer(
+    mut source: tokio::io::ReadHalf<tokio::io::DuplexStream>,
+    outbound: mpsc::Sender<MuxFrame>,
+    connection: Connection,
+    lane_id: u64,
+) -> Result<(), String> {
+    let mut buffer = vec![0_u8; CONSTANT_RATE_MAX_PAYLOAD_BYTES];
+    let mut first = true;
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .await
+            .map_err(|error| format!("strict VPN producer read failed: {error}"))?;
+        let bits = if read == 0 {
+            if first {
+                MuxFlags::OPEN | MuxFlags::FIN
+            } else {
+                MuxFlags::FIN
+            }
+        } else if first {
+            MuxFlags::OPEN
+        } else {
+            0
+        };
+        let flags = MuxFlags::new(bits).map_err(|error| error.to_string())?;
+        let frame = MuxFrame::new(
+            MuxChannel::Vpn,
+            ConstantRateCellClass::Interactive,
+            lane_id,
+            flags,
+            buffer[..read].to_vec(),
+        )
+        .map_err(|error| error.to_string())?;
+        outbound
+            .try_send(frame)
+            .map_err(|_| "strict VPN producer queue is full or closed".to_owned())?;
+        first = false;
+        if read == 0 {
+            let _ = connection.closed().await;
+            return Ok(());
+        }
+    }
+}
+
+async fn strict_vpn_sender(
+    connection: Connection,
+    mut sealer: iroha_crypto::soranet::constant_rate::ConstantRateSealer,
+    mut outbound: mpsc::Receiver<MuxFrame>,
+) -> Result<(), String> {
+    let mut scheduler = FixedRateScheduler::new(STRICT_CONSTANT_RATE_QUEUE_CAPACITY, 1);
+    let mut ticker = interval(STRICT_CONSTANT_RATE_TICK);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            biased;
+            scheduled = ticker.tick() => {
+                let lateness = tokio::time::Instant::now().saturating_duration_since(scheduled);
+                if lateness >= STRICT_CONSTANT_RATE_TICK {
+                    return Err(format!(
+                        "strict VPN sender missed a fixed-rate tick by {lateness:?}"
+                    ));
+                }
+                if connection.datagram_send_buffer_space() < CONSTANT_RATE_CELL_BYTES {
+                    return Err("strict VPN DATAGRAM send buffer cannot accept one cell".to_owned());
+                }
+                let frame = scheduler.next_frame();
+                let encoded = sealer
+                    .seal(&frame)
+                    .map_err(|error| error.to_string())?
+                    .encode();
+                connection
+                    .send_datagram(encoded.to_vec().into())
+                    .map_err(|error| format!("strict VPN DATAGRAM send failed: {error}"))?;
+            }
+            frame = outbound.recv() => {
+                let frame = frame.ok_or_else(|| "strict VPN producer queue closed".to_owned())?;
+                scheduler.enqueue(frame).map_err(|error| error.to_string())?;
+            }
+        }
+    }
+}
+
+async fn strict_vpn_receiver(
+    connection: Connection,
+    mut opener: iroha_crypto::soranet::constant_rate::ConstantRateOpener,
+    mut sink: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    lane_id: u64,
+) -> Result<(), String> {
+    let mut lifecycle = MuxLifecycle::new(1);
+    let receive_deadline = strict_constant_rate_receive_deadline(STRICT_CONSTANT_RATE_TICK);
+    loop {
+        let datagram = strict_vpn_receive_with_deadline(receive_deadline, async {
+            tokio::select! {
+                datagram = connection.read_datagram() => {
+                    datagram.map_err(|error| format!("strict VPN DATAGRAM receive failed: {error}"))
+                }
+                stream = connection.accept_bi() => {
+                    if let Ok((mut send, mut recv)) = stream {
+                        let _ = send.reset(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
+                        let _ = recv.stop(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
+                    }
+                    Err("relay attempted an unscheduled bidirectional stream in strict mode".to_owned())
+                }
+                stream = connection.accept_uni() => {
+                    if let Ok(mut recv) = stream {
+                        let _ = recv.stop(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
+                    }
+                    Err("relay attempted an unscheduled unidirectional stream in strict mode".to_owned())
+                }
+            }
+        })
+        .await?;
+        let frame = opener.open(&datagram).map_err(|error| error.to_string())?;
+        lifecycle
+            .accept(&frame)
+            .map_err(|error| error.to_string())?;
+        if frame.channel == MuxChannel::Cover {
+            continue;
+        }
+        if frame.channel != MuxChannel::Vpn
+            || frame.class != ConstantRateCellClass::Interactive
+            || frame.lane_id != lane_id
+        {
+            return Err("relay sent a strict cell for an unauthorized VPN mux lane".to_owned());
+        }
+        if !frame.payload.is_empty() {
+            sink.write_all(&frame.payload)
+                .await
+                .map_err(|error| format!("strict VPN consumer write failed: {error}"))?;
+        }
+        if frame.flags.is_fin() {
+            sink.shutdown()
+                .await
+                .map_err(|error| format!("strict VPN consumer shutdown failed: {error}"))?;
+            return Ok(());
+        }
+        if frame.flags.is_reset() {
+            return Err("relay reset the strict VPN mux lane".to_owned());
+        }
+    }
+}
+fn strict_constant_rate_receive_deadline(tick_duration: Duration) -> Duration {
+    tick_duration.saturating_mul(STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS)
+}
+async fn strict_vpn_receive_with_deadline<T>(
+    deadline: Duration,
+    receive: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    timeout(deadline, receive)
+        .await
+        .map_err(|_| format!("strict VPN receiver observed no cell within {deadline:?}"))?
 }
 async fn resolve_multiaddr_socket_addr(
     relay: &ParsedMultiaddr,
@@ -4866,6 +5114,13 @@ fn build_client_config(relay_tls_spki_sha256: [u8; 32]) -> Result<ClientConfig, 
     let mut transport = TransportConfig::default();
     transport.max_concurrent_uni_streams(VarInt::from_u32(8));
     transport.max_concurrent_bidi_streams(VarInt::from_u32(8));
+    // The production helper uses only authenticated QUIC streams while strict
+    // mode is gated. Quinn 0.11.9 / quinn-proto 0.11.15 does not charge a
+    // fixed cost per queued DATAGRAM entry, so explicitly advertise no receive
+    // support and allocate no unused outgoing DATAGRAM queue.
+    transport
+        .datagram_receive_buffer_size(None)
+        .datagram_send_buffer_size(0);
     transport.keep_alive_interval(Some(KEEPALIVE_INTERVAL));
     transport
         .max_idle_timeout(Some(IdleTimeout::try_from(IDLE_TIMEOUT).map_err(
@@ -4973,6 +5228,53 @@ async fn perform_helper_handshake(
             .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     send.finish()?;
     Ok(session)
+}
+
+#[cfg(test)]
+fn strict_constant_rate_capabilities(base: &[u8]) -> Result<Vec<u8>, ControllerError> {
+    const TYPE_CONSTANT_RATE: u16 = 0x0203;
+    const STRICT_TLV: [u8; 8] = [0x02, 0x03, 0x00, 0x04, 0x01, 0x01, 0x00, 0x04];
+    let mut cursor = 0_usize;
+    let mut insertion = base.len();
+    while cursor < base.len() {
+        if base.len() - cursor < 4 {
+            return Err(ControllerError::Handshake(
+                "base SoraNet capability vector has a truncated TLV header".to_owned(),
+            ));
+        }
+        let ty = u16::from_be_bytes([base[cursor], base[cursor + 1]]);
+        let len = usize::from(u16::from_be_bytes([base[cursor + 2], base[cursor + 3]]));
+        let end = cursor
+            .checked_add(4)
+            .and_then(|value| value.checked_add(len))
+            .filter(|end| *end <= base.len())
+            .ok_or_else(|| {
+                ControllerError::Handshake(
+                    "base SoraNet capability vector has a truncated TLV value".to_owned(),
+                )
+            })?;
+        if ty == TYPE_CONSTANT_RATE {
+            if &base[cursor..end] == STRICT_TLV.as_slice() {
+                return Ok(base.to_vec());
+            }
+            return Err(ControllerError::Handshake(
+                "base SoraNet capability vector contains a conflicting constant-rate TLV"
+                    .to_owned(),
+            ));
+        }
+        if insertion == base.len() && ty > TYPE_CONSTANT_RATE {
+            insertion = cursor;
+        }
+        cursor = end;
+    }
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(base.len() + STRICT_TLV.len())
+        .map_err(|_| ControllerError::Handshake("capability allocation failed".to_owned()))?;
+    result.extend_from_slice(&base[..insertion]);
+    result.extend_from_slice(&STRICT_TLV);
+    result.extend_from_slice(&base[insertion..]);
+    Ok(result)
 }
 fn helper_ticket_handshake_binding(
     payload: &ConnectPayload,
@@ -10866,6 +11168,83 @@ mod tests {
     };
 
     #[test]
+    fn dormant_helper_strict_capability_is_canonical_and_required() {
+        for base in [
+            DEFAULT_CLIENT_CAPABILITIES.as_slice(),
+            DEFAULT_RELAY_CAPABILITIES.as_slice(),
+        ] {
+            let encoded = strict_constant_rate_capabilities(base).expect("strict capabilities");
+            let parsed = iroha_crypto::soranet::handshake::parse_capabilities(&encoded)
+                .expect("canonical capability vector");
+            let constant_rate = parsed
+                .iter()
+                .find(|capability| capability.ty == 0x0203)
+                .expect("constant-rate capability");
+            assert_eq!(constant_rate.value, [1, 1, 0, 4]);
+            assert!(constant_rate.required);
+        }
+    }
+
+    #[test]
+    fn production_helper_capabilities_do_not_request_gated_strict_mode() {
+        for capabilities in [
+            DEFAULT_CLIENT_CAPABILITIES.as_slice(),
+            DEFAULT_RELAY_CAPABILITIES.as_slice(),
+        ] {
+            let parsed = iroha_crypto::soranet::handshake::parse_capabilities(capabilities)
+                .expect("canonical production capability vector");
+            assert!(
+                parsed.iter().all(|capability| capability.ty != 0x0203),
+                "the stream-based helper must not request gated strict DATAGRAM mode"
+            );
+        }
+    }
+
+    #[test]
+    fn production_helper_quic_config_disables_datagrams() {
+        let config = build_client_config([0xA5; 32]).expect("build helper QUIC config");
+        let rendered = format!("{config:?}");
+        assert!(
+            rendered.contains("datagram_receive_buffer_size: None"),
+            "helper must not advertise DATAGRAM receive support: {rendered}"
+        );
+        assert!(
+            rendered.contains("datagram_send_buffer_size: 0"),
+            "helper must not allocate an unused DATAGRAM send queue: {rendered}"
+        );
+    }
+
+    #[test]
+    fn strict_vpn_lane_id_is_deterministic_and_never_zero() {
+        assert_eq!(strict_vpn_lane_id([0; 16]), 1);
+        let mut session_id = [0_u8; 16];
+        session_id[..8].copy_from_slice(&7_u64.to_be_bytes());
+        session_id[8..].copy_from_slice(&9_u64.to_be_bytes());
+        assert_eq!(strict_vpn_lane_id(session_id), 7);
+        session_id[..8].fill(0);
+        assert_eq!(strict_vpn_lane_id(session_id), 9);
+    }
+
+    #[tokio::test]
+    async fn dormant_strict_receiver_deadline_expires_without_a_next_cell() {
+        assert_eq!(
+            strict_constant_rate_receive_deadline(STRICT_CONSTANT_RATE_TICK),
+            Duration::from_millis(40)
+        );
+        let deadline = Duration::from_millis(5);
+        let error = strict_vpn_receive_with_deadline(
+            deadline,
+            std::future::pending::<Result<(), String>>(),
+        )
+        .await
+        .expect_err("a silent strict peer must exceed the receive deadline");
+        assert_eq!(
+            error,
+            format!("strict VPN receiver observed no cell within {deadline:?}")
+        );
+    }
+
+    #[test]
     fn fixed_secret_owner_redacts_and_uses_the_drop_clear_path() {
         let mut guarded = WipeArray([0xA5; 16]);
         assert!(std::mem::needs_drop::<WipeArray<16>>());
@@ -14458,5 +14837,17 @@ mod tests {
             default_state_root(),
             PathBuf::from("/var/lib/sora-vpn-controller")
         );
+    }
+
+    #[test]
+    fn production_helper_rejects_vulnerable_quinn_dependency() {
+        let error = validate_shipping_quinn_dependency()
+            .expect_err("locked vulnerable Quinn must remain fail-closed");
+        let ControllerError::State(reason) = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert!(reason.contains("quinn-proto 0.11.15"));
+        assert!(reason.contains("remote memory exhaustion"));
+        assert!(reason.contains("0.11.17"));
     }
 }

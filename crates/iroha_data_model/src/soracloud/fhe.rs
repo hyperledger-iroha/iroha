@@ -3962,6 +3962,16 @@ impl SoraDeploymentBundleV1 {
             &self.container.lifecycle,
             &self.service,
         )?;
+        if self.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+            && self.container.runtime == SoraContainerRuntimeV1::Inrou
+            && self.service.placement_targets.is_empty()
+        {
+            return Err(invalid_field(
+                "sora deployment bundle",
+                "service.placement_targets",
+                "admitted HttpService + Inrou bundles require identity-bound operator-preseed placement targets",
+            ));
+        }
         Ok(())
     }
     /// Validate cross-manifest constraints that do not depend on a published
@@ -3983,8 +3993,34 @@ impl SoraDeploymentBundleV1 {
     ) -> Result<(), SoracloudManifestError> {
         Self::validate_state_write_requirements(container_capabilities, service)?;
         Self::validate_runtime_requirements(container_runtime, container_lifecycle, service)?;
+        Self::validate_placement_targets(container_runtime, service)?;
         Self::validate_public_route_healthcheck_requirement(container_lifecycle, service)?;
         Self::validate_http_service_quota_class(container_resources, service)?;
+        Ok(())
+    }
+    fn validate_placement_targets(
+        container_runtime: SoraContainerRuntimeV1,
+        service: &SoraServiceManifestV1,
+    ) -> Result<(), SoracloudManifestError> {
+        if service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+            && container_runtime == SoraContainerRuntimeV1::Inrou
+        {
+            if !service.placement_targets.is_empty()
+                && service.placement_targets.len() < usize::from(service.replicas.get())
+            {
+                return Err(invalid_field(
+                    "sora deployment bundle",
+                    "service.placement_targets",
+                    "must contain at least one distinct identity-bound target per desired Inrou replica",
+                ));
+            }
+        } else if !service.placement_targets.is_empty() {
+            return Err(invalid_field(
+                "sora deployment bundle",
+                "service.placement_targets",
+                "must be empty outside the HttpService + Inrou execution plane",
+            ));
+        }
         Ok(())
     }
     fn validate_container_reference(&self) -> Result<(), SoracloudManifestError> {

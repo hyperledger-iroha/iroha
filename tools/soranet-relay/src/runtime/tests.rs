@@ -1805,13 +1805,9 @@ mod tests {
             cell_bytes: constant_rate::CONSTANT_RATE_CELL_BYTES as u16,
         });
 
-        let error = match preflight_client_hello(&frame, &server_capabilities) {
-            Ok(_) => panic!("strict mode must fail before the relay handshake response"),
-            Err(error) => error,
-        };
         assert!(matches!(
-            error,
-            HandshakeError::StrictConstantRateUnavailable
+            preflight_client_hello(&frame, &server_capabilities),
+            Err(HandshakeError::StrictConstantRateUnavailable)
         ));
 
         server_capabilities.constant_rate = Some(capability::ConstantRateCapability {
@@ -1826,6 +1822,97 @@ mod tests {
             .expect("server best-effort mode must be negotiated");
         assert_eq!(negotiated.mode, ConstantRateMode::BestEffort);
     }
+
+    #[test]
+    fn strict_application_and_exit_channels_share_the_guarded_exit_consumer() {
+        for channel in [MuxChannel::Application, MuxChannel::Exit] {
+            assert_eq!(
+                strict_mux_consumer(channel),
+                Some((AuthenticatedCellClass::Bulk, StrictMuxConsumer::Exit))
+            );
+        }
+        assert_ne!(MuxChannel::Application, MuxChannel::Exit);
+    }
+
+    #[tokio::test]
+    async fn strict_lane_task_reaper_bounds_completed_open_fin_churn() {
+        const CHURN_LANES: usize = 512;
+        let maximum_lanes = 1;
+        let budget = strict_lane_task_budget(maximum_lanes);
+        let mut tasks = JoinSet::new();
+        let mut task_owners = HashMap::new();
+        let key = (MuxChannel::Application, 41);
+
+        for _ in 0..CHURN_LANES {
+            // A completed handler and its completed egress pump model one
+            // OPEN/FIN lane. The production loop performs this same reap
+            // before admitting the next OPEN.
+            for _ in 0..16 {
+                reap_completed_strict_lane_tasks(&mut tasks, &mut task_owners)
+                    .expect("completed lane workers must join cleanly");
+                if tasks.is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                tasks.len().saturating_add(2) <= budget,
+                "completed lane workers must not accumulate across churn"
+            );
+            assert!(!task_owners.contains_key(&key));
+            task_owners.insert(key, 2);
+            tasks.spawn(async move { key });
+            tasks.spawn(async move { key });
+            assert!(tasks.len() <= budget);
+        }
+
+        while !tasks.is_empty() {
+            tokio::task::yield_now().await;
+            reap_completed_strict_lane_tasks(&mut tasks, &mut task_owners)
+                .expect("final lane workers must join cleanly");
+        }
+        assert!(tasks.is_empty());
+        assert!(task_owners.is_empty());
+    }
+
+    #[tokio::test]
+    async fn strict_lane_id_reuse_waits_for_both_prior_workers() {
+        let key = (MuxChannel::Exit, 73);
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut tasks = JoinSet::new();
+        let mut task_owners = HashMap::from([(key, 2)]);
+
+        tasks.spawn(async move { key });
+        let waiting_release = Arc::clone(&release);
+        tasks.spawn(async move {
+            waiting_release.notified().await;
+            key
+        });
+
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+            reap_completed_strict_lane_tasks(&mut tasks, &mut task_owners)
+                .expect("first lane worker must join cleanly");
+            if tasks.len() == 1 {
+                break;
+            }
+        }
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(task_owners.get(&key), Some(&1));
+        assert!(
+            task_owners.contains_key(&key),
+            "lane ID reuse must remain rejected while either prior worker owns the key"
+        );
+
+        release.notify_one();
+        while !tasks.is_empty() {
+            tokio::task::yield_now().await;
+            reap_completed_strict_lane_tasks(&mut tasks, &mut task_owners)
+                .expect("second lane worker must join cleanly");
+        }
+        assert!(!task_owners.contains_key(&key));
+    }
+
     #[test]
     fn admission_transcript_commits_to_the_exact_client_hello() {
         let (without_resume, _) = current_client_hello_frame(HandshakeSuite::Nk2Hybrid, None);
@@ -2514,7 +2601,7 @@ mod tests {
             "send_window: 4194304",
             "crypto_buffer_size: 65536",
             "allow_spin: false",
-            "datagram_receive_buffer_size: Some(65536)",
+            "datagram_receive_buffer_size: None",
             "datagram_send_buffer_size: 65536",
             "migration: false",
             "max_incoming: 64",
@@ -2527,6 +2614,235 @@ mod tests {
             );
         }
     }
+
+    async fn strict_test_quic_pair() -> (Endpoint, Endpoint, Connection, Connection) {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["relay.test".to_owned()])
+                .expect("generate test certificate");
+        let key =
+            PrivateKeyDer::try_from(signing_key.serialize_der()).expect("encode test private key");
+        let mut server_config = RelayRuntime::server_config(vec![cert.der().clone()], key)
+            .expect("build relay QUIC configuration");
+        // Strict production negotiation is gated while Quinn lacks per-entry
+        // accounting. This loopback-only direct transport test explicitly
+        // enables receive DATAGRAMs to qualify the dormant mux behavior.
+        let mut strict_transport = TransportConfig::default();
+        strict_transport
+            .datagram_receive_buffer_size(Some(QUIC_DATAGRAM_BUFFER_BYTES_V1))
+            .datagram_send_buffer_size(QUIC_DATAGRAM_BUFFER_BYTES_V1);
+        server_config.transport_config(Arc::new(strict_transport));
+        let server = Endpoint::server(
+            server_config,
+            "127.0.0.1:0".parse().expect("parse loopback address"),
+        )
+        .expect("bind relay QUIC endpoint");
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(cert.der().clone())
+            .expect("trust test relay certificate");
+        let mut client_tls =
+            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+        client_tls.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
+        let client_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(client_tls)
+            .expect("build QUIC client crypto");
+        let mut client_config = quinn::ClientConfig::new(Arc::new(client_crypto));
+        let mut transport = TransportConfig::default();
+        transport
+            .datagram_receive_buffer_size(Some(QUIC_DATAGRAM_BUFFER_BYTES_V1))
+            .datagram_send_buffer_size(QUIC_DATAGRAM_BUFFER_BYTES_V1);
+        client_config.transport_config(Arc::new(transport));
+        let mut client = Endpoint::client(
+            "127.0.0.1:0"
+                .parse()
+                .expect("parse client loopback address"),
+        )
+        .expect("bind QUIC client endpoint");
+        client.set_default_client_config(client_config);
+        let connecting = client
+            .connect(server.local_addr().expect("relay address"), "relay.test")
+            .expect("start QUIC connection");
+        let client_task = tokio::spawn(connecting);
+        let initial = timeout(Duration::from_secs(2), server.accept())
+            .await
+            .expect("initial connection attempt timed out")
+            .expect("initial incoming connection");
+        assert!(RelayRuntime::require_validated_quic_address(initial).is_none());
+        let retried = timeout(Duration::from_secs(2), server.accept())
+            .await
+            .expect("retried connection attempt timed out")
+            .expect("retried incoming connection");
+        let server_connecting = RelayRuntime::require_validated_quic_address(retried)
+            .expect("retry token validates peer")
+            .accept()
+            .expect("accept validated connection");
+        let (server_connection, client_connection) = timeout(Duration::from_secs(2), async {
+            let (server_result, client_result) = tokio::join!(server_connecting, client_task);
+            (
+                server_result.expect("server QUIC handshake"),
+                client_result
+                    .expect("client task")
+                    .expect("client QUIC handshake"),
+            )
+        })
+        .await
+        .expect("validated QUIC handshake timed out");
+        (server, client, server_connection, client_connection)
+    }
+
+    #[tokio::test]
+    async fn strict_receiver_fails_when_the_next_tick_never_arrives() {
+        assert_eq!(
+            strict_constant_rate_receive_deadline(Duration::from_millis(5)),
+            Duration::from_millis(40)
+        );
+        let (server, client, server_connection, client_connection) = strict_test_quic_pair().await;
+        let session_key = vec![0x71; 32];
+        let relay_records =
+            RecordLayer::new(SessionKey::new(session_key.clone()), RecordEndpoint::Relay)
+                .expect("relay record layer");
+        let client_records = RecordLayer::new(SessionKey::new(session_key), RecordEndpoint::Client)
+            .expect("client record layer");
+        let (_, relay_opener) = constant_rate_codec(&relay_records).expect("relay strict codec");
+        let (mut client_sealer, _) =
+            constant_rate_codec(&client_records).expect("client strict codec");
+        let first = MuxFrame::new(
+            MuxChannel::Application,
+            AuthenticatedCellClass::Bulk,
+            77,
+            MuxFlags::new(MuxFlags::OPEN | MuxFlags::FIN).expect("flags"),
+            b"one tick".to_vec(),
+        )
+        .expect("first frame");
+        let encoded = client_sealer.seal(&first).expect("seal first").encode();
+        client_connection
+            .send_datagram(encoded.to_vec().into())
+            .expect("send first tick");
+
+        let (inbound_tx, mut inbound) = mpsc::channel(1);
+        let receive_deadline = Duration::from_millis(40);
+        let error = timeout(
+            Duration::from_secs(2),
+            run_strict_constant_rate_receiver(
+                server_connection,
+                relay_opener,
+                inbound_tx,
+                1,
+                receive_deadline,
+            ),
+        )
+        .await
+        .expect("receiver deadline test timed out")
+        .expect_err("silence after the first cell must fail closed");
+        assert!(matches!(
+            error,
+            StrictConstantRateRuntimeError::ReceiveTickMissing { deadline }
+                if deadline == receive_deadline
+        ));
+        assert_eq!(
+            inbound.try_recv().expect("first cell reached the mux"),
+            first
+        );
+
+        client.close(0u32.into(), b"test complete");
+        server.close(0u32.into(), b"test complete");
+        tokio::join!(server.wait_idle(), client.wait_idle());
+    }
+
+    #[tokio::test]
+    async fn strict_datagram_mux_carries_payload_cover_and_fails_closed_on_loss() {
+        let (server, client, server_connection, client_connection) = strict_test_quic_pair().await;
+        let session_key = vec![0x5c; 32];
+        let relay_records =
+            RecordLayer::new(SessionKey::new(session_key.clone()), RecordEndpoint::Relay)
+                .expect("relay record layer");
+        let client_records = RecordLayer::new(SessionKey::new(session_key), RecordEndpoint::Client)
+            .expect("client record layer");
+        let (task, mut strict) = spawn_strict_constant_rate_transport(
+            server_connection.clone(),
+            constant_rate::profile_by_name("null").expect("null profile"),
+            Arc::new(Metrics::new()),
+            &relay_records,
+        )
+        .expect("start strict transport");
+        let (mut client_sealer, mut client_opener) =
+            constant_rate_codec(&client_records).expect("client strict codec");
+
+        let application = MuxFrame::new(
+            MuxChannel::Application,
+            AuthenticatedCellClass::Bulk,
+            41,
+            MuxFlags::new(MuxFlags::OPEN | MuxFlags::FIN).expect("flags"),
+            b"route-open".to_vec(),
+        )
+        .expect("application frame");
+        let encoded = client_sealer
+            .seal(&application)
+            .expect("seal application")
+            .encode();
+        assert_eq!(encoded.len(), CONSTANT_RATE_CELL_BYTES);
+        client_connection
+            .send_datagram(encoded.to_vec().into())
+            .expect("send application cell");
+        assert_eq!(
+            timeout(Duration::from_secs(2), strict.inbound.recv())
+                .await
+                .expect("strict inbound timeout")
+                .expect("strict inbound channel"),
+            application
+        );
+
+        let exit = MuxFrame::new(
+            MuxChannel::Exit,
+            AuthenticatedCellClass::Bulk,
+            42,
+            MuxFlags::new(MuxFlags::OPEN | MuxFlags::FIN).expect("flags"),
+            b"guarded-response".to_vec(),
+        )
+        .expect("exit frame");
+        strict
+            .outbound
+            .try_send(exit.clone())
+            .expect("queue exit frame");
+        let received = timeout(Duration::from_secs(2), async {
+            loop {
+                let datagram = client_connection
+                    .read_datagram()
+                    .await
+                    .expect("receive strict cell");
+                assert_eq!(datagram.len(), CONSTANT_RATE_CELL_BYTES);
+                let frame = client_opener.open(&datagram).expect("open strict cell");
+                if frame.channel != MuxChannel::Cover {
+                    break frame;
+                }
+            }
+        })
+        .await
+        .expect("strict outbound timeout");
+        assert_eq!(received, exit);
+
+        let _lost = client_sealer
+            .seal(&MuxFrame::cover())
+            .expect("seal deliberately lost tick");
+        let after_loss = client_sealer
+            .seal(&MuxFrame::cover())
+            .expect("seal post-loss tick")
+            .encode();
+        client_connection
+            .send_datagram(after_loss.to_vec().into())
+            .expect("send post-loss cell");
+        timeout(Duration::from_secs(2), client_connection.closed())
+            .await
+            .expect("strict loss must close the circuit");
+
+        task.abort();
+        server.close(0u32.into(), b"test complete");
+        client.close(0u32.into(), b"test complete");
+        tokio::join!(server.wait_idle(), client.wait_idle());
+    }
+
     #[tokio::test]
     async fn relay_quic_address_gate_requires_retry_validation() {
         let rcgen::CertifiedKey { cert, signing_key } =
@@ -4193,5 +4509,17 @@ mod tests {
             !ndjson.contains("\"detail\""),
             "proxy policy NDJSON must not carry free-form detail: {ndjson}"
         );
+    }
+
+    #[test]
+    fn production_relay_rejects_vulnerable_quinn_dependency() {
+        let error = validate_shipping_quinn_dependency()
+            .expect_err("locked vulnerable Quinn must remain fail-closed");
+        let RelayError::Quic(reason) = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert!(reason.contains("quinn-proto 0.11.15"));
+        assert!(reason.contains("remote memory exhaustion"));
+        assert!(reason.contains("0.11.17"));
     }
 }

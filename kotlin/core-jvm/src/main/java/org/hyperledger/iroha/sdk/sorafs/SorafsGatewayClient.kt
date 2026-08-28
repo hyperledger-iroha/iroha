@@ -174,6 +174,8 @@ class SorafsGatewayClient(
                     output.toByteArray(),
                     response.message,
                     response.headers,
+                    null,
+                    false,
                 )
             }
         }

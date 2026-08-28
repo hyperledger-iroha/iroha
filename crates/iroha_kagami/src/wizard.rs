@@ -150,9 +150,14 @@ impl<T: Write> RunArgs<T> for Args {
 #
 # [network]
 # # Outbound proxy (HTTP CONNECT / SOCKS5):
-# p2p_proxy = "http://user:pass@proxy.example.com:8080" # or socks5://...
+# p2p_proxy = "http://proxy.example.com:8080" # or socks5://...
 # p2p_proxy_required = false
 # p2p_no_proxy = ["localhost", ".example.com"]
+# # Deny rules take precedence; empty allow lists are unrestricted:
+# outbound_dial_allow_cidrs = ["192.0.2.0/24", "2001:db8::/32"]
+# outbound_dial_deny_cidrs = ["127.0.0.0/8", "::1/128"]
+# outbound_dial_allow_dns_suffixes = [".example.com"]
+# outbound_dial_deny_dns_suffixes = [".blocked.example.com"]
 #
 # # If p2p_proxy starts with https://, the proxy hop uses pinned TLS:
 # p2p_proxy_tls_verify = true
@@ -160,7 +165,8 @@ impl<T: Write> RunArgs<T> for Args {
 #
 # Notes:
 # - When p2p_proxy_required=true, p2p_no_proxy must be empty.
-# - When p2p_proxy is https:// and p2p_proxy_tls_verify=true, a pinned cert is required.
+# - HTTPS proxy credentials are allowed only with verification and an exact pinned cert.
+# - Dial policy checks hostnames and every resolved address for direct and proxied dials.
 # - P2P always serves TLS 1.3 on network.address; there is no plaintext listener or fallback.
 "#,
         );

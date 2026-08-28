@@ -45,8 +45,8 @@ Notes
 - Attachment id is a deterministic Blake2b‑32 (hex, lowercase) of the sanitized body bytes.
 - Content type is normalized from magic‑byte sniffing; the declared header is recorded in `provenance`.
 - Attachments persist on disk under `./storage/torii/zk_attachments/`:
-  - `./storage/torii/zk_attachments/{id}.bin` (body)
-  - `./storage/torii/zk_attachments/{id}.json` (metadata)
+  - `./storage/torii/zk_attachments/{tenant-key}/{id}.bin` (body)
+  - `./storage/torii/zk_attachments/{tenant-key}/{id}.json` (metadata)
 - Background-prover diagnostics persist under
   `./storage/torii/zk_prover/reports/{id}.json`. They are node-local worker
   state and have no public HTTP or SDK surface. Metadata is stored as one
@@ -73,19 +73,25 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
   - Time‑to‑live for attachments. A background GC removes entries older than this TTL.
   - Default: 7 days.
 - `torii.attachments_max_bytes` (u64)
-  - Maximum size (bytes) for a single attachment. Requests over the cap receive `413 Payload Too Large`.
+  - Maximum size (bytes) for both the submitted body and the canonical sanitized body retained for a single attachment. A compressed body that expands beyond this cap is rejected with `413 Payload Too Large` rather than being stored unreadably.
   - Default: 4 MiB.
 - `torii.attachments_per_tenant_max_count` (u64)
   - Maximum number of attachments retained per tenant (0 disables the cap). The tenant is the exact canonically authenticated `AccountId`; anonymous and token-derived tenants do not exist.
   - Default: 128.
 - `torii.attachments_per_tenant_max_bytes` (u64)
-  - Aggregate bytes retained per tenant. When uploads would exceed the cap, Torii deterministically evicts the oldest attachments for that tenant before persisting the new body. Bodies larger than the cap are rejected with `413`.
+  - Aggregate bytes retained per tenant. When an upload can fit after tenant-local eviction, Torii fsyncs one bounded transaction intent, commits the new body, metadata, and prover reference durably, then removes the oldest attachments for that tenant. Startup and every later mutation roll back an incomplete incoming commit or finish victim deletion after a complete commit. A deletion failure returns `500` and retains the intent for recovery; bodies larger than the cap are rejected with `413`.
   - Default: 64 MiB.
+- `torii.attachments_global_max_count` (u64)
+  - Maximum number of attachment copies retained by one node across all tenants. The supported range is `1..=20000`, matching the bounded filesystem quota scan.
+  - Default: 4096.
+- `torii.attachments_global_max_bytes` (u64)
+  - Aggregate sanitized attachment bytes retained by one node across all tenants. An upload may evict only the submitting tenant's oldest entries to make room; Torii returns `413` rather than evicting another tenant's data.
+  - Default: 1 GiB.
 - `torii.attachments_allowed_mime_types` (list of strings)
   - Allowlisted MIME types for attachment payloads after magic‑byte sniffing.
   - Default: `["application/x-norito", "application/json", "application/x-zk1"]`.
 - `torii.attachments_max_expanded_bytes` (u64)
-  - Maximum expanded size for gzip/zstd payloads.
+  - Maximum bytes the sanitizer may expand while inspecting gzip/zstd payloads. The resulting canonical body must still fit `torii.attachments_max_bytes` before it can be retained.
   - Default: 16 MiB.
 - `torii.attachments_max_archive_depth` (u32)
   - Maximum nested gzip/zstd layers.
@@ -149,10 +155,11 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 
 - Non-consensus: attaching proofs and running the background verifier does not modify WSV or affect consensus.
 - Determinism & safety: id derivation and report generation are deterministic (based on body and content type). The prover verifies proofs using configured backends; it does not generate proofs or affect consensus.
-- Sanitization: gzip/zstd payloads are expanded within configured limits and only allowlisted types are stored; sanitizer metadata is captured in `provenance` and exports are re‑sanitized.
+- Sanitization: gzip/zstd payloads are expanded within configured limits and only allowlisted types are stored; sanitizer metadata is captured in `provenance` and compressed-origin exports are re‑sanitized. POST and export GET acquire the same bounded physical-work lease before handler work, and cancellation keeps that lease in every blocking worker, child process, and stdout reader until it actually exits.
 - Subprocess isolation: Torii rejects the node binary and differently named helpers, clears the child environment to the three sanitizer protocol variables, exposes only the helper and runtime libraries inside the filesystem sandbox, and caps both request and response streams. Official release bundles and container images ship the helper; Linux images also ship Bubblewrap.
 - GC cadence: attachment GC runs every minute and removes entries older than `attachments_ttl_secs`.
 - Storage hygiene: deleting an attachment removes both `.bin` and `.json`; report retention removes the corresponding node-local files under `zk_prover/reports`.
+- Quota recovery: node-global accounting scans at most 20,000 tenant-root entries and 40,000 aggregate child entries, counts malformed/raw entries against those bounds, and fails closed. An enabled prover starts only after any pending attachment quota transaction is recovered successfully.
 - Payloads: the prover expects `ProofAttachment`/`ProofAttachmentList` payloads (Norito or JSON). ZK1/TLV envelopes are tagged but rejected as top‑level payloads. The first-release ZK1 structural profile permits at most 64 TLVs per envelope, and repeated tags are stored once in report metadata.
 - Key bytes: when a registry entry omits stored VK bytes, the prover loads bytes from `torii.zk_prover_keys_dir` using `<backend>__<name>.vk` naming.
 - VK commitments are domain-separated SHA-256 hashes over the `iroha:zk:v1:vk`

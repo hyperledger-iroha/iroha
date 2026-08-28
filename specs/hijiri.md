@@ -33,8 +33,13 @@ band ends at exactly `1`. Every multiplier and the penalty cap is at least `1`,
 so Hijiri cannot discount the base validation fee; evaluation clamps a band to
 the penalty cap.
 
-If the global parameter is absent, Hijiri is inactive. If it is present but an
-account-specific record is absent, admission uses the global
+First-release shipped genesis manifests install revision 1 with no predecessor,
+one band ending at risk `1` with multiplier `1`, a penalty cap of `1`, and a
+default account risk of `0`. This neutral bootstrap makes Hijiri state and its
+signed quote binding explicit without changing the base validation-fee amount.
+
+If a custom genesis omits the global parameter, Hijiri is inactive. If it is
+present but an account-specific record is absent, admission uses the global
 `default_account_risk`. An explicit account record whose value equals the
 default remains distinct from an absent record for signed-state binding.
 
@@ -79,11 +84,14 @@ composite fee-quote hash commits to:
 - either the canonical digest of the matching `HijiriAccountRiskV1` or explicit
   absence of that record.
 
-Top-level transactions carry this value in signed metadata under
-`validation_fee_hijiri_fee_quote_hash`. A fee-bearing multisig proposal carries
-the same context-specific value in its canonical validation-fee marker. The
-marker encodes a present hash as lowercase 64-character hexadecimal and absence
-as `-`.
+Transactions carry this value in signed metadata under
+`validation_fee_hijiri_fee_quote_hash`. The metadata binds the execution
+account selected by the explicit fee coordinate, which is the transaction
+authority for an ordinary payment and the controlled account for a nested
+multisig payment. A fee-bearing multisig proposal carries that same
+context-specific value in its canonical validation-fee marker. The marker
+encodes a present hash as lowercase 64-character hexadecimal and absence as
+`-`.
 
 When Hijiri is active, the binding must be present, well formed, and exactly
 match current state. A missing, stale, substituted, or account-mismatched value
@@ -99,19 +107,31 @@ caller must hold the dedicated `CanSetHijiriParameters` permission; generic
 parameter-writing authority does not grant control over validation fees.
 Transition and payload validation run before the parameter enters state.
 
+The neutral Hijiri bootstrap does not install or activate the protected base
+validation-fee policy registry. That registry can only be created by an enacted
+SORA Parliament validation-fee proposal, and its first policy becomes effective
+after the mandatory 120,960-block activation delay. Until an enabled
+exact-network base policy is active, the Hijiri quote route remains unavailable
+even though the global Hijiri parameter is present.
+
 Clients may still read raw Hijiri records through `FindParameters`, and updates
 use the existing `ConfigurationEvent::Changed(ParameterChanged)` surface.
 
 The production quote boundary is the canonical-account-authenticated native
 Norito `POST /v1/validation-fee/hijiri/quote` route. Its V1 request is limited
-to 4 KiB and contains the authenticated account plus a transfer count in
-`1..=100_000`; the body account must exactly equal the authenticated principal.
-From one committed state snapshot at height `h`, Torii selects the exact-network
-enabled validation-fee policy scheduled for checked height `h + 1`, reads the
-global Hijiri parameter and at most one derived account-risk parameter, and
-returns a response that clients bound to 64 KiB. The response includes the
-policy version/hash, fee asset and treasury, Hijiri record digests, selected
-Q16 multiplier, composite quote hash, and exact per-transfer and aggregate
+to 4 KiB and contains the account to price plus a transfer count in
+`1..=100_000`. The body account must either exactly equal the authenticated
+principal or name a live multisig controller whose canonical specification
+contains that principal as a direct signatory. Torii validates that membership
+and reads the selected account-risk record from the same committed state
+snapshot; non-members receive the same forbidden response as every other
+cross-account request, before Torii derives or reads that account's risk key.
+From the snapshot at height `h`, Torii selects the exact-network enabled
+validation-fee policy scheduled for checked height `h + 1`, reads the global
+Hijiri parameter and at most one authorized account-risk parameter, and returns
+a response that clients bound to 64 KiB. The response includes the policy
+version/hash, fee asset and treasury, Hijiri record digests, selected Q16
+multiplier, composite quote hash, and exact per-transfer and aggregate
 minor-unit amounts.
 
 The response assurance is
@@ -126,6 +146,23 @@ proof can independently verify the base policy, but it does not witness custom
 Hijiri parameters. The Nexus `/v1/fees/quote` route is a separate fee surface
 and does not construct this validation-fee payment.
 
+Rust, C#, Kotlin, Java, Swift, JavaScript, and Python expose the same typed V1
+quote boundary without a JSON wire fallback. The non-Rust SDKs delegate request
+encoding and canonical response decoding, re-encoding, coherence checks, and
+exact-request binding to the ABI-23 native Norito implementation through the C,
+JNI, N-API, or PyO3 bridge appropriate to that SDK. Their transport wrappers
+reject non-HTTPS origins before native encoding, pin the signed and final URL,
+deny redirects and transparent decompression, require the native media type and
+identity representation, require unqualified `private` and `no-store`
+directives on every status, and reject any `public` directive including a
+parameterized form. They reject a success carrying a reject-code header and
+bound the actual request and response bytes to 4 KiB and 64 KiB respectively.
+Where a response declares `Content-Length`, clients require one canonical value
+equal to the bytes they actually consumed. ABI-23 artifact manifests, Apple
+slice inventories, JVM JNI checks, and managed-package consumer smokes require
+the corresponding Hijiri quote exports; an artifact that reports ABI 23 but
+omits the additive quote surface is not a valid SDK artifact.
+
 ## Deferred surfaces
 
 The repository contains portable Hijiri observer, evidence, and incentive data
@@ -134,7 +171,7 @@ owner. The following remain deferred and must not be described as active:
 
 - authenticated observer or evidence ingestion and attestation validation;
 - an independent witness proof over both base-policy and Hijiri custom-parameter
-  state, plus quote convenience wrappers beyond the typed Rust client;
+  state;
 - peer reputation or any effect on consensus membership, voting, or topology;
 - registry credits or settlement;
 - Hijiri-specific checkpoints; and
@@ -154,4 +191,8 @@ authorization lives in both the initial and deployed default executors with its
 permission type in `crates/iroha_executor_data_model/src/permission.rs`. The
 native quote DTO and validation contract live in
 `crates/iroha_torii_shared/src/validation_fee_api.rs`; Torii's same-snapshot
-handler lives in `crates/iroha_torii/src/validation_fee_api.rs`.
+handler lives in `crates/iroha_torii/src/validation_fee_api.rs`. The ABI-23 C
+and JNI projection is owned by `crates/connect_norito_bridge`, with the N-API
+and PyO3 projections in `crates/iroha_js_host` and
+`python/iroha_python/iroha_python_rs` respectively; each SDK owns only its
+typed transport and projection surface above that native contract.

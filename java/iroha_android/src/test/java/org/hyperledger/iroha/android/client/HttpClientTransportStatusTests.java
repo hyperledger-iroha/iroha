@@ -903,7 +903,7 @@ public final class HttpClientTransportStatusTests {
   }
 
   private static TransportResponse newResponse(final int status, final byte[] body) {
-    return new TransportResponse(status, body, "", Map.of());
+    return new TransportResponse(status, body, "", Map.of(), null, false);
   }
 
   private static String canonicalHash(final String prefix) {
@@ -920,7 +920,7 @@ public final class HttpClientTransportStatusTests {
 
   private static TransportResponse newResponse(
       final int status, final byte[] body, final Map<String, java.util.List<String>> headers) {
-    return new TransportResponse(status, body, "", headers);
+    return new TransportResponse(status, body, "", headers, null, false);
   }
 
   private static byte[] statusPayload(final String hash, final String kind) {
@@ -1043,14 +1043,17 @@ public final class HttpClientTransportStatusTests {
                         + "\"7ab5ff9c572efb316deac478f19209c5\"}")
                     .getBytes(StandardCharsets.UTF_8),
                 "",
-                Map.of()));
+                Map.of(),
+                null,
+                false));
       }
       if ("POST".equals(request.method())) {
         final Map<String, List<String>> headers =
             submitHeaderHash == null
                 ? Map.of()
                 : Map.of("x-iroha-entrypoint-hash", List.of(submitHeaderHash));
-        return CompletableFuture.completedFuture(new TransportResponse(202, new byte[0], "", headers));
+        return CompletableFuture.completedFuture(
+            new TransportResponse(202, new byte[0], "", headers, null, false));
       }
       if ("GET".equals(request.method())) {
         final String query = request.uri().getQuery();
@@ -1060,14 +1063,17 @@ public final class HttpClientTransportStatusTests {
         final int count = pollCount.getAndIncrement();
         if (count == 0) {
           return CompletableFuture.completedFuture(
-              new TransportResponse(200, statusPayload(expectedHash, "Queued"), "", Map.of()));
+              new TransportResponse(
+                  200, statusPayload(expectedHash, "Queued"), "", Map.of(), null, false));
         }
         if (count == 1) {
           return CompletableFuture.completedFuture(
-              new TransportResponse(200, statusPayload(expectedHash, "Committed"), "", Map.of()));
+              new TransportResponse(
+                  200, statusPayload(expectedHash, "Committed"), "", Map.of(), null, false));
         }
         return CompletableFuture.completedFuture(
-            new TransportResponse(200, statusPayload(expectedHash, "Applied"), "", Map.of()));
+            new TransportResponse(
+                200, statusPayload(expectedHash, "Applied"), "", Map.of(), null, false));
       }
       throw new IllegalStateException("Unexpected HTTP method " + request.method());
     }

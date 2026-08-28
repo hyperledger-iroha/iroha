@@ -13,9 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
-EXPECTED_ASSET_LENGTH = 125_474
-EXPECTED_ASSET_SHA256 = "8c285ae2dff53b70e8a21ab3b16ce3d99b3e6ff51ef0ea280254c972ae514f95"
-EXPECTED_SEMANTIC_SHA256 = "549d467470c7fce9840842a6c96a82d2a6b6d5839ffe12e970895671de66139b"
+EXPECTED_ASSET_LENGTH = 109_160
+EXPECTED_ASSET_SHA256 = "250ad7c03ff165727c689ad1cdb6d0c25a87f9b2aa53d7f1529ae19a02935071"
+EXPECTED_SEMANTIC_SHA256 = "e94c770fa63670de1a3ea4dbf4feb441976f404ef88f2ca29abb18b3886c9047"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
@@ -23,19 +23,18 @@ EXPECTED_RETAINED_DIRECT_SHA256 = (
     "af338fada6916a39d324e9c907abebf5137bec028e9d88ad75f91c4ae3d4ffb3"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "6d1a744a01060c53c5e7a0a0a49fabb35e7a3e091f160dabca14c43934cccfe3"
+    "1ecf40a166057d66dbe7f05951458174f5ad414db0b97ad753120a38e0d1c73d"
 )
 EXPECTED_BLAKE3_BYTES = (
-    0xB2, 0x01, 0xDE, 0xA2, 0x7D, 0xCE, 0xF7, 0x28,
-    0xC4, 0x86, 0xBD, 0x20, 0x21, 0x3B, 0x68, 0xD5,
-    0x31, 0xB4, 0xCE, 0xF5, 0xF1, 0xAC, 0x5C, 0xDA,
-    0x04, 0xDC, 0xEB, 0xD1, 0x27, 0xB8, 0x48, 0x14,
+    0x0C, 0xC8, 0x36, 0xD3, 0xE6, 0xED, 0x66, 0x07,
+    0xD4, 0xEF, 0x2F, 0xAE, 0x0A, 0x0B, 0xE9, 0x3B,
+    0x8B, 0x25, 0x5F, 0xCB, 0xDB, 0x25, 0x5A, 0x1C,
+    0x93, 0x84, 0x98, 0xD4, 0x52, 0xEB, 0xC5, 0x92,
 )
 EXPECTED_WRAPPERS = (
-    ('connect_ws_ticket_tool', 'connect.ws.ticket'),
-    ('connect_session_create_tool', 'connect.session.create'),
-    ('connect_session_create_and_ticket_tool', 'connect.session.create_and_ticket'),
-    ('connect_session_delete_tool', 'connect.session.delete'),
+    ('iroha_connect_ws_ticket_tool', 'iroha.connect.ws.ticket'),
+    ('iroha_connect_session_create_tool', 'iroha.connect.session.create'),
+    ('iroha_connect_session_delete_tool', 'iroha.connect.session.delete'),
     (
         "iroha_node_query_projection_checkpoint_plan_tool",
         "iroha.node.query_projection_checkpoint_plan",
@@ -48,13 +47,8 @@ EXPECTED_WRAPPERS = (
     ('iroha_da_manifests_get_tool', 'iroha.da.manifests.get'),
     ('iroha_runtime_upgrades_activate_tool', 'iroha.runtime.upgrades.activate'),
     ('iroha_runtime_upgrades_cancel_tool', 'iroha.runtime.upgrades.cancel'),
-    ('iroha_ledger_headers_tool', 'iroha.ledger.headers'),
-    ('iroha_ledger_state_root_tool', 'iroha.ledger.state_root'),
-    ('iroha_ledger_state_proof_tool', 'iroha.ledger.state_proof'),
-    ('iroha_ledger_block_proof_tool', 'iroha.ledger.block_proof'),
     ('iroha_bridge_finality_proof_tool', 'iroha.bridge.finality.proof'),
     ('iroha_bridge_finality_bundle_tool', 'iroha.bridge.finality.bundle'),
-    ('iroha_proofs_get_tool', 'iroha.proofs.get'),
     ('iroha_gov_contract_get_tool', 'iroha.gov.contract.get'),
     ('iroha_aliases_resolve_tool', 'iroha.aliases.resolve'),
     ('iroha_aliases_resolve_index_tool', 'iroha.aliases.resolve_index'),
@@ -70,8 +64,6 @@ EXPECTED_WRAPPERS = (
     ('iroha_accounts_onboard_plan_tool', 'iroha.accounts.onboard.plan'),
     ('iroha_accounts_onboard_prepare_tool', 'iroha.accounts.onboard.prepare'),
     ('iroha_accounts_onboard_submit_tool', 'iroha.accounts.onboard.submit'),
-    ('iroha_accounts_faucet_prepare_tool', 'iroha.accounts.faucet.prepare'),
-    ('iroha_accounts_faucet_submit_tool', 'iroha.accounts.faucet.submit'),
     ('iroha_account_transactions_tool', 'iroha.accounts.transactions'),
     ('iroha_account_history_tool', 'iroha.accounts.history'),
     ('iroha_account_transactions_query_tool', 'iroha.accounts.transactions.query'),
@@ -470,8 +462,6 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
         names = (
             "iroha.accounts.onboard.prepare",
             "iroha.accounts.onboard.submit",
-            "iroha.accounts.faucet.prepare",
-            "iroha.accounts.faucet.submit",
         )
 
         def assert_exact_schema(schema: object, path: str) -> None:
@@ -542,12 +532,12 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
     def test_source_mutations_fail_closed(self) -> None:
         mutations = (
             (
-                'connect_ws_ticket_tool => "connect.ws.ticket";',
-                'connect_ws_ticket_tool => "connect.session.create";',
+                'iroha_connect_ws_ticket_tool => "iroha.connect.ws.ticket";',
+                'iroha_connect_ws_ticket_tool => "iroha.connect.session.create";',
             ),
             (
-                'manual_tool_effect_from_name(expected_name)',
-                'manual_tool_effect_from_name(&descriptor.name)',
+                'effect: descriptor.effect,',
+                'effect: ToolEffect::Read,',
             ),
             (
                 'include_bytes!("mcp/manual_tool_descriptors_v1.json")',
@@ -558,8 +548,8 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
                 '"Alter a Sora VPN XOR escrow quote.',
             ),
             (
-                'tools.push(connect_ws_ticket_tool());',
-                'tools.push(connect_session_create_tool());',
+                'tools.push(iroha_connect_ws_ticket_tool());',
+                'tools.push(iroha_connect_session_create_tool());',
             ),
         )
         for old, new in mutations:

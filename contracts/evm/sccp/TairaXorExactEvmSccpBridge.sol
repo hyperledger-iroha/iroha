@@ -7,6 +7,9 @@ import "./SccpExactTransferCodec.sol";
 
 interface ITairaXorExactEvmToken {
     function bridge() external view returns (address);
+    function decimals() external view returns (uint8);
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
     function mint(address to, uint256 value) external returns (bool);
     function burnFrom(address from, uint256 value) external returns (bool);
 }
@@ -73,7 +76,7 @@ abstract contract TairaXorExactEvmSccpBridge {
     bytes32 public immutable routeConfigHash;
     bytes32 public immutable destinationBindingHash;
 
-    uint64 public transferNonce;
+    mapping(address => uint64) public transferNonces;
     mapping(bytes32 => bool) public usedSourceMessages;
     mapping(bytes32 => bool) public usedDestinationMessages;
     uint256 private reentrancyState = 1;
@@ -140,6 +143,8 @@ abstract contract TairaXorExactEvmSccpBridge {
 
         ITairaXorExactEvmToken configuredToken = ITairaXorExactEvmToken(tokenAddress);
         require(configuredToken.bridge() == address(this), "Token route mismatch");
+        require(configuredToken.decimals() == 18, "Unexpected token decimals");
+        require(configuredToken.totalSupply() == 0, "Token supply must start at zero");
         bytes32 actualTokenCodeHash = _codeHash(tokenAddress);
         require(actualTokenCodeHash != bytes32(0) && actualTokenCodeHash != EMPTY_CODE_HASH,
             "Token contract is required");
@@ -234,10 +239,11 @@ abstract contract TairaXorExactEvmSccpBridge {
             "Amount is not aligned to Taira scale");
         uint256 tairaAmount = tokenAmount / TAIRA_TO_TOKEN_SCALE;
         require(tairaAmount != 0 && tairaAmount <= MAX_U128, "Amount exceeds SCCP u128");
-        require(transferNonce != type(uint64).max, "Transfer nonce exhausted");
+        uint64 currentNonce = transferNonces[msg.sender];
+        require(currentNonce != type(uint64).max, "Transfer nonce exhausted");
         require(_codeHash(address(token)) == tokenCodeHash, "Token code changed");
 
-        uint64 nonce = transferNonce;
+        uint64 nonce = currentNonce;
         SccpExactTransferCodec.TransferFields memory fields;
         fields.sourceDomain = externalDomain;
         fields.destinationDomain = DOMAIN_SORA;
@@ -262,9 +268,9 @@ abstract contract TairaXorExactEvmSccpBridge {
         );
         require(!usedSourceMessages[messageId], "Source message already used");
 
-        transferNonce = nonce + 1;
+        transferNonces[msg.sender] = nonce + 1;
         usedSourceMessages[messageId] = true;
-        require(token.burnFrom(msg.sender, tokenAmount), "Token burn failed");
+        _mutateTokenExact(msg.sender, tokenAmount, false);
         emit SccpTransfer(
             sourceLaneHash,
             messageId,
@@ -302,8 +308,31 @@ abstract contract TairaXorExactEvmSccpBridge {
         uint256 tokenAmount = tairaAmount * TAIRA_TO_TOKEN_SCALE;
 
         usedDestinationMessages[messageId] = true;
-        require(token.mint(recipient, tokenAmount), "Token mint failed");
+        _mutateTokenExact(recipient, tokenAmount, true);
         emit TairaXorMintFinalized(messageId, recipient, tokenAmount, canonicalPayloadHash);
+    }
+
+    function _mutateTokenExact(address account, uint256 amount, bool minting) private {
+        uint256 expectedSupply = token.totalSupply();
+        uint256 expectedBalance = token.balanceOf(account);
+        if (minting) {
+            require(
+                expectedSupply <= type(uint256).max - amount
+                    && expectedBalance <= type(uint256).max - amount
+            );
+            expectedSupply += amount;
+            expectedBalance += amount;
+            require(token.mint(account, amount), "Token mint failed");
+        } else {
+            require(expectedSupply >= amount && expectedBalance >= amount);
+            expectedSupply -= amount;
+            expectedBalance -= amount;
+            require(token.burnFrom(account, amount), "Token burn failed");
+        }
+        require(
+            token.totalSupply() == expectedSupply && token.balanceOf(account) == expectedBalance,
+            "Token delta mismatch"
+        );
     }
 
     function sourceEventDigest(bytes32 messageId, bytes32 canonicalPayloadHash)

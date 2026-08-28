@@ -803,7 +803,7 @@ pub mod genesis_instructions_json {
         isi::{
             ActivatePublicLaneValidator, CustomInstruction, Grant, GrantBox, InstructionBox, Mint,
             MintBox, Register, RegisterPublicLaneValidator, SetAssetDefinitionAlias, SetParameter,
-            Transfer, TransferBox,
+            Transfer, TransferBox, Unregister, UnregisterBox,
             alias_setup::EnsureAlias,
             governance::RegisterCitizen,
             nexus::{
@@ -819,7 +819,8 @@ pub mod genesis_instructions_json {
         },
         parameter::Parameter,
         permission::Permission,
-        prelude::{AccountId, AssetDefinitionId, AssetId, DomainId},
+        prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, RoleId},
+        role::NewRole,
     };
     use iroha_primitives::numeric::Numeric;
     use norito::json::{self, Number, Parser, SeqVisitor, Value};
@@ -904,6 +905,7 @@ pub mod genesis_instructions_json {
                     if let Some((kind, inner)) = map.iter().next() {
                         let decoded = match kind.as_str() {
                             "Register" => try_decode_register(inner.clone())?,
+                            "Unregister" => try_decode_unregister(inner.clone())?,
                             "Mint" => try_decode_mint(inner.clone())?,
                             "Transfer" => try_decode_transfer(inner.clone())?,
                             "SetParameter" => try_decode_set_parameter(inner.clone())?,
@@ -1020,9 +1022,64 @@ pub mod genesis_instructions_json {
                     norito::json::value::from_value(payload)?;
                 InstructionBox::from(Register::asset_definition(new_asset_definition))
             }
+            "Role" => {
+                let fields = object_fields(payload.clone(), "Register::Role")?;
+                ensure_only_keys(&fields, &["id", "permissions", "grant_to"])?;
+                for required in ["id", "permissions", "grant_to"] {
+                    if !fields.contains_key(required) {
+                        return Err(json::Error::missing_field(required));
+                    }
+                }
+                let permission_values = match fields.get("permissions") {
+                    Some(Value::Array(values)) => values,
+                    Some(other) => {
+                        return Err(json::Error::Message(format!(
+                            "expected array for Register::Role.permissions, found {other:?}"
+                        )));
+                    }
+                    None => return Err(json::Error::missing_field("permissions")),
+                };
+                for (index, permission) in permission_values.iter().enumerate() {
+                    let permission_fields = match permission {
+                        Value::Object(fields) => fields,
+                        other => {
+                            return Err(json::Error::Message(format!(
+                                "expected object for Register::Role.permissions[{index}], found {other:?}"
+                            )));
+                        }
+                    };
+                    ensure_only_keys(permission_fields, &["name", "payload"])?;
+                    for required in ["name", "payload"] {
+                        if !permission_fields.contains_key(required) {
+                            return Err(json::Error::Message(format!(
+                                "missing Register::Role.permissions[{index}].{required}"
+                            )));
+                        }
+                    }
+                }
+                let new_role: NewRole = norito::json::value::from_value(payload)?;
+                InstructionBox::from(Register::role(new_role))
+            }
             _ => return Ok(None),
         };
         Ok(Some(instruction))
+    }
+    fn try_decode_unregister(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
+        let variants = match inner {
+            Value::Object(map) => map,
+            _ => return Ok(None),
+        };
+        if variants.len() != 1 {
+            return Ok(None);
+        }
+        let (variant, payload) = variants.into_iter().next().unwrap();
+        if variant != "Role" {
+            return Ok(None);
+        }
+        let mut fields = object_fields(payload, "Unregister::Role")?;
+        let role_id: RoleId = parse_id(&take_string(&mut fields, "object")?, "role")?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(Unregister::role(role_id))))
     }
     fn try_decode_mint(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
         let variants = match inner {
@@ -1207,6 +1264,13 @@ pub mod genesis_instructions_json {
         let lease_expiry_ms = match fields.remove("lease_expiry_ms") {
             None | Some(Value::Null) => None,
             Some(Value::Number(Number::U64(value))) => Some(value),
+            Some(Value::Number(Number::U128(value))) => {
+                Some(u64::try_from(value).map_err(|_| {
+                    json::Error::Message(format!(
+                        "invalid SetAssetDefinitionAlias.lease_expiry_ms: {value}"
+                    ))
+                })?)
+            }
             Some(Value::Number(Number::I64(value))) if value >= 0 => Some(value.cast_unsigned()),
             Some(other) => {
                 return Err(json::Error::Message(format!(
@@ -1498,6 +1562,9 @@ pub mod genesis_instructions_json {
             Value::Number(Number::U64(v)) => {
                 u32::try_from(v).map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
             }
+            Value::Number(Number::U128(v)) => {
+                u32::try_from(v).map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
+            }
             Value::Number(Number::I64(v)) => {
                 u32::try_from(v).map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
             }
@@ -1512,6 +1579,8 @@ pub mod genesis_instructions_json {
                 .parse::<u64>()
                 .map_err(|err| json::Error::Message(format!("invalid {label}: {err}"))),
             Value::Number(Number::U64(value)) => Ok(value),
+            Value::Number(Number::U128(value)) => u64::try_from(value)
+                .map_err(|_| json::Error::Message(format!("invalid {label}: {value}"))),
             Value::Number(Number::I64(value)) => u64::try_from(value)
                 .map_err(|_| json::Error::Message(format!("invalid {label}: {value}"))),
             other => Err(json::Error::Message(format!(
@@ -1576,6 +1645,7 @@ pub mod genesis_instructions_json {
                 let repr = match number {
                     Number::I64(v) => v.to_string(),
                     Number::U64(v) => v.to_string(),
+                    Number::U128(v) => v.to_string(),
                     Number::F64(v) => v.to_string(),
                 };
                 repr.parse::<Numeric>()
@@ -1614,6 +1684,22 @@ pub mod genesis_instructions_json {
                     norito::json::value::to_value(asset_definition.object())
                         .ok()
                         .map(|value| wrap("Register", "AssetDefinition", value))
+                }
+                RegisterBox::Role(role) => norito::json::value::to_value(role.object())
+                    .ok()
+                    .map(|value| wrap("Register", "Role", value)),
+                _ => None,
+            };
+        }
+        if let Some(unregister) = instruction.as_any().downcast_ref::<UnregisterBox>() {
+            return match unregister {
+                UnregisterBox::Role(role) => {
+                    let mut fields = Map::new();
+                    fields.insert(
+                        "object".to_string(),
+                        Value::String(role.object().to_string()),
+                    );
+                    Some(wrap("Unregister", "Role", Value::Object(fields)))
                 }
                 _ => None,
             };
@@ -1942,8 +2028,9 @@ pub mod genesis_instructions_json {
             permission::Permission,
             prelude::{
                 AccountId, AssetDefinitionId, AssetId, Grant, InstructionBox, Mint, Register,
-                Transfer,
+                Transfer, Unregister,
             },
+            role::Role,
         };
         use iroha_executor_data_model::permission::{
             account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
@@ -1964,6 +2051,59 @@ pub mod genesis_instructions_json {
             assert!(outer.contains_key("Register"));
         }
         #[test]
+        fn structured_numeric_fields_handle_u128_exactly() {
+            assert_eq!(
+                parse_u32(Value::Number(Number::U128(u128::from(u32::MAX))), "lane_id")
+                    .expect("u32 maximum"),
+                u32::MAX
+            );
+            assert!(
+                parse_u32(
+                    Value::Number(Number::U128(u128::from(u32::MAX) + 1)),
+                    "lane_id"
+                )
+                .is_err()
+            );
+            assert_eq!(
+                parse_u64(
+                    Value::Number(Number::U128(u128::from(u64::MAX))),
+                    "revision"
+                )
+                .expect("u64 maximum"),
+                u64::MAX
+            );
+            assert!(
+                parse_u64(
+                    Value::Number(Number::U128(u128::from(u64::MAX) + 1)),
+                    "revision"
+                )
+                .is_err()
+            );
+            assert_eq!(
+                parse_numeric(Value::Number(Number::U128(u128::MAX)))
+                    .expect("u128 must fit the exact Numeric domain")
+                    .to_string(),
+                u128::MAX.to_string()
+            );
+
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("u128", "universal").expect("domain"),
+                "coin".parse().expect("asset name"),
+            );
+            let mut fields = Map::new();
+            fields.insert(
+                "asset_definition_id".to_owned(),
+                Value::String(asset_definition_id.to_string()),
+            );
+            fields.insert(
+                "lease_expiry_ms".to_owned(),
+                Value::Number(Number::U128(u128::from(u64::MAX) + 1)),
+            );
+            let error = try_decode_set_asset_definition_alias(Value::Object(fields))
+                .expect_err("lease expiry above u64 must be rejected");
+            assert!(error.to_string().contains("lease_expiry_ms"));
+        }
+        #[test]
         fn serialize_register_uses_structured_json() {
             let domain = Register::domain(Domain::new(
                 DomainId::try_new("structured", "universal").unwrap(),
@@ -1974,6 +2114,82 @@ pub mod genesis_instructions_json {
             let parsed = norito::json::from_str::<Value>(&out).expect("parse serialized JSON");
             let array = parsed.as_array().expect("instructions array");
             assert!(array.first().unwrap().is_object());
+        }
+        #[test]
+        fn role_lifecycle_uses_strict_structured_genesis_json() {
+            let role_id: RoleId = "genesis_alias_bootstrap".parse().expect("role id");
+            let permission = Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::new(10)),
+            });
+            let new_role =
+                Role::new(role_id.clone(), ALICE_ID.clone()).add_permission(permission.clone());
+            let instructions = vec![
+                InstructionBox::from(Register::role(new_role)),
+                InstructionBox::from(Unregister::role(role_id.clone())),
+            ];
+            let encoded = instructions_to_value(&instructions);
+            let values = encoded.as_array().expect("instruction array");
+            assert!(
+                values[0]
+                    .get("Register")
+                    .and_then(|value| value.get("Role"))
+                    .is_some()
+            );
+            assert!(
+                values[1]
+                    .get("Unregister")
+                    .and_then(|value| value.get("Role"))
+                    .is_some()
+            );
+            assert!(values.iter().all(Value::is_object));
+
+            let decoded = from_value(&encoded).expect("decode structured role lifecycle");
+            let RegisterBox::Role(register) = decoded[0]
+                .as_any()
+                .downcast_ref::<RegisterBox>()
+                .expect("role registration")
+            else {
+                panic!("first instruction must register a role");
+            };
+            assert_eq!(register.object().inner().id, role_id);
+            assert_eq!(register.object().grant_to(), &*ALICE_ID);
+            assert_eq!(
+                register.object().inner().permissions().collect::<Vec<_>>(),
+                vec![&permission]
+            );
+            let UnregisterBox::Role(unregister) = decoded[1]
+                .as_any()
+                .downcast_ref::<UnregisterBox>()
+                .expect("role unregistration")
+            else {
+                panic!("second instruction must unregister a role");
+            };
+            assert_eq!(unregister.object(), &role_id);
+
+            let mut extra = values[0].clone();
+            extra
+                .get_mut("Register")
+                .and_then(|value| value.get_mut("Role"))
+                .and_then(Value::as_object_mut)
+                .expect("role fields")
+                .insert("unexpected".to_owned(), Value::Bool(true));
+            let error = from_value(&Value::Array(vec![extra]))
+                .expect_err("unknown role fields must be rejected");
+            assert!(error.to_string().contains("unexpected"));
+
+            let mut nested_extra = values[0].clone();
+            nested_extra
+                .get_mut("Register")
+                .and_then(|value| value.get_mut("Role"))
+                .and_then(|value| value.get_mut("permissions"))
+                .and_then(Value::as_array_mut)
+                .and_then(|permissions| permissions.first_mut())
+                .and_then(Value::as_object_mut)
+                .expect("permission fields")
+                .insert("unexpected".to_owned(), Value::Bool(true));
+            let error = from_value(&Value::Array(vec![nested_extra]))
+                .expect_err("unknown role permission fields must be rejected");
+            assert!(error.to_string().contains("unexpected"));
         }
         #[test]
         fn fee_sponsor_lifecycle_uses_structured_genesis_json() {

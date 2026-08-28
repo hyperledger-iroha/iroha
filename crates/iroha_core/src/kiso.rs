@@ -886,6 +886,10 @@ mod tests {
                 p2p_proxy: None,
                 p2p_proxy_required: false,
                 p2p_no_proxy: Vec::new(),
+                outbound_dial_allow_cidrs: Vec::new(),
+                outbound_dial_deny_cidrs: Vec::new(),
+                outbound_dial_allow_dns_suffixes: Vec::new(),
+                outbound_dial_deny_dns_suffixes: Vec::new(),
                 p2p_proxy_tls_verify: true,
                 p2p_proxy_tls_pinned_cert_der_base64: None,
                 quic_enabled: false,
@@ -1069,6 +1073,10 @@ mod tests {
                     iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
                 attachments_per_tenant_max_bytes:
                     iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_BYTES,
+                attachments_global_max_count:
+                    iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT,
+                attachments_global_max_bytes:
+                    iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_BYTES,
                 attachments_allowed_mime_types:
                     iroha_config::parameters::defaults::torii::attachments_allowed_mime_types(),
                 attachments_max_expanded_bytes:

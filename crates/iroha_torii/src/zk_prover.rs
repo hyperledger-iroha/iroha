@@ -30,14 +30,18 @@ use crate::{
     zk_attachments::{
         ATTACHMENT_META_FILE_MAX_BYTES, ProverProcessingDecision, ProverProcessingReceipt,
         ZK_PROVER_PROCESSING_STATE_VERSION, ensure_prover_processing_reference,
-        open_attachment_regular_file, persist_prover_processing_receipt_if_referenced,
-        prover_processing_decision, read_bounded_attachment_regular_file,
+        load_prover_processing_receipt, open_attachment_regular_file,
+        persist_prover_processing_receipt_if_referenced, prover_processing_decision,
+        read_bounded_attachment_regular_file, reconcile_prover_processing_receipt_if_referenced,
         validate_attachment_body_contract, validate_attachment_metadata_contract,
     },
     zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
 };
 use iroha_core::{
-    state::{State as CoreState, StateReadOnly, WorldReadOnly},
+    state::{
+        State as CoreState, StateQueryView, StateReadOnly, WorldReadOnly,
+        compute_zk_consensus_policy_hash,
+    },
     zk::{
         hash_proof, hash_vk, is_developer_only_backend_label, is_production_claim_backend_label,
         is_trusted_setup_backend_label, is_verifier_backend_registry_label_v1,
@@ -48,13 +52,12 @@ use iroha_core::{
 use iroha_crypto::Hash;
 use iroha_data_model::proof::{
     ProofAttachment, ProofAttachmentList, VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1, VerifyingKeyBox,
-    VerifyingKeyId,
+    VerifyingKeyId, VerifyingKeyRecord,
 };
 use iroha_data_model::zk::BackendTag;
 use mv::storage::StorageReadOnly;
 use norito::json;
 use parking_lot::{Mutex, RwLock};
-#[cfg(test)]
 use sha2::{Digest as _, Sha256};
 #[cfg(test)]
 use std::collections::BTreeMap;
@@ -81,7 +84,6 @@ use tokio::{
 #[derive(
     Debug,
     Clone,
-    Copy,
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
     crate::json_macros::JsonDeserialize,
@@ -89,17 +91,21 @@ use tokio::{
     PartialEq,
     Eq,
 )]
+#[norito(deny_unknown_fields)]
 /// Durable processing disposition embedded in a prover report.
 pub struct ProverReportProcessing {
     /// Whether the attachment outcome must not be retried automatically.
     pub terminal: bool,
     /// Earliest retry time for a transient failure, in Unix milliseconds.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub retry_not_before_ms: Option<u64>,
     /// Number of transient attempts already made for this attachment.
-    #[norito(default)]
     pub retry_count: u32,
+    /// Indices whose successful verification can be reused on the next retry.
+    pub completed_proof_indices: Vec<u16>,
+    /// Hash of the effective verifier context for reusable successful proofs.
+    #[norito(required)]
+    pub processing_context_hash: Option<String>,
 }
 #[derive(
     Debug,
@@ -187,8 +193,7 @@ pub struct ProverReport {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub proofs: Vec<ProofReportEntry>,
     /// Processing disposition used to recover a receipt after a partial commit.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub processing: Option<ProverReportProcessing>,
 }
 #[derive(
@@ -226,6 +231,8 @@ struct ProverCfg {
     allowed_circuits: Vec<String>,
     state: Option<Arc<CoreState>>,
     telemetry: MaybeTelemetry,
+    #[cfg(test)]
+    verification_attempts: Arc<AtomicUsize>,
 }
 static PROVER_CFG: OnceLock<RwLock<ProverCfg>> = OnceLock::new();
 #[cfg(test)]
@@ -275,6 +282,8 @@ pub fn configure(
         allowed_circuits,
         state,
         telemetry,
+        #[cfg(test)]
+        verification_attempts: Arc::new(AtomicUsize::new(0)),
     };
     if let Some(lock) = PROVER_CFG.get() {
         let mut guard = lock.write();
@@ -294,7 +303,7 @@ fn with_cfg<R>(f: impl FnOnce(&ProverCfg) -> R) -> Option<R> {
         f(&*guard)
     })
 }
-fn cfg_enabled() -> bool {
+pub(crate) fn cfg_enabled() -> bool {
     with_cfg(|c| c.enabled).unwrap_or(false)
 }
 fn cfg_scan_period() -> Duration {
@@ -345,6 +354,21 @@ fn cfg_allowed_circuits() -> Vec<String> {
 }
 fn cfg_state() -> Option<Arc<CoreState>> {
     with_cfg(|c| c.state.clone()).flatten()
+}
+#[cfg(test)]
+fn cfg_verification_attempts() -> Option<Arc<AtomicUsize>> {
+    with_cfg(|cfg| Arc::clone(&cfg.verification_attempts))
+}
+#[cfg(test)]
+fn proof_verification_attempt_count() -> usize {
+    with_cfg(|cfg| cfg.verification_attempts.load(AtomicOrdering::SeqCst)).unwrap_or(0)
+}
+#[cfg(test)]
+fn set_proof_verification_attempt_count(count: usize) {
+    let _ = with_cfg(|cfg| {
+        cfg.verification_attempts
+            .store(count, AtomicOrdering::SeqCst);
+    });
 }
 fn telemetry_handle() -> MaybeTelemetry {
     with_cfg(|c| c.telemetry.clone()).unwrap_or_else(MaybeTelemetry::disabled)
@@ -522,18 +546,20 @@ fn visit_report_summaries_locked(mut visitor: impl FnMut(ProverReportSummary) ->
         }
     });
 }
-fn prune_stale_report_summaries_locked() {
+fn prune_stale_report_summaries_locked() -> usize {
+    let mut pruned = 0usize;
     let Ok(entries) = fs::read_dir(report_index_dir()) else {
-        return;
+        return pruned;
     };
     for entry in entries.flatten() {
         let Some(id) = report_id_from_entry(&entry) else {
             continue;
         };
-        if !report_path_from_sanitized(&id).is_file() {
-            let _ = fs::remove_file(entry.path());
+        if !report_path_from_sanitized(&id).is_file() && fs::remove_file(entry.path()).is_ok() {
+            pruned = pruned.saturating_add(1);
         }
     }
+    pruned
 }
 #[cfg(test)]
 fn read_report_summaries_locked() -> Vec<ProverReportSummary> {
@@ -556,7 +582,7 @@ fn read_report_summaries_locked() -> Vec<ProverReportSummary> {
 #[cfg(test)]
 fn load_report_summaries() -> Vec<ProverReportSummary> {
     let _guard = report_summary_lock().lock();
-    prune_stale_report_summaries_locked();
+    let _ = prune_stale_report_summaries_locked();
     read_report_summaries_locked()
 }
 #[cfg(test)]
@@ -594,36 +620,39 @@ fn processing_receipt_from_report(report: &ProverReport) -> Option<ProverProcess
             terminal: true,
             retry_not_before_ms: None,
             retry_count: 0,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
         }
     } else {
-        report.processing?
+        report.processing.clone()?
     };
-    if (processing.terminal
-        && (processing.retry_not_before_ms.is_some() || processing.retry_count != 0))
-        || (!processing.terminal
-            && (processing.retry_not_before_ms.is_none() || processing.retry_count == 0))
-    {
-        return None;
-    }
-    Some(ProverProcessingReceipt {
+    let receipt = ProverProcessingReceipt {
         version: ZK_PROVER_PROCESSING_STATE_VERSION,
         id: report.id.clone(),
         processed_ms: report.processed_ms,
         terminal: processing.terminal,
         retry_not_before_ms: processing.retry_not_before_ms,
         retry_count: processing.retry_count,
-    })
+        completed_proof_indices: processing.completed_proof_indices,
+        processing_context_hash: processing.processing_context_hash,
+    };
+    receipt.disposition_is_valid().then_some(receipt)
 }
 fn committed_report_processing_decision(id: &str, now_ms: u64) -> Option<ProverProcessingDecision> {
     let report = load_report(id)?;
-    let receipt = processing_receipt_from_report(&report)?;
-    if let Err(error) = persist_prover_processing_receipt_if_referenced(&receipt) {
-        iroha_logger::warn!(
-            attachment_id = %id,
-            %error,
-            "Failed to reconcile a committed ZK prover report receipt"
-        );
-    }
+    let committed = processing_receipt_from_report(&report)?;
+    let receipt =
+        reconcile_prover_processing_receipt_if_referenced(&committed).unwrap_or_else(|error| {
+            iroha_logger::warn!(
+                attachment_id = %id,
+                %error,
+                "Failed to reconcile a committed ZK prover report receipt"
+            );
+            ProverProcessingReceipt::reconcile_committed(
+                load_prover_processing_receipt(id),
+                committed,
+            )
+        });
     if receipt.terminal
         || receipt
             .retry_not_before_ms
@@ -1033,9 +1062,18 @@ fn delete_report_files_locked(id: &str) -> std::io::Result<bool> {
     let Some(clean) = sanitize_report_id(id) else {
         return Ok(false);
     };
-    let removed = remove_file_if_present(&report_path_from_sanitized(&clean))?;
-    let _ = remove_file_if_present(&report_summary_path_from_sanitized(&clean))?;
-    Ok(removed)
+    let report_path = report_path_from_sanitized(&clean);
+    if report_path.is_file() {
+        if let Some(committed) = load_report(&clean)
+            .as_ref()
+            .and_then(processing_receipt_from_report)
+        {
+            let _ = reconcile_prover_processing_receipt_if_referenced(&committed)?;
+        }
+    }
+    let removed_report = remove_file_if_present(&report_path)?;
+    let removed_summary = remove_file_if_present(&report_summary_path_from_sanitized(&clean))?;
+    Ok(removed_report || removed_summary)
 }
 fn enforce_report_store_capacity_locked(
     exclude_id: &str,
@@ -1050,7 +1088,7 @@ fn enforce_report_store_capacity_locked(
             "prover report retention geometry cannot admit the report",
         ));
     }
-    prune_stale_report_summaries_locked();
+    let _ = prune_stale_report_summaries_locked();
     let mut evicted = 0usize;
     loop {
         let scan = scan_report_store_locked(exclude_id);
@@ -1170,7 +1208,9 @@ fn record_prover_metrics(report: &ProverReport) {
         );
     });
 }
-/// Garbage collect reports older than configured TTL. Returns number of deleted reports.
+/// Garbage collect expired report artifacts and stale index entries.
+///
+/// Returns the number of report records removed by retention GC.
 pub fn gc_reports_once() -> usize {
     ensure_dirs();
     let ttl = Duration::from_secs(cfg_reports_ttl_secs());
@@ -1187,7 +1227,7 @@ pub fn gc_reports_once() -> usize {
         }
         true
     });
-    prune_stale_report_summaries_locked();
+    deleted = deleted.saturating_add(prune_stale_report_summaries_locked());
     match enforce_report_store_capacity_locked(
         "",
         0,
@@ -1212,6 +1252,8 @@ struct ProverContext {
     allowed_backends: Vec<String>,
     allowed_circuits: Vec<String>,
     state: Option<Arc<CoreState>>,
+    #[cfg(test)]
+    verification_attempts: Option<Arc<AtomicUsize>>,
 }
 fn backend_allowed(backend: &str, allowlist: &[String]) -> bool {
     !is_trusted_setup_backend_label(backend)
@@ -1327,12 +1369,163 @@ fn decode_proof_attachments(
         )),
     }
 }
+fn processing_context_put_bytes(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_be_bytes());
+    hasher.update(bytes);
+}
+fn processing_context_put_str(hasher: &mut Sha256, value: &str) {
+    processing_context_put_bytes(hasher, value.as_bytes());
+}
+fn processing_context_put_option_str(hasher: &mut Sha256, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            processing_context_put_str(hasher, value);
+        }
+        None => hasher.update([0]),
+    }
+}
+fn processing_context_put_option_u64(hasher: &mut Sha256, value: Option<u64>) {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            hasher.update(value.to_be_bytes());
+        }
+        None => hasher.update([0]),
+    }
+}
+fn processing_context_put_record(
+    hasher: &mut Sha256,
+    record: Option<&VerifyingKeyRecord>,
+    verification_height: Option<u64>,
+) {
+    let Some(record) = record else {
+        hasher.update([0]);
+        return;
+    };
+    hasher.update([1]);
+    hasher.update(record.version.to_be_bytes());
+    processing_context_put_str(hasher, &record.circuit_id);
+    processing_context_put_option_str(hasher, record.owner_manifest_id.as_deref());
+    processing_context_put_str(hasher, &record.namespace);
+    processing_context_put_str(hasher, record.backend.canonical_label());
+    processing_context_put_str(hasher, &record.curve);
+    processing_context_put_bytes(hasher, &record.public_inputs_schema_hash);
+    processing_context_put_bytes(hasher, &record.commitment);
+    hasher.update(record.vk_len.to_be_bytes());
+    hasher.update(record.max_proof_bytes.to_be_bytes());
+    processing_context_put_option_str(hasher, record.gas_schedule_id.as_deref());
+    processing_context_put_option_str(hasher, record.metadata_uri_cid.as_deref());
+    processing_context_put_option_str(hasher, record.vk_bytes_cid.as_deref());
+    processing_context_put_option_u64(hasher, record.activation_height);
+    processing_context_put_option_u64(hasher, record.withdraw_height);
+    hasher.update([u8::from(record.status)]);
+    hasher.update([verification_height.is_some_and(|height| record.is_active_at(height)) as u8]);
+    // The commitment, rather than another copy of the potentially large key,
+    // defines verifier identity. A prior success remains valid if storage moves
+    // between an inline key and the same commitment-backed external key.
+}
+fn proof_processing_context_hash(
+    ctx: &ProverContext,
+    verifier_view: Option<&StateQueryView<'_>>,
+    attachments: &[ProofAttachment],
+) -> String {
+    let mut hasher = Sha256::new();
+    processing_context_put_bytes(&mut hasher, b"iroha:torii:zk-prover-retry-context:v1");
+    processing_context_put_str(&mut hasher, env!("CARGO_PKG_VERSION"));
+    processing_context_put_option_str(&mut hasher, option_env!("VERGEN_GIT_SHA"));
+    hasher.update([
+        cfg!(feature = "zk-halo2") as u8,
+        cfg!(feature = "zk-halo2-ipa") as u8,
+        cfg!(feature = "zk-stark") as u8,
+        cfg!(feature = "goldilocks_backend") as u8,
+        cfg!(feature = "circuit-params") as u8,
+    ]);
+    hasher.update(
+        u64::try_from(ctx.allowed_backends.len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    for backend in &ctx.allowed_backends {
+        processing_context_put_str(&mut hasher, backend);
+    }
+    hasher.update(
+        u64::try_from(ctx.allowed_circuits.len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    for circuit in &ctx.allowed_circuits {
+        processing_context_put_str(&mut hasher, circuit);
+    }
+    hasher.update(
+        u64::try_from(attachments.len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    match verifier_view {
+        Some(view) => {
+            hasher.update([1]);
+            processing_context_put_bytes(&mut hasher, &compute_zk_consensus_policy_hash(&view.zk));
+            let verification_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+            let world = view.world();
+            let verifying_keys = world.verifying_keys();
+            for attachment in attachments {
+                processing_context_put_str(&mut hasher, attachment.backend.as_str());
+                processing_context_put_str(&mut hasher, attachment.vk_ref.backend.as_str());
+                processing_context_put_str(&mut hasher, &attachment.vk_ref.name);
+                processing_context_put_record(
+                    &mut hasher,
+                    verifying_keys.get(&attachment.vk_ref),
+                    Some(verification_height),
+                );
+            }
+        }
+        None => {
+            hasher.update([0]);
+            for attachment in attachments {
+                processing_context_put_str(&mut hasher, attachment.backend.as_str());
+                processing_context_put_str(&mut hasher, attachment.vk_ref.backend.as_str());
+                processing_context_put_str(&mut hasher, &attachment.vk_ref.name);
+                processing_context_put_record(&mut hasher, None, None);
+            }
+        }
+    }
+    hex::encode(hasher.finalize())
+}
 struct ProofProcessingResult {
     report: ProofReportEntry,
     retryable: bool,
 }
+fn cached_successful_proof_report(
+    verifier_view: Option<&StateQueryView<'_>>,
+    attachment: &ProofAttachment,
+) -> ProofReportEntry {
+    let circuit_id = verifier_view.and_then(|view| {
+        view.world()
+            .verifying_keys()
+            .get(&attachment.vk_ref)
+            .map(|record| record.circuit_id.clone())
+    });
+    ProofReportEntry {
+        backend: attachment.backend.to_string(),
+        ok: true,
+        error: None,
+        proof_hash: Some(hex::encode(hash_proof(&attachment.proof))),
+        vk_ref: Some(attachment.vk_ref.clone()),
+        circuit_id,
+    }
+}
+#[cfg(test)]
 fn process_proof_attachment_with_disposition(
     ctx: &ProverContext,
+    attachment: &ProofAttachment,
+) -> ProofProcessingResult {
+    let verifier_view = ctx.state.as_ref().map(|state| state.query_view());
+    process_proof_attachment_in_view(ctx, verifier_view.as_ref(), attachment)
+}
+fn process_proof_attachment_in_view(
+    ctx: &ProverContext,
+    verifier_view: Option<&StateQueryView<'_>>,
     attachment: &ProofAttachment,
 ) -> ProofProcessingResult {
     let backend = attachment.backend.clone();
@@ -1381,8 +1574,19 @@ fn process_proof_attachment_with_disposition(
         retryable = is_verifier_backend_registry_label_v1(backend_str);
         terminal_error |= !retryable;
     }
-    if let Some(state) = ctx.state.as_ref() {
-        let zk = state.zk_snapshot();
+    match production_verify_backend_tag(backend_str) {
+        Some(BackendTag::Halo2IpaPasta) if !cfg!(feature = "zk-halo2-ipa") => {
+            errors.push("halo2 verification is unavailable in this node build".into());
+            retryable = true;
+        }
+        Some(BackendTag::Stark) if !cfg!(feature = "zk-stark") => {
+            errors.push("stark verification is unavailable in this node build".into());
+            retryable = true;
+        }
+        _ => {}
+    }
+    if let Some(view) = verifier_view {
+        let zk = &view.zk;
         match production_verify_backend_tag(backend_str) {
             Some(BackendTag::Halo2IpaPasta) if !zk.halo2.enabled => {
                 errors.push("halo2 verification is disabled in node configuration".into());
@@ -1463,14 +1667,13 @@ fn process_proof_attachment_with_disposition(
     if !errors.is_empty() {
         return result(errors, circuit_id, retryable, terminal_error);
     }
-    let state = match ctx.state.as_ref() {
-        Some(state) => state,
+    let view = match verifier_view {
+        Some(view) => view,
         None => {
             errors.push("verifying key lookup requires core state".into());
             return result(errors, circuit_id, true, false);
         }
     };
-    let view = state.query_view();
     let verification_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
     let record = match view.world().verifying_keys().get(vk_id) {
         Some(record) => record,
@@ -1552,6 +1755,10 @@ fn process_proof_attachment_with_disposition(
     if errors.is_empty() {
         match vk_box.as_deref() {
             Some(vk_box) => {
+                #[cfg(test)]
+                if let Some(attempts) = &ctx.verification_attempts {
+                    attempts.fetch_add(1, AtomicOrdering::SeqCst);
+                }
                 let verified = verify_backend_with_timing_checked(
                     backend_str,
                     &attachment.proof,
@@ -1582,7 +1789,18 @@ fn processing_retry_count(id: &str) -> Option<u32> {
     let now_ms = now_ms();
     let report_decision = || committed_report_processing_decision(id, now_ms);
     match prover_processing_decision(id, now_ms) {
-        ProverProcessingDecision::Suppress => None,
+        ProverProcessingDecision::Suppress => {
+            // A report rename may have committed immediately before a crash or
+            // failed terminal-receipt write. Reconcile it even while the
+            // provisional backoff is active, before retention can evict it.
+            // A terminal receipt is already authoritative, so avoid reopening
+            // and decoding its potentially large report on every scan.
+            let receipt = load_prover_processing_receipt(id);
+            reconcile_suppressed_report_if_needed(receipt.as_ref(), || {
+                let _ = report_decision();
+            });
+            None
+        }
         ProverProcessingDecision::Due { retry_count } => match report_decision() {
             Some(ProverProcessingDecision::Suppress) => None,
             Some(ProverProcessingDecision::Due {
@@ -1595,6 +1813,70 @@ fn processing_retry_count(id: &str) -> Option<u32> {
             Some(ProverProcessingDecision::Due { retry_count }) => Some(retry_count),
             Some(ProverProcessingDecision::Missing) | None => Some(0),
         },
+    }
+}
+fn reconcile_suppressed_report_if_needed(
+    receipt: Option<&ProverProcessingReceipt>,
+    reconcile_report: impl FnOnce(),
+) {
+    if receipt.is_none_or(|receipt| !receipt.terminal) {
+        reconcile_report();
+    }
+}
+#[derive(Clone, Default)]
+struct CompletedProofCache {
+    indices: Vec<u16>,
+    context_hash: Option<String>,
+}
+fn completed_proof_cache_for_retry(id: &str) -> CompletedProofCache {
+    let durable = load_prover_processing_receipt(id).filter(|receipt| !receipt.terminal);
+    let committed = load_report(id)
+        .as_ref()
+        .and_then(processing_receipt_from_report)
+        .filter(|receipt| !receipt.terminal);
+    let selected = match (durable, committed) {
+        (Some(durable), Some(committed)) => {
+            ProverProcessingReceipt::reconcile_committed(Some(durable), committed)
+        }
+        (Some(receipt), None) | (None, Some(receipt)) => receipt,
+        (None, None) => return CompletedProofCache::default(),
+    };
+    CompletedProofCache {
+        indices: selected.completed_proof_indices,
+        context_hash: selected.processing_context_hash,
+    }
+}
+fn checkpoint_completed_proofs(
+    loc: &AttachmentLocation,
+    retry_count: u32,
+    retry_not_before_ms: u64,
+    completed_proof_indices: &[u16],
+    processing_context_hash: &str,
+) {
+    if completed_proof_indices.is_empty() {
+        return;
+    }
+    let receipt = ProverProcessingReceipt {
+        version: ZK_PROVER_PROCESSING_STATE_VERSION,
+        id: loc.id.clone(),
+        processed_ms: now_ms(),
+        terminal: false,
+        retry_not_before_ms: Some(retry_not_before_ms),
+        retry_count,
+        completed_proof_indices: completed_proof_indices.to_vec(),
+        processing_context_hash: Some(processing_context_hash.to_owned()),
+    };
+    match persist_prover_processing_receipt_if_referenced(&receipt) {
+        Ok(true) => {}
+        Ok(false) => iroha_logger::debug!(
+            attachment_id = %loc.id,
+            "Skipping successful-proof checkpoint because no live attachment reference remains"
+        ),
+        Err(error) => iroha_logger::warn!(
+            attachment_id = %loc.id,
+            %error,
+            "Failed to checkpoint a successful sibling proof before processing the next proof"
+        ),
     }
 }
 fn process_attachment_once_at(loc: &AttachmentLocation) -> Option<ProverReport> {
@@ -1646,17 +1928,20 @@ fn process_attachment_snapshot_at(
     let Some(previous_retry_count) = processing_retry_count(&loc.id) else {
         return load_report(&loc.id);
     };
+    let previous_completed_proofs = completed_proof_cache_for_retry(&loc.id);
     let retry_count = previous_retry_count.saturating_add(1);
     let attempt_started_ms = now_ms();
+    let provisional_retry_not_before_ms =
+        attempt_started_ms.saturating_add(processing_retry_delay_ms(retry_count));
     let provisional_receipt = ProverProcessingReceipt {
         version: ZK_PROVER_PROCESSING_STATE_VERSION,
         id: loc.id.clone(),
         processed_ms: attempt_started_ms,
         terminal: false,
-        retry_not_before_ms: Some(
-            attempt_started_ms.saturating_add(processing_retry_delay_ms(retry_count)),
-        ),
+        retry_not_before_ms: Some(provisional_retry_not_before_ms),
         retry_count,
+        completed_proof_indices: previous_completed_proofs.indices.clone(),
+        processing_context_hash: previous_completed_proofs.context_hash.clone(),
     };
     match persist_prover_processing_receipt_if_referenced(&provisional_receipt) {
         Ok(true) => {}
@@ -1684,11 +1969,21 @@ fn process_attachment_snapshot_at(
         allowed_backends: cfg_allowed_backends(),
         allowed_circuits: cfg_allowed_circuits(),
         state: cfg_state(),
+        #[cfg(test)]
+        verification_attempts: cfg_verification_attempts(),
     };
     let mut proofs: Vec<ProofReportEntry> = Vec::new();
-    let (ok, err, backend, vk_ref, proof_hash, circuit_id, retryable) = match validated_body
-        .and_then(|body| decode_proof_attachments(&meta.content_type, body))
-    {
+    let (
+        ok,
+        err,
+        backend,
+        vk_ref,
+        proof_hash,
+        circuit_id,
+        retryable,
+        completed_proof_indices,
+        processing_context_hash,
+    ) = match validated_body.and_then(|body| decode_proof_attachments(&meta.content_type, body)) {
         Ok(attachments) => {
             if attachments.is_empty() {
                 (
@@ -1699,18 +1994,51 @@ fn process_attachment_snapshot_at(
                     None,
                     None,
                     false,
+                    Vec::new(),
+                    None,
                 )
             } else {
                 let mut saw_retryable_failure = false;
                 let mut saw_terminal_failure = false;
-                for attachment in attachments {
-                    let processed = process_proof_attachment_with_disposition(&ctx, &attachment);
+                let verifier_view = ctx.state.as_ref().map(|state| state.query_view());
+                let current_processing_context_hash =
+                    proof_processing_context_hash(&ctx, verifier_view.as_ref(), &attachments);
+                let cached_successes: HashSet<u16> = previous_completed_proofs
+                    .context_hash
+                    .as_deref()
+                    .filter(|hash| *hash == current_processing_context_hash)
+                    .map(|_| previous_completed_proofs.indices.iter().copied().collect())
+                    .unwrap_or_default();
+                let mut completed_proof_indices = Vec::with_capacity(attachments.len());
+                for (index, attachment) in attachments.into_iter().enumerate() {
+                    let index = u16::try_from(index).ok();
+                    if index.is_some_and(|index| cached_successes.contains(&index)) {
+                        completed_proof_indices.extend(index);
+                        proofs.push(cached_successful_proof_report(
+                            verifier_view.as_ref(),
+                            &attachment,
+                        ));
+                        continue;
+                    }
+                    let processed =
+                        process_proof_attachment_in_view(&ctx, verifier_view.as_ref(), &attachment);
                     if !processed.report.ok {
                         saw_retryable_failure |= processed.retryable;
                         saw_terminal_failure |= !processed.retryable;
+                    } else {
+                        completed_proof_indices.extend(index);
+                        checkpoint_completed_proofs(
+                            loc,
+                            retry_count,
+                            provisional_retry_not_before_ms,
+                            &completed_proof_indices,
+                            &current_processing_context_hash,
+                        );
                     }
                     proofs.push(processed.report);
                 }
+                completed_proof_indices.sort_unstable();
+                completed_proof_indices.dedup();
                 let failures: Vec<_> = proofs.iter().filter(|p| !p.ok).collect();
                 let ok = failures.is_empty();
                 let err = if ok {
@@ -1742,10 +2070,32 @@ fn process_attachment_snapshot_at(
                     proofs.clear();
                 }
                 let retryable = saw_retryable_failure && !saw_terminal_failure;
-                (ok, err, backend, vk_ref, proof_hash, circuit_id, retryable)
+                let processing_context_hash = (!completed_proof_indices.is_empty())
+                    .then_some(current_processing_context_hash);
+                (
+                    ok,
+                    err,
+                    backend,
+                    vk_ref,
+                    proof_hash,
+                    circuit_id,
+                    retryable,
+                    completed_proof_indices,
+                    processing_context_hash,
+                )
             }
         }
-        Err(err) => (false, Some(err), None, None, None, None, false),
+        Err(err) => (
+            false,
+            Some(err),
+            None,
+            None,
+            None,
+            None,
+            false,
+            Vec::new(),
+            None,
+        ),
     };
     #[cfg(test)]
     {
@@ -1762,6 +2112,10 @@ fn process_attachment_snapshot_at(
         retry_not_before_ms: retryable
             .then(|| processed_ms.saturating_add(processing_retry_delay_ms(retry_count))),
         retry_count: retryable.then_some(retry_count).unwrap_or(0),
+        completed_proof_indices: retryable
+            .then_some(completed_proof_indices)
+            .unwrap_or_default(),
+        processing_context_hash: retryable.then_some(processing_context_hash).flatten(),
     };
     let rep = ProverReport {
         id: loc.id.clone(),
@@ -1782,6 +2136,15 @@ fn process_attachment_snapshot_at(
     };
     let receipt = processing_receipt_from_report(&rep)
         .expect("new prover reports always carry a valid processing disposition");
+    if !receipt.terminal
+        && let Err(error) = persist_prover_processing_receipt_if_referenced(&receipt)
+    {
+        iroha_logger::warn!(
+            attachment_id = %rep.id,
+            %error,
+            "Failed to checkpoint successful sibling proofs before retry report persistence"
+        );
+    }
     match save_report(&rep) {
         Ok(()) => match persist_prover_processing_receipt_if_referenced(&receipt) {
             Ok(true) => {}
@@ -2112,10 +2475,20 @@ mod tests {
         let _guard = super::report_summary_lock().lock();
     }
     fn configure_test_cfg(allowed_circuits: Vec<String>) {
+        configure_test_cfg_with_state(allowed_circuits, fixture_state());
+    }
+    fn configure_test_cfg_with_state(allowed_circuits: Vec<String>, state: Arc<CoreState>) {
         let fixture_len = fixture_attachment_bytes().len() as u64;
         let max_scan_bytes = fixture_len
             .saturating_add(TEST_SCAN_BUDGET_MARGIN_BYTES)
             .max(ATTACHMENT_DISCOVERY_BYTES_PER_LOCATION.saturating_mul(8));
+        configure_test_cfg_with_state_and_scan_bytes(allowed_circuits, state, max_scan_bytes);
+    }
+    fn configure_test_cfg_with_state_and_scan_bytes(
+        allowed_circuits: Vec<String>,
+        state: Arc<CoreState>,
+        max_scan_bytes: u64,
+    ) {
         let _ = super::configure(
             true,
             1,
@@ -2128,7 +2501,7 @@ mod tests {
             iroha_config::parameters::defaults::torii::zk_prover_keys_dir(),
             iroha_config::parameters::defaults::torii::zk_prover_allowed_backends(),
             allowed_circuits,
-            Some(fixture_state()),
+            Some(state),
             MaybeTelemetry::disabled(),
         );
         super::TEST_PROCESSING_DELAY_MS.store(0, AtomicOrdering::SeqCst);
@@ -2260,6 +2633,7 @@ mod tests {
             "stark/fri/poseidon2-goldilocks/extra",
             "stark/fri-v2",
             "halo2/unknown-native-v1",
+            "halo2/ipa:ivm-execution-v1",
             "halo2/ipa:tiny-add-public",
             "halo2/pasta/tiny-add",
             "halo2/pasta/ivm-execution-v2",
@@ -2276,7 +2650,6 @@ mod tests {
         }
         for backend in [
             "halo2/ipa",
-            "halo2/ipa:ivm-execution-v1",
             "halo2/pasta/ivm-execution-v1",
             "stark/fri",
             "stark/fri/sha256-goldilocks",
@@ -2525,6 +2898,7 @@ mod tests {
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
             state: Some(fixture_state_with_vk_window(Some(1), None)),
+            verification_attempts: None,
         };
         let report = process_proof_attachment(&ctx, &fixture_attachment());
         let error = report
@@ -2539,6 +2913,7 @@ mod tests {
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
             state: Some(fixture_state()),
+            verification_attempts: None,
         };
         let attachment = ProofAttachment::new_ref(
             "stark/fri/".to_owned(),
@@ -2567,6 +2942,7 @@ mod tests {
             allowed_backends: vec!["halo2/".to_owned()],
             allowed_circuits: Vec::new(),
             state: Some(fixture_state()),
+            verification_attempts: None,
         };
         for backend in ["halo2/kzg", "halo2/ipa:KZG", "halo2/ipa: KZG"] {
             let attachment = ProofAttachment::new_ref(
@@ -2593,6 +2969,7 @@ mod tests {
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
             state: Some(fixture_state()),
+            verification_attempts: None,
         };
         for backend in ["debug/ok", "halo2/ipa:Mock-Proof"] {
             let attachment = ProofAttachment::new_ref(
@@ -2619,6 +2996,7 @@ mod tests {
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
             state: Some(fixture_state()),
+            verification_attempts: None,
         };
         let attachment = ProofAttachment::new_ref(
             "halo2/ipa".to_owned(),
@@ -2643,6 +3021,7 @@ mod tests {
             allowed_backends: vec!["stark/fri".to_owned()],
             allowed_circuits: Vec::new(),
             state: Some(fixture_state()),
+            verification_attempts: None,
         };
         let attachment = ProofAttachment::new_ref(
             "halo2/ipa".to_owned(),
@@ -2673,6 +3052,7 @@ mod tests {
             state: Some(fixture_state_with_vk_window_and_zk(None, None, |zk| {
                 zk.halo2.enabled = false;
             })),
+            verification_attempts: None,
         };
         let disabled = process_proof_attachment_with_disposition(&disabled_ctx, &attachment);
         assert!(!disabled.report.ok);
@@ -2696,6 +3076,7 @@ mod tests {
                 zk.halo2.enabled = true;
                 zk.halo2.max_proof_bytes = 0;
             })),
+            verification_attempts: None,
         };
         let undersized = process_proof_attachment_with_disposition(&undersized_ctx, &attachment);
         assert!(!undersized.report.ok);
@@ -2716,6 +3097,7 @@ mod tests {
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
             state: Some(fixture_state()),
+            verification_attempts: None,
         };
         let enabled = process_proof_attachment_with_disposition(&enabled_ctx, &attachment);
         assert!(
@@ -2731,6 +3113,7 @@ mod tests {
             allowed_backends: Vec::new(),
             allowed_circuits: Vec::new(),
             state: Some(fixture_state()),
+            verification_attempts: None,
         };
         let attachment = ProofAttachment::new_ref(
             "halo2/ipa".to_owned(),
@@ -2779,13 +3162,183 @@ mod tests {
                 terminal: true,
                 retry_not_before_ms: None,
                 retry_count: 0,
+                completed_proof_indices: Vec::new(),
+                processing_context_hash: None,
             }),
         }
     }
     #[test]
+    fn prover_report_processing_json_requires_complete_v1_schema() {
+        let processing = ProverReportProcessing {
+            terminal: true,
+            retry_not_before_ms: None,
+            retry_count: 0,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
+        };
+        let canonical = json::to_value(&processing).expect("encode exact report disposition");
+        assert!(
+            canonical
+                .get("retry_not_before_ms")
+                .is_some_and(norito::json::Value::is_null),
+            "terminal retry deadline must be present as explicit null"
+        );
+        assert!(
+            canonical
+                .get("completed_proof_indices")
+                .and_then(norito::json::Value::as_array)
+                .is_some_and(Vec::is_empty),
+            "terminal completed-proof cache must be present as an empty array"
+        );
+        assert!(
+            canonical
+                .get("processing_context_hash")
+                .is_some_and(norito::json::Value::is_null),
+            "terminal processing-context hash must be present as explicit null"
+        );
+        assert_eq!(
+            json::from_value::<ProverReportProcessing>(canonical.clone())
+                .expect("decode exact report disposition"),
+            processing
+        );
+        for field in [
+            "terminal",
+            "retry_not_before_ms",
+            "retry_count",
+            "completed_proof_indices",
+            "processing_context_hash",
+        ] {
+            let mut omitted = canonical.clone();
+            omitted
+                .as_object_mut()
+                .expect("report disposition object")
+                .remove(field);
+            assert!(
+                json::from_value::<ProverReportProcessing>(omitted).is_err(),
+                "omitted report disposition field `{field}` must not default"
+            );
+        }
+        let mut unknown = canonical;
+        unknown
+            .as_object_mut()
+            .expect("report disposition object")
+            .insert("retired_cache".to_owned(), true.into());
+        assert!(
+            json::from_value::<ProverReportProcessing>(unknown).is_err(),
+            "unknown report disposition fields must fail closed"
+        );
+    }
+    #[test]
+    fn prover_report_json_requires_explicit_processing_disposition() {
+        let mut report = sample_report("ac".repeat(32), true, None, "application/x-norito", 10);
+        report.processing = None;
+        let canonical = json::to_value(&report).expect("encode report with null disposition");
+        assert!(
+            canonical
+                .get("processing")
+                .is_some_and(norito::json::Value::is_null),
+            "absent processing disposition must be represented by an explicit null key"
+        );
+        assert_eq!(
+            json::from_value::<ProverReport>(canonical.clone())
+                .expect("decode report with explicit null disposition"),
+            report
+        );
+        let mut omitted = canonical;
+        omitted
+            .as_object_mut()
+            .expect("prover report object")
+            .remove("processing");
+        assert!(
+            json::from_value::<ProverReport>(omitted).is_err(),
+            "omitted processing disposition must not default to null"
+        );
+    }
+    #[test]
+    fn terminal_receipt_suppression_skips_report_reconciliation() {
+        let terminal = ProverProcessingReceipt {
+            version: ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: "aa".repeat(32),
+            processed_ms: 10,
+            terminal: true,
+            retry_not_before_ms: None,
+            retry_count: 0,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
+        };
+        let reconciliations = std::cell::Cell::new(0_u8);
+        reconcile_suppressed_report_if_needed(Some(&terminal), || {
+            reconciliations.set(reconciliations.get().saturating_add(1));
+        });
+        assert_eq!(
+            reconciliations.get(),
+            0,
+            "a terminal receipt must not reopen its committed report on every scan"
+        );
+
+        let retry = ProverProcessingReceipt {
+            terminal: false,
+            retry_not_before_ms: Some(20),
+            retry_count: 1,
+            ..terminal
+        };
+        reconcile_suppressed_report_if_needed(Some(&retry), || {
+            reconciliations.set(reconciliations.get().saturating_add(1));
+        });
+        assert_eq!(
+            reconciliations.get(),
+            1,
+            "a provisional backoff receipt must still reconcile a crash-committed report"
+        );
+    }
+    #[test]
+    fn retry_report_rejects_unbound_or_malformed_completed_proof_cache() {
+        let mut report = sample_report(
+            "ab".repeat(32),
+            false,
+            Some("retryable fixture"),
+            "application/x-norito",
+            10,
+        );
+        let processing = report.processing.as_mut().expect("processing fixture");
+        processing.terminal = false;
+        processing.retry_not_before_ms = Some(20);
+        processing.retry_count = 1;
+        processing.completed_proof_indices = vec![0];
+        assert!(
+            processing_receipt_from_report(&report).is_none(),
+            "a completed proof index without a verifier-context hash is unsafe"
+        );
+
+        report
+            .processing
+            .as_mut()
+            .expect("processing fixture")
+            .processing_context_hash = Some("A".repeat(64));
+        assert!(
+            processing_receipt_from_report(&report).is_none(),
+            "context hashes must use canonical lowercase hexadecimal"
+        );
+
+        let processing = report.processing.as_mut().expect("processing fixture");
+        processing.processing_context_hash = Some("a".repeat(64));
+        processing.completed_proof_indices = vec![1, 0];
+        assert!(
+            processing_receipt_from_report(&report).is_none(),
+            "completed proof indices must be strictly ordered"
+        );
+
+        report
+            .processing
+            .as_mut()
+            .expect("processing fixture")
+            .completed_proof_indices = vec![0];
+        assert!(processing_receipt_from_report(&report).is_some());
+    }
+    #[test]
     fn report_index_tracks_save_and_delete() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let id = "f00df00d".repeat(8);
         let report = ProverReport {
             id: id.clone(),
@@ -2806,6 +3359,8 @@ mod tests {
                 terminal: true,
                 retry_not_before_ms: None,
                 retry_count: 0,
+                completed_proof_indices: Vec::new(),
+                processing_context_hash: None,
             }),
         };
         save_report(&report).expect("save report");
@@ -2823,8 +3378,8 @@ mod tests {
     }
     #[test]
     fn report_summary_upserts_touch_only_the_matching_shard() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let first = sample_report("a1".repeat(32), true, None, "application/json", now_ms());
         let second = sample_report(
             "a2".repeat(32),
@@ -2951,8 +3506,8 @@ mod tests {
     }
     #[test]
     fn delete_report_files_prunes_stale_index_entry_when_file_is_missing() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let id = "f1".repeat(32);
         persist_report_summaries_locked(&[ProverReportSummary {
             id: id.clone(),
@@ -2969,8 +3524,8 @@ mod tests {
     }
     #[test]
     fn delete_report_files_ignores_invalid_id_and_preserves_existing_reports() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let report = sample_report("f2".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
         delete_report_files("../bad");
@@ -2984,8 +3539,8 @@ mod tests {
     }
     #[test]
     fn remove_report_summary_ignores_invalid_and_missing_ids() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let report = sample_report("f3".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
         remove_report_summary("../bad");
@@ -2996,8 +3551,8 @@ mod tests {
     }
     #[test]
     fn load_report_rejects_oversized_report_file() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         ensure_dirs();
         let id = "ab".repeat(32);
         let path = report_path_from_sanitized(&id);
@@ -3010,8 +3565,8 @@ mod tests {
     }
     #[test]
     fn load_report_rejects_non_utf8_report_file() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         ensure_dirs();
         let id = "ac".repeat(32);
         fs::write(report_path_from_sanitized(&id), [0xff, 0xfe, 0xfd]).expect("write report");
@@ -3022,8 +3577,8 @@ mod tests {
     }
     #[test]
     fn load_report_rejects_malformed_report_json() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         ensure_dirs();
         let id = "ad".repeat(32);
         fs::write(report_path_from_sanitized(&id), "{not json").expect("write report");
@@ -3077,8 +3632,8 @@ mod tests {
     }
     #[test]
     fn load_report_summaries_rebuilds_when_report_summary_is_malformed() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let report = sample_report("bb".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
         corrupt_report_summary(&report.id);
@@ -3091,8 +3646,8 @@ mod tests {
     }
     #[test]
     fn load_report_summaries_rebuilds_empty_index_when_no_reports_exist() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let summaries = load_report_summaries();
         assert!(summaries.is_empty());
         let persisted = read_report_summaries_locked();
@@ -3100,8 +3655,8 @@ mod tests {
     }
     #[test]
     fn load_report_summaries_prunes_missing_report_files_from_index() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let keep_id = "33".repeat(32);
         let missing_id = "44".repeat(32);
         let keep = sample_report(keep_id.clone(), true, None, "application/json", now_ms());
@@ -3127,8 +3682,8 @@ mod tests {
     }
     #[test]
     fn load_report_summaries_normalizes_valid_index_entries_and_deduplicates_ids() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let id = "45".repeat(32);
         let report = sample_report(id.clone(), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
@@ -3175,8 +3730,8 @@ mod tests {
     }
     #[test]
     fn save_report_recovers_when_existing_summary_is_malformed() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let first = sample_report("d1".repeat(32), true, None, "application/json", now_ms());
         let second = sample_report(
             "d2".repeat(32),
@@ -3195,8 +3750,8 @@ mod tests {
     }
     #[test]
     fn load_report_normalizes_persisted_uppercase_id() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         ensure_dirs();
         let id = "ef".repeat(32);
         let persisted = sample_report(
@@ -3216,8 +3771,8 @@ mod tests {
     }
     #[test]
     fn save_report_rejects_invalid_id() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let err = save_report(&sample_report(
             "bad".to_string(),
             true,
@@ -3230,8 +3785,8 @@ mod tests {
     }
     #[test]
     fn save_report_updates_existing_summary_without_duplicates() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let id = "ca".repeat(32);
         let first = sample_report(id.clone(), true, None, "application/json", now_ms());
         let mut updated = sample_report(
@@ -3263,8 +3818,8 @@ mod tests {
     }
     #[test]
     fn report_id_visitor_ignores_invalid_entries() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         ensure_dirs();
         let uppercase_id = "AB".repeat(32);
         let clean_id = uppercase_id.to_ascii_lowercase();
@@ -3280,8 +3835,8 @@ mod tests {
     }
     #[test]
     fn gc_reports_once_deletes_only_expired_reports_and_retains_fresh_index() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let ttl_ms = Duration::from_secs(cfg_reports_ttl_secs()).as_millis() as u64;
         let now = now_ms();
         let fresh_processed_ms = now.saturating_sub(ttl_ms.saturating_div(2));
@@ -3317,8 +3872,8 @@ mod tests {
     }
     #[test]
     fn gc_reports_once_keeps_reports_when_none_are_expired() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let ttl_ms = Duration::from_secs(cfg_reports_ttl_secs()).as_millis() as u64;
         let fresh = sample_report(
             "21".repeat(32),
@@ -3340,8 +3895,8 @@ mod tests {
     }
     #[test]
     fn gc_reports_once_rebuilds_when_report_summary_is_malformed() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let fresh = sample_report("31".repeat(32), true, None, "application/json", now_ms());
         save_report(&fresh).expect("save fresh report");
         corrupt_report_summary(&fresh.id);
@@ -3357,8 +3912,8 @@ mod tests {
     }
     #[test]
     fn gc_reports_once_deletes_expired_index_entries_even_when_report_file_is_missing() {
-        init_test_cfg();
         let _env = TestDataDirGuard::new();
+        init_test_cfg();
         let ttl_ms = Duration::from_secs(cfg_reports_ttl_secs()).as_millis() as u64;
         persist_report_summaries_locked(&[ProverReportSummary {
             id: "32".repeat(32),

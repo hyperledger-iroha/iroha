@@ -252,8 +252,8 @@ field	PACS009	CdtrAcct	required	none	identifier:iban	-	-
 field	PACS009	Purp	optional	none	text	-	-
 alias	PACS009	AppHdr/BizMsgIdr	-	-	-	-	BizMsgIdr
 alias	PACS009	AppHdr/MsgDefIdr	-	-	-	-	MsgDefIdr
-alias	PACS009	AppHdr/CreDt	-	-	-	-	AppHdr/CreDt
-alias	PACS009	Document/FICdtTrf/GrpHdr/MsgId	-	-	-	-	MsgId
+alias	PACS009	AppHdr/CreDt	-	-	-	-	CreDtTm
+alias	PACS009	Document/FICdtTrf/GrpHdr/MsgId	-	-	-	-	BizMsgIdr
 alias	PACS009	Document/FICdtTrf/GrpHdr/BizMsgIdr	-	-	-	-	BizMsgIdr
 alias	PACS009	Document/FICdtTrf/GrpHdr/MsgDefIdr	-	-	-	-	MsgDefIdr
 alias	PACS009	Document/FICdtTrf/GrpHdr/CreDtTm	-	-	-	-	CreDtTm

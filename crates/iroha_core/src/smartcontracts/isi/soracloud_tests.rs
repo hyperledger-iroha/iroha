@@ -8,7 +8,7 @@ use crate::{
 #[cfg(feature = "zk-stark")]
 use iroha_crypto::fhe_bfv::BfvBootstrapKeyMode;
 use iroha_crypto::{
-    Hash, KeyPair,
+    Algorithm, Hash, KeyPair,
     fhe_bfv::{
         BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1, BfvCiphertext, BfvEvaluationKeyBundle,
         BfvFullBootstrapAccumulatorV1, BfvFullBootstrapCircuitArtifactBundleV1,
@@ -88,15 +88,16 @@ use iroha_data_model::{
         SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
         SoraContainerRuntimeV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
         SoraHttpServiceEconomicsV1, SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1,
-        SoraInrouManifestV1, SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
-        SoraMailboxContractV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
-        SoraPublishedInrouGuestImageArtifactV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
-        SoraRolloutStageV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-        SoraRuntimeDeterministicValidatorHostV1, SoraRuntimeReceiptV1, SoraServiceHandlerClassV1,
-        SoraServiceHandlerV1, SoraServiceMailboxMessageV1, SoraServiceManifestV1,
-        SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1, SoraStateBindingV1,
-        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateMutationOperationV1,
-        SoraStateScopeV1, SoraTlsModeV1, encode_inrou_host_advertise_provenance_payload,
+        SoraInrouManifestV1, SoraInrouPlacementTargetV1, SoraLeaseVolumeBindingV1,
+        SoraLeaseVolumeKindV1, SoraLifecycleHooksV1, SoraMailboxContractV1,
+        SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraPublishedInrouGuestImageArtifactV1,
+        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRolloutStageV1, SoraRouteTargetV1,
+        SoraRouteVisibilityV1, SoraRuntimeDeterministicValidatorHostV1, SoraRuntimeReceiptV1,
+        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceMailboxMessageV1,
+        SoraServiceManifestV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
+        SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+        SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
+        encode_inrou_host_advertise_provenance_payload,
     },
     sorafs::pin_registry::ManifestDigest,
 };
@@ -135,6 +136,10 @@ macro_rules! soracloud_transaction {
             .header();
         let mut $state_block = $state.block($header);
         let mut $stx = $state_block.transaction();
+        set_current_transaction_hash(
+            &mut $stx,
+            concat!(file!(), ":", line!(), ":", stringify!($stx)).as_bytes(),
+        );
     };
 }
 macro_rules! soracloud_transaction_at {
@@ -147,6 +152,10 @@ macro_rules! soracloud_transaction_at {
             .header();
         let mut $state_block = $state.block($header);
         let mut $stx = $state_block.transaction();
+        set_current_transaction_hash(
+            &mut $stx,
+            concat!(file!(), ":", line!(), ":", stringify!($stx)).as_bytes(),
+        );
     };
 }
 macro_rules! soracloud_transaction_at_height {
@@ -159,6 +168,10 @@ macro_rules! soracloud_transaction_at_height {
             .header();
         let mut $state_block = $state.block($header);
         let mut $stx = $state_block.transaction();
+        set_current_transaction_hash(
+            &mut $stx,
+            concat!(file!(), ":", line!(), ":", stringify!($stx)).as_bytes(),
+        );
     };
 }
 macro_rules! permissioned_soracloud_transaction {
@@ -15833,6 +15846,26 @@ fn sample_inrou_host_capability(
         heartbeat_expires_at_ms,
     }
 }
+fn sample_inrou_placement_target(validator_account_id: AccountId) -> SoraInrouPlacementTargetV1 {
+    let peer_id = PeerId::from(validator_account_id.expect_single_signatory().clone()).to_string();
+    sample_inrou_placement_target_for_peer(validator_account_id, peer_id)
+}
+fn sample_inrou_placement_target_for_peer(
+    validator_account_id: AccountId,
+    peer_id: String,
+) -> SoraInrouPlacementTargetV1 {
+    SoraInrouPlacementTargetV1 {
+        validator_account_id,
+        peer_id,
+    }
+}
+fn sample_inrou_placement_targets() -> BTreeSet<SoraInrouPlacementTargetV1> {
+    BTreeSet::from([
+        sample_inrou_placement_target(ALICE_ID.clone()),
+        sample_inrou_placement_target(BOB_ID.clone()),
+        sample_inrou_placement_target(CARPENTER_ID.clone()),
+    ])
+}
 #[test]
 fn inrou_v1_host_selection_requires_exact_trusted_guest_and_physical_capacity() {
     let capability = sample_inrou_host_capability(ALICE_ID.clone(), 10, 110);
@@ -16095,7 +16128,7 @@ fn inrou_host_advertise_requires_exact_active_peer_binding() -> Result<(), eyre:
     }
     .execute(&ALICE_ID, &mut state_transaction)
     .expect_err("an Inrou advert must not redirect placement to another peer");
-    assert_invalid_parameter_contains(error, "active on-chain peer binding");
+    assert_invalid_parameter_contains(error, "active public-lane validator record");
     assert!(
         state_transaction
             .world
@@ -16107,33 +16140,32 @@ fn inrou_host_advertise_requires_exact_active_peer_binding() -> Result<(), eyre:
     Ok(())
 }
 #[test]
-fn inrou_host_advertise_rejects_a_noncanonical_validator_record_peer() -> Result<(), eyre::Report> {
+fn inrou_host_advertise_accepts_the_independent_peer_in_the_active_record()
+-> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
     soracloud_transaction_at!(state, header, state_block, state_transaction, 10);
-    let noncanonical_peer_id = PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string();
+    let independent_peer_id = PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string();
     state_transaction
         .world
         .public_lane_validators
         .get_mut(&(LaneId::SINGLE, ALICE_ID.clone()))
         .expect("active validator fixture")
-        .peer_id = noncanonical_peer_id.parse().expect("canonical peer syntax");
+        .peer_id = independent_peer_id.parse().expect("canonical peer syntax");
     let mut capability = sample_inrou_host_capability(ALICE_ID.clone(), 10, 110);
-    capability.peer_id = noncanonical_peer_id;
+    capability.peer_id = independent_peer_id;
     let provenance = inrou_host_advertise_provenance(&capability);
-    let error = isi::AdvertiseSoracloudInrouHost {
-        capability,
+    isi::AdvertiseSoracloudInrouHost {
+        capability: capability.clone(),
         provenance,
     }
-    .execute(&ALICE_ID, &mut state_transaction)
-    .expect_err("the validator record and advert must both bind to the account signatory");
-    assert_invalid_parameter_contains(error, "single signatory");
-    assert!(
+    .execute(&ALICE_ID, &mut state_transaction)?;
+    assert_eq!(
         state_transaction
             .world
             .soracloud_inrou_host_capabilities
-            .get(&ALICE_ID)
-            .is_none(),
-        "a mutually matching but noncanonical record and advert must not publish capability"
+            .get(&ALICE_ID),
+        Some(&capability),
+        "the explicit validator record must remain authoritative over key derivation"
     );
     Ok(())
 }
@@ -16760,7 +16792,6 @@ fn active_inrou_resolver_fails_closed_when_any_lease_volume_expires() -> Result<
         "fixture must begin with an active placement"
     );
 
-    let expiry_height = 2;
     let deployment = stx
         .world
         .soracloud_service_deployments
@@ -16770,13 +16801,16 @@ fn active_inrou_resolver_fails_closed_when_any_lease_volume_expires() -> Result<
         .lease_volume_states
         .first_mut()
         .expect("hosted deployment volume");
-    assert!(expired_volume.lease_started_height < expiry_height);
+    let expiry_height = expired_volume
+        .lease_started_height
+        .checked_add(1)
+        .expect("fixture lease height must permit a later expiry");
     expired_volume.lease_expires_height = expiry_height;
     let validation_error = deployment
         .validate()
         .expect_err("a volume expiry may not diverge from the exact hosted-service lease");
     assert!(validation_error.to_string().contains(
-        "every volume economic start and expiry must exactly match the hosted-service lease"
+        "every volume economic clock, start, and expiry must exactly match the hosted-service lease"
     ));
 
     let error = crate::soracloud_runtime::resolve_active_inrou_placement_record(
@@ -16964,6 +16998,7 @@ fn inrou_reconciliation_keeps_same_lease_host_sticky_and_reassigns_only_new_leas
     bundle.container.capabilities.network = SoraNetworkPolicyV1::Isolated;
     bundle.service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     bundle.service.replicas = NonZeroU16::new(2).expect("nonzero");
+    bundle.service.placement_targets = sample_inrou_placement_targets();
     bundle.service.lease_volumes = sample_inrou_lease_volumes();
     bundle.service.state_bindings.clear();
     bundle.service.handlers.clear();
@@ -17320,7 +17355,7 @@ fn set_inrou_replica_runtime_state_rejects_non_assigned_validator() -> Result<()
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("a non-assigned validator runtime update must fail");
-    assert_invariant_contains(error, "belongs to account");
+    assert_invariant_contains(error, "is not assigned to service");
     assert_eq!(
         stx.world.soracloud_inrou_replica_runtime.get(&key),
         Some(&assigned_runtime_state),
@@ -18378,9 +18413,15 @@ fn sample_hosted_http_service_bundle(
     let mut bundle = sample_bundle(service_name, service_version, canary_percent);
     bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
     bundle.container.inrou = Some(sample_inrou_manifest());
+    bundle.container.capabilities.network = SoraNetworkPolicyV1::Isolated;
     bundle.container.entrypoint = "/app/main".to_owned();
     bundle.service.execution_plane =
         iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+    bundle.service.placement_targets = BTreeSet::from([
+        sample_inrou_placement_target(ALICE_ID.clone()),
+        sample_inrou_placement_target(BOB_ID.clone()),
+        sample_inrou_placement_target(CARPENTER_ID.clone()),
+    ]);
     bundle.service.economics = SoraHttpServiceEconomicsV1 {
         schema_version: iroha_data_model::soracloud::SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1,
         quota_class: "taira-open".to_string(),
@@ -18397,6 +18438,186 @@ fn sample_hosted_http_service_bundle(
     bundle.service.artifacts[0].handler_name = None;
     bundle.service.container.manifest_hash = bundle.container_manifest_hash();
     bundle
+}
+#[test]
+fn inrou_placement_target_allowlist_matches_exact_validator_and_peer() {
+    let bundle = sample_hosted_http_service_bundle("target_bound_portal", "1.0.0", 0);
+    let alice_peer = PeerId::from(ALICE_ID.expect_single_signatory().clone()).to_string();
+    let bob_peer = PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string();
+    assert!(inrou_placement_target_allows(
+        &bundle,
+        &ALICE_ID,
+        &alice_peer
+    ));
+    assert!(!inrou_placement_target_allows(
+        &bundle, &ALICE_ID, &bob_peer
+    ));
+}
+#[test]
+fn inrou_host_admission_uses_the_active_record_for_distinct_taira_key_roles()
+-> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    soracloud_transaction_at!(state, header, block, stx, 100);
+    let consensus_key = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::BlsNormal)
+        .expect("canonical Taira BLS consensus key");
+    let consensus_peer = PeerId::from(consensus_key.public_key().clone());
+    let consensus_peer_text = consensus_peer.to_string();
+    stx.world
+        .public_lane_validators
+        .get_mut(&(LaneId::SINGLE, ALICE_ID.clone()))
+        .expect("active Taira validator fixture")
+        .peer_id = consensus_peer.clone();
+
+    let wrong_key = KeyPair::try_from_seed(vec![0xA8; 32], Algorithm::BlsNormal)
+        .expect("canonical non-authoritative BLS peer");
+    let mut wrong_capability = sample_inrou_host_capability(ALICE_ID.clone(), 100, 1_000);
+    wrong_capability.peer_id = PeerId::from(wrong_key.public_key().clone()).to_string();
+    let error = isi::AdvertiseSoracloudInrouHost {
+        capability: wrong_capability.clone(),
+        provenance: inrou_host_advertise_provenance(&wrong_capability),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("a canonical peer outside the active validator record must be rejected");
+    assert_invalid_parameter_contains(error, "active public-lane validator record");
+
+    let mut capability = wrong_capability;
+    capability.peer_id.clone_from(&consensus_peer_text);
+    isi::AdvertiseSoracloudInrouHost {
+        capability: capability.clone(),
+        provenance: inrou_host_advertise_provenance(&capability),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    assert_eq!(
+        stx.world
+            .soracloud_inrou_host_capabilities
+            .get(&ALICE_ID)
+            .map(|record| record.peer_id.as_str()),
+        Some(consensus_peer_text.as_str()),
+        "the separately authoritative BLS peer must be retained exactly"
+    );
+    Ok(())
+}
+#[test]
+fn inrou_reconciliation_counts_only_allowlisted_capable_validators() -> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    soracloud_transaction_at!(state, header, block, stx, 100);
+    Register::account(Account::new(BOB_ID.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+    insert_active_public_lane_validator(&mut stx, BOB_ID.clone(), 500);
+
+    let mut bundle = sample_hosted_http_service_bundle("allowlisted_portal", "1.0.0", 0);
+    bundle.service.replicas = NonZeroU16::new(1).expect("nonzero replica count");
+    bundle.service.placement_targets =
+        BTreeSet::from([sample_inrou_placement_target(ALICE_ID.clone())]);
+    isi::DeploySoracloudService {
+        bundle: bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+
+    let alice_capability = sample_inrou_host_capability(ALICE_ID.clone(), 100, 1_000);
+    isi::AdvertiseSoracloudInrouHost {
+        capability: alice_capability.clone(),
+        provenance: inrou_host_advertise_provenance(&alice_capability),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let bob_capability = sample_inrou_host_capability(BOB_ID.clone(), 100, 1_000);
+    isi::AdvertiseSoracloudInrouHost {
+        capability: bob_capability.clone(),
+        provenance: inrou_host_advertise_provenance_for(&BOB_KEYPAIR, &bob_capability),
+    }
+    .execute(&BOB_ID, &mut stx)?;
+
+    assert!(
+        stx.world
+            .soracloud_inrou_host_capabilities
+            .get(&BOB_ID)
+            .is_some(),
+        "the non-allowlisted validator must otherwise remain a capable active host"
+    );
+    let placement = stx
+        .world
+        .soracloud_inrou_service_placements
+        .get(&(
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ))
+        .expect("reconciled placement record");
+    assert_eq!(placement.eligible_validator_count, 1);
+    assert_eq!(placement.placements.len(), 1);
+    assert_eq!(placement.placements[0].validator_account_id, *ALICE_ID);
+    Ok(())
+}
+#[test]
+fn inrou_deploy_reconciles_a_preexisting_host_advert_atomically() -> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    soracloud_transaction_at!(state, header, block, stx, 100);
+    let capability = sample_inrou_host_capability(ALICE_ID.clone(), 100, 1_000);
+    isi::AdvertiseSoracloudInrouHost {
+        capability: capability.clone(),
+        provenance: inrou_host_advertise_provenance(&capability),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let mut bundle = sample_hosted_http_service_bundle("atomic_placement", "1.0.0", 0);
+    bundle.service.replicas = NonZeroU16::new(1).expect("nonzero replicas");
+    isi::DeploySoracloudService {
+        bundle: bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+        provenance: bundle_provenance(&bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let placement = stx
+        .world
+        .soracloud_inrou_service_placements
+        .get(&(
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ))
+        .expect("deployment must reconcile the preexisting host advert");
+    assert_eq!(placement.placements.len(), 1);
+    assert!(placement.placements[0].host_availability.is_available());
+    assert_eq!(placement.placements[0].validator_account_id, *ALICE_ID);
+    Ok(())
+}
+#[test]
+fn retained_inrou_placement_requires_same_trusted_guest_artifact() -> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    soracloud_transaction_at!(state, header, block, stx, 100);
+    let mut bundle = sample_hosted_http_service_bundle("retained_artifact_portal", "1.0.0", 0);
+    bundle.service.replicas = NonZeroU16::new(1).expect("nonzero replica count");
+    let capability = sample_inrou_host_capability(ALICE_ID.clone(), 1, 1_000);
+    stx.world
+        .soracloud_inrou_host_capabilities
+        .insert(ALICE_ID.clone(), capability.clone());
+    let placement = SoraInrouReplicaPlacementV1 {
+        replica_slot: 1,
+        economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+        lease_started_height: 1,
+        placement_incarnation: Hash::new(b"retained-artifact-placement"),
+        host_availability: SoraInrouReplicaHostAvailabilityV1::Available,
+        validator_account_id: ALICE_ID.clone(),
+        peer_id: capability.peer_id.clone(),
+        selected_guest_isa: SoraInrouGuestIsaV1::X8664,
+    };
+    let usage =
+        checked_inrou_host_reservation_usage(InrouHostReservationUsage::default(), &bundle)?;
+    assert!(exact_inrou_placement_host_is_eligible(
+        &stx, &placement, &bundle, &usage, 100,
+    ));
+    let mut swapped = capability;
+    swapped.trusted_guest_artifact.manifest_digest_hex = "32".repeat(32);
+    stx.world
+        .soracloud_inrou_host_capabilities
+        .insert(ALICE_ID.clone(), swapped);
+    assert!(!exact_inrou_placement_host_is_eligible(
+        &stx, &placement, &bundle, &usage, 100,
+    ));
+    Ok(())
 }
 #[test]
 fn inrou_reconciliation_excludes_inactive_validator_with_live_capability()
@@ -18466,12 +18687,13 @@ fn inrou_reconciliation_excludes_inactive_validator_with_live_capability()
         .get(&placement_key)
         .expect("reconciled placement record");
     assert_eq!(placement.eligible_validator_count, 0);
-    assert!(placement.placements.is_empty());
+    assert_eq!(placement.placements.len(), 1);
+    assert!(!placement.placements[0].host_availability.is_available());
     assert!(placement.last_error.is_some());
     Ok(())
 }
 #[test]
-fn inrou_peer_rotation_invalidates_stale_capability_and_placement_immediately()
+fn inrou_peer_rotation_prunes_stale_capability_and_stops_sticky_placement_immediately()
 -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
     let mut bundle = sample_hosted_http_service_bundle("rotated_peer_portal", "1.0.0", 0);
@@ -18543,7 +18765,8 @@ fn inrou_peer_rotation_invalidates_stale_capability_and_placement_immediately()
         .get(&placement_key)
         .expect("reconciled placement record");
     assert_eq!(placement.eligible_validator_count, 0);
-    assert!(placement.placements.is_empty());
+    assert_eq!(placement.placements.len(), 1);
+    assert!(!placement.placements[0].host_availability.is_available());
     Ok(())
 }
 #[test]
@@ -18599,7 +18822,8 @@ fn inrou_reconciliation_prunes_expired_host_capability() -> Result<(), eyre::Rep
         .get(&placement_key)
         .expect("placement after capability expiry");
     assert_eq!(placement.eligible_validator_count, 0);
-    assert!(placement.placements.is_empty());
+    assert_eq!(placement.placements.len(), 1);
+    assert!(!placement.placements[0].host_availability.is_available());
     Ok(())
 }
 #[test]
@@ -18635,6 +18859,7 @@ fn deploy_soracloud_service_rejects_missing_replica_private_http_service_data_vo
     });
     bundle.service.execution_plane =
         iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+    bundle.service.placement_targets = sample_inrou_placement_targets();
     bundle.service.state_bindings.clear();
     bundle.service.handlers.clear();
     bundle.service.artifacts[0].handler_name = None;
@@ -18670,6 +18895,7 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
     bundle.container.capabilities.network = SoraNetworkPolicyV1::Isolated;
     bundle.service.execution_plane =
         iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+    bundle.service.placement_targets = sample_inrou_placement_targets();
     bundle.service.economics = SoraHttpServiceEconomicsV1 {
         schema_version: iroha_data_model::soracloud::SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1,
         quota_class: "taira-open".to_string(),
@@ -18832,6 +19058,7 @@ fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), 
     bundle.container.capabilities.network = SoraNetworkPolicyV1::Isolated;
     bundle.service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     bundle.service.replicas = NonZeroU16::new(2).expect("nonzero");
+    bundle.service.placement_targets = sample_inrou_placement_targets();
     bundle.service.economics.prepaid_runtime_balance =
         "1000000000".parse().expect("large prepaid balance");
     bundle.service.lease_volumes = sample_inrou_lease_volumes();
@@ -20117,6 +20344,7 @@ fn upgrade_inrou_service_rejects_partial_canary_before_revision_admission()
         bundle.container.inrou = Some(sample_inrou_manifest());
         bundle.container.capabilities.network = SoraNetworkPolicyV1::Isolated;
         bundle.service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        bundle.service.placement_targets = sample_inrou_placement_targets();
         bundle.service.state_bindings.clear();
         bundle.service.lease_volumes = sample_inrou_lease_volumes();
         bundle.service.handlers.clear();
@@ -20165,6 +20393,93 @@ fn upgrade_inrou_service_rejects_partial_canary_before_revision_admission()
 }
 
 #[test]
+fn atomic_inrou_upgrade_preserves_the_exact_same_lease_placement() -> Result<(), eyre::Report> {
+    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    let service_name = "atomic_inrou_upgrade";
+    let baseline_version = "1.0.0";
+    let candidate_version = "1.1.0";
+    let (baseline_bundle, runtime_state) =
+        seed_active_inrou_replica_runtime_fixture(&mut stx, service_name, baseline_version)?;
+    isi::SetSoracloudInrouReplicaRuntimeState {
+        state: runtime_state.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let baseline_key = (service_name.to_owned(), baseline_version.to_owned());
+    let baseline_placement = stx
+        .world
+        .soracloud_inrou_service_placements
+        .get(&baseline_key)
+        .cloned()
+        .expect("baseline Inrou placement");
+    let baseline_lease_started_height = stx
+        .world
+        .soracloud_service_deployments
+        .get(&baseline_bundle.service.service_name)
+        .and_then(|deployment| deployment.service_lease.as_ref())
+        .expect("baseline hosted-service lease")
+        .lease_started_height;
+
+    let mut candidate_bundle = baseline_bundle.clone();
+    candidate_bundle.service.service_version = candidate_version.to_owned();
+    let precondition = exact_service_revision_precondition(&baseline_bundle, 1);
+    isi::UpgradeSoracloudService {
+        bundle: candidate_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        precondition: precondition.clone(),
+        provenance: bundle_provenance_with_precondition(&candidate_bundle, &precondition),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+
+    assert!(
+        stx.world
+            .soracloud_inrou_service_placements
+            .get(&baseline_key)
+            .is_none(),
+        "an atomic revision switch must remove the retained baseline-key alias"
+    );
+    let candidate_key = (service_name.to_owned(), candidate_version.to_owned());
+    let candidate_placement = stx
+        .world
+        .soracloud_inrou_service_placements
+        .get(&candidate_key)
+        .expect("candidate Inrou placement");
+    assert_eq!(
+        candidate_placement.placements,
+        baseline_placement.placements
+    );
+    assert_eq!(candidate_placement.desired_replica_count, 1);
+    assert!(candidate_placement.last_error.is_none());
+    let deployment = stx
+        .world
+        .soracloud_service_deployments
+        .get(&candidate_bundle.service.service_name)
+        .expect("candidate deployment");
+    assert_eq!(deployment.current_service_version, candidate_version);
+    assert_eq!(
+        deployment
+            .service_lease
+            .as_ref()
+            .expect("candidate hosted-service lease")
+            .lease_started_height,
+        baseline_lease_started_height,
+        "an atomic revision switch must not mint a new economic lease"
+    );
+    assert!(
+        stx.world
+            .soracloud_inrou_replica_runtime
+            .get(&inrou_replica_runtime_key(
+                &runtime_state.service_name,
+                baseline_version,
+                runtime_state.replica_slot,
+            ))
+            .is_none(),
+        "baseline runtime telemetry must not survive the atomic revision switch"
+    );
+    Ok(())
+}
+
+#[test]
 fn advance_rollout_rejects_inrou_even_if_active_rollout_state_is_present()
 -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
@@ -20174,6 +20489,7 @@ fn advance_rollout_rejects_inrou_even_if_active_rollout_state_is_present()
     bundle.container.inrou = Some(sample_inrou_manifest());
     bundle.container.capabilities.network = SoraNetworkPolicyV1::Isolated;
     bundle.service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+    bundle.service.placement_targets = sample_inrou_placement_targets();
     bundle.service.state_bindings.clear();
     bundle.service.lease_volumes = sample_inrou_lease_volumes();
     bundle.service.handlers.clear();
@@ -20450,6 +20766,7 @@ fn upgrade_inrou_service_rejects_execution_plane_and_runtime_change() -> Result<
     deploy_bundle.container.inrou = Some(sample_inrou_manifest());
     deploy_bundle.container.capabilities.network = SoraNetworkPolicyV1::Isolated;
     deploy_bundle.service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+    deploy_bundle.service.placement_targets = sample_inrou_placement_targets();
     deploy_bundle.service.state_bindings.clear();
     deploy_bundle.service.lease_volumes = sample_inrou_lease_volumes();
     deploy_bundle.service.handlers.clear();

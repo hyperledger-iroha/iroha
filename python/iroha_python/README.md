@@ -1259,6 +1259,26 @@ exact lifecycle record before constructing a sponsored draft. Metadata keys
 named `fee_sponsor`, `gas_asset_id`, or `gas_limit` are retired and rejected;
 sponsor failure never falls back to the authority.
 
+Use the native-Norito Hijiri quote route when a client needs the active policy
+priced with one execution account's current risk:
+
+```python
+hijiri_quote = client.quote_validation_fee_hijiri(
+    authority_account_id,
+    2,
+    canonical_auth=auth,
+)
+print(hijiri_quote.aggregate_adjusted_fee_minor_units)
+```
+
+The helper requires HTTPS and explicit canonical account authentication. It
+sends and accepts only bounded `application/x-norito`, requires a private
+`no-store` response with absent or identity content encoding, and delegates
+request encoding plus complete response coherence to the ABI 23 native
+verifier. Media type parameters are rejected. The returned frozen projection
+is evaluated-only; admission remains authoritative and rejects quotes made
+stale by an intervening policy or Hijiri-risk update.
+
 Apply metadata updates or transfer ownership without dropping to raw Norito:
 
 ```python

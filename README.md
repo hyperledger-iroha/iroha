@@ -244,7 +244,10 @@ Start a disposable four-validator Taira network with
 inspect it with `check` and stop it with `down`. `up` is a
 Linux/AArch64/root/KVM and mandatory guest-workload qualification run bound to
 the current `optimizations` worktree and freshly built target-specific
-binaries. `check` is read-only and requires the exact owner-only V1 guest
+binaries. Taira peer lifecycle state is recorded only in owner-only
+`peerN.process.json` V1 identities and is controlled through held Linux pidfds;
+legacy PID files and non-Linux process-control fallbacks are rejected. `check`
+is read-only and requires the exact owner-only V1 guest
 qualification record produced by `up`; it revalidates the retained input,
 stage, CLI/source/target identities, and fresh four-route live evidence without
 repeating the mutating canary or signed ping.

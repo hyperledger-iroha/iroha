@@ -5,6 +5,8 @@ import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.crypto.Signer;
+import org.hyperledger.iroha.android.crypto.SignatureAdmission;
+import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
 import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
@@ -61,8 +63,29 @@ public final class TransactionBuilder {
     Objects.requireNonNull(payload, "payload");
     Objects.requireNonNull(signer, "signer");
 
+    final SigningAlgorithm algorithm;
+    try {
+      algorithm = SigningAlgorithm.fromAlgorithmName(signer.algorithm());
+    } catch (final IllegalArgumentException error) {
+      throw new SigningException("Unsupported signer algorithm", error);
+    }
     final byte[] encoded = codecAdapter.encodeTransaction(payload);
     final byte[] signature = signer.sign(encoded);
+    if (!SignatureAdmission.isValid(algorithm, signature)) {
+      final int expectedLength;
+      if (algorithm == SigningAlgorithm.ED25519) {
+        expectedLength = SignatureAdmission.ED25519_SIGNATURE_LENGTH;
+      } else if (algorithm == SigningAlgorithm.ML_DSA) {
+        expectedLength = SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH;
+      } else {
+        throw new SigningException(algorithm.providerName() + " signer returned no signature");
+      }
+      throw new SigningException(
+          algorithm.providerName()
+              + " signer returned a malformed signature; expected "
+              + expectedLength
+              + " nonzero bytes");
+    }
     return SignedTransaction.builder()
         .setEncodedPayload(encoded)
         .setSignature(signature)

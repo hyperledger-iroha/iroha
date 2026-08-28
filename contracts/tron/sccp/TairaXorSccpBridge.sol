@@ -6,6 +6,9 @@ import "../../evm/sccp/SccpExactTransferCodec.sol";
 
 interface ITairaXorTronToken {
     function bridge() external view returns (address);
+    function decimals() external view returns (uint8);
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
     function mint(address to, uint256 value) external returns (bool);
     function burnFrom(address from, uint256 value) external returns (bool);
 }
@@ -169,6 +172,8 @@ contract TairaXorSccpBridge {
 
         ITairaXorTronToken configuredToken = ITairaXorTronToken(tokenAddress);
         require(configuredToken.bridge() == address(this), "Token route mismatch");
+        require(configuredToken.decimals() == 18, "Unexpected token decimals");
+        require(configuredToken.totalSupply() == 0, "Token supply must start at zero");
         bytes32 actualTokenCodeHash = _codeHash(tokenAddress);
         require(actualTokenCodeHash != bytes32(0) && actualTokenCodeHash != EMPTY_CODE_HASH,
             "Token contract is required");
@@ -317,7 +322,7 @@ contract TairaXorSccpBridge {
 
         transferNonces[msg.sender] = nonce + 1;
         usedSourceMessages[messageId] = true;
-        require(token.burnFrom(msg.sender, tokenAmount), "Token burn failed");
+        _mutateTokenExact(msg.sender, tokenAmount, false);
         emit SccpTransfer(
             sourceLaneHash,
             messageId,
@@ -355,8 +360,31 @@ contract TairaXorSccpBridge {
         uint256 tokenAmount = tairaAmount * TAIRA_TO_TOKEN_SCALE;
 
         usedDestinationMessages[messageId] = true;
-        require(token.mint(recipient, tokenAmount), "Token mint failed");
+        _mutateTokenExact(recipient, tokenAmount, true);
         emit TairaXorMintFinalized(messageId, recipient, tokenAmount, canonicalPayloadHash);
+    }
+
+    function _mutateTokenExact(address account, uint256 amount, bool minting) private {
+        uint256 expectedSupply = token.totalSupply();
+        uint256 expectedBalance = token.balanceOf(account);
+        if (minting) {
+            require(
+                expectedSupply <= type(uint256).max - amount
+                    && expectedBalance <= type(uint256).max - amount
+            );
+            expectedSupply += amount;
+            expectedBalance += amount;
+            require(token.mint(account, amount), "Token mint failed");
+        } else {
+            require(expectedSupply >= amount && expectedBalance >= amount);
+            expectedSupply -= amount;
+            expectedBalance -= amount;
+            require(token.burnFrom(account, amount), "Token burn failed");
+        }
+        require(
+            token.totalSupply() == expectedSupply && token.balanceOf(account) == expectedBalance,
+            "Token delta mismatch"
+        );
     }
 
     /** Derive the exact source-event digest emitted by this route. */

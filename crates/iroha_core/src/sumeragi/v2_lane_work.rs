@@ -106,12 +106,12 @@ use crate::{
     merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
         CertifiedMergeSidecarCloseAckV1, CertifiedMergeSidecarCloseV1,
-        CertifiedMergeSidecarClosedPrefix, CertifiedMergeSidecarMessage, ChunkIngestOutcome,
-        MAX_CERTIFIED_MERGE_CHUNK_BYTES, MergeSidecarError, MergeSidecarLimits, MergeSidecarPost,
-        MergeSidecarTransport, MergeSigningContextV1, MergeSigningGuard, MergeSigningGuardLimits,
-        ServerRequestAdmission, canonical_merge_sidecar_roster_digest,
-        certified_merge_reference_digest, certified_merge_sidecar_holders,
-        decode_certified_merge_sidecar,
+        CertifiedMergeSidecarClosedPrefix, CertifiedMergeSidecarGenerationHintV1,
+        CertifiedMergeSidecarMessage, ChunkIngestOutcome, MAX_CERTIFIED_MERGE_CHUNK_BYTES,
+        MergeSidecarError, MergeSidecarLimits, MergeSidecarPost, MergeSidecarTransport,
+        MergeSigningContextV1, MergeSigningGuard, MergeSigningGuardLimits, ServerRequestAdmission,
+        canonical_merge_sidecar_roster_digest, certified_merge_reference_digest,
+        certified_merge_sidecar_holders, decode_certified_merge_sidecar,
     },
     native_amx::{
         NativeAmxAttestationRequestV2, NativeAmxCommitRequestV2, NativeAmxMessage,
@@ -156,12 +156,10 @@ use iroha_data_model::{
 };
 #[cfg(test)]
 use iroha_p2p::network::{
-    NetworkReplyFlushAckTestFixture, NetworkReplyRouteError, NetworkReplyRouteTestFixture,
+    NetworkActorAdmissionTicketTestFixture, NetworkReplyFlushAckTestFixture,
+    NetworkReplyRouteError, NetworkReplyRouteTestFixture,
 };
-use iroha_p2p::{
-    Priority,
-    network::{NetworkReplyRoute, NetworkReplyRoutes},
-};
+use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRoutes};
 use iroha_primitives::{numeric::Quantity, time::TimeSource};
 use norito::codec::Encode as _;
 #[cfg(test)]
@@ -3075,6 +3073,10 @@ pub(crate) struct V2LaneWorkAdapter {
     /// covered source and exact-output retry occurrence.
     acknowledged_merge_sidecar_closes:
         BTreeMap<AcknowledgedMergeSidecarCloseKey, CertifiedMergeSidecarCloseAckV1>,
+    /// Strongest authenticated generation fence pending for each semantic
+    /// responder whose old requester output may already be in exact output.
+    obsolete_merge_sidecar_generation_hints:
+        BTreeMap<PeerId, CertifiedMergeSidecarGenerationHintV1>,
     committed_lane_output_cursor: usize,
     admitted_relays: BTreeSet<(LaneId, DataSpaceId, Hash, u64, Hash)>,
     queue_plan_admission_handoff_retry_required: bool,
@@ -3803,6 +3805,7 @@ impl V2LaneWorkAdapter {
             retired_historical_recovery_request_hashes: BTreeSet::new(),
             retired_merge_sidecar_request_hashes: BTreeSet::new(),
             acknowledged_merge_sidecar_closes: BTreeMap::new(),
+            obsolete_merge_sidecar_generation_hints: BTreeMap::new(),
             committed_lane_output_cursor: 0,
             admitted_relays: BTreeSet::new(),
             queue_plan_admission_handoff_retry_required: false,
@@ -7160,6 +7163,66 @@ impl V2LaneWorkAdapter {
     ) -> Result<(), V2LaneWorkError> {
         for acknowledgement in acknowledgements {
             let _ = self.coalesce_acknowledged_merge_sidecar_close(acknowledgement)?;
+        }
+        Ok(())
+    }
+    fn coalesce_obsolete_merge_sidecar_generation_hint(
+        &mut self,
+        hint: CertifiedMergeSidecarGenerationHintV1,
+    ) -> Result<bool, V2LaneWorkError> {
+        if hint.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1
+            || hint.requester != self.local_peer
+            || hint.current_generation <= hint.observed_generation
+            || hint.hint_id != hint.canonical_hint_id()
+        {
+            self.output_guard.close_admission_for_restart();
+            return Err(V2LaneWorkError::Persistence(
+                "obsolete merge-sidecar generation fence changed authenticated identity".to_owned(),
+            ));
+        }
+        if let Some(retained) = self
+            .obsolete_merge_sidecar_generation_hints
+            .get_mut(&hint.responder)
+        {
+            if retained.requester != hint.requester || retained.version != hint.version {
+                self.output_guard.close_admission_for_restart();
+                return Err(V2LaneWorkError::Persistence(
+                    "obsolete merge-sidecar generation fence changed endpoint identity".to_owned(),
+                ));
+            }
+            if hint.current_generation <= retained.current_generation {
+                return Ok(false);
+            }
+            *retained = hint;
+            return Ok(true);
+        }
+        if self.obsolete_merge_sidecar_generation_hints.len() >= wire::MAX_VALIDATORS_PER_HEIGHT {
+            self.output_guard.close_admission_for_restart();
+            return Err(V2LaneWorkError::Persistence(
+                "obsolete merge-sidecar generation fences exceeded the semantic responder bound"
+                    .to_owned(),
+            ));
+        }
+        self.obsolete_merge_sidecar_generation_hints
+            .insert(hint.responder.clone(), hint);
+        Ok(true)
+    }
+    /// Drain authenticated generation fences before dispatching replacement
+    /// requester traffic under each responder's strongest successor generation.
+    pub(crate) fn drain_obsolete_merge_sidecar_generation_hints(
+        &mut self,
+    ) -> Vec<CertifiedMergeSidecarGenerationHintV1> {
+        std::mem::take(&mut self.obsolete_merge_sidecar_generation_hints)
+            .into_values()
+            .collect()
+    }
+    /// Restore generation-fence cancellation ownership after worker preflight failed.
+    pub(crate) fn requeue_obsolete_merge_sidecar_generation_hints(
+        &mut self,
+        hints: impl IntoIterator<Item = CertifiedMergeSidecarGenerationHintV1>,
+    ) -> Result<(), V2LaneWorkError> {
+        for hint in hints {
+            let _ = self.coalesce_obsolete_merge_sidecar_generation_hint(hint)?;
         }
         Ok(())
     }
@@ -11945,6 +12008,7 @@ impl V2LaneWorkAdapter {
             .acknowledge_generation_hint(&sender, hint, &self.local_peer)
         {
             Ok(true) => {
+                let _ = self.coalesce_obsolete_merge_sidecar_generation_hint(hint.clone())?;
                 let _ = self.retire_inactive_merge_sidecar_requests(active_requests)?;
                 self.sidecar_effects.retain(|effect| {
                     !matches!(
@@ -15558,13 +15622,7 @@ impl V2LaneWorkAdapter {
         }
         let frame_capacity = self.limits.merge_share_frame_capacity.get();
         if targets.any(|target| {
-            iroha_p2p::network::data_frame_wire_len(
-                signer,
-                Some(target),
-                1,
-                Priority::High,
-                &message,
-            ) > frame_capacity
+            iroha_p2p::network::data_frame_wire_len(signer, Some(target), &message) > frame_capacity
         }) {
             return Err(
                 "merge share full P2P consensus envelope exceeds the configured frame budget"
@@ -17465,9 +17523,10 @@ pub(super) mod tests {
             fair_v2_ingress_admit_for_test,
             network_topology::Topology,
             v2_runner::{
-                apply_acknowledged_merge_sidecar_closes,
-                apply_retired_historical_recovery_requests, apply_retired_merge_sidecar_requests,
+                LifecycleProducerClaimDispositionV1, apply_acknowledged_merge_sidecar_closes,
+                apply_retired_merge_sidecar_requests,
                 dispatch_canonical_executed_block_recovery_effects_for_test,
+                lifecycle_run_inner::reconcile_terminal_lane_output_handoffs,
             },
             v2_worker::{
                 ExactOutputTestAdmission,
@@ -17687,6 +17746,18 @@ pub(super) mod tests {
     fn fixture_with_durable_parent(mode: wire::ConsensusMode) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         fixture_at_height_inner(mode, 9, true)
     }
+    fn observer_fixture_with_durable_parent(
+        mode: wire::ConsensusMode,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        fixture_at_height_inner_with_kura_and_local_index(
+            mode,
+            9,
+            true,
+            locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
+            None,
+            false,
+        )
+    }
     fn fixture_at_height(
         mode: wire::ConsensusMode,
         height: u64,
@@ -17762,6 +17833,7 @@ pub(super) mod tests {
             persist_parent_chain,
             kura,
             None,
+            true,
         )
     }
     fn fixture_at_height_inner_with_kura_and_local_index(
@@ -17770,6 +17842,7 @@ pub(super) mod tests {
         persist_parent_chain: bool,
         kura: Arc<Kura>,
         local_validator_index: Option<usize>,
+        voting_enabled: bool,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let nonzero = NonZeroUsize::new(8).expect("nonzero");
         fixture_at_height_inner_with_limits_and_kura_and_local_index(
@@ -17807,6 +17880,7 @@ pub(super) mod tests {
             ),
             kura,
             local_validator_index,
+            voting_enabled,
         )
     }
     fn fixture_at_height_inner_with_limits(
@@ -17837,6 +17911,7 @@ pub(super) mod tests {
             limits,
             kura,
             None,
+            true,
         )
     }
     fn fixture_at_height_inner_with_limits_and_kura_and_local_index(
@@ -17846,6 +17921,7 @@ pub(super) mod tests {
         limits: V2LaneWorkLimits,
         kura: Arc<Kura>,
         local_validator_index: Option<usize>,
+        voting_enabled: bool,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let chain_id: ChainId = "v2-lane-work-display-name".into();
         let network_id = crate::sumeragi::synthetic_network_id("v2-lane-work-test");
@@ -18060,7 +18136,7 @@ pub(super) mod tests {
             context,
             local_peer,
             local_key,
-            true,
+            voting_enabled,
             state,
             kura,
             limits,
@@ -19614,6 +19690,83 @@ pub(super) mod tests {
         hint
     }
     #[test]
+    fn generation_hint_handoff_retains_one_strongest_fence_per_semantic_responder() {
+        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        adapter.limits.merge_sidecar_limits = MergeSidecarLimits::new(
+            NonZeroUsize::new(2).expect("two inbound sessions"),
+            NonZeroUsize::new(2).expect("two inbound sessions per peer"),
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER,
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY,
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE,
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT,
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE,
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE,
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE,
+        )
+        .expect("two-session merge-sidecar geometry remains valid");
+        assert_eq!(
+            adapter
+                .limits
+                .merge_sidecar_limits
+                .inbound_session_capacity(),
+            2
+        );
+        let requester = adapter.local_peer.clone();
+        let mut responders = Vec::with_capacity(wire::MAX_VALIDATORS_PER_HEIGHT);
+        for index in 0..wire::MAX_VALIDATORS_PER_HEIGHT {
+            let seed = u8::try_from(index)
+                .expect("the semantic responder bound fits u8")
+                .saturating_add(0x40);
+            let responder_key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic semantic responder key");
+            let responder = PeerId::new(responder_key.public_key().clone());
+            let hint = exact_successor_generation_hint(
+                CertifiedMergeSidecarServiceGenerationV1::INITIAL,
+                Hash::new(&index.to_le_bytes()),
+                &requester,
+                &responder,
+            );
+            assert!(
+                adapter
+                    .coalesce_obsolete_merge_sidecar_generation_hint(hint)
+                    .expect("every protocol-bounded semantic responder retains one fence")
+            );
+            responders.push(responder);
+        }
+        assert_eq!(
+            adapter.obsolete_merge_sidecar_generation_hints.len(),
+            wire::MAX_VALIDATORS_PER_HEIGHT
+        );
+        assert!(!adapter.output_guard.restart_required());
+
+        let responder = responders
+            .first()
+            .expect("the protocol responder bound is non-zero")
+            .clone();
+        let retained = adapter.obsolete_merge_sidecar_generation_hints[&responder].clone();
+        let stronger = exact_successor_generation_hint(
+            retained.current_generation,
+            Hash::new(b"stronger authenticated responder fence"),
+            &requester,
+            &responder,
+        );
+        assert!(
+            adapter
+                .coalesce_obsolete_merge_sidecar_generation_hint(stronger.clone())
+                .expect("a stronger fence coalesces without allocating another responder slot")
+        );
+        assert_eq!(
+            adapter.obsolete_merge_sidecar_generation_hints.len(),
+            wire::MAX_VALIDATORS_PER_HEIGHT
+        );
+        assert_eq!(
+            adapter.obsolete_merge_sidecar_generation_hints[&responder],
+            stronger
+        );
+        assert!(!adapter.output_guard.restart_required());
+    }
+    #[test]
     fn request_generation_hint_journal_failure_preserves_queued_occurrence() {
         let (mut adapter, request) =
             requester_generation_hint_fixture(b"active request occurrence");
@@ -20249,6 +20402,287 @@ pub(super) mod tests {
                 .expect("inspect admitted requester Closes")
                 .as_slice(),
             [close_hash]
+        );
+    }
+    #[test]
+    fn queued_successor_generation_hint_cancels_ranked_older_close_before_retry() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let round = wire::ConsensusRound {
+            context_id: adapter.context.id(),
+            height: adapter.context.height,
+            view: 3,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"generation-fenced Close cancellation carrier",
+            )),
+            payload_hash: Hash::new(b"generation-fenced Close cancellation payload"),
+        };
+        let reference = missing_sidecar_reference(&adapter, &keys, 1);
+        assert_eq!(
+            adapter
+                .defer_missing_merge_sidecar(round, subject, reference)
+                .expect("begin the exact sidecar request"),
+            MergeSidecarDeferralDisposition::Fetching
+        );
+        let request = adapter
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .find_map(|effect| match effect {
+                V2LaneWorkEffect::PostCertifiedMergeSidecar { message, .. } => {
+                    match Arc::unwrap_or_clone(message) {
+                        CertifiedMergeSidecarMessage::Request(request) => Some(request),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .expect("the deferral emits its durable request");
+        adapter
+            .retain_deferred_merge_sidecars(&BTreeSet::new())
+            .expect("retire the only deferred carrier");
+        adapter
+            .schedule_retransmission_at(Instant::now())
+            .expect("schedule the cumulative Close");
+        let close_effect = adapter
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .find(|effect| {
+                matches!(
+                    effect,
+                    V2LaneWorkEffect::PostCertifiedMergeSidecar { message, .. }
+                        if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Close(_))
+                )
+            })
+            .expect("the retired request emits its cumulative Close");
+        let V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            peer,
+            message: close_message,
+            ..
+        } = close_effect
+        else {
+            unreachable!("the selected effect is a requester Close")
+        };
+        let CertifiedMergeSidecarMessage::Close(close) = close_message.as_ref() else {
+            unreachable!("the selected effect is a requester Close")
+        };
+        assert_eq!(close.closed_through, request.semantic_sequence.get());
+        let close = close.clone();
+
+        let local_validator = adapter
+            .context
+            .roster
+            .iter()
+            .position(|entry| entry.validator == adapter.local_peer)
+            .and_then(|index| wire::ValidatorIndex::try_from(index).ok())
+            .expect("the requester belongs to the frozen roster");
+        let mut services = service_for_history_context_with_local_validator(
+            Arc::clone(&adapter.kura),
+            adapter.context.clone(),
+            &keys,
+            local_validator,
+        );
+        let block_close = Arc::new(AtomicBool::new(true));
+        let block_close_for_hook = Arc::clone(&block_close);
+        let ticket_fixtures = Arc::new(Mutex::new(Vec::new()));
+        let ticket_fixtures_for_hook = Arc::clone(&ticket_fixtures);
+        let admitted = Arc::new(Mutex::new(Vec::new()));
+        let admitted_for_hook = Arc::clone(&admitted);
+        services.set_exact_output_admission_hook(move |post, ticket| {
+            if let crate::NetworkMessage::CertifiedMergeSidecar(message) = &post.data
+                && let CertifiedMergeSidecarMessage::Close(close) = message.as_ref()
+            {
+                if block_close_for_hook.load(Ordering::Acquire) {
+                    if let Some(ticket) = ticket {
+                        let rank = ticket
+                            .rank()
+                            .expect("the retained Close ticket remains actor-owned");
+                        return Err(
+                            iroha_p2p::network::NetworkActorAdmissionError::Backpressured {
+                                message: post,
+                                ticket: Some(ticket),
+                                rank,
+                            },
+                        );
+                    }
+                    let (fixture, ticket) =
+                        NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+                    ticket_fixtures_for_hook
+                        .lock()
+                        .expect("retain the actor-ticket fixture")
+                        .push(fixture);
+                    return Err(
+                        iroha_p2p::network::NetworkActorAdmissionError::Backpressured {
+                            message: post,
+                            ticket: Some(ticket),
+                            rank: 1,
+                        },
+                    );
+                }
+                admitted_for_hook
+                    .lock()
+                    .expect("record admitted requester Close")
+                    .push(HashOf::new(close));
+            }
+            Ok(())
+        });
+        services
+            .post_certified_merge_sidecar_with_reply_routes(peer, None, close_message)
+            .expect("the ranked actor-backpressured Close remains service-owned");
+        assert_eq!(
+            ticket_fixtures
+                .lock()
+                .expect("inspect the actor-ticket fixture")[0]
+                .waiter_count(),
+            1
+        );
+
+        let observed_round = wire::ConsensusRound {
+            context_id: adapter.context.id(),
+            height: adapter.context.height,
+            view: 4,
+        };
+        let observed_subject = wire::BlockSubject {
+            parent_block_hash: adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"generation-fenced observed Request carrier",
+            )),
+            payload_hash: Hash::new(b"generation-fenced observed Request payload"),
+        };
+        let observed_reference = missing_sidecar_reference(&adapter, &keys, 1);
+        assert_eq!(
+            adapter
+                .defer_missing_merge_sidecar(observed_round, observed_subject, observed_reference,)
+                .expect("begin a later request to the same responder"),
+            MergeSidecarDeferralDisposition::Fetching
+        );
+        let observed_request_effect = adapter
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .find(|effect| {
+                matches!(
+                    effect,
+                    V2LaneWorkEffect::PostCertifiedMergeSidecar { message, .. }
+                        if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Request(_))
+                )
+            })
+            .expect("the later deferral emits the observed Request");
+        let V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            peer: observed_peer,
+            message: observed_message,
+            ..
+        } = observed_request_effect
+        else {
+            unreachable!("the selected effect is the observed Request")
+        };
+        let CertifiedMergeSidecarMessage::Request(observed_request) = observed_message.as_ref()
+        else {
+            unreachable!("the selected effect retains its Request payload")
+        };
+        assert_eq!(observed_request.responder, close.responder);
+        assert_eq!(
+            observed_request.service_generation,
+            close.service_generation
+        );
+        assert!(observed_request.semantic_sequence.get() > close.closed_through);
+        let observed_request = observed_request.clone();
+        services
+            .post_certified_merge_sidecar_with_reply_routes(observed_peer, None, observed_message)
+            .expect("transfer the later Request while the older Close remains ranked");
+        assert_eq!(
+            ticket_fixtures
+                .lock()
+                .expect("inspect the older Close after Request transfer")[0]
+                .waiter_count(),
+            1,
+            "the Hint-triggering Request must not incidentally release the sibling Close"
+        );
+
+        let hint = exact_successor_generation_hint(
+            observed_request.service_generation,
+            HashOf::new(&observed_request).into(),
+            &observed_request.requester,
+            &observed_request.responder,
+        );
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(
+            hub.clone(),
+            adapter.limits.reply_source_capacity.get(),
+        );
+        let reply_route = routes.mint_via(observed_request.responder.clone(), hub);
+        let (lane_relay_tx, lane_relay_rx) = std::sync::mpsc::sync_channel(1);
+        lane_relay_tx
+            .try_send(LaneRelayMessage::CertifiedMergeSidecar {
+                sender: observed_request.responder.clone(),
+                reply_route: Some(reply_route),
+                message: CertifiedMergeSidecarMessage::GenerationHint(hint),
+            })
+            .expect("queue the authenticated generation Hint behind shared runner ingress");
+        assert!(
+            adapter.obsolete_merge_sidecar_generation_hints.is_empty(),
+            "the cancellation tombstone cannot exist before the runner consumes its relay owner"
+        );
+        assert!(
+            crate::sumeragi::v2_runner::drain_finalized_lane_relay_prefix_for_test(
+                &lane_relay_rx,
+                &mut adapter,
+                observed_round.view,
+                1,
+            ),
+            "the closed terminal relay prefix must consume its queued cancellation"
+        );
+        assert!(
+            !crate::sumeragi::v2_runner::drain_finalized_lane_relay_prefix_for_test(
+                &lane_relay_rx,
+                &mut adapter,
+                observed_round.view,
+                1,
+            ),
+            "the admitted relay prefix is finite after shared ingress closure"
+        );
+        assert_eq!(adapter.obsolete_merge_sidecar_generation_hints.len(), 1);
+        let _ = apply_retired_merge_sidecar_requests(&mut adapter, &services)
+            .expect("clear the request retirement from the fixture");
+        assert!(
+            !reconcile_terminal_lane_output_handoffs(
+                LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+                    .decided_lane_recovery_permit()
+                    .expect("settled Apply mints terminal handoff authority"),
+                &mut adapter,
+                &services,
+                1,
+            )
+            .expect("cancel the generation-fenced service-owned Close before sampling output"),
+            "the obsolete Close must not keep the terminal output gate set"
+        );
+        assert_eq!(
+            ticket_fixtures
+                .lock()
+                .expect("inspect the released actor-ticket fixture")[0]
+                .waiter_count(),
+            0,
+            "terminal generation fencing must release the ranked actor waiter"
+        );
+        block_close.store(false, Ordering::Release);
+        assert!(
+            !services
+                .retry_pending_exact_output()
+                .expect("the obsolete Close cannot reach transport")
+        );
+        assert!(
+            admitted
+                .lock()
+                .expect("inspect admitted requester Closes")
+                .is_empty()
         );
     }
     #[test]

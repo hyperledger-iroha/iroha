@@ -54,6 +54,15 @@ const SCCP_PENDING_MINT = 1
 const SCCP_PENDING_BURN = 2
 const SCCP_COMPLETED = 3
 
+/// Maximum number of asynchronous records retained by one contract boundary.
+/// Replay occupancy is permanent, but live dispatch state is deliberately
+/// bounded so an attacker cannot grow contract storage without limit.
+const SCCP_PENDING_OPERATION_CAP = 1024
+/// The emergency controller is immutable and always requires three of the five
+/// route-bound guardian keys.
+const SCCP_MINT_BREAKER_THRESHOLD = 3
+const SCCP_MINT_BREAKER_GUARDIAN_COUNT = 5
+
 const SCCP_MIN_BRIDGE_RESERVE = 100000000
 const SCCP_MIN_MASTER_RESERVE = 100000000
 const SCCP_MIN_WALLET_RESERVE = 50000000

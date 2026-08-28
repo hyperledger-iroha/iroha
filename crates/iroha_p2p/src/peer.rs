@@ -1,4 +1,10 @@
 //! Tokio actor Peer
+#[cfg(feature = "quic")]
+mod quic_datagram;
+
+#[cfg(feature = "quic")]
+pub(crate) use quic_datagram::QuicDatagramIngress;
+
 #[cfg(test)]
 use crate::puzzle_work_admission::{
     DEFAULT_INBOUND_VERIFY_CAPACITY, DEFAULT_OUTBOUND_MINT_CAPACITY,
@@ -49,6 +55,8 @@ use tokio::{
     sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch},
     time::Duration,
 };
+const SORANET_CONSTANT_RATE_CAPABILITY_TYPE: u16 = 0x0203;
+const SORANET_CONSTANT_RATE_STRICT_FLAG: u8 = 0x01;
 // (keep fully-qualified uses inline; avoid unused import warnings)
 #[cfg(test)]
 fn test_network_id(seed: &str) -> iroha_data_model::NetworkId {
@@ -347,11 +355,38 @@ impl SoranetHandshakeConfig {
         validate_client_capability_vector(&client_capabilities).map_err(|error| {
             Error::HandshakeSoranet(format!("invalid SoraNet client capability vector: {error}"))
         })?;
+        let parsed_client_capabilities =
+            parse_capabilities(&client_capabilities).map_err(|error| {
+                Error::HandshakeSoranet(format!(
+                    "invalid SoraNet client capability vector: {error}"
+                ))
+            })?;
         // Relay ordering is intentionally transcript-bound rather than subject
         // to the client's canonical nondecreasing-order rule.
-        parse_capabilities(&relay_capabilities).map_err(|error| {
-            Error::HandshakeSoranet(format!("invalid SoraNet relay capability vector: {error}"))
-        })?;
+        let parsed_relay_capabilities =
+            parse_capabilities(&relay_capabilities).map_err(|error| {
+                Error::HandshakeSoranet(format!("invalid SoraNet relay capability vector: {error}"))
+            })?;
+        // TODO: Remove this construction-time rejection when iroha_p2p routes
+        // every application payload through the authenticated fixed-rate
+        // DATAGRAM mux. Accepting the transcript flag before then would make a
+        // false traffic-shape guarantee while normal peer messages use streams.
+        if parsed_client_capabilities
+            .iter()
+            .chain(parsed_relay_capabilities.iter())
+            .any(|capability| {
+                capability.ty == SORANET_CONSTANT_RATE_CAPABILITY_TYPE
+                    && capability
+                        .value
+                        .get(1)
+                        .is_some_and(|flags| flags & SORANET_CONSTANT_RATE_STRICT_FLAG != 0)
+            })
+        {
+            return Err(Error::HandshakeSoranet(
+                "strict SoraNet constant-rate capability is unavailable for iroha_p2p until peer payload uses the authenticated fixed-rate DATAGRAM mux"
+                    .to_owned(),
+            ));
+        }
         validate_runtime_configuration(&RuntimeParams {
             descriptor_commit: &descriptor_commit,
             client_capabilities: &client_capabilities,
@@ -3194,6 +3229,7 @@ pub mod handles {
         proxy_tls_verify: bool,
         proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>>,
         proxy_policy: crate::transport::ProxyPolicy,
+        outbound_dial_policy: Arc<crate::dial_policy::OutboundDialPolicy>,
         quic_dialer: Option<crate::transport::QuicDialer>,
         quic_datagrams_enabled: bool,
         quic_datagram_max_payload_bytes: usize,
@@ -3226,7 +3262,12 @@ pub mod handles {
             proxy_tls_verify,
             proxy_tls_pinned_cert_der,
             proxy_policy,
+            outbound_dial_policy,
             quic_dialer,
+            quic_datagrams_enabled,
+            quic_datagram_max_payload_bytes: quic_datagram_max_payload_bytes
+                .min(max_frame_bytes)
+                .min(crate::MAX_ENCRYPTED_FRAME_BYTES),
         };
         let peer = RunPeerArgs {
             peer,
@@ -3546,6 +3587,12 @@ pub mod handles {
             self.hi_consensus
                 .try_recv()
                 .map(RetainedPost::into_inner_and_acknowledge_flush)
+        }
+        /// Receive the next block-sync message, if any.
+        pub(crate) fn try_recv_block_sync(
+            &mut self,
+        ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
+            self.lo_block_sync.try_recv().map(RetainedPost::into_inner)
         }
         /// Receive the next high-priority control-lane message, if any.
         pub(crate) fn try_recv_high_control(
@@ -4155,7 +4202,7 @@ mod run {
     }
     #[cfg(feature = "quic")]
     struct QuicDatagramReceiver<E: Enc, T: Pload + ClassifyTopic> {
-        connection: quinn::Connection,
+        ingress: QuicDatagramIngress,
         cryptographer: Cryptographer<E>,
         decrypted: Vec<u8>,
         framed_schema: [u8; 16],
@@ -4166,12 +4213,13 @@ mod run {
     }
     #[cfg(feature = "quic")]
     impl<E: Enc, T: Pload + ClassifyTopic> QuicDatagramReceiver<E, T> {
-        fn new(
-            connection: quinn::Connection,
+        async fn new(
+            mut ingress: QuicDatagramIngress,
             cryptographer: Cryptographer<E>,
             max_frame_bytes: usize,
             topic_frame_caps: crate::network::TopicFrameCaps,
-        ) -> Self {
+            byte_budget: InboundSourceByteBudget,
+        ) -> Result<Self, Error> {
             let framed_schema = <T as ncore::NoritoSerialize>::schema_hash();
             let align = ncore::archived_payload_align::<T>();
             let framed_padding = if align <= 1 {
@@ -4180,8 +4228,9 @@ mod run {
                 let rem = ncore::Header::SIZE % align;
                 if rem == 0 { 0 } else { align - rem }
             };
-            Self {
-                connection,
+            ingress.authenticate(byte_budget).await?;
+            Ok(Self {
+                ingress,
                 cryptographer,
                 decrypted: Vec::new(),
                 framed_schema,
@@ -4189,13 +4238,11 @@ mod run {
                 max_frame_bytes,
                 topic_frame_caps,
                 _payload: std::marker::PhantomData,
-            }
+            })
         }
         async fn recv(&mut self) -> Result<(T, usize), Error> {
-            let datagram =
-                self.connection.read_datagram().await.map_err(|e| {
-                    std::io::Error::other(format!("quic datagram recv failed: {e}"))
-                })?;
+            let retained = self.ingress.recv().await?;
+            let datagram = &retained.payload;
             if datagram.len() > self.max_frame_bytes {
                 return Err(Error::FrameTooLarge);
             }
@@ -4827,27 +4874,13 @@ mod run {
             .expect("LOW_TOPIC_COUNT must fit in u8");
     }
     fn inbound_priority_from_topic(topic: Topic) -> Priority {
-        match topic {
-            Topic::ConsensusSafety
-            | Topic::Consensus
-            | Topic::ConsensusPayload
-            | Topic::ConsensusChunk
-            | Topic::Control => Priority::High,
-            Topic::BlockSync
-            | Topic::TxGossip
-            | Topic::TxGossipRestricted
-            | Topic::PeerGossip
-            | Topic::TrustGossip
-            | Topic::Health
-            | Topic::Other => Priority::Low,
-        }
+        topic.scheduling_priority()
     }
     fn inbound_priority_from_message<T: ClassifyTopic>(message: &T) -> Priority {
-        if matches!(message.priority(), Priority::High) {
-            Priority::High
-        } else {
-            inbound_priority_from_topic(message.topic())
-        }
+        // Remote peers must not be able to promote arbitrary traffic into the
+        // actor's high-priority queues. Local actor admission can still honor
+        // an API-requested priority before the message reaches this boundary.
+        inbound_priority_from_topic(message.topic())
     }
     fn try_recv_low_rr<T>(
         low_rr: &mut u8,
@@ -5108,6 +5141,8 @@ mod run {
                         read_low,
                         write_low,
                         quic,
+                        #[cfg(feature = "quic")]
+                        quic_datagrams,
                         id: connection_id,
                         ..
                     },
@@ -5280,14 +5315,25 @@ mod run {
             let mut datagram_receiver: Option<DatagramReceiver<E, T>> = None;
             #[cfg(feature = "quic")]
             if quic_datagrams_enabled {
-                    if let Some(conn) = quic.clone() {
-                        // Receiver is always safe to enable when datagrams are configured locally.
-                        datagram_receiver = Some(QuicDatagramReceiver::<E, T>::new(
-                            conn.clone(),
+                if let Some(conn) = quic.clone() {
+                    if let Some(ingress) = quic_datagrams {
+                        let receiver = QuicDatagramReceiver::<E, T>::new(
+                            ingress,
                             cryptographer.clone(),
                             max_frame_bytes,
                             peer_message_senders.topic_frame_caps,
-                        ));
+                            inbound_frame_byte_budgets.low(),
+                        )
+                        .await;
+                        let Ok(receiver) = receiver else {
+                            iroha_logger::warn!(
+                                conn_id,
+                                "QUIC DATAGRAM ingress failed during authentication"
+                            );
+                            return;
+                        };
+                        datagram_receiver = Some(receiver);
+                    }
                     // Sender requires that the peer negotiated datagram support.
                     if conn.max_datagram_size().is_some() && quic_datagram_max_payload_bytes > 0 {
                         datagram_sender = Some(QuicDatagramSender::new(
@@ -12241,6 +12287,17 @@ mod run {
         }
         #[test]
         fn inbound_priority_marks_control_planes_high() {
+            struct RemoteHighTxGossip;
+            impl ClassifyTopic for RemoteHighTxGossip {
+                fn topic(&self) -> crate::network::message::Topic {
+                    crate::network::message::Topic::TxGossip
+                }
+
+                fn priority(&self) -> Priority {
+                    Priority::High
+                }
+            }
+
             assert_eq!(
                 super::inbound_priority_from_topic(crate::network::message::Topic::ConsensusSafety),
                 Priority::High
@@ -12266,6 +12323,11 @@ mod run {
             assert_eq!(
                 super::inbound_priority_from_topic(crate::network::message::Topic::TxGossip),
                 Priority::Low
+            );
+            assert_eq!(
+                super::inbound_priority_from_message(&RemoteHighTxGossip),
+                Priority::Low,
+                "a remote message cannot self-promote a low topic"
             );
         }
         fn framed_message<T: Encode>(value: &T) -> Vec<u8> {
@@ -13479,7 +13541,10 @@ mod state {
         pub proxy_tls_verify: bool,
         pub proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>>,
         pub proxy_policy: crate::transport::ProxyPolicy,
+        pub outbound_dial_policy: Arc<crate::dial_policy::OutboundDialPolicy>,
         pub quic_dialer: Option<crate::transport::QuicDialer>,
+        pub quic_datagrams_enabled: bool,
+        pub quic_datagram_max_payload_bytes: usize,
     }
     impl Connecting {
         #[cfg(any(feature = "quic", test))]
@@ -13519,7 +13584,10 @@ mod state {
                 proxy_tls_verify,
                 proxy_tls_pinned_cert_der,
                 proxy_policy,
+                outbound_dial_policy,
                 quic_dialer,
+                quic_datagrams_enabled,
+                quic_datagram_max_payload_bytes,
             }: Self,
         ) -> Result<ConnectedTo, crate::Error> {
             async fn dial_tls(
@@ -13579,17 +13647,23 @@ mod state {
                 dialer: &crate::transport::QuicDialer,
                 dial_timeout: Duration,
                 connection_id: ConnectionId,
+                quic_datagrams_enabled: bool,
+                quic_datagram_max_payload_bytes: usize,
+                outbound_dial_policy: &crate::dial_policy::OutboundDialPolicy,
             ) -> Result<Connection, crate::Error> {
                 use tokio::time::Instant;
                 const QUIC_SERVER_NAME: &str = "iroha-quic";
                 let deadline = Instant::now() + dial_timeout;
+                outbound_dial_policy.check_target(peer_addr)?;
                 let targets: Vec<std::net::SocketAddr> = match peer_addr {
-                    iroha_primitives::addr::SocketAddr::Ipv4(v4) => vec![std::net::SocketAddr::V4(
-                        std::net::SocketAddrV4::new(v4.ip.into(), v4.port),
-                    )],
-                    iroha_primitives::addr::SocketAddr::Ipv6(v6) => vec![std::net::SocketAddr::V6(
-                        std::net::SocketAddrV6::new(v6.ip.into(), v6.port, 0, 0),
-                    )],
+                    iroha_primitives::addr::SocketAddr::Ipv4(v4) => outbound_dial_policy
+                        .check_resolved_targets(std::iter::once(std::net::SocketAddr::V4(
+                            std::net::SocketAddrV4::new(v4.ip.into(), v4.port),
+                        )))?,
+                    iroha_primitives::addr::SocketAddr::Ipv6(v6) => outbound_dial_policy
+                        .check_resolved_targets(std::iter::once(std::net::SocketAddr::V6(
+                            std::net::SocketAddrV6::new(v6.ip.into(), v6.port, 0, 0),
+                        )))?,
                     iroha_primitives::addr::SocketAddr::Host(host) => {
                         let lookup = tokio::time::timeout_at(
                             deadline,
@@ -13599,16 +13673,9 @@ mod state {
                         .map_err(|_| {
                             std::io::Error::new(std::io::ErrorKind::TimedOut, "dial timeout")
                         })??;
-                        lookup.collect()
+                        outbound_dial_policy.check_resolved_targets(lookup)?
                     }
                 };
-                if targets.is_empty() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "no socket addrs for peer",
-                    )
-                    .into());
-                }
                 let mut last_err: Option<std::io::Error> = None;
                 for target in targets {
                     let now = Instant::now();
@@ -13618,6 +13685,12 @@ mod state {
                     let remaining = deadline - now;
                     let res = tokio::time::timeout(remaining, async {
                         let conn = dialer.connect(target, QUIC_SERVER_NAME).await?;
+                        let datagram_ingress = quic_datagrams_enabled.then(|| {
+                            QuicDatagramIngress::spawn(
+                                conn.clone(),
+                                quic_datagram_max_payload_bytes,
+                            )
+                        });
                         let transport_binding =
                             crate::transport::quic_peer_certificate_fingerprint(&conn)?;
                         let remote = conn.remote_address();
@@ -13641,6 +13714,7 @@ mod state {
                             recv_hi,
                             send_low,
                             recv_low,
+                            datagram_ingress,
                             Some(remote),
                             transport_binding,
                         ))
@@ -13669,11 +13743,22 @@ mod state {
                 proxy_tls_pinned_cert_der,
                 tcp_nodelay,
                 tcp_keepalive,
+                outbound_dial_policy: Arc::clone(&outbound_dial_policy),
             };
             if prefer_scion {
                 #[cfg(feature = "quic")]
                 if let Some(dialer) = &quic_dialer {
-                    match dial_quic_like(&peer_addr, dialer, dial_timeout, connection_id).await {
+                    match dial_quic_like(
+                        &peer_addr,
+                        dialer,
+                        dial_timeout,
+                        connection_id,
+                        quic_datagrams_enabled,
+                        quic_datagram_max_payload_bytes,
+                        &outbound_dial_policy,
+                    )
+                    .await
+                    {
                         Ok(connection) => {
                             crate::network::inc_scion_outbound();
                             return Ok(ConnectedTo {
@@ -13708,8 +13793,15 @@ mod state {
                 {
                     if quic_enabled {
                         if let Some(dialer) = &quic_dialer {
-                            let quic_fut =
-                                dial_quic_like(&peer_addr, dialer, dial_timeout, connection_id);
+                            let quic_fut = dial_quic_like(
+                                &peer_addr,
+                                dialer,
+                                dial_timeout,
+                                connection_id,
+                                quic_datagrams_enabled,
+                                quic_datagram_max_payload_bytes,
+                                &outbound_dial_policy,
+                            );
                             tokio::pin!(quic_fut);
                             // Phase 1: give QUIC a head start, but don't stall on blocked UDP.
                             let stagger = tokio::time::sleep(happy_eyeballs_stagger);
@@ -13828,7 +13920,10 @@ mod state {
                 proxy_tls_verify: true,
                 proxy_tls_pinned_cert_der: None,
                 proxy_policy: crate::transport::ProxyPolicy::disabled(),
+                outbound_dial_policy: Arc::new(crate::dial_policy::OutboundDialPolicy::default()),
                 quic_dialer: None,
+                quic_datagrams_enabled: false,
+                quic_datagram_max_payload_bytes: 0,
             }
         }
         fn io_error(kind: std::io::ErrorKind, label: &'static str) -> crate::Error {
@@ -15342,6 +15437,9 @@ pub(crate) struct Connection {
     pub(crate) write_low: Option<Box<dyn AsyncWrite + Send + Unpin>>,
     /// QUIC connection handle (only set when the underlying transport is QUIC).
     pub(crate) quic: Option<crate::transport::QuicConnection>,
+    /// Eager DATAGRAM drain started before application authentication.
+    #[cfg(feature = "quic")]
+    pub(crate) quic_datagrams: Option<QuicDatagramIngress>,
     /// Remote addr, for logging purpose.
     pub(crate) remote_addr: Option<SocketAddr>,
     /// Listener-observed TLS/QUIC channel binding; mandatory outside negative-path tests.
@@ -15362,6 +15460,8 @@ impl Connection {
             read_low: None,
             write_low: None,
             quic: None,
+            #[cfg(feature = "quic")]
+            quic_datagrams: None,
             remote_addr: None,
             transport_binding: None,
         }
@@ -15384,6 +15484,8 @@ impl Connection {
             read_low: None,
             write_low: None,
             quic: None,
+            #[cfg(feature = "quic")]
+            quic_datagrams: None,
             remote_addr: None,
             transport_binding: Some(transport_binding),
         }
@@ -15409,6 +15511,7 @@ impl Connection {
         recv_hi: quinn::RecvStream,
         send_low: Option<quinn::SendStream>,
         recv_low: Option<quinn::RecvStream>,
+        quic_datagrams: Option<QuicDatagramIngress>,
         remote_addr: Option<SocketAddr>,
         transport_binding: TransportBinding,
     ) -> Self {
@@ -15425,6 +15528,7 @@ impl Connection {
                 boxed
             }),
             quic: Some(quic),
+            quic_datagrams,
             remote_addr,
             transport_binding: Some(transport_binding),
         }

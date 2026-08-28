@@ -17,7 +17,8 @@ class FakeHttpTransportExecutor : HttpTransportExecutor {
     private val pathResponses = ConcurrentHashMap<String, ConcurrentLinkedQueue<TransportResponse>>()
 
     @Volatile
-    private var defaultResponse = TransportResponse(200, ByteArray(0), "", emptyMap())
+    private var defaultResponse =
+        TransportResponse(200, ByteArray(0), "", emptyMap(), null, false)
 
     /** Enqueue a response that will be returned for any request when no path-specific response exists. */
     fun enqueueResponse(response: TransportResponse) {
@@ -52,7 +53,14 @@ class FakeHttpTransportExecutor : HttpTransportExecutor {
             response = defaultResponse
         }
         return CompletableFuture.completedFuture(
-            TransportResponse(response.statusCode, response.body, response.message, response.headers)
+            TransportResponse(
+                response.statusCode,
+                response.body,
+                response.message,
+                response.headers,
+                response.finalUri,
+                response.redirected,
+            ),
         )
     }
 }

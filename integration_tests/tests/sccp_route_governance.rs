@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 const REGISTRY_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(120);
 const TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+const MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
 fn word_u64(value: u64) -> [u8; 32] {
     let mut word = [0; 32];
     word[24..].copy_from_slice(&value.to_be_bytes());
@@ -140,6 +141,8 @@ fn integration_route() -> SccpGovernedRouteV1 {
         route_address: [0x51; 20],
         route_code_hash: [0x61; 32],
         taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
+        max_wrapped_supply: MAX_OUTSTANDING_LIABILITY
+            * u128::from(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
     };
     let destination = SccpDestinationDeploymentV1::Evm(deployment);
     let route_configuration_hash = destination
@@ -176,6 +179,7 @@ fn integration_route() -> SccpGovernedRouteV1 {
             asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
             custody_owner: AccountId::new(custody),
             payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+            max_outstanding_liability: MAX_OUTSTANDING_LIABILITY,
         },
     };
     route

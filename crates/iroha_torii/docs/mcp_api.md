@@ -13,6 +13,7 @@ MCP is disabled by default. Enable it under `torii.mcp`.
       "enabled": true,
       "max_request_bytes": 1048576,
       "max_tools_per_list": 500,
+      "max_inflight_dispatches": 32,
       "profile": "read_only",
       "expose_operator_routes": false,
       "allow_tool_prefixes": [],
@@ -47,22 +48,31 @@ This keeps the public tool catalog small and task-oriented while hiding the
 catalog-projected `torii.*` namespace and all operator routes.
 
 ### Configuration Fields
+
 - `enabled`: master switch for `/v1/mcp`.
 - `max_request_bytes`: byte limit for the accepted POST body, each collected
   nested-route response body, and the complete emitted JSON-RPC response. The
   shared limit prevents a small tool request from amplifying into an unbounded
   in-memory response.
 - `max_tools_per_list`: pagination size for `tools/list`.
+- `max_inflight_dispatches`: maximum number of tool dispatches executing at
+  once. Calls beyond the configured capacity fail closed with a retryable
+  `dispatch_capacity_exhausted` JSON-RPC error.
 - `profile`: `read_only`, `writer`, or `operator`.
-- `expose_operator_routes`: include operator routes even when profile is not `operator`.
+- `expose_operator_routes`: second, explicit gate for operator tools. Operator
+  tools are published only when this is `true` **and** `profile` is `operator`.
 - `allow_tool_prefixes`: if non-empty, only matching tool-name prefixes are allowed.
 - `deny_tool_prefixes`: blocked tool-name prefixes (applied before allow-list).
-- `rate_per_minute` / `burst`: MCP endpoint token-bucket limits.
+- `rate_per_minute` / `burst`: MCP dispatch token-bucket limits. An ordinary
+  request costs one token; `tools/call_batch` costs one token per requested
+  tool call.
 
 Profile behavior:
+
 - `read_only`: read-only and instruction-builder tools only.
 - `writer`: includes mutating non-operator tools.
-- `operator`: includes operator tools as well.
+- `operator`: makes operator tools eligible only when
+  `expose_operator_routes = true` as well.
 
 When `allow_tool_prefixes` is set, the profile still applies first and the
 prefix allow-list is applied second. Public networks can therefore use
@@ -71,10 +81,13 @@ mutating app-development helpers available without publishing the broader raw
 surface.
 
 ## Endpoints
-- `GET /v1/mcp`: capabilities payload (not JSON-RPC wrapped).
-- `POST /v1/mcp`: JSON-RPC 2.0 execution endpoint.
 
-If `torii.mcp.enabled` is `false`, these routes are not exposed.
+- `POST /v1/mcp`: JSON-RPC 2.0 execution endpoint.
+- `GET /v1/mcp`: not supported; returns `405 Method Not Allowed` because Torii
+  does not provide an SSE stream on this endpoint.
+
+The route remains registered when `torii.mcp.enabled` is `false`; POST returns
+`503 Service Unavailable` with `mcp_disabled`.
 
 ## Security And Header Forwarding
 MCP does not bypass Torii authentication. `POST /v1/mcp` is a nested-route
@@ -85,7 +98,15 @@ before any target effect.
 `/v1/mcp` is also covered by Torii’s API-token middleware. If `torii.require_api_token` is enabled and
 the inbound token is missing/invalid, Torii rejects before JSON-RPC dispatch.
 
+Browser-style requests are also subject to an exact Origin check. Requests
+without `Origin` remain valid for non-browser MCP clients. If `Origin` is
+present, exactly one value must byte-for-byte match an explicit
+`torii.cors.allowed_origins` entry; duplicate values, wildcard origins, and
+unlisted origins are rejected. When CORS is disabled there is no browser-origin
+allowlist, so requests carrying `Origin` are rejected.
+
 For route dispatch, MCP forwards only transport-scoped credentials automatically:
+
 - `Authorization`
 - `x-api-token`
 
@@ -98,10 +119,11 @@ headers are accepted only for the matching catalog policy; attempts to inject
 them into another target are rejected or stripped. `content-length`, `host`,
 and `connection` from `arguments.headers` are ignored.
 
-For public writer-profile deployments, treat user-supplied `authority` /
-`private_key` fields and forwarded auth headers as runtime-only inputs. Do not
-store deployment credentials in repo config, plugin manifests, or
-documentation examples tied to real secrets.
+Never pass raw private keys, seed phrases, or signing key files through MCP.
+Build with instruction-builder tools where available, sign locally, and submit
+a pre-signed transaction envelope. Bearer tokens and forwarded authentication
+headers are runtime-only inputs and must not be stored in repo config, plugin
+manifests, logs, or documentation examples.
 
 Route output is untrusted data. Torii reparses JSON route bodies into a Norito
 JSON value before placing them under `structuredContent`; malformed JSON and
@@ -111,54 +133,104 @@ body, metadata, role, trigger, or permission text. MCP clients must likewise
 treat `structuredContent` as data rather than instructions.
 
 ## Protocol Behavior
+
 - `jsonrpc` is required and must be the string `"2.0"`.
 - Missing, non-string, or different `jsonrpc` values are rejected as `invalid_request`.
-- POST accepts either a single request object or a non-empty request array (batch).
-- Empty batch is rejected as `invalid_request`.
-- A request may represent at most 64 dispatches. Outer batch entries normally
-  cost one dispatch; a nested `tools/call_batch` entry costs the number of calls
-  it contains. This shared accounting prevents the two batch layers from
-  multiplying the ceiling.
+- Each POST accepts exactly one JSON-RPC request, notification, or response
+  object. JSON-RPC array batches, including empty arrays, are rejected as
+  `invalid_request`.
+- A request or response `id` must be a non-null string or JSON number. Numeric
+  IDs, including fractional values, are preserved unchanged.
+- The initialization request may omit `MCP-Protocol-Version`. Every later POST
+  must carry exactly one `MCP-Protocol-Version` header containing the negotiated
+  version (`2025-06-18`); missing, ambiguous, or unsupported values are rejected.
+- `initialize.params` must include `protocolVersion`, `capabilities`, and
+  `clientInfo`. `protocolVersion` is a string, `capabilities` is an object, and
+  `clientInfo` contains string `name` and `version` fields.
+- The advertised `tools/call_batch` extension may represent at most 64 tool
+  dispatches. Every requested call is charged separately against the rate
+  limiter; it is not an outer JSON-RPC batch.
 - Request bodies and nested-route response bodies have a 10-second collection
   deadline. Nested routes advertised as streaming operations are not eligible
   MCP tools.
+- Tool execution is bounded by the 10-minute-15-second listener deadline and by
+  `max_inflight_dispatches`.
+- Long-polling transaction and contract wait helpers use a smaller derived
+  quota (at most eight and always below the global limit), reserving capacity
+  for bounded tools.
+- When API-token authentication is required, `notifications/cancelled` can stop
+  one exact live `tools/call` or `tools/call_batch` owned by the same validated
+  token principal. String and losslessly parsed signed/unsigned integer IDs are
+  type-tagged so numerically similar representations cannot alias. Fractional
+  or out-of-range numeric IDs still receive normal JSON-RPC responses but are
+  deliberately not remotely cancellable because JSON parsing cannot preserve
+  their exact wire identity.
+- Anonymous MCP calls remain usable but are not remotely cancellable: source IP
+  is intentionally not treated as cancellation authentication.
 - Unknown method is `method_not_found`.
-- Missing/non-object `params` is treated as `{}`.
+- Missing `params` is treated as `{}` where the method permits it; non-object
+  `params` and non-object `tools/call.arguments` are rejected as
+  `invalid_params`.
 
 ### HTTP Status Behavior
+
 - `200 OK`: JSON-RPC responses (including JSON-RPC-level errors).
-- `202 Accepted`: accepted MCP notifications such as `notifications/initialized` (no response body).
-- `400 Bad Request`: invalid JSON payload.
+- `202 Accepted`: accepted MCP notifications and client response messages (no
+  response body).
+- `204 No Content`: the original authenticated request was cancelled before it
+  produced a JSON-RPC response. Cancellation does not roll back a transaction
+  already submitted to the ledger pipeline.
+- `400 Bad Request`: invalid JSON, an outer JSON-RPC array, or an unsupported or
+  ambiguous protocol-version header.
 - `408 Request Timeout`: request body did not complete within the collection deadline.
-- `403 Forbidden`: API-token middleware rejected request before JSON-RPC handling.
+- `403 Forbidden`: API-token middleware rejected the request, or a supplied
+  `Origin` did not exactly match the allowlist.
 - `413 Payload Too Large`: request exceeds `max_request_bytes`.
 - `429 Too Many Requests`: MCP rate-limited.
-- `404 Not Found`: MCP disabled (`torii.mcp.enabled = false`).
-- `405 Method Not Allowed`: method other than GET/POST on `/v1/mcp`.
+- `405 Method Not Allowed`: any HTTP method other than POST, including GET.
+- `503 Service Unavailable`: MCP disabled (`torii.mcp.enabled = false`).
 
 ## Supported JSON-RPC Methods
+
 - `initialize`
 - `notifications/initialized` (accepted as a notification; returns `202 Accepted` with an empty body)
+- `notifications/cancelled` (best-effort exact authenticated cancellation; returns `202 Accepted`)
 - `ping`
 - `tools/list`
 - `tools/call`
-- `tools/call_batch`
+- `tools/call_batch` (advertised Iroha extension)
 
 ## Method Reference
 
 ### `initialize`
-Returns MCP protocol metadata and capabilities for visible tools.
+
+Requires `params.protocolVersion`, `params.capabilities`, and
+`params.clientInfo`. It returns MCP protocol metadata, server instructions, and
+capabilities for visible tools. Use the returned `protocolVersion` as the exact
+`MCP-Protocol-Version` header on subsequent POST requests.
 
 Result shape:
+
 - `protocolVersion` (currently `2025-06-18`)
-- `serverInfo` (`name`, `version`)
-- `capabilities.tools` (`count`, `listChanged`, `toolsetVersion`)
+- `serverInfo` (`name`, the real Torii crate `version`)
+- `capabilities.tools` (`listChanged`)
+- `capabilities.experimental.iroha.tools` (`count`, `toolsetVersion`, and
+  `callBatch.maxDispatches`)
+- `instructions` (server-wide safety and discovery guidance)
 
 ### `notifications/initialized`
-Marks the client ready for normal MCP operations after a successful `initialize`
-response.
+Carries the standard client-ready lifecycle signal after a successful
+`initialize` response.
+
+Torii's MCP HTTP transport is stateless and does not mint or retain an MCP
+session identifier. The notification therefore does not unlock server-side
+session state: negotiation is enforced per request. `initialize` may omit the
+protocol header, while every other POST must carry the exact supported
+`MCP-Protocol-Version`. Clients should still follow the standard initialize,
+initialized-notification, then tool-discovery sequence.
 
 HTTP behavior:
+
 - `202 Accepted`
 - empty response body
 
@@ -167,49 +239,81 @@ Torii accepts the notification when:
 - `id` is omitted
 - `jsonrpc == "2.0"`
 
+### `notifications/cancelled`
+
+Accepts the standard best-effort cancellation shape with
+`params.requestId` and an optional string `params.reason`. Cancellation is
+enabled only for requests admitted with one exact configured API token and is
+bound to the token fingerprint plus an exact string or losslessly parsed
+signed/unsigned integer JSON-RPC ID. Fractional and out-of-range numeric IDs are
+accepted for ordinary requests but are not entered in the cancellation
+registry.
+Unknown, completed, malformed, anonymous, and cross-principal cancellations
+are deliberately indistinguishable `202 Accepted` responses. A simultaneous
+duplicate live ID for the same authenticated principal is rejected as
+`request_id_in_use`; the ID becomes reusable after completion or cancellation.
+
 ### `ping`
 Returns an empty result object so MCP clients can use the standard lifecycle
 ping before or after initialization.
 
 ### `tools/list`
+
 Returns paginated tool descriptors.
 
 Params:
+
 - `cursor` (optional numeric-string offset)
 - `toolset_version` or `toolsetVersion` (optional client version hash)
 
 Result:
-- `tools`: array of descriptors (`name`, `description`, `inputSchema`, `outputSchema`)
-- `nextCursor`: string or `null`
-- `listChanged`: `true` when client toolset hash differs
-- `toolsetVersion`: current server toolset hash
+
+- `tools`: array of descriptors (`name`, `description`, `inputSchema`,
+  `outputSchema`, `annotations`)
+- `nextCursor`: string when another page exists; omitted on the final page
+- `_meta.iroha.listChanged`: `true` when the client toolset hash differs
+- `_meta.iroha.toolsetVersion`: current server toolset hash
 
 Notes:
-- Non-numeric `cursor` falls back to `0`.
+
+- A non-string, non-numeric, or out-of-range `cursor` is rejected as
+  `invalid_cursor`.
 - Effective page size is `max(1, torii.mcp.max_tools_per_list)`.
-- `inputSchema` is sanitized before publication so OpenAI-compatible MCP clients
-  always see a top-level object schema and never a top-level
-  `anyOf`/`oneOf`/`allOf`/`enum`/`not` keyword.
+- `inputSchema` is sanitized before publication so clients always see a
+  top-level object schema. Security-relevant `anyOf`, `oneOf`, `allOf`, and
+  `not` constraints plus `if`/`then`/`else` branches are preserved and enforced
+  before dispatch. OpenAPI references are recursively inlined; registry
+  construction fails closed if an unresolved `$ref` remains.
+- `annotations.readOnlyHint`, `destructiveHint`, and `idempotentHint` describe
+  the registered tool effect. Clients must still treat annotations as hints and
+  obtain explicit approval for mutations.
 
 ### `tools/call`
+
 Executes one tool.
 
 Params:
+
 - `name` (required string)
 - `arguments` (optional object)
 
 ### `tools/call_batch`
-Executes multiple tool calls in one request.
+
+Executes multiple tool calls inside one JSON-RPC request. This is an Iroha
+extension advertised by `initialize`; it is not JSON-RPC array batching.
 
 Params:
+
 - `calls` (required array of `{ "name": string, "arguments": object? }`)
 
 Result:
+
 - `results`: array where each entry has either `result` or `error`.
 
 Batch execution is best-effort per item. One failing call does not fail sibling calls.
-The `calls` array is also subject to the shared 64-dispatch ceiling. If retained
-batch results or the final response exceed `max_request_bytes`, Torii stops
+The `calls` array is subject to the 64-dispatch ceiling, each item consumes one
+rate-limit token, and each active item must acquire an in-flight dispatch slot.
+If retained batch results or the final response exceed `max_request_bytes`, Torii stops
 retaining further results and returns the typed `response_too_large` JSON-RPC
 error instead of allocating an oversized response.
 
@@ -220,19 +324,38 @@ exact method/path pair in its MCP projection for the compiled feature set:
 - format: `torii.<method>_<path...>`
 - example: `torii.get_health`
 
-Additional purpose-built tools under `connect.*` and `iroha.*` form a separate,
-code-defined allowlist. A purpose-built alias for a catalogued route is retained
+Additional purpose-built tools under `iroha.*` form a separate, code-defined
+allowlist. A purpose-built alias for a catalogued route is retained
 only while that route's compiled feature gate is enabled; an uncatalogued target
 can be reachable only through an alias that is itself explicitly registered.
-The diagnostic and ledger/proof mirrors (`iroha.status`, `iroha.time.now`,
-`iroha.time.status`, `iroha.ledger.headers`, `iroha.ledger.state_root`,
-`iroha.ledger.state_proof`, `iroha.ledger.block_proof`, `iroha.proofs.get`, and
-`iroha.proofs.retention`) additionally require the exact route-catalog MCP
-projection. OpenAPI presence alone never publishes a tool. Generated tool
-candidates, projected mirrors, feature-disabled aliases, streaming operations,
-and other non-projected operations fail closed. `tools/call` accepts only exact
-names returned by `tools/list`; Torii does not resolve `operationId` or retired
-convenience-name aliases.
+OpenAPI presence alone never publishes a tool. Generated tool candidates,
+feature-disabled aliases, streaming operations, and other non-projected
+operations fail closed. `tools/call` accepts only exact names returned by
+`tools/list`; Torii does not resolve `operationId`, bare `connect.*` aliases, or
+other retired convenience names.
+
+The canonical Connect tools are `iroha.connect.ws.ticket`,
+`iroha.connect.session.create`, `iroha.connect.session.delete`, and
+`iroha.connect.session.status`. `iroha.connect.ws.ticket` requires an explicit
+trusted `node_url`; Torii never constructs a credential-bearing destination
+from `Host` or forwarding headers. The former composite
+`iroha.connect.session.create_and_ticket` is retired: create the session first,
+then call the ticket helper with the selected role token and trusted URL.
+Role tokens must be the canonical unpadded base64url encoding of exactly 32
+bytes; invalid or header-unsafe token text is rejected.
+
+The curated `iroha.accounts.faucet.prepare` and
+`iroha.accounts.faucet.submit` tools expose the exact two-step faucet protocol.
+Prepared faucet transactions carry a signature-bound marker version and
+semantic claim hash. Core derives an authority-scoped key and consumes it in
+the same state overlay as successful transaction execution; a failed transfer
+does not burn the claim, while distinct bindings, peers, generic transaction
+ingress, and restarts cannot make the same faucet authority consume it twice.
+Both tools are classified as writes. Submit only the unmodified envelope
+returned by prepare and keep all runtime authentication material outside tool
+arguments. The marker is mandatory for every prepared faucet transaction;
+Core rejects prepared-faucet metadata without the complete marker instead of
+admitting an untracked claim.
 
 For public Codex-facing deployments, prefer publishing only `iroha.*` tools.
 Those names are curated for live account, asset, contract, governance, and
@@ -250,6 +373,7 @@ Use `initialize` + `tools/list` for runtime discovery.
 
 ## Tool Arguments
 For OpenAPI-derived tools, pass structured arguments under:
+
 - `path`: path-template variables
 - `query`: query parameters
 - `body`: request payload (JSON or textual)
@@ -257,10 +381,12 @@ For OpenAPI-derived tools, pass structured arguments under:
 - `content_type`: request content type override
 - `headers`: extra headers
 - `accept`: Accept header override
-- `project`: optional body-key projection of structured response
+- `project`: optional body-key projection of structured response, limited to 64
+  unique keys of at most 128 characters each
 
 Body/headers behavior:
-- `body_base64` takes precedence over `body`.
+
+- `body` and `body_base64` are mutually exclusive; supplying both is rejected.
 - When `body` is used and `content_type` is omitted, Torii sends `application/json`.
 - When `body_base64` is used and `content_type` is omitted, Torii defaults to Norito MIME.
 - `arguments.headers` entries for `content-length`, `host`, and `connection` are ignored.
@@ -268,11 +394,9 @@ Body/headers behavior:
 Many purpose-built `iroha.*` tools also accept flat shortcut keys (for example `account_id`, `hash`, `definition_id`, `limit`, `offset`).
 Rely on each tool’s `inputSchema` for authoritative accepted fields.
 
-The live-network write-oriented aliases intentionally support the existing
-Torii JSON request bodies used by deployed app endpoints, so Codex can work
-with runtime-supplied `authority` / `private_key` JSON fields on supported
-routes such as contract, governance, onboarding, faucet, subscription, and
-submit-and-wait flows.
+Do not place a raw private key in `arguments`, `body`, or forwarded headers.
+Use unsigned instruction builders plus local signing, or submit an already
+signed transaction envelope with `iroha.transactions.submit_and_wait`.
 
 ### Musubi Package Registry Tools
 
@@ -365,30 +489,48 @@ Route-dispatched HTTP status mapping:
 Protocol/validation errors are returned in top-level `error` with stable `error.data.error_code`.
 
 Primary top-level JSON-RPC codes:
+
 - `-32700` -> `parse_error`
 - `-32600` -> `invalid_request`
 - `-32601` -> `method_not_found`
 - `-32602` -> `invalid_params`
+- `-32004` -> `dispatch_capacity_exhausted`
 - `-32029` -> `rate_limited`
 
 Additional MCP-specific `error_code` values may appear in `error.data`:
+
 - `tool_not_found`
 - `tool_not_allowed`
+- `long_poll_capacity_exhausted`
+- `request_id_in_use`
+- `cancellation_registry_capacity_exhausted`
+- `origin_forbidden`
+- `request_body_read_failed`
+- `request_payload_too_large`
+- `request_timeout`
+- `tool_schema_validation_failed`
+- `unsupported_protocol_version`
 
 Notes:
-- Tool validation or execution failures that do not produce an inner HTTP
-  response are returned as MCP tool results (`result.isError = true`) with the
-  canonical error envelope
+- Arguments that violate the tool's advertised input schema are rejected before
+  dispatch as top-level JSON-RPC `-32602` errors with
+  `error.data.error_code = "tool_schema_validation_failed"`.
+- Schema-valid local builder or execution failures that do not produce an inner
+  HTTP response are returned as MCP tool results (`result.isError = true`) with the canonical error envelope
   `result.structuredContent.code = "tool_execution_error"`. The envelope also
   contains `message` and may contain `details`. This is distinct from the
   status-derived `error_code` on route-dispatched HTTP failures described above.
 - `-32603/internal_error` is used for malformed internal batch-item handling fallbacks.
 
 ## Minimal Usage Flow
-1. `GET /v1/mcp` (optional) or JSON-RPC `initialize`.
-2. `tools/list` and cache `toolsetVersion`.
-3. Call tools with `tools/call`.
-4. Re-run `tools/list` when `listChanged` becomes `true`.
+
+1. POST a valid JSON-RPC `initialize` request with the required client fields.
+2. Send `notifications/initialized` and include the negotiated
+   `MCP-Protocol-Version` header on subsequent POSTs.
+3. Call `tools/list` and cache `_meta.iroha.toolsetVersion`.
+4. Call tools with `tools/call`, or use the advertised `tools/call_batch`
+   extension when its per-dispatch charging is acceptable.
+5. Re-run `tools/list` when `_meta.iroha.listChanged` becomes `true`.
 
 ## Codex Plugin Workflow
 
@@ -402,22 +544,32 @@ target Torii host already exposes native MCP at `/v1/mcp`.
   Codex Skills surface. Install it from a GitHub checkout of this repo with
   your local skill installer and restart Codex so it appears in the Skills tab.
 
-The plugin does not parameterize `.mcp.json` and does not persist secrets. For
-custom networks, keep endpoint-specific auth and any signing material in the
-user's local Codex MCP configuration or pass them as explicit runtime inputs to
-supported `iroha.*` tools.
+The plugin does not parameterize `.mcp.json` and does not persist secrets. Keep
+endpoint-specific bearer authentication in the user's local Codex MCP
+configuration. Keep signing keys outside MCP and submit locally signed
+transactions.
 
 ## Examples
 
 ### Initialize
+
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
   "method": "initialize",
-  "params": {}
+  "params": {
+    "protocolVersion": "2025-06-18",
+    "capabilities": {},
+    "clientInfo": {
+      "name": "example-client",
+      "version": "1.0.0"
+    }
+  }
 }
 ```
+
+After initialization, send `MCP-Protocol-Version: 2025-06-18` on each POST.
 
 ### List Tools (paged)
 ```json
@@ -470,7 +622,7 @@ supported `iroha.*` tools.
   "params": {
     "calls": [
       { "name": "iroha.health" },
-      { "name": "iroha.status" }
+      { "name": "iroha.parameters.get" }
     ]
   }
 }

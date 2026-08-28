@@ -20,6 +20,7 @@ use iroha::data_model::{
 };
 use iroha_crypto::Hash;
 use std::{
+    collections::BTreeSet,
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
@@ -807,8 +808,15 @@ fn validate_relay_manifest_limits(manifest: &KaigiRelayManifest) -> Result<()> {
             "relay manifest must not include more than {KAIGI_RELAY_MANIFEST_MAX_HOPS_V1} hops"
         );
     }
+    let mut seen_relays = BTreeSet::new();
     for hop in &manifest.hops {
         validate_relay_hpke_public_key(&hop.hpke_public_key)?;
+        if hop.weight == 0 {
+            eyre::bail!("relay weights must be non-zero");
+        }
+        if !seen_relays.insert(hop.relay_id.clone()) {
+            eyre::bail!("relay manifest must not contain duplicate relays");
+        }
     }
     Ok(())
 }
@@ -879,6 +887,9 @@ fn validate_usage_privacy_artifacts(
 }
 fn parse_hash(hex: &str) -> Result<Hash> {
     let trimmed = hex.strip_prefix("0x").unwrap_or(hex);
+    if trimmed.starts_with("0x") {
+        eyre::bail!("hash literal accepts at most one `0x` prefix");
+    }
     Hash::from_str(trimmed).wrap_err("invalid hash literal")
 }
 fn decode_hex_vec(hex: &str) -> Result<Vec<u8>> {
@@ -1286,6 +1297,14 @@ mod tests {
             expiry_ms: 1,
         };
         assert!(validate_relay_manifest_limits(&exact_minimum).is_ok());
+
+        let mut zero_weight = exact_minimum.clone();
+        zero_weight.hops[0].weight = 0;
+        assert!(validate_relay_manifest_limits(&zero_weight).is_err());
+
+        let mut duplicate_relay = exact_minimum.clone();
+        duplicate_relay.hops[1].relay_id = duplicate_relay.hops[0].relay_id.clone();
+        assert!(validate_relay_manifest_limits(&duplicate_relay).is_err());
 
         let too_few = KaigiRelayManifest {
             hops: (0..KAIGI_RELAY_MANIFEST_MIN_HOPS_V1 - 1)

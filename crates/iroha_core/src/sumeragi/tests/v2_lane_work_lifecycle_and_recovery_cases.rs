@@ -633,7 +633,119 @@ fn decision_cleanup_fairly_reconstructs_completed_commit_qc_fanout() {
 
 #[test]
 fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    let (adapter, keys) = observer_fixture_with_durable_parent(wire::ConsensusMode::Npos);
+    let replacement_key = KeyPair::try_from_seed(vec![0xF4; 32], Algorithm::BlsNormal)
+        .expect("deterministic successor-only validator");
+    let replacement = PeerId::new(replacement_key.public_key().clone());
+    let local_peer = adapter.local_peer.clone();
+    let successor_height = adapter
+        .context
+        .height
+        .checked_add(1)
+        .expect("successor height");
+    let epoch_length =
+        NonZeroU64::new(adapter.context.height).expect("fixture boundary height is non-zero");
+    let mut npos_parameters = SumeragiNposParameters::default();
+    npos_parameters.epoch_length_blocks = epoch_length;
+    npos_parameters
+        .validate()
+        .expect("short fixture NPoS epoch remains valid");
+    let replacement_pop = iroha_crypto::bls_normal_pop_prove(replacement_key.private_key())
+        .expect("successor validator proof of possession");
+    let replacement_key_id = ConsensusKeyId::new(
+        ConsensusKeyRole::Validator,
+        "autonomous-recovery-successor-validator",
+    );
+    {
+        let mut world = adapter.state.world.block();
+        world
+            .parameters
+            .set_parameter(Parameter::Custom(npos_parameters.into_custom_parameter()));
+        let replacement_record = ConsensusKeyRecord {
+            id: replacement_key_id.clone(),
+            public_key: replacement_key.public_key().clone(),
+            pop: Some(replacement_pop.clone()),
+            activation_height: successor_height,
+            expiry_height: None,
+            hsm: None,
+            replaces: None,
+            status: ConsensusKeyStatus::Pending,
+        };
+        world
+            .consensus_keys
+            .insert(replacement_key_id.clone(), replacement_record);
+        world.consensus_keys_by_pk.insert(
+            replacement_key.public_key().to_string(),
+            vec![replacement_key_id],
+        );
+        let _ = world.peers.get_mut().push(replacement.clone());
+        world.commit();
+    }
+    let mut successor_roster = adapter.context.roster.clone();
+    let removed_index = successor_roster
+        .iter()
+        .position(|entry| entry.validator == local_peer)
+        .expect("fixture local validator belongs to the predecessor roster");
+    assert!(
+        successor_roster
+            .iter()
+            .all(|entry| entry.validator != replacement),
+        "successor-only validator must be distinct from the predecessor roster"
+    );
+    successor_roster[removed_index].validator = replacement.clone();
+    successor_roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+    let successor_pops = successor_roster
+        .iter()
+        .map(|entry| {
+            if entry.validator == replacement {
+                return replacement_pop.clone();
+            }
+            let key = keys
+                .iter()
+                .find(|key| key.public_key() == entry.validator.public_key())
+                .expect("unchanged successor validator has a fixture key");
+            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                .expect("unchanged successor validator proof of possession")
+        })
+        .collect::<Vec<_>>();
+    let current_epoch = {
+        let world = adapter.state.world_view();
+        crate::sumeragi::epoch_for_height_from_world(
+            &world,
+            adapter.context.height,
+            adapter.context.mode,
+        )
+        .expect("fixture has a valid committed epoch schedule")
+    };
+    let mut boundary_context = adapter.context.clone();
+    boundary_context.epoch = current_epoch;
+    boundary_context.epoch_end_height = boundary_context.height;
+    boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+        epoch: current_epoch.checked_add(1).expect("successor epoch"),
+        epoch_end_height: boundary_context
+            .height
+            .checked_add(epoch_length.get())
+            .expect("successor epoch end height"),
+        mode: boundary_context.mode,
+        quorum: wire::DualQuorum::from_roster(&successor_roster)
+            .expect("successor equal-vote quorum"),
+        roster: successor_roster,
+        validator_set_pops: successor_pops,
+        leader_seed: [0xF5; 32],
+    });
+    boundary_context.nexus_amx_context_hash =
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+    boundary_context.execution_policy_hash =
+        super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref())
+            .expect("derive boundary fixture execution policy");
+    boundary_context
+        .validate()
+        .expect("fixture predecessor context authenticates the epoch transition");
+    let boundary_restart = LaneAdapterRestartParts::capture(&adapter);
+    drop(adapter);
+    let mut adapter = boundary_restart
+        .reopen_isolated(boundary_context, true)
+        .expect("reopen the adapter under the authenticated boundary context");
     let (source_block, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
     proposal.payload_block_hint = None;
     let entrypoint = source_block
@@ -999,6 +1111,23 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
                     .cloned()
             })
             .expect("durable view-one certificate");
+    let mut block = block;
+    block
+        .set_transaction_results(Vec::new(), &[], Vec::new())
+        .expect("attach the carrier's empty deterministic execution result");
+    let executed_signature =
+        SignatureOf::try_from_hash(keys[leader_index].private_key(), block.header().hash())
+            .expect("sign the executed autonomous carrier");
+    block
+        .replace_signatures(
+            [BlockSignature::new(
+                u64::try_from(leader_index).expect("global leader index fits u64"),
+                executed_signature,
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .expect("replace the resultless proposal signature");
     let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
     adapter
         .kura
@@ -1051,44 +1180,24 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
         .expect("persist exact historical autonomous recovery record"),
         HistoricalAutonomousLaneRecoveryInstallOutcome::Installed,
     );
-    let mut context = successor_context_for_parent(&adapter, &block);
-    context.epoch = {
+    let context = crate::sumeragi::v2_context::build_successor_height_context(
+        &finality,
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref()),
+        None,
+    )
+    .expect("derive successor exclusively from the authenticated boundary snapshot");
+    let committed_successor_epoch = {
         let world = adapter.state.world_view();
         crate::sumeragi::epoch_for_height_from_world(&world, context.height, context.mode)
             .expect("fixture has a valid committed epoch schedule")
     };
-    context.epoch_end_height = context.height.saturating_add(1);
+    assert_eq!(context.epoch, committed_successor_epoch);
     assert_eq!(
         context.epoch,
         historical_epoch.saturating_add(1),
         "fixture must cross an authenticated epoch boundary"
     );
     let restart = LaneAdapterRestartParts::capture(&adapter);
-    let local_peer = restart.local_peer.clone();
-    let replacement = PeerId::new(
-        KeyPair::try_from_seed(vec![0xF4; 32], Algorithm::BlsNormal)
-            .expect("deterministic successor-only validator")
-            .public_key()
-            .clone(),
-    );
-    let removed_index = context
-        .roster
-        .iter()
-        .position(|entry| entry.validator == local_peer)
-        .expect("fixture local validator belongs to the predecessor roster");
-    assert!(
-        context
-            .roster
-            .iter()
-            .all(|entry| entry.validator != replacement),
-        "successor-only validator must be distinct from the predecessor roster"
-    );
-    context.roster[removed_index].validator = replacement;
-    context
-        .roster
-        .sort_by(|left, right| left.validator.cmp(&right.validator));
-    context.quorum =
-        wire::DualQuorum::from_roster(&context.roster).expect("successor equal-vote quorum");
     assert!(
         context
             .roster

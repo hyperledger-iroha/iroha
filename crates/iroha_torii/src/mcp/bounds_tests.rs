@@ -1,21 +1,26 @@
 #[test]
-fn outer_batch_charges_nested_tool_calls_against_one_dispatch_limit() {
+fn tool_batch_rate_cost_matches_nested_dispatch_count() {
     let calls = (0..MAX_JSONRPC_BATCH_DISPATCHES)
         .map(|index| norito::json!({ "name": "iroha.health", "arguments": { "index": index } }))
         .collect::<Vec<_>>();
-    let at_limit = vec![norito::json!({
+    let at_limit = norito::json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call_batch",
         "params": { "calls": (calls.clone()) }
-    })];
-    assert!(!jsonrpc_batch_exceeds_dispatch_limit(&at_limit));
-
-    let over_limit = vec![
-        at_limit[0].clone(),
-        norito::json!({ "jsonrpc": "2.0", "id": 2, "method": "ping" }),
-    ];
-    assert!(jsonrpc_batch_exceeds_dispatch_limit(&over_limit));
+    });
+    assert_eq!(
+        jsonrpc_dispatch_cost(&at_limit),
+        MAX_JSONRPC_BATCH_DISPATCHES
+    );
+    assert_eq!(
+        jsonrpc_dispatch_cost(&norito::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "ping"
+        })),
+        1
+    );
 }
 
 #[test]
@@ -53,7 +58,9 @@ async fn bounded_jsonrpc_response_falls_back_to_typed_limit_error() {
         .await
         .expect("fixed fallback body")
         .to_bytes();
+    assert!(bytes.len() <= 128, "fallback exceeded configured cap");
     let payload: Value = json::from_slice(&bytes).expect("typed JSON-RPC fallback");
+    assert_eq!(payload.get("id").and_then(Value::as_u64), Some(7));
     assert_eq!(
         payload
             .get("error")

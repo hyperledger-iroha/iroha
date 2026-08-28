@@ -181,7 +181,7 @@ impl PreparedContractCache {
             let cached = store.nested_runtimes.get_mut(&key).and_then(|pool| {
                 pool.available
                     .pop()
-                    .map(|vm| (Arc::clone(&pool.baseline), vm))
+                    .map(|runtime| (runtime.baseline, runtime.vm))
             });
             if cached.is_some() {
                 store.stats.runtime_hits = store.stats.runtime_hits.saturating_add(1);
@@ -208,23 +208,16 @@ impl PreparedContractCache {
         let mut store = self.inner.lock();
         store.stats.runtime_prepared_loads = store.stats.runtime_prepared_loads.saturating_add(1);
         let cacheable = store.capacity != 0 && store.entries.contains_key(&key.code_hash);
-        let baseline = if let Some(pool) = store.nested_runtimes.get(&key) {
-            Arc::clone(&pool.baseline)
-        } else {
-            store.stats.runtime_template_builds =
-                store.stats.runtime_template_builds.saturating_add(1);
-            let baseline = Arc::new(vm.runtime_template());
-            if cacheable {
-                store.insert_nested_runtime(
-                    key,
-                    SharedRuntimePool {
-                        baseline: Arc::clone(&baseline),
-                        available: Vec::new(),
-                    },
-                );
-            }
-            baseline
-        };
+        store.stats.runtime_template_builds = store.stats.runtime_template_builds.saturating_add(1);
+        let baseline = Arc::new(vm.runtime_template());
+        if cacheable && !store.nested_runtimes.contains_key(&key) {
+            store.insert_nested_runtime(
+                key,
+                SharedRuntimePool {
+                    available: Vec::new(),
+                },
+            );
+        }
         drop(store);
         Ok(PreparedRuntimeLease {
             cache: self.clone(),
@@ -255,13 +248,12 @@ impl PreparedContractCache {
             .nested_runtimes
             .entry(key)
             .or_insert_with(|| SharedRuntimePool {
-                baseline,
                 available: Vec::new(),
             });
         // One idle runtime per key is sufficient. Concurrent/re-entrant calls
         // may create extra workers, which are discarded as they return.
         if pool.available.is_empty() {
-            pool.available.push(vm);
+            pool.available.push(PooledRuntime { baseline, vm });
         }
         store.touch_nested_runtime(key);
         store.evict_nested_runtimes();
@@ -511,18 +503,20 @@ impl ProgramSummary {
     }
 }
 struct RuntimePool {
-    baseline: Arc<ivm::RuntimeTemplate>,
-    available: Vec<ivm::IVM>,
+    available: Vec<PooledRuntime>,
 }
 struct SharedRuntimePool {
+    available: Vec<PooledRuntime>,
+}
+struct PooledRuntime {
     baseline: Arc<ivm::RuntimeTemplate>,
-    available: Vec<ivm::IVM>,
+    vm: ivm::IVM,
 }
 impl std::fmt::Debug for SharedRuntimePool {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("SharedRuntimePool")
-            .field("baseline", &"<runtime-template>")
+            .field("baseline_policy", &"<paired-per-runtime>")
             .field("available_runtimes", &self.available.len())
             .finish()
     }
@@ -975,7 +969,7 @@ impl IvmCache {
         let cached = self.runtime_templates.get_mut(&key).and_then(|pool| {
             pool.available
                 .pop()
-                .map(|vm| (Arc::clone(&pool.baseline), vm))
+                .map(|runtime| (runtime.baseline, runtime.vm))
         });
         let (baseline, vm) = if let Some((baseline, mut vm)) = cached {
             self.stats.runtime_hits = self.stats.runtime_hits.saturating_add(1);
@@ -990,17 +984,12 @@ impl IvmCache {
             vm.load_program(summary.program())?;
             self.stats.prepared_loads = self.stats.prepared_loads.saturating_add(1);
             vm.set_gas_limit(gas_limit);
-            let baseline = if let Some(pool) = self.runtime_templates.get(&key) {
-                Arc::clone(&pool.baseline)
-            } else {
-                self.stats.template_builds = self.stats.template_builds.saturating_add(1);
-                Arc::new(vm.runtime_template())
-            };
+            self.stats.template_builds = self.stats.template_builds.saturating_add(1);
+            let baseline = Arc::new(vm.runtime_template());
             if !self.runtime_templates.contains_key(&key) {
                 self.insert_runtime_pool(
                     key,
                     RuntimePool {
-                        baseline: Arc::clone(&baseline),
                         available: Vec::new(),
                     },
                 );
@@ -1025,7 +1014,7 @@ impl IvmCache {
         let cached = self.runtime_templates.get_mut(&key).and_then(|pool| {
             pool.available
                 .pop()
-                .map(|vm| (Arc::clone(&pool.baseline), vm))
+                .map(|runtime| (runtime.baseline, runtime.vm))
         });
         if let Some((baseline, mut vm)) = cached {
             self.stats.runtime_hits = self.stats.runtime_hits.saturating_add(1);
@@ -1042,17 +1031,12 @@ impl IvmCache {
         if gas_limit > 0 {
             vm.set_gas_limit(gas_limit);
         }
-        let baseline = if let Some(pool) = self.runtime_templates.get(&key) {
-            Arc::clone(&pool.baseline)
-        } else {
-            self.stats.template_builds = self.stats.template_builds.saturating_add(1);
-            Arc::new(vm.runtime_template())
-        };
+        self.stats.template_builds = self.stats.template_builds.saturating_add(1);
+        let baseline = Arc::new(vm.runtime_template());
         if !self.runtime_templates.contains_key(&key) {
             self.insert_runtime_pool(
                 key,
                 RuntimePool {
-                    baseline: Arc::clone(&baseline),
                     available: Vec::new(),
                 },
             );
@@ -1110,11 +1094,10 @@ impl IvmCache {
             .runtime_templates
             .entry(key)
             .or_insert_with(|| RuntimePool {
-                baseline,
                 available: Vec::new(),
             });
         if pool.available.is_empty() {
-            pool.available.push(vm);
+            pool.available.push(PooledRuntime { baseline, vm });
         }
         self.touch_runtime(key);
         self.evict_runtimes_if_needed();
@@ -1257,6 +1240,55 @@ mod tests {
         assert_eq!(runtime.memory.heap_max_limit(), GOVERNED_HEAP_LIMIT);
         drop(runtime);
         assert_eq!(cache.stats().runtime_hits, 1);
+    }
+    #[test]
+    fn generic_runtime_replacement_keeps_its_own_reset_baseline() {
+        const GAS_LIMIT: u64 = 10_000;
+        const GOVERNED_HEAP_LIMIT: u64 = 64;
+        let program = minimal_generic_program();
+        let mut cache = IvmCache::with_capacity(2);
+        let summary = cache
+            .summarize_generic_program(&program)
+            .expect("generic summary");
+        {
+            let mut poisoned = cache
+                .checkout_generic_runtime(&summary, GAS_LIMIT, GOVERNED_HEAP_LIMIT)
+                .expect("initial generic runtime");
+            poisoned.memory = ivm::Memory::new_with_stack_limit(0, ivm::Memory::STACK_ALIGNMENT);
+        }
+        let replacement_allocation = {
+            let mut replacement = cache
+                .checkout_generic_runtime(&summary, GAS_LIMIT, GOVERNED_HEAP_LIMIT)
+                .expect("replacement generic runtime");
+            let allocation = replacement
+                .memory
+                .load_region(0, 1)
+                .expect("replacement code memory")
+                .as_ptr();
+            replacement
+                .memory
+                .preload_input(0, &[0xA5])
+                .expect("dirty replacement input");
+            allocation
+        };
+        let reused = cache
+            .checkout_generic_runtime(&summary, GAS_LIMIT, GOVERNED_HEAP_LIMIT)
+            .expect("replacement must return to the pool");
+        assert_eq!(
+            reused
+                .memory
+                .load_region(0, 1)
+                .expect("reused code memory")
+                .as_ptr(),
+            replacement_allocation
+        );
+        assert_eq!(
+            reused
+                .memory
+                .load_region(ivm::Memory::INPUT_START, 1)
+                .expect("reset replacement input"),
+            [0]
+        );
     }
     #[test]
     fn generic_summary_rejects_disallowed_syscalls_during_preparation() {
@@ -1415,16 +1447,44 @@ mod tests {
             after_mismatch.dirty_resets, 0,
             "a rejected reset must not count or pool the mismatched VM"
         );
-        {
-            let runtime = cache
+        let replacement_allocation = {
+            let mut runtime = cache
                 .checkout_runtime(&summary, &program, GAS_LIMIT, HEAP_LIMIT)
                 .expect("replacement runtime");
             assert_ne!(runtime.memory.stack_limit(), ivm::Memory::STACK_ALIGNMENT);
-        }
+            let allocation = runtime
+                .memory
+                .load_region(0, 1)
+                .expect("replacement code memory")
+                .as_ptr();
+            runtime
+                .memory
+                .preload_input(0, &[0xA5])
+                .expect("dirty replacement input");
+            allocation
+        };
         let after_replacement = cache.stats();
         assert_eq!(after_replacement.runtime_misses, 2);
         assert_eq!(after_replacement.runtime_hits, 0);
         assert_eq!(after_replacement.dirty_resets, 1);
+        let reused = cache
+            .checkout_runtime(&summary, &program, GAS_LIMIT, HEAP_LIMIT)
+            .expect("replacement must return to the pool");
+        assert_eq!(
+            reused
+                .memory
+                .load_region(0, 1)
+                .expect("reused code memory")
+                .as_ptr(),
+            replacement_allocation
+        );
+        assert_eq!(
+            reused
+                .memory
+                .load_region(ivm::Memory::INPUT_START, 1)
+                .expect("reset replacement input"),
+            [0]
+        );
     }
     #[test]
     fn runtime_pool_never_reuses_stale_heap_authority() {
@@ -1715,6 +1775,60 @@ mod tests {
             after_second.runtime_dirty_resets,
             after_first.runtime_dirty_resets + 1
         );
+    }
+    #[test]
+    fn overlapping_nested_runtimes_return_with_their_own_baselines() {
+        const GAS_LIMIT: u64 = 10_000;
+        const GOVERNED_HEAP_LIMIT: u64 = 96;
+        let program = minimal_program();
+        let code_hash = ivm::contract_code_hash(&program);
+        let cache = PreparedContractCache::with_capacity(2);
+        let prepared = cache
+            .get_or_prepare(code_hash, &program)
+            .expect("prepare nested contract");
+        let first = cache
+            .checkout_runtime(prepared.as_ref(), GAS_LIMIT, GOVERNED_HEAP_LIMIT)
+            .expect("first cold nested runtime");
+        let second_allocation = {
+            let mut second = cache
+                .checkout_runtime(prepared.as_ref(), GAS_LIMIT, GOVERNED_HEAP_LIMIT)
+                .expect("overlapping cold nested runtime");
+            let allocation = second
+                .memory
+                .load_region(0, 1)
+                .expect("second code memory")
+                .as_ptr();
+            second
+                .memory
+                .preload_input(0, &[0xA5])
+                .expect("dirty second input");
+            allocation
+        };
+        let third = cache
+            .checkout_runtime(prepared.as_ref(), GAS_LIMIT, GOVERNED_HEAP_LIMIT)
+            .expect("second runtime must be reusable while first remains leased");
+        assert_eq!(
+            third
+                .memory
+                .load_region(0, 1)
+                .expect("third code memory")
+                .as_ptr(),
+            second_allocation
+        );
+        assert_eq!(
+            third
+                .memory
+                .load_region(ivm::Memory::INPUT_START, 1)
+                .expect("third input memory"),
+            [0]
+        );
+        let stats = cache.stats();
+        assert_eq!(stats.runtime_misses, 2);
+        assert_eq!(stats.runtime_hits, 1);
+        assert_eq!(stats.runtime_prepared_loads, 2);
+        assert_eq!(stats.runtime_template_builds, 2);
+        assert_eq!(stats.runtime_dirty_resets, 1);
+        drop((third, first));
     }
     #[test]
     fn program_summary_owned_lease_reuses_runtime_on_early_return() {

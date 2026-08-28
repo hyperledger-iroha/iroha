@@ -74,9 +74,18 @@ Use the built-in wait flow instead of shell polling:
 
 ```bash
 iroha tx status --hash <SIGNED_TX_HASH> --wait
-iroha contract call --contract-alias router::dex.universal --entrypoint swap --wait
+iroha contract call --contract-alias router::dex.universal --entrypoint swap \
+  --draft-intent-file trusted-swap-intent.json --wait
 iroha contract call --contract-alias router::dex.universal --entrypoint swap --simulate
 ```
+
+Every non-simulated contract call must provide `--draft-intent-file`. The
+secret-free JSON file is the caller-trusted exact contract invocation (resolved
+address, code hash, entrypoint, and canonical argument record) plus the exact
+final transaction metadata. Build it from the locally verified artifact/schema
+and an authenticated deployment binding; never copy either value from the Torii
+draft response. The CLI keeps this intent off wire and refuses to sign or return
+an unsigned payload unless every signature-bound field matches it.
 
 Run `iroha tools markdown-help` for the complete reference generated from the
 installed CLI.
@@ -501,6 +510,12 @@ source.
 `deploy`, `resume`, `call`, and `view` resolve contracts by manifest name and
 reuse the existing contract app/deploy/call machinery with typed payload
 validation from the compiled artifact when it is available.
+
+`dev call` also requires `--draft-intent-file`. A smoke entry whose operation is
+`call` must declare `draft_intent = "path/to/trusted-intent.json"`; the path is
+resolved relative to `iroha.contracts.toml`. This deliberate hard cut prevents
+an app route from substituting executable or metadata bytes that a wallet would
+otherwise sign.
 
 `doctor`, `call`, `view`, and `smoke` honor the selected profile's client
 config, signer, default gas, and fee asset settings. `doctor` probes the live

@@ -20,7 +20,7 @@ use iroha_crypto::{
 };
 use likely_stable::{likely, unlikely};
 use parking_lot::Mutex;
-use std::{collections::HashSet, convert::TryInto, num::NonZeroU64, time::Instant};
+use std::{collections::HashSet, convert::TryInto, num::NonZeroU64, sync::Arc, time::Instant};
 #[cfg(test)]
 std::thread_local! {
     static MEMORY_CLONE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -60,6 +60,8 @@ pub struct Memory {
     heap_alloc: u64,
     heap_limit: u64,
     heap_max_limit: u64,
+    /// Whether any heap byte may differ from the zeroed program-load baseline.
+    heap_contains_data: bool,
     code_length: u64,
     /// Append-only cursor for the OUTPUT region. Enforces append-only semantics.
     output_cursor: u64,
@@ -76,6 +78,19 @@ pub struct Memory {
     /// Unlike `dirty_chunks`, this set is not drained by Merkle commits. It
     /// lets warm VM reuse restore only pages the guest actually changed.
     modified_chunks: HashSet<usize>,
+    /// Transaction-owned leaves tracked independently from runtime-template lifecycle changes.
+    ///
+    /// Program loaders deliberately clear `modified_chunks` after installing a
+    /// new template. Block execution keeps this second set active so a loader
+    /// invoked from a host callback cannot hide earlier transaction writes.
+    block_modified_chunks: Option<HashSet<usize>>,
+    /// Number of times a program loader established a new runtime baseline.
+    template_generation: u64,
+    /// Opaque identity of the runtime baseline that owns this memory image.
+    ///
+    /// Ordinary independent clones receive a fresh identity. Runtime-template
+    /// snapshots and exact sequential-block checkpoints explicitly preserve it.
+    baseline_lineage: Arc<()>,
     /// Addresses read during execution when access tracking is enabled.
     read_log: Mutex<Vec<AccessRange>>,
     /// Log of writes performed during execution (byte-accurate).
@@ -291,11 +306,20 @@ impl Memory {
     }
     fn update_merkle(&mut self, start: usize, len: usize) {
         const CHUNK: usize = 32;
+        let end = start.saturating_add(len);
+        let heap_start = Memory::HEAP_START as usize;
+        let heap_end = heap_start + Memory::HEAP_MAX_SIZE as usize;
+        if start < heap_end && end > heap_start {
+            self.heap_contains_data = true;
+        }
         let first = start / CHUNK;
-        let last = (start + len).div_ceil(CHUNK);
+        let last = end.div_ceil(CHUNK);
         for i in first..last {
             self.dirty_chunks.insert(i);
             self.modified_chunks.insert(i);
+            if let Some(block_modified) = &mut self.block_modified_chunks {
+                block_modified.insert(i);
+            }
         }
         // Mark the tree as dirty so the root is recomputed lazily on the next
         // `commit()` or `root()` call.
@@ -319,6 +343,7 @@ impl Memory {
             heap_alloc: 0,
             heap_limit: Memory::HEAP_SIZE,
             heap_max_limit: Memory::HEAP_MAX_SIZE,
+            heap_contains_data: false,
             code_length: code_size,
             output_cursor: 0,
             root: HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32])),
@@ -326,6 +351,9 @@ impl Memory {
             dirty: false,
             dirty_chunks: HashSet::new(),
             modified_chunks: HashSet::new(),
+            block_modified_chunks: None,
+            template_generation: 0,
+            baseline_lineage: Arc::new(()),
             read_log: Mutex::new(Vec::new()),
             write_log: Mutex::new(Vec::new()),
         };
@@ -454,8 +482,20 @@ impl Memory {
         self.heap_limit = self.heap_limit.min(limit);
         Ok(())
     }
+    /// Clear all physical heap bytes before installing a different program.
+    pub(crate) fn clear_program_heap(&mut self) {
+        if !self.heap_contains_data && self.heap_alloc == 0 {
+            return;
+        }
+        let start = Memory::HEAP_START as usize;
+        let end = start + Memory::HEAP_MAX_SIZE as usize;
+        self.data[start..end].fill(0);
+        self.heap_alloc = 0;
+        self.update_merkle(start, end - start);
+        self.heap_contains_data = false;
+    }
     /// Update the code region length after loading a program.
-    pub fn set_code_length(&mut self, code_size: u64) {
+    fn set_code_length(&mut self, code_size: u64) {
         self.code_length = code_size;
     }
     /// Return the current code length in bytes.
@@ -470,9 +510,17 @@ impl Memory {
     /// Load program bytes into the beginning of memory (code region).
     pub fn load_code(&mut self, code: &[u8]) {
         let len = code.len();
+        let old_len = usize::try_from(self.code_length)
+            .expect("IVM code length always fits the host address space");
         self.data[0..len].copy_from_slice(code);
+        if len < old_len {
+            self.data[len..old_len].fill(0);
+        }
         self.set_code_length(len as u64);
-        self.update_merkle(0, len);
+        let modified_len = len.max(old_len);
+        if modified_len != 0 {
+            self.update_merkle(0, modified_len);
+        }
         if crate::dev_env::debug_wsv_enabled() {
             let dump = |start: usize, count: usize| {
                 if start >= len {
@@ -798,22 +846,81 @@ impl Memory {
     /// Mark the current bytes as an immutable runtime-template baseline.
     pub(crate) fn mark_template_clean(&mut self) {
         self.modified_chunks.clear();
+        self.template_generation = self
+            .template_generation
+            .checked_add(1)
+            .expect("IVM memory template generation exhausted");
+        self.baseline_lineage = Arc::new(());
         self.clear_tracking();
+    }
+    /// Start independent dirty tracking for a block worker's transaction sequence.
+    pub(crate) fn begin_block_transaction_tracking(&mut self) {
+        self.block_modified_chunks = Some(HashSet::new());
+    }
+    /// Return the current runtime-template lifecycle generation.
+    pub(crate) const fn template_generation(&self) -> u64 {
+        self.template_generation
+    }
+    /// Whether this memory image descends from the same captured runtime baseline.
+    pub(crate) fn shares_baseline_lineage(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.baseline_lineage, &other.baseline_lineage)
+    }
+
+    /// Clone a runtime-template baseline without allowing an independent image
+    /// to counterfeit that baseline later.
+    pub(crate) fn clone_for_runtime_template(&self) -> Self {
+        let mut template = self.clone();
+        template.baseline_lineage = Arc::clone(&self.baseline_lineage);
+        template
     }
     pub(crate) fn reset_from_template(
         &mut self,
         template: &Memory,
     ) -> Result<(), MemoryTemplateMismatch> {
-        let current_geometry = self.geometry();
-        let template_geometry = template.geometry();
-        if current_geometry != template_geometry {
-            return Err(MemoryTemplateMismatch {
-                current: current_geometry,
-                template: template_geometry,
-            });
+        self.reset_from_template_inner(template, false)
+    }
+    /// Validate that two images can use the same in-place reset geometry.
+    pub(crate) fn ensure_template_geometry(
+        &self,
+        template: &Memory,
+    ) -> Result<(), MemoryTemplateMismatch> {
+        let current = self.geometry();
+        let template = template.geometry();
+        if current == template {
+            Ok(())
+        } else {
+            Err(MemoryTemplateMismatch { current, template })
         }
+    }
+    /// Restore transaction-owned memory, including code installed since the block template.
+    pub(crate) fn reset_for_block_transaction(
+        &mut self,
+        template: &Memory,
+    ) -> Result<(), MemoryTemplateMismatch> {
+        self.reset_from_template_inner(template, true)
+    }
+    fn reset_from_template_inner(
+        &mut self,
+        template: &Memory,
+        restore_code: bool,
+    ) -> Result<(), MemoryTemplateMismatch> {
+        self.ensure_template_geometry(template)?;
         const CHUNK: usize = 32;
         let mut modified = self.modified_chunks.iter().copied().collect::<Vec<_>>();
+        if restore_code {
+            if let Some(block_modified) = &self.block_modified_chunks {
+                modified.extend(block_modified.iter().copied());
+            } else {
+                // A host can replace the public Memory value during a
+                // callback. Losing the active tracker must degrade to an exact
+                // reset rather than allowing untracked bytes to survive.
+                modified.extend(0..self.data.len().div_ceil(CHUNK));
+            }
+            let code_bytes = self.code_length.max(template.code_length);
+            let code_bytes = usize::try_from(code_bytes)
+                .expect("IVM code length always fits the host address space");
+            modified.extend(0..code_bytes.div_ceil(CHUNK));
+        }
         modified.sort_unstable();
         modified.dedup();
         for index in &modified {
@@ -828,12 +935,16 @@ impl Memory {
         self.heap_alloc = template.heap_alloc;
         self.heap_limit = template.heap_limit;
         self.heap_max_limit = template.heap_max_limit;
+        self.heap_contains_data = template.heap_contains_data;
         self.code_length = template.code_length;
         self.output_cursor = template.output_cursor;
         self.root = template.root;
         self.dirty = template.dirty;
         self.dirty_chunks = template.dirty_chunks.clone();
         self.modified_chunks.clear();
+        if restore_code && let Some(block_modified) = &mut self.block_modified_chunks {
+            block_modified.clear();
+        }
         self.clear_tracking();
         Ok(())
     }
@@ -858,9 +969,7 @@ impl Memory {
     /// Overwrite just the code region with bytes from another Memory.
     pub fn overlay_code(&mut self, src: &Memory) {
         let len = src.code_length as usize;
-        self.data[0..len].copy_from_slice(&src.data[0..len]);
-        self.code_length = len as u64;
-        self.update_merkle(0, len);
+        self.load_code(&src.data[0..len]);
     }
 }
 impl Clone for Memory {
@@ -873,6 +982,7 @@ impl Clone for Memory {
             heap_alloc: self.heap_alloc,
             heap_limit: self.heap_limit,
             heap_max_limit: self.heap_max_limit,
+            heap_contains_data: self.heap_contains_data,
             code_length: self.code_length,
             output_cursor: self.output_cursor,
             root: self.root,
@@ -880,12 +990,29 @@ impl Clone for Memory {
             dirty: self.dirty,
             dirty_chunks: self.dirty_chunks.clone(),
             modified_chunks: HashSet::new(),
+            block_modified_chunks: None,
+            template_generation: self.template_generation,
+            baseline_lineage: Arc::new(()),
             read_log: Mutex::new(Vec::new()),
             write_log: Mutex::new(Vec::new()),
         }
     }
 }
 impl Memory {
+    /// Restore tracking state omitted by the ordinary independent-memory clone.
+    ///
+    /// A sequential block checkpoint uses a regular [`Clone`] for the large
+    /// byte and Merkle-tree image, then calls this helper so a later runtime
+    /// template reset still knows which pre-block bytes must be restored.
+    pub(crate) fn preserve_checkpoint_tracking_from(&mut self, source: &Self) {
+        self.modified_chunks.clone_from(&source.modified_chunks);
+        self.block_modified_chunks
+            .clone_from(&source.block_modified_chunks);
+        self.baseline_lineage = Arc::clone(&source.baseline_lineage);
+        self.read_log = Mutex::new(source.read_log.lock().clone());
+        self.write_log = Mutex::new(source.write_log.lock().clone());
+    }
+
     #[inline]
     fn check_output_append_only(&mut self, addr: u64, len: u64) -> Result<(), VMError> {
         // Only enforce within OUTPUT region; allow arbitrary writes elsewhere.
@@ -978,6 +1105,101 @@ mod tests {
         );
     }
     #[test]
+    fn block_reset_restores_code_hidden_by_template_cleaning() {
+        let mut template = Memory::new(0);
+        let expected_root = template.current_root();
+        let mut worker = template.clone();
+        worker.begin_block_transaction_tracking();
+        worker.load_code(&[0xA5; 65]);
+        worker.commit();
+        worker.mark_template_clean();
+        assert!(worker.modified_chunks.is_empty());
+        assert_ne!(worker.current_root(), expected_root);
+
+        worker
+            .reset_for_block_transaction(&template)
+            .expect("worker and block template geometries match");
+
+        assert_eq!(&worker.data[..96], &[0; 96]);
+        assert_eq!(worker.code_len(), 0);
+        assert_eq!(worker.current_root(), expected_root);
+    }
+    #[test]
+    fn shorter_code_load_clears_prior_tail_and_matches_fresh_root() {
+        let short = [0x11, 0x22, 0x33, 0x44];
+        let mut historical = Memory::new(0);
+        historical.load_code(&[0xA5; 65]);
+        historical.commit();
+        historical.load_code(&short);
+
+        let mut fresh = Memory::new(0);
+        fresh.load_code(&short);
+
+        assert_eq!(&historical.data[..short.len()], &short);
+        assert!(
+            historical.data[short.len()..65]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        assert_eq!(historical.current_root(), fresh.current_root());
+
+        let mut overlaid = Memory::new(0);
+        overlaid.load_code(&[0x5A; 65]);
+        overlaid.overlay_code(&fresh);
+        assert!(overlaid.data[short.len()..65].iter().all(|byte| *byte == 0));
+        assert_eq!(overlaid.current_root(), fresh.current_root());
+    }
+    #[test]
+    fn block_tracking_survives_template_cleaning_for_non_code_writes() {
+        let mut template = Memory::new(0);
+        let expected_root = template.current_root();
+        let mut worker = template.clone();
+        worker.begin_block_transaction_tracking();
+        worker
+            .store_u64(Memory::HEAP_START, 0xDEAD_BEEF)
+            .expect("write transaction heap");
+        worker.load_code(&[0xA5; 4]);
+        worker.commit();
+        worker.mark_template_clean();
+        assert!(worker.modified_chunks.is_empty());
+
+        worker
+            .reset_for_block_transaction(&template)
+            .expect("worker and block template geometries match");
+
+        assert_eq!(worker.load_u64(Memory::HEAP_START), Ok(0));
+        assert_eq!(worker.current_root(), expected_root);
+    }
+    #[test]
+    fn program_heap_clear_scrubs_inactive_capacity_and_resets_allocator() {
+        let mut memory = Memory::new(0);
+        memory
+            .store_u64(Memory::HEAP_START, 0x1111)
+            .expect("write active heap");
+        let later_address = Memory::HEAP_START + 0x20_000;
+        memory
+            .store_u64(later_address, 0x2222)
+            .expect("write future inactive heap");
+        assert_eq!(memory.alloc(16), Ok(Memory::HEAP_START));
+        memory
+            .set_heap_max_limit(0x1_000)
+            .expect("tighten heap authority above allocation");
+        let mut pristine = Memory::new(0);
+        pristine
+            .set_heap_max_limit(0x1_000)
+            .expect("match heap authority");
+
+        memory.clear_program_heap();
+
+        assert_eq!(memory.heap_allocated_len(), 0);
+        assert_eq!(memory.heap_limit(), pristine.heap_limit());
+        assert_eq!(memory.heap_max_limit(), pristine.heap_max_limit());
+        assert_eq!(memory.data[Memory::HEAP_START as usize], 0);
+        assert_eq!(memory.data[later_address as usize], 0);
+        assert_eq!(memory.current_root(), pristine.current_root());
+        assert_eq!(memory.alloc(8), Ok(Memory::HEAP_START));
+    }
+    #[test]
     fn runtime_template_geometry_mismatch_fails_without_replacing_memory() {
         let mut worker = Memory::new_with_stack_limit(0, Memory::STACK_ALIGNMENT);
         let template = Memory::new_with_stack_limit(0, 2 * Memory::STACK_ALIGNMENT);
@@ -1046,6 +1268,7 @@ mod tests {
             heap_alloc: 0,
             heap_limit: Memory::HEAP_SIZE,
             heap_max_limit: Memory::HEAP_MAX_SIZE,
+            heap_contains_data: false,
             code_length: 0,
             output_cursor: 0,
             root,
@@ -1053,6 +1276,9 @@ mod tests {
             dirty: false,
             dirty_chunks: HashSet::new(),
             modified_chunks: HashSet::new(),
+            block_modified_chunks: None,
+            template_generation: 0,
+            baseline_lineage: Arc::new(()),
             read_log: Mutex::new(Vec::new()),
             write_log: Mutex::new(Vec::new()),
         };
@@ -1084,6 +1310,7 @@ mod tests {
             heap_alloc: 0,
             heap_limit: Memory::HEAP_SIZE,
             heap_max_limit: Memory::HEAP_MAX_SIZE,
+            heap_contains_data: false,
             code_length: 0,
             output_cursor: 0,
             root,
@@ -1091,6 +1318,9 @@ mod tests {
             dirty: false,
             dirty_chunks: HashSet::new(),
             modified_chunks: HashSet::new(),
+            block_modified_chunks: None,
+            template_generation: 0,
+            baseline_lineage: Arc::new(()),
             read_log: Mutex::new(Vec::new()),
             write_log: Mutex::new(Vec::new()),
         };

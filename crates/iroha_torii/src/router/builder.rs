@@ -584,8 +584,10 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
             },
             crate::enforce_canonical_account_body_authentication,
         );
-        let admission =
-            axum::middleware::from_fn_with_state(app_state, crate::proof_body_admission_middleware);
+        let admission = axum::middleware::from_fn_with_state(
+            crate::ProofBodyAdmissionState::new(app_state, max_body_bytes),
+            crate::proof_body_admission_middleware,
+        );
         CatalogMethodRouter {
             method: self.method,
             authentication: SealedAuthentication(AuthenticationPolicy::CanonicalAccountSignature),

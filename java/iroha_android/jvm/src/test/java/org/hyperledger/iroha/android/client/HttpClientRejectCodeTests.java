@@ -39,7 +39,9 @@ public final class HttpClientRejectCodeTests {
                   body,
                   "bad_request",
                   Map.of(
-                      "x-iroha-reject-code", List.of("PRTRY:TX_SIGNATURE_MISSING")));
+                      "x-iroha-reject-code", List.of("PRTRY:TX_SIGNATURE_MISSING")),
+                  null,
+                  false);
           return CompletableFuture.completedFuture(response);
         };
 
@@ -95,6 +97,6 @@ public final class HttpClientRejectCodeTests {
                 + ToriiTransactionCompatibility.EXPECTED_SIGNED_TRANSACTION_SCHEMA_HASH_HEX
                 + "\"}")
             .getBytes(StandardCharsets.UTF_8);
-    return new TransportResponse(200, body, "ok", Map.of());
+    return new TransportResponse(200, body, "ok", Map.of(), null, false);
   }
 }
