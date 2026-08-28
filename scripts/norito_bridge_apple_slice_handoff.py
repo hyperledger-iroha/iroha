@@ -35,6 +35,7 @@ TARGET_PROFILES = {
 COMMON_KEYS = {
     "schema",
     "source_commit",
+    "embedded_source_commit",
     "source_tree_dirty",
     "source_fingerprint_sha256",
     "cargo_lock_sha256",
@@ -214,6 +215,12 @@ def validate_common(common: dict[str, object]) -> None:
     commit = common["source_commit"]
     if not isinstance(commit, str) or HEX_COMMIT.fullmatch(commit) is None:
         fail("Apple slice common attestation has a non-canonical source commit")
+    embedded_commit = common["embedded_source_commit"]
+    if (
+        not isinstance(embedded_commit, str)
+        or HEX_COMMIT.fullmatch(embedded_commit) is None
+    ):
+        fail("Apple slice common attestation has a non-canonical embedded source commit")
     if common["source_tree_dirty"] is not False:
         fail("CI Apple slices require a clean source tree")
     for key in (

@@ -70,6 +70,12 @@ def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
     assert "CARGO_BUILD_DIR_" not in source
     assert "local cargo_target_dir" not in source
     assert source.count('--set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"') == 1
+    assert source.count(
+        '--set "CONNECT_NORITO_SOURCE_REVISION=$EMBEDDED_SOURCE_COMMIT"'
+    ) == 1
+    assert source.count('--set "IROHA_GIT_COMMIT_HASH=$EMBEDDED_SOURCE_COMMIT"') == 1
+    assert source.count('--set "VERGEN_GIT_SHA=$EMBEDDED_SOURCE_COMMIT"') == 1
+    assert source.count('"embedded_source_commit": "$EMBEDDED_SOURCE_COMMIT"') == 2
     assert (
         'source_library="$CARGO_TARGET_DIR/$target_triple/release/'
         'lib${LIB_CRATE_NAME}.a"'

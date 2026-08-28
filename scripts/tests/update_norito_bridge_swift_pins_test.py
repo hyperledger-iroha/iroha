@@ -240,6 +240,7 @@ def validate(
                 "macosx_deployment_target": "12.0",
             },
             "source_commit": "a" * 40,
+            "embedded_source_commit": "a" * 40,
             "source_tree_dirty": False,
             "source_fingerprint_sha256": "b" * 64,
             "cargo_lock_sha256": hashlib.sha256(

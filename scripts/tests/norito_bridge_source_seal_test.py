@@ -369,9 +369,11 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "CARGO_INCREMENTAL": "0",
             "CARGO_NET_OFFLINE": "true",
             "CARGO_TARGET_DIR": str(target),
+            "CONNECT_NORITO_SOURCE_REVISION": "1" * 40,
             "DEVELOPER_DIR": str(self.root / "developer"),
             "HOME": str(self.root),
             "IPHONEOS_DEPLOYMENT_TARGET": "15.0",
+            "IROHA_GIT_COMMIT_HASH": "1" * 40,
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
             "NORITO_SKIP_BINDINGS_SYNC": "1",
@@ -382,6 +384,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "RUSTUP_HOME": str(self.root / "rustup-home"),
             "SDKROOT": str(self.root / "sdk"),
             "TMPDIR": str(self.root),
+            "VERGEN_GIT_SHA": "1" * 40,
         }
 
         def run(assignments: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -403,6 +406,21 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         rejected = run(wrong_jobs)
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("CARGO_BUILD_JOBS must be exactly '1'", rejected.stderr)
+        mismatched_revision = dict(environment)
+        mismatched_revision["VERGEN_GIT_SHA"] = "2" * 40
+        rejected = run(mismatched_revision)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("source revision variables must be identical", rejected.stderr)
+        noncanonical_revision = dict(environment)
+        for name in (
+            "CONNECT_NORITO_SOURCE_REVISION",
+            "IROHA_GIT_COMMIT_HASH",
+            "VERGEN_GIT_SHA",
+        ):
+            noncanonical_revision[name] = "A" * 40
+        rejected = run(noncanonical_revision)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("identical canonical commits", rejected.stderr)
         target_link = self.root / "cargo-target-link"
         target_link.symlink_to(target, target_is_directory=True)
         linked_target = dict(environment)

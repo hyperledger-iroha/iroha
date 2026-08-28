@@ -43,6 +43,7 @@ class NoritoBridgeAppleSliceHandoffTests(unittest.TestCase):
         return {
             "schema": handoff.COMMON_SCHEMA,
             "source_commit": "c" * 40,
+            "embedded_source_commit": "c" * 40,
             "source_tree_dirty": False,
             "source_fingerprint_sha256": digest,
             "cargo_lock_sha256": digest,
@@ -271,6 +272,17 @@ class NoritoBridgeAppleSliceHandoffTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             handoff.HandoffError, "exactly one Cargo job"
+        ):
+            handoff.validate_common(common)
+
+    def test_common_attestation_rejects_malformed_embedded_source_commit(
+        self,
+    ) -> None:
+        common = json.loads(json.dumps(self.common))
+        common["embedded_source_commit"] = "not-a-commit"
+
+        with self.assertRaisesRegex(
+            handoff.HandoffError, "non-canonical embedded source commit"
         ):
             handoff.validate_common(common)
 

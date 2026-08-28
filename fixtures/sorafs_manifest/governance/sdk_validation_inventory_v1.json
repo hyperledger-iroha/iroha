@@ -146,8 +146,8 @@
       "scenario": "block_bad_signature",
       "status": "Error",
       "code": "SFS-SIG-006",
-      "byte_length": 2086,
-      "sha256": "e9d2010d637a4568cd9309d2dbb6e25eea1ea167480f54da357d6c894f5ffeb3"
+      "byte_length": 2122,
+      "sha256": "97f8e2dbad6ef2b682026702492574c78fef35b7d305ea9d095ffaa28b1fb4ec"
     },
     {
       "path": "dag_block_cid_mismatch_validation_outcome_v1.json",
@@ -186,8 +186,8 @@
       "scenario": "head_bad_signature",
       "status": "Error",
       "code": "SFS-SIG-007",
-      "byte_length": 2362,
-      "sha256": "338554e917055bb12ce6203c879ae06b048aa521bc30bd36affea899617d741c"
+      "byte_length": 2398,
+      "sha256": "75bcb43ee84b11eb4decc5dd7783e478cfb9bdbffb2a4b9b993216dfa53675b0"
     },
     {
       "path": "dag_head_reordered_validation_outcome_v1.json",
@@ -211,6 +211,6 @@
     "key_usage": "test_only_governance_fixture",
     "public_key_hex": "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3",
     "public_key_fingerprint_sha256": "1a09a6a1b85cec77787ba6ce26f18500a2434865cee04d79c69a481888f52fff",
-    "signature_hex": "9b94d8d2ed5c94eedf12466abd85c3ffce69bb0b97afd7a606a0bcc5413a0014a65fe071f9b41d39da33c27533e4e9b425717591ca72ee86d1b17c254a51be09"
+    "signature_hex": "82361fdd94d558e43f1787a73ce0530a0e6162c6351a323bf58f3378a342bcb4e651694d27a5d6aa1d7c9ee20720707df5106eeb9b63606a880967d8342c720b"
   }
 }

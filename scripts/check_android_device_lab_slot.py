@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 from collections.abc import Mapping
+from dataclasses import dataclass
 import datetime as dt
 import hashlib
 import json
@@ -491,16 +492,21 @@ def extract_apk_signing_certificate_sha256(apk_path: Path) -> str:
         raise ValueError("configured Java/apksigner.jar changed during verification")
     if verified.returncode != 0:
         raise ValueError("apksigner cryptographic verification failed")
+    # apksigner has changed certificate labels across releases (numbered
+    # signers, SDK ranges, source stamps, and lineages). Treat labels as
+    # presentation only; the independently parsed v2/v3 signing block below
+    # identifies the one current signer that the verifier must report.
     verifier_digests = re.findall(
-        r"^Signer #[0-9]+ certificate SHA-256 digest: ([0-9A-Fa-f:]{64,95})$",
+        r"^[ -~]{1,256} certificate SHA-256 digest: "
+        r"([0-9A-Fa-f:]{64,95})$",
         verified.stdout,
         flags=re.MULTILINE,
     )
     normalized_verifier_digests = {
         digest.replace(":", "").lower() for digest in verifier_digests
     }
-    if len(normalized_verifier_digests) != 1:
-        raise ValueError("apksigner must report exactly one current signer digest")
+    if not normalized_verifier_digests:
+        raise ValueError("apksigner must report at least one certificate digest")
     with path.open("rb") as handle:
         tail_size = min(file_stat.st_size, 22 + 0xFFFF)
         handle.seek(file_stat.st_size - tail_size)
@@ -567,7 +573,7 @@ def extract_apk_signing_certificate_sha256(apk_path: Path) -> str:
     if pair_offset != len(pairs) or len(signer_certificates) != 1:
         raise ValueError("APK must expose exactly one current v2/v3 signer certificate")
     measured = hashlib.sha256(signer_certificates.pop()).hexdigest()
-    if normalized_verifier_digests != {measured}:
+    if measured not in normalized_verifier_digests:
         raise ValueError("apksigner digest differs from parsed signer certificate DER")
     return measured
 
@@ -3009,17 +3015,234 @@ def _slot_artifact_lstat_mode(
         return None, [metadata_error]
 
 
+def _file_read_snapshot(file_stat: os.stat_result) -> tuple[int, int, int, int, int]:
+    """Return stable metadata that must not change across one file read."""
+
+    return (
+        file_stat.st_dev,
+        file_stat.st_ino,
+        file_stat.st_size,
+        file_stat.st_mtime_ns,
+        file_stat.st_ctime_ns,
+    )
+
+
+def _artifact_read_open_flags() -> int:
+    """Return non-blocking, non-following flags for a pinned artifact read."""
+
+    flags = os.O_RDONLY
+    for optional_flag in ("O_BINARY", "O_CLOEXEC", "O_NOFOLLOW", "O_NONBLOCK"):
+        flags |= getattr(os, optional_flag, 0)
+    return flags
+
+
+def _artifact_directory_open_flags() -> int:
+    """Return non-blocking, non-following flags for a pinned directory walk."""
+
+    flags = os.O_RDONLY
+    for optional_flag in ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK"):
+        flags |= getattr(os, optional_flag, 0)
+    return flags
+
+
+@dataclass
+class _PinnedArtifact:
+    """Own a leaf descriptor and every directory descriptor used to reach it."""
+
+    anchor_path: Path
+    path: Path
+    descriptor: int
+    opened_stat: os.stat_result
+    directory_descriptors: tuple[int, ...]
+    directory_names: tuple[str, ...]
+    leaf_name: str
+    closed: bool = False
+
+    def close(self) -> None:
+        """Close the pinned leaf and ancestor descriptors exactly once."""
+
+        if self.closed:
+            return
+        self.closed = True
+        descriptors = (self.descriptor, *reversed(self.directory_descriptors))
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    def __enter__(self) -> _PinnedArtifact:
+        if self.closed:
+            raise RuntimeError("pinned artifact is already closed")
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
+def _pinned_artifact_leaf_stat(pin: _PinnedArtifact) -> os.stat_result:
+    """Inspect the pinned leaf name without following it."""
+
+    return os.stat(
+        pin.leaf_name,
+        dir_fd=pin.directory_descriptors[-1],
+        follow_symlinks=False,
+    )
+
+
+def _pinned_artifact_ancestors_match(pin: _PinnedArtifact) -> bool:
+    """Return whether the path still resolves through the pinned directories."""
+
+    root_path_stat = pin.anchor_path.lstat()
+    root_open_stat = os.fstat(pin.directory_descriptors[0])
+    if (
+        stat.S_ISLNK(root_path_stat.st_mode)
+        or not stat.S_ISDIR(root_path_stat.st_mode)
+        or _file_identity(root_path_stat) != _file_identity(root_open_stat)
+    ):
+        return False
+    for index, name in enumerate(pin.directory_names):
+        entry_stat = os.stat(
+            name,
+            dir_fd=pin.directory_descriptors[index],
+            follow_symlinks=False,
+        )
+        opened_stat = os.fstat(pin.directory_descriptors[index + 1])
+        if (
+            stat.S_ISLNK(entry_stat.st_mode)
+            or not stat.S_ISDIR(entry_stat.st_mode)
+            or _file_identity(entry_stat) != _file_identity(opened_stat)
+        ):
+            return False
+    return True
+
+
+def _pin_slot_relative_artifact(
+    slot_path: Path,
+    safe_relative: str,
+    expected_stat: os.stat_result,
+    *,
+    changed_error: str,
+    unreadable_error: str,
+) -> tuple[_PinnedArtifact | None, list[str]]:
+    """Pin every directory and the regular leaf for one slot-relative artifact."""
+
+    artifact_parts = PurePosixPath(safe_relative).parts
+    directory_descriptors: list[int] = []
+    leaf_descriptor: int | None = None
+    try:
+        absolute_slot_path = (
+            slot_path if slot_path.is_absolute() else Path.cwd() / slot_path
+        )
+        slot_parts = absolute_slot_path.parts
+        if len(slot_parts) > 2:
+            # The existing path policy intentionally trusts the platform's
+            # top-level alias (for example, macOS /var -> /private/var). Resolve
+            # only that trusted prefix, then pin every remaining component.
+            anchor_path = Path(*slot_parts[:2]).resolve(strict=True)
+            directory_names = (*slot_parts[2:], *artifact_parts[:-1])
+        else:
+            anchor_path = Path(slot_parts[0])
+            directory_names = (*slot_parts[1:], *artifact_parts[:-1])
+        root_descriptor = os.open(anchor_path, _artifact_directory_open_flags())
+        directory_descriptors.append(root_descriptor)
+        root_path_stat = anchor_path.lstat()
+        root_open_stat = os.fstat(root_descriptor)
+        if (
+            stat.S_ISLNK(root_path_stat.st_mode)
+            or not stat.S_ISDIR(root_path_stat.st_mode)
+            or _file_identity(root_path_stat) != _file_identity(root_open_stat)
+        ):
+            return None, [changed_error]
+        for component in directory_names:
+            parent_descriptor = directory_descriptors[-1]
+            child_descriptor = os.open(
+                component,
+                _artifact_directory_open_flags(),
+                dir_fd=parent_descriptor,
+            )
+            directory_descriptors.append(child_descriptor)
+            entry_stat = os.stat(
+                component,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            opened_stat = os.fstat(child_descriptor)
+            if (
+                stat.S_ISLNK(entry_stat.st_mode)
+                or not stat.S_ISDIR(entry_stat.st_mode)
+                or _file_identity(entry_stat) != _file_identity(opened_stat)
+            ):
+                return None, [changed_error]
+        leaf_descriptor = os.open(
+            artifact_parts[-1],
+            _artifact_read_open_flags(),
+            dir_fd=directory_descriptors[-1],
+        )
+        opened_stat = os.fstat(leaf_descriptor)
+        leaf_stat = os.stat(
+            artifact_parts[-1],
+            dir_fd=directory_descriptors[-1],
+            follow_symlinks=False,
+        )
+        expected_snapshot = _file_read_snapshot(expected_stat)
+        if (
+            _file_read_snapshot(opened_stat) != expected_snapshot
+            or _file_read_snapshot(leaf_stat) != expected_snapshot
+        ):
+            return None, [changed_error]
+        pin = _PinnedArtifact(
+            anchor_path=anchor_path,
+            path=slot_path / safe_relative,
+            descriptor=leaf_descriptor,
+            opened_stat=opened_stat,
+            directory_descriptors=tuple(directory_descriptors),
+            directory_names=tuple(directory_names),
+            leaf_name=artifact_parts[-1],
+        )
+        leaf_descriptor = None
+        directory_descriptors = []
+        return pin, []
+    except (NotImplementedError, OSError, RuntimeError, TypeError):
+        return None, [unreadable_error]
+    finally:
+        if leaf_descriptor is not None:
+            try:
+                os.close(leaf_descriptor)
+            except OSError:
+                pass
+        for descriptor in reversed(directory_descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _read_exact_descriptor(descriptor: int, size: int) -> bytes:
+    """Read up to exactly ``size`` bytes from a pinned descriptor."""
+
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk = os.read(descriptor, remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 def _validate_manifest_artifact_for_digest(
     slot_path: Path,
     relative: str,
-) -> tuple[Path | None, os.stat_result | None, list[str]]:
+) -> tuple[_PinnedArtifact | None, list[str]]:
     """Validate one manifest artifact immediately before hashing it."""
 
     path_errors = _slot_path_boundary_errors(slot_path)
     if path_errors:
-        return None, None, path_errors
+        return None, path_errors
     if SECRET_RE.search(relative):
-        return None, None, ["slot artifacts must not contain secret-looking material"]
+        return None, ["slot artifacts must not contain secret-looking material"]
     normalise_errors: list[str] = []
     safe_relative = _normalise_safe_relative_path(
         relative,
@@ -3028,35 +3251,46 @@ def _validate_manifest_artifact_for_digest(
         allow_sha_manifest=True,
     )
     if normalise_errors:
-        return None, None, normalise_errors
+        return None, normalise_errors
     assert safe_relative is not None
     display = _display_path(safe_relative)
     artifact_path = slot_path / safe_relative
     if _slot_relative_symlink_ancestor(slot_path, safe_relative) is not None:
-        return None, None, [
+        return None, [
             "sha256sum.txt references artifact under symlink directory "
             f"{display}"
         ]
     try:
         artifact_stat = artifact_path.lstat()
     except FileNotFoundError:
-        return None, None, [f"sha256sum.txt references missing file {display}"]
+        return None, [f"sha256sum.txt references missing file {display}"]
     except OSError:
-        return None, None, [
+        return None, [
             f"sha256sum.txt references artifact file metadata could not be read {display}"
         ]
     if stat.S_ISLNK(artifact_stat.st_mode):
-        return None, None, [f"sha256sum.txt references symlink artifact {display}"]
+        return None, [f"sha256sum.txt references symlink artifact {display}"]
     if not stat.S_ISREG(artifact_stat.st_mode):
-        return None, None, [f"sha256sum.txt references non-regular artifact {display}"]
+        return None, [f"sha256sum.txt references non-regular artifact {display}"]
     if artifact_stat.st_nlink > 1:
-        return None, None, [f"sha256sum.txt references hardlinked artifact {display}"]
-    return artifact_path, artifact_stat, []
+        return None, [f"sha256sum.txt references hardlinked artifact {display}"]
+    changed_error = (
+        "sha256sum.txt references artifact changed while being read " f"{display}"
+    )
+    unreadable_error = (
+        "sha256sum.txt references artifact that could not be read " f"{display}"
+    )
+    return _pin_slot_relative_artifact(
+        slot_path,
+        safe_relative,
+        artifact_stat,
+        changed_error=changed_error,
+        unreadable_error=unreadable_error,
+    )
 
 
 def _read_validated_manifest_artifact_bytes(
-    artifact_path: Path,
-    expected_stat: os.stat_result,
+    pin: _PinnedArtifact,
     relative: str,
     max_bytes: int = MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES,
 ) -> tuple[bytes | None, list[str]]:
@@ -3065,57 +3299,56 @@ def _read_validated_manifest_artifact_bytes(
     display = _display_path(relative)
     chunks: list[bytes] = []
     try:
-        with artifact_path.open("rb") as handle:
-            open_stat = os.fstat(handle.fileno())
-            path_stat = artifact_path.lstat()
-            if stat.S_ISLNK(path_stat.st_mode):
-                return None, [f"sha256sum.txt references symlink artifact {display}"]
-            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
-                return None, [
-                    f"sha256sum.txt references non-regular artifact {display}"
-                ]
-            manifest_expected_identity = (
-                expected_stat.st_dev,
-                expected_stat.st_ino,
-            )
-            manifest_open_identity = (open_stat.st_dev, open_stat.st_ino)
-            if manifest_open_identity != manifest_expected_identity or (
-                path_stat.st_dev,
-                path_stat.st_ino,
-            ) != manifest_expected_identity:
-                return None, [
-                    "sha256sum.txt references artifact changed while being read "
-                    f"{display}"
-                ]
-            if open_stat.st_nlink > 1:
-                return None, [
-                    f"sha256sum.txt references hardlinked artifact {display}"
-                ]
-            if open_stat.st_size > max_bytes:
+        open_stat = os.fstat(pin.descriptor)
+        path_stat = _pinned_artifact_leaf_stat(pin)
+        if stat.S_ISLNK(path_stat.st_mode):
+            return None, [f"sha256sum.txt references symlink artifact {display}"]
+        if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+            return None, [
+                f"sha256sum.txt references non-regular artifact {display}"
+            ]
+        if open_stat.st_nlink > 1:
+            return None, [
+                f"sha256sum.txt references hardlinked artifact {display}"
+            ]
+        manifest_expected_snapshot = _file_read_snapshot(pin.opened_stat)
+        if (
+            not _pinned_artifact_ancestors_match(pin)
+            or _file_read_snapshot(open_stat) != manifest_expected_snapshot
+            or _file_read_snapshot(path_stat) != manifest_expected_snapshot
+        ):
+            return None, [
+                "sha256sum.txt references artifact changed while being read "
+                f"{display}"
+            ]
+        if open_stat.st_size > max_bytes:
+            return None, [
+                "sha256sum.txt references artifact "
+                f"{display} must be no more than "
+                f"{max_bytes} bytes"
+            ]
+        size = 0
+        while True:
+            chunk = os.read(pin.descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > max_bytes:
                 return None, [
                     "sha256sum.txt references artifact "
                     f"{display} must be no more than "
                     f"{max_bytes} bytes"
                 ]
-            size = 0
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                size += len(chunk)
-                if size > max_bytes:
-                    return None, [
-                        "sha256sum.txt references artifact "
-                        f"{display} must be no more than "
-                        f"{max_bytes} bytes"
-                    ]
-                chunks.append(chunk)
-            final_path_stat = artifact_path.lstat()
-            if (
-                final_path_stat.st_dev,
-                final_path_stat.st_ino,
-            ) != manifest_expected_identity:
-                return None, [
-                    "sha256sum.txt references artifact changed while being read "
-                    f"{display}"
-                ]
+            chunks.append(chunk)
+        final_path_stat = _pinned_artifact_leaf_stat(pin)
+        if (
+            not _pinned_artifact_ancestors_match(pin)
+            or _file_read_snapshot(final_path_stat) != manifest_expected_snapshot
+        ):
+            return None, [
+                "sha256sum.txt references artifact changed while being read "
+                f"{display}"
+            ]
     except OSError:
         return None, [
             "sha256sum.txt references artifact that could not be read "
@@ -3128,19 +3361,16 @@ def _manifest_artifact_sha256(
     slot_path: Path,
     relative: str,
 ) -> tuple[str | None, list[str]]:
-    artifact_path, artifact_stat, errors = _validate_manifest_artifact_for_digest(
-        slot_path,
-        relative,
-    )
+    pin, errors = _validate_manifest_artifact_for_digest(slot_path, relative)
     if errors:
         return None, errors
-    assert artifact_path is not None and artifact_stat is not None
-    payload, read_errors = _read_validated_manifest_artifact_bytes(
-        artifact_path,
-        artifact_stat,
-        relative,
-        _slot_artifact_max_bytes(relative),
-    )
+    assert pin is not None
+    with pin:
+        payload, read_errors = _read_validated_manifest_artifact_bytes(
+            pin,
+            relative,
+            _slot_artifact_max_bytes(relative),
+        )
     if read_errors:
         return None, read_errors
     assert payload is not None
@@ -3150,14 +3380,17 @@ def _manifest_artifact_sha256(
 def _validate_signed_evidence_artifact_for_digest(
     slot_path: Path,
     relative: str,
-) -> tuple[Path | None, os.stat_result | None, list[str]]:
+    *,
+    pin_changed_error: str | None = None,
+    pin_unreadable_error: str | None = None,
+) -> tuple[_PinnedArtifact | None, list[str]]:
     """Validate one signed-evidence artifact immediately before hashing it."""
 
     path_errors = _slot_path_boundary_errors(slot_path)
     if path_errors:
-        return None, None, path_errors
+        return None, path_errors
     if SECRET_RE.search(relative):
-        return None, None, [
+        return None, [
             "signed evidence artifact digest path must not contain secret-looking material"
         ]
     normalise_errors: list[str] = []
@@ -3167,45 +3400,58 @@ def _validate_signed_evidence_artifact_for_digest(
         "signed evidence artifact digest path",
     )
     if normalise_errors:
-        return None, None, normalise_errors
+        return None, normalise_errors
     assert safe_relative is not None
     display = _display_path(safe_relative)
     artifact_path = slot_path / safe_relative
     if _slot_relative_symlink_ancestor(slot_path, safe_relative) is not None:
-        return None, None, [
+        return None, [
             "signed evidence artifact digest references artifact under "
             f"symlink directory {display}"
         ]
     try:
         artifact_stat = artifact_path.lstat()
     except FileNotFoundError:
-        return None, None, [
+        return None, [
             "signed evidence artifact required slot artifact is missing "
             f"{display}"
         ]
     except OSError:
-        return None, None, [
+        return None, [
             "signed evidence artifact digest references artifact file metadata "
             f"could not be read {display}"
         ]
     if stat.S_ISLNK(artifact_stat.st_mode):
-        return None, None, [
+        return None, [
             f"signed evidence artifact digest references symlink artifact {display}"
         ]
     if not stat.S_ISREG(artifact_stat.st_mode):
-        return None, None, [
+        return None, [
             f"signed evidence artifact digest references non-regular artifact {display}"
         ]
     if artifact_stat.st_nlink > 1:
-        return None, None, [
+        return None, [
             f"signed evidence artifact digest references hardlinked artifact {display}"
         ]
-    return artifact_path, artifact_stat, []
+    changed_error = pin_changed_error or (
+        "signed evidence artifact digest references artifact changed while being read "
+        f"{display}"
+    )
+    unreadable_error = pin_unreadable_error or (
+        "signed evidence artifact digest references artifact that could not be read "
+        f"{display}"
+    )
+    return _pin_slot_relative_artifact(
+        slot_path,
+        safe_relative,
+        artifact_stat,
+        changed_error=changed_error,
+        unreadable_error=unreadable_error,
+    )
 
 
 def _read_validated_signed_evidence_artifact_bytes(
-    artifact_path: Path,
-    expected_stat: os.stat_result,
+    pin: _PinnedArtifact,
     relative: str,
     max_bytes: int = MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES,
 ) -> tuple[bytes | None, list[str]]:
@@ -3214,60 +3460,60 @@ def _read_validated_signed_evidence_artifact_bytes(
     display = _display_path(relative)
     chunks: list[bytes] = []
     try:
-        with artifact_path.open("rb") as handle:
-            open_stat = os.fstat(handle.fileno())
-            path_stat = artifact_path.lstat()
-            if stat.S_ISLNK(path_stat.st_mode):
-                return None, [
-                    f"signed evidence artifact digest references symlink artifact {display}"
-                ]
-            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
-                return None, [
-                    "signed evidence artifact digest references non-regular artifact "
-                    f"{display}"
-                ]
-            signed_evidence_expected_identity = (
-                expected_stat.st_dev,
-                expected_stat.st_ino,
-            )
-            signed_evidence_open_identity = (open_stat.st_dev, open_stat.st_ino)
-            if signed_evidence_open_identity != signed_evidence_expected_identity or (
-                path_stat.st_dev,
-                path_stat.st_ino,
-            ) != signed_evidence_expected_identity:
-                return None, [
-                    "signed evidence artifact digest references artifact changed "
-                    f"while being read {display}"
-                ]
-            if open_stat.st_nlink > 1:
-                return None, [
-                    f"signed evidence artifact digest references hardlinked artifact {display}"
-                ]
-            if open_stat.st_size > max_bytes:
+        open_stat = os.fstat(pin.descriptor)
+        path_stat = _pinned_artifact_leaf_stat(pin)
+        if stat.S_ISLNK(path_stat.st_mode):
+            return None, [
+                f"signed evidence artifact digest references symlink artifact {display}"
+            ]
+        if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+            return None, [
+                "signed evidence artifact digest references non-regular artifact "
+                f"{display}"
+            ]
+        if open_stat.st_nlink > 1:
+            return None, [
+                f"signed evidence artifact digest references hardlinked artifact {display}"
+            ]
+        signed_evidence_expected_snapshot = _file_read_snapshot(pin.opened_stat)
+        if (
+            not _pinned_artifact_ancestors_match(pin)
+            or _file_read_snapshot(open_stat) != signed_evidence_expected_snapshot
+            or _file_read_snapshot(path_stat) != signed_evidence_expected_snapshot
+        ):
+            return None, [
+                "signed evidence artifact digest references artifact changed "
+                f"while being read {display}"
+            ]
+        if open_stat.st_size > max_bytes:
+            return None, [
+                "signed evidence artifact digest references artifact "
+                f"{display} must be no more than "
+                f"{max_bytes} bytes"
+            ]
+        size = 0
+        while True:
+            chunk = os.read(pin.descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > max_bytes:
                 return None, [
                     "signed evidence artifact digest references artifact "
                     f"{display} must be no more than "
                     f"{max_bytes} bytes"
                 ]
-            size = 0
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                size += len(chunk)
-                if size > max_bytes:
-                    return None, [
-                        "signed evidence artifact digest references artifact "
-                        f"{display} must be no more than "
-                        f"{max_bytes} bytes"
-                    ]
-                chunks.append(chunk)
-            final_path_stat = artifact_path.lstat()
-            if (
-                final_path_stat.st_dev,
-                final_path_stat.st_ino,
-            ) != signed_evidence_expected_identity:
-                return None, [
-                    "signed evidence artifact digest references artifact changed "
-                    f"while being read {display}"
-                ]
+            chunks.append(chunk)
+        final_path_stat = _pinned_artifact_leaf_stat(pin)
+        if (
+            not _pinned_artifact_ancestors_match(pin)
+            or _file_read_snapshot(final_path_stat)
+            != signed_evidence_expected_snapshot
+        ):
+            return None, [
+                "signed evidence artifact digest references artifact changed "
+                f"while being read {display}"
+            ]
     except OSError:
         return None, [
             "signed evidence artifact digest references artifact that could not be read "
@@ -3280,19 +3526,16 @@ def _signed_evidence_artifact_sha256(
     slot_path: Path,
     relative: str,
 ) -> tuple[str | None, list[str]]:
-    artifact_path, artifact_stat, errors = _validate_signed_evidence_artifact_for_digest(
-        slot_path,
-        relative,
-    )
+    pin, errors = _validate_signed_evidence_artifact_for_digest(slot_path, relative)
     if errors:
         return None, errors
-    assert artifact_path is not None and artifact_stat is not None
-    payload, read_errors = _read_validated_signed_evidence_artifact_bytes(
-        artifact_path,
-        artifact_stat,
-        relative,
-        _slot_artifact_max_bytes(relative),
-    )
+    assert pin is not None
+    with pin:
+        payload, read_errors = _read_validated_signed_evidence_artifact_bytes(
+            pin,
+            relative,
+            _slot_artifact_max_bytes(relative),
+        )
     if read_errors:
         return None, read_errors
     assert payload is not None
@@ -3304,14 +3547,15 @@ def _validate_metadata_artifact_for_read(
     relative: str,
     label: str,
     missing_error: str,
-) -> tuple[Path | None, os.stat_result | None, list[str]]:
+    unreadable_error: str,
+) -> tuple[_PinnedArtifact | None, list[str]]:
     """Validate a slot-relative metadata artifact immediately before reading it."""
 
     path_errors = _slot_path_boundary_errors(slot_path)
     if path_errors:
-        return None, None, path_errors
+        return None, path_errors
     if SECRET_RE.search(relative):
-        return None, None, [f"{label} must not contain secret-looking material"]
+        return None, [f"{label} must not contain secret-looking material"]
     normalise_errors: list[str] = []
     safe_relative = _normalise_safe_relative_path(
         relative,
@@ -3319,34 +3563,41 @@ def _validate_metadata_artifact_for_read(
         label,
     )
     if normalise_errors:
-        return None, None, normalise_errors
+        return None, normalise_errors
     assert safe_relative is not None
     display = _display_path(safe_relative)
     artifact_path = slot_path / safe_relative
     if _slot_relative_symlink_ancestor(slot_path, safe_relative) is not None:
-        return None, None, [
+        return None, [
             f"{label} references artifact under symlink directory {display}"
         ]
     try:
         artifact_stat = artifact_path.lstat()
     except FileNotFoundError:
-        return None, None, [missing_error]
+        return None, [missing_error]
     except OSError:
-        return None, None, [
+        return None, [
             f"{label} references artifact file metadata could not be read {display}"
         ]
     if stat.S_ISLNK(artifact_stat.st_mode):
-        return None, None, [f"{label} references symlink artifact {display}"]
+        return None, [f"{label} references symlink artifact {display}"]
     if not stat.S_ISREG(artifact_stat.st_mode):
-        return None, None, [f"{label} references non-regular artifact {display}"]
+        return None, [f"{label} references non-regular artifact {display}"]
     if artifact_stat.st_nlink > 1:
-        return None, None, [f"{label} references hardlinked artifact {display}"]
-    return artifact_path, artifact_stat, []
+        return None, [f"{label} references hardlinked artifact {display}"]
+    return _pin_slot_relative_artifact(
+        slot_path,
+        safe_relative,
+        artifact_stat,
+        changed_error=(
+            f"{label} references artifact changed while being read {display}"
+        ),
+        unreadable_error=unreadable_error,
+    )
 
 
 def _read_validated_metadata_artifact_bytes(
-    artifact_path: Path,
-    expected_stat: os.stat_result,
+    pin: _PinnedArtifact,
     label: str,
     relative: str,
     unreadable_error: str,
@@ -3356,44 +3607,49 @@ def _read_validated_metadata_artifact_bytes(
 
     digest_chunks: list[bytes] = []
     try:
-        with artifact_path.open("rb") as handle:
-            open_stat = os.fstat(handle.fileno())
-            path_stat = artifact_path.lstat()
-            display = _display_path(relative)
-            if stat.S_ISLNK(path_stat.st_mode):
-                return None, [f"{label} references symlink artifact {display}"]
-            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
-                return None, [f"{label} references non-regular artifact {display}"]
-            expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
-            open_identity = (open_stat.st_dev, open_stat.st_ino)
-            if open_identity != expected_identity or (
-                path_stat.st_dev,
-                path_stat.st_ino,
-            ) != expected_identity:
-                return None, [
-                    f"{label} references artifact changed while being read {display}"
-                ]
-            if open_stat.st_nlink > 1:
-                return None, [f"{label} references hardlinked artifact {display}"]
-            if open_stat.st_size > max_bytes:
+        open_stat = os.fstat(pin.descriptor)
+        path_stat = _pinned_artifact_leaf_stat(pin)
+        display = _display_path(relative)
+        if stat.S_ISLNK(path_stat.st_mode):
+            return None, [f"{label} references symlink artifact {display}"]
+        if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+            return None, [f"{label} references non-regular artifact {display}"]
+        if open_stat.st_nlink > 1:
+            return None, [f"{label} references hardlinked artifact {display}"]
+        expected_snapshot = _file_read_snapshot(pin.opened_stat)
+        if (
+            not _pinned_artifact_ancestors_match(pin)
+            or _file_read_snapshot(open_stat) != expected_snapshot
+            or _file_read_snapshot(path_stat) != expected_snapshot
+        ):
+            return None, [
+                f"{label} references artifact changed while being read {display}"
+            ]
+        if open_stat.st_size > max_bytes:
+            return None, [
+                f"{label} references artifact {display} must be no more than "
+                f"{max_bytes} bytes"
+            ]
+        size = 0
+        while True:
+            chunk = os.read(pin.descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > max_bytes:
                 return None, [
                     f"{label} references artifact {display} must be no more than "
                     f"{max_bytes} bytes"
                 ]
-            size = 0
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                size += len(chunk)
-                if size > max_bytes:
-                    return None, [
-                        f"{label} references artifact {display} must be no more than "
-                        f"{max_bytes} bytes"
-                    ]
-                digest_chunks.append(chunk)
-            final_path_stat = artifact_path.lstat()
-            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
-                return None, [
-                    f"{label} references artifact changed while being read {display}"
-                ]
+            digest_chunks.append(chunk)
+        final_path_stat = _pinned_artifact_leaf_stat(pin)
+        if (
+            not _pinned_artifact_ancestors_match(pin)
+            or _file_read_snapshot(final_path_stat) != expected_snapshot
+        ):
+            return None, [
+                f"{label} references artifact changed while being read {display}"
+            ]
     except OSError:
         return None, [unreadable_error]
     return b"".join(digest_chunks), []
@@ -3408,23 +3664,25 @@ def _metadata_artifact_bytes_and_sha256(
 ) -> tuple[bytes | None, str | None, list[str]]:
     """Validate a slot.json-referenced artifact immediately before reading it."""
 
-    artifact_path, artifact_stat, errors = _validate_metadata_artifact_for_read(
+    unreadable_error = f"{label} could not be read"
+    pin, errors = _validate_metadata_artifact_for_read(
         slot_path,
         relative,
         label,
         missing_error,
+        unreadable_error,
     )
     if errors:
         return None, None, errors
-    assert artifact_path is not None and artifact_stat is not None
-    artifact_bytes, read_errors = _read_validated_metadata_artifact_bytes(
-        artifact_path,
-        artifact_stat,
-        label,
-        relative,
-        f"{label} could not be read",
-        max_bytes,
-    )
+    assert pin is not None
+    with pin:
+        artifact_bytes, read_errors = _read_validated_metadata_artifact_bytes(
+            pin,
+            label,
+            relative,
+            unreadable_error,
+            max_bytes,
+        )
     if read_errors:
         return None, None, read_errors
     assert artifact_bytes is not None
@@ -3442,22 +3700,23 @@ def _metadata_artifact_text(
 ) -> tuple[str | None, list[str]]:
     """Validate a slot-relative text artifact immediately before reading it."""
 
-    artifact_path, artifact_stat, errors = _validate_metadata_artifact_for_read(
+    pin, errors = _validate_metadata_artifact_for_read(
         slot_path,
         relative,
         label,
         missing_error,
+        unreadable_error,
     )
     if errors:
         return None, errors
-    assert artifact_path is not None and artifact_stat is not None
-    artifact_bytes, read_errors = _read_validated_metadata_artifact_bytes(
-        artifact_path,
-        artifact_stat,
-        label,
-        relative,
-        unreadable_error,
-    )
+    assert pin is not None
+    with pin:
+        artifact_bytes, read_errors = _read_validated_metadata_artifact_bytes(
+            pin,
+            label,
+            relative,
+            unreadable_error,
+        )
     if read_errors:
         return None, read_errors
     assert artifact_bytes is not None
@@ -5977,73 +6236,85 @@ def _candidate_artifact_measurement(
 ) -> dict[str, int | str] | None:
     """Measure one KRV4 frame without trusting metadata-supplied offsets."""
 
-    artifact_path, artifact_stat, path_errors = (
-        _validate_signed_evidence_artifact_for_digest(slot_path, relative)
+    display = _display_path(relative)
+    pin, path_errors = _validate_signed_evidence_artifact_for_digest(
+        slot_path,
+        relative,
+        pin_changed_error=f"candidate artifact {display} changed while being opened",
+        pin_unreadable_error=f"candidate artifact {display} could not be read",
     )
     if path_errors:
         errors.extend(path_errors)
         return None
-    assert artifact_path is not None and artifact_stat is not None
-    if _kagemusha_krv4_size_exceeds_bound(artifact_stat.st_size):
-        errors.append(f"candidate artifact {_display_path(relative)} exceeds the KRV4 bound")
-        return None
-    framed = hashlib.sha256()
-    payload = hashlib.sha256()
-    payload_size = 0
-    expected_identity = (artifact_stat.st_dev, artifact_stat.st_ino)
-    try:
-        with artifact_path.open("rb") as handle:
-            open_stat = os.fstat(handle.fileno())
-            if (open_stat.st_dev, open_stat.st_ino) != expected_identity:
+    assert pin is not None
+    with pin:
+        framed = hashlib.sha256()
+        payload = hashlib.sha256()
+        payload_size = 0
+        try:
+            open_stat = os.fstat(pin.descriptor)
+            path_stat = _pinned_artifact_leaf_stat(pin)
+            expected_snapshot = _file_read_snapshot(pin.opened_stat)
+            if (
+                not _pinned_artifact_ancestors_match(pin)
+                or not stat.S_ISREG(open_stat.st_mode)
+                or open_stat.st_nlink > 1
+                or _file_read_snapshot(open_stat) != expected_snapshot
+                or _file_read_snapshot(path_stat) != expected_snapshot
+            ):
                 errors.append(
-                    f"candidate artifact {_display_path(relative)} changed while being opened"
+                    f"candidate artifact {display} changed while being opened"
                 )
                 return None
-            prefix = handle.read(12)
+            framed_size = int(open_stat.st_size)
+            if _kagemusha_krv4_size_exceeds_bound(framed_size):
+                errors.append(f"candidate artifact {display} exceeds the KRV4 bound")
+                return None
+            prefix = _read_exact_descriptor(pin.descriptor, 12)
             if len(prefix) != 12 or prefix[:8] != b"KRV4KEY\0":
-                errors.append(
-                    f"candidate artifact {_display_path(relative)} has invalid KRV4 framing"
-                )
+                errors.append(f"candidate artifact {display} has invalid KRV4 framing")
                 return None
             header_len = int.from_bytes(prefix[8:12], "little")
             if header_len == 0 or header_len > MAX_KAGEMUSHA_KRV4_HEADER_BYTES:
                 errors.append(
-                    f"candidate artifact {_display_path(relative)} has invalid KRV4 header length"
+                    f"candidate artifact {display} has invalid KRV4 header length"
                 )
                 return None
-            header = handle.read(header_len)
+            header = _read_exact_descriptor(pin.descriptor, header_len)
             if len(header) != header_len:
                 errors.append(
-                    f"candidate artifact {_display_path(relative)} has a truncated KRV4 header"
+                    f"candidate artifact {display} has a truncated KRV4 header"
                 )
                 return None
             framed.update(prefix)
             framed.update(header)
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            while True:
+                chunk = os.read(pin.descriptor, 1024 * 1024)
+                if not chunk:
+                    break
                 payload_size += len(chunk)
                 if _kagemusha_krv4_size_exceeds_bound(payload_size):
                     errors.append(
-                        f"candidate artifact {_display_path(relative)} exceeds the KRV4 payload bound"
+                        f"candidate artifact {display} exceeds the KRV4 payload bound"
                     )
                     return None
                 framed.update(chunk)
                 payload.update(chunk)
             if payload_size == 0:
-                errors.append(
-                    f"candidate artifact {_display_path(relative)} has an empty KRV4 payload"
-                )
+                errors.append(f"candidate artifact {display} has an empty KRV4 payload")
                 return None
-            final_stat = artifact_path.lstat()
-            if (final_stat.st_dev, final_stat.st_ino) != expected_identity:
-                errors.append(
-                    f"candidate artifact {_display_path(relative)} changed while being read"
-                )
+            final_stat = _pinned_artifact_leaf_stat(pin)
+            if (
+                not _pinned_artifact_ancestors_match(pin)
+                or _file_read_snapshot(final_stat) != expected_snapshot
+            ):
+                errors.append(f"candidate artifact {display} changed while being read")
                 return None
-    except OSError:
-        errors.append(f"candidate artifact {_display_path(relative)} could not be read")
-        return None
+        except OSError:
+            errors.append(f"candidate artifact {display} could not be read")
+            return None
     return {
-        "framed_size_bytes": int(artifact_stat.st_size),
+        "framed_size_bytes": framed_size,
         "framed_sha256": framed.hexdigest(),
         "payload_size_bytes": payload_size,
         "payload_sha256": payload.hexdigest(),
