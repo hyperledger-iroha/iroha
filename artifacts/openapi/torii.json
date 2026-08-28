@@ -13606,93 +13606,6 @@
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
       },
-      "GovernanceProposeDeployContractRequestV1": {
-        "additionalProperties": false,
-        "description": "Strict first-release governance request for one contract deployment target and ABI V1.",
-        "oneOf": [
-          {
-            "properties": {
-              "contract_address": {
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "contract_address"
-            ]
-          },
-          {
-            "properties": {
-              "contract_alias": {
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "contract_alias"
-            ]
-          }
-        ],
-        "properties": {
-          "abi_hash": {
-            "pattern": "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$",
-            "type": "string"
-          },
-          "abi_version": {
-            "const": "1",
-            "type": "string"
-          },
-          "code_hash": {
-            "pattern": "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$",
-            "type": "string"
-          },
-          "contract_address": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "contract_alias": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "manifest_provenance": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/GovernanceManifestProvenanceV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "mode": {
-            "enum": [
-              "Zk",
-              "Plain",
-              null
-            ],
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "window": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/GovernanceAtWindowV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "abi_version",
-          "code_hash",
-          "abi_hash"
-        ],
-        "type": "object"
-      },
       "GovernanceProtectedNamespacesRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -63046,7 +62959,7 @@
     },
     "/v1/gov/proposals/deploy-contract": {
       "post": {
-        "description": "Build one typed certificate-only contract-deployment proposal and receive exactly one instruction draft for local signing. The request contains no referendum window, voting mode, authority, or signing secret.",
+        "description": "Build one typed contract-deployment proposal instruction draft for local signing. The returned proposal can enter only the attempt-based private Parliament pipeline; the request contains no referendum window, voting mode, authority, or signing secret.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
@@ -63098,7 +63011,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/GovernanceProposeDeployContractRequestV1"
+                "$ref": "#/components/schemas/DeployContractProposalDraftRequestV1"
               }
             }
           },
@@ -63186,7 +63099,7 @@
     },
     "/v1/gov/proposals/sccp-route-governance": {
       "post": {
-        "description": "Accepts exactly one typed SCCP registry action. The endpoint returns one canonical certificate-only proposal instruction for local signing and never accepts a referendum window, voting mode, signer, or private-key material.",
+        "description": "Accepts exactly one typed SCCP registry action. The endpoint returns one canonical proposal instruction draft for the attempt-based private Parliament pipeline and never accepts a referendum window, voting mode, signer, or private-key material.",
         "operationId": "proposeSccpRouteGovernance",
         "parameters": [
           {

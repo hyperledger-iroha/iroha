@@ -1526,7 +1526,7 @@ pub(crate) mod tests {
             genesis
                 .insert(
                     "expected_hash".to_owned(),
-                    toml::Value::String(Hash::prehashed([0xC1; 32]).to_string()),
+                    toml::Value::String(network_id_v1(0xC1).to_string()),
                 )
                 .is_none()
         );

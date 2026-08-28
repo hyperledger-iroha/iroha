@@ -166,9 +166,12 @@ key-session/transcript/seat checks. The projection is not evidence of
 committed-state origin, and the capability reply is only a point-in-time lookup
 rather than proof of future liveness. Those operating seams are outside the TLA
 state machine and the check is not a refinement proof.
-Release still requires a settled source revision, focused Rust tests, qualified
-live finalized-pulse production, consensus-enforced TLE key rotation, a genuine
-authenticated broker/HSM share provider, four-peer timed-release/restart/retry
-evidence, and the independently reviewed timed-OVN publication manifest
-described in the roadmap. Zeroizing software buffers are not secure-erasure or
+For this formal-model corridor, release qualification still requires a settled
+source revision, an exhaustive same-source pinned TLC 2.19 run and archive, and
+qualification of the implemented finalized-pulse production and
+consensus-enforced TLE key-rotation paths. The repository-wide gate inventory in
+the [SORA Parliament hardening roadmap](../../roadmap.md#sora-parliament-hardening)
+additionally requires focused and four-peer execution evidence, a genuine
+authenticated broker/HSM share provider, and independent review of the timed-OVN
+publication manifest. Zeroizing software buffers are not secure-erasure or
 hardware-custody evidence.

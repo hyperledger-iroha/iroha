@@ -474,17 +474,17 @@ Completed history lives in [`status.md`](./status.md).
   evidence checker passes all 18 collected cases across 15 test functions, and
   byte-identical pre-merge allocation runs establish the harness contract, but
   do not replace fresh candidate measurements and an archived sealed report.
-- Re-run the bounded Parliament model and deterministic source/model contract
-  from the immutable candidate, then pass focused data-model/Core/Torii tests,
-  the legacy-codec guard, workspace tests, strict all-target Clippy, formatting,
-  strict TLAPS, pinned Verus, chaos/soak qualification, and a clean externally
-  signed release corridor. The local TLC run now covers the typed zero/singleton
-  pre-request capacity path, bounded exhaustion, and atomic Confirmation-capacity
-  decision in addition to the original lifecycle, while the deterministic
-  source/model gate and all 14 lifecycle corridor source checks with 113
-  adversarial subtests are green.
-  Bounded model checking remains regression evidence and does not replace
-  cryptographic review, real-HSM custody, or multi-peer tests.
+- Re-run and archive the configured state space exhaustively with pinned TLC
+  2.19 plus the deterministic source/model contract from the immutable
+  candidate, then pass focused data-model/Core/Torii tests, the legacy-codec
+  guard, workspace tests, strict all-target Clippy, formatting, strict TLAPS,
+  pinned Verus, chaos/soak qualification, and a clean externally signed release
+  corridor. The local exhaustive run covered 11,488,938 generated and 8,495,064
+  distinct states through complete-graph depth 52 with no error; the
+  deterministic source/model gate and all 15 lifecycle corridor source checks
+  with 173 adversarial contexts are green. Model checking remains regression
+  evidence and does not replace cryptographic review, real-HSM custody, or
+  multi-peer tests.
 
 ## ZK algorithm release qualification
 
@@ -28665,8 +28665,8 @@ advanced by each responsive validator.
   reviewers and subsystem owners.
 
 **Next checkpoints:** monthly X Spaces cadence, clearer contributor onboarding,
-public follow-up notes for LFDT governance review items, and commit/reveal
-hardening for SORA Parliament policy juries.
+public follow-up notes for LFDT governance review items, and timed-OVN/
+threshold-release hardening for SORA Parliament policy juries.
 
 ## Kagemusha protected mobile production publication
 
