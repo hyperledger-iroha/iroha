@@ -44,10 +44,6 @@ MODULE.ROOT_CARGO_LOCK = REPO_ROOT / "Cargo.lock"
 
 DEV_FILES = {
     "README.md",
-    "config-peer-1.toml",
-    "config-peer-2.toml",
-    "config-peer-3.toml",
-    "config.toml",
     "docker-compose.yml",
     "genesis.expected_hash",
     "genesis.json",
@@ -87,7 +83,7 @@ def _valid_cli_tail(tmp_path: Path) -> list[str]:
 def test_profile_allowlist_and_closed_inventories_match_present_bundles() -> None:
     assert set(MODULE.PROFILE_FILES) == {"iroha3-dev"}
     assert set(MODULE.PROFILE_FILES["iroha3-dev"]) == DEV_FILES
-    assert len(DEV_FILES) == 15
+    assert len(DEV_FILES) == 11
     present = {
         path.name
         for path in (REPO_ROOT / "defaults" / "kagami" / "iroha3-dev").iterdir()
@@ -146,7 +142,7 @@ def test_stage_snapshot_rejects_missing_extra_symlink_and_hardlink(tmp_path: Pat
 
     peer = root / "defaults" / "kagami" / "iroha3-dev" / "peer0.toml"
     peer.unlink()
-    os.link(root / "defaults" / "kagami" / "iroha3-dev" / "config.toml", peer)
+    os.link(root / "defaults" / "kagami" / "iroha3-dev" / "README.md", peer)
     with pytest.raises(MODULE.OwnerError, match="single-link regular"):
         MODULE._snapshot(root, "iroha3-dev", closed_stage=True)
 

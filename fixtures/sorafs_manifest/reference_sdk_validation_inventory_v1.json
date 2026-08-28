@@ -730,7 +730,7 @@
       "encoding": "json",
       "expectation": "valid",
       "byte_length": 1688,
-      "sha256": "fb4fa524b0daa24714161a5f3243d82da8739919985bd66e46e91797da9d35ef"
+      "sha256": "436e2641c9395b217818c24f52ae61d7d0abe536b088eba55fa3b9141d3f8369"
     },
     {
       "path": "replication_order/order_v1.to",
@@ -739,7 +739,7 @@
       "encoding": "norito",
       "expectation": "valid",
       "byte_length": 387,
-      "sha256": "683a82dedad5f61f6d4b4eee0ee9de87cb55abc434688f50c3ca29bfc140d5b0"
+      "sha256": "42079b7421d2125abd09f8a01d699b6708cb1433079901bf2b2772dc1fcb6dc4"
     }
   ],
   "outcomes": [
@@ -749,8 +749,8 @@
       "scenario": "block_bad_signature",
       "status": "Error",
       "code": "SFS-SIG-006",
-      "byte_length": 2086,
-      "sha256": "e9d2010d637a4568cd9309d2dbb6e25eea1ea167480f54da357d6c894f5ffeb3"
+      "byte_length": 2122,
+      "sha256": "97f8e2dbad6ef2b682026702492574c78fef35b7d305ea9d095ffaa28b1fb4ec"
     },
     {
       "path": "governance/dag_block_cid_mismatch_validation_outcome_v1.json",
@@ -794,8 +794,8 @@
       "scenario": "head_bad_signature",
       "status": "Error",
       "code": "SFS-SIG-007",
-      "byte_length": 2362,
-      "sha256": "338554e917055bb12ce6203c879ae06b048aa521bc30bd36affea899617d741c"
+      "byte_length": 2398,
+      "sha256": "75bcb43ee84b11eb4decc5dd7783e478cfb9bdbffb2a4b9b993216dfa53675b0"
     },
     {
       "path": "governance/dag_head_reordered_validation_outcome_v1.json",
@@ -830,8 +830,8 @@
       "scenario": "order_request_bad_signature",
       "status": "Error",
       "code": "SFS-SIG-007",
-      "byte_length": 1946,
-      "sha256": "687ca9bae925c721b29701e9ed65e38a0edb235475e23b2e62d84e364655e5d3"
+      "byte_length": 1982,
+      "sha256": "85bec819db767ecabbb11dca0b1641a2d76e8775ea83663583808ef08bccda0f"
     },
     {
       "path": "orderbook/negative/order_request_trailing_bytes_validation_outcome_v1.json",
@@ -965,8 +965,8 @@
       "scenario": "bundle_orderbook_bad_signature_negative",
       "status": "Error",
       "code": "SFS-BND-001",
-      "byte_length": 2333,
-      "sha256": "6c90e24cb5a223a7b05e22d96ac2c72d36a6459b4e82d61c2df4437f8d6d15f7"
+      "byte_length": 2369,
+      "sha256": "38e14c7de4aafa028ddb8a49e3ef3ea01015467d61d8eed9817221c1b71defc2"
     },
     {
       "path": "reference_sdk/bundle_orderbook_trailing_bytes_negative_validation_outcome_v1.json",
@@ -1037,6 +1037,6 @@
     "key_usage": "test_only_reference_sdk_fixture",
     "public_key_hex": "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3",
     "public_key_fingerprint_sha256": "1a09a6a1b85cec77787ba6ce26f18500a2434865cee04d79c69a481888f52fff",
-    "signature_hex": "a52e6acdf4fc175b7b5e05fb7e36df5cd39c1f78ecc3e4dd602f57b086d9fe395b7b62228b5c564c2ead51e4853e859cf714ba8fda189b536bf8e080cd108107"
+    "signature_hex": "5c288b60d620cf259d06fa3709df7701f7950f04efe0948e1d6f0915d0e81b1887c076d29db04046bf4a086cb9daad03aeb3f96d8ea97311647c6b00841db60c"
   }
 }

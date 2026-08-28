@@ -1624,7 +1624,10 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "d71a57ec0eb41724bb65040a35e9d0ac308a2ef387868c207070add6e02be541"
     ),
     "scheduler_arbitration_inputs": (
-        "5e8a29a35cf5627473a4298a9d47831e6719da8913f8a478cd410546d7758eba"
+        "79fc6e55d53b331ff01aab01f638cfb3238f607115ca56a4a8cbd423f3572028"
+    ),
+    "try_step_pre_timeout_locked_prepare_qc": (
+        "b2555b96fe2f6ff8a1c1f2cfc6e8738df498942e1bbf5cebbd6a1275619b29bb"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
@@ -1641,7 +1644,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "eligible_deferred_admission_ordinals": (
         "ca2db5b8e601e556e10001d3c0a6be5b18dd1cd1f92e5eecf0273fe158fb232d"
     ),
-    "runtime_step": "aaa41e0366ae660537780528c97e763e8f292e9a80234c21d4cc37a390eea414",
+    "runtime_step": "5963ef7728c8c6555bf7156b64cc649ee7c54b5a77befae64db17e24cdc4d313",
     "dispatch_one_adapter_deferred": (
         "a4c901cdd676731f6cfd3c4dcb52718df366f65bc7ca5e8d1a54a841ec30cdab"
     ),
@@ -1673,6 +1676,8 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_HELPER_CHAIN = (
     "oldest_active_lifecycle_ordinal_before_physical_cut_excluding",
     "physically_eligible_deferred_admission_ordinals",
     "pop_pacemaker_progress_with_ownership",
+    "runtime_view_blocked_progress_authorization_projection_hash",
+    "validates_retained_blocker",
     "runtime_queue_occurrence_owner_projection_hash",
     "runtime_queue_ownership_snapshot_projection_hash",
     "runtime_queue_occurrence_set_matches_snapshot",
@@ -1696,7 +1701,7 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "b46fe089ce520f215926646c49fb991755ae3e2ba6b4dda5242808df6f8d0645"
     ),
     "mint_selection_seal": (
-        "981e90ec1cfb8388e1e6058874ecab69d8e415b7319890c5587c683e4dec7568"
+        "3f4a3eaaa3f1a703392d04b9c05262f2638c2bb3d4f65a9e247b83a0c1a44af8"
     ),
     "contains_queue_occurrence_owner": (
         "c116a2a5423be69a43d6dbf13c00525a416f974020cd96ad7f55282a27293a98"
@@ -1711,7 +1716,13 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "0b51819b618a5d50f632ffb772a94be1560e960b57746c10ba3e077aa97b60d3"
     ),
     "pop_pacemaker_progress_with_ownership": (
-        "10beefbc980f21e6eb3e07de7153be4e72568a323908211afe1042335125eca9"
+        "326f99b8605bbaceb6cc2328bc6235b77936cba4ad20b4011ccca08e5f6e1793"
+    ),
+    "runtime_view_blocked_progress_authorization_projection_hash": (
+        "e9a29e0a277bbae16f4b1ef8219bdf892f79ce733b56bbe01bd2a9f7c5c36158"
+    ),
+    "validates_retained_blocker": (
+        "e1b3b5823bf3c81749298d436f04c1bdf1d8d0b06b3f1d26693089aab119a05b"
     ),
     "runtime_queue_occurrence_owner_projection_hash": (
         "c220a852adcdb9e7a2a20cec297ee79a87cf5b88acac55410eac3c824614d1a6"
@@ -1729,7 +1740,7 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
     ),
     "runtime_scheduler_projection_hash": (
-        "78fc1daedf4549fb9438eb49d70cf9313eaab634d8e037d83199a988a279a7d3"
+        "415a47652facf9236a0205764edc92f3eb545f35e2f83b9a3562a417bf77c1ba"
     ),
     "current_signature_fence_identity": (
         "d3e7b714af5442d66ec2e8f4e1c57bfe649c5b8f41b310d71929fa6586baf0ed"
@@ -1744,13 +1755,13 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "f6c5e5ac82dfda26d972715a073a2ddb7a41135ef9be0ee02ed77944f9e186f8"
     ),
     "retain_scheduler_ownership": (
-        "a40b89683136838f6979df884f6faf72e7dfd6c5d999d1e81e996f928fc5574d"
+        "d333ce49089e9a1d7a15a9111d0ee6541fce2171f4af835249095e6a71aa0929"
     ),
     "try_step_pacemaker_escape": (
-        "aa0a41501d13d502e119566bb4fc55e202f820ece97cf66e486ac851b458c64d"
+        "55cd8225900a605ce0821bda634c5247d007b53db561c404b4be2de13a0ac9fe"
     ),
     "dispatch_one_pacemaker_progress": (
-        "fc7d5f12b41f703242826e8926dd91f4267b78d775b1d8c2453d85006a3ac965"
+        "d806941928afcb15ee72ed7eef771ac10cad55a7b714827b49052617b76c894d"
     ),
     "occurrence_owner_validate_exact": (
         "0f018cbe8ab36b2a5e1f3aa128d7c22c367083b399184aedc8c829f9228db8e3"
@@ -1762,13 +1773,37 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "9ee5bf23ffa531c168a3722a216ef32a9c2cf83f4265e25dde0fe750b4fa890f"
     ),
     "queue_selection_validate_identity": (
-        "18019651786d6151ee975cc68de9f43f2e9ece72e979d3957fb67acbb7c09774"
+        "94d5ca84828c28e62e55af3682b290e5d02eb1db477243ae0a25ad55c39d1542"
+    ),
+    "queue_selection_kind_code": (
+        "08b07eaf05cd85228dc54c2f49a2b54071814c916a19e92cb3cff56fd5eb2518"
     ),
     "queue_selection_matches_scheduler_occurrence": (
         "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
     ),
     "scheduler_evidence_validate_exact": (
-        "cbbc75540f3941c461e2212d770436b6dd22a48a73c6457177c459aa11c0ceed"
+        "458ee09d659891d8f30a77a2b2c49a564914ade84ee013e9be77a8aa89f59459"
+    ),
+    "view_blocked_authorization_new": (
+        "7c4cfb17b4841105a0bc2c7e966acbd72ea4c8c232cd502918f4136c9f8717ad"
+    ),
+    "bounded_ingress_ordinary_view_blocked_progress_authorization": (
+        "432f1bd53d20501e9fa004f394aa871f49eb7144c10b82aab0bbeb311c7688ee"
+    ),
+    "runtime_ordinary_view_blocked_progress_authorization": (
+        "1f145ba32cfdf6e21d078255e660ccfecc7de2fff4fd4a718fceeec24669511e"
+    ),
+    "runtime_driver_default_pacemaker_progress_blocked_target_view": (
+        "881e840c28227633ad82e695d9c1214352c16d6622cb9a0c57237b299ccb5424"
+    ),
+    "runtime_driver_default_pacemaker_progress_releases_view_block": (
+        "ecd3f05b7cff39a5654e509bee842092e9e39f7e96d01e188e067a7e44b4cab9"
+    ),
+    "runtime_driver_pacemaker_progress_blocked_target_view": (
+        "d667e1e855dd787defdaa559d4a3cfaef26f5b15cedf8e505184f7733db8495a"
+    ),
+    "runtime_driver_pacemaker_progress_releases_view_block": (
+        "0cdddcea836f909d53a45048fd38c97faf9e42f236fb234ad97a40550e376793"
     ),
     "adapter_pacemaker_escape_is_parked": (
         "5513bb3477396c268d3dc7ed75ded1d6c027bc5780c5f129b53920720c498d86"
@@ -1935,6 +1970,9 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
 }
 
 _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
+    "ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc": (
+        "a998fd581c2b0ed01441cad6e752e8599e7f41634844045bff07ab4f7213aa29"
+    ),
     "deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences": (
         "275408912512b0588a7fd1403629e9039115288b25d66aa707ddfb77a66d902e"
     ),
@@ -4495,13 +4533,11 @@ def _transport_geometry_refresh_resistant_errors(
 let origin_len = peer_id_wire_len_from_raw_key_bytes(RELAY_NODE_PUBLIC_KEY_BYTES, flags)?;
 let target_len = relay_target_wire_len(direct.then_some(RELAY_NODE_PUBLIC_KEY_BYTES), flags)?;
 let ttl_len = core::mem::size_of::<u8>();
-let priority_len = core::mem::size_of::<u32>();
 let origin_signature_len = byte_sequence_wire_len(RELAY_ORIGIN_SIGNATURE_BYTES)?;
 let field_lens = [
     origin_len,
     target_len,
     ttl_len,
-    priority_len,
     origin_signature_len,
     payload_len,
 ];
@@ -4681,7 +4717,7 @@ _PRODUCTION_P2P_FRAME_GEOMETRY_ITEM_SHA256 = {
         "84837f33c9793445071c17cdc11de01ddc1b7b57e061896afd381252743d3c05"
     ),
     "relay_message_wire_payload_len": (
-        "e354e0de75bfcb827e1cca70b082392c61316d40bb87ca689ea67918ecdfb009"
+        "993d863fd174abfd9052a1bfcacc9f3c40fca6cd62493b2dbb95222137b579fe"
     ),
     "direct_data_frame_wire_len_from_payload_len": (
         "fa559993ed02666615d9443ef67b6f801f4c52e74d33e39681bed9a283fe2d38"

@@ -5,6 +5,66 @@ Last updated: 2026-08-28
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Mochi first-release closure
+
+- Add a production-source reachability and dependency guard for Mochi exports,
+  commands, routes, environment inputs, and helper binaries so compatibility
+  aliases, test-only release branches, and unowned wrappers cannot return.
+- Qualify owner-only vault/bootstrap custody and atomic publication on every
+  shipping host platform. Keep platforms without equivalent no-follow,
+  ownership/ACL, single-link, and directory-durability guarantees fail closed.
+  Replace pathname revalidation/publication with descriptor-relative no-follow
+  traversal before claiming resistance to concurrent ancestor replacement.
+- Benchmark dashboard refresh, bounded Explorer decoding, one-pass snapshot
+  inventory/copy/rehash, restore recovery, readiness smoke, and supervisor
+  startup. Preserve deterministic output and add explicit allocation/latency
+  budgets before introducing caches or wider concurrency.
+
+## Iroha configuration first-release closure
+
+- Convert the remaining ordinary-input unwind surfaces in Governance and its
+  SoraFS policy leaves, SoraCloud submission/posture, SoraNet VPN, content,
+  Torii push/history/RAM-LFE, and DA/SoraFS parsing to the existing aggregated
+  `Emitter<ParseError>` contract. Reject invalid bounds exactly instead of
+  silently clamping or treating zero as a compatibility default.
+- Split the large user/actual parameter modules along existing ownership and
+  validation boundaries. Keep a single definition of each first-release
+  label, default, and constraint, and add production-source reachability guards
+  so aliases, duplicate serializers, ambient-environment reads, and unowned
+  config/DTO/metric fields cannot return.
+- Benchmark bounded TOML loading (including `extends`), typed TOML-to-Norito
+  conversion, complete-config parsing, and public config projection. Add
+  allocation and source-graph ceilings before introducing caches or changing
+  merge order, and preserve byte-identical results across hardware.
+- After the current shared-tree integration edits and unrelated SoraCloud/Nexus
+  golden failures are resolved, run the complete `iroha_config_base`,
+  `iroha_config`, generator, SDK, daemon, strict Clippy, and workspace test
+  matrices from one settled release candidate.
+
+## Kagami first-release closure
+
+- Re-run the complete Kagami unit/integration suite after the concurrently
+  edited instruction registry/genesis state, consensus/profile commitments, and
+  config fixtures settle. Follow with the multi-hour workspace suite on the
+  release candidate; strict Kagami Clippy and checked-in generated-help equality
+  already pass.
+- Add a production-source reachability check for Kagami commands, binaries,
+  features, and direct dependencies so empty switches, unowned helper binaries,
+  compatibility aliases, and duplicate serializers cannot accumulate again.
+  Apply proven direct-dependency removals in a dedicated lockfile-owned change
+  so `Cargo.toml` and `Cargo.lock` remain atomic.
+- Split the large localnet, Swarm, and Kagemusha implementations along their
+  existing validation, rendering, custody, and publication boundaries. Reuse
+  the canonical bounded-read and atomic-publication primitives without adding
+  alternate first-release workflows.
+- Benchmark batched Kura inspection, bounded codec conversions, localnet bundle
+  generation, and prepared-genesis policy restaging. Add allocation ceilings
+  and identical-output checks before caching equivalent validator-policy work or
+  changing batch sizes.
+- Qualify owner-only key/config custody on every shipping host platform. Keep
+  unsupported platforms fail closed until an equivalent no-follow, ACL/mode,
+  single-link, atomic-publication implementation is available.
+
 ## Digital-signature release qualification
 
 - Run the mixed-torsion Ed25519 regression with and without `ecc-batch`, followed
@@ -104,13 +164,16 @@ Completed history lives in [`status.md`](./status.md).
   reader now drain eagerly before application authentication, close on empty or
   oversized frames, and use count-and-byte-bounded handoffs, but dependency-owned
   work before the first pump poll and between reactor polls is not a formal
-  per-entry memory bound.
-- Carry application, exit, measurement, and VPN payload through the fixed-rate
-  scheduler before enabling strict SoraNet constant-rate negotiation. Make
-  DATAGRAM unavailability and send failure circuit-fatal in that mode, then add
-  mixed-hop, loss, and traffic-shape regressions proving payload and cover share
-  one schedule. Until those invariants are complete, the relay must continue to
-  reject strict mode instead of downgrading it.
+  per-entry memory bound. Locked Quinn 0.11.9 / quinn-proto 0.11.15 still has payload-only
+  receive accounting, so strict SoraNet configuration and live preflight remain
+  rejected without downgrade.
+- Requalify the dormant strict SoraNet mux after per-entry DATAGRAM accounting
+  lands. Application/exit, measurement, and VPN payload are wired through the
+  authenticated fixed-rate scheduler; unavailability, missed deadlines, bounded
+  queue exhaustion, send failure, sequence loss, and unscheduled streams are
+  circuit-fatal, with direct mixed-channel and loss regressions. Final activation
+  still requires dependency-level zero-length-DATAGRAM abuse coverage and full
+  relay/helper end-to-end traffic-shape qualification.
 - Carry the already-signed broadcast envelope in reliable-progress retry
   ownership so retries across actor turns also avoid repeated BLS signing. Add
   deterministic signing, allocation, and retained-byte benchmarks for direct,
@@ -217,8 +280,16 @@ Completed history lives in [`status.md`](./status.md).
   `DaManifestV1`, envelope, CAR commitment, alias proof input, and SSM preimage,
   with byte-parity tests against Torii's enforced retention and rent policy.
   Publishers should not have to duplicate private admission algorithms.
+- Consolidate the remaining repeated TRM, SSM, envelope, and track checks into
+  checked V1 constructors shared by publishers and Torii. Add a production
+  reachability guard requiring every future signed field to have an explicit
+  admission, routing, persistence, or viewer owner before changing the
+  first-release wire shape.
+- Extend the borrowed-section CAR verifier to file-backed rehydration with an
+  explicit configuration-sourced archive bound, then benchmark retained and
+  peak bytes so the CLI does not need to materialize an entire archive at once.
 - Extend the CAR output prepare/commit boundary to the optional summary output,
-  then rerun the focused Torii, CLI, xtask, viewer/cache, CAR, integration, and
+  then rerun the focused Torii, CLI, xtask, viewer, CAR, integration, and
   full-workspace matrices from a settled candidate.
 
 ## Data-model first-release closure
@@ -756,19 +827,6 @@ close the internal blockers below:
   path; add bounded multi-page shard retrieval before permitting a larger
   offset window, and make every remaining fanout list prove the same property
   with cross-shard fixtures.
-- Implement a consensus-owned, cluster-wide faucet claim marker consumed
-  atomically in the same ledger transaction as the transfer. Until duplicate
-  claims fail deterministically across peers, restarts, and generic transaction
-  ingress, keep both faucet prepare and submit outside the MCP tool registry.
-- Qualify the new MCP global and reserved long-poll dispatch limits under
-  adversarial concurrency. Add multi-client tests proving that transaction and
-  contract waits cannot starve bounded tools, and tune the derived long-poll
-  share only from deterministic configuration rather than environment toggles.
-- Implement authenticated JSON-RPC request cancellation for exact in-flight MCP
-  calls. Bind cancellation to the admitted client and request identifier, stop
-  the corresponding nested dispatch or long poll, and prove that identifier
-  reuse cannot cancel another client's work.
-
 - TODO: add an authenticated cancellation/rebind protocol for an exact pending
   QueuePlan whose fresh dataspace/role topology changes (for example after an
   SNS lease transition). Candidate assembly now defers such work without
@@ -1902,11 +1960,22 @@ source validation.
   the owner-only exact V1 guest qualification record emitted by `up`. It must
   not claim to repeat KVM, source/binary identity, signed finality, or the
   mutating Inrou deployment.
-- Once peer shutdown is proven, `down` must destroy every generated peer,
-  operator, and onboarding signer plus the onboarding token.
+- Once peer shutdown and the cleanup-directory identity are proven, `down` must
+  destroy the complete generated `network/` tree, including configs, state,
+  logs, every peer/operator/onboarding signer, and the onboarding token. Failed
+  startup may print bounded log tails before applying the same destruction;
+  unproven shutdown or identity drift must preserve the tree.
   Do not restore release authorities, source-seal handoffs, publication
   receipts, LaunchAgents, systemd validator units, predecessor rollback, or
   24-hour soak requirements to this path.
+- Move the last trusted-Inrou guest binding out of Python's small textual TOML
+  append and into a typed Rust config writer that consumes the staged artifact
+  identity. Kagami now owns storage and egress directly, so do not restore the
+  removed generic-localnet overlay or its invalid guest-less intermediate.
+- Replace generated stop-script PID-file/argv matching with a Linux process
+  identity that cannot be reused between proof and signal (pidfd plus pinned
+  start-time/executable/config identity). Keep the current fail-closed residual
+  cohort checks until that narrower authority is implemented.
 - Treat public Taira product-surface qualification as a separate operator
   activity. The compiled `iroha taira doctor` remains the standalone read-only
   diagnostic; the broad doctor is opt-in for disposable networks.
@@ -2741,22 +2810,22 @@ candidate's exact values and pass independent review and device evidence.
 sheet and Phoenix series, followed by the smallest useful producer-credit pilot
 and adversarial simulation harness.
 
-SoraNet handshake admission for the first release now has a single production
-policy: PoW is mandatory, the Argon2 puzzle gate stays enabled, and SM helper /
-OpenSSL-preview matching stays strict. Startup configuration no longer exposes
-the unsafe `pow.required` or `pow.puzzle.enabled` knobs, live `/v1/config`
-updates reject attempts to disable PoW, clear puzzle admission, or allow SM
-mismatches, and the `iroha app sorafs handshake update` CLI no longer carries
-the retired relaxation flags. The SoraFS rollout contract pins the CLI, Kiso,
-config defaults, negative tests, and stale-doc scans for that fail-closed
-surface.
+SoraNet handshake admission for the first release now has one implementation:
+mandatory bounded Argon2 work with durable replay protection and strict SM
+helper/OpenSSL-preview matching. The actual config, config API, Kiso updater,
+CLI, relay, puzzle service, and P2P runtime no longer carry `pow.required`,
+`pow.puzzle.enabled`, optional-puzzle state, or the plain-hashcash fallback;
+retired JSON keys fail decoding. The SoraFS rollout contract pins the singular
+policy and stale-surface scans.
 
-SoraNet signed-ticket admission now also fails closed. Relays that configure a
-`pow.signed_ticket_public_key_hex` verifier reject raw 74-byte PoW frames
-instead of falling back to unsigned-ticket verification; raw PoW frames remain
-valid only for relays without a signed-ticket verifier key. The P2P verifier,
-negative regression, puzzle-service operations guide, and rollout static
-contract pin that first-release policy.
+Relay admission has two explicit issuer-authentication policies over the same
+Argon2 proof. A relay with `pow.signed_ticket_public_key_hex` accepts only the
+matching ML-DSA-44 envelope; a relay without that verifier accepts only the
+canonical bare ticket. The P2P verifier, negative regression, puzzle-service
+operations guide, and rollout static contract pin that first-release policy.
+The issuer selects its configured policy and returns one tagged credential, so
+clients send neither a signing selector nor nullable alternate ticket fields.
+Reserved v1 token flags are fixed internally at zero.
 
 SoraFS/SoraNet orchestrator circuits no longer carry the validator MASQUE/obfs
 bypass fast path. Path hints, guard metadata, persisted guard records, circuit
@@ -3824,10 +3893,7 @@ workflows remain excluded from the first release.
   noncanonical-`R` signature material plus all-zero, small-order, and
   noncanonical resolver public keys before CryptoKit verification, the shared
   Swift offline Ed25519 helper rejects the same weak or noncanonical public-key
-  encodings before CryptoKit verification, and SoraFS
-  orchestrator Taikai cache admission envelopes and gossip messages now pin
-  small-order and noncanonical `R` rejection before custom protocol signature
-  verification,
+  encodings before CryptoKit verification;
   SoraNet
   SRCv2 certificate verification now routes Ed25519 signatures through that
 		  strict `R` parser before backend verification, SoraFS manifest Ed25519
@@ -4034,9 +4100,6 @@ workflows remain excluded from the first release.
 						  Torii durable DA receipt-log operator signatures route signer-resolved
 						  Ed25519 material through malformed-`R` admission before receipt payload
 					  verification,
-					  SoraFS orchestrator Taikai cache admission envelope and gossip
-					  signatures route signer-resolved Ed25519 material through
-					  malformed-`R` admission before canonical payload verification,
 					  validation-fee governance policy signatures route signer-resolved Ed25519
 					  material through malformed-`R` admission before threshold accounting,
 	  SoraFS gateway conformance
@@ -7434,19 +7497,7 @@ workflows remain excluded from the first release.
   multi-source fetch scoreboard persistence, and `taikai_viewer` metrics/summary
   artifacts now also use checked no-follow descriptor writers, with canonical
   temp roots in the affected CLI/integration coverage so platform temp symlinks
-  cannot bypass the release-path checks. Taikai cache QoS shaping now uses
-  deterministic integer token-bucket accounting with carried nanosecond refill
-  remainders, and cache-tier insertion checks projected byte totals before
-  mutating state, so large byte capacities, subsecond refill windows, and
-  near-`u64::MAX` tier accounting do not depend on floating-point rounding or
-  wrapping arithmetic before pull batches are issued, requeued, hedged, or
-  admitted to a tier. Taikai shard circuit breakers now treat overflowing
-  `Instant + open_for` deadlines as explicit indefinite open states, so huge
-  configured open durations fail closed without panicking and queue failover
-  continues to avoid the opened shard. Taikai cache-admission TTL handling now
-  rejects zero-TTL signed records and treats exact envelope/gossip expiry as
-  closed for verification and tracker ingestion, while the replay filter still
-  reopens only after evicting the old digest at its own exact window boundary.
+  cannot bypass the release-path checks.
   The SF-11
   release evidence gate now validates payload-free release-archive, signed-manifest,
   downstream-binding, cookbook-smoke, FFI/header-contract, and
@@ -14989,9 +15040,7 @@ workflows remain excluded from the first release.
   provenance, and alias-proof fixture signers now propagate `Signature::try_new`
   failures through N-API errors; the Connect Soracloud upload request signer
   now returns command errors from `Signature::try_new` for init/finalize
-  provenance signatures; SoraFS Taikai cache admission envelopes and gossip
-  wrappers now return `CacheAdmissionError::Signing` from `Signature::try_new`
-  instead of unwinding on backend signing failures; the SoraFS fixture manifest
+  provenance signatures; the SoraFS fixture manifest
   exporter, CLI domain-endorsement preparation, and SoraFS repair
   claim/complete/fail transaction signing now also propagate
   `Signature::try_new`/`SignatureOf::try_new` failures through command errors;
@@ -15609,9 +15658,6 @@ workflows remain excluded from the first release.
   SoraFS CLI manifest-submit, account-address parsing, authority literal, and
   pin-register payload fixtures now use checked deterministic Ed25519 seed
   expansion before CLI account parsing and payload regressions consume them;
-  SoraFS Taikai cache-admission envelope/gossip signer fixtures now use checked
-  deterministic Ed25519 seed expansion before signature and nonce failure
-  regressions consume them;
   SoraFS treasury payout account helpers now use checked deterministic Ed25519
   seed expansion before payout, reconciliation, and dispute regressions consume
   them; client transaction build/sign helpers now use `TransactionBuilder::try_sign`
@@ -16798,8 +16844,7 @@ workflows remain excluded from the first release.
   before request builders are emitted; SoraFS orchestrator guard-cache
   persistence now generates authentication-tag nonces through checked OS RNG
   fills and returns labelled persistence errors before tagged cache bytes are
-  emitted, and Taikai cache-admission gossip bodies now generate replay nonces
-  through checked OS RNG fills before signed gossip entries are emitted;
+  emitted;
   SoraFS orchestrator fetch job IDs now use checked OS RNG fills and return
   `OrchestratorError::JobIdRandomness` before fetch telemetry or provider
   selection continues on entropy failure; local QUIC proxy browser-manifest

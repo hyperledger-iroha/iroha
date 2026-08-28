@@ -6487,10 +6487,6 @@ fields {
     pub streaming_fec_parity_current: gauge_vec(&["bucket"]);
     /// Streaming feedback timeout events.
     pub streaming_feedback_timeout_total: int_counter();
-    /// Streaming SoraNet privacy-route provisioning failures.
-    pub streaming_soranet_provision_fail_total: int_counter();
-    /// Streaming SoraNet provisioning queue drops grouped by reason.
-    pub streaming_soranet_provision_queue_drop_total: int_counter_vec(&["reason"]);
     /// Telemetry redaction events grouped by reason.
     pub telemetry_redaction_total: int_counter_vec(&["reason"]);
     /// Telemetry redaction skips grouped by reason.
@@ -7728,7 +7724,7 @@ fields {
     pub soranet_privacy_circuit_events_total: int_counter_vec(&["mode", "kind"],);
     /// PoW validation failures grouped by relay mode and fixed reason.
     pub soranet_privacy_pow_rejects_total: int_counter_vec(&["mode", "reason"],);
-    /// Count of SoraNet PoW revocation store fallbacks grouped by reason.
+    /// Count of SoraNet PoW revocation-store failures grouped by reason.
     pub soranet_pow_revocation_store_total: int_counter_vec(&["reason"]);
     /// Aggregated SoraNet throttling events keyed by relay mode and fixed scope.
     pub soranet_privacy_throttles_total: int_counter_vec(&["mode", "scope"],);
@@ -7917,28 +7913,6 @@ fields {
     pub taikai_viewer_cek_rotation_seconds_ago: gauge_vec(&["lane"]);
     /// Taikai viewer alerts firing counter grouped by cluster/alertname.
     pub taikai_viewer_alerts_firing_total: int_counter_vec(&["cluster", "alertname"],);
-    /// Taikai cache query outcomes grouped by result/tier.
-    pub sorafs_taikai_cache_query_total: int_counter_vec(&["result", "tier"]);
-    /// Taikai cache insert events grouped by tier.
-    pub sorafs_taikai_cache_insert_total: int_counter_vec(&["tier"]);
-    /// Taikai cache eviction counters grouped by tier/reason.
-    pub sorafs_taikai_cache_evictions_total: int_counter_vec(&["tier", "reason"]);
-    /// Taikai cache promotion counters grouped by source/target tiers.
-    pub sorafs_taikai_cache_promotions_total: int_counter_vec(&["from_tier", "to_tier"],);
-    /// Taikai cache byte counters grouped by event/tier.
-    pub sorafs_taikai_cache_bytes_total: int_counter_vec(&["event", "tier"]);
-    /// Taikai QoS denials grouped by class.
-    pub sorafs_taikai_qos_denied_total: int_counter_vec(&["class"]);
-    /// Taikai queue events grouped by event/class.
-    pub sorafs_taikai_queue_events_total: int_counter_vec(&["event", "class"]);
-    /// Taikai queue depth grouped by state.
-    pub sorafs_taikai_queue_depth: int_gauge_vec(&["state"]);
-    /// Taikai shard failovers grouped by preferred/selected shard.
-    pub sorafs_taikai_shard_failovers_total: int_counter_vec(
-        &["preferred_shard", "selected_shard"],
-    );
-    /// Gauge tracking open shard circuits in the Taikai queue.
-    pub sorafs_taikai_shard_circuits_open: int_gauge_vec(&["shard"]);
     /// Count of SoraFS anonymity policy brownouts grouped by stage/reason/region.
     pub sorafs_orchestrator_brownouts_total: int_counter_vec(&["region", "stage", "reason"],);
     /// Configured SoraNet base payout (nano XOR) applied per epoch.
@@ -8448,19 +8422,13 @@ construct {
         }
     }
     [streaming_gck_rotations_total streaming_quic_datagrams_sent_total
-        streaming_quic_datagrams_dropped_total streaming_fec_parity_current]
+        streaming_quic_datagrams_dropped_total streaming_fec_parity_current
+        streaming_feedback_timeout_total]
     {
         for bucket in ["0", "1", "2", "3", "4", "ge5"] {
             streaming_fec_parity_current
                 .with_label_values(&[bucket])
                 .set(0);
-        }
-    }
-    [streaming_feedback_timeout_total streaming_soranet_provision_fail_total
-        streaming_soranet_provision_queue_drop_total]
-    {
-        for reason in ["full", "disconnected"] {
-            let _ = streaming_soranet_provision_queue_drop_total.with_label_values(&[reason]);
         }
     }
     [telemetry_redaction_total]
@@ -8901,11 +8869,6 @@ construct {
         taikai_viewer_rebuffer_events_total taikai_viewer_playback_segments_total
         taikai_viewer_cek_fetch_duration_ms taikai_viewer_pq_circuit_health
         taikai_viewer_cek_rotation_seconds_ago taikai_viewer_alerts_firing_total
-        sorafs_taikai_cache_query_total sorafs_taikai_cache_insert_total
-        sorafs_taikai_cache_evictions_total sorafs_taikai_cache_promotions_total
-        sorafs_taikai_cache_bytes_total sorafs_taikai_qos_denied_total
-        sorafs_taikai_queue_events_total sorafs_taikai_queue_depth
-        sorafs_taikai_shard_failovers_total sorafs_taikai_shard_circuits_open
         sorafs_orchestrator_brownouts_total soranet_reward_base_payout_nanos]
     {
         soranet_reward_base_payout_nanos.set(0);
@@ -9040,8 +9003,7 @@ initialize (metrics) {
         fraud_psp_score_bps fraud_psp_outcome_mismatch_total streaming_hpke_rekeys_total
         streaming_gck_rotations_total streaming_quic_datagrams_sent_total
         streaming_quic_datagrams_dropped_total streaming_fec_parity_current
-        streaming_feedback_timeout_total streaming_soranet_provision_fail_total
-        streaming_soranet_provision_queue_drop_total telemetry_redaction_total
+        streaming_feedback_timeout_total telemetry_redaction_total
         telemetry_redaction_skipped_total telemetry_truncation_total
         streaming_privacy_redaction_fail_total streaming_encode_latency_ms
         streaming_encode_audio_jitter_ms streaming_encode_audio_max_jitter_ms
@@ -9312,11 +9274,6 @@ initialize (metrics) {
         taikai_viewer_rebuffer_events_total taikai_viewer_playback_segments_total
         taikai_viewer_cek_fetch_duration_ms taikai_viewer_pq_circuit_health
         taikai_viewer_cek_rotation_seconds_ago taikai_viewer_alerts_firing_total
-        sorafs_taikai_cache_query_total sorafs_taikai_cache_insert_total
-        sorafs_taikai_cache_evictions_total sorafs_taikai_cache_promotions_total
-        sorafs_taikai_cache_bytes_total sorafs_taikai_qos_denied_total
-        sorafs_taikai_queue_events_total sorafs_taikai_queue_depth
-        sorafs_taikai_shard_failovers_total sorafs_taikai_shard_circuits_open
         sorafs_orchestrator_brownouts_total soranet_reward_base_payout_nanos
         soranet_reward_events_total soranet_reward_payout_nanos_total soranet_reward_skips_total
         soranet_reward_adjustment_nanos_total soranet_reward_disputes_total
@@ -9346,12 +9303,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 813;
-const METRIC_CATALOG_V2_REGISTERED: usize = 768;
-const METRIC_CATALOG_V2_BYTES: usize = 111_021;
+const METRIC_CATALOG_V2_ROWS: usize = 801;
+const METRIC_CATALOG_V2_REGISTERED: usize = 756;
+const METRIC_CATALOG_V2_BYTES: usize = 109_426;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "cdd04d34e3057c330976ce4d57af70f75f7d1908790d3511216161209955f028";
+    "62cba32dfc1d08ef52d5721497a312e0c879fcf9a2e5a2e5d69e8ebb2a5a0812";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {
@@ -12044,70 +12001,6 @@ impl Metrics {
             .with_label_values(&[cluster, alertname])
             .inc();
     }
-    /// Record Taikai cache query outcomes.
-    pub fn record_taikai_cache_query(&self, result: &str, tier: &str) {
-        self.sorafs_taikai_cache_query_total
-            .with_label_values(&[result, tier])
-            .inc();
-    }
-    /// Record Taikai cache insert events (also increments byte counters).
-    pub fn record_taikai_cache_insert(&self, tier: &str, bytes: u64) {
-        self.sorafs_taikai_cache_insert_total
-            .with_label_values(&[tier])
-            .inc();
-        self.record_taikai_cache_bytes("insert", tier, bytes);
-    }
-    /// Record Taikai cache evictions.
-    pub fn record_taikai_cache_eviction(&self, tier: &str, reason: &str) {
-        self.sorafs_taikai_cache_evictions_total
-            .with_label_values(&[tier, reason])
-            .inc();
-    }
-    /// Record Taikai cache promotions between tiers.
-    pub fn record_taikai_cache_promotion(&self, from: &str, to: &str) {
-        self.sorafs_taikai_cache_promotions_total
-            .with_label_values(&[from, to])
-            .inc();
-    }
-    /// Record Taikai cache byte totals for the provided event and tier.
-    pub fn record_taikai_cache_bytes(&self, event: &str, tier: &str, bytes: u64) {
-        if bytes == 0 {
-            return;
-        }
-        self.sorafs_taikai_cache_bytes_total
-            .with_label_values(&[event, tier])
-            .inc_by(bytes);
-    }
-    /// Record Taikai QoS denials grouped by class.
-    pub fn inc_taikai_qos_denied(&self, class: &str) {
-        self.sorafs_taikai_qos_denied_total
-            .with_label_values(&[class])
-            .inc();
-    }
-    /// Record Taikai queue events grouped by event/class.
-    pub fn inc_taikai_queue_event(&self, event: &str, class: &str) {
-        self.sorafs_taikai_queue_events_total
-            .with_label_values(&[event, class])
-            .inc();
-    }
-    /// Set Taikai queue depth gauges grouped by state.
-    pub fn set_taikai_queue_depth(&self, state: &str, value: i64) {
-        self.sorafs_taikai_queue_depth
-            .with_label_values(&[state])
-            .set(value);
-    }
-    /// Increment the shard failover counter for the preferred → selected pair.
-    pub fn inc_taikai_shard_failover(&self, preferred: &str, selected: &str) {
-        self.sorafs_taikai_shard_failovers_total
-            .with_label_values(&[preferred, selected])
-            .inc();
-    }
-    /// Set the open/closed state gauge for a specific Taikai shard circuit.
-    pub fn set_taikai_shard_circuit_open(&self, shard: &str, open: bool) {
-        self.sorafs_taikai_shard_circuits_open
-            .with_label_values(&[shard])
-            .set(i64::from(open));
-    }
     /// Increment the anonymity policy brownout counter for the session.
     pub fn inc_sorafs_orchestrator_brownout(&self, stage: &str, region: &str, reason: &str) {
         self.sorafs_orchestrator_brownouts_total
@@ -12153,7 +12046,7 @@ impl Metrics {
             .with_label_values(&[action])
             .inc();
     }
-    /// Record a SoraNet PoW revocation store fallback.
+    /// Record a SoraNet PoW revocation-store failure.
     pub fn inc_soranet_pow_revocation_store(&self, reason: &str) {
         self.soranet_pow_revocation_store_total
             .with_label_values(&[reason])

@@ -16,8 +16,9 @@ use sorafs_manifest::{
     decode_manifest_v1_canonical,
     operator_preseed::{
         OPERATOR_PRESEED_SESSION_MAX_ARTIFACTS_V1, OPERATOR_PRESEED_SESSION_MAX_STORES_V1,
-        OPERATOR_PRESEED_SESSION_RECEIPT_VERSION_V1, OperatorPreseedArtifactReceiptV1,
-        OperatorPreseedSessionReceiptV1, OperatorPreseedTargetReceiptV1,
+        OPERATOR_PRESEED_SESSION_RECEIPT_VERSION_V1, OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1,
+        OperatorPreseedArtifactReceiptV1, OperatorPreseedSessionReceiptV1,
+        OperatorPreseedTargetReceiptV1,
     },
     por::{
         AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1, AuditOutcomeV1, AuditVerdictV1,
@@ -798,9 +799,20 @@ fn run_preseed_session(
         .and_then(|()| stdout.write_all(b"\n"))
         .and_then(|()| stdout.flush())
         .map_err(|error| format!("failed to emit preseed ready receipt: {error}"))?;
-    let mut input = [0_u8; 1];
-    match io::stdin().read(&mut input) {
-        Ok(0) => Ok(()),
+    let mut stdin = io::stdin().lock();
+    acknowledge_preseed_session_release(&mut stdin, &mut stdout)
+}
+
+fn acknowledge_preseed_session_release(
+    input: &mut impl Read,
+    output: &mut impl Write,
+) -> Result<(), String> {
+    let mut byte = [0_u8; 1];
+    match input.read(&mut byte) {
+        Ok(0) => output
+            .write_all(OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1)
+            .and_then(|()| output.flush())
+            .map_err(|error| format!("failed to acknowledge preseed-session release: {error}")),
         Ok(_) => Err("preseed-session stdin accepts only EOF after readiness".to_owned()),
         Err(error) => Err(format!(
             "failed while waiting for preseed-session EOF: {error}"
@@ -1154,7 +1166,6 @@ fn build_streaming_file_plan<P: PayloadSource>(
                 length: u32::try_from(boundary.length)
                     .map_err(|_| "streaming file chunk length exceeds u32".to_owned())?,
                 digest: blake3::hash(bytes).into(),
-                taikai_segment_hint: None,
             });
             emitted_offset = emitted_offset
                 .checked_add(boundary.length)
@@ -1183,7 +1194,6 @@ fn build_streaming_file_plan<P: PayloadSource>(
             length: u32::try_from(boundary.length)
                 .map_err(|_| "streaming file chunk length exceeds u32".to_owned())?,
             digest: blake3::hash(&pending).into(),
-            taikai_segment_hint: None,
         });
         emitted_offset = emitted_offset
             .checked_add(boundary.length)
@@ -1280,7 +1290,6 @@ fn build_streaming_directory_plan(
                     length: u32::try_from(boundary.length)
                         .map_err(|_| "streaming chunk length exceeds u32".to_owned())?,
                     digest: blake3::hash(bytes).into(),
-                    taikai_segment_hint: None,
                 });
                 emitted_offset = emitted_offset
                     .checked_add(boundary.length)
@@ -1311,7 +1320,6 @@ fn build_streaming_directory_plan(
                     length: u32::try_from(boundary.length)
                         .map_err(|_| "streaming chunk length exceeds u32".to_owned())?,
                     digest: blake3::hash(&pending).into(),
-                    taikai_segment_hint: None,
                 });
                 emitted_offset = emitted_offset
                     .checked_add(boundary.length)
@@ -1836,9 +1844,7 @@ fn export(
             .load_manifest()
             .map_err(|err| format!("failed to decode stored manifest: {err}"))?;
         let chunk_profile = chunk_profile_from_manifest(&manifest_v1)?;
-        let taikai_hint = sorafs_car::taikai_segment_hint_from_sorafs_manifest(&manifest_v1)
-            .map_err(|err| format!("failed to derive Taikai metadata: {err}"))?;
-        let plan = stored_manifest.to_car_plan_with_hint(chunk_profile, taikai_hint);
+        let plan = stored_manifest.to_car_plan(chunk_profile);
         let json_value = try_chunk_fetch_plan_to_json(&plan).map_err(|err| err.to_string())?;
         write_json_file(&path, json_value)?;
     }
@@ -2088,6 +2094,24 @@ mod tests {
     use std::fs::File;
     use tempfile::TempDir;
     #[test]
+    fn preseed_session_acknowledges_only_observed_eof() {
+        let mut eof = &b""[..];
+        let mut output = Vec::new();
+        acknowledge_preseed_session_release(&mut eof, &mut output)
+            .expect("EOF releases the preseed session");
+        assert_eq!(output, OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1);
+
+        let mut unexpected = &b"x"[..];
+        output.clear();
+        let error = acknowledge_preseed_session_release(&mut unexpected, &mut output)
+            .expect_err("input bytes must not release the preseed session");
+        assert_eq!(
+            error,
+            "preseed-session stdin accepts only EOF after readiness"
+        );
+        assert!(output.is_empty());
+    }
+    #[test]
     fn ingest_capacity_requires_nonzero_canonical_u64() {
         assert_eq!(
             parse_nonzero_canonical_u64("1", "--max-capacity-bytes"),
@@ -2319,7 +2343,6 @@ mod tests {
                     offset,
                     length: u32::try_from(length).expect("default chunk length"),
                     digest: [0xA5; 32],
-                    taikai_segment_hint: None,
                 });
                 offset += length;
                 remaining -= length;

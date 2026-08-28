@@ -1194,19 +1194,16 @@ def _attestation_certificate_chain_bytes_for_harness(
             "slot.json attestation_certificate_chain_path must stay under attestation/"
         )
         return None
-    artifact_path, artifact_stat, artifact_errors = _validate_slot_artifact_for_digest(
-        slot_path,
-        relative,
-    )
+    pin, artifact_errors = _validate_slot_artifact_for_digest(slot_path, relative)
     if artifact_errors:
         errors.extend(artifact_errors)
         return None
-    assert artifact_path is not None and artifact_stat is not None
-    chain_bytes, read_errors = _read_validated_slot_artifact_bytes(
-        artifact_path,
-        artifact_stat,
-        relative,
-    )
+    assert pin is not None
+    with pin:
+        chain_bytes, read_errors = _read_validated_slot_artifact_bytes(
+            pin,
+            relative,
+        )
     if read_errors:
         errors.extend(read_errors)
         return None
@@ -1401,14 +1398,14 @@ def _validate_slot_for_manifest_rewrite(slot_path: Path) -> list[str]:
 def _validate_slot_artifact_for_digest(
     slot_path: Path,
     relative: str,
-) -> tuple[Path | None, os.stat_result | None, list[str]]:
+) -> tuple[device_lab._PinnedArtifact | None, list[str]]:
     """Validate one slot artifact immediately before hashing it."""
 
     path_errors = device_lab._slot_path_boundary_errors(slot_path)  # type: ignore[attr-defined]
     if path_errors:
-        return None, None, path_errors
+        return None, path_errors
     if device_lab.SECRET_RE.search(relative):
-        return None, None, ["slot artifacts must not contain secret-looking material"]
+        return None, ["slot artifacts must not contain secret-looking material"]
     normalise_errors: list[str] = []
     safe_relative = device_lab._normalise_safe_relative_path(
         relative,
@@ -1416,7 +1413,7 @@ def _validate_slot_artifact_for_digest(
         "slot artifact path",
     )
     if normalise_errors:
-        return None, None, normalise_errors
+        return None, normalise_errors
     assert safe_relative is not None
     display = device_lab._display_path(safe_relative)
     artifact_path = slot_path / safe_relative
@@ -1425,33 +1422,40 @@ def _validate_slot_artifact_for_digest(
         safe_relative,
     )
     if symlink_ancestor is not None:
-        return None, None, [
+        return None, [
             f"slot artifact {display} ancestor directory must not be a symlink"
         ]
     try:
         artifact_stat = artifact_path.lstat()
     except FileNotFoundError:
-        return None, None, [f"slot artifact {display} is missing"]
+        return None, [f"slot artifact {display} is missing"]
     except OSError:
-        return None, None, [f"slot artifact {display} file metadata could not be read"]
+        return None, [
+            f"slot artifact {display} file metadata could not be read"
+        ]
     if stat.S_ISLNK(artifact_stat.st_mode):
-        return None, None, [f"slot artifact {display} must not be a symlink"]
+        return None, [f"slot artifact {display} must not be a symlink"]
     if not stat.S_ISREG(artifact_stat.st_mode):
-        return None, None, [f"slot artifact {display} must be a regular file"]
+        return None, [f"slot artifact {display} must be a regular file"]
     try:
         link_count = artifact_path.stat().st_nlink
     except OSError:
-        return None, None, [
+        return None, [
             f"slot artifact {display} hardlink metadata could not be read"
         ]
     if link_count > 1:
-        return None, None, [f"slot artifact {display} must not be hardlinked"]
-    return artifact_path, artifact_stat, []
+        return None, [f"slot artifact {display} must not be hardlinked"]
+    return device_lab._pin_slot_relative_artifact(
+        slot_path,
+        safe_relative,
+        artifact_stat,
+        changed_error=f"slot artifact {display} changed while being read",
+        unreadable_error=f"slot artifact {display} could not be read",
+    )
 
 
 def _read_validated_slot_artifact_bytes(
-    artifact_path: Path,
-    expected_stat: os.stat_result,
+    pin: device_lab._PinnedArtifact,
     relative: str,
     max_bytes: int | None = None,
 ) -> tuple[bytes | None, list[str]]:
@@ -1465,60 +1469,60 @@ def _read_validated_slot_artifact_bytes(
     )
     chunks: list[bytes] = []
     try:
-        with artifact_path.open("rb") as handle:
-            open_stat = os.fstat(handle.fileno())
-            path_stat = artifact_path.lstat()
-            if stat.S_ISLNK(path_stat.st_mode):
-                return None, [f"slot artifact {display} must not be a symlink"]
-            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
-                return None, [f"slot artifact {display} must be a regular file"]
-            signer_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
-            signer_open_identity = (open_stat.st_dev, open_stat.st_ino)
-            if signer_open_identity != signer_expected_identity or (
-                path_stat.st_dev,
-                path_stat.st_ino,
-            ) != signer_expected_identity:
-                return None, [f"slot artifact {display} changed while being read"]
-            if open_stat.st_nlink > 1:
-                return None, [f"slot artifact {display} must not be hardlinked"]
-            if open_stat.st_size > artifact_max_bytes:
+        open_stat = os.fstat(pin.descriptor)
+        path_stat = device_lab._pinned_artifact_leaf_stat(pin)
+        if stat.S_ISLNK(path_stat.st_mode):
+            return None, [f"slot artifact {display} must not be a symlink"]
+        if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+            return None, [f"slot artifact {display} must be a regular file"]
+        if open_stat.st_nlink > 1:
+            return None, [f"slot artifact {display} must not be hardlinked"]
+        signer_expected_snapshot = device_lab._file_read_snapshot(pin.opened_stat)
+        if (
+            not device_lab._pinned_artifact_ancestors_match(pin)
+            or device_lab._file_read_snapshot(open_stat) != signer_expected_snapshot
+            or device_lab._file_read_snapshot(path_stat) != signer_expected_snapshot
+        ):
+            return None, [f"slot artifact {display} changed while being read"]
+        if open_stat.st_size > artifact_max_bytes:
+            return None, [
+                f"slot artifact {display} must be no more than "
+                f"{artifact_max_bytes} bytes"
+            ]
+        size = 0
+        while True:
+            chunk = os.read(pin.descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > artifact_max_bytes:
                 return None, [
                     f"slot artifact {display} must be no more than "
                     f"{artifact_max_bytes} bytes"
                 ]
-            size = 0
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                size += len(chunk)
-                if size > artifact_max_bytes:
-                    return None, [
-                        f"slot artifact {display} must be no more than "
-                        f"{artifact_max_bytes} bytes"
-                    ]
-                chunks.append(chunk)
-            final_path_stat = artifact_path.lstat()
-            if (
-                final_path_stat.st_dev,
-                final_path_stat.st_ino,
-            ) != signer_expected_identity:
-                return None, [f"slot artifact {display} changed while being read"]
+            chunks.append(chunk)
+        final_path_stat = device_lab._pinned_artifact_leaf_stat(pin)
+        if (
+            not device_lab._pinned_artifact_ancestors_match(pin)
+            or device_lab._file_read_snapshot(final_path_stat)
+            != signer_expected_snapshot
+        ):
+            return None, [f"slot artifact {display} changed while being read"]
     except OSError:
         return None, [f"slot artifact {display} could not be read"]
     return b"".join(chunks), []
 
 
 def _slot_artifact_sha256(slot_path: Path, relative: str) -> tuple[str | None, list[str]]:
-    artifact_path, artifact_stat, errors = _validate_slot_artifact_for_digest(
-        slot_path,
-        relative,
-    )
+    pin, errors = _validate_slot_artifact_for_digest(slot_path, relative)
     if errors:
         return None, errors
-    assert artifact_path is not None and artifact_stat is not None
-    payload, read_errors = _read_validated_slot_artifact_bytes(
-        artifact_path,
-        artifact_stat,
-        relative,
-    )
+    assert pin is not None
+    with pin:
+        payload, read_errors = _read_validated_slot_artifact_bytes(
+            pin,
+            relative,
+        )
     if read_errors:
         return None, read_errors
     assert payload is not None

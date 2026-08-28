@@ -49,10 +49,11 @@ where
         self(key)
     }
 }
+pub(crate) fn empty_env(_key: &str) -> Option<Cow<'static, str>> {
+    None
+}
 /// An adapter of [`std::env::var`] for [`ReadEnv`] trait. Does not fail in case of
 /// [`std::env::VarError::NotUnicode`], but prints it as an error via [log].
-///
-/// [`crate::read::ConfigReader`] uses it by default.
 pub fn std_env(key: &str) -> Option<Cow<'static, str>> {
     match std::env::var(key) {
         Ok(value) => Some(Cow::from(value)),

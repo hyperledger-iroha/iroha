@@ -799,6 +799,13 @@ struct PinnedArtifact {
     input: PinnedInput,
 }
 
+struct ValidatedArtifactSource {
+    sha256: String,
+    size: u64,
+    mode: u16,
+    input: PinnedInput,
+}
+
 fn admit(
     inventory_path: &Path,
     authorization_path: &Path,
@@ -1997,8 +2004,7 @@ fn validate_canary_onboarding_request(request: &AccountOnboardingPlanRequestV1) 
     let signatory = account
         .try_signatory()
         .ok_or_else(|| eyre!("public-reset canary account must be a single-signatory identity"))?;
-    let expected_alias =
-        crate::taira::build_alias("tairarolloutcanary", signatory, "taira.universal")?;
+    let expected_alias = crate::taira::canary_alias(signatory);
     if request != &canonical || request.alias != expected_alias || !request.permissions.is_empty() {
         return Err(eyre!(
             "public-reset canary onboarding request must be the exact empty-permission V1 canary identity"
@@ -2104,7 +2110,15 @@ fn artifact<'a>(artifacts: &'a [ArtifactV1], role: &str) -> Result<&'a ArtifactV
 }
 
 fn validate_artifact_files(inventory: &InventoryV1) -> Result<Vec<PinnedArtifact>> {
+    validate_artifact_files_with(inventory, sha256_reader)
+}
+
+fn validate_artifact_files_with(
+    inventory: &InventoryV1,
+    mut hash: impl FnMut(&mut File, &Path) -> Result<String>,
+) -> Result<Vec<PinnedArtifact>> {
     let mut pinned = Vec::new();
+    let mut sources = BTreeMap::<PathBuf, ValidatedArtifactSource>::new();
     for (slug, artifacts) in inventory
         .validators
         .iter()
@@ -2116,37 +2130,58 @@ fn validate_artifact_files(inventory: &InventoryV1) -> Result<Vec<PinnedArtifact
     {
         for artifact in artifacts {
             let path = Path::new(&artifact.local_path);
-            let (mut file, snapshot) = open_pinned_regular(path, "artifact")?;
-            if snapshot.len != artifact.size {
-                return Err(eyre!(
-                    "artifact `{}` is not the pinned direct regular file",
-                    path.display()
-                ));
-            }
-            let actual = sha256_reader(&mut file, path)?;
-            ensure_pinned_unchanged(path, "artifact", &file, &snapshot)?;
-            if actual != artifact.sha256 {
-                return Err(eyre!("artifact `{}` SHA-256 drifted", path.display()));
-            }
-            #[cfg(unix)]
-            if snapshot.uid != rustix::process::geteuid().as_raw()
-                || snapshot.mode & 0o7777 != u32::from(artifact.mode)
-                || snapshot.nlink != 1
+            let source = match sources.entry(path.to_path_buf()) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    let (mut file, snapshot) = open_pinned_regular(path, "artifact")?;
+                    if snapshot.len != artifact.size {
+                        return Err(eyre!(
+                            "artifact `{}` is not the pinned direct regular file",
+                            path.display()
+                        ));
+                    }
+                    let actual = hash(&mut file, path)?;
+                    ensure_pinned_unchanged(path, "artifact", &file, &snapshot)?;
+                    if actual != artifact.sha256 {
+                        return Err(eyre!("artifact `{}` SHA-256 drifted", path.display()));
+                    }
+                    #[cfg(unix)]
+                    if snapshot.uid != rustix::process::geteuid().as_raw()
+                        || snapshot.mode & 0o7777 != u32::from(artifact.mode)
+                        || snapshot.nlink != 1
+                    {
+                        return Err(eyre!(
+                            "artifact `{}` does not have its exact owner/mode/single-link custody",
+                            path.display()
+                        ));
+                    }
+                    entry.insert(ValidatedArtifactSource {
+                        sha256: actual,
+                        size: snapshot.len,
+                        mode: artifact.mode,
+                        input: PinnedInput {
+                            path: path.to_path_buf(),
+                            file,
+                            snapshot,
+                        },
+                    })
+                }
+            };
+            if source.sha256 != artifact.sha256
+                || source.size != artifact.size
+                || source.mode != artifact.mode
             {
                 return Err(eyre!(
-                    "artifact `{}` does not have its exact owner/mode/single-link custody",
+                    "artifact `{}` has conflicting content, size, or mode declarations",
                     path.display()
                 ));
             }
+            let input = clone_revalidated_pinned(&source.input, "artifact")?;
             pinned.push(PinnedArtifact {
                 slug: slug.to_owned(),
                 role: artifact.role.clone(),
                 artifact: artifact.clone(),
-                input: PinnedInput {
-                    path: path.to_path_buf(),
-                    file,
-                    snapshot,
-                },
+                input,
             });
         }
     }
@@ -2705,6 +2740,28 @@ fn pin_owner_private_file(path: &Path, label: &str) -> Result<PinnedInput> {
 
 fn revalidate_pinned(input: &PinnedInput, label: &str) -> Result<()> {
     ensure_pinned_unchanged(&input.path, label, &input.file, &input.snapshot)
+}
+
+fn clone_revalidated_pinned(input: &PinnedInput, label: &str) -> Result<PinnedInput> {
+    revalidate_pinned(input, label)?;
+    let file = input
+        .file
+        .try_clone()
+        .wrap_err_with(|| format!("failed to duplicate pinned {label} descriptor"))?;
+    #[cfg(unix)]
+    {
+        let snapshot = file_snapshot(&file.metadata()?)?;
+        if snapshot != input.snapshot {
+            return Err(eyre!(
+                "{label} descriptor changed while duplicating its pinned handle"
+            ));
+        }
+    }
+    Ok(PinnedInput {
+        path: input.path.clone(),
+        file,
+        snapshot: input.snapshot.clone(),
+    })
 }
 
 fn ensure_authorization_current(admitted: &AdmittedReset) -> Result<()> {
@@ -5045,6 +5102,150 @@ mod executor_model {
             directory
         }
 
+        #[cfg(unix)]
+        fn private_custody_tempdir() -> tempfile::TempDir {
+            let current = std::env::current_dir().expect("current directory");
+            let directory = tempfile::Builder::new()
+                .prefix(".taira-artifact-test-")
+                .tempdir_in(current)
+                .expect("workspace tempdir");
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                .expect("private workspace tempdir mode");
+            directory
+        }
+
+        #[cfg(unix)]
+        fn materialize_artifact_sources(inventory: &mut InventoryV1) -> tempfile::TempDir {
+            let directory = private_custody_tempdir();
+            let root = directory.path().canonicalize().expect("artifact root");
+            let mut materialized = BTreeSet::new();
+            let mut materialize = |slug: &str, artifact: &mut ArtifactV1| {
+                let source_name = if artifact.role == "config" {
+                    format!("{slug}-config")
+                } else {
+                    artifact.role.clone()
+                };
+                let path = root.join(&source_name);
+                let bytes = source_name.as_bytes();
+                if materialized.insert(path.clone()) {
+                    fs::write(&path, bytes).expect("write artifact fixture");
+                    fs::set_permissions(
+                        &path,
+                        fs::Permissions::from_mode(u32::from(artifact.mode)),
+                    )
+                    .expect("set artifact fixture mode");
+                }
+                artifact.local_path = path.to_string_lossy().into_owned();
+                artifact.size = u64::try_from(bytes.len()).expect("small artifact fixture");
+                artifact.sha256 = sha256_hex(bytes);
+            };
+            for validator in &mut inventory.validators {
+                for artifact in &mut validator.artifacts {
+                    materialize(&validator.slug, artifact);
+                }
+            }
+            for artifact in &mut inventory.edge.artifacts {
+                materialize(&inventory.edge.slug, artifact);
+            }
+            directory
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn shared_validator_artifacts_are_hashed_once_per_local_source() {
+            let mut inventory = sample_inventory();
+            let _directory = materialize_artifact_sources(&mut inventory);
+            let mut hash_counts = BTreeMap::<PathBuf, usize>::new();
+
+            validate_shared_validator_closure(&inventory)
+                .expect("materialized inventory must be a valid shared closure");
+
+            let pinned = validate_artifact_files_with(&inventory, |file, path| {
+                *hash_counts.entry(path.to_path_buf()).or_default() += 1;
+                sha256_reader(file, path)
+            })
+            .expect("shared artifact sources must validate");
+
+            assert_eq!(pinned.len(), 4 * VALIDATOR_ARTIFACT_ROLES.len() + 2);
+            assert_eq!(
+                pinned
+                    .iter()
+                    .map(|entry| (
+                        entry.slug.as_str(),
+                        entry.role.as_str(),
+                        entry.artifact.remote_path.as_str(),
+                    ))
+                    .collect::<BTreeSet<_>>()
+                    .len(),
+                pinned.len(),
+                "deduplication must retain every host/role/remote-path entry"
+            );
+            assert_eq!(hash_counts.len(), 10);
+            assert!(hash_counts.values().all(|count| *count == 1));
+            let iroha3d = PathBuf::from(&inventory.validators[0].artifacts[0].local_path);
+            assert_eq!(hash_counts.get(&iroha3d), Some(&1));
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn shared_artifact_declarations_must_agree_on_content_size_and_mode() {
+            for mismatch in ["content", "size", "mode"] {
+                let mut inventory = sample_inventory();
+                let _directory = materialize_artifact_sources(&mut inventory);
+                let duplicate = inventory.validators[1]
+                    .artifacts
+                    .iter_mut()
+                    .find(|artifact| artifact.role == "iroha3d")
+                    .expect("second validator iroha3d");
+                match mismatch {
+                    "content" => duplicate.sha256 = "0".repeat(64),
+                    "size" => duplicate.size += 1,
+                    "mode" => duplicate.mode ^= 0o100,
+                    _ => unreachable!(),
+                }
+
+                let error = validate_artifact_files(&inventory)
+                    .err()
+                    .expect("conflicting shared declaration must fail closed");
+                assert!(
+                    format!("{error:#}")
+                        .contains("conflicting content, size, or mode declarations"),
+                    "unexpected {mismatch} error: {error:#}"
+                );
+            }
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn shared_artifact_descriptor_clone_rejects_path_identity_drift() {
+            let mut inventory = sample_inventory();
+            let _directory = materialize_artifact_sources(&mut inventory);
+            let drifted = PathBuf::from(&inventory.validators[0].artifacts[0].local_path);
+            let trigger = PathBuf::from(&inventory.validators[0].artifacts[5].local_path);
+            let expected_mode = inventory.validators[0].artifacts[0].mode;
+            let mut replaced = false;
+
+            let error = validate_artifact_files_with(&inventory, |file, path| {
+                let digest = sha256_reader(file, path)?;
+                if path == trigger && !replaced {
+                    let displaced = drifted.with_extension("displaced");
+                    fs::rename(&drifted, displaced).expect("displace cached artifact path");
+                    fs::write(&drifted, b"iroha3d").expect("replace cached artifact path");
+                    fs::set_permissions(
+                        &drifted,
+                        fs::Permissions::from_mode(u32::from(expected_mode)),
+                    )
+                    .expect("protect replacement");
+                    replaced = true;
+                }
+                Ok(digest)
+            })
+            .err()
+            .expect("cached path identity drift must prevent descriptor cloning");
+            assert!(replaced);
+            assert!(format!("{error:#}").contains("changed during descriptor-bound validation"));
+        }
+
         fn signed_admitted(inventory: InventoryV1, issued_at_unix_ms: u64) -> AdmittedReset {
             let mut admitted = admitted(inventory);
             let key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("key");
@@ -6371,12 +6572,7 @@ mod executor_model {
                 iroha_crypto::KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
                     .expect("deterministic faucet key");
             let canary_account = AccountId::new(canary_key_pair.public_key().clone());
-            let canary_alias = crate::taira::build_alias(
-                "tairarolloutcanary",
-                canary_key_pair.public_key(),
-                "taira.universal",
-            )
-            .expect("deterministic canary alias");
+            let canary_alias = crate::taira::canary_alias(canary_key_pair.public_key());
             let canary_onboarding_request =
                 AccountOnboardingPlanRequestV1::try_new(canary_alias, &canary_account, Vec::new())
                     .expect("deterministic canary onboarding request");

@@ -635,9 +635,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             soranet_privacy: A::SoranetPrivacy::default(),
             soranet_vpn: A::SoranetVpn::default(),
-            lane_profile: A::LaneProfile::from_label(
+            lane_profile: A::LaneProfile::parse_label(
                 &defaults::network::lane_profile::default_label(),
-            ),
+            )
+            .expect("default network lane profile must be canonical"),
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout: core::time::Duration::from_secs(5),
@@ -666,6 +667,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             p2p_proxy: None,
             p2p_proxy_required: false,
             p2p_no_proxy: Vec::new(),
+            outbound_dial_allow_cidrs: Vec::new(),
+            outbound_dial_deny_cidrs: Vec::new(),
+            outbound_dial_allow_dns_suffixes: Vec::new(),
+            outbound_dial_deny_dns_suffixes: Vec::new(),
             p2p_proxy_tls_verify: true,
             p2p_proxy_tls_pinned_cert_der_base64: None,
             quic_enabled: false,
@@ -1466,8 +1471,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             .expect("streaming key material"),
             session_store_dir: PathBuf::from(defaults::streaming::SESSION_STORE_DIR),
             feature_bits: defaults::streaming::FEATURE_BITS,
-            soranet: A::StreamingSoranet::from_defaults(),
-            soravpn: A::StreamingSoravpn::from_defaults(),
             sync: A::StreamingSync::from_defaults(),
             codec: A::StreamingCodec {
                 cabac_mode: A::CabacMode::Disabled,

@@ -674,7 +674,7 @@ mod tests {
                 DataspaceGossip, FraudMonitoring, Genesis, Governance, IsoBridge, Ivm, Kura,
                 LiveQueryStore, Logger, Network, Nexus, Queue, Root, Settlement,
                 SoranetHandshake as ActualSoranetHandshake, SoranetPow, SoranetPrivacy, Streaming,
-                StreamingSoranet, Sumeragi, TieredState, Torii, TransactionGossiper, TrustedPeers,
+                Sumeragi, TieredState, Torii, TransactionGossiper, TrustedPeers,
             },
             defaults,
         },
@@ -796,15 +796,23 @@ mod tests {
             assert_eq!(pow.puzzle, original_puzzle);
         }
         let mut pow = SoranetPow::default();
+        let original_outbound_mint_capacity = pow.outbound_mint_capacity.get();
         let mut update = update(None, None, None, None);
-        update.outbound_mint_capacity = Some(2);
+        update.outbound_mint_capacity = Some(if original_outbound_mint_capacity == 1 {
+            2
+        } else {
+            1
+        });
         let error = Actor::apply_pow_update(&mut pow, &update)
             .expect_err("live puzzle-work capacity change must require restart");
         assert!(
             error.contains("restart required"),
             "unexpected error: {error}"
         );
-        assert_eq!(pow.outbound_mint_capacity.get(), 1);
+        assert_eq!(
+            pow.outbound_mint_capacity.get(),
+            original_outbound_mint_capacity
+        );
     }
     #[allow(clippy::too_many_lines)]
     fn test_config() -> Root {
@@ -878,6 +886,10 @@ mod tests {
                 p2p_proxy: None,
                 p2p_proxy_required: false,
                 p2p_no_proxy: Vec::new(),
+                outbound_dial_allow_cidrs: Vec::new(),
+                outbound_dial_deny_cidrs: Vec::new(),
+                outbound_dial_allow_dns_suffixes: Vec::new(),
+                outbound_dial_deny_dns_suffixes: Vec::new(),
                 p2p_proxy_tls_verify: true,
                 p2p_proxy_tls_pinned_cert_der_base64: None,
                 quic_enabled: false,
@@ -1887,8 +1899,6 @@ mod tests {
                     iroha_config::parameters::defaults::streaming::SESSION_STORE_DIR,
                 ),
                 feature_bits: iroha_config::parameters::defaults::streaming::FEATURE_BITS,
-                soranet: StreamingSoranet::from_defaults(),
-                soravpn: iroha_config::parameters::actual::StreamingSoravpn::from_defaults(),
                 sync: iroha_config::parameters::actual::StreamingSync::from_defaults(),
                 codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
             },
@@ -2263,6 +2273,8 @@ mod tests {
         assert_eq!(snapshot.pow.difficulty, 9);
         assert_eq!(snapshot.pow.ticket_ttl.as_secs(), 45);
         assert_eq!(snapshot.pow.puzzle.memory_kib.get(), 32 * 1024);
+        assert_eq!(snapshot.pow.puzzle.time_cost.get(), 1);
+        assert_eq!(snapshot.pow.puzzle.lanes.get(), 2);
         runtime.await.expect("runtime responder task");
     }
     #[tokio::test]

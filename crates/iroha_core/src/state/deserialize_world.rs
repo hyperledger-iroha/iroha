@@ -7423,7 +7423,6 @@ fn build_state(
     #[cfg(feature = "telemetry")]
     let telemetry_seed = telemetry.clone();
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
-    let streaming_storage_paths = StreamingStoragePaths::default();
     let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
     let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
     let restored_height = u64::try_from(block_hashes.committed_height()).map_err(|error| {
@@ -7550,7 +7549,6 @@ fn build_state(
         pipeline_ivm_prepared_cache: parking_lot::RwLock::new(
             PreparedContractCache::with_capacity(pipeline_cache_size),
         ),
-        streaming_storage_paths,
         crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
         nexus: parking_lot::RwLock::new(nexus),
         lane_incarnations: parking_lot::RwLock::new(lane_incarnations),

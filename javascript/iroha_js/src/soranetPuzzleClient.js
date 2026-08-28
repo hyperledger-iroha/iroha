@@ -22,9 +22,10 @@ export class SoranetPuzzleClient {
     if (typeof baseUrl !== "string" || baseUrl.trim() === "") {
       throw new TypeError("baseUrl must be a non-empty string");
     }
+    rejectRetiredFields(options, ["fetch"], "options");
     const trimmed = baseUrl.trim();
     this._baseUrl = trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
-    this._fetch = options.fetchImpl ?? options.fetch ?? globalThis.fetch;
+    this._fetch = options.fetchImpl ?? globalThis.fetch;
     if (typeof this._fetch !== "function") {
       throw new Error("fetch implementation is required");
     }
@@ -43,12 +44,11 @@ export class SoranetPuzzleClient {
    * Fetch the current puzzle/token configuration.
    * @param {object} [options]
    * @returns {Promise<{
-   *   required: boolean,
    *   difficulty: number,
    *   maxFutureSkewSecs: number,
    *   minTicketTtlSecs: number,
    *   ticketTtlSecs: number,
-   *   puzzle: null | { memoryKib: number, timeCost: number, lanes: number },
+   *   puzzle: { memoryKib: number, timeCost: number, lanes: number },
    *   token: ReturnType<typeof normalizeTokenConfig>
    * }>}
    */
@@ -62,10 +62,10 @@ export class SoranetPuzzleClient {
    * @param {string} transcriptHashHex Required nonzero 32-byte transcript binding (hex).
    * @param {object} [options]
    * @param {number | bigint} [options.ttlSecs] Optional TTL override.
-   * @param {boolean} [options.signed] Request a relay-signed ticket when signing keys are configured.
-   * @returns {Promise<{ ticketB64: string, signedTicketB64: string | null, signedTicketFingerprintHex: string | null, difficulty: number, ttlSecs: number, expiresAt: number }>}
+   * @returns {Promise<{ credentialKind: "raw" | "signed", credentialB64: string, signedTicketFingerprintHex: string | null, difficulty: number, ttlSecs: number, expiresAt: number }>}
    */
   async mintPuzzleTicket(transcriptHashHex, options = {}) {
+    rejectRetiredFields(options, ["signed"], "options");
     const body = {
       transcript_hash_hex: normalizeTranscriptHash(
         transcriptHashHex,
@@ -74,9 +74,6 @@ export class SoranetPuzzleClient {
     };
     if (options.ttlSecs !== undefined && options.ttlSecs !== null) {
       body.ttl_secs = coercePositiveInteger(options.ttlSecs, "options.ttlSecs");
-    }
-    if (options.signed !== undefined && options.signed !== null) {
-      body.signed = coerceBoolean(options.signed, "options.signed");
     }
     const payload = await this._request("POST", "/v1/puzzle/mint", body, options);
     return normalizePuzzleMintResponse(payload, "puzzle mint response");
@@ -96,28 +93,24 @@ export class SoranetPuzzleClient {
    * @param {string} transcriptHashHex 32-byte transcript hash (hex).
    * @param {object} [options]
    * @param {number | bigint} [options.ttlSecs]
-   * @param {number} [options.flags]
    * @returns {Promise<{
    *   tokenB64: string,
    *   tokenIdHex: string,
    *   issuedAt: number,
    *   expiresAt: number,
    *   ttlSecs: number,
-   *   flags: number,
    *   issuerFingerprintHex: string,
    *   relayIdHex: string
    * }>}
    */
   async mintAdmissionToken(transcriptHashHex, options = {}) {
+    rejectRetiredFields(options, ["flags"], "options");
     const normalizedHash = normalizeTranscriptHash(transcriptHashHex, "transcriptHashHex");
     const body = {
       transcript_hash_hex: normalizedHash,
     };
     if (options.ttlSecs !== undefined && options.ttlSecs !== null) {
       body.ttl_secs = coercePositiveInteger(options.ttlSecs, "options.ttlSecs");
-    }
-    if (options.flags !== undefined && options.flags !== null) {
-      body.flags = coerceByte(options.flags, "options.flags");
     }
     const payload = await this._request("POST", "/v1/token/mint", body, options);
     return normalizeTokenMintResponse(payload, "token mint response");
@@ -126,7 +119,8 @@ export class SoranetPuzzleClient {
   async _request(method, path, body, options = {}) {
     const url = buildUrl(this._baseUrl, path);
     const headers = { ...this._defaultHeaders };
-    if (body !== undefined) {
+    const hasBody = body !== undefined && body !== null;
+    if (hasBody) {
       headers["Content-Type"] = "application/json";
     }
     if (!headers.Accept) {
@@ -148,7 +142,7 @@ export class SoranetPuzzleClient {
     const init = {
       method: (method ?? "GET").toUpperCase(),
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: hasBody ? JSON.stringify(body) : undefined,
     };
     const response = await this._fetchWithTimeout(url, init, timeout, options.signal);
     if (response.status < 200 || response.status >= 300) {
@@ -168,13 +162,14 @@ export class SoranetPuzzleClient {
       return this._fetch(url, finalInit);
     }
     const abortController = new AbortController();
-    const combinedSignal = combineAbortSignals(externalSignal, abortController.signal);
-    const finalInit = { ...init, signal: combinedSignal };
+    const combined = combineAbortSignals(externalSignal, abortController.signal);
+    const finalInit = { ...init, signal: combined.signal };
     const timer = setTimeout(() => abortController.abort(), timeoutMs);
     try {
       return await this._fetch(url, finalInit);
     } finally {
       clearTimeout(timer);
+      combined.cleanup();
     }
   }
 }
@@ -211,6 +206,14 @@ function ensureRecord(value, context) {
     throw new TypeError(`${context} must be an object`);
   }
   return value;
+}
+
+function rejectRetiredFields(record, fields, context) {
+  for (const field of fields) {
+    if (Object.hasOwn(record, field)) {
+      throw new TypeError(`${context}.${field} is not part of the first-release API`);
+    }
+  }
 }
 
 function coerceBoolean(value, context) {
@@ -261,14 +264,6 @@ function coercePositiveInteger(value, context) {
   return number;
 }
 
-function coerceByte(value, context) {
-  const number = coerceNonNegativeInteger(value, context);
-  if (number > 0xff) {
-    throw new TypeError(`${context} must be between 0 and 255`);
-  }
-  return number;
-}
-
 function normalizeHexString(value, expectedBytes, context) {
   if (typeof value !== "string") {
     throw new TypeError(`${context} must be a string`);
@@ -299,13 +294,9 @@ function normalizeTranscriptHash(value, context) {
 
 function normalizePuzzleConfig(payload, context) {
   const record = ensureRecord(payload, context);
-  const puzzle =
-    record.puzzle === null || record.puzzle === undefined
-      ? null
-      : normalizePuzzleParams(record.puzzle, `${context}.puzzle`);
+  rejectRetiredFields(record, ["required", "signed_ticket_signing_enabled"], context);
   return {
-    required: coerceBoolean(record.required, `${context}.required`),
-    difficulty: coerceNonNegativeInteger(record.difficulty, `${context}.difficulty`),
+    difficulty: coercePositiveInteger(record.difficulty, `${context}.difficulty`),
     maxFutureSkewSecs: coerceNonNegativeInteger(
       record.max_future_skew_secs,
       `${context}.max_future_skew_secs`,
@@ -318,7 +309,7 @@ function normalizePuzzleConfig(payload, context) {
       record.ticket_ttl_secs,
       `${context}.ticket_ttl_secs`,
     ),
-    puzzle,
+    puzzle: normalizePuzzleParams(record.puzzle, `${context}.puzzle`),
     token: normalizeTokenConfig(record.token, `${context}.token`),
   };
 }
@@ -379,33 +370,37 @@ function normalizeTokenConfig(payload, context) {
 
 function normalizePuzzleMintResponse(payload, context) {
   const record = ensureRecord(payload, context);
-  const ticketB64Raw = record.ticket_b64 ?? null;
-  const ticketB64 =
-    ticketB64Raw === undefined || ticketB64Raw === null
-      ? null
-      : requireNonEmptyString(ticketB64Raw, `${context}.ticket_b64`);
-  const signedB64Raw = record.signed_ticket_b64 ?? null;
-  const signedTicketB64 =
-    signedB64Raw === undefined || signedB64Raw === null
-      ? null
-      : requireNonEmptyString(signedB64Raw, `${context}.signed_ticket_b64`);
+  rejectRetiredFields(record, ["ticket_b64", "signed_ticket_b64"], context);
+  const credentialKind = record.credential_kind;
+  if (credentialKind !== "raw" && credentialKind !== "signed") {
+    throw new TypeError(`${context}.credential_kind must be "raw" or "signed"`);
+  }
+  const credentialB64 = requireNonEmptyString(
+    record.credential_b64,
+    `${context}.credential_b64`,
+  );
   const fingerprintRaw = record.signed_ticket_fingerprint_hex ?? null;
   const signedTicketFingerprintHex =
-    fingerprintRaw === undefined || fingerprintRaw === null
+    fingerprintRaw === null
       ? null
       : normalizeHexString(
           fingerprintRaw,
           32,
           `${context}.signed_ticket_fingerprint_hex`,
         );
-  if ((ticketB64 === null) === (signedTicketB64 === null)) {
+  if (credentialKind === "raw" && signedTicketFingerprintHex !== null) {
     throw new TypeError(
-      `${context} must contain exactly one of ticket_b64 or signed_ticket_b64`,
+      `${context}.signed_ticket_fingerprint_hex is only valid for signed credentials`,
+    );
+  }
+  if (credentialKind === "signed" && signedTicketFingerprintHex === null) {
+    throw new TypeError(
+      `${context}.signed_ticket_fingerprint_hex is required for signed credentials`,
     );
   }
   return {
-    ticketB64,
-    signedTicketB64,
+    credentialKind,
+    credentialB64,
     signedTicketFingerprintHex,
     difficulty: coerceNonNegativeInteger(record.difficulty, `${context}.difficulty`),
     ttlSecs: coerceNonNegativeInteger(record.ttl_secs, `${context}.ttl_secs`),
@@ -418,6 +413,7 @@ function normalizePuzzleMintResponse(payload, context) {
 
 function normalizeTokenMintResponse(payload, context) {
   const record = ensureRecord(payload, context);
+  rejectRetiredFields(record, ["flags"], context);
   return {
     tokenB64: requireNonEmptyString(record.token_b64, `${context}.token_b64`),
     tokenIdHex: normalizeHexString(
@@ -431,7 +427,6 @@ function normalizeTokenMintResponse(payload, context) {
       `${context}.expires_at`,
     ),
     ttlSecs: coerceNonNegativeInteger(record.ttl_secs, `${context}.ttl_secs`),
-    flags: coerceByte(record.flags, `${context}.flags`),
     issuerFingerprintHex: normalizeHexString(
       record.issuer_fingerprint_hex,
       32,
@@ -471,22 +466,37 @@ async function safeReadJson(response) {
 
 function combineAbortSignals(primary, secondary) {
   if (!primary) {
-    return secondary;
+    return { signal: secondary, cleanup() {} };
   }
   if (!secondary) {
-    return primary;
+    return { signal: primary, cleanup() {} };
   }
   const controller = new AbortController();
-  const abort = () => controller.abort();
+  let active = true;
   const listeners = [
-    [primary, abort],
-    [secondary, abort],
+    [primary, null],
+    [secondary, null],
   ];
-  for (const [signal, handler] of listeners) {
+  const cleanup = () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    for (const [signal, handler] of listeners) {
+      signal.removeEventListener("abort", handler);
+    }
+  };
+  const abort = () => {
+    controller.abort();
+    cleanup();
+  };
+  for (const listener of listeners) {
+    listener[1] = abort;
+    const [signal, handler] = listener;
     signal.addEventListener("abort", handler, { once: true });
   }
   if (primary.aborted || secondary.aborted) {
-    controller.abort();
+    abort();
   }
-  return controller.signal;
+  return { signal: controller.signal, cleanup };
 }

@@ -13,8 +13,6 @@ const MAX_PEER_COUNT: usize = 7;
 const MULTI_PEER_BLOCK_CADENCE_MS: NonZeroU64 = NonZeroU64::new(1_000).unwrap();
 /// Relative directory used for Mochi-generated workspace artifacts.
 pub const WORKSPACE_MOCHI_DIR: &str = ".mochi";
-/// Relative directory under a workspace that stores sandbox runtime state.
-pub const WORKSPACE_SANDBOX_DIR: &str = ".mochi/sandbox";
 /// High-level presets exposed directly to the user interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfilePreset {
@@ -47,18 +45,15 @@ impl ProfilePreset {
 pub enum GenesisProfile {
     /// Local-only Iroha 3 developer network.
     Iroha3Dev,
-    /// Sora Testus public test network.
-    Iroha3Testus,
-    /// Sora Nexus main network.
-    Iroha3Nexus,
+    /// Sora Taira public test network.
+    Iroha3Taira,
 }
 impl GenesisProfile {
     /// CLI flag value expected by `kagami genesis --profile`.
     pub const fn as_kagami_arg(self) -> &'static str {
         match self {
             GenesisProfile::Iroha3Dev => "iroha3-dev",
-            GenesisProfile::Iroha3Testus => "iroha3-testus",
-            GenesisProfile::Iroha3Nexus => "iroha3-nexus",
+            GenesisProfile::Iroha3Taira => "iroha3-taira",
         }
     }
     /// Default chain settings for the profile.
@@ -67,20 +62,14 @@ impl GenesisProfile {
             GenesisProfile::Iroha3Dev => GenesisProfileDefaults {
                 chain_id: "iroha3-dev.local",
             },
-            GenesisProfile::Iroha3Testus => GenesisProfileDefaults {
-                chain_id: "iroha3-testus",
-            },
-            GenesisProfile::Iroha3Nexus => GenesisProfileDefaults {
-                chain_id: "iroha3-nexus",
+            GenesisProfile::Iroha3Taira => GenesisProfileDefaults {
+                chain_id: "fc56984b-2be7-431d-840e-21514d1883f0",
             },
         }
     }
     /// Whether the profile mandates an explicit VRF seed.
     pub const fn requires_seed(self) -> bool {
-        matches!(
-            self,
-            GenesisProfile::Iroha3Testus | GenesisProfile::Iroha3Nexus
-        )
+        matches!(self, GenesisProfile::Iroha3Taira)
     }
 }
 impl std::str::FromStr for GenesisProfile {
@@ -88,8 +77,7 @@ impl std::str::FromStr for GenesisProfile {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "iroha3-dev" => Ok(GenesisProfile::Iroha3Dev),
-            "iroha3-testus" => Ok(GenesisProfile::Iroha3Testus),
-            "iroha3-nexus" => Ok(GenesisProfile::Iroha3Nexus),
+            "iroha3-taira" => Ok(GenesisProfile::Iroha3Taira),
             other => Err(format!("invalid genesis profile `{other}`")),
         }
     }
@@ -426,14 +414,16 @@ mod tests {
             GenesisProfile::Iroha3Dev
         );
         assert_eq!(
-            "iroha3-testus".parse::<GenesisProfile>().unwrap(),
-            GenesisProfile::Iroha3Testus
+            "iroha3-taira".parse::<GenesisProfile>().unwrap(),
+            GenesisProfile::Iroha3Taira
         );
         for invalid in [
             "unknown",
             "iroha3_testus",
-            "iroha3testus",
-            " IROHA3-TESTUS ",
+            "iroha3-testus",
+            "iroha3taira",
+            "iroha3-nexus",
+            " IROHA3-TAIRA ",
         ] {
             assert!(
                 invalid.parse::<GenesisProfile>().is_err(),
@@ -443,9 +433,9 @@ mod tests {
     }
     #[test]
     fn genesis_profile_defaults_are_available() {
-        let nexus = GenesisProfile::Iroha3Nexus.defaults();
-        assert_eq!(nexus.chain_id, "iroha3-nexus");
-        assert!(GenesisProfile::Iroha3Nexus.requires_seed());
+        let taira = GenesisProfile::Iroha3Taira.defaults();
+        assert_eq!(taira.chain_id, "fc56984b-2be7-431d-840e-21514d1883f0");
+        assert!(GenesisProfile::Iroha3Taira.requires_seed());
     }
     #[test]
     fn network_paths_append_profile_slug() {

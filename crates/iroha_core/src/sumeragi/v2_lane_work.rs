@@ -15625,13 +15625,7 @@ impl V2LaneWorkAdapter {
         }
         let frame_capacity = self.limits.merge_share_frame_capacity.get();
         if targets.any(|target| {
-            iroha_p2p::network::data_frame_wire_len(
-                signer,
-                Some(target),
-                1,
-                Priority::High,
-                &message,
-            ) > frame_capacity
+            iroha_p2p::network::data_frame_wire_len(signer, Some(target), &message) > frame_capacity
         }) {
             return Err(
                 "merge share full P2P consensus envelope exceeds the configured frame budget"

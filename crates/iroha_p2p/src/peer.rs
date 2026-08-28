@@ -1,4 +1,10 @@
 //! Tokio actor Peer
+#[cfg(feature = "quic")]
+mod quic_datagram;
+
+#[cfg(feature = "quic")]
+pub(crate) use quic_datagram::{QUIC_DATAGRAM_PROTOCOL_ERROR_CODE, QuicDatagramIngress};
+
 #[cfg(test)]
 use crate::puzzle_work_admission::{
     DEFAULT_INBOUND_VERIFY_CAPACITY, DEFAULT_OUTBOUND_MINT_CAPACITY,
@@ -19,10 +25,7 @@ use iroha_crypto::soranet::{
         build_client_hello, client_handle_relay_hello, parse_capabilities, process_client_hello,
         validate_client_capability_vector, validate_runtime_configuration,
     },
-    pow::{
-        self, ChallengeBinding as PowBinding, Parameters as PowParameters, Ticket as PowTicket,
-        TicketRevocationStore,
-    },
+    pow::{self, Ticket as PowTicket, TicketRevocationInsertStatus, TicketRevocationStore},
     puzzle::{self, ChallengeBinding as PuzzleBinding, Parameters as PuzzleParameters},
 };
 #[cfg(test)]
@@ -37,7 +40,7 @@ use rand::rand_core::TryCryptoRng;
 use rand::{SeedableRng, rngs::StdRng};
 use soranet_pq::MlKemSuite;
 #[cfg(test)]
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     net::SocketAddr,
@@ -45,13 +48,15 @@ use std::{
         Arc, Mutex, MutexGuard, Weak,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
-    time::SystemTime,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch},
     time::Duration,
 };
+const SORANET_CONSTANT_RATE_CAPABILITY_TYPE: u16 = 0x0203;
+const SORANET_CONSTANT_RATE_STRICT_FLAG: u8 = 0x01;
 // (keep fully-qualified uses inline; avoid unused import warnings)
 #[cfg(test)]
 fn test_network_id(seed: &str) -> iroha_data_model::NetworkId {
@@ -102,11 +107,6 @@ const SOURCE_RETENTION_MAX_LEASES: usize = 2;
 const DEFAULT_MESSAGE_PREALLOC_CAP: usize = 512 * 1024;
 /// Largest idle per-connection message buffer retained after a large frame.
 const MAX_RETAINED_MESSAGE_BUFFER_CAP: usize = DEFAULT_MESSAGE_PREALLOC_CAP;
-#[cfg(feature = "quic")]
-const QUIC_DATAGRAM_INBOX_CAPACITY: usize = 256;
-#[cfg(feature = "quic")]
-/// QUIC application error used for malformed production P2P DATAGRAMs.
-pub(crate) const QUIC_DATAGRAM_PROTOCOL_ERROR_CODE: u32 = 0x4952_4f44;
 /// Prefix byte used to indicate a versioned handshake hello payload.
 const HANDSHAKE_HELLO_VERSION_PREFIX: u8 = 0xFF;
 /// Single supported handshake hello payload version.
@@ -273,10 +273,8 @@ pub struct SoranetHandshakeConfig {
     kem_id: u8,
     sig_id: u8,
     resume_hash: Option<Arc<Vec<u8>>>,
-    pow_required: bool,
-    pow_params: Arc<PowParameters>,
-    pow_ticket_ttl: Duration,
-    puzzle_params: Option<Arc<PuzzleParameters>>,
+    ticket_ttl: Duration,
+    puzzle_params: Arc<PuzzleParameters>,
     revocation_store: Arc<Mutex<TicketRevocationStore>>,
     pending_ticket_replays: Arc<PendingTicketReplays>,
     puzzle_work_admission: Arc<SoranetPuzzleWorkAdmission>,
@@ -291,10 +289,8 @@ impl SoranetHandshakeConfig {
         kem_id: u8,
         sig_id: u8,
         resume_hash: Option<Vec<u8>>,
-        pow_required: bool,
-        pow_params: PowParameters,
-        puzzle_params: Option<PuzzleParameters>,
-        pow_ticket_ttl: Duration,
+        puzzle_params: PuzzleParameters,
+        ticket_ttl: Duration,
         revocation_store: Arc<Mutex<TicketRevocationStore>>,
     ) -> Result<Self, Error> {
         let shared_state = SoranetHandshakeSharedState::new(
@@ -312,10 +308,8 @@ impl SoranetHandshakeConfig {
             kem_id,
             sig_id,
             resume_hash,
-            pow_required,
-            pow_params,
             puzzle_params,
-            pow_ticket_ttl,
+            ticket_ttl,
             shared_state,
         )
     }
@@ -328,10 +322,8 @@ impl SoranetHandshakeConfig {
         kem_id: u8,
         sig_id: u8,
         resume_hash: Option<Vec<u8>>,
-        pow_required: bool,
-        pow_params: PowParameters,
-        puzzle_params: Option<PuzzleParameters>,
-        pow_ticket_ttl: Duration,
+        puzzle_params: PuzzleParameters,
+        ticket_ttl: Duration,
         shared_state: SoranetHandshakeSharedState,
     ) -> Result<Self, Error> {
         if MlKemSuite::from_kem_id(kem_id).is_none() {
@@ -363,11 +355,38 @@ impl SoranetHandshakeConfig {
         validate_client_capability_vector(&client_capabilities).map_err(|error| {
             Error::HandshakeSoranet(format!("invalid SoraNet client capability vector: {error}"))
         })?;
+        let parsed_client_capabilities =
+            parse_capabilities(&client_capabilities).map_err(|error| {
+                Error::HandshakeSoranet(format!(
+                    "invalid SoraNet client capability vector: {error}"
+                ))
+            })?;
         // Relay ordering is intentionally transcript-bound rather than subject
         // to the client's canonical nondecreasing-order rule.
-        parse_capabilities(&relay_capabilities).map_err(|error| {
-            Error::HandshakeSoranet(format!("invalid SoraNet relay capability vector: {error}"))
-        })?;
+        let parsed_relay_capabilities =
+            parse_capabilities(&relay_capabilities).map_err(|error| {
+                Error::HandshakeSoranet(format!("invalid SoraNet relay capability vector: {error}"))
+            })?;
+        // TODO: Remove this construction-time rejection when iroha_p2p routes
+        // every application payload through the authenticated fixed-rate
+        // DATAGRAM mux. Accepting the transcript flag before then would make a
+        // false traffic-shape guarantee while normal peer messages use streams.
+        if parsed_client_capabilities
+            .iter()
+            .chain(parsed_relay_capabilities.iter())
+            .any(|capability| {
+                capability.ty == SORANET_CONSTANT_RATE_CAPABILITY_TYPE
+                    && capability
+                        .value
+                        .get(1)
+                        .is_some_and(|flags| flags & SORANET_CONSTANT_RATE_STRICT_FLAG != 0)
+            })
+        {
+            return Err(Error::HandshakeSoranet(
+                "strict SoraNet constant-rate capability is unavailable for iroha_p2p until peer payload uses the authenticated fixed-rate DATAGRAM mux"
+                    .to_owned(),
+            ));
+        }
         validate_runtime_configuration(&RuntimeParams {
             descriptor_commit: &descriptor_commit,
             client_capabilities: &client_capabilities,
@@ -399,10 +418,8 @@ impl SoranetHandshakeConfig {
             kem_id,
             sig_id,
             resume_hash: resume_hash.map(Arc::new),
-            pow_required,
-            pow_params: Arc::new(pow_params),
-            pow_ticket_ttl,
-            puzzle_params: puzzle_params.map(Arc::new),
+            ticket_ttl,
+            puzzle_params: Arc::new(puzzle_params),
             revocation_store: shared_state.revocation_store,
             pending_ticket_replays: shared_state.pending_ticket_replays,
             puzzle_work_admission: shared_state.puzzle_work_admission,
@@ -419,16 +436,9 @@ impl SoranetHandshakeConfig {
         self.puzzle_work_admission.capacities()
     }
     fn effective_ticket_ttl(&self) -> Duration {
-        self.pow_ticket_ttl
-            .min(self.pow_params.max_future_skew())
-            .max(self.pow_params.min_ticket_ttl())
-    }
-    fn pow_binding<'a>(&'a self, transcript_hash: &'a [u8; 32]) -> PowBinding<'a> {
-        PowBinding::new(
-            self.descriptor_commit.as_slice(),
-            transcript_hash,
-            transcript_hash,
-        )
+        self.ticket_ttl
+            .min(self.puzzle_params.max_future_skew())
+            .max(self.puzzle_params.min_ticket_ttl())
     }
     fn puzzle_binding<'a>(&'a self, transcript_hash: &'a [u8; 32]) -> PuzzleBinding<'a> {
         PuzzleBinding::new(
@@ -513,23 +523,48 @@ impl SoranetHandshakeConfig {
     ) -> Result<(), ChallengeVerifyError> {
         {
             let mut store_guard = self.lock_revocation_store()?;
-            pow::record_revocation(ticket, Some(&mut *store_guard), now)
-                .map_err(Self::map_pow_verification_error)?;
+            let outcome = store_guard
+                .revoke_ticket_payload(ticket, now)
+                .map_err(|error| {
+                    Self::map_pow_verification_error(pow::Error::RevocationStore(error.to_string()))
+                })?;
+            match outcome.status {
+                TicketRevocationInsertStatus::Accepted => {}
+                TicketRevocationInsertStatus::Duplicate => {
+                    return Err(ChallengeVerifyError::Replay);
+                }
+                TicketRevocationInsertStatus::Expired => {
+                    let now_secs = now
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(puzzle::Error::Clock)?
+                        .as_secs();
+                    return Err(ChallengeVerifyError::Puzzle(puzzle::Error::Expired(
+                        ticket.expires_at,
+                        now_secs,
+                    )));
+                }
+                TicketRevocationInsertStatus::TtlExceeded => {
+                    return Err(Self::map_pow_verification_error(
+                        pow::Error::RevocationStore(
+                            "revocation ttl exceeded configured maximum".to_owned(),
+                        ),
+                    ));
+                }
+                TicketRevocationInsertStatus::Capacity => {
+                    return Err(Self::map_pow_verification_error(
+                        pow::Error::RevocationStore("revocation store at capacity".to_owned()),
+                    ));
+                }
+            }
         }
         reservation.release().map_err(|reason| {
             Self::map_pow_verification_error(pow::Error::RevocationStore(reason.to_owned()))
         })
     }
-    fn admission_for_difficulty(&self, difficulty: u8) -> ChallengeAdmission {
-        let pow = self.pow_params.with_difficulty(difficulty);
-        let puzzle = self
-            .puzzle_params
-            .as_ref()
-            .map(|params| params.with_difficulty(difficulty));
+    fn admission(&self) -> ChallengeAdmission {
         ChallengeAdmission {
-            pow,
             ticket_ttl: self.effective_ticket_ttl(),
-            puzzle,
+            puzzle: *self.puzzle_params,
         }
     }
     /// Whether this peer participates in trust gossip exchange.
@@ -546,9 +581,15 @@ impl SoranetHandshakeConfig {
             1,
             1,
             None,
-            false,
-            PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30)),
-            None,
+            PuzzleParameters::try_new(
+                NonZeroU32::new(puzzle::MIN_MEMORY_KIB).unwrap(),
+                NonZeroU32::new(1).unwrap(),
+                NonZeroU32::new(1).unwrap(),
+                1,
+                Duration::from_secs(300),
+                Duration::from_secs(30),
+            )
+            .expect("built-in puzzle parameters must be valid"),
             Duration::from_secs(60),
             test_ticket_revocation_store(),
         )
@@ -569,20 +610,8 @@ impl SoranetHandshakeConfig {
                 .map(|value| value.as_ref().as_slice()),
         }
     }
-    /// Whether an inbound peer must present the configured puzzle credential.
-    ///
-    /// Outbound self-minting policy must never weaken this local listener policy.
-    pub(crate) fn inbound_pow_required(&self) -> bool {
-        self.pow_required && (self.pow_params.difficulty() > 0 || self.puzzle_params.is_some())
-    }
-    fn outbound_pow_required(&self) -> bool {
-        self.inbound_pow_required()
-    }
-    fn requires_blocking_ticket_verification(&self) -> bool {
-        self.inbound_pow_required() && self.puzzle_params.is_some()
-    }
     /// Removes expired revocations from the backing store and returns the number of entries purged.
-    #[allow(dead_code)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn purge_expired_revocations(&self) -> Result<usize, ChallengeVerifyError> {
         let mut guard = self.lock_revocation_store()?;
         guard.purge_expired(SystemTime::now()).map_err(|err| {
@@ -595,7 +624,7 @@ impl SoranetHandshakeConfig {
     }
     /// Returns the number of active revocation fingerprints currently tracked.
     #[must_use]
-    #[allow(dead_code)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn active_revocations(&self) -> Result<usize, ChallengeVerifyError> {
         let mut guard = self.lock_revocation_store()?;
         guard.len(SystemTime::now()).map_err(|error| {
@@ -607,100 +636,58 @@ impl SoranetHandshakeConfig {
         })
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub(crate) fn pow_parameters(&self) -> PowParameters {
-        *self.pow_params
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub(crate) fn pow_ticket_ttl(&self) -> Duration {
+    pub(crate) fn ticket_ttl(&self) -> Duration {
         self.effective_ticket_ttl()
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub(crate) fn puzzle_parameters(&self) -> Option<PuzzleParameters> {
-        self.puzzle_params.as_ref().map(|params| **params)
+    pub(crate) fn puzzle_parameters(&self) -> PuzzleParameters {
+        *self.puzzle_params
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub(crate) fn admission_summary(&self) -> Option<ChallengeAdmission> {
-        if !self.inbound_pow_required() {
-            return None;
-        }
-        Some(self.admission_for_difficulty(self.pow_params.difficulty()))
+    pub(crate) fn admission_summary(&self) -> ChallengeAdmission {
+        self.admission()
     }
     pub(crate) fn mint_challenge_ticket<R: TryCryptoRng>(
         &self,
         transcript_hash: &[u8; 32],
         rng: &mut R,
-    ) -> Result<Option<MintedChallenge>, ChallengeMintError> {
-        if !self.outbound_pow_required() {
-            return Ok(None);
-        }
+    ) -> Result<MintedChallenge, puzzle::MintError> {
         let ttl = self.effective_ticket_ttl();
-        let ticket = if let Some(params) = self.puzzle_params.as_ref() {
-            let binding = self.puzzle_binding(transcript_hash);
-            puzzle::mint_ticket(params.as_ref(), &binding, ttl, rng)
-                .map_err(ChallengeMintError::Puzzle)?
-        } else {
-            let binding = self.pow_binding(transcript_hash);
-            pow::mint_ticket(self.pow_params.as_ref(), &binding, ttl, rng)
-                .map_err(ChallengeMintError::Pow)?
-        };
-        let admission = self.admission_for_difficulty(ticket.difficulty);
-        Ok(Some(MintedChallenge {
-            frames: vec![ticket.to_vec()],
-            admission: Some(admission),
-        }))
+        let binding = self.puzzle_binding(transcript_hash);
+        let ticket = puzzle::mint_ticket(self.puzzle_params.as_ref(), &binding, ttl, rng)?;
+        let admission = self.admission();
+        Ok(MintedChallenge {
+            credential: ticket.to_vec(),
+            admission,
+        })
     }
     pub(crate) fn verify_challenge_ticket(
         &self,
         bytes: &[u8],
         transcript_hash: &[u8; 32],
-    ) -> Result<Option<ChallengeAdmission>, ChallengeVerifyError> {
-        if !self.inbound_pow_required() {
-            return Ok(None);
-        }
+    ) -> Result<ChallengeAdmission, ChallengeVerifyError> {
         self.verify_ticket_bytes(bytes, transcript_hash)
     }
     fn verify_ticket_bytes(
         &self,
         bytes: &[u8],
         transcript_hash: &[u8; 32],
-    ) -> Result<Option<ChallengeAdmission>, ChallengeVerifyError> {
+    ) -> Result<ChallengeAdmission, ChallengeVerifyError> {
         let ticket = PowTicket::parse(bytes).map_err(ChallengeVerifyError::Pow)?;
         let now = SystemTime::now();
         // Reserve the canonical identity while holding the store only for its
         // durable preflight. The RAII guard excludes concurrent duplicates but
         // leaves distinct ML-DSA/Argon2 work free to run in parallel.
         let reservation = self.reserve_ticket_replay(&ticket, now)?;
-        let admission = self
-            .puzzle_params
-            .as_ref()
-            .map_or_else(
-                || {
-                    let binding = self.pow_binding(transcript_hash);
-                    pow::verify_at(&ticket, &binding, self.pow_params.as_ref(), now)
-                        .map_err(ChallengeVerifyError::Pow)
-                },
-                |params| {
-                    let binding = self.puzzle_binding(transcript_hash);
-                    puzzle::verify_at(&ticket, &binding, params.as_ref(), now)
-                        .map_err(ChallengeVerifyError::Puzzle)
-                },
-            )
-            .map(|()| self.admission_for_difficulty(ticket.difficulty))?;
+        let binding = self.puzzle_binding(transcript_hash);
+        puzzle::verify_at(&ticket, &binding, self.puzzle_params.as_ref(), now)
+            .map_err(ChallengeVerifyError::Puzzle)?;
+        let admission = self.admission();
         // Re-check revocation/expiry at commit time so slow Argon2 work cannot
         // accept a ticket that expired after its initial verification instant.
         self.commit_ticket_replay(&ticket, reservation, SystemTime::now())?;
-        Ok(Some(admission))
+        Ok(admission)
     }
-}
-/// Errors encountered while minting `SoraNet` handshake challenges.
-#[derive(Debug, Error)]
-pub enum ChallengeMintError {
-    /// Underlying `PoW` ticket minting failure.
-    #[error("pow ticket mint failed: {0}")]
-    Pow(#[from] pow::MintError),
-    /// Argon2 puzzle minting failure.
-    #[error("puzzle ticket mint failed: {0}")]
-    Puzzle(#[from] puzzle::MintError),
 }
 /// Errors encountered while verifying `SoraNet` handshake challenges.
 #[derive(Debug, Error)]
@@ -721,19 +708,17 @@ pub enum ChallengeVerifyError {
 /// Admission policy snapshot returned alongside minted or verified tickets.
 #[derive(Debug, Clone, Copy)]
 pub struct ChallengeAdmission {
-    /// Effective static first-release `PoW` parameters.
-    pub pow: PowParameters,
     /// Ticket TTL after applying policy clamps.
     pub ticket_ttl: Duration,
-    /// Optional puzzle parameters when Argon2 gating is enabled.
-    pub puzzle: Option<PuzzleParameters>,
+    /// Effective mandatory Argon2 puzzle parameters.
+    pub puzzle: PuzzleParameters,
 }
 /// Minted ticket bytes alongside the admission policy summary.
 pub struct MintedChallenge {
-    /// Self-minted puzzle ticket frames to send before the client hello.
-    pub frames: Vec<Vec<u8>>,
+    /// Self-minted puzzle ticket to send before the client hello.
+    pub credential: Vec<u8>,
     /// Admission policy applied when minting the ticket.
-    pub admission: Option<ChallengeAdmission>,
+    pub admission: ChallengeAdmission,
 }
 fn clear_sensitive_vec(bytes: &mut Vec<u8>) {
     // Initialize the existing spare allocation before clearing so a caller
@@ -747,18 +732,14 @@ impl std::fmt::Debug for MintedChallenge {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("MintedChallenge")
-            .field("frame_count", &self.frames.len())
-            .field("frames", &"[REDACTED]")
+            .field("credential", &"[REDACTED]")
             .field("admission", &self.admission)
             .finish()
     }
 }
 impl MintedChallenge {
     fn clear_sensitive_bytes(&mut self) {
-        for frame in &mut self.frames {
-            clear_sensitive_vec(frame);
-        }
-        self.frames.clear();
+        clear_sensitive_vec(&mut self.credential);
     }
 }
 impl Drop for MintedChallenge {
@@ -805,16 +786,9 @@ async fn mint_handshake_challenge(
     config: Arc<SoranetHandshakeConfig>,
     transcript_hash: [u8; 32],
     mut rng: StdRng,
-) -> Result<(Option<MintedChallenge>, StdRng), Error> {
-    // The ordinary hashcash loop is cheap and preserves the existing direct
-    // path. Only the configured memory-hard Argon2 puzzle needs blocking-pool
-    // isolation and direction-aware process admission.
-    if !config.outbound_pow_required() || config.puzzle_params.is_none() {
-        let minted = config
-            .mint_challenge_ticket(&transcript_hash, &mut rng)
-            .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
-        return Ok((minted, rng));
-    }
+) -> Result<(MintedChallenge, StdRng), Error> {
+    // Argon2 minting is memory-hard and must stay off peer tasks. The process
+    // gate bounds concurrent memory use independently from connection count.
     run_soranet_admission_work(
         config.puzzle_work_admission.outbound_mint_gate(),
         move || {
@@ -830,7 +804,7 @@ async fn verify_handshake_challenge(
     config: Arc<SoranetHandshakeConfig>,
     ticket: SensitiveHandshakeFrame,
     transcript_hash: [u8; 32],
-) -> Result<Option<ChallengeAdmission>, Error> {
+) -> Result<ChallengeAdmission, Error> {
     verify_handshake_challenge_with_gate(
         Arc::clone(&config),
         ticket,
@@ -844,14 +818,9 @@ async fn verify_handshake_challenge_with_gate(
     ticket: SensitiveHandshakeFrame,
     transcript_hash: [u8; 32],
     gate: Arc<Semaphore>,
-) -> Result<Option<ChallengeAdmission>, Error> {
-    // Ordinary hashcash is cheap. Argon2 and ML-DSA verification must never
-    // run on a peer task, and both share the bounded inbound work gate.
-    if !config.requires_blocking_ticket_verification() {
-        return config
-            .verify_challenge_ticket(&ticket, &transcript_hash)
-            .map_err(|error| Error::HandshakeSoranet(error.to_string()));
-    }
+) -> Result<ChallengeAdmission, Error> {
+    // Argon2 verification must never run on a peer task, and every verifier
+    // shares the bounded inbound work gate.
     run_soranet_admission_work(gate, move || {
         config
             .verify_challenge_ticket(&ticket, &transcript_hash)
@@ -3260,6 +3229,7 @@ pub mod handles {
         proxy_tls_verify: bool,
         proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>>,
         proxy_policy: crate::transport::ProxyPolicy,
+        outbound_dial_policy: Arc<crate::dial_policy::OutboundDialPolicy>,
         quic_dialer: Option<crate::transport::QuicDialer>,
         quic_datagrams_enabled: bool,
         quic_datagram_max_payload_bytes: usize,
@@ -3292,6 +3262,7 @@ pub mod handles {
             proxy_tls_verify,
             proxy_tls_pinned_cert_der,
             proxy_policy,
+            outbound_dial_policy,
             quic_dialer,
             quic_datagrams_enabled,
             quic_datagram_max_payload_bytes: quic_datagram_max_payload_bytes
@@ -13570,6 +13541,7 @@ mod state {
         pub proxy_tls_verify: bool,
         pub proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>>,
         pub proxy_policy: crate::transport::ProxyPolicy,
+        pub outbound_dial_policy: Arc<crate::dial_policy::OutboundDialPolicy>,
         pub quic_dialer: Option<crate::transport::QuicDialer>,
         pub quic_datagrams_enabled: bool,
         pub quic_datagram_max_payload_bytes: usize,
@@ -13612,6 +13584,7 @@ mod state {
                 proxy_tls_verify,
                 proxy_tls_pinned_cert_der,
                 proxy_policy,
+                outbound_dial_policy,
                 quic_dialer,
                 quic_datagrams_enabled,
                 quic_datagram_max_payload_bytes,
@@ -13676,17 +13649,21 @@ mod state {
                 connection_id: ConnectionId,
                 quic_datagrams_enabled: bool,
                 quic_datagram_max_payload_bytes: usize,
+                outbound_dial_policy: &crate::dial_policy::OutboundDialPolicy,
             ) -> Result<Connection, crate::Error> {
                 use tokio::time::Instant;
                 const QUIC_SERVER_NAME: &str = "iroha-quic";
                 let deadline = Instant::now() + dial_timeout;
+                outbound_dial_policy.check_target(peer_addr)?;
                 let targets: Vec<std::net::SocketAddr> = match peer_addr {
-                    iroha_primitives::addr::SocketAddr::Ipv4(v4) => vec![std::net::SocketAddr::V4(
-                        std::net::SocketAddrV4::new(v4.ip.into(), v4.port),
-                    )],
-                    iroha_primitives::addr::SocketAddr::Ipv6(v6) => vec![std::net::SocketAddr::V6(
-                        std::net::SocketAddrV6::new(v6.ip.into(), v6.port, 0, 0),
-                    )],
+                    iroha_primitives::addr::SocketAddr::Ipv4(v4) => outbound_dial_policy
+                        .check_resolved_targets(std::iter::once(std::net::SocketAddr::V4(
+                            std::net::SocketAddrV4::new(v4.ip.into(), v4.port),
+                        )))?,
+                    iroha_primitives::addr::SocketAddr::Ipv6(v6) => outbound_dial_policy
+                        .check_resolved_targets(std::iter::once(std::net::SocketAddr::V6(
+                            std::net::SocketAddrV6::new(v6.ip.into(), v6.port, 0, 0),
+                        )))?,
                     iroha_primitives::addr::SocketAddr::Host(host) => {
                         let lookup = tokio::time::timeout_at(
                             deadline,
@@ -13696,16 +13673,9 @@ mod state {
                         .map_err(|_| {
                             std::io::Error::new(std::io::ErrorKind::TimedOut, "dial timeout")
                         })??;
-                        lookup.collect()
+                        outbound_dial_policy.check_resolved_targets(lookup)?
                     }
                 };
-                if targets.is_empty() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "no socket addrs for peer",
-                    )
-                    .into());
-                }
                 let mut last_err: Option<std::io::Error> = None;
                 for target in targets {
                     let now = Instant::now();
@@ -13773,6 +13743,7 @@ mod state {
                 proxy_tls_pinned_cert_der,
                 tcp_nodelay,
                 tcp_keepalive,
+                outbound_dial_policy: Arc::clone(&outbound_dial_policy),
             };
             if prefer_scion {
                 #[cfg(feature = "quic")]
@@ -13784,6 +13755,7 @@ mod state {
                         connection_id,
                         quic_datagrams_enabled,
                         quic_datagram_max_payload_bytes,
+                        &outbound_dial_policy,
                     )
                     .await
                     {
@@ -13828,6 +13800,7 @@ mod state {
                                 connection_id,
                                 quic_datagrams_enabled,
                                 quic_datagram_max_payload_bytes,
+                                &outbound_dial_policy,
                             );
                             tokio::pin!(quic_fut);
                             // Phase 1: give QUIC a head start, but don't stall on blocked UDP.
@@ -13947,6 +13920,7 @@ mod state {
                 proxy_tls_verify: true,
                 proxy_tls_pinned_cert_der: None,
                 proxy_policy: crate::transport::ProxyPolicy::disabled(),
+                outbound_dial_policy: Arc::new(crate::dial_policy::OutboundDialPolicy::default()),
                 quic_dialer: None,
                 quic_datagrams_enabled: false,
                 quic_datagram_max_payload_bytes: 0,
@@ -14123,17 +14097,11 @@ mod state {
             let (minted, _resumed_rng) =
                 mint_handshake_challenge(Arc::clone(&soranet_handshake), admission_transcript, rng)
                     .await?;
-            if let Some(mut minted) = minted {
-                let mut send_result = Ok(());
-                for frame in &minted.frames {
-                    if let Err(error) = write_handshake_frame(&mut connection.write, frame).await {
-                        send_result = Err(error);
-                        break;
-                    }
-                }
-                minted.clear_sensitive_bytes();
-                send_result?;
-            }
+            let mut minted = minted;
+            let send_result =
+                write_handshake_frame(&mut connection.write, &minted.credential).await;
+            minted.clear_sensitive_bytes();
+            send_result?;
             write_handshake_frame(&mut connection.write, &client_hello).await?;
             let relay_hello = read_handshake_frame(&mut connection.read).await?;
             let secrets = match client_handle_relay_hello(
@@ -14277,28 +14245,19 @@ mod state {
             .await?;
             let runtime_params = soranet_handshake.runtime_params();
             let mut rng = soranet_handshake_rng()?;
-            let ticket = if soranet_handshake.inbound_pow_required() {
-                Some(SensitiveHandshakeFrame::from(
-                    read_handshake_frame(&mut connection.read).await?,
-                ))
-            } else {
-                None
-            };
+            let ticket =
+                SensitiveHandshakeFrame::from(read_handshake_frame(&mut connection.read).await?);
             // Buffering the bounded hello is cheap. Verify its admission
             // commitment before `process_client_hello` performs ML-KEM work.
             let client_hello = read_handshake_frame(&mut connection.read).await?;
-            if let Some(ticket) = ticket {
-                let admission_transcript = soranet_admission_transcript(
-                    &client_hello,
-                    &local_transport_delegation.binding,
-                );
-                verify_handshake_challenge(
-                    Arc::clone(&soranet_handshake),
-                    ticket,
-                    admission_transcript,
-                )
-                .await?;
-            }
+            let admission_transcript =
+                soranet_admission_transcript(&client_hello, &local_transport_delegation.binding);
+            verify_handshake_challenge(
+                Arc::clone(&soranet_handshake),
+                ticket,
+                admission_transcript,
+            )
+            .await?;
             let (relay_hello, secrets) = match process_client_hello(
                 &client_hello,
                 &runtime_params,
@@ -15464,357 +15423,6 @@ mod cryptographer {
 pub type ConnectionId = u64;
 /// Hash-sized binding for authenticated transport sessions.
 pub type TransportBinding = [u8; iroha_crypto::Hash::LENGTH];
-#[cfg(feature = "quic")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum QuicDatagramDisposition {
-    DropPreauth,
-    Queue,
-    Reject(&'static str),
-}
-#[cfg(feature = "quic")]
-fn classify_quic_datagram(
-    payload_len: usize,
-    authenticated: bool,
-    max_payload_bytes: usize,
-) -> QuicDatagramDisposition {
-    if payload_len == 0 {
-        return QuicDatagramDisposition::Reject("zero-length QUIC DATAGRAM");
-    }
-    if payload_len > max_payload_bytes {
-        return QuicDatagramDisposition::Reject("oversized QUIC DATAGRAM");
-    }
-    if authenticated {
-        QuicDatagramDisposition::Queue
-    } else {
-        QuicDatagramDisposition::DropPreauth
-    }
-}
-#[cfg(feature = "quic")]
-fn quic_datagram_queue_charge(payload_len: usize) -> Option<usize> {
-    payload_len.checked_add(core::mem::size_of::<RetainedQuicDatagram>())
-}
-#[cfg(feature = "quic")]
-#[derive(Debug)]
-struct RetainedQuicDatagram {
-    payload: bytes::Bytes,
-    _lease: SharedByteLease,
-}
-#[cfg(feature = "quic")]
-struct QuicDatagramActivation {
-    byte_budget: InboundSourceByteBudget,
-    acknowledged: oneshot::Sender<()>,
-}
-/// Eager, bounded QUIC DATAGRAM drain retained across application authentication.
-///
-/// Unauthenticated payloads are discarded, while authenticated payloads enter
-/// a fixed-count inbox whose per-entry size is capped by configuration.
-#[cfg(feature = "quic")]
-pub(crate) struct QuicDatagramIngress {
-    inbox: mpsc::Receiver<RetainedQuicDatagram>,
-    terminal: watch::Receiver<Option<Arc<str>>>,
-    activation: Option<oneshot::Sender<QuicDatagramActivation>>,
-    task: tokio::task::JoinHandle<()>,
-}
-#[cfg(feature = "quic")]
-impl QuicDatagramIngress {
-    /// Start draining Quinn immediately after transport establishment.
-    pub(crate) fn spawn(connection: quinn::Connection, max_payload_bytes: usize) -> Self {
-        let (inbox_tx, inbox) = mpsc::channel(QUIC_DATAGRAM_INBOX_CAPACITY);
-        let (terminal_tx, terminal) = watch::channel(None::<Arc<str>>);
-        let (activation_tx, mut activation_rx) = oneshot::channel::<QuicDatagramActivation>();
-        let task_connection = connection.clone();
-        // TODO: Patch or update Quinn so dependency-owned queued DATAGRAMs carry
-        // a fixed per-entry charge before this eager pump is first scheduled.
-        let task = tokio::spawn(async move {
-            let mut frames_since_yield = 0_u8;
-            let mut byte_budget: Option<InboundSourceByteBudget> = None;
-            loop {
-                tokio::select! {
-                    biased;
-                    activation = &mut activation_rx, if byte_budget.is_none() => {
-                        let Ok(activation) = activation else {
-                            return;
-                        };
-                        byte_budget = Some(activation.byte_budget);
-                        if activation.acknowledged.send(()).is_err() {
-                            return;
-                        }
-                    }
-                    datagram = task_connection.read_datagram() => {
-                        let datagram = match datagram {
-                            Ok(datagram) => datagram,
-                            Err(error) => {
-                                terminal_tx.send_replace(Some(
-                                    format!("QUIC DATAGRAM receive failed: {error}").into(),
-                                ));
-                                return;
-                            }
-                        };
-                        let mut rejection = None;
-                        match classify_quic_datagram(
-                            datagram.len(),
-                            byte_budget.is_some(),
-                            max_payload_bytes,
-                        ) {
-                            QuicDatagramDisposition::DropPreauth => {}
-                            QuicDatagramDisposition::Queue => {
-                                if let Some(charge) = quic_datagram_queue_charge(datagram.len()) {
-                                    if let Some(lease) = byte_budget
-                                        .as_ref()
-                                        .and_then(|budget| budget.try_reserve(charge))
-                                    {
-                                        let retained = RetainedQuicDatagram {
-                                            payload: datagram,
-                                            _lease: lease,
-                                        };
-                                        match inbox_tx.try_send(retained) {
-                                            Ok(())
-                                            | Err(mpsc::error::TrySendError::Full(_)) => {}
-                                            Err(mpsc::error::TrySendError::Closed(_)) => return,
-                                        }
-                                    }
-                                } else {
-                                    rejection = Some("QUIC DATAGRAM queue charge overflow");
-                                }
-                            }
-                            QuicDatagramDisposition::Reject(reason) => rejection = Some(reason),
-                        }
-                        if let Some(reason) = rejection {
-                            terminal_tx.send_replace(Some(Arc::from(reason)));
-                            task_connection.close(
-                                quinn::VarInt::from_u32(QUIC_DATAGRAM_PROTOCOL_ERROR_CODE),
-                                b"invalid DATAGRAM",
-                            );
-                            while task_connection.read_datagram().await.is_ok() {
-                                tokio::task::yield_now().await;
-                            }
-                            return;
-                        }
-                        frames_since_yield = frames_since_yield.wrapping_add(1);
-                        if frames_since_yield == 0 {
-                            tokio::task::yield_now().await;
-                        }
-                    }
-                }
-            }
-        });
-        Self {
-            inbox,
-            terminal,
-            activation: Some(activation_tx),
-            task,
-        }
-    }
-    /// Serialize application authentication with the drain's observation order.
-    async fn authenticate(&mut self, byte_budget: InboundSourceByteBudget) -> Result<(), Error> {
-        let Some(activation) = self.activation.take() else {
-            return Err(std::io::Error::other("QUIC DATAGRAM ingress activated twice").into());
-        };
-        let (acknowledged, acknowledgement) = oneshot::channel();
-        activation
-            .send(QuicDatagramActivation {
-                byte_budget,
-                acknowledged,
-            })
-            .map_err(|_| std::io::Error::other("QUIC DATAGRAM drain stopped before activation"))?;
-        acknowledgement
-            .await
-            .map_err(|_| std::io::Error::other("QUIC DATAGRAM activation was not acknowledged"))?;
-        Ok(())
-    }
-    async fn recv(&mut self) -> Result<RetainedQuicDatagram, Error> {
-        loop {
-            if let Some(reason) = self.terminal.borrow().clone() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    reason.to_string(),
-                )
-                .into());
-            }
-            tokio::select! {
-                biased;
-                changed = self.terminal.changed() => {
-                    if changed.is_err() {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::ConnectionAborted,
-                            "QUIC DATAGRAM drain stopped",
-                        ).into());
-                    }
-                }
-                datagram = self.inbox.recv() => {
-                    return datagram.ok_or_else(|| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::ConnectionAborted,
-                            "QUIC DATAGRAM inbox closed",
-                        ).into()
-                    });
-                }
-            }
-        }
-    }
-}
-#[cfg(feature = "quic")]
-impl Drop for QuicDatagramIngress {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-#[cfg(all(test, feature = "quic"))]
-mod quic_datagram_ingress_tests {
-    use super::*;
-    use quinn::{Endpoint, ServerConfig, TransportConfig};
-    use rustls::pki_types::PrivatePkcs8KeyDer;
-
-    async fn connection_pair() -> std::io::Result<(
-        Endpoint,
-        crate::transport::QuicDialer,
-        quinn::Connection,
-        quinn::Connection,
-    )> {
-        use quinn::crypto::rustls::QuicServerConfig;
-
-        let rcgen::CertifiedKey { cert, signing_key } =
-            rcgen::generate_simple_self_signed(["iroha-quic".to_owned()])
-                .map_err(std::io::Error::other)?;
-        let private_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
-        let mut tls =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(vec![cert.der().clone().into_owned()], private_key.into())
-                .map_err(std::io::Error::other)?;
-        tls.max_early_data_size = 0;
-        tls.alpn_protocols = vec![crate::transport::quic::P2P_ALPN.to_vec()];
-        let crypto = QuicServerConfig::try_from(Arc::new(tls)).map_err(std::io::Error::other)?;
-        let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
-        let mut server_transport = TransportConfig::default();
-        server_transport
-            .datagram_receive_buffer_size(Some(64 * 1024))
-            .datagram_send_buffer_size(64 * 1024);
-        server_config.transport_config(Arc::new(server_transport));
-        let endpoint =
-            Endpoint::server(server_config, "127.0.0.1:0".parse().expect("test address"))?;
-        let server_addr = endpoint.local_addr()?;
-        let dialer = crate::transport::QuicDialer::bind(
-            "127.0.0.1:0".parse().expect("test address"),
-            crate::transport::quic::DialerConfig {
-                datagram_receive_buffer: Some(64 * 1024),
-                datagram_send_buffer: 64 * 1024,
-                ..crate::transport::quic::DialerConfig::default()
-            },
-        )?;
-        let accepted = async {
-            let incoming = endpoint
-                .accept()
-                .await
-                .ok_or_else(|| std::io::Error::other("test endpoint closed"))?;
-            let connecting = incoming.accept().map_err(std::io::Error::other)?;
-            connecting.await.map_err(std::io::Error::other)
-        };
-        let connected = dialer.connect(server_addr, "iroha-quic");
-        let (server, client) = tokio::try_join!(accepted, connected)?;
-        Ok((endpoint, dialer, server, client))
-    }
-
-    #[test]
-    fn datagram_policy_drops_preauth_and_rejects_unbudgeted_shapes() {
-        assert_eq!(
-            classify_quic_datagram(1, false, 32),
-            QuicDatagramDisposition::DropPreauth
-        );
-        assert_eq!(
-            classify_quic_datagram(1, true, 32),
-            QuicDatagramDisposition::Queue
-        );
-        assert!(matches!(
-            classify_quic_datagram(0, false, 32),
-            QuicDatagramDisposition::Reject(_)
-        ));
-        assert!(matches!(
-            classify_quic_datagram(33, true, 32),
-            QuicDatagramDisposition::Reject(_)
-        ));
-        assert_eq!(
-            quic_datagram_queue_charge(32),
-            Some(32 + core::mem::size_of::<RetainedQuicDatagram>())
-        );
-        assert_eq!(quic_datagram_queue_charge(usize::MAX), None);
-    }
-
-    #[tokio::test]
-    async fn ingress_terminal_preempts_buffered_frames_and_drop_aborts_task() {
-        let (inbox_tx, inbox) = mpsc::channel(1);
-        let (terminal_tx, terminal) = watch::channel(None::<Arc<str>>);
-        let (activation_tx, activation_rx) = oneshot::channel::<QuicDatagramActivation>();
-        let task = tokio::spawn(async move {
-            let activation = activation_rx.await.expect("activation request");
-            activation
-                .acknowledged
-                .send(())
-                .expect("activation caller remains alive");
-            std::future::pending::<()>().await;
-        });
-        let abort_handle = task.abort_handle();
-        let mut ingress = QuicDatagramIngress {
-            inbox,
-            terminal,
-            activation: Some(activation_tx),
-            task,
-        };
-        let budget = SharedByteBudget::new(1024, 0).expect("test byte budget");
-        ingress
-            .authenticate(InboundSourceByteBudget::shared_only(Arc::clone(&budget)))
-            .await
-            .expect("activate ingress");
-        let charge = quic_datagram_queue_charge(6).expect("small charge");
-        let lease = budget.try_reserve(charge, false).expect("test byte lease");
-        inbox_tx
-            .send(RetainedQuicDatagram {
-                payload: bytes::Bytes::from_static(b"queued"),
-                _lease: lease,
-            })
-            .await
-            .expect("test inbox open");
-        terminal_tx.send_replace(Some(Arc::from("terminal violation")));
-        let error = ingress
-            .recv()
-            .await
-            .expect_err("terminal state must beat buffered frames");
-        assert!(matches!(error, Error::Io(_)));
-        drop(ingress);
-        tokio::task::yield_now().await;
-        assert!(abort_handle.is_finished());
-        assert_eq!(budget.retained_total(), 0);
-    }
-
-    #[tokio::test]
-    async fn empty_datagram_is_rejected_before_application_authentication() {
-        let pair = tokio::time::timeout(Duration::from_secs(5), connection_pair()).await;
-        let (_endpoint, _dialer, server, client) = match pair {
-            Ok(Ok(pair)) => pair,
-            Ok(Err(error)) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("QUIC test skipped: {error}");
-                return;
-            }
-            Ok(Err(error)) => panic!("QUIC pair failed: {error}"),
-            Err(_) => panic!("QUIC pair timed out"),
-        };
-        let mut ingress = QuicDatagramIngress::spawn(server, 32);
-        client
-            .send_datagram(bytes::Bytes::new())
-            .expect("empty DATAGRAM reaches the peer transport");
-        let error = tokio::time::timeout(Duration::from_secs(2), ingress.recv())
-            .await
-            .expect("eager drain must observe the DATAGRAM")
-            .expect_err("empty DATAGRAM must be terminal before authentication");
-        let Error::Io(error) = error else {
-            panic!("unexpected error: {error}");
-        };
-        assert!(error.to_string().contains("zero-length"));
-        tokio::time::timeout(Duration::from_secs(2), client.closed())
-            .await
-            .expect("protocol close must reach the sender");
-    }
-}
 /// Authenticated P2P connection assembled by the crate's TLS or QUIC transports.
 pub(crate) struct Connection {
     /// A unique connection id

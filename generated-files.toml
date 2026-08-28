@@ -874,10 +874,6 @@ name = "kagami-iroha3-dev-profile-bundle"
 kind = "file"
 outputs = [
   "defaults/kagami/iroha3-dev/README.md",
-  "defaults/kagami/iroha3-dev/config-peer-1.toml",
-  "defaults/kagami/iroha3-dev/config-peer-2.toml",
-  "defaults/kagami/iroha3-dev/config-peer-3.toml",
-  "defaults/kagami/iroha3-dev/config.toml",
   "defaults/kagami/iroha3-dev/docker-compose.yml",
   "defaults/kagami/iroha3-dev/genesis.expected_hash",
   "defaults/kagami/iroha3-dev/genesis.json",

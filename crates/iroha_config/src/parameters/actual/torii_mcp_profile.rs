@@ -10,12 +10,12 @@ pub enum ToriiMcpProfile {
     Operator,
 }
 impl ToriiMcpProfile {
-    /// Parse a user-provided profile label.
+    /// Parse an exact first-release profile label.
     pub fn parse(label: &str) -> Option<Self> {
-        match label.trim().to_ascii_lowercase().as_str() {
-            "read_only" | "readonly" | "read-only" => Some(Self::ReadOnly),
-            "writer" | "write" => Some(Self::Writer),
-            "operator" | "ops" => Some(Self::Operator),
+        match label {
+            "read_only" => Some(Self::ReadOnly),
+            "writer" => Some(Self::Writer),
+            "operator" => Some(Self::Operator),
             _ => None,
         }
     }

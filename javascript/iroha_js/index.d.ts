@@ -3609,29 +3609,6 @@ export interface SorafsLocalProxyOptions {
   kaigiBridge?: SorafsLocalProxyKaigiBridgeOptions;
 }
 
-export interface SorafsTaikaiCacheQosOptions {
-  priorityRateBps: number | bigint;
-  standardRateBps: number | bigint;
-  bulkRateBps: number | bigint;
-  burstMultiplier: number | bigint;
-}
-
-export interface SorafsTaikaiReliabilityOptions {
-  failuresToTrip?: number | bigint;
-  openSecs?: number | bigint;
-}
-
-export interface SorafsTaikaiCacheOptions {
-  hotCapacityBytes: number | bigint;
-  hotRetentionSecs: number | bigint;
-  warmCapacityBytes: number | bigint;
-  warmRetentionSecs: number | bigint;
-  coldCapacityBytes: number | bigint;
-  coldRetentionSecs: number | bigint;
-  qos: SorafsTaikaiCacheQosOptions;
-  reliability?: SorafsTaikaiReliabilityOptions;
-}
-
 export interface SorafsGatewayFetchOptions {
   manifestEnvelopeB64?: string;
   manifestCidHex?: string;
@@ -3647,7 +3624,6 @@ export interface SorafsGatewayFetchOptions {
   writeMode?: "read-only" | "upload-pq-only";
   policyOverride?: SorafsGatewayPolicyOverride;
   localProxy?: SorafsLocalProxyOptions;
-  taikaiCache?: SorafsTaikaiCacheOptions;
   scoreboardOutPath?: string;
   scoreboardNowUnixSecs?: number | bigint;
   scoreboardTelemetryLabel?: string;
@@ -3760,56 +3736,6 @@ export interface SorafsGatewayScoreboardEntry {
   eligibility: string | null;
 }
 
-export interface SorafsTaikaiCacheTierCounts {
-  hot: number;
-  warm: number;
-  cold: number;
-}
-
-export interface SorafsTaikaiCacheEvictionCounts {
-  expired: number;
-  capacity: number;
-}
-
-export interface SorafsTaikaiCacheEvictions {
-  hot: SorafsTaikaiCacheEvictionCounts;
-  warm: SorafsTaikaiCacheEvictionCounts;
-  cold: SorafsTaikaiCacheEvictionCounts;
-}
-
-export interface SorafsTaikaiCachePromotions {
-  warmToHot: number;
-  coldToWarm: number;
-  coldToHot: number;
-}
-
-export interface SorafsTaikaiQosCounts {
-  priority: number;
-  standard: number;
-  bulk: number;
-}
-
-export interface SorafsTaikaiCacheSummary {
-  hits: SorafsTaikaiCacheTierCounts;
-  misses: number;
-  inserts: SorafsTaikaiCacheTierCounts;
-  evictions: SorafsTaikaiCacheEvictions;
-  promotions: SorafsTaikaiCachePromotions;
-  qosDenials: SorafsTaikaiQosCounts;
-}
-
-export interface SorafsTaikaiCacheQueue {
-  pendingSegments: number;
-  pendingBytes: number;
-  pendingBatches: number;
-  inFlightBatches: number;
-  hedgedBatches: number;
-  shaperDenials: SorafsTaikaiQosCounts;
-  droppedSegments: number;
-  failovers: number;
-  openCircuits: number;
-}
-
 export interface SorafsGatewayFetchResult {
   manifestIdHex: string;
   chunkerHandle: string;
@@ -3824,8 +3750,6 @@ export interface SorafsGatewayFetchResult {
   carVerification: SorafsGatewayCarVerification | null;
   metadata: SorafsGatewayScoreboardMetadata;
   scoreboard: ReadonlyArray<SorafsGatewayScoreboardEntry> | null | undefined;
-  taikaiCacheSummary?: SorafsTaikaiCacheSummary | null;
-  taikaiCacheQueue?: SorafsTaikaiCacheQueue | null;
 }
 
 export type SorafsGatewayFetchErrorCode =
@@ -4067,23 +3991,29 @@ export interface SoranetTokenConfigSnapshot {
 }
 
 export interface SoranetPuzzleConfigSnapshot {
-  required: boolean;
   difficulty: number;
   maxFutureSkewSecs: number;
   minTicketTtlSecs: number;
   ticketTtlSecs: number;
-  puzzle: SoranetPuzzleParamsSnapshot | null;
+  puzzle: SoranetPuzzleParamsSnapshot;
   token: SoranetTokenConfigSnapshot;
 }
 
-export interface SoranetPuzzleTicketResponse {
-  ticketB64: string | null;
-  signedTicketB64: string | null;
-  signedTicketFingerprintHex: string | null;
+export type SoranetPuzzleTicketResponse = {
+  credentialB64: string;
   difficulty: number;
   ttlSecs: number;
   expiresAt: number;
-}
+} & (
+  | {
+      credentialKind: "raw";
+      signedTicketFingerprintHex: null;
+    }
+  | {
+      credentialKind: "signed";
+      signedTicketFingerprintHex: string;
+    }
+);
 
 export interface SoranetAdmissionTokenResponse {
   tokenB64: string;
@@ -4091,22 +4021,21 @@ export interface SoranetAdmissionTokenResponse {
   issuedAt: number;
   expiresAt: number;
   ttlSecs: number;
-  flags: number;
   issuerFingerprintHex: string;
   relayIdHex: string;
 }
 
-export interface SoranetPuzzleMintOptions {
-  ttlSecs?: number | bigint | null;
-  signed?: boolean | null;
+export interface SoranetPuzzleRequestOptions {
   timeoutMs?: number | null;
   headers?: Record<string, string | null | undefined>;
   signal?: AbortSignal;
 }
 
-export interface SoranetTokenMintOptions extends SoranetPuzzleMintOptions {
-  flags?: number;
+export interface SoranetPuzzleMintOptions extends SoranetPuzzleRequestOptions {
+  ttlSecs?: number | bigint | null;
 }
+
+export type SoranetTokenMintOptions = SoranetPuzzleMintOptions;
 
 export interface SoranetPuzzleClientOptions {
   fetchImpl?: typeof fetch;
@@ -4124,14 +4053,14 @@ export class SoranetPuzzleClient {
   constructor(baseUrl: string, options?: SoranetPuzzleClientOptions);
   readonly baseUrl: string;
   getPuzzleConfig(
-    options?: SoranetPuzzleMintOptions,
+    options?: SoranetPuzzleRequestOptions,
   ): Promise<SoranetPuzzleConfigSnapshot>;
   mintPuzzleTicket(
     transcriptHashHex: string,
     options?: SoranetPuzzleMintOptions,
   ): Promise<SoranetPuzzleTicketResponse>;
   getTokenConfig(
-    options?: SoranetPuzzleMintOptions,
+    options?: SoranetPuzzleRequestOptions,
   ): Promise<SoranetTokenConfigSnapshot>;
   mintAdmissionToken(
     transcriptHashHex: string,
@@ -6215,7 +6144,6 @@ export interface ToriiRuntimeMetricsCounters {
 
 export interface ToriiConfigurationTransport {
   noritoRpc: ToriiConfigurationTransportNoritoRpc | null;
-  streaming: ToriiConfigurationStreaming | null;
 }
 
 export interface ToriiConfigurationTransportNoritoRpc {
@@ -6223,23 +6151,6 @@ export interface ToriiConfigurationTransportNoritoRpc {
   stage: string;
   requireMtls: boolean;
   canaryAllowlistSize: number;
-}
-
-export interface ToriiConfigurationStreaming {
-  soranet: ToriiConfigurationStreamingSoranet | null;
-}
-
-export interface ToriiConfigurationStreamingSoranet {
-  enabled: boolean;
-  streamTag: string;
-  exitMultiaddr: string;
-  paddingBudgetMs: number | null;
-  accessKind: string;
-  garCategory: string;
-  channelSalt: string;
-  provisionSpoolDir: string;
-  provisionWindowSegments: number;
-  provisionQueueCapacity: number;
 }
 
 export interface ToriiRuntimeUpgradeManifestInput {
@@ -8960,14 +8871,6 @@ export interface SorafsChunkFetchSpecV1 {
   offset: number;
   length: number;
   digest_blake3: string;
-  taikai_segment_hint?: {
-    event: string;
-    stream: string;
-    rendition: string;
-    sequence: number;
-    payload_len?: number;
-    payload_blake3_hex?: string;
-  };
 }
 
 export interface SorafsChunkFetchPlanV1 {

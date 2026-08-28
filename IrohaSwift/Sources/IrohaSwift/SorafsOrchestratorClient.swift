@@ -85,90 +85,11 @@ public struct SorafsGatewayFetchReport: Codable, Sendable {
         }
     }
 
-    public struct TaikaiCacheTierCounts: Codable, Sendable, Equatable {
-        public let hot: Int
-        public let warm: Int
-        public let cold: Int
-    }
-
-    public struct TaikaiCacheEvictionCounts: Codable, Sendable, Equatable {
-        public let expired: Int
-        public let capacity: Int
-    }
-
-    public struct TaikaiCacheEvictions: Codable, Sendable, Equatable {
-        public let hot: TaikaiCacheEvictionCounts
-        public let warm: TaikaiCacheEvictionCounts
-        public let cold: TaikaiCacheEvictionCounts
-    }
-
-    public struct TaikaiCachePromotions: Codable, Sendable, Equatable {
-        public let warmToHot: Int
-        public let coldToWarm: Int
-        public let coldToHot: Int
-
-        enum CodingKeys: String, CodingKey {
-            case warmToHot = "warm_to_hot"
-            case coldToWarm = "cold_to_warm"
-            case coldToHot = "cold_to_hot"
-        }
-    }
-
-    public struct TaikaiQosCounts: Codable, Sendable, Equatable {
-        public let priority: Int
-        public let standard: Int
-        public let bulk: Int
-    }
-
-    public struct TaikaiCacheSummary: Codable, Sendable, Equatable {
-        public let hits: TaikaiCacheTierCounts
-        public let misses: Int
-        public let inserts: TaikaiCacheTierCounts
-        public let evictions: TaikaiCacheEvictions
-        public let promotions: TaikaiCachePromotions
-        public let qosDenials: TaikaiQosCounts
-
-        enum CodingKeys: String, CodingKey {
-            case hits
-            case misses
-            case inserts
-            case evictions
-            case promotions
-            case qosDenials = "qos_denials"
-        }
-    }
-
-    public struct TaikaiCacheQueue: Codable, Sendable, Equatable {
-        public let pendingSegments: Int
-        public let pendingBytes: Int
-        public let pendingBatches: Int
-        public let inFlightBatches: Int
-        public let hedgedBatches: Int
-        public let shaperDenials: TaikaiQosCounts
-        public let droppedSegments: Int
-        public let failovers: Int
-        public let openCircuits: Int
-
-        enum CodingKeys: String, CodingKey {
-            case pendingSegments = "pending_segments"
-            case pendingBytes = "pending_bytes"
-            case pendingBatches = "pending_batches"
-            case inFlightBatches = "in_flight_batches"
-            case hedgedBatches = "hedged_batches"
-            case shaperDenials = "shaper_denials"
-            case droppedSegments = "dropped_segments"
-            case failovers
-            case openCircuits = "open_circuits"
-        }
-    }
-
     public let chunkCount: Int
     public let providerReports: [ProviderReport]
     public let chunkReceipts: [ChunkReceipt]
     public let scoreboard: [ScoreboardEntry]?
     public let telemetryRegion: String?
-    public let taikaiCacheSummary: TaikaiCacheSummary?
-    public let taikaiCacheQueue: TaikaiCacheQueue?
 
     enum CodingKeys: String, CodingKey {
         case chunkCount = "chunk_count"
@@ -176,8 +97,6 @@ public struct SorafsGatewayFetchReport: Codable, Sendable {
         case chunkReceipts = "chunk_receipts"
         case scoreboard
         case telemetryRegion = "telemetry_region"
-        case taikaiCacheSummary = "taikai_cache_summary"
-        case taikaiCacheQueue = "taikai_cache_queue"
     }
 
     public init(
@@ -185,17 +104,13 @@ public struct SorafsGatewayFetchReport: Codable, Sendable {
         providerReports: [ProviderReport],
         chunkReceipts: [ChunkReceipt],
         scoreboard: [ScoreboardEntry]? = nil,
-        telemetryRegion: String? = nil,
-        taikaiCacheSummary: TaikaiCacheSummary? = nil,
-        taikaiCacheQueue: TaikaiCacheQueue? = nil
+        telemetryRegion: String? = nil
     ) {
         self.chunkCount = chunkCount
         self.providerReports = providerReports
         self.chunkReceipts = chunkReceipts
         self.scoreboard = scoreboard
         self.telemetryRegion = telemetryRegion
-        self.taikaiCacheSummary = taikaiCacheSummary
-        self.taikaiCacheQueue = taikaiCacheQueue
     }
 
     static func decode(from json: String) throws -> SorafsGatewayFetchReport {

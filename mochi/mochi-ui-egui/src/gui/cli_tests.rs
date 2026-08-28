@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
+const TEST_VRF_SEED_HEX: &str = "abababababababababababababababababababababababababababababababab";
 fn cli_env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -42,6 +43,26 @@ fn parse_cli_kagami_override_sets_path() {
         Some(Path::new("/tmp/kagami"))
     );
 }
+
+#[test]
+fn default_test_overrides_use_a_private_temporary_data_root() {
+    let (overrides, guard) = isolate_default_test_data_root(CliOverrides::default());
+    let guard = guard.expect("default test root must be isolated");
+    let data_root = overrides.data_root.expect("isolated data root");
+    assert!(data_root.starts_with(guard.path()));
+    assert_eq!(overrides.build_binaries, Some(false));
+
+    let explicit = CliOverrides {
+        data_root: Some(PathBuf::from("/tmp/explicit-mochi-test-root")),
+        ..CliOverrides::default()
+    };
+    let (explicit, guard) = isolate_default_test_data_root(explicit);
+    assert!(guard.is_none());
+    assert_eq!(
+        explicit.data_root.as_deref(),
+        Some(Path::new("/tmp/explicit-mochi-test-root"))
+    );
+}
 #[test]
 fn parse_cli_config_override_sets_path() {
     let args = vec![
@@ -52,6 +73,26 @@ fn parse_cli_config_override_sets_path() {
     assert_eq!(
         parsed.overrides.config_path.as_deref(),
         Some(Path::new("/tmp/mochi.toml"))
+    );
+}
+#[test]
+fn prepare_supervisor_rejects_a_missing_explicit_config_without_fallback() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let missing = temp.path().join("missing-mochi.toml");
+    let overrides = CliOverrides {
+        config_path: Some(missing.clone()),
+        ..CliOverrides::default()
+    };
+
+    let (supervisor, error, config) = prepare_supervisor_with_overrides(&overrides);
+
+    assert!(supervisor.is_none());
+    assert!(config.is_none());
+    let error = error.expect("missing explicit config must fail");
+    assert!(
+        error.to_string().contains("failed to load Mochi config")
+            && error.to_string().contains(&missing.display().to_string()),
+        "unexpected error: {error}"
     );
 }
 #[test]
@@ -94,6 +135,17 @@ fn parse_cli_chain_id_override_sets_value() {
     let args = vec![OsString::from("--chain-id"), OsString::from("demo-chain")];
     let parsed = parse_cli_overrides_from(args).expect("parse CLI");
     assert_eq!(parsed.overrides.chain_id.as_deref(), Some("demo-chain"));
+}
+#[test]
+fn parse_cli_chain_id_rejects_noncanonical_values() {
+    for value in ["", " demo-chain ", "bad/chain"] {
+        let args = vec![OsString::from("--chain-id"), OsString::from(value)];
+        let error = parse_cli_overrides_from(args).expect_err("invalid chain id must fail closed");
+        assert!(
+            error.to_string().contains("invalid --chain-id value"),
+            "unexpected error for `{value}`: {error}"
+        );
+    }
 }
 #[test]
 fn parse_cli_genesis_profile_sets_value() {
@@ -154,6 +206,30 @@ fn parse_cli_profile_rejects_consensus_aliases() {
     }
 }
 #[test]
+fn parse_cli_profile_rejects_unknown_fields_and_wrong_optional_types() {
+    for (profile, expected) in [
+        (
+            "{ peer_count = 4, consensus_mode = \"npos\", peers = 4 }",
+            "unknown field `peers`",
+        ),
+        (
+            "{ peer_count = 4, consensus_mode = \"npos\", genesis_profile = 7 }",
+            "genesis_profile must be a string",
+        ),
+        (
+            "{ peer_count = 4, consensus_mode = \"npos\", genesis_profile = \"\" }",
+            "genesis_profile must not be empty",
+        ),
+    ] {
+        let args = vec![OsString::from("--profile"), OsString::from(profile)];
+        let error = parse_cli_overrides_from(args).expect_err("invalid profile must fail closed");
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected error for `{profile}`: {error}"
+        );
+    }
+}
+#[test]
 fn parse_cli_profile_inline_table_sets_genesis_profile() {
     let args = vec![
         OsString::from("--profile"),
@@ -175,7 +251,7 @@ fn parse_cli_profile_genesis_conflict_errors() {
             "{ peer_count = 4, consensus_mode = \"npos\", genesis_profile = \"iroha3-dev\" }",
         ),
         OsString::from("--genesis-profile"),
-        OsString::from("iroha3-testus"),
+        OsString::from("iroha3-taira"),
     ];
     let err = parse_cli_overrides_from(args).expect_err("conflict should error");
     assert!(
@@ -185,9 +261,28 @@ fn parse_cli_profile_genesis_conflict_errors() {
 }
 #[test]
 fn parse_cli_vrf_seed_sets_value() {
-    let args = vec![OsString::from("--vrf-seed-hex"), OsString::from("abcd")];
+    let args = vec![
+        OsString::from("--vrf-seed-hex"),
+        OsString::from(TEST_VRF_SEED_HEX),
+    ];
     let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-    assert_eq!(parsed.overrides.vrf_seed_hex.as_deref(), Some("abcd"));
+    assert_eq!(
+        parsed.overrides.vrf_seed_hex.as_deref(),
+        Some(TEST_VRF_SEED_HEX)
+    );
+}
+#[test]
+fn parse_cli_vrf_seed_rejects_noncanonical_values() {
+    for value in [
+        "",
+        "abcd",
+        " abcdef ",
+        "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
+    ] {
+        let args = vec![OsString::from("--vrf-seed-hex"), OsString::from(value)];
+        let error = parse_cli_overrides_from(args).expect_err("invalid VRF seed must fail closed");
+        assert!(error.to_string().contains("exactly 64 hexadecimal"));
+    }
 }
 #[test]
 fn parse_cli_nexus_config_sets_table() {
@@ -196,6 +291,7 @@ fn parse_cli_nexus_config_sets_table() {
     fs::write(
         &config_path,
         r#"
+[nexus]
 lane_count = 2
 "#,
     )
@@ -213,6 +309,29 @@ lane_count = 2
     );
 }
 #[test]
+fn parse_cli_nexus_config_rejects_noncanonical_roots() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    for (name, contents) in [
+        ("raw.toml", "lane_count = 2\n"),
+        ("siblings.toml", "[nexus]\nlane_count = 2\n[torii]\n"),
+        ("scalar.toml", "nexus = 2\n"),
+    ] {
+        let config_path = temp.path().join(name);
+        fs::write(&config_path, contents).expect("write invalid nexus config");
+        let error = parse_cli_overrides_from(vec![
+            OsString::from("--nexus-config"),
+            OsString::from(config_path.as_os_str()),
+        ])
+        .expect_err("noncanonical Nexus config roots must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("exactly one `[nexus]` TOML table"),
+            "{error}"
+        );
+    }
+}
+#[test]
 fn parse_cli_nexus_lane_count_sets_override() {
     let args = vec![OsString::from("--nexus-lane-count"), OsString::from("3")];
     let parsed = parse_cli_overrides_from(args).expect("parse CLI");
@@ -222,7 +341,7 @@ fn parse_cli_nexus_lane_count_sets_override() {
 fn parse_cli_rejects_retired_da_flags() {
     let error = parse_cli_overrides_from(vec![OsString::from("--disable-da")])
         .expect_err("retired DA toggle must be rejected");
-    assert!(error.to_string().contains("unknown option"));
+    assert_eq!(error.to_string(), "unknown flag `--disable-da`");
 }
 #[test]
 fn parse_cli_restart_mode_never_sets_policy() {
@@ -232,6 +351,27 @@ fn parse_cli_restart_mode_never_sets_policy() {
         parsed.overrides.restart_policy,
         Some(RestartPolicy::Never)
     ));
+}
+#[test]
+fn parse_cli_restart_mode_rejects_noncanonical_alias() {
+    for mode in ["on_failure", "On-Failure", " on-failure ", ""] {
+        let args = vec![OsString::from("--restart-mode"), OsString::from(mode)];
+        let error = parse_cli_overrides_from(args).expect_err("restart alias must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("expects `never` or `on-failure`"),
+            "unexpected error for `{mode}`: {error}"
+        );
+    }
+}
+#[test]
+fn boolean_environment_values_require_canonical_spelling() {
+    for value in ["1", "TRUE", "yes", "on", " false "] {
+        let error = parse_bool_flag(value, "MOCHI_TEST_FLAG")
+            .expect_err("boolean aliases must be rejected");
+        assert!(error.to_string().contains("expects `true` or `false`"));
+    }
 }
 #[test]
 fn parse_cli_restart_on_failure_overrides_attempts() {
@@ -325,6 +465,30 @@ fn env_profile_override_applies() {
         overrides.profile,
         Some(NetworkProfile::from_preset(ProfilePreset::FourPeerBft))
     );
+}
+#[test]
+fn env_profile_override_rejects_unknown_fields() {
+    let _guard = cli_env_lock().lock().expect("env lock");
+    let _profile = CliEnvGuard::set(
+        "MOCHI_PROFILE",
+        "{ peer_count = 4, consensus_mode = \"npos\", peers = 4 }",
+    );
+    let error = parse_env_overrides().expect_err("unknown profile fields must fail closed");
+    assert!(error.to_string().contains("unknown field `peers`"));
+}
+#[test]
+fn environment_rejects_noncanonical_chain_and_vrf_values() {
+    let _guard = cli_env_lock().lock().expect("env lock");
+    {
+        let _chain = CliEnvGuard::set("MOCHI_CHAIN_ID", " mochi-local ");
+        let error = parse_env_overrides().expect_err("padded chain id must fail closed");
+        assert!(error.to_string().contains("invalid MOCHI_CHAIN_ID value"));
+    }
+    {
+        let _seed = CliEnvGuard::set("MOCHI_VRF_SEED_HEX", "abcd");
+        let error = parse_env_overrides().expect_err("short VRF seed must fail closed");
+        assert!(error.to_string().contains("exactly 64 hexadecimal"));
+    }
 }
 #[test]
 fn env_workspace_root_override_applies() {
@@ -426,39 +590,17 @@ fn cli_flags_override_env_values() {
     );
 }
 #[cfg(unix)]
-fn write_kagami_override_stub(root: &Path) -> (PathBuf, PathBuf) {
-    use std::os::unix::fs::PermissionsExt;
-    let script_path = root.join("kagami_cli_override.sh");
-    let log_path = root.join("kagami_cli_override.log");
-    let script = r#"#!/bin/sh
-set -e
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
-printf '%s\n' "$@" >> "$SCRIPT_DIR/kagami_cli_override.log"
-if [ "$1" = "--version" ]; then
-  echo "kagami-stub iroha3"
-  exit 0
-fi
-cat <<'JSON'
-{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","consensus_mode":"Permissioned","transactions":[{"instructions":[]}]}
-JSON
-"#;
-    std::fs::write(&script_path, script).expect("write kagami CLI override stub");
-    let mut perms = std::fs::metadata(&script_path)
-        .expect("override stub metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&script_path, perms).expect("set override stub permissions");
-    (script_path, log_path)
-}
-#[cfg(unix)]
 #[test]
 fn cli_overrides_apply_kagami_path_to_supervisor_builder() {
     if !super::socket_bind_available() {
         eprintln!("Skipping CLI override supervisor test due to socket restrictions");
         return;
     }
+    let _lock = test_support::env_lock().lock().expect("test env lock");
     let temp = tempfile::tempdir().expect("temp dir");
-    let (script_path, log_path) = write_kagami_override_stub(temp.path());
+    let log_path = temp.path().join("kagami_cli_override.log");
+    let (script_path, _signature_guard) = test_support::install_kagami_stub(temp.path());
+    let _log_guard = test_support::TestEnvGuard::set("MOCHI_TEST_KAGAMI_LOG", &log_path);
     let mut overrides = CliOverrides::default();
     overrides.binaries.kagami = Some(script_path.clone());
     let builder = SupervisorBuilder::new(ProfilePreset::FourPeerBft).data_root(temp.path());

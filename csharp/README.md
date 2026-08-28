@@ -1070,7 +1070,9 @@ The package-consumer guard creates an isolated temporary `net8.0` application,
 installs `Hyperledger.Iroha.Sdk` from `csharp/artifacts/packages`, verifies the
 consumer project uses `PackageReference` rather than `ProjectReference`, builds
 with warnings as errors, and runs managed Ed25519, canonical request, and SCCP
-route checks through the packed NuGet assembly. Set
+route checks through the packed NuGet assembly. It copies `csharp/global.json`
+into the temporary consumer so newer SDKs installed on hosted runners cannot
+supersede the reviewed .NET 8 SDK corridor. Set
 `CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER` to the current reviewed RID;
 the guard also verifies the NuGet runtime inventory and requires the packaged
 ABI-23 appeal-finance bridge:

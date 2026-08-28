@@ -1870,6 +1870,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         mcp_tools,
         mcp_dispatch_inflight,
         mcp_long_poll_inflight,
+        mcp_inflight_requests: Arc::new(mcp::McpInflightRegistry::default()),
         mcp_allowed_origins: Arc::new(Vec::new()),
         mcp_dispatch_router: std::sync::RwLock::new(None),
         fee_policy: FeePolicy::Disabled,

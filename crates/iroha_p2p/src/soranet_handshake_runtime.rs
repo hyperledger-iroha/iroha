@@ -16,7 +16,7 @@ use iroha_config::parameters::actual::{
     SoranetHandshake as ActualSoranetHandshake, SoranetPow as ActualSoranetPow,
 };
 use iroha_crypto::soranet::{
-    pow::{Parameters as PowParameters, TicketRevocationStore, TicketRevocationStoreLimits},
+    pow::{TicketRevocationStore, TicketRevocationStoreLimits},
     puzzle,
 };
 
@@ -93,7 +93,6 @@ struct ValidatedSoranetHandshake {
     kem_id: u8,
     sig_id: u8,
     resume_hash: Option<Vec<u8>>,
-    pow_params: PowParameters,
     puzzle_params: puzzle::Parameters,
     ticket_ttl: std::time::Duration,
     owner: SoranetHandshakeOwnerConfig,
@@ -111,9 +110,7 @@ impl ValidatedSoranetHandshake {
             self.kem_id,
             self.sig_id,
             self.resume_hash,
-            true,
-            self.pow_params,
-            Some(self.puzzle_params),
+            self.puzzle_params,
             self.ticket_ttl,
             shared_state,
         )?))
@@ -222,10 +219,6 @@ fn validate_handshake(
     } = pow;
     validate_revocation_window(max_future_skew, revocation_max_ttl)?;
     validate_puzzle_work_capacities(outbound_mint_capacity, inbound_verify_capacity)?;
-    let pow_params =
-        PowParameters::try_new(difficulty, max_future_skew, min_ticket_ttl).map_err(|err| {
-            Error::HandshakeSoranet(format!("invalid soranet PoW configuration: {err}"))
-        })?;
     let puzzle_params = puzzle::Parameters::try_new(
         puzzle.memory_kib,
         puzzle.time_cost,
@@ -262,7 +255,6 @@ fn validate_handshake(
         kem_id,
         sig_id,
         resume_hash: resume_hash.map(iroha_config::base::WithOrigin::into_value),
-        pow_params,
         puzzle_params,
         ticket_ttl,
         owner: SoranetHandshakeOwnerConfig {

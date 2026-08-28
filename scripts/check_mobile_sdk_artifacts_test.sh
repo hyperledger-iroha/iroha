@@ -61,6 +61,29 @@ test_hermetic_command_environment() {
   local probe="$TMP_DIR/hermetic-environment-probe"
   local output="$TMP_DIR/hermetic-environment.txt"
   local rejected_output
+  "$TEST_PYTHON_BINARY" -I -S -B - \
+    "$SCRIPT_DIR/run_mobile_hermetic_command.py" <<'PY'
+from pathlib import Path
+import runpy
+import sys
+
+profiles = runpy.run_path(str(Path(sys.argv[1])))['PROFILES']
+source_revision_environment = {
+    'CONNECT_NORITO_SOURCE_REVISION',
+    'IROHA_GIT_COMMIT_HASH',
+    'VERGEN_GIT_SHA',
+}
+for profile in ('apple-ios-device', 'apple-ios-simulator', 'apple-macos'):
+    if not source_revision_environment <= profiles[profile]:
+        raise SystemExit(f'{profile} must admit the canonical source revision')
+for profile in ('android-cargo', 'host-cargo'):
+    unexpected = source_revision_environment & profiles[profile]
+    if unexpected:
+        raise SystemExit(
+            f'{profile} must not admit Apple source-revision variables: '
+            f'{sorted(unexpected)}'
+        )
+PY
   printf '%s\n' \
     "#!$TEST_PYTHON_BINARY" \
     'import os' \

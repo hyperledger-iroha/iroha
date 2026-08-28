@@ -979,6 +979,8 @@ fn taira_inrou_stage_cli_requires_mode_and_parses_explicit_upgrade() {
         "2000000000",
         "--stage-dir",
         "/tmp/taira-inrou-stage-upgrade",
+        "--bind-validator-config-dir",
+        "/private/runtime/taira-validator-configs",
     ])
     .expect("parse Taira Inrou stage args");
     let Command::Taira(crate::taira::Command::InrouStage(cmd)) = args.command else {
@@ -986,6 +988,10 @@ fn taira_inrou_stage_cli_requires_mode_and_parses_explicit_upgrade() {
     };
     assert_eq!(cmd.mode, crate::taira::InrouCanaryMode::Upgrade);
     assert_eq!(cmd.sorafs_retention_epoch.get(), 2_000_000_000);
+    assert_eq!(
+        cmd.bind_validator_config_dir,
+        std::path::PathBuf::from("/private/runtime/taira-validator-configs")
+    );
 
     let error = Args::try_parse_from([
         "iroha",
@@ -1001,6 +1007,8 @@ fn taira_inrou_stage_cli_requires_mode_and_parses_explicit_upgrade() {
         "2000000000",
         "--stage-dir",
         "/tmp/taira-inrou-stage",
+        "--bind-validator-config-dir",
+        "/private/runtime/taira-validator-configs",
     ])
     .expect_err("Inrou stage must require an explicit mutation mode");
     assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
@@ -1019,8 +1027,30 @@ fn taira_inrou_stage_cli_requires_mode_and_parses_explicit_upgrade() {
         "/tmp/inrou/bundle.bin",
         "--stage-dir",
         "/tmp/taira-inrou-stage",
+        "--bind-validator-config-dir",
+        "/private/runtime/taira-validator-configs",
     ])
     .expect_err("Inrou stage must require an explicit SoraFS retention epoch");
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+
+    let error = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "inrou-stage",
+        "--mode",
+        "deploy",
+        "--container",
+        "/tmp/inrou/container.json",
+        "--service",
+        "/tmp/inrou/service.json",
+        "--bundle-file",
+        "/tmp/inrou/bundle.bin",
+        "--sorafs-retention-epoch",
+        "2000000000",
+        "--stage-dir",
+        "/tmp/taira-inrou-stage",
+    ])
+    .expect_err("Inrou stage must require the validator config binding directory");
     assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
 }
 #[test]

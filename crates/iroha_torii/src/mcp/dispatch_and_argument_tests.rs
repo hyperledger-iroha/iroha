@@ -37,11 +37,12 @@ fn tool_registry_skips_ws_and_sse_routes() {
             .iter()
             .all(|tool| tool.name != "iroha.connect.session.create_and_ticket")
     );
-    assert!(
-        tools
-            .iter()
-            .all(|tool| tool.name != "iroha.accounts.faucet.prepare")
-    );
+    for name in [
+        "iroha.accounts.faucet.prepare",
+        "iroha.accounts.faucet.submit",
+    ] {
+        assert!(tools.iter().any(|tool| tool.name == name));
+    }
     assert!(tools.iter().any(|tool| tool.name == "iroha.health"));
     assert!(tools.iter().all(|tool| tool.name != "iroha.status"));
     assert!(tools.iter().any(|tool| tool.name == "iroha.parameters.get"));
@@ -375,14 +376,11 @@ fn tool_registry_skips_ws_and_sse_routes() {
     for name in [
         "iroha.accounts.onboard.prepare",
         "iroha.accounts.onboard.submit",
+        "iroha.accounts.faucet.prepare",
+        "iroha.accounts.faucet.submit",
     ] {
         assert!(tools.iter().any(|tool| tool.name == name));
     }
-    assert!(
-        tools
-            .iter()
-            .all(|tool| !tool.name.starts_with("iroha.accounts.faucet."))
-    );
     assert!(tools.iter().all(|tool| {
         !matches!(
             tool.name.as_str(),
@@ -627,6 +625,72 @@ fn tool_registry_skips_ws_and_sse_routes() {
     );
     assert!(tools.iter().any(|tool| tool.name == "iroha.blocks.list"));
     assert!(tools.iter().any(|tool| tool.name == "iroha.blocks.get"));
+}
+
+#[test]
+fn faucet_tool_schemas_are_closed_ref_free_exact_envelopes() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+    for (name, expected_body_fields) in [
+        (
+            "iroha.accounts.faucet.prepare",
+            vec!["schema", "binding", "claim", "fee_payment"],
+        ),
+        (
+            "iroha.accounts.faucet.submit",
+            vec![
+                "schema",
+                "binding",
+                "operation",
+                "claim",
+                "semantic_hash_hex",
+                "account_id",
+                "asset_definition_id",
+                "asset_id",
+                "amount",
+                "transaction_hash_hex",
+                "signed_transaction_wire_hex",
+                "signed_transaction_wire_sha256",
+                "fee_payment",
+                "server_signature",
+            ],
+        ),
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("missing faucet tool {name}"));
+        reject_unresolved_schema_refs(&tool.input_schema, name).expect("fully inlined schema");
+        let schema = sanitize_tool_input_schema(&tool.input_schema);
+        let root = schema.as_object().expect("root object schema");
+        assert_eq!(root.get("additionalProperties"), Some(&Value::Bool(false)));
+        assert_eq!(
+            root.get("required")
+                .and_then(Value::as_array)
+                .expect("required fields"),
+            &[Value::String("body".to_owned())]
+        );
+        let properties = root
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("root properties");
+        assert!(properties.contains_key("body"));
+        assert!(properties.contains_key("accept"));
+        assert!(!properties.contains_key("headers"));
+        let body = properties
+            .get("body")
+            .and_then(Value::as_object)
+            .expect("body object schema");
+        assert_eq!(body.get("additionalProperties"), Some(&Value::Bool(false)));
+        let required = body
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("body required fields")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(required, expected_body_fields.into_iter().collect());
+    }
 }
 #[test]
 fn musubi_mcp_dispatch_requires_a_fresh_exact_target_account_proof() {

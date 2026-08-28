@@ -18,7 +18,6 @@ use norito::{
     decode_canonical_with_limits,
     derive::{NoritoDeserialize, NoritoSerialize},
 };
-use rand_core::TryCryptoRng;
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use std::{
     collections::HashMap,
@@ -27,13 +26,12 @@ use std::{
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use subtle::ConstantTimeEq as _;
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
-/// Domain separator used when deriving `PoW` challenges.
-pub const CHALLENGE_DOMAIN: &[u8] = b"soranet.pow.challenge.v1";
-/// Domain separator used when hashing `PoW` solutions.
-pub const SOLUTION_DOMAIN: &[u8] = b"soranet.pow.solution.v1";
+/// Domain separator used when deriving Argon2 admission challenges.
+pub(super) const CHALLENGE_DOMAIN: &[u8] = b"soranet.pow.challenge.v1";
+/// Domain separator used when hashing Argon2 admission solutions.
+pub(super) const SOLUTION_DOMAIN: &[u8] = b"soranet.pow.solution.v1";
 /// Domain separator used when signing `SignedTicket` payloads.
 pub const SIGNING_DOMAIN: &[u8; 28] = b"soranet.pow.signed_ticket.v1";
 /// Domain separator used when hashing revocation fingerprints.
@@ -85,9 +83,6 @@ const SIGNED_TICKET_PAYLOAD_LEN: usize = SIGNING_DOMAIN.len() + TICKET_LEN + 32 
 /// Maximum accepted bare Norito encoding for one signed ticket.
 pub const SIGNED_TICKET_MAX_ENCODED_BYTES_V1: usize = 8 * 1024;
 const SIGNED_TICKET_DECODE_MAX_NESTING_DEPTH_V1: usize = 8;
-/// Slack tolerated when validating the remaining TTL to account for second-level truncation.
-const TTL_GRACE: Duration = Duration::from_secs(1);
-const BINDING_FIELD_LEN: usize = 32;
 const REVOCATION_SNAPSHOT_BASE_LIMIT_BYTES: usize = 4 * 1024;
 const REVOCATION_SNAPSHOT_ENTRY_LIMIT_BYTES: usize = 128;
 const REVOCATION_SNAPSHOT_DECODE_MAX_NESTING_DEPTH_V1: usize = 8;
@@ -121,7 +116,7 @@ pub(super) fn ticket_binding_commitment(
     }
     *hasher.finalize().as_bytes()
 }
-/// Hashcash-style ticket attached to `SoraNet` circuit establishment.
+/// Fixed-width Argon2 admission ticket attached to `SoraNet` circuit establishment.
 #[derive(PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct Ticket {
     /// Ticket format version (currently `1`).
@@ -211,11 +206,6 @@ impl Ticket {
             solution: *solution,
         })
     }
-    /// Returns the ticket expiration timestamp as a `SystemTime`.
-    #[must_use]
-    pub fn expires_at_time(&self) -> SystemTime {
-        self.checked_expires_at_time().unwrap_or(UNIX_EPOCH)
-    }
     /// Returns the ticket expiration timestamp if it is representable by `SystemTime`.
     #[must_use]
     pub fn checked_expires_at_time(&self) -> Option<SystemTime> {
@@ -262,8 +252,8 @@ fn read_ticket_field<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result
 ///
 /// The signature covers the ticket bytes, relay ID, and mandatory transcript
 /// hash. Production consumers must verify the enclosed ticket with
-/// `soranet::puzzle`; a signature never downgrades admission to hashcash or a
-/// difficulty-zero grant.
+/// `soranet::puzzle`; a signature authenticates the envelope but does not
+/// replace verification of the enclosed proof.
 #[derive(PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
 pub struct SignedTicket {
@@ -422,24 +412,6 @@ impl SignedTicket {
         debug_assert_eq!(offset + transcript_hash.len(), SIGNED_TICKET_PAYLOAD_LEN);
         payload
     }
-    /// Returns the ticket expiration timestamp as a `SystemTime`.
-    #[must_use]
-    pub fn expires_at(&self) -> SystemTime {
-        self.checked_expires_at().unwrap_or(UNIX_EPOCH)
-    }
-    /// Returns the signed ticket expiration timestamp if it is representable by `SystemTime`.
-    #[must_use]
-    pub fn checked_expires_at(&self) -> Option<SystemTime> {
-        self.ticket.checked_expires_at_time()
-    }
-    /// Compute the canonical revocation fingerprint for the underlying ticket.
-    ///
-    /// Signed and unsigned presentations intentionally share one replay
-    /// identity; randomized re-signing cannot mint a fresh revocation key.
-    #[must_use]
-    pub fn revocation_fingerprint(&self) -> [u8; 32] {
-        self.ticket.revocation_fingerprint()
-    }
 }
 fn signed_ticket_decode_limits_v1() -> DecodeLimits {
     DecodeLimits::new(
@@ -565,9 +537,6 @@ pub enum TicketRevocationStoreError {
     /// Ticket expiry timestamp cannot be represented by `SystemTime`.
     #[error("revocation expiry timestamp {0} overflows system time")]
     ExpiryTimestampOverflow(u64),
-    /// A signed ticket carries malformed signature material.
-    #[error("signed-ticket revocation credential malformed: {0}")]
-    MalformedSignature(String),
 }
 #[derive(Debug, Clone, Copy)]
 struct RevokedTicketRecord {
@@ -652,39 +621,7 @@ impl TicketRevocationStore {
         store.load_from_disk(now)?;
         Ok(store)
     }
-    /// Insert a `SignedTicket` using the canonical underlying-ticket identity.
-    ///
-    /// # Errors
-    /// Propagates [`TicketRevocationStoreError`] when persistence fails while
-    /// recording the revocation.
-    pub fn revoke_ticket(
-        &mut self,
-        ticket: &SignedTicket,
-        now: SystemTime,
-    ) -> Result<TicketRevocationInsertOutcome, TicketRevocationStoreError> {
-        validate_signed_ticket_signature_material(&ticket.signature)
-            .map_err(TicketRevocationStoreError::MalformedSignature)?;
-        let expires_at = ticket.checked_expires_at().ok_or(
-            TicketRevocationStoreError::ExpiryTimestampOverflow(ticket.ticket.expires_at),
-        )?;
-        self.insert(ticket.revocation_fingerprint(), expires_at, now)
-    }
-    /// Insert a ticket by hashing its serialized payload.
-    ///
-    /// # Errors
-    /// Propagates [`TicketRevocationStoreError`] when persistence fails while
-    /// recording the revocation.
-    pub fn revoke_ticket_bytes(
-        &mut self,
-        ticket: &Ticket,
-        now: SystemTime,
-    ) -> Result<TicketRevocationInsertOutcome, TicketRevocationStoreError> {
-        let expires_at = ticket.checked_expires_at_time().ok_or(
-            TicketRevocationStoreError::ExpiryTimestampOverflow(ticket.expires_at),
-        )?;
-        self.insert(ticket.revocation_fingerprint(), expires_at, now)
-    }
-    /// Insert a raw ticket payload into the store using its expiry.
+    /// Insert a canonical ticket payload into the store using its expiry.
     ///
     /// # Errors
     /// Propagates [`TicketRevocationStoreError`] when persistence fails while
@@ -713,20 +650,6 @@ impl TicketRevocationStore {
         let fingerprint = ticket.revocation_fingerprint();
         self.is_revoked_fingerprint(&fingerprint, now)
     }
-    /// Check if a ticket has been revoked.
-    ///
-    /// # Errors
-    /// Returns [`TicketRevocationStoreError`] when a previously failed mutation
-    /// cannot be made durable.
-    pub fn is_ticket_revoked(
-        &mut self,
-        ticket: &SignedTicket,
-        now: SystemTime,
-    ) -> Result<bool, TicketRevocationStoreError> {
-        validate_signed_ticket_signature_material(&ticket.signature)
-            .map_err(TicketRevocationStoreError::MalformedSignature)?;
-        self.is_revoked_fingerprint(&ticket.revocation_fingerprint(), now)
-    }
     /// Number of active (non-expired) fingerprints.
     ///
     /// # Errors
@@ -739,33 +662,6 @@ impl TicketRevocationStore {
             .values()
             .filter(|record| !is_expired(record.expires_at, effective_now))
             .count())
-    }
-    /// Return the active fingerprints retained by the store.
-    ///
-    /// # Errors
-    /// Returns [`TicketRevocationStoreError::Allocation`] if the bounded result
-    /// cannot reserve memory, or an IO error if a previously failed mutation
-    /// still cannot be made durable.
-    pub fn active_fingerprints(
-        &mut self,
-        now: SystemTime,
-    ) -> Result<Vec<[u8; 32]>, TicketRevocationStoreError> {
-        let effective_now = self.effective_now_for_read(now)?;
-        let active_len = self
-            .records
-            .values()
-            .filter(|record| !is_expired(record.expires_at, effective_now))
-            .count();
-        let mut fingerprints = Vec::new();
-        fingerprints.try_reserve_exact(active_len).map_err(|_| {
-            TicketRevocationStoreError::Allocation {
-                entries: active_len,
-            }
-        })?;
-        fingerprints.extend(self.records.iter().filter_map(|(fingerprint, record)| {
-            (!is_expired(record.expires_at, effective_now)).then_some(*fingerprint)
-        }));
-        Ok(fingerprints)
     }
     /// Remove expired entries and persist updates.
     ///
@@ -1042,120 +938,6 @@ fn encode_revocation_timestamp(
     })?;
     Ok((duration.as_secs(), duration.subsec_nanos()))
 }
-/// Policy controlling `PoW` verification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Parameters {
-    difficulty: u8,
-    max_future_skew: Duration,
-    min_ttl: Duration,
-}
-/// Errors surfaced while constructing `PoW` policy parameters.
-#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
-pub enum ParameterError {
-    /// The minimum ticket TTL must be non-zero.
-    #[error("pow min_ttl must be greater than zero")]
-    MinTtlZero,
-    /// The maximum future skew must cover the minimum ticket TTL.
-    #[error("pow max_future_skew {max_future_skew:?} is shorter than min_ttl {min_ttl:?}")]
-    MaxFutureSkewTooShort {
-        /// Configured maximum future skew.
-        max_future_skew: Duration,
-        /// Configured minimum ticket TTL.
-        min_ttl: Duration,
-    },
-}
-/// Binding inputs mixed into a `PoW` challenge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChallengeBinding<'a> {
-    /// Descriptor commitment advertised by the relay.
-    pub descriptor_commit: &'a [u8],
-    /// Relay identifier bound into the challenge.
-    pub relay_id: &'a [u8],
-    /// Transcript hash binding the ticket to this admission attempt.
-    pub transcript_hash: &'a [u8; 32],
-}
-impl<'a> ChallengeBinding<'a> {
-    /// Construct a new binding descriptor.
-    #[must_use]
-    pub fn new(
-        descriptor_commit: &'a [u8],
-        relay_id: &'a [u8],
-        transcript_hash: &'a [u8; 32],
-    ) -> Self {
-        Self {
-            descriptor_commit,
-            relay_id,
-            transcript_hash,
-        }
-    }
-}
-impl Parameters {
-    /// Construct new `PoW` parameters.
-    ///
-    /// Invalid bounds produce a fail-closed policy that rejects all minted and verified tickets.
-    /// Runtime configuration loaders should prefer [`Parameters::try_new`] so invalid policy input
-    /// can be surfaced as a configuration error.
-    #[must_use]
-    pub fn new(difficulty: u8, max_future_skew: Duration, min_ttl: Duration) -> Self {
-        Self::try_new(difficulty, max_future_skew, min_ttl)
-            .unwrap_or_else(|_| Self::fail_closed(difficulty))
-    }
-    fn fail_closed(difficulty: u8) -> Self {
-        Self {
-            difficulty,
-            max_future_skew: Duration::ZERO,
-            min_ttl: Duration::MAX,
-        }
-    }
-    /// Construct new `PoW` parameters.
-    ///
-    /// # Errors
-    /// Returns [`ParameterError`] if the minimum ticket TTL is zero or if the
-    /// maximum future skew is shorter than the minimum ticket TTL.
-    pub fn try_new(
-        difficulty: u8,
-        max_future_skew: Duration,
-        min_ttl: Duration,
-    ) -> Result<Self, ParameterError> {
-        if min_ttl.is_zero() {
-            return Err(ParameterError::MinTtlZero);
-        }
-        if max_future_skew < min_ttl {
-            return Err(ParameterError::MaxFutureSkewTooShort {
-                max_future_skew,
-                min_ttl,
-            });
-        }
-        Ok(Self {
-            difficulty,
-            max_future_skew,
-            min_ttl,
-        })
-    }
-    /// Returns the number of leading zero bits required in the solution digest.
-    #[must_use]
-    pub fn difficulty(&self) -> u8 {
-        self.difficulty
-    }
-    /// Maximum allowed future skew (ticket expiry - now).
-    #[must_use]
-    pub fn max_future_skew(&self) -> Duration {
-        self.max_future_skew
-    }
-    /// Minimum ticket lifetime allowed by the policy.
-    #[must_use]
-    pub fn min_ticket_ttl(&self) -> Duration {
-        self.min_ttl
-    }
-    /// Returns a copy of the parameters with the supplied difficulty.
-    #[must_use]
-    pub fn with_difficulty(&self, difficulty: u8) -> Self {
-        Self {
-            difficulty,
-            ..*self
-        }
-    }
-}
 /// Errors surfaced while validating tickets.
 #[derive(Debug, Error)]
 pub enum Error {
@@ -1165,29 +947,9 @@ pub enum Error {
     /// Ticket uses an unsupported version.
     #[error("unsupported pow ticket version {0}")]
     UnsupportedVersion(u8),
-    /// Ticket difficulty does not match policy.
-    #[error("ticket difficulty {ticket} does not match required {required}")]
-    DifficultyMismatch {
-        /// Difficulty encoded in the incoming ticket.
-        ticket: u8,
-        /// Difficulty required by local policy.
-        required: u8,
-    },
-    /// Ticket has expired.
-    #[error("pow ticket expired at {0}, current time {1}")]
-    Expired(u64, u64),
-    /// Ticket expires too far in the future relative to the relay clock.
-    #[error("pow ticket expires too far in the future (>{0:?})")]
-    FutureSkewExceeded(Duration),
     /// Ticket expiry timestamp cannot be represented by `SystemTime`.
     #[error("pow ticket expiry timestamp {0} overflows system time")]
     ExpiryTimestampOverflow(u64),
-    /// Ticket TTL is shorter than the policy minimum.
-    #[error("pow ticket ttl shorter than required min ({0:?})")]
-    ExpiryWindowTooSmall(Duration),
-    /// Ticket failed the hash predicate.
-    #[error("pow ticket solution invalid")]
-    InvalidSolution,
     /// Signed ticket bound to a different relay than the verifier expects.
     #[error("pow ticket relay mismatch")]
     RelayMismatch,
@@ -1209,450 +971,6 @@ pub enum Error {
     /// Revocation store failed to accept or load the entry.
     #[error("revocation store error: {0}")]
     RevocationStore(String),
-    /// System clock unavailable.
-    #[error("system clock error: {0}")]
-    Clock(#[from] std::time::SystemTimeError),
-    /// Binding material has an invalid field length.
-    #[error("malformed pow binding: {0}")]
-    MalformedBinding(String),
-}
-/// Errors surfaced while minting tickets.
-#[derive(Debug, Error)]
-pub enum MintError {
-    /// Binding material has an invalid field length.
-    #[error("malformed pow binding: {0}")]
-    MalformedBinding(String),
-    /// Requested TTL was shorter than the policy minimum.
-    #[error("requested ttl {requested:?} shorter than required minimum {required:?}")]
-    TtlTooShort {
-        /// TTL requested by the client.
-        requested: Duration,
-        /// Minimum TTL allowed by policy.
-        required: Duration,
-    },
-    /// Requested TTL exceeded the allowed future skew.
-    #[error("requested ttl {requested:?} exceeds max future skew {max_skew:?}")]
-    TtlTooLong {
-        /// TTL requested by the client.
-        requested: Duration,
-        /// Maximum future skew allowed by policy.
-        max_skew: Duration,
-    },
-    /// Requested TTL cannot be represented as a `SystemTime` expiry.
-    #[error("requested ttl {0:?} overflows system time")]
-    ExpiryTimestampOverflow(Duration),
-    /// Random byte generation failed while minting the ticket.
-    #[error("random byte generation failed while {operation}: {message}")]
-    RandomBytes {
-        /// Operation that requested random bytes.
-        operation: &'static str,
-        /// Underlying RNG error message.
-        message: String,
-    },
-    /// System clock unavailable.
-    #[error("system clock error: {0}")]
-    Clock(#[from] std::time::SystemTimeError),
-    /// The system clock moved backwards while a proof candidate was being
-    /// evaluated, so the resulting expiry window cannot be trusted.
-    #[error("system clock moved backwards while minting pow ticket")]
-    ClockMovedBackwards,
-}
-fn fill_random<R: TryCryptoRng>(
-    rng: &mut R,
-    operation: &'static str,
-    dest: &mut [u8],
-) -> Result<(), MintError> {
-    rng.try_fill_bytes(dest)
-        .map_err(|err| MintError::RandomBytes {
-            operation,
-            message: err.to_string(),
-        })?;
-    if dest.iter().all(|&byte| byte == 0) {
-        return Err(MintError::RandomBytes {
-            operation,
-            message: "rng returned all-zero material".to_owned(),
-        });
-    }
-    if dest.len() > 1 && dest.iter().all(|&byte| byte == dest[0]) {
-        return Err(MintError::RandomBytes {
-            operation,
-            message: "rng returned all-identical-byte material".to_owned(),
-        });
-    }
-    Ok(())
-}
-fn reject_repeated_nonce_material(
-    operation: &'static str,
-    candidate: &[u8; 32],
-    prior: &[(&'static str, &[u8; 32])],
-) -> Result<(), MintError> {
-    if let Some((label, _)) = prior
-        .iter()
-        .find(|(_, bytes)| bool::from(candidate.ct_eq(*bytes)))
-    {
-        return Err(MintError::RandomBytes {
-            operation,
-            message: format!("rng repeated {label} material"),
-        });
-    }
-    Ok(())
-}
-/// Verify a ticket using the local `PoW` parameters.
-///
-/// # Errors
-/// Returns [`Error`] if the ticket version or difficulty do not match the policy, the
-/// ticket has expired, the lifetime falls outside the configured window, or the solution
-/// fails the hash predicate.
-pub fn verify(
-    ticket: &Ticket,
-    binding: &ChallengeBinding<'_>,
-    params: &Parameters,
-) -> Result<(), Error> {
-    verify_at(ticket, binding, params, SystemTime::now())
-}
-/// Verify a ticket at a specific time (exposed for testing).
-///
-/// # Errors
-/// Mirrors [`verify`] while allowing the caller to supply the reference timestamp.
-pub fn verify_at(
-    ticket: &Ticket,
-    binding: &ChallengeBinding<'_>,
-    params: &Parameters,
-    now: SystemTime,
-) -> Result<(), Error> {
-    validate_binding(binding).map_err(Error::MalformedBinding)?;
-    validate_ticket_policy_at(ticket, params, now)?;
-    verify_ticket_solution(ticket, binding, params)
-}
-/// Verify a hashcash-signed ticket at a fixed timestamp for legacy unit fixtures.
-///
-/// Production signed tickets are mandatory Argon2 envelopes and are verified by
-/// [`crate::soranet::puzzle::verify_signed_ticket_at`]. Keeping this helper
-/// test-only prevents a caller from silently selecting hashcash for a signed
-/// credential.
-///
-/// # Errors
-/// Returns [`Error`] when signature verification fails, relay/transcript bindings
-/// mismatch, `PoW` validation fails, or the revocation store refuses the entry.
-#[cfg(test)]
-fn verify_signed_ticket_at(
-    signed_ticket: &SignedTicket,
-    public_key: &[u8],
-    binding: &ChallengeBinding<'_>,
-    params: &Parameters,
-    mut revocations: Option<&mut TicketRevocationStore>,
-    now: SystemTime,
-) -> Result<(), Error> {
-    validate_binding(binding).map_err(Error::MalformedBinding)?;
-    if signed_ticket.relay_id != *binding.relay_id {
-        return Err(Error::RelayMismatch);
-    }
-    if signed_ticket.transcript_hash != *binding.transcript_hash {
-        return Err(Error::TranscriptMismatch);
-    }
-    validate_ticket_policy_at(&signed_ticket.ticket, params, now)?;
-    // The canonical ticket identity is cheap to derive and does not depend on
-    // ML-DSA's randomized signature. Reject a known replay before performing
-    // public-key verification so repeated bearer use cannot amplify CPU work.
-    SignedTicket::validate_signature_material(&signed_ticket.signature)?;
-    if let Some(store) = revocations.as_deref_mut()
-        && store
-            .is_ticket_revoked(signed_ticket, now)
-            .map_err(|err| Error::RevocationStore(err.to_string()))?
-    {
-        return Err(Error::Replay);
-    }
-    signed_ticket.verify(public_key)?;
-    verify_ticket_solution(&signed_ticket.ticket, binding, params)?;
-    if let Some(store) = revocations {
-        let outcome = store
-            .revoke_ticket(signed_ticket, now)
-            .map_err(|err| Error::RevocationStore(err.to_string()))?;
-        handle_revocation_outcome(outcome, signed_ticket.ticket.expires_at, now)?;
-    }
-    Ok(())
-}
-fn validate_ticket_policy_at(
-    ticket: &Ticket,
-    params: &Parameters,
-    now: SystemTime,
-) -> Result<(), Error> {
-    if ticket.version != Ticket::VERSION {
-        return Err(Error::UnsupportedVersion(ticket.version));
-    }
-    if ticket.difficulty != params.difficulty {
-        return Err(Error::DifficultyMismatch {
-            ticket: ticket.difficulty,
-            required: params.difficulty,
-        });
-    }
-    let now_duration = now.duration_since(UNIX_EPOCH)?;
-    let now_secs = now_duration.as_secs();
-    unix_time_from_secs(ticket.expires_at)
-        .ok_or(Error::ExpiryTimestampOverflow(ticket.expires_at))?;
-    let expires_at = Duration::from_secs(ticket.expires_at);
-    let ttl_remaining = expires_at
-        .checked_sub(now_duration)
-        .ok_or(Error::Expired(ticket.expires_at, now_secs))?;
-    let deficit = params.min_ttl.saturating_sub(ttl_remaining);
-    if deficit > TTL_GRACE {
-        return Err(Error::ExpiryWindowTooSmall(params.min_ttl));
-    }
-    if ttl_remaining > params.max_future_skew {
-        return Err(Error::FutureSkewExceeded(params.max_future_skew));
-    }
-    Ok(())
-}
-fn verify_ticket_solution(
-    ticket: &Ticket,
-    binding: &ChallengeBinding<'_>,
-    params: &Parameters,
-) -> Result<(), Error> {
-    let expected_binding = ticket_binding_commitment(
-        binding.descriptor_commit,
-        binding.relay_id,
-        binding.transcript_hash,
-    );
-    if !bool::from(ticket.client_nonce.ct_eq(&expected_binding)) {
-        return Err(Error::InvalidSolution);
-    }
-    let challenge = derive_challenge(binding, &ticket.client_nonce, ticket.expires_at);
-    let digest = derive_solution_digest(&challenge, &ticket.solution);
-    if !leading_zero_bits_at_least(digest.as_bytes(), params.difficulty) {
-        return Err(Error::InvalidSolution);
-    }
-    Ok(())
-}
-/// Verify an unsigned ticket using the provided policy and bindings, recording
-/// revocations in the supplied store when present.
-///
-/// # Errors
-/// Mirrors [`verify_with_revocations_at`] while using the current system time.
-pub fn verify_with_revocations(
-    ticket: &Ticket,
-    binding: &ChallengeBinding<'_>,
-    params: &Parameters,
-    revocations: Option<&mut TicketRevocationStore>,
-) -> Result<(), Error> {
-    verify_with_revocations_at(ticket, binding, params, revocations, SystemTime::now())
-}
-/// Verify an unsigned ticket at a fixed timestamp and record its revocation.
-///
-/// # Errors
-/// Returns [`Error`] for validation failures or [`Error::RevocationStore`] when
-/// the replay guard rejects or fails to persist the ticket.
-pub fn verify_with_revocations_at(
-    ticket: &Ticket,
-    binding: &ChallengeBinding<'_>,
-    params: &Parameters,
-    revocations: Option<&mut TicketRevocationStore>,
-    now: SystemTime,
-) -> Result<(), Error> {
-    verify_at(ticket, binding, params, now)?;
-    record_revocation(ticket, revocations, now)
-}
-/// Record a ticket revocation in the provided store.
-///
-/// # Errors
-/// Returns [`Error::Replay`] for duplicates, [`Error::Expired`] when the ticket
-/// is stale, or [`Error::RevocationStore`] for persistence failures.
-pub fn record_revocation(
-    ticket: &Ticket,
-    revocations: Option<&mut TicketRevocationStore>,
-    now: SystemTime,
-) -> Result<(), Error> {
-    let Some(store) = revocations else {
-        return Ok(());
-    };
-    if store
-        .is_ticket_payload_revoked(ticket, now)
-        .map_err(|err| Error::RevocationStore(err.to_string()))?
-    {
-        return Err(Error::Replay);
-    }
-    let outcome = store
-        .revoke_ticket_payload(ticket, now)
-        .map_err(|err| Error::RevocationStore(err.to_string()))?;
-    handle_revocation_outcome(outcome, ticket.expires_at, now)
-}
-/// Mint a ticket satisfying the policy, returning the serialized structure.
-///
-/// # Errors
-/// Returns [`MintError`] when the requested TTL violates the policy constraints,
-/// random bytes cannot be generated, or the system clock is unavailable or regresses.
-pub fn mint_ticket<R: TryCryptoRng>(
-    params: &Parameters,
-    binding: &ChallengeBinding<'_>,
-    ttl: Duration,
-    rng: &mut R,
-) -> Result<Ticket, MintError> {
-    mint_ticket_with_clock(params, binding, ttl, rng, SystemTime::now)
-}
-fn mint_ticket_with_clock<R, F>(
-    params: &Parameters,
-    binding: &ChallengeBinding<'_>,
-    ttl: Duration,
-    rng: &mut R,
-    now: F,
-) -> Result<Ticket, MintError>
-where
-    R: TryCryptoRng,
-    F: FnMut() -> SystemTime,
-{
-    mint_ticket_with_clock_and_digest(params, binding, ttl, rng, now, derive_solution_digest)
-}
-fn mint_ticket_with_clock_and_digest<R, F, D>(
-    params: &Parameters,
-    binding: &ChallengeBinding<'_>,
-    ttl: Duration,
-    rng: &mut R,
-    mut now: F,
-    mut derive_digest: D,
-) -> Result<Ticket, MintError>
-where
-    R: TryCryptoRng,
-    F: FnMut() -> SystemTime,
-    D: FnMut(&blake3::Hash, &[u8; 32]) -> blake3::Hash,
-{
-    validate_binding(binding).map_err(MintError::MalformedBinding)?;
-    if ttl < params.min_ttl {
-        return Err(MintError::TtlTooShort {
-            requested: ttl,
-            required: params.min_ttl,
-        });
-    }
-    if ttl > params.max_future_skew {
-        return Err(MintError::TtlTooLong {
-            requested: ttl,
-            max_skew: params.max_future_skew,
-        });
-    }
-    let client_nonce = Zeroizing::new(ticket_binding_commitment(
-        binding.descriptor_commit,
-        binding.relay_id,
-        binding.transcript_hash,
-    ));
-    let mut previous_solution: Option<Zeroizing<[u8; 32]>> = None;
-    loop {
-        let minted_at = now();
-        let expires_at = minted_at
-            .checked_add(ttl)
-            .ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
-        let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
-        let wire_expires_at =
-            unix_time_from_secs(expires_at_secs).ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
-        let mut prior = Vec::with_capacity(2);
-        prior.push(("ticket binding commitment", &*client_nonce));
-        if let Some(previous) = previous_solution.as_ref() {
-            prior.push(("previous solution nonce", &**previous));
-        }
-        let challenge = derive_challenge(binding, &client_nonce, expires_at_secs);
-        let mut solution = Zeroizing::new([0u8; 32]);
-        fill_random(rng, "minting PoW solution nonce", &mut solution[..])?;
-        reject_repeated_nonce_material("minting PoW solution nonce", &solution, &prior)?;
-        let digest = derive_digest(&challenge, &solution);
-        let solved_at = now();
-        if solved_at < minted_at {
-            return Err(MintError::ClockMovedBackwards);
-        }
-        let Ok(remaining) = wire_expires_at.duration_since(solved_at) else {
-            previous_solution = Some(solution);
-            continue;
-        };
-        if params.min_ttl.saturating_sub(remaining) > TTL_GRACE {
-            // Expiry is challenge-bound. Re-anchor the next candidate instead
-            // of returning proof bytes that current verifier policy rejects.
-            previous_solution = Some(solution);
-            continue;
-        }
-        if leading_zero_bits_at_least(digest.as_bytes(), params.difficulty) {
-            return Ok(Ticket {
-                version: 1,
-                difficulty: params.difficulty,
-                expires_at: expires_at_secs,
-                client_nonce: *client_nonce,
-                solution: *solution,
-            });
-        }
-        previous_solution = Some(solution);
-    }
-}
-fn validate_binding(binding: &ChallengeBinding<'_>) -> Result<(), String> {
-    if binding.descriptor_commit.len() != BINDING_FIELD_LEN {
-        return Err(format!(
-            "descriptor_commit must be {BINDING_FIELD_LEN} bytes, got {}",
-            binding.descriptor_commit.len()
-        ));
-    }
-    if binding.relay_id.len() != BINDING_FIELD_LEN {
-        return Err(format!(
-            "relay_id must be {BINDING_FIELD_LEN} bytes, got {}",
-            binding.relay_id.len()
-        ));
-    }
-    Ok(())
-}
-fn derive_challenge(
-    binding: &ChallengeBinding<'_>,
-    client_nonce: &[u8; 32],
-    expires_at: u64,
-) -> blake3::Hash {
-    let mut hasher = Hasher::new();
-    hasher.update(CHALLENGE_DOMAIN);
-    hasher.update(binding.descriptor_commit);
-    hasher.update(binding.relay_id);
-    hasher.update(binding.transcript_hash);
-    hasher.update(client_nonce);
-    hasher.update(&expires_at.to_be_bytes());
-    hasher.finalize()
-}
-fn derive_solution_digest(challenge: &blake3::Hash, solution: &[u8; 32]) -> blake3::Hash {
-    let mut hasher = Hasher::new();
-    hasher.update(SOLUTION_DOMAIN);
-    hasher.update(challenge.as_bytes());
-    hasher.update(solution);
-    hasher.finalize()
-}
-fn leading_zero_bits_at_least(bytes: &[u8], bits: u8) -> bool {
-    if bits == 0 {
-        return true;
-    }
-    let full_bytes = (bits / 8) as usize;
-    let rem_bits = bits % 8;
-    if bytes.len() < full_bytes {
-        return false;
-    }
-    if bytes[..full_bytes].iter().any(|&byte| byte != 0) {
-        return false;
-    }
-    if rem_bits == 0 {
-        return true;
-    }
-    if bytes.len() <= full_bytes {
-        return false;
-    }
-    let mask = 0xFF << (8 - rem_bits);
-    bytes[full_bytes] & mask == 0
-}
-fn handle_revocation_outcome(
-    outcome: TicketRevocationInsertOutcome,
-    expires_at_secs: u64,
-    now: SystemTime,
-) -> Result<(), Error> {
-    match outcome.status {
-        TicketRevocationInsertStatus::Accepted => Ok(()),
-        TicketRevocationInsertStatus::Duplicate => Err(Error::Replay),
-        TicketRevocationInsertStatus::Expired => {
-            let now_secs = now.duration_since(UNIX_EPOCH)?;
-            Err(Error::Expired(expires_at_secs, now_secs.as_secs()))
-        }
-        TicketRevocationInsertStatus::TtlExceeded => Err(Error::RevocationStore(
-            "revocation ttl exceeded configured maximum".to_string(),
-        )),
-        TicketRevocationInsertStatus::Capacity => Err(Error::RevocationStore(
-            "revocation store at capacity".to_string(),
-        )),
-    }
 }
 fn unix_time_from_secs(secs: u64) -> Option<SystemTime> {
     UNIX_EPOCH.checked_add(Duration::from_secs(secs))
@@ -1686,82 +1004,24 @@ fn exceeds_ttl(expires_at: SystemTime, now: SystemTime, max_ttl: Duration) -> bo
         .duration_since(now)
         .map_or(true, |ttl| ttl > max_ttl)
 }
-impl fmt::Display for Parameters {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "difficulty={}, max_future_skew={}s, min_ttl={}s",
-            self.difficulty,
-            self.max_future_skew.as_secs(),
-            self.min_ttl.as_secs(),
-        )
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::SeedableRng;
-    use rand_core::{TryCryptoRng, TryRngCore};
     use tempfile::tempdir;
     const RELAY_A: [u8; 32] = [0xCC; 32];
-    const RELAY_B: [u8; 32] = [0xDD; 32];
     const TRANSCRIPT: [u8; 32] = [0xEE; 32];
-    fn params() -> Parameters {
-        Parameters::new(5, Duration::from_secs(600), Duration::from_secs(30))
-    }
-    fn binding(descriptor: &[u8; 32]) -> ChallengeBinding<'_> {
-        ChallengeBinding::new(descriptor, &RELAY_A, &TRANSCRIPT)
-    }
-    fn other_binding(descriptor: &[u8; 32]) -> ChallengeBinding<'_> {
-        ChallengeBinding::new(descriptor, &RELAY_B, &TRANSCRIPT)
-    }
-    struct FailingTryRng;
-    #[derive(Debug)]
-    struct FailingTryRngError;
-    impl fmt::Display for FailingTryRngError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("failing PoW ticket RNG")
+    fn ticket_with_expiry(expires_at: u64, nonce: u8) -> Ticket {
+        Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at,
+            client_nonce: [nonce; 32],
+            solution: [nonce.wrapping_add(1); 32],
         }
     }
-    impl TryRngCore for FailingTryRng {
-        type Error = FailingTryRngError;
-        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-            Err(FailingTryRngError)
-        }
-        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-            Err(FailingTryRngError)
-        }
-        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
-            Err(FailingTryRngError)
-        }
-    }
-    impl TryCryptoRng for FailingTryRng {}
-    struct FixedTryRng {
-        byte: u8,
-    }
-    impl TryRngCore for FixedTryRng {
-        type Error = core::convert::Infallible;
-        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-            Ok(u32::from_le_bytes([self.byte; 4]))
-        }
-        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-            Ok(u64::from_le_bytes([self.byte; 8]))
-        }
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
-            dest.fill(self.byte);
-            Ok(())
-        }
-    }
-    impl TryCryptoRng for FixedTryRng {}
     fn signed_ticket_with_expiry(expires_at: u64, signature_byte: u8) -> SignedTicket {
         SignedTicket {
-            ticket: Ticket {
-                version: 1,
-                difficulty: 0,
-                expires_at,
-                client_nonce: [0u8; 32],
-                solution: [0u8; 32],
-            },
+            ticket: ticket_with_expiry(expires_at, signature_byte),
             relay_id: RELAY_A,
             transcript_hash: TRANSCRIPT,
             signature: vec![signature_byte; MlDsaSuite::MlDsa44.signature_len()],
@@ -1792,23 +1052,6 @@ mod tests {
         }
         let mut file = options.open(path).expect("open private test file");
         file.write_all(bytes).expect("write private test file");
-    }
-    fn invalid_solution_for(
-        binding: &ChallengeBinding<'_>,
-        client_nonce: [u8; 32],
-        expires_at: u64,
-        difficulty: u8,
-    ) -> [u8; 32] {
-        let challenge = derive_challenge(binding, &client_nonce, expires_at);
-        for suffix in u8::MIN..=u8::MAX {
-            let mut solution = [0u8; 32];
-            solution[31] = suffix;
-            let digest = derive_solution_digest(&challenge, &solution);
-            if !leading_zero_bits_at_least(digest.as_bytes(), difficulty) {
-                return solution;
-            }
-        }
-        panic!("expected at least one invalid solution for difficulty {difficulty}");
     }
     #[test]
     fn ticket_debug_redacts_bearer_proof_material() {
@@ -1971,12 +1214,7 @@ mod tests {
         let descriptor = [0x11; 32];
         let relay = [0x22; 32];
         let transcript = [0x33; 32];
-        let binding = ChallengeBinding::new(&descriptor, &relay, &transcript);
-        let commitment = ticket_binding_commitment(
-            binding.descriptor_commit,
-            binding.relay_id,
-            binding.transcript_hash,
-        );
+        let commitment = ticket_binding_commitment(&descriptor, &relay, &transcript);
 
         let mut expected = Hasher::new();
         expected.update(TICKET_BINDING_DOMAIN);
@@ -2007,42 +1245,10 @@ mod tests {
         );
     }
     #[test]
-    fn challenge_hashes_match_canonical_contiguous_layout() {
-        let descriptor = [0x11; 32];
-        let relay = [0x22; 32];
-        let transcript = [0x33; 32];
+    fn revocation_fingerprint_matches_canonical_contiguous_layout() {
         let client_nonce = [0x44; 32];
         let expires_at = 1_700_000_123_u64;
-        let binding = ChallengeBinding::new(&descriptor, &relay, &transcript);
-        let mut expected_challenge = Vec::with_capacity(
-            CHALLENGE_DOMAIN.len()
-                + descriptor.len()
-                + relay.len()
-                + transcript.len()
-                + client_nonce.len()
-                + 8,
-        );
-        expected_challenge.extend_from_slice(CHALLENGE_DOMAIN);
-        expected_challenge.extend_from_slice(&descriptor);
-        expected_challenge.extend_from_slice(&relay);
-        expected_challenge.extend_from_slice(&transcript);
-        expected_challenge.extend_from_slice(&client_nonce);
-        expected_challenge.extend_from_slice(&expires_at.to_be_bytes());
-        assert_eq!(
-            derive_challenge(&binding, &client_nonce, expires_at),
-            blake3::hash(&expected_challenge)
-        );
-        let challenge = blake3::hash(b"challenge");
         let solution = [0x55; 32];
-        let mut expected_solution =
-            Vec::with_capacity(SOLUTION_DOMAIN.len() + challenge.as_bytes().len() + solution.len());
-        expected_solution.extend_from_slice(SOLUTION_DOMAIN);
-        expected_solution.extend_from_slice(challenge.as_bytes());
-        expected_solution.extend_from_slice(&solution);
-        assert_eq!(
-            derive_solution_digest(&challenge, &solution),
-            blake3::hash(&expected_solution)
-        );
         let ticket = Ticket {
             version: Ticket::VERSION,
             difficulty: 0,
@@ -2101,187 +1307,20 @@ mod tests {
         );
     }
     #[test]
-    fn parameters_try_new_rejects_invalid_runtime_bounds() {
-        let valid =
-            Parameters::try_new(5, Duration::from_secs(600), Duration::from_secs(30)).expect("ok");
-        assert_eq!(valid.difficulty(), 5);
-        let zero_ttl = Parameters::try_new(5, Duration::from_secs(600), Duration::ZERO)
-            .expect_err("zero min ttl must fail");
-        assert!(matches!(zero_ttl, ParameterError::MinTtlZero));
-        let inverted = Parameters::try_new(5, Duration::from_secs(29), Duration::from_secs(30))
-            .expect_err("max future skew shorter than min ttl must fail");
-        assert!(matches!(
-            inverted,
-            ParameterError::MaxFutureSkewTooShort {
-                max_future_skew,
-                min_ttl
-            } if max_future_skew == Duration::from_secs(29)
-                && min_ttl == Duration::from_secs(30)
-        ));
-    }
-    #[test]
-    fn parameters_new_invalid_bounds_fail_closed_without_panic() {
-        let zero_ttl = Parameters::new(0, Duration::from_secs(600), Duration::ZERO);
-        assert_eq!(zero_ttl.max_future_skew(), Duration::ZERO);
-        assert_eq!(zero_ttl.min_ticket_ttl(), Duration::MAX);
-        let inverted = Parameters::new(0, Duration::from_secs(29), Duration::from_secs(30));
-        assert_eq!(inverted.max_future_skew(), Duration::ZERO);
-        assert_eq!(inverted.min_ticket_ttl(), Duration::MAX);
-        let descriptor = [0xAA; 32];
-        let binding = binding(&descriptor);
-        let mut rng = rand::rngs::StdRng::from_seed([0x24; 32]);
-        let mint_err = mint_ticket(&zero_ttl, &binding, Duration::from_secs(30), &mut rng)
-            .expect_err("fail-closed params must reject minting");
-        assert!(matches!(
-            mint_err,
-            MintError::TtlTooShort {
-                required: Duration::MAX,
-                ..
-            }
-        ));
+    fn ticket_round_trip() {
         let ticket = Ticket {
             version: Ticket::VERSION,
-            difficulty: 0,
-            expires_at: 1_120,
-            client_nonce: [0u8; 32],
-            solution: [0u8; 32],
+            difficulty: 5,
+            expires_at: 1_700_000_090,
+            client_nonce: [0x11; 32],
+            solution: [0x22; 32],
         };
-        let verify_err = verify_at(
-            &ticket,
-            &binding,
-            &inverted,
-            UNIX_EPOCH + Duration::from_secs(1_000),
-        )
-        .expect_err("fail-closed params must reject verification");
-        assert!(matches!(
-            verify_err,
-            Error::ExpiryWindowTooSmall(Duration::MAX)
-        ));
-    }
-    #[test]
-    fn mint_ticket_reports_rng_failure() {
-        let descriptor = [0xAB; 32];
-        let binding = binding(&descriptor);
-        let mut rng = FailingTryRng;
-        let err = mint_ticket(&params(), &binding, Duration::from_secs(30), &mut rng)
-            .expect_err("failing RNG must abort ticket minting");
-        match err {
-            MintError::RandomBytes { operation, message } => {
-                assert_eq!(operation, "minting PoW solution nonce");
-                assert!(
-                    message.contains("failing PoW ticket RNG"),
-                    "unexpected message: {message}"
-                );
-            }
-            other => panic!("expected RNG failure, got {other:?}"),
-        }
-    }
-    #[test]
-    fn fill_random_rejects_all_zero_nonce_material() {
-        let mut rng = FixedTryRng { byte: 0 };
-        let mut nonce = [0u8; 32];
-        let err = fill_random(&mut rng, "minting PoW solution nonce", &mut nonce)
-            .expect_err("all-zero PoW nonce material must fail");
-        match err {
-            MintError::RandomBytes { operation, message } => {
-                assert_eq!(operation, "minting PoW solution nonce");
-                assert!(message.contains("all-zero material"));
-            }
-            other => panic!("expected all-zero nonce RandomBytes error, got {other:?}"),
-        }
-    }
-    #[test]
-    fn mint_ticket_rejects_repeated_nonzero_rng_material() {
-        let descriptor = [0xAB; 32];
-        let binding = binding(&descriptor);
-        let mut rng = FixedTryRng { byte: 0xA5 };
-        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let error = mint_ticket_with_clock_and_digest(
-            &params(),
-            &binding,
-            Duration::from_secs(30),
-            &mut rng,
-            || now,
-            |_, _| blake3::Hash::from_bytes([0xFF; 32]),
-        )
-        .expect_err("a stuck nonzero RNG must fail before repeated proof work");
-        match error {
-            MintError::RandomBytes { operation, message } => {
-                assert_eq!(operation, "minting PoW solution nonce");
-                assert!(message.contains("all-identical-byte material"));
-            }
-            other => panic!("expected repeated nonce failure, got {other:?}"),
-        }
-    }
-    #[test]
-    fn ticket_round_trip() {
-        let mut rng = rand::rngs::StdRng::from_seed([0x42; 32]);
-        let params = params();
-        let descriptor = [0xAA; 32];
-        let ttl = Duration::from_secs(90);
-        let binding = binding(&descriptor);
-        let ticket = mint_ticket(&params, &binding, ttl, &mut rng).expect("mint");
         let bytes = ticket.to_bytes();
         let parsed = Ticket::parse(&bytes).expect("parse");
         assert_eq!(ticket, parsed);
-        verify(&parsed, &binding, &params).expect("verify");
     }
     #[test]
-    fn mint_reanchors_each_pow_candidate_across_long_search() {
-        let mut rng = rand::rngs::StdRng::from_seed([0x91; 32]);
-        let params = Parameters::new(1, Duration::from_secs(600), Duration::from_secs(30));
-        let descriptor = [0xA7; 32];
-        let binding = binding(&descriptor);
-        let base = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let mut clock_reads = 0_u64;
-        let mut digest_trials = 0_u64;
-        let ticket = mint_ticket_with_clock_and_digest(
-            &params,
-            &binding,
-            Duration::from_secs(60),
-            &mut rng,
-            || {
-                let read = clock_reads;
-                clock_reads += 1;
-                let candidate = read / 2;
-                let offset = candidate * 10 + u64::from(read % 2 == 1);
-                base + Duration::from_secs(offset)
-            },
-            |challenge, solution| {
-                digest_trials += 1;
-                if digest_trials <= 7 {
-                    blake3::Hash::from_bytes([0xFF; 32])
-                } else {
-                    derive_solution_digest(challenge, solution)
-                }
-            },
-        )
-        .expect("failed search history must not consume the successful candidate's ttl");
-        assert!(digest_trials >= 8, "seven forced failures must be retried");
-        let successful_candidate = clock_reads / 2 - 1;
-        let solved_at = base + Duration::from_secs(successful_candidate * 10 + 1);
-        assert!(solved_at.duration_since(base).expect("ordered clock") >= Duration::from_secs(71));
-        assert_eq!(ticket.expires_at, 1_700_000_060 + successful_candidate * 10);
-        verify_at(&ticket, &binding, &params, solved_at)
-            .expect("fresh successful PoW candidate must satisfy remaining-ttl policy");
-    }
-    #[test]
-    fn mint_rejects_clock_regression_during_candidate_evaluation() {
-        let mut rng = rand::rngs::StdRng::from_seed([0x92; 32]);
-        let params = params();
-        let descriptor = [0xA8; 32];
-        let binding = binding(&descriptor);
-        let base = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let mut clock = [base + Duration::from_secs(2), base + Duration::from_secs(1)].into_iter();
-        let error =
-            mint_ticket_with_clock(&params, &binding, Duration::from_secs(60), &mut rng, || {
-                clock.next().expect("two clock reads are sufficient")
-            })
-            .expect_err("clock regression must fail closed");
-        assert!(matches!(error, MintError::ClockMovedBackwards));
-    }
-    #[test]
-    fn ticket_expiry_accessors_fail_closed_on_unrepresentable_timestamp() {
+    fn checked_ticket_expiry_rejects_unrepresentable_timestamp() {
         let ticket = Ticket {
             version: Ticket::VERSION,
             difficulty: 0,
@@ -2290,79 +1329,6 @@ mod tests {
             solution: [0u8; 32],
         };
         assert!(ticket.checked_expires_at_time().is_none());
-        assert_eq!(ticket.expires_at_time(), UNIX_EPOCH);
-        let signed = SignedTicket {
-            ticket,
-            relay_id: RELAY_A,
-            transcript_hash: TRANSCRIPT,
-            signature: vec![0xAA; MlDsaSuite::MlDsa44.signature_len()],
-        };
-        assert!(signed.checked_expires_at().is_none());
-        assert_eq!(signed.expires_at(), UNIX_EPOCH);
-    }
-    #[test]
-    fn verify_rejects_unrepresentable_expiry_before_solution_work() {
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
-        let descriptor = [0xAA; 32];
-        let binding = binding(&descriptor);
-        let ticket = Ticket {
-            version: Ticket::VERSION,
-            difficulty: params.difficulty(),
-            expires_at: u64::MAX,
-            client_nonce: [0x11; 32],
-            solution: [0x22; 32],
-        };
-        let err = verify_at(
-            &ticket,
-            &binding,
-            &params,
-            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-        )
-        .expect_err("unrepresentable expiry must fail before challenge verification");
-        assert!(matches!(err, Error::ExpiryTimestampOverflow(u64::MAX)));
-    }
-    #[test]
-    fn signed_ticket_verifier_rejects_unrepresentable_expiry_before_signature_preflight() {
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
-        let descriptor = [0xCC; 32];
-        let binding = binding(&descriptor);
-        let signed = SignedTicket {
-            ticket: Ticket {
-                version: Ticket::VERSION,
-                difficulty: params.difficulty(),
-                expires_at: u64::MAX,
-                client_nonce: [0xAA; 32],
-                solution: [0xBB; 32],
-            },
-            relay_id: RELAY_A,
-            transcript_hash: TRANSCRIPT,
-            signature: Vec::new(),
-        };
-        let err = verify_signed_ticket_at(
-            &signed,
-            &[],
-            &binding,
-            &params,
-            None,
-            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-        )
-        .expect_err("expiry overflow must fail before signature or key preflight");
-        assert!(matches!(err, Error::ExpiryTimestampOverflow(u64::MAX)));
-    }
-    #[test]
-    fn mint_ticket_rejects_ttl_that_overflows_system_time() {
-        let mut rng = rand::rngs::StdRng::from_seed([0x24; 32]);
-        let params = Parameters::try_new(0, Duration::from_secs(u64::MAX), Duration::from_secs(1))
-            .expect("huge bounds are structurally valid");
-        let descriptor = [0xAA; 32];
-        let binding = binding(&descriptor);
-        let err = mint_ticket(&params, &binding, Duration::from_secs(u64::MAX), &mut rng)
-            .expect_err("overflowing ttl should fail closed");
-        assert!(matches!(
-            err,
-            MintError::ExpiryTimestampOverflow(ttl)
-                if ttl == Duration::from_secs(u64::MAX)
-        ));
     }
     #[test]
     fn rejects_unsupported_ticket_version() {
@@ -2417,151 +1383,6 @@ mod tests {
             .expect_err("overflowed field cursor should fail closed");
         assert!(matches!(err, Error::Malformed(_)));
         assert_eq!(field_cursor, usize::MAX);
-    }
-    #[test]
-    fn verify_rejects_malformed_binding_lengths() {
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
-        let ticket = Ticket {
-            version: Ticket::VERSION,
-            difficulty: params.difficulty(),
-            expires_at: 1_700_000_060,
-            client_nonce: [0xAA; 32],
-            solution: [0xBB; 32],
-        };
-        let short_descriptor = [0x11; 31];
-        let binding = ChallengeBinding::new(&short_descriptor, &RELAY_A, &TRANSCRIPT);
-        let err = verify_at(
-            &ticket,
-            &binding,
-            &params,
-            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-        )
-        .expect_err("malformed descriptor binding must fail before challenge derivation");
-        match err {
-            Error::MalformedBinding(message) => {
-                assert!(message.contains("descriptor_commit"));
-            }
-            other => panic!("expected malformed binding error, got {other:?}"),
-        }
-        let signed = SignedTicket {
-            ticket,
-            relay_id: RELAY_A,
-            transcript_hash: TRANSCRIPT,
-            signature: vec![0xAA; MlDsaSuite::MlDsa44.signature_len()],
-        };
-        let err = verify_signed_ticket_at(
-            &signed,
-            &[],
-            &binding,
-            &params,
-            None,
-            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-        )
-        .expect_err("malformed binding must fail before public-key validation");
-        match err {
-            Error::MalformedBinding(message) => {
-                assert!(message.contains("descriptor_commit"));
-            }
-            other => panic!("expected malformed binding error, got {other:?}"),
-        }
-    }
-    #[test]
-    fn mint_ticket_rejects_malformed_binding_lengths() {
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
-        let descriptor = [0x22; 32];
-        let short_relay = [0x33; 31];
-        let binding = ChallengeBinding::new(&descriptor, &short_relay, &TRANSCRIPT);
-        let mut rng = rand::rngs::StdRng::from_seed([0x44; 32]);
-        let err = mint_ticket(&params, &binding, Duration::from_secs(120), &mut rng)
-            .expect_err("malformed relay binding must fail before minting");
-        match err {
-            MintError::MalformedBinding(message) => {
-                assert!(message.contains("relay_id"));
-            }
-            other => panic!("expected malformed binding error, got {other:?}"),
-        }
-    }
-    #[test]
-    fn detects_invalid_solution() {
-        let params = params();
-        let descriptor = [0xAA; 32];
-        let binding = binding(&descriptor);
-        let expires_at = SystemTime::now()
-            .checked_add(params.min_ticket_ttl())
-            .unwrap()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let client_nonce = [0x11; 32];
-        let mut ticket = Ticket {
-            version: 1,
-            difficulty: params.difficulty(),
-            expires_at,
-            client_nonce,
-            solution: invalid_solution_for(&binding, client_nonce, expires_at, params.difficulty()),
-        };
-        let err = verify(&ticket, &binding, &params).expect_err("should fail");
-        assert!(matches!(err, Error::InvalidSolution));
-        ticket.difficulty = 0;
-        assert!(verify(&ticket, &binding, &params).is_err());
-    }
-    #[test]
-    fn detects_future_skew() {
-        let params = params();
-        let descriptor = [0u8; 32];
-        let ticket = Ticket {
-            version: 1,
-            difficulty: params.difficulty(),
-            expires_at: SystemTime::now()
-                .checked_add(params.max_future_skew() + Duration::from_secs(60))
-                .unwrap()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            client_nonce: [0x22; 32],
-            solution: [0x33; 32],
-        };
-        let binding = binding(&descriptor);
-        let err = verify(&ticket, &binding, &params).expect_err("should fail");
-        matches!(err, Error::FutureSkewExceeded(_));
-    }
-    #[test]
-    fn accepts_min_ttl_with_boundary_grace() {
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
-        let base = 1_700_000_000;
-        let descriptor = [0u8; 32];
-        let binding = binding(&descriptor);
-        let ticket = Ticket {
-            version: 1,
-            difficulty: params.difficulty(),
-            expires_at: base + params.min_ticket_ttl().as_secs(),
-            client_nonce: ticket_binding_commitment(
-                binding.descriptor_commit,
-                binding.relay_id,
-                binding.transcript_hash,
-            ),
-            solution: [0x55; 32],
-        };
-        let now = UNIX_EPOCH + Duration::from_secs(base + 1);
-        verify_at(&ticket, &binding, &params, now).expect("slack should accept ticket");
-    }
-    #[test]
-    fn rejects_ttl_far_below_min_even_with_grace() {
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
-        let base = 1_700_000_000;
-        let descriptor = [0u8; 32];
-        let ticket = Ticket {
-            version: 1,
-            difficulty: params.difficulty(),
-            expires_at: base + params.min_ticket_ttl().as_secs(),
-            client_nonce: [0x55; 32],
-            solution: [0x66; 32],
-        };
-        let now = UNIX_EPOCH + Duration::from_secs(base + 2);
-        let binding = binding(&descriptor);
-        let err =
-            verify_at(&ticket, &binding, &params, now).expect_err("should reject insufficient ttl");
-        matches!(err, Error::ExpiryWindowTooSmall(_));
     }
     #[test]
     fn signed_ticket_roundtrip() {
@@ -2626,11 +1447,11 @@ mod tests {
             "ML-DSA re-signing fixture must exercise distinct randomized signatures"
         );
 
-        assert_eq!(signed_a.revocation_fingerprint(), fingerprint);
-        assert_eq!(signed_b.revocation_fingerprint(), fingerprint);
+        assert_eq!(signed_a.ticket.revocation_fingerprint(), fingerprint);
+        assert_eq!(signed_b.ticket.revocation_fingerprint(), fingerprint);
         assert_eq!(
-            signed_a.revocation_fingerprint(),
-            signed_b.revocation_fingerprint(),
+            signed_a.ticket.revocation_fingerprint(),
+            signed_b.ticket.revocation_fingerprint(),
             "randomized re-signing must not mint a fresh replay identity"
         );
 
@@ -2649,7 +1470,7 @@ mod tests {
         let mut signed_first = TicketRevocationStore::in_memory(limits).expect("store");
         assert_eq!(
             signed_first
-                .revoke_ticket(&signed_a, now)
+                .revoke_ticket_payload(&signed_a.ticket, now)
                 .expect("consume signed form")
                 .status,
             TicketRevocationInsertStatus::Accepted
@@ -2672,7 +1493,7 @@ mod tests {
         );
         assert_eq!(
             unsigned_first
-                .revoke_ticket(&signed_b, now)
+                .revoke_ticket_payload(&signed_b.ticket, now)
                 .expect("consume re-signed form")
                 .status,
             TicketRevocationInsertStatus::Duplicate
@@ -3055,158 +1876,6 @@ mod tests {
         }
     }
     #[test]
-    fn signed_ticket_verifier_rejects_relay_mismatch_before_signature_preflight() {
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
-        let ticket = Ticket {
-            version: Ticket::VERSION,
-            difficulty: params.difficulty(),
-            expires_at: 1_700_000_120,
-            client_nonce: [0xAA; 32],
-            solution: [0xBB; 32],
-        };
-        let signed = SignedTicket {
-            ticket,
-            relay_id: RELAY_A,
-            transcript_hash: TRANSCRIPT,
-            signature: Vec::new(),
-        };
-        let descriptor = [0xCC; 32];
-        let binding = other_binding(&descriptor);
-        let err = verify_signed_ticket_at(
-            &signed,
-            &[],
-            &binding,
-            &params,
-            None,
-            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-        )
-        .expect_err("relay mismatch must fail before signature or key preflight");
-        assert!(matches!(err, Error::RelayMismatch));
-    }
-    #[test]
-    fn signed_ticket_verifier_rejects_transcript_mismatch_before_signature_preflight() {
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
-        let ticket = Ticket {
-            version: Ticket::VERSION,
-            difficulty: params.difficulty(),
-            expires_at: 1_700_000_120,
-            client_nonce: [0xAA; 32],
-            solution: [0xBB; 32],
-        };
-        let signed = SignedTicket {
-            ticket,
-            relay_id: RELAY_A,
-            transcript_hash: [0x11; 32],
-            signature: Vec::new(),
-        };
-        let descriptor = [0xCC; 32];
-        let expected_transcript = [0x22; 32];
-        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &expected_transcript);
-        let err = verify_signed_ticket_at(
-            &signed,
-            &[],
-            &binding,
-            &params,
-            None,
-            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-        )
-        .expect_err("transcript mismatch must fail before signature or key preflight");
-        assert!(matches!(err, Error::TranscriptMismatch));
-    }
-    #[test]
-    fn signed_ticket_verifier_rejects_policy_mismatch_before_signature_preflight() {
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
-        let ticket = Ticket {
-            version: Ticket::VERSION,
-            difficulty: params.difficulty() + 1,
-            expires_at: 1_700_000_120,
-            client_nonce: [0xAA; 32],
-            solution: [0xBB; 32],
-        };
-        let signed = SignedTicket {
-            ticket,
-            relay_id: RELAY_A,
-            transcript_hash: TRANSCRIPT,
-            signature: Vec::new(),
-        };
-        let descriptor = [0xCC; 32];
-        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &TRANSCRIPT);
-        let err = verify_signed_ticket_at(
-            &signed,
-            &[],
-            &binding,
-            &params,
-            None,
-            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-        )
-        .expect_err("difficulty mismatch must fail before signature or key preflight");
-        assert!(matches!(err, Error::DifficultyMismatch { .. }));
-    }
-    #[test]
-    fn signed_ticket_verifier_rejects_expiry_before_signature_preflight() {
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
-        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let ticket = Ticket {
-            version: Ticket::VERSION,
-            difficulty: params.difficulty(),
-            expires_at: 1_699_999_999,
-            client_nonce: [0xAA; 32],
-            solution: [0xBB; 32],
-        };
-        let signed = SignedTicket {
-            ticket,
-            relay_id: RELAY_A,
-            transcript_hash: TRANSCRIPT,
-            signature: Vec::new(),
-        };
-        let descriptor = [0xCC; 32];
-        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &TRANSCRIPT);
-        let err = verify_signed_ticket_at(&signed, &[], &binding, &params, None, now)
-            .expect_err("expired ticket must fail before signature or key preflight");
-        assert!(matches!(err, Error::Expired(_, _)));
-    }
-    #[test]
-    fn ticket_reuse_is_allowed_with_same_binding() {
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
-        let mut rng = rand::rngs::StdRng::from_seed([0x77; 32]);
-        let descriptor = [0x42; 32];
-        let binding = binding(&descriptor);
-        let ticket =
-            mint_ticket(&params, &binding, Duration::from_secs(120), &mut rng).expect("mint");
-        verify(&ticket, &binding, &params).expect("first verify");
-        verify(&ticket, &binding, &params).expect("replay verify");
-    }
-    #[test]
-    fn ticket_reuse_rejected_with_mismatched_binding() {
-        let params = Parameters::new(3, Duration::from_secs(600), Duration::from_secs(30));
-        let mut rng = rand::rngs::StdRng::from_seed([0x55; 32]);
-        let descriptor = [0x24; 32];
-        let binding = binding(&descriptor);
-        let other = other_binding(&descriptor);
-        let ticket =
-            mint_ticket(&params, &binding, Duration::from_secs(120), &mut rng).expect("mint");
-        verify(&ticket, &binding, &params).expect("verify with original binding");
-        let error = verify(&ticket, &other, &params)
-            .expect_err("an arbitrary mismatched relay must fail exactly");
-        assert!(matches!(error, Error::InvalidSolution));
-    }
-    #[test]
-    fn rejects_mismatched_transcript_hash() {
-        let params = Parameters::new(8, Duration::from_secs(300), Duration::from_secs(45));
-        let mut rng = rand::rngs::StdRng::from_seed([0x12; 32]);
-        let descriptor = [0xAC; 32];
-        let transcript_a = [0x01; 32];
-        let transcript_b = [0x02; 32];
-        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &transcript_a);
-        let mismatched = ChallengeBinding::new(&descriptor, &RELAY_A, &transcript_b);
-        let ticket =
-            mint_ticket(&params, &binding, Duration::from_secs(120), &mut rng).expect("mint");
-        verify(&ticket, &binding, &params).expect("expected transcript to verify");
-        let error = verify(&ticket, &mismatched, &params)
-            .expect_err("an arbitrary mismatched transcript must fail exactly");
-        assert!(matches!(error, Error::InvalidSolution));
-    }
-    #[test]
     fn revocation_store_materializes_empty_ledger_on_load() {
         let now = UNIX_EPOCH + Duration::from_secs(1_000);
         let dir = tempdir().expect("tempdir");
@@ -3230,12 +1899,12 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("clock-rollback.norito");
         let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
-        let ticket = signed_ticket_with_expiry(1_100, 0xA5);
+        let ticket = ticket_with_expiry(1_100, 0xA5);
         {
             let mut store = TicketRevocationStore::load(&path, limits, initial).expect("load");
             assert_eq!(
                 store
-                    .revoke_ticket(&ticket, initial)
+                    .revoke_ticket_payload(&ticket, initial)
                     .expect("initial revocation")
                     .status,
                 TicketRevocationInsertStatus::Accepted
@@ -3243,7 +1912,7 @@ mod tests {
             assert_eq!(store.purge_expired(expiry).expect("purge at expiry"), 1);
             assert_eq!(
                 store
-                    .revoke_ticket(&ticket, rollback)
+                    .revoke_ticket_payload(&ticket, rollback)
                     .expect("rollback insertion status")
                     .status,
                 TicketRevocationInsertStatus::Expired,
@@ -3254,7 +1923,7 @@ mod tests {
             TicketRevocationStore::load(&path, limits, rollback).expect("rollback reload");
         assert_eq!(
             reloaded
-                .revoke_ticket(&ticket, rollback)
+                .revoke_ticket_payload(&ticket, rollback)
                 .expect("restart rollback insertion status")
                 .status,
             TicketRevocationInsertStatus::Expired,
@@ -3269,25 +1938,19 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("query-clock-high-water.norito");
         let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
-        let ticket = signed_ticket_with_expiry(1_100, 0xA5);
+        let ticket = ticket_with_expiry(1_100, 0xA5);
         {
             let mut store = TicketRevocationStore::load(&path, limits, initial).expect("load");
             store
-                .revoke_ticket(&ticket, initial)
+                .revoke_ticket_payload(&ticket, initial)
                 .expect("initial revocation");
             let snapshot_before_query = std::fs::read(&path).expect("read snapshot before query");
             assert!(
                 !store
-                    .is_ticket_revoked(&ticket, expiry)
+                    .is_ticket_payload_revoked(&ticket, expiry)
                     .expect("expiry query")
             );
             assert_eq!(store.len(expiry).expect("active length at expiry"), 0);
-            assert!(
-                store
-                    .active_fingerprints(expiry)
-                    .expect("active fingerprints at expiry")
-                    .is_empty()
-            );
             assert_eq!(
                 std::fs::read(&path).expect("read snapshot after query"),
                 snapshot_before_query,
@@ -3298,13 +1961,13 @@ mod tests {
             TicketRevocationStore::load(&path, limits, rollback).expect("rollback reload");
         assert!(
             reloaded
-                .is_ticket_revoked(&ticket, rollback)
+                .is_ticket_payload_revoked(&ticket, rollback)
                 .expect("rollback query"),
             "the retained revocation must become active again after rollback"
         );
         assert_eq!(
             reloaded
-                .revoke_ticket(&ticket, rollback)
+                .revoke_ticket_payload(&ticket, rollback)
                 .expect("rollback revocation")
                 .status,
             TicketRevocationInsertStatus::Duplicate
@@ -3318,12 +1981,12 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("rejected-clock-high-water.norito");
         let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
-        let ticket = signed_ticket_with_expiry(1_200, 0xA5);
+        let ticket = ticket_with_expiry(1_200, 0xA5);
         {
             let mut store = TicketRevocationStore::load(&path, limits, initial).expect("load");
             assert_eq!(
                 store
-                    .revoke_ticket(&ticket, observed)
+                    .revoke_ticket_payload(&ticket, observed)
                     .expect("expired revocation")
                     .status,
                 TicketRevocationInsertStatus::Expired
@@ -3333,7 +1996,7 @@ mod tests {
             TicketRevocationStore::load(&path, limits, rollback).expect("rollback reload");
         assert_eq!(
             reloaded
-                .revoke_ticket(&ticket, rollback)
+                .revoke_ticket_payload(&ticket, rollback)
                 .expect("rollback revocation")
                 .status,
             TicketRevocationInsertStatus::Expired
@@ -3343,21 +2006,21 @@ mod tests {
     fn revocation_store_retries_dirty_snapshot_after_failed_write() {
         let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
         let now = UNIX_EPOCH + Duration::from_secs(1_000);
-        let ticket = signed_ticket_with_expiry(1_120, 0xA5);
+        let ticket = ticket_with_expiry(1_120, 0xA5);
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("dirty-retry.norito");
         let mut store = TicketRevocationStore::load(&path, limits, now).expect("load");
         std::fs::remove_file(&path).expect("remove initial snapshot");
         std::fs::create_dir(&path).expect("block snapshot destination");
         let error = store
-            .revoke_ticket(&ticket, now)
+            .revoke_ticket_payload(&ticket, now)
             .expect_err("the first snapshot write must fail");
         assert!(matches!(error, TicketRevocationStoreError::Io(_)));
         std::fs::remove_dir(&path).expect("remove snapshot blocker");
 
         assert!(
             store
-                .is_ticket_revoked(&ticket, now)
+                .is_ticket_payload_revoked(&ticket, now)
                 .expect("a later query must retry the dirty snapshot")
         );
         drop(store);
@@ -3365,7 +2028,7 @@ mod tests {
         let mut reloaded = TicketRevocationStore::load(&path, limits, now).expect("reload");
         assert!(
             reloaded
-                .is_ticket_revoked(&ticket, now)
+                .is_ticket_payload_revoked(&ticket, now)
                 .expect("failed-write revocation must survive restart after retry")
         );
     }
@@ -3375,7 +2038,7 @@ mod tests {
         let initial = UNIX_EPOCH + Duration::new(1_000, 100_000_000);
         let expiry = UNIX_EPOCH + Duration::new(1_100, 500_000_000);
         let before_expiry = UNIX_EPOCH + Duration::new(1_100, 250_000_000);
-        let ticket = signed_ticket_with_expiry(1_101, 0xA5);
+        let ticket = ticket_with_expiry(1_101, 0xA5);
         let fingerprint = ticket.revocation_fingerprint();
         let dir = tempdir().expect("tempdir");
         let expiry_path = dir.path().join("subsecond-expiry.norito");
@@ -3410,7 +2073,7 @@ mod tests {
         let observed = UNIX_EPOCH + Duration::new(1_200, 500_000_000);
         let rollback = UNIX_EPOCH + Duration::new(1_200, 250_000_000);
         let rollback_expiry = UNIX_EPOCH + Duration::new(1_200, 400_000_000);
-        let rollback_ticket = signed_ticket_with_expiry(1_201, 0x5A);
+        let rollback_ticket = ticket_with_expiry(1_201, 0x5A);
         let rollback_fingerprint = rollback_ticket.revocation_fingerprint();
         {
             let mut store =
@@ -3440,32 +2103,41 @@ mod tests {
         let path = dir.path().join("revocations.norito");
         let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
         let mut store = TicketRevocationStore::load(&path, limits, now).expect("load");
-        let ticket_a = signed_ticket_with_expiry(1_120, 0xAA);
-        let ticket_b = signed_ticket_with_expiry(1_140, 0xBB);
-        let ticket_c = signed_ticket_with_expiry(1_160, 0xCC);
-        let outcome_a = store.revoke_ticket(&ticket_a, now).expect("insert a");
+        let ticket_a = ticket_with_expiry(1_120, 0xAA);
+        let ticket_b = ticket_with_expiry(1_140, 0xBB);
+        let ticket_c = ticket_with_expiry(1_160, 0xCC);
+        let outcome_a = store
+            .revoke_ticket_payload(&ticket_a, now)
+            .expect("insert a");
         assert_eq!(outcome_a.status, TicketRevocationInsertStatus::Accepted);
-        let outcome_b = store.revoke_ticket(&ticket_b, now).expect("insert b");
+        let outcome_b = store
+            .revoke_ticket_payload(&ticket_b, now)
+            .expect("insert b");
         assert_eq!(outcome_b.status, TicketRevocationInsertStatus::Accepted);
-        let outcome_c = store.revoke_ticket(&ticket_c, now).expect("insert c");
+        let outcome_c = store
+            .revoke_ticket_payload(&ticket_c, now)
+            .expect("insert c");
         assert_eq!(
             outcome_c.status,
             TicketRevocationInsertStatus::Capacity,
             "a full store must reject new consumption records"
         );
-        assert!(store.is_ticket_revoked(&ticket_a, now).expect("ticket a"));
-        assert!(store.is_ticket_revoked(&ticket_b, now).expect("ticket b"));
-        assert!(!store.is_ticket_revoked(&ticket_c, now).expect("ticket c"));
-        let mut active = store
-            .active_fingerprints(now)
-            .expect("collect bounded active fingerprints");
-        active.sort_unstable();
-        let mut expected = vec![
-            ticket_a.revocation_fingerprint(),
-            ticket_b.revocation_fingerprint(),
-        ];
-        expected.sort_unstable();
-        assert_eq!(active, expected);
+        assert!(
+            store
+                .is_ticket_payload_revoked(&ticket_a, now)
+                .expect("ticket a")
+        );
+        assert!(
+            store
+                .is_ticket_payload_revoked(&ticket_b, now)
+                .expect("ticket b")
+        );
+        assert!(
+            !store
+                .is_ticket_payload_revoked(&ticket_c, now)
+                .expect("ticket c")
+        );
+        assert_eq!(store.len(now).expect("active entries"), 2);
         let reload_now = UNIX_EPOCH + Duration::from_secs(1_250);
         drop(store);
         let mut reloaded =
@@ -3628,12 +2300,14 @@ mod tests {
         let now = UNIX_EPOCH + Duration::from_secs(5_000);
         let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(60)).expect("limits");
         let mut store = TicketRevocationStore::in_memory(limits).expect("store");
-        let future = signed_ticket_with_expiry(5_200, 0x01);
-        let overdue = signed_ticket_with_expiry(4_900, 0x02);
-        let too_long = store.revoke_ticket(&future, now).expect("insert");
+        let future = ticket_with_expiry(5_200, 0x01);
+        let overdue = ticket_with_expiry(4_900, 0x02);
+        let too_long = store.revoke_ticket_payload(&future, now).expect("insert");
         assert_eq!(too_long.status, TicketRevocationInsertStatus::TtlExceeded);
         assert_eq!(store.len(now).expect("len"), 0);
-        let expired = store.revoke_ticket(&overdue, now).expect("insert overdue");
+        let expired = store
+            .revoke_ticket_payload(&overdue, now)
+            .expect("insert overdue");
         assert_eq!(expired.status, TicketRevocationInsertStatus::Expired);
         assert_eq!(store.len(now).expect("len"), 0);
     }
@@ -3649,35 +2323,9 @@ mod tests {
             client_nonce: [0u8; 32],
             solution: [0u8; 32],
         };
-        let signed = SignedTicket {
-            ticket: Ticket {
-                version: Ticket::VERSION,
-                difficulty: 0,
-                expires_at: u64::MAX,
-                client_nonce: [0u8; 32],
-                solution: [0u8; 32],
-            },
-            relay_id: RELAY_A,
-            transcript_hash: TRANSCRIPT,
-            signature: vec![0xAA; MlDsaSuite::MlDsa44.signature_len()],
-        };
         let err = store
             .revoke_ticket_payload(&ticket, now)
             .expect_err("overflowed ticket payload expiry should fail closed");
-        assert!(matches!(
-            err,
-            TicketRevocationStoreError::ExpiryTimestampOverflow(u64::MAX)
-        ));
-        let err = store
-            .revoke_ticket_bytes(&ticket, now)
-            .expect_err("overflowed ticket byte expiry should fail closed");
-        assert!(matches!(
-            err,
-            TicketRevocationStoreError::ExpiryTimestampOverflow(u64::MAX)
-        ));
-        let err = store
-            .revoke_ticket(&signed, now)
-            .expect_err("overflowed signed-ticket expiry should fail closed");
         assert!(matches!(
             err,
             TicketRevocationStoreError::ExpiryTimestampOverflow(u64::MAX)
@@ -3691,17 +2339,25 @@ mod tests {
         let path = dir.path().join("revocations.norito");
         let limits = TicketRevocationStoreLimits::new(3, Duration::from_secs(180)).expect("limits");
         let mut store = TicketRevocationStore::load(&path, limits, now).expect("load");
-        let short = signed_ticket_with_expiry(10_050, 0x10);
-        let long = signed_ticket_with_expiry(10_140, 0x20);
-        store.revoke_ticket(&short, now).expect("short insert");
-        store.revoke_ticket(&long, now).expect("long insert");
+        let short = ticket_with_expiry(10_050, 0x10);
+        let long = ticket_with_expiry(10_140, 0x20);
+        store
+            .revoke_ticket_payload(&short, now)
+            .expect("short insert");
+        store
+            .revoke_ticket_payload(&long, now)
+            .expect("long insert");
         let later = UNIX_EPOCH + Duration::from_secs(10_120);
         let removed = store.purge_expired(later).expect("purge");
         assert_eq!(removed, 1);
-        assert!(store.is_ticket_revoked(&long, later).expect("long ticket"));
+        assert!(
+            store
+                .is_ticket_payload_revoked(&long, later)
+                .expect("long ticket")
+        );
         assert!(
             !store
-                .is_ticket_revoked(&short, later)
+                .is_ticket_payload_revoked(&short, later)
                 .expect("short ticket")
         );
         drop(store);
@@ -3710,12 +2366,12 @@ mod tests {
         assert_eq!(reloaded.len(later).expect("reloaded len"), 1);
         assert!(
             reloaded
-                .is_ticket_revoked(&long, later)
+                .is_ticket_payload_revoked(&long, later)
                 .expect("reloaded long ticket")
         );
     }
     #[test]
-    fn revocation_store_handles_raw_ticket_bytes() {
+    fn revocation_store_handles_canonical_ticket_payload() {
         let now = UNIX_EPOCH + Duration::from_secs(12_000);
         let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(600)).expect("limits");
         let mut store = TicketRevocationStore::in_memory(limits).expect("store");
@@ -3727,82 +2383,74 @@ mod tests {
             solution: [0xCD; 32],
         };
         let first = store
-            .revoke_ticket_bytes(&ticket, now)
+            .revoke_ticket_payload(&ticket, now)
             .expect("first insert should succeed");
         assert_eq!(first.status, TicketRevocationInsertStatus::Accepted);
         let duplicate = store
-            .revoke_ticket_bytes(&ticket, now)
+            .revoke_ticket_payload(&ticket, now)
             .expect("duplicate insert should succeed");
         assert_eq!(duplicate.status, TicketRevocationInsertStatus::Duplicate);
     }
     #[test]
-    fn verify_with_revocations_rejects_replay_and_persists() {
+    fn raw_ticket_revocation_rejects_replay_and_persists() {
         let now = UNIX_EPOCH + Duration::from_secs(2_000);
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("revocations.norito");
         let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(600)).expect("limits");
         let mut store = TicketRevocationStore::load(&path, limits, now).expect("load");
-        let descriptor = [0xAB; 32];
-        let binding = binding(&descriptor);
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(60));
         let ticket = Ticket {
-            version: 1,
-            difficulty: params.difficulty(),
-            expires_at: now
-                .checked_add(Duration::from_secs(300))
-                .unwrap()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            client_nonce: ticket_binding_commitment(
-                binding.descriptor_commit,
-                binding.relay_id,
-                binding.transcript_hash,
-            ),
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: 2_300,
+            client_nonce: [0x10; 32],
             solution: [0x20; 32],
         };
-        verify_with_revocations_at(&ticket, &binding, &params, Some(&mut store), now)
-            .expect("first verification");
-        let err = verify_with_revocations_at(&ticket, &binding, &params, Some(&mut store), now)
-            .expect_err("replay should be rejected");
-        matches!(err, Error::Replay);
+        let first = store
+            .revoke_ticket_payload(&ticket, now)
+            .expect("first revocation");
+        assert_eq!(first.status, TicketRevocationInsertStatus::Accepted);
+        let duplicate = store
+            .revoke_ticket_payload(&ticket, now)
+            .expect("duplicate revocation");
+        assert_eq!(duplicate.status, TicketRevocationInsertStatus::Duplicate);
         let later = now + Duration::from_secs(30);
         drop(store);
         let mut reloaded =
             TicketRevocationStore::load(&path, limits, later).expect("reload revocations");
-        let err =
-            verify_with_revocations_at(&ticket, &binding, &params, Some(&mut reloaded), later)
-                .expect_err("replay should persist");
-        matches!(err, Error::Replay);
+        assert!(
+            reloaded
+                .is_ticket_payload_revoked(&ticket, later)
+                .expect("persisted revocation")
+        );
     }
     #[test]
     fn revocation_store_capacity_never_makes_consumed_ticket_replayable() {
         let now = UNIX_EPOCH + Duration::from_secs(8_000);
         let limits = TicketRevocationStoreLimits::new(1, Duration::from_secs(300)).expect("limits");
         let mut store = TicketRevocationStore::in_memory(limits).expect("store");
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(60));
-        let descriptor = [0xBC; 32];
-        let binding = binding(&descriptor);
-        let client_nonce = ticket_binding_commitment(
-            binding.descriptor_commit,
-            binding.relay_id,
-            binding.transcript_hash,
-        );
         let mk_ticket = |expires_at_secs: u64, nonce: u8| Ticket {
-            version: 1,
-            difficulty: params.difficulty(),
+            version: Ticket::VERSION,
+            difficulty: 0,
             expires_at: expires_at_secs,
-            client_nonce,
+            client_nonce: [nonce; 32],
             solution: [nonce.wrapping_add(1); 32],
         };
         let ticket_a = mk_ticket(8_120, 0x01);
         let ticket_b = mk_ticket(8_140, 0x02);
-        verify_with_revocations_at(&ticket_a, &binding, &params, Some(&mut store), now)
-            .expect("accept ticket a");
-        let capacity_err =
-            verify_with_revocations_at(&ticket_b, &binding, &params, Some(&mut store), now)
-                .expect_err("full replay store must reject ticket b");
-        assert!(matches!(capacity_err, Error::RevocationStore(_)));
+        assert_eq!(
+            store
+                .revoke_ticket_payload(&ticket_a, now)
+                .expect("accept ticket a")
+                .status,
+            TicketRevocationInsertStatus::Accepted
+        );
+        assert_eq!(
+            store
+                .revoke_ticket_payload(&ticket_b, now)
+                .expect("reject ticket b")
+                .status,
+            TicketRevocationInsertStatus::Capacity
+        );
         assert!(
             store
                 .is_ticket_payload_revoked(&ticket_a, now)
@@ -3815,10 +2463,13 @@ mod tests {
                 .expect("ticket b query"),
             "rejected ticket must not displace active consumption state"
         );
-        let replay_err =
-            verify_with_revocations_at(&ticket_a, &binding, &params, Some(&mut store), now)
-                .expect_err("ticket a must remain a replay");
-        assert!(matches!(replay_err, Error::Replay));
+        assert_eq!(
+            store
+                .revoke_ticket_payload(&ticket_a, now)
+                .expect("ticket a remains consumed")
+                .status,
+            TicketRevocationInsertStatus::Duplicate
+        );
     }
     #[test]
     fn signed_ticket_replay_rejected_after_reload() {
@@ -3829,96 +2480,41 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("replay_store.norito");
         let mut store = TicketRevocationStore::load(&path, limits, now).expect("store");
-        let params = Parameters::new(0, Duration::from_secs(900), Duration::from_secs(60));
         let descriptor = [0xAA; 32];
-        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &TRANSCRIPT);
         let expires_at = now.duration_since(UNIX_EPOCH).expect("epoch").as_secs() + 120;
         let ticket = Ticket {
-            version: 1,
+            version: Ticket::VERSION,
             difficulty: 0,
             expires_at,
-            client_nonce: ticket_binding_commitment(
-                binding.descriptor_commit,
-                binding.relay_id,
-                binding.transcript_hash,
-            ),
+            client_nonce: ticket_binding_commitment(&descriptor, &RELAY_A, &TRANSCRIPT),
             solution: [0u8; 32],
         };
         let signed =
             SignedTicket::sign(ticket, &RELAY_A, &TRANSCRIPT, keypair.secret_key()).expect("sign");
-        verify_signed_ticket_at(
-            &signed,
-            keypair.public_key(),
-            &binding,
-            &params,
-            Some(&mut store),
-            now,
-        )
-        .expect("first verification");
-        let err = verify_signed_ticket_at(
-            &signed,
-            keypair.public_key(),
-            &binding,
-            &params,
-            Some(&mut store),
-            now,
-        )
-        .expect_err("replay must fail");
-        assert!(matches!(err, Error::Replay));
+        signed.verify(keypair.public_key()).expect("signature");
+        assert_eq!(
+            store
+                .revoke_ticket_payload(&signed.ticket, now)
+                .expect("first revocation")
+                .status,
+            TicketRevocationInsertStatus::Accepted
+        );
+        assert_eq!(
+            store
+                .revoke_ticket_payload(&signed.ticket, now)
+                .expect("duplicate revocation")
+                .status,
+            TicketRevocationInsertStatus::Duplicate
+        );
         let later = now + Duration::from_secs(30);
         drop(store);
         let mut reloaded =
             TicketRevocationStore::load(&path, limits, later).expect("reload from disk");
-        let err = verify_signed_ticket_at(
-            &signed,
-            keypair.public_key(),
-            &binding,
-            &params,
-            Some(&mut reloaded),
-            later,
-        )
-        .expect_err("replay should persist across reload");
-        assert!(matches!(err, Error::Replay));
-    }
-    #[test]
-    fn known_signed_ticket_replay_is_rejected_before_public_key_crypto() {
-        let now = UNIX_EPOCH + Duration::from_secs(43_000);
-        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(600)).expect("limits");
-        let mut store = TicketRevocationStore::in_memory(limits).expect("store");
-        let params = Parameters::new(0, Duration::from_secs(900), Duration::from_secs(60));
-        let descriptor = [0xAB; 32];
-        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &TRANSCRIPT);
-        let ticket = Ticket {
-            version: Ticket::VERSION,
-            difficulty: params.difficulty(),
-            expires_at: now.duration_since(UNIX_EPOCH).expect("epoch").as_secs() + 120,
-            client_nonce: ticket_binding_commitment(
-                binding.descriptor_commit,
-                binding.relay_id,
-                binding.transcript_hash,
-            ),
-            solution: [0; 32],
-        };
-        assert_eq!(
-            store
-                .revoke_ticket_payload(&ticket, now)
-                .expect("preload canonical replay")
-                .status,
-            TicketRevocationInsertStatus::Accepted
+        assert!(
+            reloaded
+                .is_ticket_payload_revoked(&signed.ticket, later)
+                .expect("replay persists across reload")
         );
-        let replay = SignedTicket {
-            ticket,
-            relay_id: RELAY_A,
-            transcript_hash: TRANSCRIPT,
-            // Structurally valid, deliberately unauthenticated material. If
-            // ML-DSA/key validation runs first, the empty public key below
-            // produces a different error and this regression fails.
-            signature: vec![0x11; MlDsaSuite::MlDsa44.signature_len()],
-        };
-
-        let error = verify_signed_ticket_at(&replay, &[], &binding, &params, Some(&mut store), now)
-            .expect_err("known replay must be rejected before public-key work");
-        assert!(matches!(error, Error::Replay));
     }
     #[test]
     fn revocation_store_rejects_concurrent_ledger_owner() {
@@ -3935,34 +2531,5 @@ mod tests {
         );
         drop(owner);
         TicketRevocationStore::load(&path, limits, now).expect("lock released with owner");
-    }
-    #[test]
-    fn signed_ticket_relay_mismatch_is_reported() {
-        use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
-        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
-        let now = UNIX_EPOCH + Duration::from_secs(50_000);
-        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(45));
-        let descriptor = [0x55; 32];
-        let expires_at = now.duration_since(UNIX_EPOCH).expect("epoch").as_secs() + 90;
-        let ticket = Ticket {
-            version: 1,
-            difficulty: 0,
-            expires_at,
-            client_nonce: [0u8; 32],
-            solution: [0u8; 32],
-        };
-        let signed =
-            SignedTicket::sign(ticket, &RELAY_A, &TRANSCRIPT, keypair.secret_key()).expect("sign");
-        let mismatched = ChallengeBinding::new(&descriptor, &RELAY_B, &TRANSCRIPT);
-        let err = verify_signed_ticket_at(
-            &signed,
-            keypair.public_key(),
-            &mismatched,
-            &params,
-            None,
-            now,
-        )
-        .expect_err("relay mismatch should fail");
-        assert!(matches!(err, Error::RelayMismatch));
     }
 }

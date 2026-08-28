@@ -1256,8 +1256,9 @@ fn render_release_config_v1(
     broker: &BrokerPublicMaterialV1,
 ) -> color_eyre::Result<Vec<u8>> {
     let text = std::str::from_utf8(bytes).wrap_err("Taira config template is not UTF-8")?;
-    let mut config: toml::Value =
-        toml::from_str(text).wrap_err("Taira config template is invalid TOML")?;
+    let mut config = crate::secret_toml::Value::new(toml::Value::Table(
+        crate::secret_toml::parse_table(text, "Taira config template")?,
+    ));
     validate_secret_free_config_template_v1(&config)?;
     let root = config
         .as_table_mut()
@@ -1337,12 +1338,16 @@ fn render_release_config_v1(
         toml::Value::String(broker.qualification_policy_digest_hex.clone()),
     );
     let mut rendered =
-        toml::to_string_pretty(&config).wrap_err("failed to render release config")?;
+        toml::to_string_pretty(&*config).wrap_err("failed to render release config")?;
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
     Ok(rendered.into_bytes())
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the exact secret-free template and its three credential rows are one ordered admission contract"
+)]
 fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::Result<()> {
     let root = config
         .as_table()

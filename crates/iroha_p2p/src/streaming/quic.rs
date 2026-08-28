@@ -425,6 +425,10 @@ impl DatagramInbox {
             // eager transport drain.
             return Ok(());
         }
+        // Quinn's decoded DATAGRAM is a slice of a packet-sized allocation.
+        // Copying here makes the application inbox's byte and entry limits
+        // bound the buffers it actually retains instead of pinning that packet.
+        let frame = Bytes::copy_from_slice(&frame);
         state.bytes += frame.len();
         state.frames.push_back(frame);
         drop(state);
@@ -620,8 +624,13 @@ impl StreamingConnection {
         // Drain Quinn continuously before the control stream is authenticated.
         // The bounded application inbox counts entries as well as bytes and
         // closes the connection on the first empty DATAGRAM.
-        // TODO: Patch or update Quinn so dependency-owned queued DATAGRAMs also
-        // carry a fixed per-entry charge before this pump gets scheduled.
+        // TODO: Upgrade to Quinn 0.12 once released, or backport Quinn main's
+        // `DatagramBuffer::memory_used()` accounting and
+        // `empty_frame_flood_limit` regression. quinn-proto 0.11.15 charges
+        // only `data.len()`, so empty frames cost zero and can grow its private
+        // `VecDeque` before `read_datagram()` is polled. Quinn main charges the
+        // payload plus `size_of::<Datagram>()`, which supplies the missing
+        // dependency-owned per-entry bound.
         let datagram_task = spawn_datagram_pump(
             connection.clone(),
             Arc::clone(&datagram_inbox),
@@ -1470,6 +1479,42 @@ mod tests {
                 .expect_err("post-negotiation admission must use the negotiated bound")
                 .contains("above negotiated maximum 4")
         );
+    }
+    #[test]
+    fn datagram_inbox_compacts_packet_backing_before_retention() {
+        struct TrackedOwner {
+            bytes: Vec<u8>,
+            dropped: Arc<std::sync::atomic::AtomicBool>,
+        }
+        impl AsRef<[u8]> for TrackedOwner {
+            fn as_ref(&self) -> &[u8] {
+                &self.bytes
+            }
+        }
+        impl Drop for TrackedOwner {
+            fn drop(&mut self) {
+                self.dropped
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let packet = Bytes::from_owner(TrackedOwner {
+            bytes: vec![0_u8; 64 * 1024],
+            dropped: Arc::clone(&dropped),
+        });
+        let payload = packet.slice(23..27);
+        drop(packet);
+        let inbox = DatagramInbox::new(4);
+        inbox.admit(payload, 4).expect("small DATAGRAM is retained");
+
+        assert!(dropped.load(std::sync::atomic::Ordering::Acquire));
+        let state = inbox.state.lock().expect("inbox state");
+        assert_eq!(
+            state.frames.front().map(Bytes::as_ref),
+            Some(&[0, 0, 0, 0][..])
+        );
+        assert_eq!(state.bytes, 4);
     }
     #[test]
     fn streaming_certificate_pin_rejects_another_certificate() {

@@ -37,10 +37,11 @@ use iroha_torii_shared::{
 };
 use norito::json::{self, BoundedJsonError, FastJsonWrite, JsonWriteSink, Map, Value};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt::Write as _,
+    future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{LazyLock, RwLock},
+    sync::{Arc, LazyLock, Mutex, RwLock},
     time::Duration,
 };
 use tower::ServiceExt as _;
@@ -63,6 +64,7 @@ const MCP_RESPONSE_TOO_LARGE: i64 = -32002;
 const MCP_REQUEST_TIMEOUT: i64 = -32003;
 const MCP_DISPATCH_CAPACITY_EXHAUSTED: i64 = -32004;
 const MCP_RATE_LIMITED: i64 = -32029;
+const MCP_CANCELLATION_FINGERPRINT_DOMAIN: &[u8] = b"iroha.mcp.cancellation.client.v1\0";
 const MAX_MCP_PROJECTION_KEYS: usize = 64;
 const MAX_MCP_PROJECTION_KEY_CHARS: usize = 128;
 /// First-release ceiling for the explicitly advertised `tools/call_batch` extension.
@@ -107,6 +109,148 @@ const NONZERO_UPPER_HEX_PATTERN: &str = "^(?!0+$)(?:[0-9A-F]{2})+$";
 const GOVERNANCE_PROPOSAL_ID_V1_PATTERN: &str = "^[0-9a-f]{64}$";
 const HEADER_X_API_TOKEN: &str = "x-api-token";
 const HEADER_MCP_PROTOCOL_VERSION: &str = "mcp-protocol-version";
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ExactJsonRpcId {
+    kind: ExactJsonRpcIdKind,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum ExactJsonRpcIdKind {
+    String(String),
+    I64(i64),
+    U64(u64),
+    F64(u64),
+}
+
+impl ExactJsonRpcId {
+    fn from_value(value: &Value) -> Option<Self> {
+        let kind = match value {
+            Value::String(value) => ExactJsonRpcIdKind::String(value.clone()),
+            Value::Number(json::native::Number::I64(value)) => ExactJsonRpcIdKind::I64(*value),
+            Value::Number(json::native::Number::U64(value)) => ExactJsonRpcIdKind::U64(*value),
+            Value::Number(json::native::Number::F64(value)) => {
+                ExactJsonRpcIdKind::F64(value.to_bits())
+            }
+            _ => return None,
+        };
+        Some(Self { kind })
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct McpInflightKey {
+    client_fingerprint: [u8; 32],
+    request_id: ExactJsonRpcId,
+}
+
+struct McpInflightEntry {
+    generation: Arc<()>,
+    cancellation: tokio::sync::watch::Sender<bool>,
+}
+
+/// Process-local registry for best-effort cancellation of exact authenticated MCP calls.
+#[derive(Default)]
+pub(crate) struct McpInflightRegistry {
+    entries: Mutex<HashMap<McpInflightKey, McpInflightEntry>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum McpInflightRegistrationError {
+    Duplicate,
+    Capacity,
+}
+
+struct McpInflightRegistration {
+    registry: Arc<McpInflightRegistry>,
+    key: McpInflightKey,
+    generation: Arc<()>,
+    cancellation: tokio::sync::watch::Receiver<bool>,
+}
+
+impl McpInflightRegistry {
+    fn register(
+        self: &Arc<Self>,
+        key: McpInflightKey,
+        capacity: usize,
+    ) -> Result<McpInflightRegistration, McpInflightRegistrationError> {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if entries.contains_key(&key) {
+            return Err(McpInflightRegistrationError::Duplicate);
+        }
+        if entries.len() >= capacity {
+            return Err(McpInflightRegistrationError::Capacity);
+        }
+        let generation = Arc::new(());
+        let (cancellation, receiver) = tokio::sync::watch::channel(false);
+        entries.insert(
+            key.clone(),
+            McpInflightEntry {
+                generation: Arc::clone(&generation),
+                cancellation,
+            },
+        );
+        drop(entries);
+        Ok(McpInflightRegistration {
+            registry: Arc::clone(self),
+            key,
+            generation,
+            cancellation: receiver,
+        })
+    }
+
+    fn cancel(&self, key: &McpInflightKey) -> bool {
+        let entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(entry) = entries.get(key) else {
+            return false;
+        };
+        entry.cancellation.send_replace(true);
+        true
+    }
+}
+
+impl McpInflightRegistration {
+    async fn cancelled(&mut self) {
+        if *self.cancellation.borrow() {
+            return;
+        }
+        while self.cancellation.changed().await.is_ok() {
+            if *self.cancellation.borrow() {
+                return;
+            }
+        }
+    }
+}
+
+impl Drop for McpInflightRegistration {
+    fn drop(&mut self) {
+        let mut entries = self
+            .registry
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if entries
+            .get(&self.key)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.generation, &self.generation))
+        {
+            entries.remove(&self.key);
+        }
+    }
+}
+
+/// Result of executing one request-bearing MCP JSON-RPC message.
+pub(crate) enum JsonRpcRequestOutcome {
+    /// A JSON-RPC response must be returned to the caller.
+    Response(Value),
+    /// The exact authenticated request was cancelled; no JSON-RPC response is emitted.
+    Cancelled,
+}
 static ADVERTISED_REGEX_CACHE: LazyLock<RwLock<BTreeMap<String, regex::Regex>>> =
     LazyLock::new(|| RwLock::new(BTreeMap::new()));
 #[cfg(test)]
@@ -670,9 +814,12 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_accounts_onboard_plan_tool());
     tools.push(iroha_accounts_onboard_prepare_tool());
     tools.push(iroha_accounts_onboard_submit_tool());
-    // TODO: Reintroduce faucet tools only after claims have a durable cluster-wide consume-once
-    // marker; the underlying REST prepare route can otherwise sign distinct transfers for one
-    // proof-of-work claim when invoked with different bindings.
+    if paths.contains_key("/v1/accounts/faucet/prepare")
+        && paths.contains_key("/v1/accounts/faucet")
+    {
+        tools.push(iroha_accounts_faucet_prepare_tool());
+        tools.push(iroha_accounts_faucet_submit_tool());
+    }
     tools.push(iroha_account_transactions_tool());
     tools.push(iroha_account_history_tool());
     tools.push(iroha_account_transactions_query_tool());
@@ -1222,77 +1369,195 @@ pub(crate) fn jsonrpc_unsupported_protocol_version() -> Value {
         })),
     )
 }
+
+fn authenticated_cancellation_client_fingerprint(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+) -> Option<[u8; 32]> {
+    if !app.require_api_token {
+        return None;
+    }
+    let mut values = headers.get_all(HEADER_X_API_TOKEN).iter();
+    let token = values.next()?.to_str().ok()?;
+    if values.next().is_some() || !app.api_tokens_set.contains(token) {
+        return None;
+    }
+    let mut hasher = Blake3Hasher::new();
+    hasher.update(MCP_CANCELLATION_FINGERPRINT_DOMAIN);
+    hasher.update(token.as_bytes());
+    Some(*hasher.finalize().as_bytes())
+}
+
+fn register_authenticated_inflight_request(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+    id: Option<&Value>,
+) -> Result<Option<McpInflightRegistration>, McpInflightRegistrationError> {
+    let Some(client_fingerprint) = authenticated_cancellation_client_fingerprint(app, headers)
+    else {
+        return Ok(None);
+    };
+    let Some(request_id) = id.and_then(ExactJsonRpcId::from_value) else {
+        return Ok(None);
+    };
+    app.mcp_inflight_requests
+        .register(
+            McpInflightKey {
+                client_fingerprint,
+                request_id,
+            },
+            app.mcp.max_inflight_dispatches.get(),
+        )
+        .map(Some)
+}
+
+async fn finish_cancellable_dispatch<F>(
+    mut registration: Option<McpInflightRegistration>,
+    dispatch: F,
+) -> JsonRpcRequestOutcome
+where
+    F: Future<Output = Value>,
+{
+    let Some(registration) = registration.as_mut() else {
+        return JsonRpcRequestOutcome::Response(dispatch.await);
+    };
+    tokio::pin!(dispatch);
+    tokio::select! {
+        biased;
+        () = registration.cancelled() => JsonRpcRequestOutcome::Cancelled,
+        response = &mut dispatch => JsonRpcRequestOutcome::Response(response),
+    }
+}
+
+fn cancellation_registration_error(
+    id: Option<Value>,
+    error: McpInflightRegistrationError,
+    capacity: usize,
+) -> JsonRpcRequestOutcome {
+    let (message, error_code) = match error {
+        McpInflightRegistrationError::Duplicate => (
+            "an authenticated MCP request with this id is already in flight",
+            "request_id_in_use",
+        ),
+        McpInflightRegistrationError::Capacity => (
+            "the authenticated MCP cancellation registry is at capacity",
+            "cancellation_registry_capacity_exhausted",
+        ),
+    };
+    JsonRpcRequestOutcome::Response(jsonrpc_error_response(
+        id,
+        MCP_DISPATCH_CAPACITY_EXHAUSTED,
+        message,
+        Some(norito::json!({
+            "error_code": (error_code),
+            "max_inflight_dispatches": (capacity),
+            "retryable": true
+        })),
+    ))
+}
+
 /// Execute one MCP JSON-RPC request value.
 pub(crate) async fn handle_jsonrpc_request(
     app: SharedAppState,
     inbound_headers: &HeaderMap,
     request: Value,
-) -> Value {
+) -> JsonRpcRequestOutcome {
     let Value::Object(mut req_obj) = request else {
-        return jsonrpc_invalid_request("request must be an object");
+        return JsonRpcRequestOutcome::Response(jsonrpc_invalid_request(
+            "request must be an object",
+        ));
     };
     let id = req_obj.remove("id");
     if id.as_ref().is_some_and(|id| !is_jsonrpc_id(id)) {
-        return jsonrpc_error_response(
+        return JsonRpcRequestOutcome::Response(jsonrpc_error_response(
             None,
             JSONRPC_INVALID_REQUEST,
             "id must be a non-null string or number",
             None,
-        );
+        ));
     }
     if req_obj.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
-        return jsonrpc_error_response(
+        return JsonRpcRequestOutcome::Response(jsonrpc_error_response(
             id,
             JSONRPC_INVALID_REQUEST,
             "jsonrpc must be \"2.0\"",
             None,
-        );
+        ));
     }
     let Some(Value::String(method)) = req_obj.remove("method") else {
-        return jsonrpc_error_response(
+        return JsonRpcRequestOutcome::Response(jsonrpc_error_response(
             id,
             JSONRPC_INVALID_REQUEST,
             "method must be a string",
             None,
-        );
+        ));
     };
     let params = match req_obj.remove("params") {
         Some(Value::Object(params)) => params,
         None => Map::new(),
         Some(_) => {
-            return jsonrpc_error_response(
+            return JsonRpcRequestOutcome::Response(jsonrpc_error_response(
                 id,
                 JSONRPC_INVALID_PARAMS,
                 "params must be an object when present",
                 None,
-            );
+            ));
         }
     };
     match method.as_str() {
         "initialize" => {
             if let Err(message) = validate_initialize_params(&params) {
-                return jsonrpc_error_response(
+                return JsonRpcRequestOutcome::Response(jsonrpc_error_response(
                     id,
                     JSONRPC_INVALID_PARAMS,
                     message,
                     Some(norito::json!({
                         "supported_protocol_version": MCP_PROTOCOL_VERSION
                     })),
-                );
+                ));
             }
             let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
-            jsonrpc_result_response(id, capabilities_payload(&visible_tools))
+            JsonRpcRequestOutcome::Response(jsonrpc_result_response(
+                id,
+                capabilities_payload(&visible_tools),
+            ))
         }
-        "ping" => jsonrpc_result_response(id, Value::Object(Map::new())),
-        "tools/list" => handle_tools_list(id, &app, &params),
-        "tools/call_batch" => handle_tools_call_batch(id, app, inbound_headers, &params).await,
-        "tools/call" => handle_tools_call(id, app, inbound_headers, &params).await,
-        _ => jsonrpc_error_response(
+        "ping" => {
+            JsonRpcRequestOutcome::Response(jsonrpc_result_response(id, Value::Object(Map::new())))
+        }
+        "tools/list" => JsonRpcRequestOutcome::Response(handle_tools_list(id, &app, &params)),
+        "tools/call_batch" | "tools/call" => {
+            let registration =
+                match register_authenticated_inflight_request(&app, inbound_headers, id.as_ref()) {
+                    Ok(registration) => registration,
+                    Err(error) => {
+                        return cancellation_registration_error(
+                            id,
+                            error,
+                            app.mcp.max_inflight_dispatches.get(),
+                        );
+                    }
+                };
+            if method == "tools/call_batch" {
+                finish_cancellable_dispatch(
+                    registration,
+                    handle_tools_call_batch(id, app, inbound_headers, &params),
+                )
+                .await
+            } else {
+                finish_cancellable_dispatch(
+                    registration,
+                    handle_tools_call(id, app, inbound_headers, &params),
+                )
+                .await
+            }
+        }
+        _ => JsonRpcRequestOutcome::Response(jsonrpc_error_response(
             id,
             JSONRPC_METHOD_NOT_FOUND,
             "method not found",
             Some(norito::json!({ "method": method })),
-        ),
+        )),
     }
 }
 fn validate_initialize_params(params: &Map) -> Result<(), &'static str> {
@@ -1331,6 +1596,52 @@ pub(crate) fn is_jsonrpc_notification(request: &Value) -> bool {
     }
     req_obj.get("id").is_none() && req_obj.get("method").and_then(Value::as_str).is_some()
 }
+
+/// Return true for the standard best-effort cancellation notification.
+pub(crate) fn is_cancelled_notification(request: &Value) -> bool {
+    is_jsonrpc_notification(request)
+        && request
+            .as_object()
+            .and_then(|request| request.get("method"))
+            .and_then(Value::as_str)
+            == Some("notifications/cancelled")
+}
+
+/// Best-effort cancel one exact request owned by the same authenticated API-token principal.
+///
+/// Malformed, unknown, completed, anonymous, and cross-principal notifications are deliberately
+/// indistinguishable to the caller. Notifications never receive a JSON-RPC response.
+pub(crate) fn handle_cancelled_notification(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+    notification: &Value,
+) {
+    let Some(client_fingerprint) = authenticated_cancellation_client_fingerprint(app, headers)
+    else {
+        return;
+    };
+    let Some(params) = notification
+        .as_object()
+        .and_then(|notification| notification.get("params"))
+        .and_then(Value::as_object)
+    else {
+        return;
+    };
+    if params
+        .get("reason")
+        .is_some_and(|reason| !reason.is_string())
+    {
+        return;
+    }
+    let Some(request_id) = params.get("requestId").and_then(ExactJsonRpcId::from_value) else {
+        return;
+    };
+    let _ = app.mcp_inflight_requests.cancel(&McpInflightKey {
+        client_fingerprint,
+        request_id,
+    });
+}
+
 /// Return true when a payload is a syntactically valid JSON-RPC response.
 pub(crate) fn is_jsonrpc_response(response: &Value) -> bool {
     let Some(response_obj) = response.as_object() else {
@@ -2001,6 +2312,18 @@ async fn handle_named_tool_call(
         }
         "iroha.accounts.onboard.prepare" => {
             match dispatch_iroha_accounts_onboard_prepare(&app, inbound_headers, arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.faucet.prepare" => {
+            match dispatch_iroha_accounts_faucet_prepare(&app, inbound_headers, arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.faucet.submit" => {
+            match dispatch_iroha_accounts_faucet_submit(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -3611,6 +3934,16 @@ fn is_audited_protocol_handshake_tool(tool: &ToolSpec) -> bool {
                 "/v1/connect/session/{sid}"
             )
             | ("iroha.connect.session.status", "GET", "/v1/connect/status")
+            | (
+                "iroha.accounts.faucet.prepare",
+                "POST",
+                "/v1/accounts/faucet/prepare"
+            )
+            | (
+                "iroha.accounts.faucet.submit",
+                "POST",
+                "/v1/accounts/faucet"
+            )
     )
 }
 fn apply_catalog_auth_schemas_to_tools(tools: &mut [ToolSpec], groups: &[CatalogProjectionGroup]) {
@@ -5791,6 +6124,50 @@ async fn dispatch_iroha_accounts_onboard_prepare(
         Method::POST,
         "/v1/accounts/onboard/prepare",
         arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+async fn dispatch_iroha_accounts_faucet_prepare(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_accounts_faucet_prepare_body(arguments)?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/accounts/faucet/prepare",
+        None,
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+async fn dispatch_iroha_accounts_faucet_submit(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_accounts_faucet_submit_body(arguments)?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/accounts/faucet",
+        None,
         body_bytes,
         Some("application/json".to_owned()),
         arguments
@@ -8721,6 +9098,59 @@ manual_tool! {
     iroha_blocks_get_tool => "iroha.blocks.get";
     iroha_transactions_wait_tool => "iroha.transactions.wait";
     iroha_transactions_status_tool => "iroha.transactions.status";
+}
+fn account_faucet_tool_input_schema(path: &str) -> Value {
+    let spec = openapi::compiled_spec();
+    let operation = spec
+        .get("paths")
+        .and_then(Value::as_object)
+        .and_then(|paths| paths.get(path))
+        .and_then(Value::as_object)
+        .and_then(|path| path.get("post"))
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("faucet MCP tool route POST {path} is absent from OpenAPI"));
+    let body_schema = operation
+        .get("requestBody")
+        .and_then(|request_body| build_request_body_schema(spec, request_body))
+        .unwrap_or_else(|| panic!("faucet MCP tool route POST {path} lacks a typed request body"));
+    let mut properties = Map::new();
+    properties.insert("body".to_owned(), body_schema);
+    properties.insert("accept".to_owned(), string_schema());
+    let mut schema = Map::new();
+    schema.insert("type".to_owned(), Value::String("object".to_owned()));
+    schema.insert(
+        MCP_STRICT_BODY_SCHEMA_EXTENSION.to_owned(),
+        Value::Bool(true),
+    );
+    schema.insert("additionalProperties".to_owned(), Value::Bool(false));
+    schema.insert(
+        "required".to_owned(),
+        Value::Array(vec![Value::String("body".to_owned())]),
+    );
+    schema.insert("properties".to_owned(), Value::Object(properties));
+    Value::Object(schema)
+}
+fn iroha_accounts_faucet_prepare_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.faucet.prepare".to_owned(),
+        effect: ToolEffect::Write,
+        description: "Validate one faucet proof-of-work claim and return an exact faucet-authority-signed transaction envelope. Successful ledger execution consumes the claim through a durable authority-scoped consensus marker, so distinct preparations of the same claim cannot both commit."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/accounts/faucet/prepare".to_owned(),
+        input_schema: account_faucet_tool_input_schema("/v1/accounts/faucet/prepare"),
+    }
+}
+fn iroha_accounts_faucet_submit_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.faucet.submit".to_owned(),
+        effect: ToolEffect::Write,
+        description: "Submit only the exact authenticated envelope returned by iroha.accounts.faucet.prepare. Consensus rejects a semantic claim already consumed through any peer, binding, restart, or generic transaction ingress."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/accounts/faucet".to_owned(),
+        input_schema: account_faucet_tool_input_schema("/v1/accounts/faucet"),
+    }
 }
 fn simple_manual_get_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
     ToolSpec {

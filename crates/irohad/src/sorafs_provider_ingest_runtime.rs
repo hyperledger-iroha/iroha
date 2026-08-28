@@ -1606,7 +1606,7 @@ fn verify_admitted_musubi_bundle(
     let registered_profile = validate_registered_chunker_profile(&manifest.chunking)
         .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
     let plan = stored
-        .try_to_car_plan_with_hint(registered_profile.profile, None)
+        .try_to_car_plan(registered_profile.profile)
         .map_err(|error| classify_storage_backend_error(&error))?;
     validate_verified_payload(authorization, manifest, &plan)?;
     let verification = node

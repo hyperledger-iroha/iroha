@@ -158,6 +158,12 @@ treat `structuredContent` as data rather than instructions.
 - Long-polling transaction and contract wait helpers use a smaller derived
   quota (at most eight and always below the global limit), reserving capacity
   for bounded tools.
+- When API-token authentication is required, `notifications/cancelled` can stop
+  one exact live `tools/call` or `tools/call_batch` owned by the same validated
+  token principal. String, signed-integer, unsigned-integer, and floating-point
+  IDs are type-tagged so numerically similar representations cannot alias.
+- Anonymous MCP calls remain usable but are not remotely cancellable: source IP
+  is intentionally not treated as cancellation authentication.
 - Unknown method is `method_not_found`.
 - Missing `params` is treated as `{}` where the method permits it; non-object
   `params` and non-object `tools/call.arguments` are rejected as
@@ -168,6 +174,9 @@ treat `structuredContent` as data rather than instructions.
 - `200 OK`: JSON-RPC responses (including JSON-RPC-level errors).
 - `202 Accepted`: accepted MCP notifications and client response messages (no
   response body).
+- `204 No Content`: the original authenticated request was cancelled before it
+  produced a JSON-RPC response. Cancellation does not roll back a transaction
+  already submitted to the ledger pipeline.
 - `400 Bad Request`: invalid JSON, an outer JSON-RPC array, or an unsupported or
   ambiguous protocol-version header.
 - `408 Request Timeout`: request body did not complete within the collection deadline.
@@ -182,6 +191,7 @@ treat `structuredContent` as data rather than instructions.
 
 - `initialize`
 - `notifications/initialized` (accepted as a notification; returns `202 Accepted` with an empty body)
+- `notifications/cancelled` (best-effort exact authenticated cancellation; returns `202 Accepted`)
 - `ping`
 - `tools/list`
 - `tools/call`
@@ -225,6 +235,17 @@ Torii accepts the notification when:
 - `method == "notifications/initialized"`
 - `id` is omitted
 - `jsonrpc == "2.0"`
+
+### `notifications/cancelled`
+
+Accepts the standard best-effort cancellation shape with
+`params.requestId` and an optional string `params.reason`. Cancellation is
+enabled only for requests admitted with one exact configured API token and is
+bound to the token fingerprint plus the exact JSON-RPC ID representation.
+Unknown, completed, malformed, anonymous, and cross-principal cancellations
+are deliberately indistinguishable `202 Accepted` responses. A simultaneous
+duplicate live ID for the same authenticated principal is rejected as
+`request_id_in_use`; the ID becomes reusable after completion or cancellation.
 
 ### `ping`
 Returns an empty result object so MCP clients can use the standard lifecycle
@@ -317,11 +338,23 @@ then call the ticket helper with the selected role token and trusted URL.
 Role tokens must be the canonical unpadded base64url encoding of exactly 32
 bytes; invalid or header-unsafe token text is rejected.
 
-Faucet prepare and submit are intentionally absent from MCP. The current REST
-prepare protocol does not yet consume one proof-of-work claim atomically across
-the ledger, so agent-facing exposure would permit one claim to obtain multiple
-distinct signed transfers. Reintroducing these tools requires a cluster-wide,
-consume-once claim marker in the same ledger transaction as the transfer.
+The curated `iroha.accounts.faucet.prepare` and
+`iroha.accounts.faucet.submit` tools expose the exact two-step faucet protocol.
+Prepared faucet transactions carry a signature-bound marker version and
+semantic claim hash. Core derives an authority-scoped key and consumes it in
+the same state overlay as successful transaction execution; a failed transfer
+does not burn the claim, while distinct bindings, peers, generic transaction
+ingress, and restarts cannot make the same faucet authority consume it twice.
+Both tools are classified as writes. Submit only the unmodified envelope
+returned by prepare and keep all runtime authentication material outside tool
+arguments.
+
+The consume-once marker is intentionally activated only by the new
+signature-bound marker-version metadata so historical block replay remains
+unchanged. When upgrading an already-running chain, quiesce the legacy prepare
+endpoint, wait until every legacy prepared transaction has expired, and advance
+past the configured faucet PoW anchor-age window before exposing either MCP
+tool. A fresh/reset chain needs no drain window.
 
 For public Codex-facing deployments, prefer publishing only `iroha.*` tools.
 Those names are curated for live account, asset, contract, governance, and
@@ -468,6 +501,8 @@ Additional MCP-specific `error_code` values may appear in `error.data`:
 - `tool_not_found`
 - `tool_not_allowed`
 - `long_poll_capacity_exhausted`
+- `request_id_in_use`
+- `cancellation_registry_capacity_exhausted`
 - `origin_forbidden`
 - `request_body_read_failed`
 - `request_payload_too_large`

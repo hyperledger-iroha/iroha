@@ -116,6 +116,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                 "macosx_deployment_target": "12.0",
             },
             "source_commit": "1" * 40,
+            "embedded_source_commit": "1" * 40,
             "source_tree_dirty": False,
             "source_fingerprint_sha256": "2" * 64,
             "cargo_lock_sha256": hashlib.sha256(
@@ -261,7 +262,8 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             status=lambda _root, _inputs, _lock: "",
         )
         pin_commit = types.SimpleNamespace(
-            validate_pin_relationship=lambda _root, _commit: "direct"
+            validate_pin_relationship=lambda _root, _commit: "direct",
+            embedded_source_commit=lambda _root, commit: commit,
         )
         with (
             mock.patch.object(
@@ -273,13 +275,30 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         ):
             validator._validate_repository_provenance(ROOT, self.payload)
 
+        self.payload["embedded_source_commit"] = "3" * 40
+        with (
+            mock.patch.object(
+                validator,
+                "_load_repository_module",
+                side_effect=(source_seal, pin_commit),
+            ),
+            mock.patch.object(validator, "_validate_tool_provenance"),
+            self.assertRaisesRegex(
+                validator.ValidationError,
+                "embedded source commit does not match",
+            ),
+        ):
+            validator._validate_repository_provenance(ROOT, self.payload)
+        self.payload["embedded_source_commit"] = "1" * 40
+
         dirty_source_seal = types.SimpleNamespace(
             seal_inputs=lambda _root, _platform, _lock: ["Cargo.lock"],
             fingerprint=lambda _root, _inputs, _lock: "2" * 64,
             status=lambda _root, _inputs, _lock: " M Cargo.lock\n",
         )
         pin_parent = types.SimpleNamespace(
-            validate_pin_relationship=lambda _root, _commit: "pin-parent"
+            validate_pin_relationship=lambda _root, _commit: "pin-parent",
+            embedded_source_commit=lambda _root, commit: commit,
         )
         self.payload["source_tree_dirty"] = True
         with (

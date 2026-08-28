@@ -6,6 +6,9 @@ use norito::derive::{JsonDeserialize, JsonSerialize};
 
 /// Sole first-release operator-preseed session receipt schema.
 pub const OPERATOR_PRESEED_SESSION_RECEIPT_VERSION_V1: u16 = 1;
+/// Exact acknowledgment emitted only after the helper observes release EOF.
+pub const OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1: &[u8] =
+    b"{\"schema_version\":1,\"status\":\"released\"}\n";
 /// Canonical per-store qualification directory installed by operator-preseed sessions.
 pub const OPERATOR_PRESEED_STORE_RECEIPT_DIR_V1: &str = ".operator-preseed-v1";
 /// Maximum simultaneously locked stores admitted by the first-release session.
@@ -203,6 +206,23 @@ fn validate_digest_hex(value: &str, label: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_acknowledgement_is_one_exact_v1_json_line() {
+        assert_eq!(
+            OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1,
+            b"{\"schema_version\":1,\"status\":\"released\"}\n"
+        );
+        let line = OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1
+            .strip_suffix(b"\n")
+            .expect("release acknowledgment newline");
+        let value: norito::json::Value =
+            norito::json::from_slice(line).expect("release acknowledgment JSON");
+        assert_eq!(
+            norito::json::to_json(&value).expect("canonical release acknowledgment"),
+            "{\"schema_version\":1,\"status\":\"released\"}"
+        );
+    }
 
     #[test]
     fn receipt_validation_is_closed_and_exact() {

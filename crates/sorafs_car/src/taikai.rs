@@ -1,7 +1,4 @@
-use crate::{
-    CarWriter, ingest_single_file,
-    verifier::{CarVerifier, ParsedCar},
-};
+use crate::{CarWriter, ingest_single_file, verifier::CarVerifier};
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
     da::types::{BlobDigest, ExtraMetadata, StorageTicketId},
@@ -184,25 +181,16 @@ pub fn validate_track_metadata(track: &TaikaiTrackMetadata) -> Result<()> {
 /// The payload and its chunk plan are derived from the archive before the complete CAR encoding is
 /// reproduced byte-for-byte. Callers receive only commitments derived from that verified archive.
 pub fn verify_taikai_car(car_bytes: &[u8]) -> Result<VerifiedTaikaiCar> {
-    let parsed =
-        ParsedCar::parse(car_bytes).map_err(|err| eyre!("failed to parse Taikai CAR: {err}"))?;
-    let payload = parsed
-        .payload_bytes()
-        .map_err(|err| eyre!("failed to materialize Taikai CAR payload: {err}"))?;
-    if payload.is_empty() {
-        return Err(eyre!("Taikai CAR payload must not be empty"));
-    }
-    let ingest_summary = ingest_single_file(&payload)
-        .map_err(|err| eyre!("failed to rebuild chunk plan from Taikai CAR payload: {err}"))?;
-    let car_stats = CarVerifier::verify_canonical_car_with_plan(&ingest_summary.plan, car_bytes)
+    let verification = CarVerifier::verify_canonical_single_file_car(car_bytes)
         .map_err(|err| eyre!("failed to verify canonical Taikai CAR: {err}"))?;
-    let chunk_count = ingest_summary
+    let chunk_count = verification
         .chunk_store
         .chunks()
         .len()
         .try_into()
         .map_err(|_| eyre!("chunk count exceeds u32::MAX"))?;
-    let chunk_root = BlobDigest::new(*ingest_summary.chunk_store.por_tree().root());
+    let chunk_root = BlobDigest::new(*verification.chunk_store.por_tree().root());
+    let car_stats = verification.stats;
     let car_digest = BlobDigest::from_hash(car_stats.car_archive_digest);
     let cid_multibase = format!("b{}", encode_base32_lower(&car_stats.car_cid)?);
     let car_pointer = TaikaiCarPointer::new(cid_multibase, car_digest, car_stats.car_size);
@@ -1239,6 +1227,7 @@ fn encode_base32_lower(data: &[u8]) -> Result<String> {
 }
 #[cfg(test)]
 mod tests {
+    use crate::verifier::ParsedCar;
     use iroha_data_model::{
         name::Name,
         taikai::{TaikaiAudioLayout, TaikaiCodec, TaikaiResolution},

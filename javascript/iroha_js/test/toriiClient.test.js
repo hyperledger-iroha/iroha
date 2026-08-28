@@ -17645,20 +17645,6 @@ test("ToriiClient.getConfigurationTyped normalizes snapshot", async () => {
         require_mtls: true,
         canary_allowlist_size: 3,
       },
-      streaming: {
-        soranet: {
-          enabled: true,
-          stream_tag: "norito-stream",
-          exit_multiaddr: "/dns/exit/udp/9443/quic",
-          padding_budget_ms: 10,
-          access_kind: "read-only",
-          gar_category: "stream.norito.read_only",
-          channel_salt: "test-salt",
-          provision_spool_dir: "./storage/streaming/soranet_routes",
-          provision_window_segments: 4,
-          provision_queue_capacity: 128,
-        },
-      },
     },
     nexus: {
       axt: {
@@ -17700,20 +17686,6 @@ test("ToriiClient.getConfigurationTyped normalizes snapshot", async () => {
         stage: "ga",
         requireMtls: true,
         canaryAllowlistSize: 3,
-      },
-      streaming: {
-        soranet: {
-          enabled: true,
-          streamTag: "norito-stream",
-          exitMultiaddr: "/dns/exit/udp/9443/quic",
-          paddingBudgetMs: 10,
-          accessKind: "read-only",
-          garCategory: "stream.norito.read_only",
-          channelSalt: "test-salt",
-          provisionSpoolDir: "./storage/streaming/soranet_routes",
-          provisionWindowSegments: 4,
-          provisionQueueCapacity: 128,
-        },
       },
     },
     nexus: {

@@ -15336,29 +15336,10 @@ state_test! { sync set_crypto_updates_sm2_distid_default
     crypto_cfg.sm2_distid_default = original;
     state.set_crypto(crypto_cfg);
 }
-state_test! { sync set_streaming_storage_paths_updates_process_local_paths
-    let mut state = blank_test_state();
-    let soranet_spool = PathBuf::from("soranet-spool");
-    let soravpn_spool = PathBuf::from("soravpn-spool");
-    state.set_streaming_storage_paths(soranet_spool.clone(), soravpn_spool.clone());
-    assert_eq!(
-        state.streaming_storage_paths.soranet_provision_spool_dir,
-        soranet_spool
-    );
-    assert_eq!(
-        state.streaming_storage_paths.soravpn_provision_spool_dir,
-        soravpn_spool
-    );
-}
-state_test! { sync enforce_nexus_storage_budget_prunes_spools_before_cold
+state_test! { sync enforce_nexus_storage_budget_prunes_cold_snapshots
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let store_root = temp_dir.path().join("kura");
-    let soranet_spool = temp_dir.path().join("soranet");
-    let soravpn_spool = temp_dir.path().join("soravpn");
     let cold_root = temp_dir.path().join("cold");
-    std::fs::create_dir_all(&soranet_spool).expect("create soranet spool");
-    std::fs::write(soranet_spool.join("b-file.norito"), vec![0u8; 60]).expect("write spool file");
-    std::fs::write(soranet_spool.join("a-file.norito"), vec![0u8; 60]).expect("write spool file");
     let snapshot_dir = cold_root.join("00000000000000000001");
     std::fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
     std::fs::write(snapshot_dir.join("payload.norito"), vec![0u8; 50]).expect("write cold payload");
@@ -15366,7 +15347,6 @@ state_test! { sync enforce_nexus_storage_budget_prunes_spools_before_cold
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
-    state.set_streaming_storage_paths(soranet_spool.clone(), soravpn_spool.clone());
     state
         .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
             enabled: true,
@@ -15379,15 +15359,10 @@ state_test! { sync enforce_nexus_storage_budget_prunes_spools_before_cold
             max_cold_bytes: iroha_config::base::util::Bytes(0),
         })
         .expect("configure tiered state for storage budget test");
-    let_row! { oldest_spool_size = std::fs::metadata(soranet_spool.join("a-file.norito")) .expect("stat soranet spool file") .len() };
     let kura_used = state.kura.disk_usage_bytes().expect("measure kura bytes");
-    let soranet_used = dir_size(&soranet_spool).expect("measure soranet spool");
-    let soravpn_used = dir_size(&soravpn_spool).expect("measure soravpn spool");
     let_row! { cold_used = { let backend = state.tiered_backend.lock(); backend .cold_store_bytes() .expect("measure cold store bytes") .unwrap_or(0) } };
-    let_row! { total_used = kura_used .saturating_add(cold_used) .saturating_add(soranet_used) .saturating_add(soravpn_used) };
-    // Leave a deficit smaller than one spool entry so only the oldest entry is evicted.
-    let desired_excess = oldest_spool_size.saturating_sub(1).max(1);
-    let max_disk_usage = total_used.saturating_sub(desired_excess);
+    let total_used = kura_used.saturating_add(cold_used);
+    let max_disk_usage = total_used.saturating_sub(1).max(1);
     let mut storage = iroha_config::parameters::actual::NexusStorage::default();
     storage.local_budget_bytes = Some(iroha_config::base::util::Bytes(max_disk_usage));
     storage.effective_local_budget_bytes = Some(iroha_config::base::util::Bytes(max_disk_usage));
@@ -15397,34 +15372,34 @@ state_test! { sync enforce_nexus_storage_budget_prunes_spools_before_cold
         nexus.storage = storage;
     }
     state.enforce_nexus_storage_budget(1);
-    assert!(
-        !soranet_spool.join("a-file.norito").exists(),
-        "oldest spool entry should be evicted"
-    );
-    assert!(
-        soranet_spool.join("b-file.norito").exists(),
-        "newer spool entry should remain"
-    );
-    assert!(snapshot_dir.exists(), "cold snapshot should remain");
+    assert!(!snapshot_dir.exists(), "cold snapshot should be evicted");
 }
 state_test! { sync enforce_nexus_storage_budget_respects_interval_blocks
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let store_root = temp_dir.path().join("kura");
-    let soranet_spool = temp_dir.path().join("soranet");
-    std::fs::create_dir_all(&soranet_spool).expect("create soranet spool");
-    let spool_file = soranet_spool.join("a-file.norito");
-    std::fs::write(&spool_file, vec![0u8; 60]).expect("write spool file");
+    let cold_root = temp_dir.path().join("cold");
+    let snapshot_dir = cold_root.join("00000000000000000001");
+    std::fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
+    std::fs::write(snapshot_dir.join("payload.norito"), vec![0u8; 60]).expect("write cold payload");
     let kura_cfg = strict_kura_config_for_testing(store_root);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
-    state.set_streaming_storage_paths(
-        soranet_spool.clone(),
-        iroha_config::parameters::actual::StreamingSoravpn::from_defaults().provision_spool_dir,
-    );
+    state
+        .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+            enabled: true,
+            hot_retained_keys: 0,
+            hot_retained_bytes: iroha_config::base::util::Bytes(0),
+            hot_retained_grace_snapshots: 0,
+            cold_store_root: Some(cold_root.clone()),
+            da_store_root: None,
+            max_snapshots: 0,
+            max_cold_bytes: iroha_config::base::util::Bytes(0),
+        })
+        .expect("configure tiered state for storage budget test");
     let kura_used = state.kura.disk_usage_bytes().expect("measure kura bytes");
-    let soranet_used = dir_size(&soranet_spool).expect("measure soranet spool");
-    let total_used = kura_used.saturating_add(soranet_used);
+    let_row! { cold_used = { let backend = state.tiered_backend.lock(); backend .cold_store_bytes() .expect("measure cold store bytes") .unwrap_or(0) } };
+    let total_used = kura_used.saturating_add(cold_used);
     let interval_blocks = 10;
     let mut storage = iroha_config::parameters::actual::NexusStorage::default();
     storage.local_budget_bytes = Some(iroha_config::base::util::Bytes(total_used));
@@ -15436,8 +15411,8 @@ state_test! { sync enforce_nexus_storage_budget_respects_interval_blocks
     }
     state.enforce_nexus_storage_budget(1);
     assert!(
-        spool_file.exists(),
-        "spool entry should remain under budget"
+        snapshot_dir.exists(),
+        "cold snapshot should remain under budget"
     );
     let max_disk_usage = total_used.saturating_sub(1).max(1);
     {
@@ -15446,11 +15421,11 @@ state_test! { sync enforce_nexus_storage_budget_respects_interval_blocks
             Some(iroha_config::base::util::Bytes(max_disk_usage));
     }
     state.enforce_nexus_storage_budget(2);
-    assert!(spool_file.exists(), "spool eviction should be deferred");
+    assert!(snapshot_dir.exists(), "cold eviction should be deferred");
     state.enforce_nexus_storage_budget(11);
     assert!(
-        !spool_file.exists(),
-        "spool entry should be evicted once interval passes"
+        !snapshot_dir.exists(),
+        "cold snapshot should be evicted once interval passes"
     );
 }
 state_test! { sync lane_topology_diff_marks_alias_changes_for_relabel
@@ -37538,14 +37513,20 @@ state_test! { sync derived_state_rebuild_rejects_future_kaigi_relay_feedback
 
     let mut state = blank_test_state();
     state.world.domains.insert(home, domain);
-    state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+    let header = BlockHeader::new(
         nonzero!(1_u64),
         None,
         None,
         None,
         20,
         0,
-    ));
+    );
+    {
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(header.hash());
+        block_hashes.commit_for_tests();
+    }
+    state.update_latest_block_header_cache_for_tests(header);
 
     let error = state
         .rebuild_derived_state_indexes()

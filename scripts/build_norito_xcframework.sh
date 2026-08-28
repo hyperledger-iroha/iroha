@@ -113,6 +113,10 @@ run_python312_clean() {
 #   scripts/build_norito_xcframework.sh --privacy-production-enabled
 #   scripts/build_norito_xcframework.sh --privacy-production-enabled --allow-dirty-source
 #   scripts/build_norito_xcframework.sh --ci-handoff-only
+#   scripts/build_norito_xcframework.sh --ci-apple-slice aarch64-apple-ios
+#   scripts/build_norito_xcframework.sh --ci-handoff-only \
+#     --ci-assemble-apple-slices /absolute/download/root \
+#     --ci-apple-slice-sha256 aarch64-apple-ios=<sha256> [...]
 #
 # NORITO_BRIDGE_OUT_DIR and NORITO_BRIDGE_BUILD_DIR are mandatory external
 # cache roots. The first-release owner never creates build or artifact output
@@ -345,6 +349,9 @@ ARCHIVE_OUTPUT=""
 PRIVACY_PRODUCTION_ENABLED=0
 ALLOW_DIRTY_SOURCE=0
 CI_HANDOFF_ONLY=0
+CI_APPLE_SLICE=""
+CI_ASSEMBLE_APPLE_SLICES=""
+CI_APPLE_SLICE_SHA256=()
 CARGO_LOCKFILE="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-$ROOT_DIR/Cargo.lock}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -383,9 +390,54 @@ while [[ $# -gt 0 ]]; do
     --ci-handoff-only)
       CI_HANDOFF_ONLY=1
       ;;
+    --ci-apple-slice)
+      shift
+      CI_APPLE_SLICE="${1:-}"
+      if [[ -z "$CI_APPLE_SLICE" ]]; then
+        echo "[-] --ci-apple-slice requires a target triple" >&2
+        exit 1
+      fi
+      ;;
+    --ci-apple-slice=*)
+      CI_APPLE_SLICE="${1#*=}"
+      if [[ -z "$CI_APPLE_SLICE" ]]; then
+        echo "[-] --ci-apple-slice requires a target triple" >&2
+        exit 1
+      fi
+      ;;
+    --ci-assemble-apple-slices)
+      shift
+      CI_ASSEMBLE_APPLE_SLICES="${1:-}"
+      if [[ -z "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
+        echo "[-] --ci-assemble-apple-slices requires an absolute directory" >&2
+        exit 1
+      fi
+      ;;
+    --ci-assemble-apple-slices=*)
+      CI_ASSEMBLE_APPLE_SLICES="${1#*=}"
+      if [[ -z "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
+        echo "[-] --ci-assemble-apple-slices requires an absolute directory" >&2
+        exit 1
+      fi
+      ;;
+    --ci-apple-slice-sha256)
+      shift
+      if [[ -z "${1:-}" ]]; then
+        echo "[-] --ci-apple-slice-sha256 requires target=digest" >&2
+        exit 1
+      fi
+      CI_APPLE_SLICE_SHA256+=("$1")
+      ;;
+    --ci-apple-slice-sha256=*)
+      if [[ -z "${1#*=}" ]]; then
+        echo "[-] --ci-apple-slice-sha256 requires target=digest" >&2
+        exit 1
+      fi
+      CI_APPLE_SLICE_SHA256+=("${1#*=}")
+      ;;
     *)
       echo "[-] Unknown argument: $1" >&2
-      echo "    Usage: $0 [--bridge-version <version>] [--archive-output <absolute-path>] [--privacy-production-enabled] [--allow-dirty-source] [--ci-handoff-only]" >&2
+      echo "    Usage: $0 [--bridge-version <version>] [--archive-output <absolute-path>] [--privacy-production-enabled] [--allow-dirty-source] [--ci-handoff-only] [--ci-apple-slice <target>] [--ci-assemble-apple-slices <absolute-dir> --ci-apple-slice-sha256 <target=digest> ...]" >&2
       exit 1
       ;;
   esac
@@ -418,6 +470,68 @@ if [[ "$REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION" == "1" \
 fi
 
 CI_HANDOFF_DIR="$OUT_DIR/NoritoBridge.ci-handoff"
+CI_APPLE_SLICE_ARCHIVE="$OUT_DIR/NoritoBridge.apple-slice.tar"
+if [[ -n "$CI_APPLE_SLICE" ]]; then
+  if [[ "$CI_HANDOFF_ONLY" == "1" \
+      || -n "$CI_ASSEMBLE_APPLE_SLICES" \
+      || "${#CI_APPLE_SLICE_SHA256[@]}" -ne 0 \
+      || -n "$ARCHIVE_OUTPUT" \
+      || -n "$BRIDGE_VERSION" \
+      || "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+    echo "[-] --ci-apple-slice is a standalone clean-source producer mode" >&2
+    exit 1
+  fi
+  case "$CI_APPLE_SLICE" in
+    aarch64-apple-ios)
+      expected_slice_job=swift_slice_ios_device
+      ;;
+    aarch64-apple-ios-sim)
+      expected_slice_job=swift_slice_ios_sim_arm
+      ;;
+    x86_64-apple-ios)
+      expected_slice_job=swift_slice_ios_sim_x64
+      ;;
+    aarch64-apple-darwin)
+      expected_slice_job=swift_slice_macos_arm
+      ;;
+    x86_64-apple-darwin)
+      expected_slice_job=swift_slice_macos_x64
+      ;;
+    *)
+      echo "[-] --ci-apple-slice names an unsupported target: $CI_APPLE_SLICE" >&2
+      exit 1
+      ;;
+  esac
+  if [[ "${CI:-}" != "true" \
+      || "${GITHUB_ACTIONS:-}" != "true" \
+      || "${GITHUB_WORKFLOW:-}" != "Kagemusha first-release contract" \
+      || "${GITHUB_JOB:-}" != "$expected_slice_job" \
+      || "${GITHUB_WORKSPACE:-}" != "$ROOT_DIR" \
+      || "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1" ]]; then
+    echo "[-] --ci-apple-slice is restricted to its authenticated Kagemusha producer" >&2
+    exit 1
+  fi
+  case "${GITHUB_EVENT_NAME:-}" in
+    pull_request | workflow_dispatch) ;;
+    *)
+      echo "[-] --ci-apple-slice requires a pull_request or workflow_dispatch event" >&2
+      exit 1
+      ;;
+  esac
+  if [[ -e "$CI_APPLE_SLICE_ARCHIVE" || -L "$CI_APPLE_SLICE_ARCHIVE" ]]; then
+    echo "[-] CI Apple slice archive must not already exist: $CI_APPLE_SLICE_ARCHIVE" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
+  if [[ "$CI_HANDOFF_ONLY" != "1" || "${#CI_APPLE_SLICE_SHA256[@]}" -ne 5 ]]; then
+    echo "[-] --ci-assemble-apple-slices requires --ci-handoff-only and five slice digests" >&2
+    exit 1
+  fi
+elif [[ "${#CI_APPLE_SLICE_SHA256[@]}" -ne 0 ]]; then
+  echo "[-] --ci-apple-slice-sha256 requires --ci-assemble-apple-slices" >&2
+  exit 1
+fi
 if [[ "$CI_HANDOFF_ONLY" == "1" ]]; then
   if [[ -n "$ARCHIVE_OUTPUT" || "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
     echo "[-] --ci-handoff-only cannot publish an archive or use dirty source" >&2
@@ -518,7 +632,9 @@ fi
 
 PINNED_RUST_TOOLCHAIN="1.93.1"
 SOURCE_SEAL_SCRIPT="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
+PIN_COMMIT_CHECKER="$ROOT_DIR/scripts/check_mobile_sdk_artifact_pin_commit.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
+APPLE_SLICE_HANDOFF="$ROOT_DIR/scripts/norito_bridge_apple_slice_handoff.py"
 USER_HOME_DIR="$(run_python312_clean -c \
   'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
 USER_HOME_DIR="$(run_python312_clean -c \
@@ -547,7 +663,12 @@ for tool_path in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_BINARY"; do
     exit 1
   }
 done
-for required_input in "$SOURCE_SEAL_SCRIPT" "$HERMETIC_RUNNER" "$ROOT_DIR/rust-toolchain.toml"; do
+for required_input in \
+  "$SOURCE_SEAL_SCRIPT" \
+  "$PIN_COMMIT_CHECKER" \
+  "$HERMETIC_RUNNER" \
+  "$APPLE_SLICE_HANDOFF" \
+  "$ROOT_DIR/rust-toolchain.toml"; do
   [[ -f "$required_input" && ! -L "$required_input" ]] || {
     echo "[-] Required NoritoBridge build input is unavailable: $required_input" >&2
     exit 1
@@ -732,6 +853,31 @@ if [[ -n "$SOURCE_STATUS_START" && "$ALLOW_DIRTY_SOURCE" != "1" ]]; then
   echo "[-] NoritoBridge production artifacts require a clean dependency-closure source tree" >&2
   echo "    Commit the bridge inputs or pass --allow-dirty-source for a fingerprint-bound local integration artifact." >&2
   exit 1
+fi
+SOURCE_COMMIT="$SOURCE_COMMIT_START"
+EMBEDDED_SOURCE_COMMIT="$(
+  run_isolated_python "$PIN_COMMIT_CHECKER" \
+    --root "$ROOT_DIR" \
+    --print-embedded-source-commit
+)"
+if [[ ! "$EMBEDDED_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "[-] NoritoBridge embedded source commit is not canonical" >&2
+  exit 1
+fi
+SOURCE_TREE_DIRTY=false
+if [[ -n "$SOURCE_STATUS_START" ]]; then
+  SOURCE_TREE_DIRTY=true
+fi
+SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT_START"
+PRIVACY_PRODUCTION_JSON=false
+CARGO_FEATURES_JSON='[]'
+KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON=null
+if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
+  PRIVACY_PRODUCTION_JSON=true
+  CARGO_FEATURES_JSON='["privacy-production-enabled"]'
+fi
+if [[ -n "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" ]]; then
+  KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON="\"$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256\""
 fi
 
 assert_bridge_source_seal() {
@@ -962,13 +1108,69 @@ echo "[+] Using iOS deployment target (simulator): $IPHONESIMULATOR_DEPLOYMENT_T
 
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR" "$OUT_DIR"
-PUBLISH_ROOT="$(mktemp -d "$OUT_DIR/.NoritoBridge.publish.XXXXXX")"
-PUBLISH_XCFRAMEWORK="$PUBLISH_ROOT/${FRAMEWORK_NAME}.xcframework"
-PUBLISH_MANIFEST="$PUBLISH_XCFRAMEWORK/${FRAMEWORK_NAME}.artifacts.json"
-PUBLISH_MANIFEST_LINK="$PUBLISH_ROOT/${FRAMEWORK_NAME}.artifacts.json"
+PUBLISH_XCFRAMEWORK=""
+PUBLISH_MANIFEST=""
+PUBLISH_MANIFEST_LINK=""
+if [[ -z "$CI_APPLE_SLICE" ]]; then
+  PUBLISH_ROOT="$(mktemp -d "$OUT_DIR/.NoritoBridge.publish.XXXXXX")"
+  PUBLISH_XCFRAMEWORK="$PUBLISH_ROOT/${FRAMEWORK_NAME}.xcframework"
+  PUBLISH_MANIFEST="$PUBLISH_XCFRAMEWORK/${FRAMEWORK_NAME}.artifacts.json"
+  PUBLISH_MANIFEST_LINK="$PUBLISH_ROOT/${FRAMEWORK_NAME}.artifacts.json"
+fi
 FINAL_XCFRAMEWORK="$OUT_DIR/${FRAMEWORK_NAME}.xcframework"
 FINAL_MANIFEST="$OUT_DIR/${FRAMEWORK_NAME}.artifacts.json"
 CANONICAL_MANIFEST_RELATIVE_TARGET="${FRAMEWORK_NAME}.xcframework/${FRAMEWORK_NAME}.artifacts.json"
+
+HEADER_HASH="$(sha256_file "$INC_DIR/connect_norito_bridge.h")"
+APPLE_SLICE_COMMON_ATTESTATION="$STAGE_DIR/NoritoBridge.apple-slice-common.json"
+if [[ -n "$CI_APPLE_SLICE" || -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
+  cat > "$APPLE_SLICE_COMMON_ATTESTATION" <<EOF
+{
+  "schema": "iroha.norito-bridge-apple-slice-common.v1",
+  "source_commit": "$SOURCE_COMMIT",
+  "embedded_source_commit": "$EMBEDDED_SOURCE_COMMIT",
+  "source_tree_dirty": $SOURCE_TREE_DIRTY,
+  "source_fingerprint_sha256": "$SOURCE_FINGERPRINT",
+  "cargo_lock_sha256": "$CARGO_LOCK_SHA256_START",
+  "bridge_header_sha256": "$HEADER_HASH",
+  "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
+  "cargo_features": $CARGO_FEATURES_JSON,
+  "kagemusha_production_authorization_sha256": $KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON,
+  "build_environment": {
+    "schema": "iroha.mobile-native-build-environment.v1",
+    "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
+    "hermetic_runner_sha256": "$HERMETIC_RUNNER_SHA256",
+    "cargo_build_jobs": 1,
+    "cargo_incremental": 0,
+    "cargo_net_offline": true,
+    "rust_toolchain_channel": "$PINNED_RUST_TOOLCHAIN",
+    "cargo_release": "$CARGO_RELEASE",
+    "cargo_commit_hash": "$CARGO_COMMIT_HASH",
+    "cargo_binary_sha256": "$CARGO_BINARY_SHA256",
+    "rustc_release": "$RUSTC_RELEASE",
+    "rustc_commit_hash": "$RUSTC_COMMIT_HASH",
+    "rustc_binary_sha256": "$RUSTC_BINARY_SHA256",
+    "rustdoc_release": "$RUSTDOC_RELEASE",
+    "rustdoc_commit_hash": "$RUSTDOC_COMMIT_HASH",
+    "rustdoc_binary_sha256": "$RUSTDOC_BINARY_SHA256",
+    "python_version": "$PYTHON_VERSION",
+    "python_binary_sha256": "$PYTHON_BINARY_SHA256",
+    "git_version": "$GIT_VERSION",
+    "git_binary_sha256": "$GIT_BINARY_SHA256",
+    "rustup_version": "$RUSTUP_VERSION",
+    "rustup_binary_sha256": "$RUSTUP_BINARY_SHA256",
+    "xcode_version": "$XCODE_VERSION",
+    "xcode_build_version": "$XCODE_BUILD_VERSION",
+    "iphoneos_sdk_version": "$IPHONEOS_SDK_VERSION",
+    "iphonesimulator_sdk_version": "$IPHONESIMULATOR_SDK_VERSION",
+    "macosx_sdk_version": "$MACOSX_SDK_VERSION",
+    "iphoneos_deployment_target": "$IPHONEOS_DEPLOYMENT_TARGET",
+    "iphonesimulator_deployment_target": "$IPHONESIMULATOR_DEPLOYMENT_TARGET",
+    "macosx_deployment_target": "$MACOSX_DEPLOYMENT_TARGET"
+  }
+}
+EOF
+fi
 
 DEVICE_TRIPLE="aarch64-apple-ios"
 SIM_ARM_TRIPLE="aarch64-apple-ios-sim"
@@ -1034,7 +1236,9 @@ run_hermetic_apple_cargo() {
       --set "CARGO_INCREMENTAL=0" \
       --set "CARGO_NET_OFFLINE=true" \
       --set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+      --set "CONNECT_NORITO_SOURCE_REVISION=$EMBEDDED_SOURCE_COMMIT" \
       --set "HOME=$USER_HOME_DIR" \
+      --set "IROHA_GIT_COMMIT_HASH=$EMBEDDED_SOURCE_COMMIT" \
       --set "LANG=C.UTF-8" \
       --set "LC_ALL=C.UTF-8" \
       --set "NORITO_SKIP_BINDINGS_SYNC=1" \
@@ -1044,6 +1248,7 @@ run_hermetic_apple_cargo() {
       --set "RUSTDOC=$RUSTDOC_BINARY" \
       --set "RUSTUP_HOME=$MOBILE_RUSTUP_HOME" \
       --set "TMPDIR=$MOBILE_TMPDIR" \
+      --set "VERGEN_GIT_SHA=$EMBEDDED_SOURCE_COMMIT" \
       "${platform_environment[@]}" \
       -- "$CARGO_BINARY" "$cargo_subcommand" \
       -Z unstable-options --lockfile-path "$CARGO_LOCKFILE" "$@"; then
@@ -1055,50 +1260,127 @@ run_hermetic_apple_cargo() {
   return "$cargo_status"
 }
 
-echo "[+] Building Rust static libraries in the caller's fixed Cargo target (release)" >&2
-echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_ARM_TRIPLE, $MACOS_X64_TRIPLE" >&2
+if [[ -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
+  echo "[+] Authenticating five isolated CI Apple slice handoffs" >&2
+elif [[ -n "$CI_APPLE_SLICE" ]]; then
+  echo "[+] Building one Rust static library in the caller's fixed Cargo target (release)" >&2
+  echo "    Target: $CI_APPLE_SLICE" >&2
+else
+  echo "[+] Building Rust static libraries in the caller's fixed Cargo target (release)" >&2
+  echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_ARM_TRIPLE, $MACOS_X64_TRIPLE" >&2
+  echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_ARM_TRIPLE $MACOS_X64_TRIPLE)" >&2
+fi
 
-echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_ARM_TRIPLE $MACOS_X64_TRIPLE)" >&2
+should_build_apple_slice() {
+  local target_triple="$1"
+  if [[ -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
+    return 1
+  fi
+  [[ -z "$CI_APPLE_SLICE" || "$CI_APPLE_SLICE" == "$target_triple" ]]
+}
 
 # Rust uses IPHONEOS_DEPLOYMENT_TARGET for both iOS device and simulator targets,
 # while cc-based dependencies also honor IPHONESIMULATOR_DEPLOYMENT_TARGET.
-run_hermetic_apple_cargo \
-  apple-ios-device "$IPHONEOS_SDKROOT" \
-  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-  --target "$DEVICE_TRIPLE" \
-  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-assert_bridge_source_seal "the iOS device build"
-LIB_DEV=$(stage_cargo_library "$DEVICE_TRIPLE" "iOS device")
-run_hermetic_apple_cargo \
-  apple-ios-simulator "$IPHONESIMULATOR_SDKROOT" \
-  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-  --target "$SIM_ARM_TRIPLE" \
-  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-assert_bridge_source_seal "the arm64 simulator build"
-LIB_SIM_ARM=$(stage_cargo_library "$SIM_ARM_TRIPLE" "arm64 simulator")
-run_hermetic_apple_cargo \
-  apple-ios-simulator "$IPHONESIMULATOR_SDKROOT" \
-  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-  --target "$SIM_X64_TRIPLE" \
-  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-assert_bridge_source_seal "the x86_64 simulator build"
-LIB_SIM_X64=$(stage_cargo_library "$SIM_X64_TRIPLE" "x86_64 simulator")
-run_hermetic_apple_cargo \
-  apple-macos "$MACOSX_SDKROOT" \
-  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-  --target "$MACOS_ARM_TRIPLE" \
-  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-assert_bridge_source_seal "the arm64 macOS build"
-LIB_MAC_ARM=$(stage_cargo_library "$MACOS_ARM_TRIPLE" "arm64 macOS")
-run_hermetic_apple_cargo \
-  apple-macos "$MACOSX_SDKROOT" \
-  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-  --target "$MACOS_X64_TRIPLE" \
-  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-assert_bridge_source_seal "the x86_64 macOS build"
-LIB_MAC_X64=$(stage_cargo_library "$MACOS_X64_TRIPLE" "x86_64 macOS")
+if should_build_apple_slice "$DEVICE_TRIPLE"; then
+  run_hermetic_apple_cargo \
+    apple-ios-device "$IPHONEOS_SDKROOT" \
+    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    --target "$DEVICE_TRIPLE" \
+    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+  assert_bridge_source_seal "the iOS device build"
+  LIB_DEV=$(stage_cargo_library "$DEVICE_TRIPLE" "iOS device")
+fi
+if should_build_apple_slice "$SIM_ARM_TRIPLE"; then
+  run_hermetic_apple_cargo \
+    apple-ios-simulator "$IPHONESIMULATOR_SDKROOT" \
+    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    --target "$SIM_ARM_TRIPLE" \
+    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+  assert_bridge_source_seal "the arm64 simulator build"
+  LIB_SIM_ARM=$(stage_cargo_library "$SIM_ARM_TRIPLE" "arm64 simulator")
+fi
+if should_build_apple_slice "$SIM_X64_TRIPLE"; then
+  run_hermetic_apple_cargo \
+    apple-ios-simulator "$IPHONESIMULATOR_SDKROOT" \
+    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    --target "$SIM_X64_TRIPLE" \
+    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+  assert_bridge_source_seal "the x86_64 simulator build"
+  LIB_SIM_X64=$(stage_cargo_library "$SIM_X64_TRIPLE" "x86_64 simulator")
+fi
+if should_build_apple_slice "$MACOS_ARM_TRIPLE"; then
+  run_hermetic_apple_cargo \
+    apple-macos "$MACOSX_SDKROOT" \
+    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    --target "$MACOS_ARM_TRIPLE" \
+    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+  assert_bridge_source_seal "the arm64 macOS build"
+  LIB_MAC_ARM=$(stage_cargo_library "$MACOS_ARM_TRIPLE" "arm64 macOS")
+fi
+if should_build_apple_slice "$MACOS_X64_TRIPLE"; then
+  run_hermetic_apple_cargo \
+    apple-macos "$MACOSX_SDKROOT" \
+    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    --target "$MACOS_X64_TRIPLE" \
+    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+  assert_bridge_source_seal "the x86_64 macOS build"
+  LIB_MAC_X64=$(stage_cargo_library "$MACOS_X64_TRIPLE" "x86_64 macOS")
+fi
 
 assert_bridge_source_seal "Apple slice staging"
+
+if [[ -n "$CI_APPLE_SLICE" ]]; then
+  case "$CI_APPLE_SLICE" in
+    "$DEVICE_TRIPLE")
+      CI_APPLE_SLICE_PROFILE=apple-ios-device
+      CI_APPLE_SLICE_LIBRARY="$LIB_DEV"
+      ;;
+    "$SIM_ARM_TRIPLE")
+      CI_APPLE_SLICE_PROFILE=apple-ios-simulator
+      CI_APPLE_SLICE_LIBRARY="$LIB_SIM_ARM"
+      ;;
+    "$SIM_X64_TRIPLE")
+      CI_APPLE_SLICE_PROFILE=apple-ios-simulator
+      CI_APPLE_SLICE_LIBRARY="$LIB_SIM_X64"
+      ;;
+    "$MACOS_ARM_TRIPLE")
+      CI_APPLE_SLICE_PROFILE=apple-macos
+      CI_APPLE_SLICE_LIBRARY="$LIB_MAC_ARM"
+      ;;
+    "$MACOS_X64_TRIPLE")
+      CI_APPLE_SLICE_PROFILE=apple-macos
+      CI_APPLE_SLICE_LIBRARY="$LIB_MAC_X64"
+      ;;
+  esac
+  run_isolated_python "$APPLE_SLICE_HANDOFF" pack \
+    --common "$APPLE_SLICE_COMMON_ATTESTATION" \
+    --target "$CI_APPLE_SLICE" \
+    --profile "$CI_APPLE_SLICE_PROFILE" \
+    --library "$CI_APPLE_SLICE_LIBRARY" \
+    --archive "$CI_APPLE_SLICE_ARCHIVE"
+  assert_bridge_source_seal "the CI Apple slice handoff"
+  rm -rf "$STAGE_DIR"
+  echo "[+] Packed authenticated Apple slice: $CI_APPLE_SLICE_ARCHIVE" >&2
+  exit 0
+fi
+
+if [[ -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
+  restore_arguments=()
+  for digest_mapping in "${CI_APPLE_SLICE_SHA256[@]}"; do
+    restore_arguments+=(--sha256 "$digest_mapping")
+  done
+  run_isolated_python "$APPLE_SLICE_HANDOFF" restore \
+    --common "$APPLE_SLICE_COMMON_ATTESTATION" \
+    --archive-root "$CI_ASSEMBLE_APPLE_SLICES" \
+    --destination "$STAGE_DIR/cargo-libraries" \
+    "${restore_arguments[@]}"
+  assert_bridge_source_seal "the authenticated CI Apple slice restore"
+  LIB_DEV="$STAGE_DIR/cargo-libraries/$DEVICE_TRIPLE/lib${LIB_CRATE_NAME}.a"
+  LIB_SIM_ARM="$STAGE_DIR/cargo-libraries/$SIM_ARM_TRIPLE/lib${LIB_CRATE_NAME}.a"
+  LIB_SIM_X64="$STAGE_DIR/cargo-libraries/$SIM_X64_TRIPLE/lib${LIB_CRATE_NAME}.a"
+  LIB_MAC_ARM="$STAGE_DIR/cargo-libraries/$MACOS_ARM_TRIPLE/lib${LIB_CRATE_NAME}.a"
+  LIB_MAC_X64="$STAGE_DIR/cargo-libraries/$MACOS_X64_TRIPLE/lib${LIB_CRATE_NAME}.a"
+fi
 
 if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" \
     || ! -f "$LIB_MAC_ARM" || ! -f "$LIB_MAC_X64" ]]; then
@@ -1211,7 +1493,6 @@ fi
 IOS_HASH=$(shasum -a 256 "$IOS_BIN" | awk '{print $1}')
 SIM_HASH=$(shasum -a 256 "$SIM_BIN" | awk '{print $1}')
 MAC_HASH=$(shasum -a 256 "$MAC_BIN" | awk '{print $1}')
-HEADER_HASH=$(shasum -a 256 "$INC_DIR/connect_norito_bridge.h" | awk '{print $1}')
 BRIDGE_ABI_VERSION="$(run_isolated_python - \
   "$INC_DIR/connect_norito_bridge.h" \
   "$CRATE_DIR/src/lib.rs" \
@@ -1249,22 +1530,6 @@ PY
 # The mobile registry binds the Kagemusha ABI-21/V4 artifact family carried by
 # the independently versioned native bridge ABI above.
 KAGEMUSHA_ARTIFACT_ABI_VERSION=21
-SOURCE_COMMIT="$SOURCE_COMMIT_START"
-SOURCE_TREE_DIRTY=false
-if [[ -n "$SOURCE_STATUS_START" ]]; then
-  SOURCE_TREE_DIRTY=true
-fi
-SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT_START"
-PRIVACY_PRODUCTION_JSON=false
-CARGO_FEATURES_JSON='[]'
-KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON=null
-if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
-  PRIVACY_PRODUCTION_JSON=true
-  CARGO_FEATURES_JSON='["privacy-production-enabled"]'
-fi
-if [[ -n "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" ]]; then
-  KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON="\"$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256\""
-fi
 
 cat > "$PUBLISH_MANIFEST" <<EOF
 {
@@ -1285,9 +1550,11 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "CARGO_INCREMENTAL",
         "CARGO_NET_OFFLINE",
         "CARGO_TARGET_DIR",
+        "CONNECT_NORITO_SOURCE_REVISION",
         "DEVELOPER_DIR",
         "HOME",
         "IPHONEOS_DEPLOYMENT_TARGET",
+        "IROHA_GIT_COMMIT_HASH",
         "LANG",
         "LC_ALL",
         "NORITO_SKIP_BINDINGS_SYNC",
@@ -1297,7 +1564,8 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "RUSTDOC",
         "RUSTUP_HOME",
         "SDKROOT",
-        "TMPDIR"
+        "TMPDIR",
+        "VERGEN_GIT_SHA"
       ],
       "apple-ios-simulator": [
         "CARGO",
@@ -1306,10 +1574,12 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "CARGO_INCREMENTAL",
         "CARGO_NET_OFFLINE",
         "CARGO_TARGET_DIR",
+        "CONNECT_NORITO_SOURCE_REVISION",
         "DEVELOPER_DIR",
         "HOME",
         "IPHONEOS_DEPLOYMENT_TARGET",
         "IPHONESIMULATOR_DEPLOYMENT_TARGET",
+        "IROHA_GIT_COMMIT_HASH",
         "LANG",
         "LC_ALL",
         "NORITO_SKIP_BINDINGS_SYNC",
@@ -1319,7 +1589,8 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "RUSTDOC",
         "RUSTUP_HOME",
         "SDKROOT",
-        "TMPDIR"
+        "TMPDIR",
+        "VERGEN_GIT_SHA"
       ],
       "apple-macos": [
         "CARGO",
@@ -1328,8 +1599,10 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "CARGO_INCREMENTAL",
         "CARGO_NET_OFFLINE",
         "CARGO_TARGET_DIR",
+        "CONNECT_NORITO_SOURCE_REVISION",
         "DEVELOPER_DIR",
         "HOME",
+        "IROHA_GIT_COMMIT_HASH",
         "LANG",
         "LC_ALL",
         "MACOSX_DEPLOYMENT_TARGET",
@@ -1340,7 +1613,8 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "RUSTDOC",
         "RUSTUP_HOME",
         "SDKROOT",
-        "TMPDIR"
+        "TMPDIR",
+        "VERGEN_GIT_SHA"
       ]
     },
     "cargo_build_jobs": 1,
@@ -1370,6 +1644,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "macosx_deployment_target": "$MACOSX_DEPLOYMENT_TARGET"
   },
   "source_commit": "$SOURCE_COMMIT",
+  "embedded_source_commit": "$EMBEDDED_SOURCE_COMMIT",
   "source_tree_dirty": $SOURCE_TREE_DIRTY,
   "source_fingerprint_sha256": "$SOURCE_FINGERPRINT",
   "cargo_lock_sha256": "$CARGO_LOCK_SHA256_START",
@@ -1856,7 +2131,11 @@ echo "[+] Removing task-owned staging intermediates before publication" >&2
 rm -rf "$STAGE_DIR"
 
 if [[ "$CI_HANDOFF_ONLY" == "1" ]]; then
+  # Pin projection leaves its task-private lock in the candidate root. The
+  # immutable handoff publishes no live writer state, so remove it before the
+  # exact two-entry root check and exclusive rename.
   rm -f "$PUBLISH_PROSPECTIVE_LOADER"
+  rm -f "$PUBLISH_ROOT/.NoritoBridge.publish.lockfile"
   run_isolated_python - "$PUBLISH_ROOT" "$CI_HANDOFF_DIR" <<'PY'
 import ctypes
 import os

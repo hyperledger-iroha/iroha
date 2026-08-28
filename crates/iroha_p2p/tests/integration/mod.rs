@@ -10,13 +10,25 @@ use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use std::{
     io::ErrorKind,
     net::{SocketAddr, TcpListener},
-    num::NonZeroUsize,
+    num::{NonZeroU32, NonZeroUsize},
     sync::{
         OnceLock,
-        atomic::{AtomicU16, Ordering},
+        atomic::{AtomicU16, AtomicU64, Ordering},
     },
     time::Duration,
 };
+
+/// Build a low-cost fixture for the mandatory SoraNet admission handshake.
+fn low_cost_test_soranet_handshake() -> SoranetHandshake {
+    let mut handshake = SoranetHandshake::default();
+    handshake.pow.difficulty = 1;
+    handshake.pow.puzzle.memory_kib =
+        NonZeroU32::new(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB)
+            .expect("minimum puzzle memory is non-zero");
+    handshake.pow.puzzle.time_cost = NonZeroU32::new(1).unwrap();
+    handshake.pow.puzzle.lanes = NonZeroU32::new(1).unwrap();
+    handshake
+}
 
 /// Build the exact fully populated baseline shared by P2P integration cases.
 ///
@@ -30,9 +42,19 @@ fn test_network_config(
     address: IrohaSocketAddr,
     public_address: IrohaSocketAddr,
     idle_timeout: Duration,
-    soranet_handshake: SoranetHandshake,
+    mut soranet_handshake: SoranetHandshake,
     trust_gossip: bool,
 ) -> Network {
+    static REPLAY_DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+    static NEXT_REPLAY_STORE: AtomicU64 = AtomicU64::new(0);
+    let replay_dir = REPLAY_DIR.get_or_init(|| tempfile::tempdir().expect("test replay dir"));
+    let store_id = NEXT_REPLAY_STORE.fetch_add(1, Ordering::Relaxed);
+    soranet_handshake.pow.revocation_store_path = replay_dir
+        .path()
+        .join(format!("revocations-{store_id}.norito"))
+        .to_string_lossy()
+        .into_owned()
+        .into();
     Network {
         address: WithOrigin::inline(address),
         public_address: WithOrigin::inline(public_address),
@@ -65,6 +87,10 @@ fn test_network_config(
         p2p_proxy: None,
         p2p_proxy_required: false,
         p2p_no_proxy: Vec::new(),
+        outbound_dial_allow_cidrs: Vec::new(),
+        outbound_dial_deny_cidrs: Vec::new(),
+        outbound_dial_allow_dns_suffixes: Vec::new(),
+        outbound_dial_deny_dns_suffixes: Vec::new(),
         p2p_proxy_tls_verify: true,
         p2p_proxy_tls_pinned_cert_der_base64: None,
         happy_eyeballs_stagger: Duration::from_millis(100),

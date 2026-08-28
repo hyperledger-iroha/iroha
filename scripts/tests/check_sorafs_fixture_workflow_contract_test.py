@@ -194,6 +194,7 @@ MATERIAL_CLOSURE_PATHS_BY_WORKFLOW = {
         "python/iroha_torii_client/tests/orderbook_submission_test.py",
         "crates/iroha_data_model/src/sorafs/orderbook_submission_tests.rs",
         "scripts/deploy_localnet.sh",
+        "scripts/norito_bridge_apple_slice_handoff.py",
         "scripts/norito_bridge_source_seal.py",
         "scripts/package_mobile_sdk_artifacts.sh",
         "scripts/run_mobile_hermetic_command.py",

@@ -214,7 +214,7 @@ fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
 }
 
 #[test]
-fn future_prepare_qc_remains_owned_until_matching_tc_enters_view() {
+fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
     let directory = TempDir::new().expect("temporary future-PrepareQC runtime directory");
     let (mut runtime, context, keys) =
         authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
@@ -272,15 +272,38 @@ fn future_prepare_qc_remains_owned_until_matching_tc_enters_view() {
         Some(&certificate_receipt)
     );
 
+    let intervening_certificate = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0xC1,
+        wire::GlobalPhase::Prepare,
+        2,
+    );
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(intervening_certificate),
+        ))
+        .expect("enqueue a second retryable future PrepareQC before the matching TC");
+    runtime
+        .enqueue_network(signed_runtime_proposal(&context, &keys, 0xC2))
+        .expect("enqueue ordinary work whose class debt must remain fair");
     runtime
         .enqueue_network(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
         ))
         .expect("enqueue the matching timeout certificate");
+    runtime.schedule.fifo_owed = true;
+    runtime.ingress.next_class = CommandClass::Progress;
+    let normal_debt_before = runtime
+        .ingress
+        .commands
+        .iter()
+        .find(|queued| queued.class == CommandClass::Normal)
+        .expect("ordinary proposal remains queued before TC service")
+        .eligible_skips;
     let entered = runtime
-        .try_step_pacemaker_escape(now)
-        .expect("matching TC remains a valid pacemaker escape")
-        .expect("matching TC bypasses the retained normal PrepareQC");
+        .step(now)
+        .expect("ordinary production step admits the matching TC");
     let RuntimeStep::Advanced(enter_view_effects) = entered else {
         panic!("matching TC unexpectedly idled")
     };
@@ -295,12 +318,62 @@ fn future_prepare_qc_remains_owned_until_matching_tc_enters_view() {
         tc_scheduler.selected,
         RuntimeSelectedOwnerKind::PacemakerProgress
     );
+    assert!(
+        tc_scheduler.view_blocked_progress_authorization.is_some(),
+        "ordinary TC bypass must retain its exact blocked-PrepareQC authorization"
+    );
+    assert!(tc_scheduler.fifo_owed_before);
+    assert!(!tc_scheduler.fifo_owed_after);
+    assert!(!runtime.schedule.fifo_owed);
+    assert_eq!(runtime.ingress.next_class, CommandClass::Normal);
+    let normal_debt_after = runtime
+        .ingress
+        .commands
+        .iter()
+        .find(|queued| queued.class == CommandClass::Normal)
+        .expect("ordinary proposal remains queued after TC service")
+        .eligible_skips;
+    assert_eq!(normal_debt_after, normal_debt_before + 1);
+    let RuntimeSelectedCandidateOwnership::Exact(tc_candidate) = &tc_scheduler.candidate else {
+        panic!("ordinary TC bypass must retain its exact queue candidate")
+    };
+    assert_eq!(
+        tc_candidate.selection_seal.kind,
+        RuntimeQueueSelectionKind::OrdinaryViewProgress
+    );
     assert_eq!(tc_scheduler.validate_exact(), Ok(()));
+    let mut forged_target = tc_scheduler.clone();
+    let selected_view = forged_target.round_tag.view();
+    let authorization = forged_target
+        .view_blocked_progress_authorization
+        .as_mut()
+        .expect("matching TC evidence carries a blocked-PrepareQC authorization");
+    authorization.target_view = selected_view;
+    authorization.projection_hash =
+        runtime_view_blocked_progress_authorization_projection_hash(authorization);
+    forged_target.projection_hash = runtime_scheduler_projection_hash(&forged_target);
+    assert!(
+        forged_target.validate_exact().is_err(),
+        "scheduler evidence must reject a target view which cannot unblock the retained QC"
+    );
     runtime
         .take_effect_ownership(enter_view_effects.len())
         .expect("consume matching TC effect ownership");
     assert_eq!(runtime.round_tag().view(), certificate.round.view);
-    assert_eq!(runtime.queued_commands(), 1);
+    assert_eq!(runtime.queued_commands(), 3);
+
+    assert!(matches!(
+        runtime.step(now),
+        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+    ));
+    let normal_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("ordinary class receives the turn after Progress rotates");
+    assert_eq!(normal_scheduler.selected, RuntimeSelectedOwnerKind::Fifo);
+    assert_eq!(normal_scheduler.validate_exact(), Ok(()));
+    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+    assert_eq!(runtime.take_leader_wire_runtime_terminals().len(), 1);
+    assert_eq!(runtime.queued_commands(), 2);
 
     let retried = runtime
         .step(now)
@@ -327,7 +400,7 @@ fn future_prepare_qc_remains_owned_until_matching_tc_enters_view() {
     runtime
         .take_effect_ownership(certificate_effects.len())
         .expect("consume matching-view PrepareQC effect ownership");
-    assert_eq!(runtime.queued_commands(), 0);
+    assert_eq!(runtime.queued_commands(), 1);
     let terminals = runtime.take_leader_wire_runtime_terminals();
     let [LeaderWireRuntimeTerminal::Volatile(retired)] = terminals.as_slice() else {
         panic!("matching-view PrepareQC must emit one volatile runtime terminal")
@@ -1796,6 +1869,7 @@ fn retiring_the_sole_certificate_does_not_fake_completion_headroom() {
         .pop_pacemaker_progress_with_ownership(
             |_| true,
             |command| command.is_certified_fence_escape(),
+            false,
             None,
         )
         .expect("the certified priority seam remains exact")
@@ -1921,7 +1995,7 @@ fn pacemaker_retry_marks_excludes_and_reconciles_exact_fifo_occurrence() {
     .expect("admit one unblocked retryable Progress root");
     bind_fake_local_deferred_target_for_test(&mut runtime, b"pacemaker-retry-target");
     let first = runtime
-        .dispatch_one_pacemaker_progress(start)
+        .dispatch_one_pacemaker_progress(start, None)
         .expect("retryable pacemaker dispatch remains exact")
         .expect("the unmarked occurrence owns one bounded turn");
     assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
@@ -1949,7 +2023,7 @@ fn pacemaker_retry_marks_excludes_and_reconciles_exact_fifo_occurrence() {
     );
     assert!(
         runtime
-            .dispatch_one_pacemaker_progress(start)
+            .dispatch_one_pacemaker_progress(start, None)
             .expect("marked pacemaker selection remains valid")
             .is_none(),
         "the same retryable occurrence cannot spin on the next turn"

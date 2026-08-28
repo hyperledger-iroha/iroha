@@ -77,15 +77,20 @@ Commit intent, Vote, and CommitQC all name one new same round.
 The same ownership rule applies when authenticated evidence outruns local view
 installation. A future-view PrepareQC remains at its exact durable leader-wire
 FIFO position with a retryable `Busy` disposition; it is not terminally marked
-irrelevant. Although that certificate shares the Progress lane, pacemaker
-selection treats it as view-blocked while its view is still ahead, allowing a
-later authenticated TC to install the missing view without discarding or
-reordering the certificate's FIFO owner. The exact PrepareQC is then retried
-once as current-view evidence, so a lagging honest validator can fetch and
-validate the certified body and contribute its Commit vote. This exception is
-limited to future PrepareQCs: future individual votes remain inadmissible,
-current and stale certificates retain their existing reducer semantics, and a
-CommitQC is already direct quorum-authenticated decision evidence.
+irrelevant. Although that certificate shares the Progress lane, an ordinary
+production turn detects when it is the view-blocked class minimum. If ordinary
+timer/FIFO arbitration has selected FIFO, the turn uses the ownership-sealed
+pacemaker selector for one later authenticated current-view TimeoutVote, TC,
+or CommitQC. Its scheduler receipt binds the exact blocked occurrence,
+lifecycle and FIFO position, and target view to the pre- and post-selection
+queue snapshots. This allows a TC to install the missing view without
+discarding or reordering the certificate's FIFO owner. The exact PrepareQC is
+then retried once as current-view evidence, so a lagging honest validator can
+fetch and validate the certified body and contribute its Commit vote. This
+exception is limited to future PrepareQCs: future individual votes remain
+inadmissible, current and stale certificates retain their existing reducer
+semantics, and a CommitQC is already direct quorum-authenticated decision
+evidence.
 
 A second TC for the immediately preceding timed-out round is progress only when
 its selected Prepare origin strictly exceeds both the installed highest PrepareQC

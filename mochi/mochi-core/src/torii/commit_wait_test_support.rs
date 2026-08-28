@@ -8,8 +8,18 @@ async fn submit_and_wait_for_commit_with_receivers<Fut>(
 where
     Fut: Future<Output = ToriiResult<()>>,
 {
-    submit.await?;
     let tx_hash_str = tx_hash.to_string();
+    let started = Instant::now();
+    let deadline = smoke_commit_deadline(started, options.timeout)?;
+    let context = format!("smoke commit {tx_hash_str}");
+    match await_torii_before_deadline(deadline, &context, submit).await {
+        Err(ToriiError::Timeout { .. }) => {
+            return Err(ToriiError::SmokeAdmissionOutcomeUnknown {
+                hash: tx_hash_str,
+            });
+        }
+        result => result?,
+    }
     let wait = async {
         loop {
             tokio::select! {
@@ -77,9 +87,5 @@ where
             }
         }
     };
-    tokio::time::timeout(options.timeout, wait)
-        .await
-        .map_err(|_| ToriiError::Timeout {
-            context: format!("smoke commit {tx_hash_str}"),
-        })?
+    await_torii_before_deadline(deadline, &context, wait).await
 }

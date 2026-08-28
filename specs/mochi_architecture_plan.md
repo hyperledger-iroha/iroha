@@ -54,7 +54,7 @@ Additional front ends (for example a Tauri shell) can hook into `mochi-core` lat
   - **Transactions** view with common local-dev actions up front and advanced/governance flows tucked behind a secondary affordance.
 - **Composer** supports batchable mint/transfer palettes, queue management (add/remove/clear), raw Norito preview, and submission feedback backed by the signer vault so operators can swap between dev and real authorities.
 - The control bar groups actions under **Devnet**, **Maintenance**, and **Config** rather than pushing first-run work into Settings.
-- **Settings** is reserved for advanced profile overrides, Nexus/DA controls, tooling/readiness behavior, compatibility options, and export paths.
+- **Settings** is reserved for advanced profile overrides, Nexus/DA controls, tooling/readiness behavior, and export paths.
 - UI subscribes to asynchronous updates from `mochi-core` via channels; the core exposes a `SupervisorHandle` that streams structured events (peer status, block headers, transaction updates).
 
 ## Local Development Notes

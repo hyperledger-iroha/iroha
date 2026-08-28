@@ -21,6 +21,16 @@ pub use signed::{
     TransactionAdmissionIntent, TransactionBuilder, TransactionDomain, TransactionEntrypoint,
     TransactionPayload, TransactionResult, TransactionResultInner, TransactionSignature,
 };
+/// Metadata key enabling consensus-owned consume-once handling for prepared faucet claims.
+pub const FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY: &str = "taira_faucet_claim_marker_version";
+/// Initial consensus-owned prepared-faucet claim marker version.
+pub const FAUCET_CLAIM_MARKER_VERSION_V1: u64 = 1;
+/// Metadata key identifying the prepared-operation family.
+pub const PREPARED_OPERATION_METADATA_KEY: &str = "taira_prepared_operation";
+/// Exact prepared-operation value for faucet transactions.
+pub const PREPARED_FAUCET_OPERATION: &str = "faucet";
+/// Metadata key carrying the domain-separated semantic faucet claim hash.
+pub const PREPARED_SEMANTIC_HASH_METADATA_KEY: &str = "taira_prepared_semantic_hash";
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {
     pub use super::{

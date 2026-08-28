@@ -11,7 +11,6 @@ use base64::{
 use blake3::hash as blake3_hash;
 use ed25519_dalek::{Signer, SigningKey};
 use hex::encode as hex_encode;
-use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -89,6 +88,7 @@ use sorafs_manifest::{
     governance_dag_block_cid_v1, validate_governance_dag_head_against_chain_v1,
     validate_governance_log_node_bytes,
 };
+use sorafs_orchestrator::DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR;
 use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, OrchestratorConfig, RolloutPhase, TransportPolicy,
     WriteModeHint,
@@ -109,7 +109,6 @@ use sorafs_orchestrator::{
         ModerationRunnerError,
     },
     proxy::{ProxyKaigiBridgeConfig, ProxyMode, ProxyNoritoBridgeConfig},
-    taikai_cache::{TaikaiCacheConfig, TaikaiCacheStatsSnapshot, TaikaiPullQueueStats},
 };
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -2937,7 +2936,7 @@ fn usage() -> String {
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL --network-id=NETWORK_ID (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
   sorafs_cli pdp enqueue|next|submit|status|export --torii-url=HTTPS_ORIGIN --network-id=NETWORK_ID --operator-private-key-file=PATH [operation options; run `sorafs_cli pdp` for details]
@@ -2992,7 +2991,7 @@ fn reputation_usage() -> String {
 }
 fn fetch_usage() -> String {
     "Usage:
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION]"
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION]"
         .to_string()
 }
 fn taikai_usage() -> String {
@@ -3224,7 +3223,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     let mut telemetry_region: Option<String> = None;
     let mut rollout_phase: Option<RolloutPhase> = None;
     let mut orchestrator_config_source: Option<JsonSource> = None;
-    let mut taikai_cache_source: Option<JsonSource> = None;
     let mut transport_policy: Option<TransportPolicy> = None;
     let mut anonymity_policy: Option<AnonymityPolicy> = None;
     let mut transport_policy_override: Option<TransportPolicy> = None;
@@ -3357,8 +3355,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             orchestrator_config_source = Some(JsonSource::from_arg(rest)?);
         } else if let Some(rest) = arg.strip_prefix("--policy=") {
             orchestrator_config_source = Some(JsonSource::from_arg(rest)?);
-        } else if let Some(rest) = arg.strip_prefix("--taikai-cache-config=") {
-            taikai_cache_source = Some(JsonSource::from_arg(rest)?);
         } else if let Some(rest) = arg.strip_prefix("--output=") {
             output_path = Some(PathBuf::from(rest));
         } else if let Some(rest) = arg.strip_prefix("--json-out=") {
@@ -3566,17 +3562,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(phase) = rollout_phase {
         orchestrator_config = orchestrator_config.with_rollout_phase(phase);
     }
-    if let Some(source) = taikai_cache_source {
-        let value = source.read()?;
-        match parse_taikai_cache_override(value)? {
-            Some(cache) => {
-                orchestrator_config.taikai_cache = Some(cache);
-            }
-            None => {
-                orchestrator_config.taikai_cache = None;
-            }
-        }
-    }
     if let Some(proxy_cfg) = orchestrator_config.local_proxy.as_mut() {
         if let Some(mode) = local_proxy_mode_override {
             proxy_cfg.proxy_mode = mode;
@@ -3589,13 +3574,13 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         }
         if matches!(proxy_cfg.proxy_mode, ProxyMode::Bridge) && proxy_cfg.norito_bridge.is_none() {
             proxy_cfg.norito_bridge = Some(ProxyNoritoBridgeConfig {
-                spool_dir: PROVISION_SPOOL_DIR.to_string(),
+                spool_dir: DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR.to_string(),
                 extension: Some("norito".to_string()),
             });
         }
         if matches!(proxy_cfg.proxy_mode, ProxyMode::Bridge) && proxy_cfg.kaigi_bridge.is_none() {
             proxy_cfg.kaigi_bridge = Some(ProxyKaigiBridgeConfig {
-                spool_dir: PROVISION_SPOOL_DIR.to_string(),
+                spool_dir: DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR.to_string(),
                 extension: Some("norito".to_string()),
                 room_policy: Some("public".to_string()),
             });
@@ -3604,7 +3589,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             let bridge = proxy_cfg
                 .kaigi_bridge
                 .get_or_insert_with(|| ProxyKaigiBridgeConfig {
-                    spool_dir: PROVISION_SPOOL_DIR.to_string(),
+                    spool_dir: DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR.to_string(),
                     extension: Some("norito".to_string()),
                     room_policy: None,
                 });
@@ -10713,7 +10698,6 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
             offset: 0,
             length: 0,
             digest: digest_bytes,
-            taikai_segment_hint: None,
         });
     }
     let gateway_config = GatewayFetchConfig {
@@ -13824,36 +13808,6 @@ mod manifest_tests {
         );
     }
     #[test]
-    fn taikai_cache_override_accepts_raw_object() {
-        let value = sample_taikai_cache_value();
-        let parsed = parse_taikai_cache_override(value).expect("parse succeeds");
-        let config = parsed.expect("cache config present");
-        assert_eq!(config.hot_capacity_bytes, 8_388_608);
-        assert_eq!(config.qos.priority_rate_bps, 83_886_080);
-    }
-    #[test]
-    fn taikai_cache_override_accepts_wrapped_object() {
-        let raw = sample_taikai_cache_value();
-        let mut map = Map::new();
-        insert_json!(map["taikai_cache"] = raw);
-        let parsed = parse_taikai_cache_override(Value::Object(map)).expect("wrapped cache parses");
-        assert!(parsed.is_some());
-    }
-    #[test]
-    fn taikai_cache_override_allows_null() {
-        let parsed = parse_taikai_cache_override(Value::Null).expect("null parses");
-        assert!(parsed.is_none());
-    }
-    #[test]
-    fn taikai_cache_override_rejects_invalid_payload() {
-        let invalid = norito::json::from_str(r#"{"hot_capacity_bytes": 1}"#).expect("parse");
-        let err = parse_taikai_cache_override(invalid).expect_err("invalid config rejected");
-        assert!(
-            err.contains("failed to parse Taikai cache config"),
-            "unexpected error: {err}"
-        );
-    }
-    #[test]
     fn appeal_disburse_requires_juror_list() {
         let refund_account = account_string(10);
         let treasury_account = account_string(11);
@@ -13870,25 +13824,6 @@ mod manifest_tests {
             err.contains("missing required `--juror`"),
             "unexpected error: {err}"
         );
-    }
-    fn sample_taikai_cache_value() -> Value {
-        norito::json::from_str(
-            r#"{
-                "hot_capacity_bytes": 8388608,
-                "hot_retention_secs": 45,
-                "warm_capacity_bytes": 33554432,
-                "warm_retention_secs": 180,
-                "cold_capacity_bytes": 268435456,
-                "cold_retention_secs": 3600,
-                "qos": {
-                    "priority_rate_bps": 83886080,
-                    "standard_rate_bps": 41943040,
-                    "bulk_rate_bps": 12582912,
-                    "burst_multiplier": 4
-                }
-            }"#,
-        )
-        .expect("sample Taikai cache JSON parses")
     }
 }
 enum InputSummary {
@@ -21005,7 +20940,6 @@ fn build_plan_from_specs(
                 offset: spec.offset,
                 length: spec.length,
                 digest: spec.digest,
-                taikai_segment_hint: spec.taikai_segment_hint.clone(),
             })
             .collect(),
         files: vec![FilePlan {
@@ -21088,12 +21022,6 @@ fn build_fetch_summary(
         }
         insert_json!(root["local_proxy_manifest"] = manifest_json);
     }
-    if let Some(stats) = session.taikai_cache_stats {
-        insert_json!(root["taikai_cache_summary"] = taikai_cache_stats_to_value(stats));
-    }
-    if let Some(queue_stats) = session.taikai_cache_queue {
-        insert_json!(root["taikai_cache_queue"] = taikai_cache_queue_to_value(queue_stats));
-    }
     if let Some(verification) = &session.car_verification {
         insert_value!(
             root["manifest_digest_hex"] = hex_encode(verification.manifest_digest.as_bytes())
@@ -21166,90 +21094,6 @@ fn build_fetch_summary(
     insert_value!(root["anonymity_brownout_effective"] = policy_report.should_flag_brownout());
     insert_value!(root["anonymity_uses_classical"] = policy_report.uses_classical());
     Value::Object(root)
-}
-fn taikai_cache_stats_to_value(stats: TaikaiCacheStatsSnapshot) -> Value {
-    let mut map = Map::new();
-    insert_json!(map["hits"] = tier_counts_value(stats.hits.hot, stats.hits.warm, stats.hits.cold));
-    insert_value!(map["misses"] = stats.misses);
-    insert_json!(
-        map["inserts"] =
-            tier_counts_value(stats.inserts.hot, stats.inserts.warm, stats.inserts.cold)
-    );
-    let mut evictions = Map::new();
-    insert_json!(
-        evictions["hot"] =
-            reason_counts_value(stats.evictions.hot.expired, stats.evictions.hot.capacity)
-    );
-    insert_json!(
-        evictions["warm"] =
-            reason_counts_value(stats.evictions.warm.expired, stats.evictions.warm.capacity)
-    );
-    insert_json!(
-        evictions["cold"] =
-            reason_counts_value(stats.evictions.cold.expired, stats.evictions.cold.capacity)
-    );
-    insert_json!(map["evictions"] = Value::Object(evictions));
-    insert_json!(
-        map["promotions"] = promotion_counts_value(
-            stats.promotions.warm_to_hot,
-            stats.promotions.cold_to_warm,
-            stats.promotions.cold_to_hot,
-        )
-    );
-    insert_json!(
-        map["qos_denials"] = qos_counts_value(
-            stats.qos_denials.priority,
-            stats.qos_denials.standard,
-            stats.qos_denials.bulk,
-        )
-    );
-    Value::Object(map)
-}
-fn taikai_cache_queue_to_value(stats: TaikaiPullQueueStats) -> Value {
-    let mut map = Map::new();
-    insert_value!(map["pending_segments"] = stats.pending_segments);
-    insert_value!(map["pending_bytes"] = stats.pending_bytes);
-    insert_value!(map["pending_batches"] = stats.pending_batches);
-    insert_value!(map["in_flight_batches"] = stats.in_flight_batches);
-    insert_value!(map["hedged_batches"] = stats.hedged_batches);
-    insert_json!(
-        map["shaper_denials"] = qos_counts_value(
-            stats.shaper_denials.priority,
-            stats.shaper_denials.standard,
-            stats.shaper_denials.bulk,
-        )
-    );
-    insert_value!(map["dropped_segments"] = stats.dropped_segments);
-    insert_value!(map["failovers"] = stats.failovers);
-    insert_value!(map["open_circuits"] = stats.open_circuits);
-    Value::Object(map)
-}
-fn tier_counts_value(hot: u64, warm: u64, cold: u64) -> Value {
-    let mut map = Map::new();
-    insert_value!(map["hot"] = hot);
-    insert_value!(map["warm"] = warm);
-    insert_value!(map["cold"] = cold);
-    Value::Object(map)
-}
-fn reason_counts_value(expired: u64, capacity: u64) -> Value {
-    let mut map = Map::new();
-    insert_value!(map["expired"] = expired);
-    insert_value!(map["capacity"] = capacity);
-    Value::Object(map)
-}
-fn promotion_counts_value(warm_to_hot: u64, cold_to_warm: u64, cold_to_hot: u64) -> Value {
-    let mut map = Map::new();
-    insert_value!(map["warm_to_hot"] = warm_to_hot);
-    insert_value!(map["cold_to_warm"] = cold_to_warm);
-    insert_value!(map["cold_to_hot"] = cold_to_hot);
-    Value::Object(map)
-}
-fn qos_counts_value(priority: u64, standard: u64, bulk: u64) -> Value {
-    let mut map = Map::new();
-    insert_value!(map["priority"] = priority);
-    insert_value!(map["standard"] = standard);
-    insert_value!(map["bulk"] = bulk);
-    Value::Object(map)
 }
 fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, String> {
     let mut name: Option<String> = None;
@@ -21328,26 +21172,6 @@ fn parse_usize(raw: &str, flag: &str) -> Result<usize, String> {
     require_canonical_unsigned_decimal(flag, raw, "sorafs_cli")?;
     raw.parse::<usize>()
         .map_err(|err| format!("invalid {flag} value `{raw}`: {err}"))
-}
-fn parse_taikai_cache_override(value: Value) -> Result<Option<TaikaiCacheConfig>, String> {
-    if value.is_null() {
-        return Ok(None);
-    }
-    let inner = match value {
-        Value::Object(mut map) => {
-            if let Some(embedded) = map.remove("taikai_cache") {
-                embedded
-            } else {
-                Value::Object(map)
-            }
-        }
-        other => other,
-    };
-    let mut wrapper = Map::new();
-    insert_json!(wrapper["taikai_cache"] = inner);
-    let parsed = orchestrator_config_from_json(&Value::Object(wrapper))
-        .map_err(|err| format!("failed to parse Taikai cache config: {err}"))?;
-    Ok(parsed.taikai_cache)
 }
 fn parse_storage_class(value: &str) -> Result<StorageClass, String> {
     match value.to_ascii_lowercase().as_str() {

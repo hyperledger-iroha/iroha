@@ -55408,8 +55408,10 @@ pub struct AccountFaucetPuzzleDto {
 }
 const FAUCET_CLAIM_HASH_DOMAIN_V1: &[u8] = b"iroha:accounts:faucet:claim:v1\0";
 const PREPARED_BINDING_METADATA_KEY_V1: &str = "taira_public_reset_binding";
-const PREPARED_OPERATION_METADATA_KEY_V1: &str = "taira_prepared_operation";
-const PREPARED_SEMANTIC_HASH_METADATA_KEY_V1: &str = "taira_prepared_semantic_hash";
+const PREPARED_OPERATION_METADATA_KEY_V1: &str =
+    iroha_data_model::transaction::PREPARED_OPERATION_METADATA_KEY;
+const PREPARED_SEMANTIC_HASH_METADATA_KEY_V1: &str =
+    iroha_data_model::transaction::PREPARED_SEMANTIC_HASH_METADATA_KEY;
 
 #[derive(Clone)]
 struct AccountOnboardingPreparedSignaturePayloadV1 {
@@ -55739,6 +55741,14 @@ fn prepared_transaction_metadata(
             .expect("static prepared semantic-hash metadata key"),
         IrohaJson::new(semantic_hash_hex.to_owned()),
     );
+    if operation == iroha_data_model::transaction::PREPARED_FAUCET_OPERATION {
+        metadata.insert(
+            iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
+                .parse()
+                .expect("static faucet claim marker version metadata key"),
+            IrohaJson::new(iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1),
+        );
+    }
     Ok(metadata)
 }
 

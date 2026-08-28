@@ -2525,7 +2525,7 @@ statuses and rejects padded or case-drifted spellings.
 
 The `SoranetPuzzleClient` helper talks to the optional
 `soranet-puzzle-service` microservice so SDK consumers can mint Argon2 tickets,
-inspect puzzle policy, and request ML-DSA-65 admission tokens without reimplementing
+inspect puzzle policy, and request ML-DSA-44 admission tokens without reimplementing
 the HTTP transport. The client mirrors the JSON schema described in
 [`specs/soranet/puzzle_service_operations.md`](../../specs/soranet/puzzle_service_operations.md).
 
@@ -2540,35 +2540,34 @@ const puzzle = new SoranetPuzzleClient("http://localhost:8088", {
 });
 
 const config = await puzzle.getPuzzleConfig();
-if (config.required) {
-  console.log(
-    `difficulty=${config.difficulty} Argon2 lanes=${config.puzzle?.lanes ?? 0}`,
-  );
-}
+console.log(
+  `difficulty=${config.difficulty} Argon2 lanes=${config.puzzle.lanes}`,
+);
 
 const ticket = await puzzle.mintPuzzleTicket("bb".repeat(32), {
   ttlSecs: 90,
-  signed: true,
 });
-console.log(`ticket=${ticket.ticketB64} expires=${ticket.expiresAt}`);
-if (ticket.signedTicketB64) {
+console.log(
+  `${ticket.credentialKind} ticket=${ticket.credentialB64} expires=${ticket.expiresAt}`,
+);
+if (ticket.signedTicketFingerprintHex) {
   console.log(`signed ticket fingerprint=${ticket.signedTicketFingerprintHex}`);
 }
 
 const token = await puzzle.mintAdmissionToken("aa".repeat(32), {
   ttlSecs: 300,
-  flags: 1,
 });
 console.log(`token id=${token.tokenIdHex} issuer=${token.issuerFingerprintHex}`);
 ```
 
 `mintPuzzleTicket` requires a nonzero 32-byte transcript hash as its first
-argument and accepts a `signed` flag to request relay-signed credentials; signed
-responses include a `signedTicketFingerprintHex` to help track replay cache
-state across restarts.
+argument. The service selects `credentialKind` from its immutable relay policy:
+`raw` without a signed-ticket verifier key and `signed` when the verifier and
+signing keys are configured. Signed responses include a
+`signedTicketFingerprintHex` to help track replay cache state across restarts.
 
 The service assigns admission-token issue times from its own clock; callers can
-only request TTL and flags. The mint and token-configuration endpoints require
+only request TTL. The mint and token-configuration endpoints require
 the bearer credential stored in the service's `--mint-auth-token-path` file.
 Run the plaintext service on loopback and terminate TLS at a local proxy. Use
 `/v1/token/config` to display the active issuer fingerprint and revocation
@@ -3718,8 +3717,8 @@ if (snapshot) {
   if (snapshot.confidentialGas) {
     console.log("Conf gas per nullifier:", snapshot.confidentialGas.perNullifier);
   }
-  if (snapshot.transport?.streaming?.soranet) {
-    console.log("SoraNet Norito exit:", snapshot.transport.streaming.soranet.exitMultiaddr);
+  if (snapshot.transport?.noritoRpc) {
+    console.log("Norito-RPC stage:", snapshot.transport.noritoRpc.stage);
   }
 }
 ```

@@ -73,9 +73,9 @@ fn parse_mlkem_suite(name: &str) -> MlKemSuite {
 }
 fn parse_mldsa_suite(name: &str) -> MlDsaSuite {
     match name {
-        "MlDsa44" => MlDsaSuite::MlDsa44,
-        "MlDsa65" => MlDsaSuite::MlDsa65,
-        "MlDsa87" => MlDsaSuite::MlDsa87,
+        "mldsa44" => MlDsaSuite::MlDsa44,
+        "mldsa65" => MlDsaSuite::MlDsa65,
+        "mldsa87" => MlDsaSuite::MlDsa87,
         other => panic!("unsupported ML-DSA suite '{other}'"),
     }
 }

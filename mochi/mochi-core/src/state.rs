@@ -158,16 +158,8 @@ impl StateEntry {
         };
         let detail = metadata_summary(account.metadata());
         let summary_json = build_summary_json(&title, &subtitle, &detail, None, Some(&owner), None);
-        let (json, norito_bytes) = {
-            let (json, bytes) = encode_json(&account);
-            match (json, bytes) {
-                (Some(json), Some(bytes)) => (Some(json), Some(bytes)),
-                _ => {
-                    let bytes = summary_json.clone().into_bytes();
-                    (Some(summary_json.clone()), Some(bytes))
-                }
-            }
-        };
+        let (json, norito_bytes) = encode_payload(&account);
+        let json = Some(json.unwrap_or(summary_json));
         let search_blob = build_search_blob(&[&title, &subtitle, &detail, &owner]);
         let raw = format!("{account:#?}");
         Self {
@@ -191,7 +183,7 @@ impl StateEntry {
         let detail = "Identifier projection".to_owned();
         let title = id.to_string();
         let json_summary = build_summary_json(&title, &subtitle, &detail, None, None, None);
-        let norito_bytes = json_summary.as_bytes().to_vec();
+        let (json, norito_bytes) = encode_payload(&id);
         let search_blob = build_search_blob(&[&title, &subtitle, &detail]);
         let raw = format!("{id:#?}");
         Self {
@@ -205,8 +197,8 @@ impl StateEntry {
             owner_lower: None,
             asset_definition: None,
             asset_definition_lower: None,
-            json: Some(json_summary),
-            norito_bytes: Some(norito_bytes),
+            json: Some(json.unwrap_or(json_summary)),
+            norito_bytes,
             search_blob,
         }
     }
@@ -230,16 +222,8 @@ impl StateEntry {
             Some(&owner_str),
             Some(&definition),
         );
-        let (json, norito_bytes) = {
-            let (json, bytes) = encode_json(&asset);
-            match (json, bytes) {
-                (Some(json), Some(bytes)) => (Some(json), Some(bytes)),
-                _ => {
-                    let bytes = summary_json.clone().into_bytes();
-                    (Some(summary_json.clone()), Some(bytes))
-                }
-            }
-        };
+        let (json, norito_bytes) = encode_payload(&asset);
+        let json = Some(json.unwrap_or(summary_json));
         let mut search_parts = vec![
             title.as_str(),
             subtitle.as_str(),
@@ -276,7 +260,7 @@ impl StateEntry {
         let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
         let definition = asset_id.definition().to_string();
         let definition_lower = definition.to_ascii_lowercase();
-        let (json, norito_bytes) = encode_json(&asset_id);
+        let (json, norito_bytes) = encode_payload(&asset_id);
         let title = asset_id.to_string();
         let detail = "Identifier projection".to_owned();
         let subtitle = format!("Owner {owner_str}");
@@ -328,16 +312,8 @@ impl StateEntry {
             Some(&owner),
             Some(&definition_string),
         );
-        let (json, norito_bytes) = {
-            let (json, bytes) = encode_json(&definition);
-            match (json, bytes) {
-                (Some(json), Some(bytes)) => (Some(json), Some(bytes)),
-                _ => {
-                    let bytes = summary_json.clone().into_bytes();
-                    (Some(summary_json.clone()), Some(bytes))
-                }
-            }
-        };
+        let (json, norito_bytes) = encode_payload(&definition);
+        let json = Some(json.unwrap_or(summary_json));
         let mut search_parts = vec![
             title.as_str(),
             subtitle.as_str(),
@@ -371,7 +347,7 @@ impl StateEntry {
         let definition = id.to_string();
         let definition_lower = definition.to_ascii_lowercase();
         let title = definition.clone();
-        let (json, norito_bytes) = encode_json(&id);
+        let (json, norito_bytes) = encode_payload(&id);
         let subtitle = "Asset definition identifier".to_owned();
         let detail = "Identifier projection".to_owned();
         let mut search_parts = vec![
@@ -418,16 +394,8 @@ impl StateEntry {
             Some(&owner),
             None,
         );
-        let (json, norito_bytes) = {
-            let (json, bytes) = encode_json(&domain);
-            match (json, bytes) {
-                (Some(json), Some(bytes)) => (Some(json), Some(bytes)),
-                _ => {
-                    let bytes = summary_json.clone().into_bytes();
-                    (Some(summary_json.clone()), Some(bytes))
-                }
-            }
-        };
+        let (json, norito_bytes) = encode_payload(&domain);
+        let json = Some(json.unwrap_or(summary_json));
         let search_blob = build_search_blob(&[&title, &subtitle, &detail, &owner]);
         let raw = format!("{domain:#?}");
         Self {
@@ -450,7 +418,7 @@ impl StateEntry {
         let title = id.to_string();
         let domain_lower = title.to_ascii_lowercase();
         let domain_string = title.clone();
-        let (json, norito_bytes) = encode_json(&id);
+        let (json, norito_bytes) = encode_payload(&id);
         let subtitle = "Domain identifier".to_owned();
         let detail = "Identifier projection".to_owned();
         let search_blob = build_search_blob(&[
@@ -481,16 +449,8 @@ impl StateEntry {
         let subtitle = "Peer public key".to_owned();
         let detail = "Registered peer identifier".to_owned();
         let summary_json = build_summary_json(&title, &subtitle, &detail, None, None, None);
-        let (json, norito_bytes) = {
-            let (json, bytes) = encode_json(&peer_id);
-            match (json, bytes) {
-                (Some(json), Some(bytes)) => (Some(json), Some(bytes)),
-                _ => {
-                    let bytes = summary_json.clone().into_bytes();
-                    (Some(summary_json.clone()), Some(bytes))
-                }
-            }
-        };
+        let (json, norito_bytes) = encode_payload(&peer_id);
+        let json = Some(json.unwrap_or(summary_json));
         let search_blob = build_search_blob(&[&title, &subtitle, &detail]);
         let raw = format!("{peer_id:#?}");
         Self {
@@ -525,11 +485,14 @@ fn metadata_summary(metadata: &Metadata) -> String {
 fn asset_definition_domain_hint(owning_domain: Option<&DomainId>) -> Option<String> {
     owning_domain.map(ToString::to_string)
 }
-fn encode_json<T: json::JsonSerialize>(value: &T) -> (Option<String>, Option<Vec<u8>>) {
+fn encode_payload<T>(value: &T) -> (Option<String>, Option<Vec<u8>>)
+where
+    T: json::JsonSerialize + norito::NoritoSerialize,
+{
     let pretty = catch_unwind(AssertUnwindSafe(|| json::to_json_pretty(value)))
         .ok()
         .and_then(Result::ok);
-    let bytes = catch_unwind(AssertUnwindSafe(|| json::to_vec(value)))
+    let bytes = catch_unwind(AssertUnwindSafe(|| norito::to_bytes(value)))
         .ok()
         .and_then(Result::ok);
     (pretty, bytes)
@@ -581,16 +544,6 @@ pub struct StateCursor {
     inner: ForwardCursor,
 }
 impl StateCursor {
-    /// Identifier of the server-side cursor.
-    #[must_use]
-    pub fn query_id(&self) -> &str {
-        self.inner.query()
-    }
-    /// Position (1-based) of the next batch in the cursor stream.
-    #[must_use]
-    pub fn position(&self) -> u64 {
-        self.inner.cursor().get()
-    }
     pub(crate) fn clone_inner(&self) -> ForwardCursor {
         self.inner.clone()
     }
@@ -860,7 +813,7 @@ mod tests {
         );
         let encoded = to_bytes(&output).expect("encode query output");
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(200).body(encoded.clone());
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
@@ -890,7 +843,7 @@ mod tests {
         );
         let encoded = to_bytes(&output).expect("encode query output");
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(200).body(encoded.clone());
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
@@ -914,7 +867,7 @@ mod tests {
         );
         let encoded = to_bytes(&output).expect("encode query output");
         server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(200).body(encoded.clone());
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
@@ -922,7 +875,7 @@ mod tests {
         let err = run_state_query(client, StateQueryKind::Accounts, None, None)
             .await
             .expect_err("unexpected batch kind should error");
-        matches!(err, StateQueryError::UnexpectedBatch { .. });
+        assert!(matches!(err, StateQueryError::UnexpectedBatch { .. }));
     }
     #[test]
     fn state_entry_account_exposes_norito_payload() {
@@ -936,6 +889,9 @@ mod tests {
         );
         let bytes = entry.norito_bytes.expect("account bytes");
         assert!(!bytes.is_empty(), "norito bytes should not be empty");
+        let decoded: AccountBuilder =
+            norito::decode_from_bytes(&bytes).expect("decode framed account payload");
+        assert_eq!(decoded.id(), &*ALICE_ID);
     }
     #[test]
     fn state_entry_asset_includes_json_encoding() {

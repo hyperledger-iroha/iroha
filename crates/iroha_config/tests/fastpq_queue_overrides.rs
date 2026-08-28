@@ -39,8 +39,8 @@ fn metal_queue_overrides_parse_from_env() {
         ("FASTPQ_METAL_MAX_IN_FLIGHT".to_string(), "5".to_string()),
         ("FASTPQ_METAL_THREADGROUP".to_string(), "128".to_string()),
         ("FASTPQ_METAL_TRACE".to_string(), "true".to_string()),
-        ("FASTPQ_DEBUG_METAL_ENUM".to_string(), "1".to_string()),
-        ("FASTPQ_DEBUG_FUSED".to_string(), "on".to_string()),
+        ("FASTPQ_DEBUG_METAL_ENUM".to_string(), "true".to_string()),
+        ("FASTPQ_DEBUG_FUSED".to_string(), "true".to_string()),
     ]));
     let cfg = load_with_env(env);
     assert_eq!(cfg.zk.fastpq.metal_queue_fanout, Some(3));
@@ -72,6 +72,19 @@ fn metal_queue_overrides_parse_from_env() {
     assert_eq!(
         cfg.zk.fastpq.proof_sidecar_max_retries,
         iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES
+    );
+}
+#[test]
+fn metal_debug_overrides_reject_boolean_aliases() {
+    let error = ConfigReader::new()
+        .with_env(MockEnv::from([("FASTPQ_DEBUG_METAL_ENUM", "1")]))
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("fixture should load")
+        .read_and_complete::<UserConfig>()
+        .expect_err("noncanonical boolean aliases must fail");
+    assert!(
+        format!("{error:?}").contains("FASTPQ_DEBUG_METAL_ENUM"),
+        "unexpected error: {error:?}"
     );
 }
 #[test]

@@ -463,6 +463,63 @@ fn prepared_submit_builders_reject_old_one_shot_shapes() {
     let error = build_accounts_onboard_submit_body(old_onboarding.as_object().expect("object"))
         .expect_err("old onboarding apply shape");
     assert!(error.contains("only in `body`"));
+
+    let old_faucet = norito::json!({ "claim": {} });
+    let error = build_accounts_faucet_submit_body(old_faucet.as_object().expect("object"))
+        .expect_err("old faucet apply shape");
+    assert!(error.contains("only in `body`"));
+}
+#[test]
+fn faucet_body_builders_require_exact_prepare_and_submit_envelopes() {
+    let prepare = norito::json!({
+        "body": {
+            "schema": "iroha.accounts.faucet.prepare.v1",
+            "binding": {},
+            "claim": {},
+            "fee_payment": {}
+        }
+    });
+    build_accounts_faucet_prepare_body(prepare.as_object().expect("object"))
+        .expect("complete prepare body");
+    let mut missing_fee = prepare.clone();
+    missing_fee
+        .get_mut("body")
+        .and_then(Value::as_object_mut)
+        .expect("body")
+        .remove("fee_payment");
+    let error = build_accounts_faucet_prepare_body(missing_fee.as_object().expect("object"))
+        .expect_err("missing fee payment");
+    assert!(error.contains("fee_payment"));
+
+    let submit = norito::json!({
+        "body": {
+            "schema": "iroha.taira.prepared-transaction.v1",
+            "binding": {},
+            "operation": "faucet",
+            "claim": {},
+            "semantic_hash_hex": ("ab".repeat(32)),
+            "account_id": TEST_ACCOUNT_I105,
+            "asset_definition_id": "xor#wonderland",
+            "asset_id": "xor#wonderland#alice",
+            "amount": "1",
+            "transaction_hash_hex": ("cd".repeat(32)),
+            "signed_transaction_wire_hex": "00",
+            "signed_transaction_wire_sha256": ("ef".repeat(32)),
+            "fee_payment": {},
+            "server_signature": "AA"
+        }
+    });
+    build_accounts_faucet_submit_body(submit.as_object().expect("object"))
+        .expect("complete submit body");
+    let mut extra = submit;
+    extra
+        .get_mut("body")
+        .and_then(Value::as_object_mut)
+        .expect("body")
+        .insert("private_key".to_owned(), Value::String("secret".to_owned()));
+    let error = build_accounts_faucet_submit_body(extra.as_object().expect("object"))
+        .expect_err("secret field");
+    assert!(error.contains("private_key"));
 }
 #[test]
 fn build_object_body_or_default_uses_empty_object_when_missing() {

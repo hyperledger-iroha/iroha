@@ -15,7 +15,7 @@ fn lane_catalog_snapshot_resolves_aliases_and_dataspaces() {
     let mut lane1 = TomlTable::new();
     lane1.insert("index".into(), TomlValue::Integer(1));
     lane1.insert("alias".into(), TomlValue::String("ops".into()));
-    lane1.insert("dataspace_id".into(), TomlValue::Integer(3));
+    lane1.insert("dataspace".into(), TomlValue::String("private".into()));
     nexus.insert(
         "lane_catalog".into(),
         TomlValue::Array(vec![TomlValue::Table(lane0), TomlValue::Table(lane1)]),

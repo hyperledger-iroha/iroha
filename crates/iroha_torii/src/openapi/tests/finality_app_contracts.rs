@@ -60,17 +60,12 @@ fn sumeragi_v2_da_schema_requires_reed_solomon16_without_plain_compatibility() {
 #[test]
 fn inrou_guest_image_schema_requires_one_concrete_published_artifact() {
     let schemas = openapi_schemas();
-    let image = contract_schema(&schemas, "SoraInrouGuestImageV1");
-    assert_eq!(object_field_set(image.get("properties").and_then(Value::as_object).expect("Inrou guest-image properties")), BTreeSet::from(["initrd_image_path", "kernel_image_path", "published_artifact", "rootfs_image_path",]), "Inrou V1 guest-image schema must expose only implemented fields");
-    let required = image.get("required").and_then(Value::as_array).expect("Inrou guest-image required fields");
-    assert!(required.iter().any(|field| field.as_str() == Some("published_artifact")), "published_artifact must be required for every admitted Inrou V1 guest image");
+    assert_exact_closed_required_schema_fields(&schemas, "SoraInrouGuestImageV1", &["initrd_image_path", "kernel_image_path", "published_artifact", "rootfs_image_path"]);
     let published_artifact = contract_property(&schemas, "SoraInrouGuestImageV1", "published_artifact");
     assert_eq!(published_artifact.get("$ref").and_then(Value::as_str), Some("#/components/schemas/SoraPublishedInrouGuestImageArtifactV1"));
     assert!(published_artifact.get("anyOf").is_none() && published_artifact.get("oneOf").is_none() && published_artifact.get("nullable").is_none(), "admitted Inrou V1 artifacts must not expose a missing/null compatibility branch");
-    let artifact = contract_schema(&schemas, "SoraPublishedInrouGuestImageArtifactV1");
-    assert_eq!(object_field_set(artifact.get("properties").and_then(Value::as_object).expect("published Inrou artifact properties")), BTreeSet::from(["content_cid", "manifest_digest_hex"]), "published Inrou artifacts must use the sole canonical storage identity");
-    let manifest = contract_schema(&schemas, "SoraInrouManifestV1");
-    assert_eq!(object_field_set(manifest.get("properties").and_then(Value::as_object).expect("Inrou manifest properties")), BTreeSet::from(["guest_images", "schema_version"]), "Inrou V1 manifest must not retain one-variant or bootstrap compatibility fields");
+    assert_exact_closed_required_schema_fields(&schemas, "SoraPublishedInrouGuestImageArtifactV1", &["content_cid", "manifest_digest_hex"]);
+    assert_exact_closed_required_schema_fields(&schemas, "SoraInrouManifestV1", &["guest_images", "schema_version"]);
     for retired_schema in ["SoraArtifactDistributionPolicyV1", "SoraArtifactDistributionTargetV1", "SoraInrouGuestOsV1"] {
         assert!(!schemas.contains_key(retired_schema), "retired schema `{retired_schema}` must be absent");
     }

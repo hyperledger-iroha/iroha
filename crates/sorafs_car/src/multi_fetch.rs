@@ -1741,7 +1741,6 @@ mod tests {
             offset: chunk_offset,
             length: chunk_length,
             digest: [0xAA; 32],
-            taikai_segment_hint: None,
         };
         let mut metadata = ProviderMetadata::new();
         metadata.range_capability = Some(RangeCapability {

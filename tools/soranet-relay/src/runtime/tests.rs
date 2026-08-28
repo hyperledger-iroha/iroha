@@ -263,7 +263,7 @@ mod tests {
         }
     }
     #[test]
-    fn route_open_metrics_use_adapter_once() {
+    fn route_open_ingress_metrics_use_adapter_once() {
         let metrics = Arc::new(Metrics::new());
         metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
         let overlay = VpnOverlay::from_config(Default::default());
@@ -280,20 +280,9 @@ mod tests {
         assert_eq!(1, snapshot.vpn_control_ingress_frames);
         assert_eq!(bytes, snapshot.vpn_control_bytes);
         assert_eq!(bytes, snapshot.vpn_control_ingress_bytes);
-        record_route_open_egress_metrics(Some(&adapter), Some(&handle));
-        let snapshot = metrics.snapshot();
-        assert_eq!(0, snapshot.vpn_frames);
-        assert_eq!(0, snapshot.vpn_egress_frames);
-        assert_eq!(0, snapshot.vpn_egress_bytes);
-        assert_eq!(0, snapshot.vpn_bytes);
-        assert_eq!(2, snapshot.vpn_control_frames);
-        assert_eq!(1, snapshot.vpn_control_ingress_frames);
-        assert_eq!(1, snapshot.vpn_control_egress_frames);
-        assert_eq!(bytes * 2, snapshot.vpn_control_bytes);
-        assert_eq!(bytes, snapshot.vpn_control_egress_bytes);
     }
     #[test]
-    fn route_open_metrics_fallback_to_session() {
+    fn route_open_ingress_metrics_fallback_to_session() {
         let metrics = Arc::new(Metrics::new());
         metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
         let overlay = VpnOverlay::from_config(Default::default());
@@ -309,16 +298,6 @@ mod tests {
         assert_eq!(1, snapshot.vpn_control_ingress_frames);
         assert_eq!(bytes, snapshot.vpn_control_bytes);
         assert_eq!(bytes, snapshot.vpn_control_ingress_bytes);
-        record_route_open_egress_metrics(None, Some(&handle));
-        let snapshot = metrics.snapshot();
-        assert_eq!(0, snapshot.vpn_frames);
-        assert_eq!(0, snapshot.vpn_egress_frames);
-        assert_eq!(0, snapshot.vpn_bytes);
-        assert_eq!(2, snapshot.vpn_control_frames);
-        assert_eq!(1, snapshot.vpn_control_ingress_frames);
-        assert_eq!(1, snapshot.vpn_control_egress_frames);
-        assert_eq!(bytes * 2, snapshot.vpn_control_bytes);
-        assert_eq!(bytes, snapshot.vpn_control_egress_bytes);
     }
     #[test]
     fn handshake_byte_guard_does_not_touch_vpn_bytes() {
@@ -1749,6 +1728,20 @@ mod tests {
             capacity,
         })
     }
+    fn replay_test_ticket(marker: u8) -> PowTicket {
+        let expires_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock after Unix epoch")
+            .as_secs()
+            .saturating_add(60);
+        PowTicket {
+            version: PowTicket::VERSION,
+            difficulty: 1,
+            expires_at,
+            client_nonce: [marker; 32],
+            solution: [marker ^ 0xFF; 32],
+        }
+    }
     fn current_client_hello_frame(
         suite: HandshakeSuite,
         resume_hash: Option<&[u8]>,
@@ -1812,13 +1805,9 @@ mod tests {
             cell_bytes: constant_rate::CONSTANT_RATE_CELL_BYTES as u16,
         });
 
-        let error = match preflight_client_hello(&frame, &server_capabilities) {
-            Ok(_) => panic!("strict mode must fail before the relay handshake response"),
-            Err(error) => error,
-        };
         assert!(matches!(
-            error,
-            HandshakeError::StrictConstantRateUnavailable
+            preflight_client_hello(&frame, &server_capabilities),
+            Err(HandshakeError::StrictConstantRateUnavailable)
         ));
 
         server_capabilities.constant_rate = Some(capability::ConstantRateCapability {
@@ -1833,6 +1822,97 @@ mod tests {
             .expect("server best-effort mode must be negotiated");
         assert_eq!(negotiated.mode, ConstantRateMode::BestEffort);
     }
+
+    #[test]
+    fn strict_application_and_exit_channels_share_the_guarded_exit_consumer() {
+        for channel in [MuxChannel::Application, MuxChannel::Exit] {
+            assert_eq!(
+                strict_mux_consumer(channel),
+                Some((AuthenticatedCellClass::Bulk, StrictMuxConsumer::Exit))
+            );
+        }
+        assert_ne!(MuxChannel::Application, MuxChannel::Exit);
+    }
+
+    #[tokio::test]
+    async fn strict_lane_task_reaper_bounds_completed_open_fin_churn() {
+        const CHURN_LANES: usize = 512;
+        let maximum_lanes = 1;
+        let budget = strict_lane_task_budget(maximum_lanes);
+        let mut tasks = JoinSet::new();
+        let mut task_owners = HashMap::new();
+        let key = (MuxChannel::Application, 41);
+
+        for _ in 0..CHURN_LANES {
+            // A completed handler and its completed egress pump model one
+            // OPEN/FIN lane. The production loop performs this same reap
+            // before admitting the next OPEN.
+            for _ in 0..16 {
+                reap_completed_strict_lane_tasks(&mut tasks, &mut task_owners)
+                    .expect("completed lane workers must join cleanly");
+                if tasks.is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                tasks.len().saturating_add(2) <= budget,
+                "completed lane workers must not accumulate across churn"
+            );
+            assert!(!task_owners.contains_key(&key));
+            task_owners.insert(key, 2);
+            tasks.spawn(async move { key });
+            tasks.spawn(async move { key });
+            assert!(tasks.len() <= budget);
+        }
+
+        while !tasks.is_empty() {
+            tokio::task::yield_now().await;
+            reap_completed_strict_lane_tasks(&mut tasks, &mut task_owners)
+                .expect("final lane workers must join cleanly");
+        }
+        assert!(tasks.is_empty());
+        assert!(task_owners.is_empty());
+    }
+
+    #[tokio::test]
+    async fn strict_lane_id_reuse_waits_for_both_prior_workers() {
+        let key = (MuxChannel::Exit, 73);
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut tasks = JoinSet::new();
+        let mut task_owners = HashMap::from([(key, 2)]);
+
+        tasks.spawn(async move { key });
+        let waiting_release = Arc::clone(&release);
+        tasks.spawn(async move {
+            waiting_release.notified().await;
+            key
+        });
+
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+            reap_completed_strict_lane_tasks(&mut tasks, &mut task_owners)
+                .expect("first lane worker must join cleanly");
+            if tasks.len() == 1 {
+                break;
+            }
+        }
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(task_owners.get(&key), Some(&1));
+        assert!(
+            task_owners.contains_key(&key),
+            "lane ID reuse must remain rejected while either prior worker owns the key"
+        );
+
+        release.notify_one();
+        while !tasks.is_empty() {
+            tokio::task::yield_now().await;
+            reap_completed_strict_lane_tasks(&mut tasks, &mut task_owners)
+                .expect("second lane worker must join cleanly");
+        }
+        assert!(!task_owners.contains_key(&key));
+    }
+
     #[test]
     fn admission_transcript_commits_to_the_exact_client_hello() {
         let (without_resume, _) = current_client_hello_frame(HandshakeSuite::Nk2Hybrid, None);
@@ -1922,14 +2002,15 @@ mod tests {
     }
     #[test]
     fn verify_puzzle_ticket_requires_binding_and_consumes_once() {
-        let params = PuzzleParameters::new(
+        let params = PuzzleParameters::try_new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
             1,
             Duration::from_secs(180),
             Duration::from_secs(45),
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let descriptor = vec![0xD4; 32];
         let relay_id = vec![0xC3; 32];
         let admission_transcript = [0x9Au8; 32];
@@ -1979,14 +2060,15 @@ mod tests {
     }
     #[test]
     fn verify_signed_puzzle_ticket_authenticates_argon2_and_consumes_shared_identity() {
-        let params = PuzzleParameters::new(
+        let params = PuzzleParameters::try_new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
             1,
             Duration::from_secs(180),
             Duration::from_secs(45),
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let descriptor = [0xB4; 32];
         let relay_id = [0xA3; 32];
         let transcript = [0x8A; 32];
@@ -2033,14 +2115,15 @@ mod tests {
     }
     #[test]
     fn verify_puzzle_ticket_rejects_wrong_relay_binding() {
-        let params = PuzzleParameters::new(
+        let params = PuzzleParameters::try_new(
             NonZeroU32::new(4_096).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
             5,
             Duration::from_secs(120),
             Duration::from_secs(30),
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let descriptor = vec![0x51; 32];
         let relay_id = vec![0x42; 32];
         let admission_transcript = [0x24u8; 32];
@@ -2069,14 +2152,15 @@ mod tests {
         let dir = secure_test_tempdir();
         let path = dir.path().join("relay-ticket-replays.norito");
         let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
-        let params = PuzzleParameters::new(
+        let params = PuzzleParameters::try_new(
             NonZeroU32::new(4_096).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
             1,
             Duration::from_secs(180),
             Duration::from_secs(30),
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let descriptor = [0x35; 32];
         let relay_id = [0x46; 32];
         let transcript = [0x57; 32];
@@ -2123,16 +2207,8 @@ mod tests {
     #[test]
     fn full_replay_store_rejects_before_costly_ticket_verification() {
         let replays = in_memory_ticket_replays(1);
-        let params = PowParameters::new(0, Duration::from_secs(180), Duration::from_secs(30));
-        let descriptor = [0x11; 32];
-        let relay_id = [0x22; 32];
-        let transcript = [0x33; 32];
-        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
-        let mut rng = StdRng::from_seed([0x44; 32]);
-        let first = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
-            .expect("mint first");
-        let second = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
-            .expect("mint second");
+        let first = replay_test_ticket(0x44);
+        let second = replay_test_ticket(0x45);
         verify_and_consume_ticket(&first, &replays, || Ok(())).expect("consume first");
         let costly_verify_ran = std::cell::Cell::new(false);
         let err = verify_and_consume_ticket(&second, &replays, || {
@@ -2149,14 +2225,7 @@ mod tests {
     #[test]
     fn concurrent_duplicate_ticket_is_rejected_while_first_use_is_pending() {
         let replays = Arc::new(in_memory_ticket_replays(2));
-        let params = PowParameters::new(0, Duration::from_secs(180), Duration::from_secs(30));
-        let descriptor = [0x71; 32];
-        let relay_id = [0x72; 32];
-        let transcript = [0x73; 32];
-        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
-        let mut rng = StdRng::from_seed([0x74; 32]);
-        let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
-            .expect("mint ticket");
+        let ticket = replay_test_ticket(0x74);
         let (entered_tx, entered_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let first_replays = Arc::clone(&replays);
@@ -2204,6 +2273,27 @@ mod tests {
         assert_eq!(
             pow_failure_reason(&overflow),
             SoranetPowFailureReasonV1::ClockError
+        );
+    }
+
+    #[test]
+    fn puzzle_failure_reason_preserves_policy_diagnostics() {
+        assert_eq!(
+            puzzle_failure_reason(&puzzle::Error::DifficultyMismatch {
+                ticket: 4,
+                required: 6,
+            }),
+            SoranetPowFailureReasonV1::DifficultyMismatch
+        );
+        assert_eq!(
+            puzzle_failure_reason(&puzzle::Error::Expired(10, 11)),
+            SoranetPowFailureReasonV1::Expired
+        );
+        assert_eq!(
+            puzzle_failure_reason(&puzzle::Error::ExpiryWindowTooSmall(Duration::from_secs(
+                30
+            ))),
+            SoranetPowFailureReasonV1::TtlTooShort
         );
     }
     #[cfg(any())]
@@ -2511,7 +2601,7 @@ mod tests {
             "send_window: 4194304",
             "crypto_buffer_size: 65536",
             "allow_spin: false",
-            "datagram_receive_buffer_size: Some(65536)",
+            "datagram_receive_buffer_size: None",
             "datagram_send_buffer_size: 65536",
             "migration: false",
             "max_incoming: 64",
@@ -2524,6 +2614,176 @@ mod tests {
             );
         }
     }
+
+    async fn strict_test_quic_pair() -> (Endpoint, Endpoint, Connection, Connection) {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["relay.test".to_owned()])
+                .expect("generate test certificate");
+        let key =
+            PrivateKeyDer::try_from(signing_key.serialize_der()).expect("encode test private key");
+        let mut server_config = RelayRuntime::server_config(vec![cert.der().clone()], key)
+            .expect("build relay QUIC configuration");
+        // Strict production negotiation is gated while Quinn lacks per-entry
+        // accounting. This loopback-only direct transport test explicitly
+        // enables receive DATAGRAMs to qualify the dormant mux behavior.
+        let mut strict_transport = TransportConfig::default();
+        strict_transport
+            .datagram_receive_buffer_size(Some(QUIC_DATAGRAM_BUFFER_BYTES_V1))
+            .datagram_send_buffer_size(QUIC_DATAGRAM_BUFFER_BYTES_V1);
+        server_config.transport_config(Arc::new(strict_transport));
+        let server = Endpoint::server(
+            server_config,
+            "127.0.0.1:0".parse().expect("parse loopback address"),
+        )
+        .expect("bind relay QUIC endpoint");
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(cert.der().clone())
+            .expect("trust test relay certificate");
+        let mut client_tls =
+            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+        client_tls.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
+        let client_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(client_tls)
+            .expect("build QUIC client crypto");
+        let mut client_config = quinn::ClientConfig::new(Arc::new(client_crypto));
+        let mut transport = TransportConfig::default();
+        transport
+            .datagram_receive_buffer_size(Some(QUIC_DATAGRAM_BUFFER_BYTES_V1))
+            .datagram_send_buffer_size(QUIC_DATAGRAM_BUFFER_BYTES_V1);
+        client_config.transport_config(Arc::new(transport));
+        let mut client = Endpoint::client(
+            "127.0.0.1:0"
+                .parse()
+                .expect("parse client loopback address"),
+        )
+        .expect("bind QUIC client endpoint");
+        client.set_default_client_config(client_config);
+        let connecting = client
+            .connect(server.local_addr().expect("relay address"), "relay.test")
+            .expect("start QUIC connection");
+        let client_task = tokio::spawn(connecting);
+        let initial = timeout(Duration::from_secs(2), server.accept())
+            .await
+            .expect("initial connection attempt timed out")
+            .expect("initial incoming connection");
+        assert!(RelayRuntime::require_validated_quic_address(initial).is_none());
+        let retried = timeout(Duration::from_secs(2), server.accept())
+            .await
+            .expect("retried connection attempt timed out")
+            .expect("retried incoming connection");
+        let server_connecting = RelayRuntime::require_validated_quic_address(retried)
+            .expect("retry token validates peer")
+            .accept()
+            .expect("accept validated connection");
+        let (server_connection, client_connection) = timeout(Duration::from_secs(2), async {
+            let (server_result, client_result) = tokio::join!(server_connecting, client_task);
+            (
+                server_result.expect("server QUIC handshake"),
+                client_result
+                    .expect("client task")
+                    .expect("client QUIC handshake"),
+            )
+        })
+        .await
+        .expect("validated QUIC handshake timed out");
+        (server, client, server_connection, client_connection)
+    }
+
+    #[tokio::test]
+    async fn strict_datagram_mux_carries_payload_cover_and_fails_closed_on_loss() {
+        let (server, client, server_connection, client_connection) = strict_test_quic_pair().await;
+        let session_key = vec![0x5c; 32];
+        let relay_records =
+            RecordLayer::new(SessionKey::new(session_key.clone()), RecordEndpoint::Relay)
+                .expect("relay record layer");
+        let client_records = RecordLayer::new(SessionKey::new(session_key), RecordEndpoint::Client)
+            .expect("client record layer");
+        let (task, mut strict) = spawn_strict_constant_rate_transport(
+            server_connection.clone(),
+            constant_rate::profile_by_name("null").expect("null profile"),
+            Arc::new(Metrics::new()),
+            &relay_records,
+        )
+        .expect("start strict transport");
+        let (mut client_sealer, mut client_opener) =
+            constant_rate_codec(&client_records).expect("client strict codec");
+
+        let application = MuxFrame::new(
+            MuxChannel::Application,
+            AuthenticatedCellClass::Bulk,
+            41,
+            MuxFlags::new(MuxFlags::OPEN | MuxFlags::FIN).expect("flags"),
+            b"route-open".to_vec(),
+        )
+        .expect("application frame");
+        let encoded = client_sealer
+            .seal(&application)
+            .expect("seal application")
+            .encode();
+        assert_eq!(encoded.len(), CONSTANT_RATE_CELL_BYTES);
+        client_connection
+            .send_datagram(encoded.to_vec().into())
+            .expect("send application cell");
+        assert_eq!(
+            timeout(Duration::from_secs(2), strict.inbound.recv())
+                .await
+                .expect("strict inbound timeout")
+                .expect("strict inbound channel"),
+            application
+        );
+
+        let exit = MuxFrame::new(
+            MuxChannel::Exit,
+            AuthenticatedCellClass::Bulk,
+            42,
+            MuxFlags::new(MuxFlags::OPEN | MuxFlags::FIN).expect("flags"),
+            b"guarded-response".to_vec(),
+        )
+        .expect("exit frame");
+        strict
+            .outbound
+            .try_send(exit.clone())
+            .expect("queue exit frame");
+        let received = timeout(Duration::from_secs(2), async {
+            loop {
+                let datagram = client_connection
+                    .read_datagram()
+                    .await
+                    .expect("receive strict cell");
+                assert_eq!(datagram.len(), CONSTANT_RATE_CELL_BYTES);
+                let frame = client_opener.open(&datagram).expect("open strict cell");
+                if frame.channel != MuxChannel::Cover {
+                    break frame;
+                }
+            }
+        })
+        .await
+        .expect("strict outbound timeout");
+        assert_eq!(received, exit);
+
+        let _lost = client_sealer
+            .seal(&MuxFrame::cover())
+            .expect("seal deliberately lost tick");
+        let after_loss = client_sealer
+            .seal(&MuxFrame::cover())
+            .expect("seal post-loss tick")
+            .encode();
+        client_connection
+            .send_datagram(after_loss.to_vec().into())
+            .expect("send post-loss cell");
+        timeout(Duration::from_secs(2), client_connection.closed())
+            .await
+            .expect("strict loss must close the circuit");
+
+        task.abort();
+        server.close(0u32.into(), b"test complete");
+        client.close(0u32.into(), b"test complete");
+        tokio::join!(server.wait_idle(), client.wait_idle());
+    }
+
     #[tokio::test]
     async fn relay_quic_address_gate_requires_retry_validation() {
         let rcgen::CertifiedKey { cert, signing_key } =
@@ -3515,7 +3775,6 @@ mod tests {
         let config = load_config(&json);
         let runtime = RelayRuntime::new_for_test(config.config).expect("runtime");
         let context = runtime.circuit_context();
-        assert_eq!(context.dos.current_pow_parameters().difficulty(), 6);
         assert_eq!(context.dos.current_puzzle_parameters().difficulty(), 6);
         let replay_state = context.ticket_replays.lock().expect("ticket replay lock");
         assert_eq!(replay_state.capacity, 8_192);
@@ -3822,7 +4081,10 @@ mod tests {
         let valid = format!(
             "GET /metrics HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
         );
-        assert_eq!(RelayRuntime::admin_bearer_token(&valid), Some(TOKEN));
+        assert_eq!(
+            RelayRuntime::parse_admin_request(&valid).and_then(|request| request.bearer_token),
+            Some(TOKEN)
+        );
         for invalid in [
             format!("GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n folded\r\n\r\n"),
             format!(
@@ -3837,7 +4099,7 @@ mod tests {
             format!("GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nMalformed\r\n\r\n"),
         ] {
             assert!(
-                RelayRuntime::admin_bearer_token(&invalid).is_none(),
+                RelayRuntime::parse_admin_request(&invalid).is_none(),
                 "ambiguous request was accepted: {invalid:?}"
             );
         }
@@ -3846,7 +4108,10 @@ mod tests {
     fn admin_parser_rejects_request_line_and_host_smuggling_forms() {
         const TOKEN: &str = "soranet-test-admin-token-00000001";
         let http_10 = format!("GET /metrics HTTP/1.0\r\nAuthorization: Bearer {TOKEN}\r\n\r\n");
-        assert_eq!(RelayRuntime::admin_bearer_token(&http_10), Some(TOKEN));
+        assert_eq!(
+            RelayRuntime::parse_admin_request(&http_10).and_then(|request| request.bearer_token),
+            Some(TOKEN)
+        );
         for invalid in [
             format!("GET /metrics HTTP/1.1\nHost: localhost\nAuthorization: Bearer {TOKEN}\n\n"),
             format!(

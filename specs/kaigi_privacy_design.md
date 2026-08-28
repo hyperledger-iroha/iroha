@@ -327,7 +327,8 @@ rollback semantics across restart. Rebuild also validates retained call-record
 and relay-allowlist protocol bounds before accepting the snapshot. A retained
 call cannot list its implicit host as a participant, delegate V1 billing away
 from that host, or recover clear alias/timing hints that native storage scrubs.
-Call creation and end timestamps cannot exceed the latest authenticated block time.
+Call creation and end timestamps cannot exceed the latest authenticated block time,
+including an exact-tip hash-only snapshot anchor once its bootstrap record is authenticated.
 Retained relay feedback must remain within the 1 MiB metadata and 512-character
 note bounds, reside in the relay descriptor's registered home domain, and not
 claim a timestamp after that ledger time; the current and undo projections both

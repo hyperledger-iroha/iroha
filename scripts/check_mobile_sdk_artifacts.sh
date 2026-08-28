@@ -2379,7 +2379,9 @@ common = {
     "CARGO_INCREMENTAL",
     "CARGO_NET_OFFLINE",
     "CARGO_TARGET_DIR",
+    "CONNECT_NORITO_SOURCE_REVISION",
     "HOME",
+    "IROHA_GIT_COMMIT_HASH",
     "LANG",
     "LC_ALL",
     "NORITO_SKIP_BINDINGS_SYNC",
@@ -2389,6 +2391,7 @@ common = {
     "RUSTDOC",
     "RUSTUP_HOME",
     "TMPDIR",
+    "VERGEN_GIT_SHA",
 }
 expected_profiles = {
     "apple-ios-device": sorted(
@@ -2557,6 +2560,7 @@ PY
 
     require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*23([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 23"
     require_regex "$manifest" '"source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge source commit"
+    require_regex "$manifest" '"embedded_source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge embedded source commit"
     require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
     require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
     require_regex "$manifest" '"cargo_lock_sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' "NoritoBridge selected Cargo lock hash"
@@ -2700,6 +2704,20 @@ PY
       )" || true
       if [[ "$source_relationship" != "direct" && "$source_relationship" != "pin-parent" ]]; then
         fail "NoritoBridge artifact source commit is neither HEAD nor its authenticated pin-only parent"
+      fi
+      local manifest_embedded_commit expected_embedded_commit
+      manifest_embedded_commit="$(
+        manifest_json_value "$manifest" embedded_source_commit 2>/dev/null || true
+      )"
+      expected_embedded_commit="$(
+        run_isolated_checker_python \
+          "$ROOT_DIR/scripts/check_mobile_sdk_artifact_pin_commit.py" \
+          --root "$ROOT_DIR" \
+          --print-embedded-source-commit \
+          2>/dev/null
+      )" || true
+      if [[ "$manifest_embedded_commit" != "$expected_embedded_commit" ]]; then
+        fail "NoritoBridge artifact embedded source commit does not match checkout"
       fi
       source_dirty=false
       if [[ -n "$(bridge_source_status)" ]]; then

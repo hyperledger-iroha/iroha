@@ -16747,11 +16747,7 @@ function normalizeConfigurationTransport(value, context) {
     record.norito_rpc,
     `${context}.norito_rpc`,
   );
-  const streaming = normalizeConfigurationTransportStreaming(
-    record.streaming,
-    `${context}.streaming`,
-  );
-  return { noritoRpc, streaming };
+  return { noritoRpc };
 }
 
 function normalizeConfigurationTransportNoritoRpc(value, context) {
@@ -16770,69 +16766,6 @@ function normalizeConfigurationTransportNoritoRpc(value, context) {
       record.canary_allowlist_size ?? 0,
       `${context}.canary_allowlist_size`,
       { allowZero: true },
-    ),
-  };
-}
-
-function normalizeConfigurationTransportStreaming(value, context) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const record = ensureRecord(value, context);
-  const soranet = normalizeConfigurationStreamingSoranet(
-    record.soranet,
-    `${context}.soranet`,
-  );
-  return { soranet };
-}
-
-function normalizeConfigurationStreamingSoranet(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  const paddingRaw = record.padding_budget_ms ?? null;
-  const paddingBudgetMs =
-    paddingRaw === null
-      ? null
-      : ToriiClient._normalizeUnsignedInteger(
-          paddingRaw,
-          `${context}.padding_budget_ms`,
-          { allowZero: true },
-        );
-  return {
-    enabled: coerceBoolean(record.enabled ?? false, `${context}.enabled`),
-    streamTag: requireNonEmptyString(
-      record.stream_tag ?? "",
-      `${context}.stream_tag`,
-    ),
-    exitMultiaddr: requireNonEmptyString(
-      record.exit_multiaddr ?? "",
-      `${context}.exit_multiaddr`,
-    ),
-    paddingBudgetMs,
-    accessKind: requireNonEmptyString(
-      record.access_kind ?? "",
-      `${context}.access_kind`,
-    ),
-    garCategory: requireNonEmptyString(
-      record.gar_category ?? "",
-      `${context}.gar_category`,
-    ),
-    channelSalt: requireNonEmptyString(
-      record.channel_salt ?? "",
-      `${context}.channel_salt`,
-    ),
-    provisionSpoolDir: requireNonEmptyString(
-      record.provision_spool_dir ?? "",
-      `${context}.provision_spool_dir`,
-    ),
-    provisionWindowSegments: ToriiClient._normalizeUnsignedInteger(
-      record.provision_window_segments,
-      `${context}.provision_window_segments`,
-      { allowZero: false },
-    ),
-    provisionQueueCapacity: ToriiClient._normalizeUnsignedInteger(
-      record.provision_queue_capacity,
-      `${context}.provision_queue_capacity`,
-      { allowZero: false },
     ),
   };
 }

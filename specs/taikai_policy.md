@@ -12,11 +12,12 @@ payloads (licensing/moderation/metrics + RPT digests) are live in
 `crates/iroha_cli/tests/taikai_policy.rs`), and `cargo xtask taikai-rpt-verify`
 verifies bundles for rollout gates.
 
-Taikai’s broadcast stack already ships deterministic ingest and caching
-primitives (`TaikaiSegmentEnvelopeV1`, `TaikaiCache`) plus the governance
-surface that ties manifests, encryption, and attestation artefacts together.
-This note remains the canonical reference for the shipped policy/crypto
-behaviour.
+Taikai’s broadcast stack already ships the deterministic
+`TaikaiSegmentEnvelopeV1` ingest primitive plus the governance surface that
+ties manifests, encryption, and attestation artefacts together. Viewer
+retrieval uses normal bounded multi-provider SoraFS fetch; V1 has no dedicated
+Taikai cache, queue, gossip profile, configuration, or dashboard. This note
+remains the canonical reference for the shipped policy/crypto behaviour.
 
 ## Objectives
 
@@ -127,7 +128,7 @@ exact KMS lineage without revealing secrets.
 RPTs are canonical Norito commitment envelopes that prove a Taikai rollout
 tied GAR v2, encryption state, and SoraFS distribution evidence together. They
 are designed to be generic so SoraDNS/SoraNet programs can re-use them when
-proving cache consistency or zone publication. The v1 envelope does not carry
+proving distribution consistency or zone publication. The v1 envelope does not carry
 its own signature: authenticity depends on the authenticated publication
 channel and the signed GAR whose exact bytes it commits. Adding an RPT signer
 or signature requires an explicitly versioned signed wrapper or a new schema

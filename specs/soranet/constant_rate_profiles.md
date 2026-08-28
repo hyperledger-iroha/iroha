@@ -16,24 +16,24 @@ cells independent of payload size. The preset catalogue ships with:
   tick and ceiling so operators can test capability negotiation without paying the full bandwidth
   cost. This preset should remain on staging or tightly scoped pilots.
 
-All presets share a 1,024 B payload cell, 1024 B dummy fill, and the hybrid Noise+QUIC envelope
-defined in SNNet-17A. This document records the normative parameters mandated by SNNet-17B1, the
+All presets share an exact 1,024 B wire cell containing an authenticated mux record plus canonical
+zero fill, and the hybrid Noise+QUIC envelope defined in SNNet-17A. This document records the
+normative parameters mandated by SNNet-17B1, the
 tick→bandwidth conversion table used by SDKs, and the CLI interface that operators can call when
 generating configs or status reports.
 
-> **Current relay status:** the production scheduler emits fixed-rate dummy QUIC DATAGRAM cover,
-> but application, exit, measurement, and VPN payload still travels on QUIC streams outside that
-> scheduler. The relay therefore supports only best-effort cover traffic. It rejects
-> `constant_rate_capability.enabled=true` with `strict=true` during configuration validation and
-> independently rejects any strict result during live handshake preflight. There is no silent
-> downgrade to best-effort. Until payload is scheduler-bound and DATAGRAM unavailability or send
-> failure closes the circuit, these profiles and their metrics are rollout instrumentation, not a
-> strict traffic-analysis protection claim. In best-effort mode, unavailable DATAGRAM support or a
-> send error stops the cover task while the circuit remains open.
+> **Current relay status:** strict mode is implemented but deliberately unreachable in production.
+> The locked Quinn 0.11.9 / quinn-proto 0.11.15 receive queue charges payload bytes but no fixed cost per
+> DATAGRAM entry, so an authenticated peer could enqueue unbounded zero-length entries without
+> consuming the configured byte budget. Configuration and live handshake preflight independently
+> reject strict mode until per-entry accounting is available and the complete end-to-end path is
+> requalified. The dormant mux carries application/exit, measurement, and VPN bytes with cover in
+> exact 1,024-byte cells and fails closed on transport or scheduling errors; its presence is not an
+> activation claim. Best-effort cover and the existing authenticated VPN stream remain available.
 
 ## Preset summary
 
-| Profile | Tick (ms) | Cell (B) | Lanes | Dummy floor | Per-lane payload (Mb/s) | Ceiling payload (Mb/s) | Ceiling % of uplink | Recommended uplink (Mb/s) | Neighbor cap | Auto-disable trigger (%) |
+| Profile | Tick (ms) | Cell (B) | Lanes | Dummy floor | Per-lane wire rate (Mb/s) | Ceiling wire rate (Mb/s) | Ceiling % of uplink | Recommended uplink (Mb/s) | Neighbor cap | Auto-disable trigger (%) |
 |---------|-----------|----------|-------|-------------|-------------------------|------------------------|---------------------|----------------------------|--------------|--------------------------|
 | core    | 5.0       | 1024     | 12    | 4           | 1.64                    | 19.50                  | 65                  | 30.0                       | 8            | 85                       |
 | home    | 10.0      | 1024     | 4     | 2           | 0.82                    | 4.00                   | 40                  | 10.0                       | 2            | 70                       |
@@ -47,7 +47,7 @@ generating configs or status reports.
 - **Dummy floor** – minimum number of lanes that always transmit dummy traffic to maintain cover.
   When measured SoraNet demand is lower than this floor, relays still send dummy data at the
   advertised tick so circuit guards cannot infer usage.
-- **Ceiling payload (Mb/s)** – uplink budget dedicated to constant-rate cells after applying the
+- **Ceiling wire rate (Mb/s)** – uplink budget dedicated to constant-rate cells after applying the
   uplink ceiling percentage. Operators should never schedule constant-rate payloads above this
   budget even if spare bandwidth exists.
 - **Auto-disable trigger** – dequeue-based saturation percentage (averaged over a 60 s window for
@@ -74,7 +74,7 @@ labels so audits can prove that the cap is being applied correctly.
 
 The transport uses fixed 1,024 B cells. Table values follow:
 
-| Tick (ms) | Cells/sec | Payload KiB/sec | Payload Mb/s |
+| Tick (ms) | Cells/sec | Cell KiB/sec | Wire Mb/s |
 |-----------|-----------|-----------------|--------------|
 | 5.0       | 200.00    | 200.00          | 1.64         |
 | 7.5       | 133.33    | 133.33          | 1.09         |
@@ -82,8 +82,8 @@ The transport uses fixed 1,024 B cells. Table values follow:
 | 15.0      | 66.67     | 66.67           | 0.55         |
 | 20.0      | 50.00     | 50.00           | 0.41         |
 
-**Formula:** `payload_mbps = (cell_bytes × 8 / 1_000_000) × (1000 / tick_ms)` with `cell_bytes = 1024`.
-Because the payload cell equals 1 KiB, the KiB/sec column matches `cells/sec`.
+**Formula:** `wire_mbps = (cell_bytes × 8 / 1_000_000) × (1000 / tick_ms)` with `cell_bytes = 1024`.
+Because the wire cell equals 1 KiB, the KiB/sec column matches `cells/sec`.
 
 Operators can extend this table with the CLI helper and emit Markdown directly for documentation:
 
@@ -141,8 +141,9 @@ is a staging/dogfood preset; only enable it when exercising the SNNet‑17A capa
 
 ## MTU and padding guidance
 
-- A constant-rate cell carries 1,024 B of payload plus ~96 B of Norito+Noise framing, QUIC crypto,
-  and telemetry tags. When transported over UDP/IPv6 the total datagram stays below 1,260 B,
+- A constant-rate QUIC DATAGRAM carries one exact 1,024 B strict cell (up to 970 logical payload
+  bytes after mux, record header, and authentication tag). With QUIC/UDP/IPv6 overhead the packet
+  stays below the IPv6 minimum MTU,
   comfortably under the 1,280 B IPv6 minimum MTU and the 1,350 B QUIC handshake recommendation.
 - Operators MUST keep `cell_size + framing <= 1,280 B` when tunnels encapsulate the relay traffic
   (WireGuard, IPsec). If overhead pushes the envelope above the MTU the relay must lower its
@@ -180,12 +181,13 @@ is a staging/dogfood preset; only enable it when exercising the SNNet‑17A capa
   a dummy cell or allocate storage proportional to `cell_bytes`.
 - At the wire-protocol level, clients that set the strict flag require every hop to expose the same
   TLV; capability negotiation rejects a strict request when a server advertises best-effort or no
-  constant-rate support. The current relay additionally rejects every negotiated strict result at
-  runtime because real payload is not yet scheduler-bound. It never accepts the circuit as
-  best-effort instead.
+  constant-rate support. The current relay also rejects an otherwise matching strict result before
+  responding because Quinn 0.11.9 / quinn-proto 0.11.15 does not bound queued DATAGRAM entries. It never accepts strict
+  as best-effort instead.
 - Defaults keep the capability disabled so brownfield deployments can stage the rollout. Operators
-  may enable `strict=false` for best-effort cover-traffic telemetry. `strict=true` is a configuration
-  error until the relay can provide the complete transport invariant.
+  may enable `strict=false` for best-effort cover-traffic telemetry. `strict=true` is a startup
+  configuration error until the transport dependency and end-to-end qualification gates close.
+  The Sora VPN helper therefore continues to use its authenticated record-protected QUIC stream.
 
 ## Telemetry-driven lane management
 
@@ -203,16 +205,17 @@ auditable. Recommended actions:
    adherence to the SNNet-17B policy.
 4. Track the new cover-traffic gauges and alerts:
    - `soranet_constant_rate_queue_depth_class{class}` exposes the scheduler's internal per-class
-     queues; current production payload does not feed these queues, so they normally remain empty.
+     queues. The dormant strict implementation binds these to authenticated application queues;
+     currently reachable best-effort mode normally leaves them empty.
      `soranet_constant_rate_queue_depth` remains the aggregate view.
    - `soranet_constant_rate_low_dummy_events_total` increments whenever the live dummy ratio falls
      below 20 % in the scheduler loop. With no production payload producer, this ratio should stay
      at 100 %; a lower value currently indicates test or future scheduler integration.
-   - `soranet_constant_rate_dummy_ratio` reflects only cells emitted by the DATAGRAM scheduler. It
-     does not include or characterize application bytes sent on QUIC streams.
-   - The relay runs a dedicated best-effort DATAGRAM loop per negotiated circuit that emits dummy
-     1,024 B envelopes on the profile tick. Dashboards may use it to chart cover-loop health, but
-     must not interpret it as evidence that application traffic followed the same schedule.
+   - `soranet_constant_rate_dummy_ratio` reflects cover cells divided by all cells emitted by the
+     DATAGRAM scheduler. Once strict activation is qualified, all post-handshake payload must use
+     that scheduler; current production negotiation cannot enter that mode.
+   - Best-effort negotiation still runs the legacy cover-only DATAGRAM loop. Dashboards must retain
+     the negotiated mode label when interpreting those metrics.
 5. Observability assets: Grafana board `dashboards/grafana/soranet_constant_rate.json` charts
    queue depth per class, dummy ratio, live neighbor count, and degraded-state markers; the
    companion alert bundle `dashboards/alerts/soranet_constant_rate_rules.yml` fires when dummy

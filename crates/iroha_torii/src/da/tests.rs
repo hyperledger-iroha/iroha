@@ -40,18 +40,14 @@ use iroha_data_model::{
         LaneConfig as ModelLaneConfig, LaneId,
     },
     parameter::{Parameter, custom::CustomParameter},
-    sorafs::{
-        capacity::ProviderId,
-        pin_registry::{ManifestAliasBinding, ManifestDigest},
-    },
+    sorafs::pin_registry::{ManifestAliasBinding, ManifestDigest},
     taikai::{
-        GuardDirectoryId, SegmentTimestamp, TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1,
-        TAIKAI_ANCHOR_RECEIPT_VERSION_V1, TaikaiAliasBinding, TaikaiAnchorReceiptBodyV1,
-        TaikaiAnchorReceiptV1, TaikaiAvailabilityClass, TaikaiCarPointer, TaikaiCidIndexKey,
-        TaikaiEnvelopeIndexes, TaikaiEventId, TaikaiGuardPolicy, TaikaiRenditionId,
-        TaikaiRenditionRouteV1, TaikaiRoutingManifestV1, TaikaiSegmentEnvelopeV1,
-        TaikaiSegmentSigningBodyV1, TaikaiSegmentSigningManifestV1, TaikaiSegmentWindow,
-        TaikaiStreamId, TaikaiTimeIndexKey,
+        SegmentTimestamp, TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1, TAIKAI_ANCHOR_RECEIPT_VERSION_V1,
+        TaikaiAliasBinding, TaikaiAnchorReceiptBodyV1, TaikaiAnchorReceiptV1,
+        TaikaiAvailabilityClass, TaikaiCarPointer, TaikaiCidIndexKey, TaikaiEnvelopeIndexes,
+        TaikaiEventId, TaikaiRenditionId, TaikaiRenditionRouteV1, TaikaiRoutingManifestV1,
+        TaikaiSegmentEnvelopeV1, TaikaiSegmentSigningBodyV1, TaikaiSegmentSigningManifestV1,
+        TaikaiSegmentWindow, TaikaiStreamId, TaikaiTimeIndexKey,
     },
 };
 use iroha_primitives::{json::Json, numeric::XorQuantity};
@@ -1002,7 +998,7 @@ fn taikai_availability_rejects_rendition_window_that_misses_segment() {
     );
 }
 #[test]
-fn taikai_ingest_tags_include_availability_and_cache_hint() {
+fn taikai_ingest_tags_include_availability_and_proof_policy() {
     let mut metadata = taikai_metadata();
     metadata.items.extend([
         MetadataEntry::new(
@@ -1023,15 +1019,12 @@ fn taikai_ingest_tags_include_availability_and_cache_hint() {
         storage_class: StorageClass::Warm,
         governance_tag: GovernanceTag::new("da.taikai.test"),
     };
-    let payload_digest = BlobDigest::from_hash(blake3_hash(b"taikai payload bytes"));
     taikai::apply_taikai_ingest_tags(
         &mut metadata,
         Some(TaikaiAvailabilityClass::Cold),
         &retention,
-        payload_digest,
         1024,
-    )
-    .expect("tagging succeeds");
+    );
     fn value_for(metadata: &ExtraMetadata, key: &str) -> String {
         let entry = metadata
             .items
@@ -1078,63 +1071,19 @@ fn taikai_ingest_tags_include_availability_and_cache_hint() {
         value_for(&metadata, taikai::META_DA_POTR_SAMPLE_WINDOW),
         "32"
     );
-    let cache_hint_entry = metadata
-        .items
-        .iter()
-        .find(|entry| entry.key == taikai::META_TAIKAI_CACHE_HINT)
-        .expect("cache hint entry");
-    let cache_hint: Value = json::from_slice(&cache_hint_entry.value).expect("cache hint json");
-    let hint = cache_hint.as_object().expect("cache hint object");
-    assert_eq!(
-        hint.get("event").and_then(Value::as_str).expect("event id"),
-        "global-keynote"
-    );
-    assert_eq!(
-        hint.get("stream")
-            .and_then(Value::as_str)
-            .expect("stream id"),
-        "stage-a"
-    );
-    assert_eq!(
-        hint.get("rendition")
-            .and_then(Value::as_str)
-            .expect("rendition id"),
-        "1080p"
-    );
-    assert_eq!(
-        hint.get("sequence")
-            .and_then(Value::as_u64)
-            .expect("sequence"),
-        42
-    );
-    assert_eq!(
-        hint.get("payload_len")
-            .and_then(Value::as_u64)
-            .expect("payload_len"),
-        1024
-    );
-    assert_eq!(
-        hint.get("payload_blake3_hex")
-            .and_then(Value::as_str)
-            .expect("digest"),
-        hex::encode(payload_digest.as_ref())
-    );
 }
 fn taikai_manifest_fixture() -> (DaIngestRequest, ManifestArtifacts) {
     let mut request = sample_request();
     request.metadata = taikai_metadata();
     let canonical = normalize_payload(&request).expect("normalize payload");
     let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let payload_digest = BlobDigest::from_hash(blake3_hash(canonical.as_slice()));
     let mut metadata = request.metadata.clone();
     taikai::apply_taikai_ingest_tags(
         &mut metadata,
         Some(TaikaiAvailabilityClass::Hot),
         &request.retention_policy,
-        payload_digest,
         request.total_size,
-    )
-    .expect("tagging succeeds");
+    );
     let rent_policy = DaRentPolicyV1::default();
     let manifest = resolve_manifest(
         &request,
@@ -1147,40 +1096,6 @@ fn taikai_manifest_fixture() -> (DaIngestRequest, ManifestArtifacts) {
     )
     .expect("manifest");
     (request, manifest)
-}
-#[test]
-fn verify_manifest_rejects_cache_hint_mismatch() {
-    let (request, manifest) = taikai_manifest_fixture();
-    let mut tampered = manifest.manifest.clone();
-    // Replace the cache hint digest with a mismatched value.
-    let hint_entry = tampered
-        .metadata
-        .items
-        .iter_mut()
-        .find(|entry| entry.key == taikai::META_TAIKAI_CACHE_HINT)
-        .expect("cache hint entry");
-    let mut hint: Value = json::from_slice(&hint_entry.value).expect("decode cache hint");
-    if let Value::Object(map) = &mut hint {
-        map.insert(
-            "payload_blake3_hex".into(),
-            Value::from(hex::encode([0xCD; 32])),
-        );
-    } else {
-        panic!("cache hint must be a JSON object");
-    }
-    hint_entry.value = json::to_vec(&hint).expect("encode cache hint");
-    let err = verify_manifest_against_request(
-        &request,
-        &tampered,
-        &request.retention_policy,
-        &tampered.metadata,
-        &tampered.chunks,
-        manifest.blob_hash,
-        manifest.chunk_root,
-        &manifest.manifest.rent_quote,
-    )
-    .expect_err("cache hint digest mismatch must be rejected");
-    assert_eq!(err.0, StatusCode::BAD_REQUEST);
 }
 #[test]
 fn verify_manifest_rejects_missing_proof_tier() {
@@ -1394,7 +1309,6 @@ where
     let publisher = checked_random_keypair_with_algorithm(publisher_algorithm);
     let publisher_account = AccountId::new(publisher.public_key().clone());
     let mut body = TaikaiSegmentSigningBodyV1::new(
-        TaikaiSegmentSigningBodyV1::VERSION,
         envelope_hash,
         manifest_hash,
         car_digest,
@@ -1403,7 +1317,6 @@ where
         publisher.public_key().clone(),
         generated_at_unix * 1_000,
         alias_binding,
-        ExtraMetadata::default(),
     );
     mutate_body(&mut body);
     let signature = checked_taikai_segment_signature(publisher.private_key(), &body);
@@ -1423,8 +1336,6 @@ fn sample_trm_manifest() -> TaikaiRoutingManifestV1 {
             131_072,
         ),
         availability_class: TaikaiAvailabilityClass::Hot,
-        replication_targets: vec![ProviderId::new([0x22; 32])],
-        soranet_circuit: GuardDirectoryId::new("soranet/demo"),
         ssm_range: TaikaiSegmentWindow::new(40, 64),
     };
     TaikaiRoutingManifestV1 {
@@ -1438,13 +1349,6 @@ fn sample_trm_manifest() -> TaikaiRoutingManifestV1 {
             namespace: "sora".to_owned(),
             proof: vec![0xAB, 0xCD],
         },
-        guard_policy: TaikaiGuardPolicy::new(
-            GuardDirectoryId::new("soranet/demo"),
-            1,
-            3,
-            vec!["lane-a".to_owned()],
-        ),
-        metadata: ExtraMetadata::default(),
     }
 }
 fn sample_trm_bytes() -> Vec<u8> {
@@ -2112,6 +2016,41 @@ fn taikai_ssm_requires_caller_supplied_manifest_in_compute_path() {
 }
 
 #[test]
+fn taikai_cache_hint_is_rejected_in_compute_path() {
+    let mut request = sample_request();
+    request.metadata = taikai_metadata();
+    request.metadata.items.push(MetadataEntry::new(
+        RETIRED_TAIKAI_CACHE_HINT_KEY,
+        b"stale-cache-hint".to_vec(),
+        MetadataVisibility::Public,
+    ));
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    let digest = request.signing_digest();
+    request.signatures[0].signature = checked_signature(keypair.private_key(), &digest);
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
+
+    let err = compute_da_manifest_artifacts(
+        &request,
+        &nexus,
+        1,
+        None,
+        None,
+        &DaReplicationPolicy::default(),
+        &DaRentPolicyV1::default(),
+        None,
+    )
+    .err()
+    .expect("retired Taikai cache hint must reject");
+
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("`taikai.cache_hint` is not accepted in V1"),
+        "unexpected retired cache-hint error: {}",
+        err.1
+    );
+}
+
+#[test]
 fn lane_proof_scheme_rejects_stale_geometry_only_lane() {
     let stale_lane = LaneId::new(3);
     let authoritative_catalog = lane_catalog_with_lanes(vec![ModelLaneConfig::default()]);
@@ -2186,16 +2125,11 @@ fn taikai_envelope_generation_requires_metadata() {
         &rent_policy,
     )
     .expect("manifest");
-    let err = match taikai_ingest::build_envelope(
-        &request,
-        &manifest,
-        &chunk_store,
-        canonical.as_slice(),
-        None,
-    ) {
-        Ok(_) => panic!("missing metadata must error"),
-        Err(err) => err,
-    };
+    let err =
+        match taikai_ingest::build_envelope(&manifest, &chunk_store, canonical.as_slice(), None) {
+            Ok(_) => panic!("missing metadata must error"),
+            Err(err) => err,
+        };
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
 }
 
@@ -2222,13 +2156,7 @@ fn taikai_envelope_error_with_metadata_value(key: &str, value: &[u8]) -> (Status
         &DaRentPolicyV1::default(),
     )
     .expect("manifest");
-    match taikai_ingest::build_envelope(
-        &request,
-        &manifest,
-        &chunk_store,
-        canonical.as_slice(),
-        None,
-    ) {
+    match taikai_ingest::build_envelope(&manifest, &chunk_store, canonical.as_slice(), None) {
         Ok(_) => panic!("zero-valued `{key}` metadata must fail"),
         Err(err) => err,
     }
@@ -2266,14 +2194,9 @@ fn taikai_envelope_generation_computes_pointers() {
         &rent_policy,
     )
     .expect("manifest");
-    let artifacts = taikai_ingest::build_envelope(
-        &request,
-        &manifest,
-        &chunk_store,
-        canonical.as_slice(),
-        None,
-    )
-    .expect("taikai envelope");
+    let artifacts =
+        taikai_ingest::build_envelope(&manifest, &chunk_store, canonical.as_slice(), None)
+            .expect("taikai envelope");
     let envelope: TaikaiSegmentEnvelopeV1 =
         norito::decode_from_bytes(&artifacts.envelope_bytes).expect("decode framed envelope");
     assert_eq!(
@@ -2321,7 +2244,6 @@ fn taikai_envelope_calls_chunking_observer() {
         called.set(called.get() + 1);
     };
     taikai_ingest::build_envelope(
-        &request,
         &manifest,
         &chunk_store,
         canonical.as_slice(),
@@ -5236,14 +5158,9 @@ fn taikai_ssm_validation_fixture() -> (ManifestArtifacts, taikai_ingest::Envelop
         &rent_policy,
     )
     .expect("manifest");
-    let envelope = taikai_ingest::build_envelope(
-        &request,
-        &manifest,
-        &chunk_store,
-        canonical.as_slice(),
-        None,
-    )
-    .expect("envelope");
+    let envelope =
+        taikai_ingest::build_envelope(&manifest, &chunk_store, canonical.as_slice(), None)
+            .expect("envelope");
     (manifest, envelope)
 }
 fn taikai_alias_cache_policy() -> crate::sorafs::AliasCachePolicy {
@@ -6150,10 +6067,8 @@ fn build_receipt_prefers_chunk_root_from_manifest() {
         &mut request.metadata,
         None,
         &request.retention_policy,
-        payload_hash.clone(),
         request.total_size,
-    )
-    .expect("apply taikai tags to metadata");
+    );
     let manifest_chunk_root = BlobDigest::new(*chunk_store.por_tree().root());
     let chunk_commitments =
         build_chunk_commitments(&request, &chunk_store, canonical_bytes.as_slice())

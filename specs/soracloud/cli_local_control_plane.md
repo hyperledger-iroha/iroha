@@ -244,12 +244,15 @@ The CLI executes an owner-private copy of the exact helper. One `sorafs-node
 preseed-session` child locks every target, ingests and byte-for-byte
 revalidates the bundle, every guest ISA, and the public discovery document,
 then atomically appends a content-addressed ingest qualification inside every
-store. The CLI writes the same canonical qualification to `--receipt-out`,
-closes the helper protocol, waits for it to exit, and thereby releases every
-store lock before any validator restarts or Torii mutation begins. Historical
-qualifications remain immutable so still-reachable releases coexist across
-upgrades. Verify-only sessions prove an existing ingest qualification and
-never replace it or repair missing content.
+store. While holding all locks, the child emits exactly one canonical ready
+receipt and waits for stdin EOF. After validating that receipt, the parent
+closes stdin and accepts completion only when the child emits the exact V1
+`released` acknowledgment after observing EOF and exits successfully. The CLI
+then writes the same canonical qualification to `--receipt-out`; every store
+lock is therefore released before any validator restart or Torii mutation.
+Historical qualifications remain immutable so still-reachable releases coexist
+across upgrades. Verify-only sessions prove an existing ingest qualification
+and never replace it or repair missing content.
 
 Each store retains at most 4096 qualifications. The offline helper rejects a
 4097th qualification on every target before ingesting any artifact. Capacity

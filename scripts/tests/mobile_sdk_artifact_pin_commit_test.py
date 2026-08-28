@@ -71,6 +71,10 @@ class MobileSdkArtifactPinCommitTests(unittest.TestCase):
             pin.validate_pin_relationship(self.root, self.source_commit),
             "direct",
         )
+        self.assertEqual(
+            pin.embedded_source_commit(self.root),
+            self.source_commit,
+        )
 
     def test_git_fixture_ignores_inherited_repository_context(self) -> None:
         poison = self.root / "inherited-git-context"
@@ -92,22 +96,46 @@ class MobileSdkArtifactPinCommitTests(unittest.TestCase):
             pin.validate_pin_relationship(self.root, self.source_commit),
             "pin-parent",
         )
+        self.assertEqual(
+            pin.embedded_source_commit(self.root),
+            self.source_commit,
+        )
 
     def test_rejects_loader_logic_change_in_pin_commit(self) -> None:
         self.loader.write_text(loader("a", extra="    static let bypass = true\n"), encoding="utf-8")
-        self.commit_changes()
+        changed_commit = self.commit_changes()
         with self.assertRaisesRegex(
             pin.PinCommitError,
             "beyond the three fallback digests",
         ):
             pin.validate_pin_relationship(self.root, self.source_commit)
+        self.assertEqual(pin.embedded_source_commit(self.root), changed_commit)
 
     def test_rejects_any_non_allowlisted_path(self) -> None:
         self.loader.write_text(loader("a"), encoding="utf-8")
         (self.root / "README.md").write_text("unrelated\n", encoding="utf-8")
-        self.commit_changes()
+        changed_commit = self.commit_changes()
         with self.assertRaisesRegex(pin.PinCommitError, "non-artifact source paths"):
             pin.validate_pin_relationship(self.root, self.source_commit)
+        self.assertEqual(pin.embedded_source_commit(self.root), changed_commit)
+
+    def test_prints_embedded_parent_only_for_mechanical_pin_child(self) -> None:
+        self.loader.write_text(loader("a"), encoding="utf-8")
+        self.commit_changes()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--root",
+                str(self.root),
+                "--print-embedded-source-commit",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(result.stdout, f"{self.source_commit}\n")
 
     def test_rejects_grandparent_even_when_both_children_are_pin_shaped(self) -> None:
         self.loader.write_text(loader("a"), encoding="utf-8")

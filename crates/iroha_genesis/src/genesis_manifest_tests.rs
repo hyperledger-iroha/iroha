@@ -1291,6 +1291,18 @@ fn crypto_manifest_requires_ed25519() {
         "unexpected error: {err:?}"
     );
 }
+#[test]
+fn crypto_manifest_rejects_noncanonical_sm_intrinsics_policy() {
+    let crypto = ManifestCrypto {
+        sm_intrinsics: "AUTO".to_owned(),
+        ..ManifestCrypto::default()
+    };
+    assert!(crypto.validate().is_err());
+    assert!(
+        std::panic::catch_unwind(|| ActualCrypto::from(crypto)).is_err(),
+        "conversion must not silently replace an invalid policy with `auto`"
+    );
+}
 #[cfg(feature = "sm")]
 #[test]
 fn crypto_manifest_requires_sm_defaults_when_sm2_allowed() {

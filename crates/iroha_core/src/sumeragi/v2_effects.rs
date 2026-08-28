@@ -4656,6 +4656,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
 }
 impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Whether executor-owned mutation and handoff state has drained before Apply.
+    #[cfg(test)]
     fn lifecycle_decision_apply_executor_owners_are_empty(&self) -> bool {
         self.pending_work() == 0
             && self.pending_runner_decision_cleanup.is_none()

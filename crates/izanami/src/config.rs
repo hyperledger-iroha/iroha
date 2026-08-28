@@ -839,7 +839,8 @@ impl NexusProfile {
             )),
         );
         let reader = ConfigReader::new().with_toml_source(TomlSource::inline(raw_table.clone()));
-        let actual = iroha_config::parameters::user::Root::read_and_complete(reader)
+        let actual = reader
+            .read_and_complete::<iroha_config::parameters::user::Root>()
             .map_err(|err| eyre!("failed to load embedded nexus config: {err:?}"))?
             .parse()
             .map_err(|err| eyre!("failed to parse embedded nexus config: {err:?}"))?;

@@ -347,10 +347,10 @@ impl PackageCar {
     /// Return the exact validated `SoraFS` plan used to write this package CAR.
     ///
     /// The plan covers the positive source tree plus the three mandatory semantic-release,
-    /// artifact-descriptor, and verification-lock bundle entries. Its ordered chunk inventory
-    /// carries no optional Taikai hints and is the canonical witness for the archive commitment's
-    /// content length, chunk count, and chunk-plan digest. The commitment's file count remains the
-    /// source-tree count and therefore excludes those three bundle entries.
+    /// artifact-descriptor, and verification-lock bundle entries. Its ordered chunk inventory is
+    /// the canonical witness for the archive commitment's content length, chunk count, and
+    /// chunk-plan digest. The commitment's file count remains the source-tree count and therefore
+    /// excludes those three bundle entries.
     #[must_use]
     pub const fn plan(&self) -> &CarBuildPlan {
         &self.plan
@@ -3081,12 +3081,6 @@ exports = []
         let commitment = car.archive_commitment().expect("archive commitment");
         plan.validate().expect("exposed plan validates");
         assert_eq!(plan.payload_digest, blake3::hash(car.payload()));
-        assert!(
-            plan.chunks
-                .iter()
-                .all(|chunk| chunk.taikai_segment_hint.is_none()),
-            "Musubi source plans must not carry Taikai routing hints"
-        );
         assert_eq!(plan.content_length, commitment.content_length);
         assert_eq!(
             plan.chunks.len(),

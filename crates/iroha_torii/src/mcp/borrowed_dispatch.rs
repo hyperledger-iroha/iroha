@@ -332,6 +332,67 @@ fn build_accounts_onboard_submit_body(arguments: &Map) -> Result<BorrowedMcpJson
     build_accounts_onboard_exact_body(arguments, FIELDS, FIELDS)
 }
 
+fn build_accounts_faucet_exact_body<'a>(
+    arguments: &'a Map,
+    allowed_fields: &[&str],
+    required_fields: &[&str],
+) -> Result<BorrowedMcpJson<'a>, String> {
+    if let Some(field) = arguments
+        .keys()
+        .find(|field| !matches!(field.as_str(), "body" | "accept"))
+    {
+        return Err(format!(
+            "unsupported account faucet argument `{field}`; the exact request must be supplied only in `body`"
+        ));
+    }
+    let body = arguments
+        .get("body")
+        .ok_or_else(|| "`body` is required".to_owned())?;
+    let body_object = body
+        .as_object()
+        .ok_or_else(|| "`body` must be an object".to_owned())?;
+    if let Some(field) = body_object
+        .keys()
+        .find(|field| !allowed_fields.contains(&field.as_str()))
+    {
+        return Err(format!(
+            "unsupported account faucet field `{field}`; only the exact proof or prepared envelope is accepted"
+        ));
+    }
+    if let Some(field) = required_fields
+        .iter()
+        .find(|field| body_object.get(**field).is_none_or(Value::is_null))
+    {
+        return Err(format!("`{field}` is required"));
+    }
+    Ok(BorrowedMcpJson::Value(body))
+}
+
+fn build_accounts_faucet_prepare_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
+    const FIELDS: &[&str] = &["schema", "binding", "claim", "fee_payment"];
+    build_accounts_faucet_exact_body(arguments, FIELDS, FIELDS)
+}
+
+fn build_accounts_faucet_submit_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
+    const FIELDS: &[&str] = &[
+        "schema",
+        "binding",
+        "operation",
+        "claim",
+        "semantic_hash_hex",
+        "account_id",
+        "asset_definition_id",
+        "asset_id",
+        "amount",
+        "transaction_hash_hex",
+        "signed_transaction_wire_hex",
+        "signed_transaction_wire_sha256",
+        "fee_payment",
+        "server_signature",
+    ];
+    build_accounts_faucet_exact_body(arguments, FIELDS, FIELDS)
+}
+
 fn require_borrowed_governance_body_string<'a>(
     body: &BorrowedMcpJson<'a>,
     field: &str,

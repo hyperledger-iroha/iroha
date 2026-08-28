@@ -1472,15 +1472,15 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     "observe_effects": (
         "a046c2022e0ae5bec78701605451d8ef99c2c474345ebddd0b49d8c18f274e49"
     ),
-    "step": "aaa41e0366ae660537780528c97e763e8f292e9a80234c21d4cc37a390eea414",
+    "step": "5963ef7728c8c6555bf7156b64cc649ee7c54b5a77befae64db17e24cdc4d313",
     "finish_dispatched_step": (
         "79b15a8142c81629b078a64822c4bba3a7cc930d1da75eb816c7f64609021285"
     ),
     "try_step_pacemaker_escape": (
-        "aa0a41501d13d502e119566bb4fc55e202f820ece97cf66e486ac851b458c64d"
+        "55cd8225900a605ce0821bda634c5247d007b53db561c404b4be2de13a0ac9fe"
     ),
     "dispatch_one_pacemaker_progress": (
-        "fc7d5f12b41f703242826e8926dd91f4267b78d775b1d8c2453d85006a3ac965"
+        "d806941928afcb15ee72ed7eef771ac10cad55a7b714827b49052617b76c894d"
     ),
     "dispatch_one_fence_dependency": (
         "539239fa96fca8ea08dc56ac89041b7be0bb6f5f3d33f65259ad8e7833173b69"
@@ -1623,6 +1623,9 @@ _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
+    "ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc": (
+        "a998fd581c2b0ed01441cad6e752e8599e7f41634844045bff07ab4f7213aa29"
+    ),
     "same_view_generation_upgrade_restarts_timeout_with_a_fresh_owner": (
         "9c2930e2bec6e33904f20f6135300bcce4164b36a2cd03d9c8e516729ab84666"
     ),

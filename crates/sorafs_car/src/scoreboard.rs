@@ -745,7 +745,6 @@ mod tests {
                 offset: 0,
                 length,
                 digest: [0u8; 32],
-                taikai_segment_hint: None,
             }],
             files: vec![crate::FilePlan {
                 path: Vec::new(),

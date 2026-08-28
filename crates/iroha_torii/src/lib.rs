@@ -2372,6 +2372,7 @@ struct AppState {
     mcp_tools: Arc<Vec<mcp::ToolSpec>>,
     mcp_dispatch_inflight: Arc<tokio::sync::Semaphore>,
     mcp_long_poll_inflight: Arc<tokio::sync::Semaphore>,
+    mcp_inflight_requests: Arc<mcp::McpInflightRegistry>,
     mcp_allowed_origins: Arc<Vec<HeaderValue>>,
     mcp_dispatch_router: std::sync::RwLock<Option<axum::Router>>,
     fee_policy: FeePolicy,
@@ -42754,8 +42755,6 @@ fn map_block_proof_error(error: BlockProofError) -> Error {
 }
 // -------------- Runtime handlers (removed AppState-based; use closures in router) --------------
 mod da;
-#[cfg(feature = "app_api")]
-pub use self::da::compute_taikai_ingest_tags;
 mod stream;
 #[cfg(feature = "app_api")]
 pub(crate) mod webhook;
@@ -44777,8 +44776,8 @@ pub struct Torii {
     events: EventsSender,
     query_service: LiveQueryStoreHandle,
     kura: Arc<Kura>,
-    transaction_max_content_len: ConfigBytes<u64>,
-    iso_bridge_max_body_bytes: ConfigBytes<u64>,
+    transaction_max_content_len: ConfigBytes,
+    iso_bridge_max_body_bytes: ConfigBytes,
     transaction_ingress_max_concurrent_compute_jobs: usize,
     #[cfg(feature = "app_api")]
     verified_source_max_concurrent_compiles: usize,
@@ -50510,6 +50509,7 @@ impl Torii {
         let mcp_long_poll_inflight = Arc::new(tokio::sync::Semaphore::new(
             mcp::long_poll_dispatch_capacity(self.mcp.max_inflight_dispatches.get()),
         ));
+        let mcp_inflight_requests = Arc::new(mcp::McpInflightRegistry::default());
         let mcp_allowed_origins = Arc::new(if self.cors.enabled {
             Self::parse_cors_origins(&self.cors.allowed_origins)
         } else {
@@ -50600,6 +50600,7 @@ impl Torii {
             mcp_tools: mcp_tools.clone(),
             mcp_dispatch_inflight,
             mcp_long_poll_inflight,
+            mcp_inflight_requests,
             mcp_allowed_origins,
             mcp_dispatch_router: std::sync::RwLock::new(None),
             fee_policy: self.fee_policy.clone(),
@@ -51441,11 +51442,21 @@ async fn handler_mcp_jsonrpc(
             mcp::jsonrpc_rate_limited(),
         );
     }
+    if mcp::is_cancelled_notification(&payload) {
+        mcp::handle_cancelled_notification(&app, &headers, &payload);
+        return mcp::private_no_store_response(StatusCode::ACCEPTED);
+    }
     if mcp::is_jsonrpc_notification(&payload) || mcp::is_jsonrpc_response(&payload) {
         return mcp::private_no_store_response(StatusCode::ACCEPTED);
     }
-    let response_payload = mcp::handle_jsonrpc_request(app.clone(), &headers, payload).await;
-    mcp::bounded_jsonrpc_http_response(response_payload, app.mcp.max_request_bytes)
+    match mcp::handle_jsonrpc_request(app.clone(), &headers, payload).await {
+        mcp::JsonRpcRequestOutcome::Response(response_payload) => {
+            mcp::bounded_jsonrpc_http_response(response_payload, app.mcp.max_request_bytes)
+        }
+        mcp::JsonRpcRequestOutcome::Cancelled => {
+            mcp::private_no_store_response(StatusCode::NO_CONTENT)
+        }
+    }
 }
 #[cfg(feature = "app_api")]
 fn build_sorafs_cache(

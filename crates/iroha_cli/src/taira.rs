@@ -54,8 +54,7 @@ const DEFAULT_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
 /// Canonical first-release Taira fee/faucet asset definition.
 pub(crate) const DEFAULT_GAS_ASSET_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
-const DEFAULT_ALIAS_PREFIX: &str = "tairarolloutcanary";
-const TAIRA_CANARY_ALIAS_SCOPE: &str = "taira.universal";
+const CANARY_ALIAS_PREFIX: &str = "tairarolloutcanary";
 const DEFAULT_WRITE_TTL_MS: u64 = 120_000;
 const DEFAULT_WRITE_STATUS_TIMEOUT_MS: u64 = 120_000;
 const PREPARED_ENVELOPE_SCHEMA_V1: &str = "iroha.taira.prepared-mutation-envelope.v1";
@@ -745,6 +744,9 @@ pub struct InrouStage {
     /// Fresh owner-only directory that will contain exact manifests and payloads.
     #[arg(long, value_name = "PATH")]
     pub stage_dir: PathBuf,
+    /// Owner-private directory containing exactly peer0.toml through peer3.toml to bind.
+    #[arg(long, value_name = "PATH")]
+    pub bind_validator_config_dir: PathBuf,
     /// Emit a stable JSON receipt.
     #[arg(long)]
     pub json: bool,
@@ -774,10 +776,18 @@ impl Run for InrouStage {
             self.sorafs_retention_epoch,
             placement_targets,
         )?;
+        crate::soracloud::bind_taira_inrou_validator_configs(
+            &self.bind_validator_config_dir,
+            &receipt,
+        )?;
         let mut extra = Map::new();
         extra.insert(
             "stage_dir".into(),
             Value::String(self.stage_dir.display().to_string()),
+        );
+        extra.insert(
+            "validator_config_dir".into(),
+            Value::String(self.bind_validator_config_dir.display().to_string()),
         );
         extra.insert("receipt".into(), json::to_value(&receipt)?);
         let report = report_value(
@@ -4068,11 +4078,7 @@ fn validate_prepared_operation(
     let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
     let transaction = match operation {
         PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
-            let expected_alias = build_alias(
-                DEFAULT_ALIAS_PREFIX,
-                signer.key_pair.public_key(),
-                TAIRA_CANARY_ALIAS_SCOPE,
-            )?;
+            let expected_alias = canary_alias(signer.key_pair.public_key());
             let expected_request = AccountOnboardingPlanRequestV1::try_new(
                 expected_alias.clone(),
                 &signer.account_id,
@@ -4093,11 +4099,7 @@ fn validate_prepared_operation(
             )?)
         }
         PreparedTransactionOperationV1::OnboardingProofRequired(proof_required) => {
-            let expected_alias = build_alias(
-                DEFAULT_ALIAS_PREFIX,
-                signer.key_pair.public_key(),
-                TAIRA_CANARY_ALIAS_SCOPE,
-            )?;
+            let expected_alias = canary_alias(signer.key_pair.public_key());
             let expected_request = AccountOnboardingPlanRequestV1::try_new(
                 expected_alias.clone(),
                 &signer.account_id,
@@ -4815,11 +4817,7 @@ fn prepare_onboarding_operation(
     let signer = resolve_canary_signer(config)?;
     let canary_config = write_canary_config(config, public_root, &signer)?;
     let client = IrohaClient::new(canary_config.clone());
-    let alias = build_alias(
-        DEFAULT_ALIAS_PREFIX,
-        signer.key_pair.public_key(),
-        TAIRA_CANARY_ALIAS_SCOPE,
-    )?;
+    let alias = canary_alias(signer.key_pair.public_key());
     let request =
         AccountOnboardingPlanRequestV1::try_new(alias, &signer.account_id, std::iter::empty())?;
     let receipt = client
@@ -4933,11 +4931,7 @@ fn submit_server_prepared_operation(
         PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
             let token = read_onboarding_token_file(args.require_onboarding_token()?)?;
             let request = AccountOnboardingPlanRequestV1::try_new(
-                build_alias(
-                    DEFAULT_ALIAS_PREFIX,
-                    signer.key_pair.public_key(),
-                    TAIRA_CANARY_ALIAS_SCOPE,
-                )?,
+                canary_alias(signer.key_pair.public_key()),
                 &signer.account_id,
                 std::iter::empty(),
             )?;
@@ -6787,37 +6781,10 @@ fn resolve_canary_signer(config: &Config) -> Result<CanarySigner> {
         key_pair,
     })
 }
-pub(super) fn build_alias(
-    prefix: &str,
-    public_key: &iroha_crypto::PublicKey,
-    domain: &str,
-) -> Result<String> {
-    if !(1..=32).contains(&prefix.len())
-        || !prefix
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_lowercase)
-        || !prefix
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-    {
-        eyre::bail!(
-            "alias prefix must contain 1..32 canonical lowercase ASCII alphanumeric bytes and start with a letter"
-        );
-    }
-    let dataspace = domain
-        .rsplit('.')
-        .next()
-        .filter(|value| {
-            !value.is_empty()
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-        })
-        .ok_or_else(|| eyre!("alias domain must end in a canonical dataspace label"))?;
+pub(super) fn canary_alias(public_key: &iroha_crypto::PublicKey) -> String {
     let digest = Sha256::digest(public_key.to_string().as_bytes());
     let suffix = hex::encode(&digest[..8]);
-    Ok(format!("{prefix}{suffix}@{dataspace}"))
+    format!("{CANARY_ALIAS_PREFIX}{suffix}@universal")
 }
 
 fn solve_account_faucet_claim(
@@ -10702,14 +10669,9 @@ mod tests {
         );
     }
     #[test]
-    fn build_alias_requires_a_canonical_prefix() {
+    fn canary_alias_is_one_canonical_key_derived_identity() {
         let key_pair = fixture_key_pair(7);
-        let alias = build_alias(
-            DEFAULT_ALIAS_PREFIX,
-            key_pair.public_key(),
-            TAIRA_CANARY_ALIAS_SCOPE,
-        )
-        .expect("canonical alias inputs");
+        let alias = canary_alias(key_pair.public_key());
         assert!(alias.starts_with("tairarolloutcanary"));
         assert!(alias.ends_with("@universal"));
         assert!(
@@ -10717,12 +10679,7 @@ mod tests {
                 .chars()
                 .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '@')
         );
-        for retired in ["Taira Rollout Canary!", "taira-rollout-canary", ""] {
-            let _ = build_alias(retired, key_pair.public_key(), TAIRA_CANARY_ALIAS_SCOPE)
-                .expect_err("alias prefixes are never sanitized or defaulted");
-        }
-        let _ = build_alias(DEFAULT_ALIAS_PREFIX, key_pair.public_key(), "taira.")
-            .expect_err("dataspace labels are never defaulted");
+        assert_eq!(alias, canary_alias(key_pair.public_key()));
     }
     #[test]
     fn public_root_requires_an_exact_origin() {

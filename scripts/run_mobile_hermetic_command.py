@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -33,12 +34,17 @@ COMMON_CARGO_ENVIRONMENT = frozenset(
         "TMPDIR",
     }
 )
-APPLE_CARGO_ENVIRONMENT = COMMON_CARGO_ENVIRONMENT | {
+SERIALIZED_CARGO_ENVIRONMENT = COMMON_CARGO_ENVIRONMENT | {
     "CARGO_BUILD_JOBS",
     "RUSTC_BOOTSTRAP",
     "RUSTDOC",
 }
-ANDROID_CARGO_ENVIRONMENT = APPLE_CARGO_ENVIRONMENT | {
+APPLE_CARGO_ENVIRONMENT = SERIALIZED_CARGO_ENVIRONMENT | {
+    "CONNECT_NORITO_SOURCE_REVISION",
+    "IROHA_GIT_COMMIT_HASH",
+    "VERGEN_GIT_SHA",
+}
+ANDROID_CARGO_ENVIRONMENT = SERIALIZED_CARGO_ENVIRONMENT | {
     "ANDROID_NDK_HOME",
     "ANDROID_NDK_ROOT",
 }
@@ -195,6 +201,21 @@ def authenticate_cargo_environment(
     for name, expected in exact_values.items():
         if environment[name] != expected:
             raise RuntimeError(f"{name} must be exactly {expected!r}")
+
+    source_revision_names = (
+        "CONNECT_NORITO_SOURCE_REVISION",
+        "IROHA_GIT_COMMIT_HASH",
+        "VERGEN_GIT_SHA",
+    )
+    if source_revision_names[0] in environment:
+        revisions = [environment[name] for name in source_revision_names]
+        if (
+            len(set(revisions)) != 1
+            or re.fullmatch(r"[0-9a-f]{40}", revisions[0]) is None
+        ):
+            raise RuntimeError(
+                "Apple source revision variables must be identical canonical commits"
+            )
 
     target = pathlib.Path(environment["CARGO_TARGET_DIR"])
     if not target.is_absolute() or target != pathlib.Path(os.path.abspath(target)):

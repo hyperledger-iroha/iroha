@@ -21,8 +21,7 @@ and the data-model definitions in `crates/iroha_data_model/src/taikai.rs`.
    `iroha app taikai ingest --watch`)
    that automate drift correction, metadata emission, and Norito encoding.
 4. Expose ingest/encoder telemetry (latency, live-edge drift, rebuffer
-   forecasts) via the `taikai_viewer`/`taikai_cache` Grafana bundles and alert
-   packs referenced in the roadmap.
+   forecasts) via the `taikai_viewer` Grafana dashboard and alert pack.
 5. Publish fixtures and deterministic tests (`integration_tests/tests/taikai_da.rs`)
    proving the ingest path is replayable end to end.
 
@@ -34,8 +33,12 @@ publishers -> SRT/RTMP edge -> mezzanine normalizer (color space, audio layout)
             -> LL/STD CMAF segmenter (200 ms / 2 s targets)
             -> ingest writer (Torii /v1/da/ingest)
             -> CARv2 builder + Taikai envelope + indexes
-            -> SoraNS anchor + DA replication + viewer caches
+            -> SoraNS anchor + DA replication + bounded multi-provider fetch
 ```
+
+Taikai V1 uses the normal bounded multi-provider SoraFS fetch path for viewer
+retrieval. It has no dedicated cache, pull queue, cache gossip profile, or
+Taikai-specific cache configuration or dashboard.
 
 Each stage emits deterministic manifests:
 
@@ -120,7 +123,6 @@ Each stage emits deterministic manifests:
   - `dashboards/grafana/taikai_viewer.json` — viewer telemetry (latency, live
     edge, rebuffer rate, CEK fetch status) populated by the ingest collectors
     and the `taikai_viewer` harness.
-  - `dashboards/grafana/taikai_cache.json` — cache fill level, CDN hit-rate.
   - Alert packs under `dashboards/alerts/taikai_viewer_rules.yml`.
 
 ## 4. CLI & Automation Flows
@@ -131,7 +133,7 @@ Each stage emits deterministic manifests:
 | `iroha app taikai ingest edge --payload fixtures/taikai/segments/ingest_edge_sample.m4s` | Prototype SRT/RTMP receiver that emits CMAF fragments, drift samples, and an NDJSON log so the watcher path can be rehearsed deterministically. | Writes fragments to `artifacts/taikai/ingest_edge_run_<stamp>/fragments/` plus `logs/ingest_edge.ndjson` and `logs/drift_monitor.json`; pass `--segments`, `--segment-interval-ms`, and `--drift-*` to shape the run. |
 | `iroha app taikai ingest --watch <dir>` | Watches a fragment directory, derives manifest/storage-ticket digests, emits `/v1/da/ingest` metadata, and invokes the bundler per segment. | Emits CAR archives, envelopes, indexes, ingest metadata, and Norito DA requests under `artifacts/taikai/ingest_run_<timestamp>/`. The new `--publish-da` flag streams those requests directly to Torii (`/v1/da/ingest`) using the CLI config, while `--da-*` knobs expose lane/codec/retention overrides. Pass `--summary-out ingest_summary.ndjson` to capture a replayable NDJSON log (payload path, CAR/envelope outputs, manifest/storage-ticket digests, DA request receipts) so regulators and operators can regenerate bundles from the recorded evidence. |
 | `scripts/taikai_ingest_smoke.sh` | Smoke harness that replays `fixtures/taikai/segments/*.json` via `taikai_car`, validates CAR/index/ingest outputs, and fails fast on digest or metadata drift. | Emits artefacts under `artifacts/taikai/ingest_smoke/<label>` with CLI stdout, CAR, Norito, index, and ingest-metadata snapshots for evidence bundles. |
-| `integration_tests/tests/taikai_da.rs` | End-to-end ingest + DA fetch/regeneration tests. | Ensures manifest commitments match envelopes and caches. |
+| `integration_tests/tests/taikai_da.rs` | End-to-end ingest + DA fetch/regeneration tests. | Ensures manifest commitments match envelopes and bounded SoraFS retrieval. |
 
 #### NDJSON summary log (`--summary-out`)
 
@@ -164,7 +166,7 @@ the resulting directory as an artefact.
     coverage for the smoke harness.
 - **Integration tests:** `integration_tests/tests/taikai_da.rs`
   - Submit fixtures through Torii ingest (using mock SRT/RTMP input).
-  - Verify DA manifests, CAR pointers, and viewer cache hydration.
+  - Verify DA manifests, CAR pointers, and bounded multi-provider retrieval.
   - Reconstruct playback using Norito envelopes only.
 - **Property tests:** `crates/sorafs_car/tests/taikai_bundle.rs`
   - Randomized payload sizes ensure CAR builder enforces length/digest rules.
@@ -174,7 +176,6 @@ the resulting directory as an artefact.
 | Asset | Purpose | Status |
 |-------|---------|--------|
 | `dashboards/grafana/taikai_viewer.json` | Viewer metrics (latency, live edge, rebuffer, CEK fetch, PQ circuit health). | ✅ Exported via `scripts/grafana/export_taikai_viewer.py`; populated by `taikai_ingest_*` and `taikai_viewer_*` metrics (emitted by the ingest collectors and the `taikai_viewer` CLI) so operators can replay telemetry locally or in CI. |
-| `dashboards/grafana/taikai_cache.json` | Cache occupancy per PoP, prefetch latency, CAA propagation. | ✅ Exported dashboard referencing the `taikai_cache_*` metrics; edit in Grafana (same export flow as the viewer board) or modify the JSON directly when telemetry label sets change. |
 | `dashboards/alerts/taikai_viewer_rules.yml` | Alert contract (LiveEdgeDrift, IngestFailure, CEKRotationLag). | ✅ Prometheus rules with promtool tests (`dashboards/alerts/tests/taikai_viewer_rules.test.yml`) seeded by the ingest + viewer metric fixtures. |
 
 > **Telemetry label:** set `torii.da_ingest.telemetry_cluster_label` in `iroha_config`
@@ -188,7 +189,7 @@ the resulting directory as an artefact.
 | Ladder builder produces deterministic CMAF fragments for required renditions. | Fixture comparison in `scripts/taikai_ingest_smoke.sh`. |
 | Bundler generates CAR/TSE pairs with matching digests and ingest metadata. | CLI output + checksums captured in release bundles. |
 | Drift monitors feed telemetry + alerts. | Metrics exported to `dashboards/grafana/taikai_viewer.json`; alert pack lives in `dashboards/alerts/taikai_viewer_rules.yml` with promtool coverage driven by ingest/viewer metric fixtures. |
-| Integration tests replay ingest → DA → viewer caches. | `cargo test -p integration_tests taikai_da::` logs attached to roadmap evidence. |
+| Integration tests replay ingest → DA → bounded SoraFS retrieval. | `cargo test -p integration_tests taikai_da::` logs attached to roadmap evidence. |
 
 ## 8. Completion Notes
 
@@ -201,6 +202,6 @@ the resulting directory as an artefact.
   letting operators regenerate CAR/index/ingest outputs deterministically.
 - The ingest watcher continues to emit `/v1/da/ingest` payloads and optional
   receipts (`--publish-da`); dashboards and alert packs are published alongside
-  the Taikai viewer/cache telemetry bundles.
+  the Taikai ingest and viewer telemetry.
 - Roadmap/status entries were updated to mark SN13-A as complete with the new
   ingest edge evidence paths captured for governance packets.

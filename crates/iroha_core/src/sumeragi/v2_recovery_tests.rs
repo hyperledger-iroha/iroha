@@ -11,7 +11,7 @@ use crate::{
     block::{CommittedBlock, ValidBlock},
     kura::{CommitManifest, Kura},
     query::store::LiveQueryStore,
-    snapshot::AuthenticatedSnapshotBootstrapPayload,
+    snapshot::{AuthenticatedSnapshotBootstrapPayload, SnapshotBootstrapLineageAuthority},
     state::{State, World},
     sumeragi::{
         network_topology::Topology,
@@ -22,18 +22,24 @@ use crate::{
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
-    ChainId,
+    ChainId, Registrable,
     account::AccountId,
     block::{
         BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext, SignedBlock,
         builder::BlockBuilder, consensus::SumeragiLanePayloadOwnership, consensus_v2 as wire,
     },
     consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
+    domain::{Domain, DomainId},
+    kaigi::{
+        KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
+        kaigi_relay_feedback_key, kaigi_relay_metadata_key,
+    },
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
     transaction::{TransactionBuilder, signed::TransactionResultInner},
     trigger::DataTriggerSequence,
 };
+use iroha_primitives::json::Json;
 use std::{
     io::Write,
     num::{NonZeroU16, NonZeroU64, NonZeroUsize},
@@ -619,6 +625,61 @@ fn snapshot_record_for_state(
     VerifiedHeightContext::snapshot_bootstrap(&record)
         .expect("fixture snapshot bootstrap is valid");
     record
+}
+#[test]
+fn snapshot_bootstrap_authentication_rejects_future_kaigi_feedback_and_rolls_back() {
+    let (_kura, mut state, mut record, keys) = hash_only_snapshot_boundary(2, false);
+    let relay_id = AccountId::new(keys[0].public_key().clone());
+    let home = DomainId::try_new("kaigi-feedback-home", "universal").expect("relay home domain");
+    let mut domain = Domain::new(home.clone()).build(&relay_id);
+    domain.metadata_mut().insert(
+        kaigi_relay_metadata_key(&relay_id).expect("relay registration key"),
+        Json::try_new(KaigiRelayRegistration {
+            relay_id: relay_id.clone(),
+            hpke_public_key: vec![0xAA],
+            bandwidth_class: 1,
+        })
+        .expect("serialize relay registration"),
+    );
+    domain.metadata_mut().insert(
+        kaigi_relay_feedback_key(&relay_id).expect("relay feedback key"),
+        Json::try_new(KaigiRelayFeedback {
+            relay_id: relay_id.clone(),
+            call: KaigiId::new(
+                home.clone(),
+                "future-feedback".parse().expect("Kaigi call name"),
+            ),
+            reported_by: relay_id,
+            status: KaigiRelayHealthStatus::Degraded,
+            reported_at_ms: 3,
+            notes: None,
+        })
+        .expect("serialize relay feedback"),
+    );
+    state.world.domains.insert(home, domain);
+    crate::smartcontracts::isi::kaigi::rebuild_kaigi_relay_registry(&mut state.world)
+        .expect("rebuild relay registry fixture");
+    crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies(&mut state.world)
+        .expect("rebuild Kaigi dependency fixture without an authenticated time ceiling");
+    record
+        .context
+        .snapshot_bootstrap
+        .as_mut()
+        .expect("snapshot bootstrap anchor")
+        .snapshot_state_hash = crate::snapshot::canonical_state_snapshot_hash(&state);
+    state.set_snapshot_v2_bootstrap_candidate_for_testing(record);
+    state.clear_latest_block_header_cache_for_testing();
+    assert!(state.latest_block_creation_time_ms_fast().is_none());
+
+    let error = state
+        .authenticate_snapshot_v2_bootstrap_candidate(
+            SnapshotBootstrapLineageAuthority::normally_signed_for_testing(),
+        )
+        .expect_err("post-promotion Kaigi validation must reject future relay feedback");
+    assert!(error.contains("exceeds restored ledger time 2"), "{error}");
+    assert!(state.has_snapshot_v2_bootstrap_candidate());
+    assert!(state.authenticated_snapshot_v2_bootstrap().is_none());
+    assert!(state.latest_block_creation_time_ms_fast().is_none());
 }
 fn complete_first_post_snapshot_height(
     kura: &Kura,

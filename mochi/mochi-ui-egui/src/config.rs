@@ -4,7 +4,7 @@
 //! port allocations, and external binary paths without recompiling the application. This module
 //! discovers that file (or an explicit `MOCHI_CONFIG` override), parses the TOML document, and
 //! yields a strongly typed configuration for the UI to apply while constructing the supervisor.
-use iroha_data_model::parameter::system::SumeragiConsensusMode;
+use iroha_data_model::{id::ChainId, parameter::system::SumeragiConsensusMode};
 use mochi_core::{
     GenesisProfile, NetworkProfile, ProfilePreset, SupervisorBuilder,
     config::sandbox_root_for_workspace, supervisor::RestartPolicy,
@@ -25,8 +25,6 @@ pub struct BinaryOverrides {
     pub irohad: Option<PathBuf>,
     /// Optional override for the `kagami` executable.
     pub kagami: Option<PathBuf>,
-    /// Optional override for the `iroha_cli` executable (reserved for future use).
-    pub iroha_cli: Option<PathBuf>,
 }
 /// Parsed configuration extracted from `config/local.toml`.
 #[derive(Debug, Default, Clone)]
@@ -89,11 +87,11 @@ impl BundleConfig {
         if let Some(port) = self.p2p_start {
             builder = builder.p2p_base_port(port);
         }
-        if let Some(chain_id) = self.chain_id.as_ref() {
-            builder = builder.chain_id(chain_id.clone());
-        }
         if let Some(profile) = self.genesis_profile {
             builder = builder.genesis_profile(profile);
+        }
+        if let Some(chain_id) = self.chain_id.as_ref() {
+            builder = builder.chain_id(chain_id.clone());
         }
         if let Some(seed) = self.vrf_seed_hex.as_ref() {
             builder = builder.vrf_seed_hex(seed.clone());
@@ -103,9 +101,6 @@ impl BundleConfig {
         }
         if let Some(path) = self.binaries.kagami.as_ref() {
             builder = builder.kagami_path(path.clone());
-        }
-        if let Some(path) = self.binaries.iroha_cli.as_ref() {
-            builder = builder.iroha_cli_path(path.clone());
         }
         if let Some(allow) = self.build_binaries {
             builder = builder.auto_build_binaries(allow);
@@ -142,13 +137,8 @@ impl BundleConfig {
     pub fn set_readiness_smoke(&mut self, value: Option<bool>) {
         self.readiness_smoke = value;
     }
-    #[allow(dead_code)]
     pub fn set_genesis_profile(&mut self, value: Option<GenesisProfile>) {
         self.genesis_profile = value;
-    }
-    #[allow(dead_code)]
-    pub fn set_vrf_seed_hex(&mut self, value: Option<String>) {
-        self.vrf_seed_hex = value;
     }
     pub fn set_torii_start(&mut self, value: Option<u16>) {
         self.torii_start = value;
@@ -321,17 +311,6 @@ impl BundleConfig {
                 binaries.remove("kagami");
             }
         }
-        match self.binaries.iroha_cli.as_ref() {
-            Some(path) => {
-                binaries.insert(
-                    "iroha_cli".into(),
-                    Value::String(path.display().to_string()),
-                );
-            }
-            None => {
-                binaries.remove("iroha_cli");
-            }
-        }
         if binaries.is_empty() {
             root.remove("binaries");
         } else {
@@ -418,22 +397,13 @@ pub fn load_bundle_config() -> Result<Option<ResolvedBundleConfig>, ConfigError>
     }
     Ok(None)
 }
-/// Load configuration from an explicit path, returning defaults if the file is absent.
+/// Load configuration from an explicit path.
 pub fn load_bundle_config_at(path: PathBuf) -> Result<ResolvedBundleConfig, ConfigError> {
-    match fs::read_to_string(&path) {
-        Ok(contents) => {
-            let config = parse_bundle_config(&path, &contents)?;
-            Ok(ResolvedBundleConfig { config, path })
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(ResolvedBundleConfig {
-            config: BundleConfig::default(),
-            path,
-        }),
-        Err(err) => Err(ConfigError::new(format!(
-            "failed to read config {}: {err}",
-            path.display()
-        ))),
-    }
+    let contents = fs::read_to_string(&path).map_err(|err| {
+        ConfigError::new(format!("failed to read config {}: {err}", path.display()))
+    })?;
+    let config = parse_bundle_config(&path, &contents)?;
+    Ok(ResolvedBundleConfig { config, path })
 }
 pub fn default_config_path() -> PathBuf {
     candidate_paths()
@@ -465,6 +435,58 @@ fn push_candidate(paths: &mut Vec<(PathBuf, bool)>, candidate: PathBuf, explicit
         paths.push((candidate, explicit));
     }
 }
+fn reject_unknown_fields(
+    path: &Path,
+    table: &Map<String, Value>,
+    context: &str,
+    allowed: &[&str],
+) -> Result<(), ConfigError> {
+    if let Some(field) = table
+        .keys()
+        .find(|field| !allowed.contains(&field.as_str()))
+    {
+        let qualified = if context == "config" {
+            field.to_owned()
+        } else {
+            format!("{context}.{field}")
+        };
+        return Err(ConfigError::new(format!(
+            "config {} contains unknown field `{qualified}`",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+fn optional_table<'a>(
+    path: &Path,
+    table: &'a Map<String, Value>,
+    key_path: &str,
+) -> Result<Option<&'a Map<String, Value>>, ConfigError> {
+    let key = key_path.rsplit('.').next().unwrap_or(key_path);
+    match table.get(key) {
+        None => Ok(None),
+        Some(Value::Table(value)) => Ok(Some(value)),
+        Some(_) => Err(ConfigError::new(format!(
+            "config {} expected `{key_path}` as a table",
+            path.display()
+        ))),
+    }
+}
+fn optional_string<'a>(
+    path: &Path,
+    table: &'a Map<String, Value>,
+    key_path: &str,
+) -> Result<Option<&'a str>, ConfigError> {
+    let key = key_path.rsplit('.').next().unwrap_or(key_path);
+    match table.get(key) {
+        None => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
+        Some(_) => Err(ConfigError::new(format!(
+            "config {} expected string for `{key_path}`",
+            path.display()
+        ))),
+    }
+}
 fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, ConfigError> {
     let value: Value = toml::from_str(contents).map_err(|err| {
         ConfigError::new(format!("failed to parse config {}: {err}", path.display()))
@@ -475,22 +497,51 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
             path.display()
         )));
     };
+    reject_unknown_fields(
+        path,
+        table,
+        "config",
+        &[
+            "supervisor",
+            "ports",
+            "binaries",
+            "nexus",
+            "sumeragi",
+            "torii",
+        ],
+    )?;
     let base = path.parent().unwrap_or(Path::new("."));
     let mut config = BundleConfig::default();
-    if let Some(supervisor) = table.get("supervisor").and_then(Value::as_table) {
+    if let Some(supervisor) = optional_table(path, table, "supervisor")? {
+        reject_unknown_fields(
+            path,
+            supervisor,
+            "supervisor",
+            &[
+                "workspace_root",
+                "data_root",
+                "profile",
+                "chain_id",
+                "genesis_profile",
+                "vrf_seed_hex",
+                "build_binaries",
+                "readiness_smoke",
+                "restart",
+            ],
+        )?;
         let mut profile_genesis = None;
-        if let Some(workspace_root) = supervisor.get("workspace_root").and_then(Value::as_str) {
-            let workspace_root = workspace_root.trim();
-            if !workspace_root.is_empty() {
-                config.workspace_root = Some(resolve_path(base, workspace_root));
-            }
-        }
-        if let Some(data_root) = supervisor.get("data_root").and_then(Value::as_str) {
-            let data_root = data_root.trim();
-            if !data_root.is_empty() {
-                config.data_root = Some(resolve_path(base, data_root));
-            }
-        }
+        config.workspace_root = parse_path_override(
+            base,
+            path,
+            "supervisor.workspace_root",
+            supervisor.get("workspace_root"),
+        )?;
+        config.data_root = parse_path_override(
+            base,
+            path,
+            "supervisor.data_root",
+            supervisor.get("data_root"),
+        )?;
         if let Some(build_binaries) = supervisor.get("build_binaries") {
             config.build_binaries = Some(parse_bool(
                 path,
@@ -508,16 +559,14 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
         if let Some(profile_value) = supervisor.get("profile") {
             match profile_value {
                 Value::String(profile) => {
-                    if !profile.is_empty() {
-                        config.profile = Some(NetworkProfile::from_preset(
-                            parse_profile(profile).map_err(|value| {
-                                ConfigError::new(format!(
-                                    "invalid profile `{value}` in {}",
-                                    path.display()
-                                ))
-                            })?,
-                        ));
-                    }
+                    config.profile = Some(NetworkProfile::from_preset(
+                        parse_profile(profile).map_err(|value| {
+                            ConfigError::new(format!(
+                                "invalid profile `{value}` in {}",
+                                path.display()
+                            ))
+                        })?,
+                    ));
                 }
                 Value::Table(table) => {
                     let parsed = parse_profile_table(path, table)?;
@@ -532,42 +581,51 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
                 }
             }
         }
-        if let Some(chain_id) = supervisor.get("chain_id").and_then(Value::as_str) {
-            let trimmed = chain_id.trim();
-            if !trimmed.is_empty() {
-                config.chain_id = Some(trimmed.to_owned());
-            }
+        if let Some(chain_id) = optional_string(path, supervisor, "supervisor.chain_id")? {
+            config.chain_id = Some(
+                chain_id
+                    .parse::<ChainId>()
+                    .map(|chain_id| chain_id.to_string())
+                    .map_err(|error| {
+                        ConfigError::new(format!(
+                            "config {} has invalid `supervisor.chain_id`: {error}",
+                            path.display()
+                        ))
+                    })?,
+            );
         }
-        if let Some(profile) = supervisor.get("genesis_profile").and_then(Value::as_str) {
-            if !profile.is_empty() {
-                if profile_genesis.is_some() {
-                    return Err(ConfigError::new(format!(
-                        "config {} sets genesis_profile in both `supervisor.profile` and `supervisor.genesis_profile`",
-                        path.display()
-                    )));
-                }
-                config.genesis_profile = Some(profile.parse().map_err(|err: String| {
-                    ConfigError::new(format!(
-                        "invalid genesis_profile `{profile}` in {}: {err}",
-                        path.display()
-                    ))
-                })?);
+        if let Some(profile) = optional_string(path, supervisor, "supervisor.genesis_profile")? {
+            if profile_genesis.is_some() {
+                return Err(ConfigError::new(format!(
+                    "config {} sets genesis_profile in both `supervisor.profile` and `supervisor.genesis_profile`",
+                    path.display()
+                )));
             }
+            config.genesis_profile = Some(profile.parse().map_err(|err: String| {
+                ConfigError::new(format!(
+                    "invalid genesis_profile `{profile}` in {}: {err}",
+                    path.display()
+                ))
+            })?);
         }
         if config.genesis_profile.is_none() {
             config.genesis_profile = profile_genesis;
         }
-        if let Some(seed) = supervisor.get("vrf_seed_hex").and_then(Value::as_str) {
-            let trimmed = seed.trim();
-            if !trimmed.is_empty() {
-                config.vrf_seed_hex = Some(trimmed.to_owned());
+        if let Some(seed) = optional_string(path, supervisor, "supervisor.vrf_seed_hex")? {
+            if seed.len() != 64 || !seed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(ConfigError::new(format!(
+                    "config {} requires `supervisor.vrf_seed_hex` to contain exactly 64 hexadecimal characters",
+                    path.display()
+                )));
             }
+            config.vrf_seed_hex = Some(seed.to_owned());
         }
-        if let Some(restart) = supervisor.get("restart").and_then(Value::as_table) {
+        if let Some(restart) = optional_table(path, supervisor, "supervisor.restart")? {
             config.set_restart_policy(Some(parse_restart_policy(path, restart)?));
         }
     }
-    if let Some(ports) = table.get("ports").and_then(Value::as_table) {
+    if let Some(ports) = optional_table(path, table, "ports")? {
+        reject_unknown_fields(path, ports, "ports", &["torii_start", "p2p_start"])?;
         if let Some(port) = ports.get("torii_start") {
             config.torii_start = Some(parse_port(path, "ports.torii_start", port)?);
         }
@@ -575,13 +633,12 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
             config.p2p_start = Some(parse_port(path, "ports.p2p_start", port)?);
         }
     }
-    if let Some(binaries) = table.get("binaries").and_then(Value::as_table) {
+    if let Some(binaries) = optional_table(path, table, "binaries")? {
+        reject_unknown_fields(path, binaries, "binaries", &["irohad", "kagami"])?;
         config.binaries.irohad =
             parse_path_override(base, path, "binaries.irohad", binaries.get("irohad"))?;
         config.binaries.kagami =
             parse_path_override(base, path, "binaries.kagami", binaries.get("kagami"))?;
-        config.binaries.iroha_cli =
-            parse_path_override(base, path, "binaries.iroha_cli", binaries.get("iroha_cli"))?;
     }
     if let Some(nexus_value) = table.get("nexus") {
         let Some(nexus) = nexus_value.as_table() else {
@@ -630,6 +687,12 @@ fn parse_profile_table(
     path: &Path,
     table: &Map<String, Value>,
 ) -> Result<ParsedProfile, ConfigError> {
+    reject_unknown_fields(
+        path,
+        table,
+        "supervisor.profile",
+        &["peer_count", "consensus_mode", "genesis_profile"],
+    )?;
     let peer_value = table.get("peer_count").ok_or_else(|| {
         ConfigError::new(format!(
             "config {} missing `supervisor.profile.peer_count`",
@@ -645,10 +708,7 @@ fn parse_profile_table(
     })?;
     let consensus_mode =
         parse_consensus_mode(path, "supervisor.profile.consensus_mode", consensus_value)?;
-    let genesis_profile = table
-        .get("genesis_profile")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
+    let genesis_profile = optional_string(path, table, "supervisor.profile.genesis_profile")?
         .map(|value| {
             value.parse().map_err(|err: String| {
                 ConfigError::new(format!(
@@ -745,12 +805,21 @@ fn parse_path_override(
     key: &str,
     value: Option<&Value>,
 ) -> Result<Option<PathBuf>, ConfigError> {
-    let Some(raw) = value.and_then(Value::as_str) else {
-        return Ok(None);
+    let raw = match value {
+        None => return Ok(None),
+        Some(Value::String(raw)) => raw,
+        Some(_) => {
+            return Err(ConfigError::new(format!(
+                "config {} expected string for `{key}`",
+                path.display()
+            )));
+        }
     };
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Ok(None);
+    if raw.is_empty() || raw.trim() != raw {
+        return Err(ConfigError::new(format!(
+            "config {} requires `{key}` to be a non-empty path without surrounding whitespace",
+            path.display()
+        )));
     }
     let resolved = resolve_path(base, raw);
     if resolved.is_relative() {
@@ -795,14 +864,20 @@ fn parse_profile(value: &str) -> Result<ProfilePreset, String> {
 }
 fn existing_root_table(path: &Path) -> Result<Map<String, Value>, ConfigError> {
     match fs::read_to_string(path) {
-        Ok(contents) => match toml::from_str::<Value>(&contents) {
-            Ok(Value::Table(table)) => Ok(table),
-            Ok(_) => Ok(Map::new()),
-            Err(err) => Err(ConfigError::new(format!(
-                "failed to parse existing config {}: {err}",
-                path.display()
-            ))),
-        },
+        Ok(contents) => {
+            parse_bundle_config(path, &contents)?;
+            match toml::from_str::<Value>(&contents) {
+                Ok(Value::Table(table)) => Ok(table),
+                Ok(_) => Err(ConfigError::new(format!(
+                    "existing config {} must be a TOML table",
+                    path.display()
+                ))),
+                Err(err) => Err(ConfigError::new(format!(
+                    "failed to parse existing config {}: {err}",
+                    path.display()
+                ))),
+            }
+        }
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Map::new()),
         Err(err) => Err(ConfigError::new(format!(
             "failed to read config {}: {err}",
@@ -814,13 +889,14 @@ fn parse_restart_policy(
     path: &Path,
     table: &Map<String, Value>,
 ) -> Result<RestartPolicy, ConfigError> {
-    let mode = table
-        .get("mode")
-        .and_then(Value::as_str)
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "on-failure".to_owned());
-    match mode.as_str() {
+    reject_unknown_fields(
+        path,
+        table,
+        "supervisor.restart",
+        &["mode", "max_restarts", "backoff_ms"],
+    )?;
+    let mode = optional_string(path, table, "supervisor.restart.mode")?.unwrap_or("on-failure");
+    match mode {
         "never" => {
             if table.get("max_restarts").is_some() || table.get("backoff_ms").is_some() {
                 return Err(ConfigError::new(format!(
@@ -830,7 +906,7 @@ fn parse_restart_policy(
             }
             Ok(RestartPolicy::Never)
         }
-        "on-failure" | "on_failure" | "onfailure" => {
+        "on-failure" => {
             let max = table
                 .get("max_restarts")
                 .map(|value| parse_restart_count(path, value))
@@ -924,6 +1000,8 @@ fn duration_to_ms(backoff: Duration) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const TEST_VRF_SEED_HEX: &str =
+        "abababababababababababababababababababababababababababababababab";
     fn temp_file(contents: &str) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("local.toml");
@@ -941,10 +1019,10 @@ readiness_smoke = false
 profile = "four-peer-bft"
 chain_id = "dev-chain"
 genesis_profile = "iroha3-dev"
-vrf_seed_hex = "abcd"
+vrf_seed_hex = "abababababababababababababababababababababababababababababababab"
 
 [supervisor.restart]
-mode = "on_failure"
+mode = "on-failure"
 max_restarts = 5
 backoff_ms = 2500
 
@@ -955,7 +1033,6 @@ p2p_start = 13000
 [binaries]
 irohad = "./bin/iroha3d"
 kagami = "/opt/iroha/bin/kagami"
-iroha_cli = "./tools/iroha_cli"
 "#,
         );
         let config =
@@ -974,7 +1051,7 @@ iroha_cli = "./tools/iroha_cli"
         assert_eq!(config.p2p_start, Some(13000));
         assert_eq!(config.chain_id.as_deref(), Some("dev-chain"));
         assert_eq!(config.genesis_profile, Some(GenesisProfile::Iroha3Dev));
-        assert_eq!(config.vrf_seed_hex.as_deref(), Some("abcd"));
+        assert_eq!(config.vrf_seed_hex.as_deref(), Some(TEST_VRF_SEED_HEX));
         assert_eq!(
             config.binaries.irohad.as_deref(),
             Some(dir.path().join("bin/iroha3d").as_path())
@@ -982,10 +1059,6 @@ iroha_cli = "./tools/iroha_cli"
         assert_eq!(
             config.binaries.kagami.as_deref(),
             Some(Path::new("/opt/iroha/bin/kagami"))
-        );
-        assert_eq!(
-            config.binaries.iroha_cli.as_deref(),
-            Some(dir.path().join("tools/iroha_cli").as_path())
         );
         match config.restart_policy.expect("restart policy") {
             RestartPolicy::OnFailure {
@@ -1194,6 +1267,109 @@ da_enabled = "nope"
         );
     }
     #[test]
+    fn parse_bundle_config_rejects_retired_iroha_cli_binary() {
+        let (_dir, path) = temp_file(
+            r#"
+[binaries]
+iroha_cli = "/tmp/iroha"
+"#,
+        );
+        let error = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
+            .expect_err("retired CLI binary setting must fail");
+        assert!(error.to_string().contains("binaries.iroha_cli"));
+    }
+    #[test]
+    fn parse_bundle_config_rejects_unknown_first_release_fields() {
+        for (contents, field) in [
+            ("unexpected = true\n", "unexpected"),
+            (
+                "[supervisor]\nreadiness_smokes = true\n",
+                "supervisor.readiness_smokes",
+            ),
+            (
+                "[supervisor]\nprofile = { peer_count = 4, consensus_mode = \"permissioned\", peers = 4 }\n",
+                "supervisor.profile.peers",
+            ),
+            (
+                "[supervisor.restart]\nmode = \"never\"\nretries = 2\n",
+                "supervisor.restart.retries",
+            ),
+            ("[ports]\ntorii = 8080\n", "ports.torii"),
+            ("[binaries]\ncli = \"/tmp/iroha\"\n", "binaries.cli"),
+        ] {
+            let (_dir, path) = temp_file(contents);
+            let error = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
+                .expect_err("unknown config fields must fail closed");
+            assert!(
+                error.to_string().contains(field),
+                "unexpected error for {field}: {error}"
+            );
+        }
+    }
+    #[test]
+    fn parse_bundle_config_rejects_wrong_optional_value_types() {
+        for (contents, field) in [
+            ("supervisor = \"four-peer-bft\"\n", "supervisor"),
+            ("[supervisor]\nchain_id = 7\n", "supervisor.chain_id"),
+            (
+                "[supervisor]\nrestart = \"on-failure\"\n",
+                "supervisor.restart",
+            ),
+            ("ports = 8080\n", "ports"),
+            ("[binaries]\nkagami = 7\n", "binaries.kagami"),
+        ] {
+            let (_dir, path) = temp_file(contents);
+            let error = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
+                .expect_err("wrong config types must fail closed");
+            assert!(
+                error.to_string().contains(field),
+                "unexpected error for {field}: {error}"
+            );
+        }
+    }
+    #[test]
+    fn parse_bundle_config_rejects_noncanonical_chain_and_vrf_values() {
+        for (contents, field) in [
+            ("[supervisor]\nchain_id = \"\"\n", "supervisor.chain_id"),
+            (
+                "[supervisor]\nchain_id = \" mochi-local \"\n",
+                "supervisor.chain_id",
+            ),
+            (
+                "[supervisor]\nchain_id = \"bad/chain\"\n",
+                "supervisor.chain_id",
+            ),
+            (
+                "[supervisor]\nvrf_seed_hex = \"abcd\"\n",
+                "supervisor.vrf_seed_hex",
+            ),
+            (
+                "[supervisor]\nvrf_seed_hex = \" gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg \"\n",
+                "supervisor.vrf_seed_hex",
+            ),
+            ("[supervisor]\nprofile = \"\"\n", "profile"),
+            ("[supervisor]\ngenesis_profile = \"\"\n", "genesis_profile"),
+            (
+                "[supervisor]\nworkspace_root = \"\"\n",
+                "supervisor.workspace_root",
+            ),
+            (
+                "[supervisor]\ndata_root = \" ./data \"\n",
+                "supervisor.data_root",
+            ),
+            ("[binaries]\nirohad = \"\"\n", "binaries.irohad"),
+            ("[binaries]\nkagami = \" ./kagami \"\n", "binaries.kagami"),
+        ] {
+            let (_dir, path) = temp_file(contents);
+            let error = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
+                .expect_err("noncanonical exact values must fail closed");
+            assert!(
+                error.to_string().contains(field),
+                "unexpected error for {field}: {error}"
+            );
+        }
+    }
+    #[test]
     fn parse_bundle_config_rejects_invalid_torii_da_ingest() {
         let (_dir, path) = temp_file(
             r#"
@@ -1209,13 +1385,13 @@ da_ingest = "nope"
         );
     }
     #[test]
-    fn load_bundle_config_at_returns_default_for_missing_file() {
+    fn load_bundle_config_at_rejects_missing_explicit_file() {
         let temp = tempfile::tempdir().expect("temp dir");
         let path = temp.path().join("custom-config.toml");
-        let resolved =
-            load_bundle_config_at(path.clone()).expect("explicit config load should succeed");
-        assert!(resolved.config.data_root.is_none());
-        assert_eq!(resolved.path, path);
+        let error = load_bundle_config_at(path.clone())
+            .expect_err("a missing explicit config must fail closed");
+        assert!(error.to_string().contains("failed to read config"));
+        assert!(error.to_string().contains(&path.display().to_string()));
     }
     #[test]
     fn load_bundle_config_at_parses_existing_file() {
@@ -1273,17 +1449,17 @@ data_root = "./env-data"
         config.set_build_binaries(Some(true));
         config.set_readiness_smoke(Some(false));
         config.set_genesis_profile(Some(GenesisProfile::Iroha3Dev));
-        config.set_vrf_seed_hex(Some("abcd".to_owned()));
+        config.vrf_seed_hex = Some(TEST_VRF_SEED_HEX.to_owned());
         config.set_torii_start(Some(12000));
         config.set_p2p_start(Some(13000));
         config.binaries.irohad = Some(temp.path().join("bin/iroha3d"));
         config.binaries.kagami = Some(temp.path().join("bin/kagami"));
-        config.binaries.iroha_cli = Some(temp.path().join("bin/iroha_cli"));
         let mut nexus = Map::new();
         nexus.insert("lane_count".into(), Value::Integer(2));
         let mut lane = Map::new();
         lane.insert("alias".into(), Value::String("core".into()));
         lane.insert("index".into(), Value::Integer(0));
+        lane.insert("metadata".into(), Value::Table(Map::new()));
         nexus.insert(
             "lane_catalog".into(),
             Value::Array(vec![Value::Table(lane)]),
@@ -1325,7 +1501,6 @@ data_root = "./env-data"
         assert_eq!(parsed.p2p_start, config.p2p_start);
         assert_eq!(parsed.binaries.irohad, config.binaries.irohad);
         assert_eq!(parsed.binaries.kagami, config.binaries.kagami);
-        assert_eq!(parsed.binaries.iroha_cli, config.binaries.iroha_cli);
         assert_eq!(parsed.nexus, config.nexus);
         assert_eq!(parsed.sumeragi, config.sumeragi);
         assert_eq!(parsed.torii, config.torii);
@@ -1365,7 +1540,7 @@ data_root = "./env-data"
             .expect("profile table");
         assert_eq!(
             profile_table.get("peer_count").and_then(Value::as_integer),
-            Some(3)
+            Some(7)
         );
         assert_eq!(
             profile_table.get("consensus_mode").and_then(Value::as_str),
@@ -1405,6 +1580,26 @@ max_restarts = 0
         drop(dir);
     }
     #[test]
+    fn parse_restart_policy_rejects_noncanonical_mode_aliases() {
+        for mode in ["on_failure", "On-Failure", " on-failure ", ""] {
+            let contents = format!(
+                r#"
+[supervisor.restart]
+mode = {mode:?}
+"#
+            );
+            let (_dir, path) = temp_file(&contents);
+            let error = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
+                .expect_err("restart mode aliases must be rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains("invalid `supervisor.restart.mode`"),
+                "unexpected error for `{mode}`: {error}"
+            );
+        }
+    }
+    #[test]
     fn parse_restart_policy_never_rejects_extra_fields() {
         let (_dir, path) = temp_file(
             r#"
@@ -1431,7 +1626,7 @@ backoff_ms = 1000
         assert_eq!(builder.profile().topology.peer_count, 4);
     }
     #[test]
-    fn write_preserves_unrelated_fields() {
+    fn write_preserves_opaque_runtime_tables() {
         let temp = tempfile::tempdir().expect("temp dir");
         let config_dir = temp.path().join("config");
         fs::create_dir_all(&config_dir).expect("config dir");
@@ -1442,21 +1637,16 @@ backoff_ms = 1000
             &path,
             format!(
                 r#"
-note = "keep-root"
-
 [supervisor]
 data_root = "{data_root}"
 profile = "four-peer-bft"
 chain_id = "existing-chain"
-custom = "preserve-me"
 
 [ports]
 torii_start = 11000
-custom_flag = true
 
 [binaries]
 irohad = "{irohad}"
-extra = "/opt/keep/binary"
 
 [nexus]
 lane_count = 2
@@ -1464,6 +1654,9 @@ extra_lane = "keep"
 
 [sumeragi]
 extra_setting = "keep"
+
+[torii]
+custom_route_setting = "keep"
 "#,
                 data_root = data_root.display(),
                 irohad = irohad.display(),
@@ -1477,24 +1670,8 @@ extra_setting = "keep"
         config.set_chain_id(None);
         config
             .write_to_path(&path)
-            .expect("rewrite should preserve unrelated fields");
+            .expect("rewrite should preserve opaque runtime tables");
         let contents = fs::read_to_string(&path).expect("read rewritten config");
-        assert!(
-            contents.contains("note = \"keep-root\""),
-            "top-level keys must remain untouched"
-        );
-        assert!(
-            contents.contains("custom = \"preserve-me\""),
-            "unknown supervisor fields must be preserved"
-        );
-        assert!(
-            contents.contains("custom_flag = true"),
-            "unknown ports fields must be preserved"
-        );
-        assert!(
-            contents.contains("extra = \"/opt/keep/binary\""),
-            "unknown binaries fields must be preserved"
-        );
         assert!(
             contents.contains("extra_lane = \"keep\""),
             "nexus fields must be preserved"
@@ -1502,6 +1679,10 @@ extra_setting = "keep"
         assert!(
             contents.contains("extra_setting = \"keep\""),
             "sumeragi fields must be preserved"
+        );
+        assert!(
+            contents.contains("custom_route_setting = \"keep\""),
+            "torii fields must be preserved"
         );
         assert!(
             contents.contains("torii_start = 12000"),
@@ -1515,6 +1696,16 @@ extra_setting = "keep"
             !contents.contains("chain_id"),
             "chain_id should be removed when cleared"
         );
+    }
+    #[test]
+    fn write_rejects_unknown_owned_schema_fields() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("local.toml");
+        fs::write(&path, "[supervisor]\ncustom = true\n").expect("write invalid config");
+        let error = BundleConfig::default()
+            .write_to_path(&path)
+            .expect_err("the writer must not carry retired fields forward");
+        assert!(error.to_string().contains("supervisor.custom"));
     }
     struct EnvGuard {
         key: &'static str,

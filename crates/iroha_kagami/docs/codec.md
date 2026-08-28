@@ -2,8 +2,7 @@
 
 These commands help you decode **Iroha 3** data types from binaries using the Norito codec.
 
-> **Note:** The codec subcommands are gated behind the optional `codec` feature.
-> Run them via `cargo run -p iroha_kagami --features codec -- advanced codec <SUBCOMMAND>` or build the binary with that feature enabled.
+> Run them via `cargo run -p iroha_kagami -- advanced codec <SUBCOMMAND>` or use a built `kagami` binary directly.
 
 ### Subcommands
 
@@ -23,30 +22,17 @@ To list all supported data types, run from the project main directory:
 kagami advanced codec list-types
 ```
 
-<details> <summary> Expand to see expected output</summary>
-
-```
-Account
-AccountEvent
-AccountEventFilter
-AccountEventSet
-AccountId
-AccountMintBox
-AccountPermissionChanged
-AccountRoleChanged
-Action
-Algorithm
-...
-
-344 types are supported
-```
-
-</details>
+The command prints the current, deliberately small first-release converter
+inventory in deterministic order. Treat that output as authoritative; Kagami
+does not expose every schema type as a generic codec surface.
 
 ## `norito-to-json` and `json-to-norito`
 
 Both commands by default read data from `stdin` and print result to `stdout`.
 There are flags `--input` and `--output` which can be used to read/write from files instead.
+Input and output must refer to different files. File output is rendered and
+validated first, then published atomically, so a failed conversion leaves an
+existing destination unchanged.
 
 Codec input and rendered output are limited to 64 MiB, matching the
 first-release signed-genesis artifact corridor (the largest registered codec
@@ -70,13 +56,13 @@ These commands require `--type` argument. If data type is not known, [`norito-to
 * Decode the `NewAccount` data type from the `samples/account.bin` binary:
 
   ```bash
-  kagami advanced codec norito-to-json --input crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
+  kagami advanced codec norito-to-json --input crates/iroha_kagami/samples/codec/account.bin --type NewAccount
   ```
 
 * Encode the `NewAccount` data type from the `samples/account.json`:
 
   ```bash
-  kagami advanced codec json-to-norito --input crates/iroha_kagami/src/codec/samples/account.json --output result.bin --type NewAccount
+  kagami advanced codec json-to-norito --input crates/iroha_kagami/samples/codec/account.json --output result.bin --type NewAccount
   ```
 
 ## `norito-to-rust`
@@ -105,11 +91,11 @@ Decode the data type from a given binary.
 * Decode the `NewAccount` data type from the `samples/account.bin` binary:
 
   ```bash
-  kagami advanced codec norito-to-rust crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
+  kagami advanced codec norito-to-rust crates/iroha_kagami/samples/codec/account.bin --type NewAccount
   ```
 
-* Decode the `NewDomain` data type from the `samples/domain.bin` binary:
+* Decode the `Domain` data type from the `samples/domain.bin` binary:
 
   ```bash
-  kagami advanced codec norito-to-rust crates/iroha_kagami/src/codec/samples/domain.bin --type NewDomain
+  kagami advanced codec norito-to-rust crates/iroha_kagami/samples/codec/domain.bin --type Domain
   ```

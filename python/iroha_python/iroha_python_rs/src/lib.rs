@@ -229,14 +229,11 @@ use sorafs_manifest::{
     validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
-    AnonymityPolicy, OrchestratorConfig, RolloutPhase, TransportPolicy, fetch_via_gateway,
+    AnonymityPolicy, DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR, OrchestratorConfig, RolloutPhase,
+    TransportPolicy, fetch_via_gateway,
     proxy::{
         LocalQuicProxyConfig, ProxyCarBridgeConfig, ProxyKaigiBridgeConfig, ProxyMode,
         ProxyNoritoBridgeConfig,
-    },
-    taikai_cache::{
-        EvictionStats, PromotionStats, QosConfig, QosStats, ReliabilityTuning, TaikaiCacheConfig,
-        TaikaiCacheStatsSnapshot, TaikaiPullQueueStats, TierStats,
     },
 };
 use std::{
@@ -2366,82 +2363,6 @@ fn py_stream_budget_to_internal(budget: &PyStreamBudget) -> StreamBudget {
         burst_bytes: budget.burst_bytes,
     }
 }
-fn ensure_positive_u64(value: u64, context: &str) -> PyResult<u64> {
-    if value == 0 {
-        Err(PyValueError::new_err(format!(
-            "{context} must be greater than zero"
-        )))
-    } else {
-        Ok(value)
-    }
-}
-fn ensure_positive_u32(value: u32, context: &str) -> PyResult<u32> {
-    if value == 0 {
-        Err(PyValueError::new_err(format!(
-            "{context} must be greater than zero"
-        )))
-    } else {
-        Ok(value)
-    }
-}
-fn py_taikai_cache_to_internal(cfg: &PyTaikaiCacheOptions) -> PyResult<TaikaiCacheConfig> {
-    let qos = &cfg.qos;
-    let qos_config = QosConfig {
-        priority_rate_bps: ensure_positive_u64(
-            qos.priority_rate_bps,
-            "taikai_cache.qos.priority_rate_bps",
-        )?,
-        standard_rate_bps: ensure_positive_u64(
-            qos.standard_rate_bps,
-            "taikai_cache.qos.standard_rate_bps",
-        )?,
-        bulk_rate_bps: ensure_positive_u64(qos.bulk_rate_bps, "taikai_cache.qos.bulk_rate_bps")?,
-        burst_multiplier: ensure_positive_u32(
-            qos.burst_multiplier,
-            "taikai_cache.qos.burst_multiplier",
-        )?,
-    };
-    Ok(TaikaiCacheConfig {
-        hot_capacity_bytes: ensure_positive_u64(
-            cfg.hot_capacity_bytes,
-            "taikai_cache.hot_capacity_bytes",
-        )?,
-        hot_retention: Duration::from_secs(ensure_positive_u64(
-            cfg.hot_retention_secs,
-            "taikai_cache.hot_retention_secs",
-        )?),
-        warm_capacity_bytes: ensure_positive_u64(
-            cfg.warm_capacity_bytes,
-            "taikai_cache.warm_capacity_bytes",
-        )?,
-        warm_retention: Duration::from_secs(ensure_positive_u64(
-            cfg.warm_retention_secs,
-            "taikai_cache.warm_retention_secs",
-        )?),
-        cold_capacity_bytes: ensure_positive_u64(
-            cfg.cold_capacity_bytes,
-            "taikai_cache.cold_capacity_bytes",
-        )?,
-        cold_retention: Duration::from_secs(ensure_positive_u64(
-            cfg.cold_retention_secs,
-            "taikai_cache.cold_retention_secs",
-        )?),
-        qos: qos_config,
-        reliability: {
-            let defaults = ReliabilityTuning::default();
-            let reliability = cfg.reliability.clone().unwrap_or_default();
-            let failures_to_trip = reliability
-                .failures_to_trip
-                .unwrap_or(defaults.failures_to_trip)
-                .max(1);
-            let open_secs = reliability.open_secs.unwrap_or(defaults.open_secs).max(1);
-            ReliabilityTuning {
-                failures_to_trip,
-                open_secs,
-            }
-        },
-    })
-}
 fn py_transport_hints_to_internal(hints: &[PyTransportHint]) -> Vec<TransportHint> {
     hints
         .iter()
@@ -2945,7 +2866,6 @@ struct PyGatewayFetchOptions {
     transport_policy: Option<String>,
     anonymity_policy: Option<String>,
     local_proxy: Option<PyLocalProxyOptions>,
-    taikai_cache: Option<PyTaikaiCacheOptions>,
 }
 #[derive(Clone, Default, FromPyObject)]
 struct PyLocalProxyOptions {
@@ -2977,29 +2897,6 @@ struct PyLocalProxyKaigiBridgeOptions {
     spool_dir: String,
     extension: Option<String>,
     room_policy: Option<String>,
-}
-#[derive(Clone, FromPyObject)]
-struct PyTaikaiQosOptions {
-    priority_rate_bps: u64,
-    standard_rate_bps: u64,
-    bulk_rate_bps: u64,
-    burst_multiplier: u32,
-}
-#[derive(Clone, Default, FromPyObject)]
-struct PyTaikaiReliabilityOptions {
-    failures_to_trip: Option<u32>,
-    open_secs: Option<u64>,
-}
-#[derive(Clone, FromPyObject)]
-struct PyTaikaiCacheOptions {
-    hot_capacity_bytes: u64,
-    hot_retention_secs: u64,
-    warm_capacity_bytes: u64,
-    warm_retention_secs: u64,
-    cold_capacity_bytes: u64,
-    cold_retention_secs: u64,
-    qos: PyTaikaiQosOptions,
-    reliability: Option<PyTaikaiReliabilityOptions>,
 }
 fn chunk_verification_error_payload(
     py: Python<'_>,
@@ -3088,72 +2985,6 @@ fn attempt_failure_payload(py: Python<'_>, failure: AttemptFailure) -> PyResult<
         }
     }
     Ok(payload.into())
-}
-fn tier_counts_payload(py: Python<'_>, counts: TierStats) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("hot", counts.hot)?;
-    dict.set_item("warm", counts.warm)?;
-    dict.set_item("cold", counts.cold)?;
-    Ok(dict.into())
-}
-fn eviction_counts_payload(py: Python<'_>, counts: EvictionStats) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    let hot = PyDict::new(py);
-    hot.set_item("expired", counts.hot.expired)?;
-    hot.set_item("capacity", counts.hot.capacity)?;
-    let warm = PyDict::new(py);
-    warm.set_item("expired", counts.warm.expired)?;
-    warm.set_item("capacity", counts.warm.capacity)?;
-    let cold = PyDict::new(py);
-    cold.set_item("expired", counts.cold.expired)?;
-    cold.set_item("capacity", counts.cold.capacity)?;
-    dict.set_item("hot", hot)?;
-    dict.set_item("warm", warm)?;
-    dict.set_item("cold", cold)?;
-    Ok(dict.into())
-}
-fn promotions_payload(py: Python<'_>, promotions: PromotionStats) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("warm_to_hot", promotions.warm_to_hot)?;
-    dict.set_item("cold_to_warm", promotions.cold_to_warm)?;
-    dict.set_item("cold_to_hot", promotions.cold_to_hot)?;
-    Ok(dict.into())
-}
-fn qos_counts_payload(py: Python<'_>, counts: QosStats) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("priority", counts.priority)?;
-    dict.set_item("standard", counts.standard)?;
-    dict.set_item("bulk", counts.bulk)?;
-    Ok(dict.into())
-}
-fn taikai_cache_stats_payload(
-    py: Python<'_>,
-    stats: TaikaiCacheStatsSnapshot,
-) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("hits", tier_counts_payload(py, stats.hits)?)?;
-    dict.set_item("misses", stats.misses)?;
-    dict.set_item("inserts", tier_counts_payload(py, stats.inserts)?)?;
-    dict.set_item("evictions", eviction_counts_payload(py, stats.evictions)?)?;
-    dict.set_item("promotions", promotions_payload(py, stats.promotions)?)?;
-    dict.set_item("qos_denials", qos_counts_payload(py, stats.qos_denials)?)?;
-    Ok(dict.into())
-}
-fn taikai_queue_stats_payload(py: Python<'_>, stats: TaikaiPullQueueStats) -> PyResult<Py<PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("pending_segments", stats.pending_segments)?;
-    dict.set_item("pending_bytes", stats.pending_bytes)?;
-    dict.set_item("pending_batches", stats.pending_batches)?;
-    dict.set_item("in_flight_batches", stats.in_flight_batches)?;
-    dict.set_item("hedged_batches", stats.hedged_batches)?;
-    dict.set_item(
-        "shaper_denials",
-        qos_counts_payload(py, stats.shaper_denials)?,
-    )?;
-    dict.set_item("dropped_segments", stats.dropped_segments)?;
-    dict.set_item("failovers", stats.failovers)?;
-    dict.set_item("open_circuits", stats.open_circuits)?;
-    Ok(dict.into())
 }
 fn attempt_error_payload(py: Python<'_>, error: AttemptError) -> PyResult<Py<PyDict>> {
     let AttemptError { provider, failure } = error;
@@ -3295,7 +3126,6 @@ fn sorafs_multi_fetch_local_py(
                 offset: spec.offset,
                 length: spec.length,
                 digest: spec.digest,
-                taikai_segment_hint: spec.taikai_segment_hint.clone(),
             })
             .collect(),
         files: vec![FilePlan {
@@ -3771,7 +3601,6 @@ fn sorafs_gateway_fetch_py(
                 offset: spec.offset,
                 length: spec.length,
                 digest: spec.digest,
-                taikai_segment_hint: spec.taikai_segment_hint.clone(),
             })
             .collect(),
         files: vec![FilePlan {
@@ -3961,22 +3790,18 @@ fn sorafs_gateway_fetch_py(
         }
         if matches!(proxy_cfg.proxy_mode, ProxyMode::Bridge) && proxy_cfg.norito_bridge.is_none() {
             proxy_cfg.norito_bridge = Some(ProxyNoritoBridgeConfig {
-                spool_dir: defaults::streaming::soranet::PROVISION_SPOOL_DIR.to_string(),
+                spool_dir: DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR.to_string(),
                 extension: Some("norito".to_string()),
             });
         }
         if matches!(proxy_cfg.proxy_mode, ProxyMode::Bridge) && proxy_cfg.kaigi_bridge.is_none() {
             proxy_cfg.kaigi_bridge = Some(ProxyKaigiBridgeConfig {
-                spool_dir: defaults::streaming::soranet::PROVISION_SPOOL_DIR.to_string(),
+                spool_dir: DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR.to_string(),
                 extension: Some("norito".to_string()),
                 room_policy: Some("public".to_string()),
             });
         }
         orchestrator_config.local_proxy = Some(proxy_cfg);
-    }
-    if let Some(cache_opts) = options.taikai_cache.as_ref() {
-        let cache_cfg = py_taikai_cache_to_internal(cache_opts)?;
-        orchestrator_config.taikai_cache = Some(cache_cfg);
     }
     let local_proxy_snapshot = orchestrator_config.local_proxy.clone();
     let gateway_provider_count = provider_inputs.len();
@@ -4172,18 +3997,6 @@ fn sorafs_gateway_fetch_py(
         result.set_item("car_verification", car_dict)?;
     } else {
         result.set_item("car_verification", py.None())?;
-    }
-    if let Some(cache_stats) = session.taikai_cache_stats {
-        let summary = taikai_cache_stats_payload(py, cache_stats)?;
-        result.set_item("taikai_cache_summary", summary)?;
-    } else {
-        result.set_item("taikai_cache_summary", py.None())?;
-    }
-    if let Some(queue_stats) = session.taikai_cache_queue {
-        let queue = taikai_queue_stats_payload(py, queue_stats)?;
-        result.set_item("taikai_cache_queue", queue)?;
-    } else {
-        result.set_item("taikai_cache_queue", py.None())?;
     }
     Ok(result.unbind())
 }
@@ -7142,55 +6955,6 @@ mod tests {
         assert!(canonical_gateway_provider(invalid_privacy).is_err());
     }
     #[test]
-    fn py_taikai_cache_options_convert_to_internal_config() {
-        ensure_python();
-        let qos = PyTaikaiQosOptions {
-            priority_rate_bps: 83_886_080,
-            standard_rate_bps: 41_943_040,
-            bulk_rate_bps: 12_582_912,
-            burst_multiplier: 4,
-        };
-        let opts = PyTaikaiCacheOptions {
-            hot_capacity_bytes: 8_388_608,
-            hot_retention_secs: 45,
-            warm_capacity_bytes: 33_554_432,
-            warm_retention_secs: 180,
-            cold_capacity_bytes: 268_435_456,
-            cold_retention_secs: 3_600,
-            qos,
-            reliability: None,
-        };
-        let config = py_taikai_cache_to_internal(&opts).expect("config parses");
-        assert_eq!(config.hot_capacity_bytes, 8_388_608);
-        assert_eq!(config.hot_retention.as_secs(), 45);
-        assert_eq!(config.qos.burst_multiplier, 4);
-    }
-    #[test]
-    fn py_taikai_cache_options_reject_zero_values() {
-        ensure_python();
-        let qos = PyTaikaiQosOptions {
-            priority_rate_bps: 83_886_080,
-            standard_rate_bps: 41_943_040,
-            bulk_rate_bps: 12_582_912,
-            burst_multiplier: 4,
-        };
-        let opts = PyTaikaiCacheOptions {
-            hot_capacity_bytes: 0,
-            hot_retention_secs: 45,
-            warm_capacity_bytes: 1,
-            warm_retention_secs: 1,
-            cold_capacity_bytes: 1,
-            cold_retention_secs: 1,
-            qos,
-            reliability: None,
-        };
-        let err = py_taikai_cache_to_internal(&opts).expect_err("zero rejected");
-        assert!(
-            err.to_string()
-                .contains("taikai_cache.hot_capacity_bytes must be greater than zero")
-        );
-    }
-    #[test]
     fn parse_time_trigger_kwargs_handles_known_arguments() {
         ensure_python();
         Python::attach(|py| {
@@ -8113,114 +7877,6 @@ mod tests {
                     "removed policy evidence field `{removed}` must stay absent"
                 );
             }
-        });
-    }
-    #[test]
-    fn taikai_cache_payload_helpers_render_counts() {
-        ensure_python();
-        let mut evictions = EvictionStats::default();
-        evictions.hot.expired = 1;
-        evictions.hot.capacity = 2;
-        evictions.warm.expired = 3;
-        evictions.warm.capacity = 4;
-        evictions.cold.expired = 5;
-        evictions.cold.capacity = 6;
-        let stats = TaikaiCacheStatsSnapshot {
-            hits: TierStats {
-                hot: 7,
-                warm: 8,
-                cold: 9,
-            },
-            misses: 10,
-            inserts: TierStats {
-                hot: 11,
-                warm: 12,
-                cold: 13,
-            },
-            evictions,
-            promotions: PromotionStats {
-                warm_to_hot: 14,
-                cold_to_warm: 15,
-                cold_to_hot: 16,
-            },
-            qos_denials: QosStats {
-                priority: 17,
-                standard: 18,
-                bulk: 19,
-            },
-        };
-        Python::attach(|py| {
-            let summary = taikai_cache_stats_payload(py, stats).expect("payload");
-            let summary = summary.bind(py);
-            let hits = summary
-                .get_item("hits")
-                .expect("hits entry")
-                .expect("hits entry");
-            let hits = hits.cast::<PyDict>().expect("dict");
-            assert_eq!(
-                hits.get_item("hot")
-                    .expect("hot count")
-                    .expect("hot count")
-                    .extract::<u64>()
-                    .expect("u64"),
-                7
-            );
-            let qos = summary.get_item("qos_denials").expect("qos").expect("qos");
-            let qos = qos.cast::<PyDict>().expect("dict");
-            assert_eq!(
-                qos.get_item("standard")
-                    .expect("standard")
-                    .expect("standard")
-                    .extract::<u64>()
-                    .expect("u64"),
-                18
-            );
-        });
-    }
-    #[test]
-    fn taikai_queue_payload_helpers_render_counts() {
-        ensure_python();
-        let queue = TaikaiPullQueueStats {
-            pending_segments: 2,
-            pending_bytes: 3,
-            pending_batches: 4,
-            in_flight_batches: 5,
-            hedged_batches: 6,
-            shaper_denials: QosStats {
-                priority: 1,
-                standard: 2,
-                bulk: 3,
-            },
-            dropped_segments: 7,
-            failovers: 8,
-            open_circuits: 9,
-        };
-        Python::attach(|py| {
-            let payload = taikai_queue_stats_payload(py, queue).expect("payload");
-            let payload = payload.bind(py);
-            assert_eq!(
-                payload
-                    .get_item("hedged_batches")
-                    .expect("hedged")
-                    .expect("hedged")
-                    .extract::<u64>()
-                    .expect("u64"),
-                6
-            );
-            let shaper = payload
-                .get_item("shaper_denials")
-                .expect("shaper")
-                .expect("shaper");
-            let shaper = shaper.cast::<PyDict>().expect("dict");
-            assert_eq!(
-                shaper
-                    .get_item("bulk")
-                    .expect("bulk")
-                    .expect("bulk")
-                    .extract::<u64>()
-                    .expect("u64"),
-                3
-            );
         });
     }
     #[test]

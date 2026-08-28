@@ -862,7 +862,7 @@ pub mod tls {
 }
 use crate::sampler::LogSampler;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_primitives::addr::SocketAddr;
+use iroha_primitives::addr::{SocketAddr, SocketAddrHost};
 use socket2::{SockRef, TcpKeepalive};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::{
@@ -1034,7 +1034,10 @@ impl ProxyPolicy {
             .strip_prefix('[')
             .and_then(|host| host.strip_suffix(']'))
             .unwrap_or(target_host);
-        let target_ip = unbracketed.parse::<std::net::IpAddr>().ok();
+        let target_ip = unbracketed
+            .parse::<std::net::IpAddr>()
+            .ok()
+            .map(canonical_proxy_ip);
         let target_domain = if target_ip.is_none() {
             normalize_dns_name(unbracketed).ok()
         } else {
@@ -1083,6 +1086,16 @@ impl ProxyPolicy {
         }
     }
 }
+
+fn canonical_proxy_ip(address: std::net::IpAddr) -> std::net::IpAddr {
+    match address {
+        std::net::IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map_or(std::net::IpAddr::V6(address), std::net::IpAddr::V4),
+        address => address,
+    }
+}
+
 fn normalize_dns_name(raw: &str) -> io::Result<String> {
     let name = raw.strip_suffix('.').unwrap_or(raw);
     if name.is_empty() || name.len() > 253 || !name.is_ascii() {
@@ -1131,7 +1144,7 @@ fn normalize_no_proxy(list: Vec<String>) -> io::Result<Vec<NoProxyEntry>> {
             (None, None) => entry,
         };
         if let Ok(ip) = unbracketed.parse::<std::net::IpAddr>() {
-            normalized.push(NoProxyEntry::Ip(ip));
+            normalized.push(NoProxyEntry::Ip(canonical_proxy_ip(ip)));
         } else {
             normalized.push(NoProxyEntry::Domain(normalize_dns_name(entry)?));
         }
@@ -1143,6 +1156,8 @@ fn normalize_no_proxy(list: Vec<String>) -> io::Result<Vec<NoProxyEntry>> {
 pub struct TcpConnectOptions {
     /// Proxy policy for this dial.
     pub proxy: ProxyPolicy,
+    /// Operator admission policy for peer, proxy, and resolved dial targets.
+    pub(crate) outbound_dial_policy: Arc<crate::dial_policy::OutboundDialPolicy>,
     /// Whether to verify TLS certificates when connecting to an `https://` proxy.
     ///
     /// This must be `true` for HTTPS proxies. `false` is rejected before dialing.
@@ -1183,12 +1198,61 @@ impl Default for TcpConnectOptions {
     fn default() -> Self {
         Self {
             proxy: ProxyPolicy::disabled(),
+            outbound_dial_policy: Arc::new(crate::dial_policy::OutboundDialPolicy::default()),
             proxy_tls_verify: true,
             proxy_tls_pinned_cert_der: None,
             tcp_nodelay: true,
             tcp_keepalive: None,
         }
     }
+}
+
+fn proxy_socket_addr(proxy: &Proxy) -> SocketAddr {
+    proxy.host.parse::<std::net::IpAddr>().map_or_else(
+        |_| {
+            SocketAddr::Host(SocketAddrHost {
+                host: proxy.host.clone().into(),
+                port: proxy.port,
+            })
+        },
+        |ip| std::net::SocketAddr::new(ip, proxy.port).into(),
+    )
+}
+
+async fn resolve_checked(
+    target: &SocketAddr,
+    policy: &crate::dial_policy::OutboundDialPolicy,
+) -> Result<Vec<std::net::SocketAddr>> {
+    policy.check_target(target)?;
+    match target {
+        SocketAddr::Ipv4(address) => policy
+            .check_resolved_targets(std::iter::once(std::net::SocketAddr::V4((*address).into()))),
+        SocketAddr::Ipv6(address) => policy
+            .check_resolved_targets(std::iter::once(std::net::SocketAddr::V6((*address).into()))),
+        SocketAddr::Host(address) => policy.check_resolved_targets(
+            tokio::net::lookup_host((address.host.as_ref(), address.port)).await?,
+        ),
+    }
+}
+
+async fn connect_checked(
+    target: &SocketAddr,
+    policy: &crate::dial_policy::OutboundDialPolicy,
+) -> Result<TcpStream> {
+    let candidates = resolve_checked(target, policy).await?;
+    let mut last_error = None;
+    for candidate in candidates {
+        match TcpStream::connect(candidate).await {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            "outbound dial target had no admitted addresses",
+        )
+    }))
 }
 /// TCP-like outbound substrate returned by [`connect`].
 ///
@@ -1622,6 +1686,9 @@ fn validate_http_connect_response(response: &[u8]) -> Result<()> {
 ///
 /// Returns an `io::Error` if TCP connect fails, proxy handshake fails, or I/O operations error.
 pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpConnectStream> {
+    // Validate the logical destination before resolving or connecting to a
+    // proxy. Every concrete address is checked again immediately before dial.
+    opts.outbound_dial_policy.check_target(addr)?;
     let configured_https_proxy_pin: Option<Arc<[u8]>> =
         if let Some(proxy) = opts.proxy.proxy.as_ref() {
             if proxy.auth.is_some() && proxy.kind != ProxyKind::HttpConnectTls {
@@ -1658,12 +1725,32 @@ pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpC
         };
     // If a proxy is configured and the target is not in NO_PROXY, tunnel via HTTP CONNECT.
     if let Some(proxy) = opts.proxy.pick_proxy_for_target(addr) {
+        let proxy_addr = proxy_socket_addr(proxy);
         let proxy_endpoint = if proxy.host.contains(':') {
             format!("[{}]:{}", proxy.host, proxy.port)
         } else {
             format!("{}:{}", proxy.host, proxy.port)
         };
-        let mut stream = match TcpStream::connect(proxy_endpoint.as_str()).await {
+        // A CIDR policy cannot be delegated to a remote resolver. Resolve the
+        // peer exactly once before opening the proxy connection and send the
+        // proxy an admitted numeric endpoint. The end-to-end P2P TLS layer
+        // still authenticates the original name.
+        let resolved_target = if opts.outbound_dial_policy.has_ip_constraints()
+            && matches!(addr, SocketAddr::Host(_))
+        {
+            Some(
+                resolve_checked(addr, &opts.outbound_dial_policy)
+                    .await?
+                    .into_iter()
+                    .next()
+                    .expect("non-empty checked resolution")
+                    .into(),
+            )
+        } else {
+            None
+        };
+        let tunnel_target = resolved_target.as_ref().unwrap_or(addr);
+        let mut stream = match connect_checked(&proxy_addr, &opts.outbound_dial_policy).await {
             Ok(s) => s,
             Err(e) => {
                 static PROXY_CONNECT_SAMPLER: OnceLock<Mutex<LogSampler>> = OnceLock::new();
@@ -1679,7 +1766,7 @@ pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpC
         apply_tcp_socket_options(&stream, opts.tcp_nodelay, opts.tcp_keepalive);
         match proxy.kind {
             ProxyKind::HttpConnect => {
-                http_connect_tunnel(&mut stream, proxy, addr, &proxy_endpoint).await?;
+                http_connect_tunnel(&mut stream, proxy, tunnel_target, &proxy_endpoint).await?;
             }
             ProxyKind::HttpConnectTls => {
                 let pinned =
@@ -1690,16 +1777,16 @@ pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpC
                     pinned,
                 )
                 .await?;
-                http_connect_tunnel(&mut tls, proxy, addr, &proxy_endpoint).await?;
+                http_connect_tunnel(&mut tls, proxy, tunnel_target, &proxy_endpoint).await?;
                 return Ok(TcpConnectStream::Tls(tls));
             }
             ProxyKind::Socks5 => {
-                socks5_connect(&mut stream, proxy, addr).await?;
+                socks5_connect(&mut stream, proxy, tunnel_target).await?;
             }
         }
         Ok(TcpConnectStream::Plain(stream))
     } else {
-        match TcpStream::connect(addr.to_string()).await {
+        match connect_checked(addr, &opts.outbound_dial_policy).await {
             Ok(stream) => {
                 apply_tcp_socket_options(&stream, opts.tcp_nodelay, opts.tcp_keepalive);
                 Ok(TcpConnectStream::Plain(stream))
@@ -1818,7 +1905,7 @@ mod tests {
     }
     #[test]
     fn connect_request_includes_basic_auth_when_present() {
-        use iroha_primitives::addr::socket_addr;
+        use iroha_primitives::addr::{SocketAddrHost, socket_addr};
 
         let proxy = Proxy {
             kind: ProxyKind::HttpConnectTls,
@@ -1826,7 +1913,7 @@ mod tests {
             port: 8443,
             auth: Some(Arc::new(ProxyCredentials::new("user", "pass"))),
         };
-        let target = SocketAddr::Host(iroha_primitives::addr::SocketAddrHost {
+        let target = SocketAddr::Host(SocketAddrHost {
             host: "DEST.example.".into(),
             port: 443,
         });
@@ -1851,17 +1938,38 @@ mod tests {
         );
     }
     #[test]
-    fn connect_authority_formats_ipv6_and_rejects_host_syntax_injection() {
-        use iroha_primitives::addr::{SocketAddrHost, SocketAddrV6};
+    fn connect_request_formats_canonical_typed_authorities() {
+        use iroha_primitives::addr::{SocketAddrHost, socket_addr};
 
-        let ipv6 = SocketAddr::Ipv6(SocketAddrV6 {
-            ip: "2001:db8::1".parse().expect("IPv6 address"),
-            port: 443,
-        });
-        assert_eq!(
-            http_connect_authority(&ipv6).expect("valid IPv6 authority"),
-            "[2001:db8::1]:443"
-        );
+        let proxy = Proxy {
+            kind: ProxyKind::HttpConnect,
+            host: "proxy.example".into(),
+            port: 8080,
+            auth: None,
+        };
+        let targets = [
+            (
+                SocketAddr::Host(SocketAddrHost {
+                    host: "DEST.Example.".into(),
+                    port: 443,
+                }),
+                "CONNECT dest.example.:443 HTTP/1.1\r\nHost: dest.example.:443\r\n",
+            ),
+            (
+                socket_addr!([2001:db8::1]:8443),
+                "CONNECT [2001:db8::1]:8443 HTTP/1.1\r\nHost: [2001:db8::1]:8443\r\n",
+            ),
+        ];
+
+        for (target, expected_prefix) in targets {
+            let request = build_connect_request(&target, &proxy).expect("valid CONNECT authority");
+            let request = std::str::from_utf8(request.as_slice()).expect("ASCII request");
+            assert!(request.starts_with(expected_prefix), "request: {request:?}");
+        }
+    }
+    #[test]
+    fn connect_authority_rejects_invalid_host_syntax() {
+        use iroha_primitives::addr::SocketAddrHost;
 
         for host in [
             "good.example\r\nX-Injected: yes",
@@ -1898,7 +2006,7 @@ mod tests {
         use iroha_primitives::addr::SocketAddrHost;
 
         let proxy = Proxy {
-            kind: ProxyKind::HttpConnect,
+            kind: ProxyKind::HttpConnectTls,
             host: "proxy.example".to_owned(),
             port: 8080,
             auth: Some(Arc::new(ProxyCredentials::new("user", "pass"))),
@@ -1908,9 +2016,10 @@ mod tests {
             port: 443,
         });
         let (mut client, mut server) = tokio::io::duplex(256);
-        http_connect_tunnel(&mut client, &proxy, &target, "proxy.example:8080")
+        let error = http_connect_tunnel(&mut client, &proxy, &target, "proxy.example:8080")
             .await
             .expect_err("invalid authority must fail");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         drop(client);
         let mut written = Vec::new();
         server
@@ -1954,6 +2063,7 @@ mod tests {
 
         let opts = TcpConnectOptions {
             proxy: policy,
+            outbound_dial_policy: Arc::new(crate::dial_policy::OutboundDialPolicy::default()),
             proxy_tls_verify: true,
             proxy_tls_pinned_cert_der: Some(Arc::from(b"UNIQUE_PROXY_PIN_MATERIAL".to_vec())),
             tcp_nodelay: true,
@@ -1991,6 +2101,17 @@ mod tests {
         assert!(!policy.should_bypass_proxy("1192.0.2.1"));
         assert!(policy.should_bypass_proxy("2001:0db8:0:0:0:0:0:1"));
         assert!(!policy.should_bypass_proxy("2001:db8::2"));
+        assert!(
+            policy.should_bypass_proxy("::ffff:192.0.2.1"),
+            "IPv4-mapped spelling must not leak an IPv4 no-proxy target through the proxy"
+        );
+
+        let mapped = ProxyPolicy::from_config(None, vec!["::ffff:192.0.2.2".to_owned()])
+            .expect("mapped no-proxy policy");
+        assert!(
+            mapped.should_bypass_proxy("192.0.2.2"),
+            "mapped no-proxy entries must match canonical IPv4 targets"
+        );
 
         let wildcard = ProxyPolicy::from_config(None, vec!["*".to_owned()]).expect("wildcard");
         assert!(wildcard.should_bypass_proxy("anything.example"));
@@ -2002,6 +2123,120 @@ mod tests {
                 .expect_err("invalid no-proxy entry");
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         }
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn outbound_policy_rejects_literal_before_opening_tcp_connection() {
+        use tokio::net::TcpListener;
+
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("bind: {error:?}"),
+        };
+        let endpoint = listener.local_addr().expect("listener address");
+        let opts = TcpConnectOptions {
+            outbound_dial_policy: Arc::new(
+                crate::dial_policy::OutboundDialPolicy::from_config(
+                    Vec::new(),
+                    vec!["127.0.0.0/8".to_owned()],
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .expect("policy"),
+            ),
+            ..TcpConnectOptions::default()
+        };
+        let target = std::net::SocketAddr::new(endpoint.ip(), endpoint.port()).into();
+        let error = match connect(&target, &opts).await {
+            Err(error) => error,
+            Ok(_) => panic!("denied target must fail closed"),
+        };
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), listener.accept())
+                .await
+                .is_err(),
+            "a denied literal must not open a TCP connection"
+        );
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn outbound_policy_rechecks_every_dns_result_before_connecting() {
+        use iroha_primitives::addr::SocketAddrHost;
+        use tokio::net::TcpListener;
+
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("bind: {error:?}"),
+        };
+        let endpoint = listener.local_addr().expect("listener address");
+        let opts = TcpConnectOptions {
+            outbound_dial_policy: Arc::new(
+                crate::dial_policy::OutboundDialPolicy::from_config(
+                    Vec::new(),
+                    vec!["127.0.0.0/8".to_owned(), "::1/128".to_owned()],
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .expect("policy"),
+            ),
+            ..TcpConnectOptions::default()
+        };
+        let target = SocketAddr::Host(SocketAddrHost {
+            host: "localhost".into(),
+            port: endpoint.port(),
+        });
+        let error = match connect(&target, &opts).await {
+            Err(error) => error,
+            Ok(_) => panic!("denied DNS result must fail closed"),
+        };
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), listener.accept())
+                .await
+                .is_err(),
+            "a denied DNS result must not open a TCP connection"
+        );
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn outbound_policy_applies_to_proxy_endpoint_before_connecting() {
+        use iroha_primitives::addr::socket_addr;
+        use tokio::net::TcpListener;
+
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("bind: {error:?}"),
+        };
+        let endpoint = listener.local_addr().expect("proxy address");
+        let opts = TcpConnectOptions {
+            proxy: ProxyPolicy::from_config(
+                Some(format!("http://{}:{}", endpoint.ip(), endpoint.port())),
+                Vec::new(),
+            )
+            .expect("proxy policy"),
+            outbound_dial_policy: Arc::new(
+                crate::dial_policy::OutboundDialPolicy::from_config(
+                    Vec::new(),
+                    vec!["127.0.0.0/8".to_owned()],
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .expect("dial policy"),
+            ),
+            ..TcpConnectOptions::default()
+        };
+        let error = match connect(&socket_addr!(192.0.2.1:443), &opts).await {
+            Err(error) => error,
+            Ok(_) => panic!("denied proxy endpoint must fail closed"),
+        };
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), listener.accept())
+                .await
+                .is_err(),
+            "a denied proxy endpoint must not open a TCP connection"
+        );
     }
     #[test]
     fn connect_response_parser_requires_exact_bounded_http11_success() {

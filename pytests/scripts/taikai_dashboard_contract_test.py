@@ -8,10 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DASHBOARDS = (
-    ROOT / "dashboards" / "grafana" / "taikai_cache.json",
-    ROOT / "dashboards" / "grafana" / "taikai_viewer.json",
-)
+DASHBOARDS = (ROOT / "dashboards" / "grafana" / "taikai_viewer.json",)
 CATALOG = ROOT / "crates" / "iroha_telemetry" / "src" / "metrics" / "catalog_v2.tsv"
 TAIKAI_METRIC = re.compile(r"\b(?:taikai_|sorafs_|torii_sorafs_)[a-zA-Z0-9_:]+")
 

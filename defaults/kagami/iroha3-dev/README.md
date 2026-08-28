@@ -17,7 +17,6 @@ Files:
 - genesis.public_key — canonical one-line verifier key for the signed genesis artifact
 - genesis.expected_hash — canonical checked `hash:<64 uppercase hex>#<CRC16>` NetworkId encoding the independently provisioned signed-header hash
 - verify.txt — stdout from `kagami verify --profile iroha3-dev --genesis genesis.json`
-- config.toml and config-peer-*.toml — compatibility names for the generated validator configs
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 - docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
 

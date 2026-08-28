@@ -1159,6 +1159,7 @@ privacy_compiled_profile_symbols = (
     "iroha_privacy_free_buffer",
 )
 parliament_timed_ovn_symbols = (
+    "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1",
     "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
     "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
     "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",

@@ -2,14 +2,21 @@
 use crate::{
     Outcome, RunArgs,
     genesis::{
-        ConsensusPolicy, generate_default, profile::known_chain_discriminant_for_chain_id,
+        ConsensusPolicy, generate_default,
+        profile::{
+            PUBLIC_TAIRA_CHAIN_ID, known_chain_discriminant_for_chain_id,
+            reject_retired_public_chain_id,
+        },
         validate_consensus_mode,
     },
     tui,
 };
 use clap::{Args as ClapArgs, ValueEnum};
-use color_eyre::eyre::{Result, WrapErr as _, eyre};
-use iroha_config::{base::toml::TomlSource, parameters::actual};
+use color_eyre::eyre::{Result, WrapErr as _, ensure, eyre};
+use iroha_config::{
+    base::toml::TomlSource,
+    parameters::{actual, defaults::taira as taira_defaults},
+};
 use iroha_core::zk::confidential_v2;
 use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair};
 #[cfg(test)]
@@ -87,7 +94,6 @@ use std::{
 };
 use zeroize::{Zeroize as _, Zeroizing};
 /// User-facing options for generating a bare-metal localnet.
-#[derive(Debug, Clone)]
 pub struct LocalnetOptions {
     /// Optional Sora profile selector (multi-lane / dataspace defaults).
     pub sora_profile: Option<SoraProfile>,
@@ -156,6 +162,9 @@ impl CanonicalHost {
         if trimmed.is_empty() {
             return Err(eyre!("`{field}` must not be empty"));
         }
+        if trimmed != raw {
+            return Err(eyre!("`{field}` must not contain surrounding whitespace"));
+        }
         let has_prefix = trimmed.starts_with('[');
         let has_suffix = trimmed.ends_with(']');
         if has_prefix != has_suffix {
@@ -168,6 +177,20 @@ impl CanonicalHost {
         };
         if unbracketed.is_empty() {
             return Err(eyre!("`{field}` must not be empty"));
+        }
+        if has_prefix {
+            return unbracketed.parse::<Ipv6Addr>().map_or_else(
+                |_| {
+                    Err(eyre!(
+                        "`{field}` brackets are only valid around an IPv6 literal"
+                    ))
+                },
+                |ipv6| {
+                    Ok(Self {
+                        kind: HostKind::Ipv6(ipv6),
+                    })
+                },
+            );
         }
         if let Ok(ipv4) = unbracketed.parse::<Ipv4Addr>() {
             return Ok(Self {
@@ -182,6 +205,27 @@ impl CanonicalHost {
         if unbracketed.contains(':') {
             return Err(eyre!(
                 "`{field}` must be a host name or IP literal without a port: `{raw}`"
+            ));
+        }
+        if unbracketed.len() > 253
+            || !unbracketed.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && label
+                        .as_bytes()
+                        .first()
+                        .is_some_and(u8::is_ascii_alphanumeric)
+                    && label
+                        .as_bytes()
+                        .last()
+                        .is_some_and(u8::is_ascii_alphanumeric)
+                    && label
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            })
+        {
+            return Err(eyre!(
+                "`{field}` must be an ASCII DNS name or IP literal without a port: `{raw}`"
             ));
         }
         Ok(Self {
@@ -209,6 +253,17 @@ impl CanonicalHost {
     fn torii_url(&self, port: u16) -> String {
         format!("http://{}:{port}/", self.url_host())
     }
+}
+
+/// Validate and canonicalize a host name or IP literal for another Kagami command.
+pub(crate) fn canonical_host(raw: &str, field: &str) -> Result<String> {
+    Ok(CanonicalHost::parse(raw, field)?.url_host())
+}
+
+/// Validate a non-zero endpoint and render its canonical socket-address literal.
+pub(crate) fn canonical_endpoint_literal(raw: &str, field: &str, port: u16) -> Result<String> {
+    ensure!(port != 0, "`{field}` port must be greater than zero");
+    Ok(CanonicalHost::parse(raw, field)?.addr_literal(port))
 }
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConsensusModeArg {
@@ -279,9 +334,7 @@ impl LocalnetPerfProfile {
 }
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SoraProfileArg {
-    #[value(alias = "dataspaces")]
     Dataspace,
-    #[value(alias = "public", alias = "sora-nexus", alias = "nexus-public")]
     Nexus,
 }
 /// Canonical restricted-dataspace presets supported by the localnet generator.
@@ -320,9 +373,9 @@ fn resolve_sora_profile(
 }
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LocalnetPerfProfileArg {
-    #[value(name = "10k-permissioned", alias = "throughput-10k-permissioned")]
+    #[value(name = "10k-permissioned")]
     Throughput10kPermissioned,
-    #[value(name = "10k-npos", alias = "throughput-10k-npos")]
+    #[value(name = "10k-npos")]
     Throughput10kNpos,
 }
 impl From<LocalnetPerfProfileArg> for LocalnetPerfProfile {
@@ -342,8 +395,6 @@ pub(crate) fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str 
     }
 }
 const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
-const TAIRA_TESTNET_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
-const RETIRED_TAIRA_CHAIN_ID_ALIAS: &str = "iroha3-taira";
 const TAIRA_TESTNET_PEERS: u16 = 4;
 const TAIRA_SORACLOUD_HYDRATION_CONCURRENCY: i64 = 4;
 const TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY: i64 = 4;
@@ -606,6 +657,12 @@ const LOCALNET_KURA_FSYNC_MODE: &str = "batched";
 /// localnet owns short-lived storage under its output directory, so an explicit small cap avoids
 /// applying that host-wide production policy to a throwaway network.
 const LOCALNET_NEXUS_STORAGE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
+/// Exact first-release Taira Nexus storage weights, in basis points.
+const TAIRA_NEXUS_STORAGE_WEIGHTS: [(&str, u16); 3] = [
+    ("kura_blocks_bps", taira_defaults::NEXUS_KURA_BLOCKS_BPS),
+    ("wsv_snapshots_bps", taira_defaults::NEXUS_WSV_SNAPSHOTS_BPS),
+    ("sorafs_bps", taira_defaults::NEXUS_SORAFS_BPS),
+];
 /// Ed25519 signature batch size for perf-profile localnets (0 disables batching).
 const LOCALNET_SIGNATURE_BATCH_MAX_ED25519: usize = 64;
 /// Logger filter for perf-profile localnets to avoid per-transaction log floods.
@@ -870,41 +927,75 @@ fn effective_localnet_assets_for_client(
     client_account_id: &AccountId,
 ) -> Vec<AssetSpec> {
     let mut assets = Vec::with_capacity(extra_assets.len() + 1);
-    let mut seen_asset_ids = BTreeSet::new();
-    let built_in = localnet_kagemusha_asset_spec_for_client(client_account_id);
-    seen_asset_ids.insert(built_in.id.clone());
-    assets.push(built_in);
+    assets.push(localnet_kagemusha_asset_spec_for_client(client_account_id));
+    let default_client = localnet_client_account_id();
     for asset in extra_assets {
-        if seen_asset_ids.insert(asset.id.clone()) {
-            let mut asset = asset.clone();
-            let default_client = localnet_client_account_id();
-            if asset.owned_by == default_client {
-                asset.owned_by = client_account_id.clone();
-            }
-            if asset.mint_to == default_client {
-                asset.mint_to = client_account_id.clone();
-            }
-            assets.push(asset);
+        let mut asset = asset.clone();
+        if asset.owned_by == default_client {
+            asset.owned_by = client_account_id.clone();
         }
+        if asset.mint_to == default_client {
+            asset.mint_to = client_account_id.clone();
+        }
+        assets.push(asset);
     }
     assets
 }
+
+fn validate_localnet_asset_specs(extra_assets: &[AssetSpec]) -> Result<()> {
+    let mut seen_asset_ids = BTreeSet::new();
+    let mut seen_aliases = BTreeSet::new();
+    seen_asset_ids.insert(
+        AssetDefinitionId::parse_address_literal(&localnet_kagemusha_asset_literal())
+            .expect("built-in localnet asset definition id must parse"),
+    );
+    seen_aliases.insert(
+        LOCALNET_KAGEMUSHA_ASSET_ALIAS
+            .parse::<AssetDefinitionAlias>()
+            .expect("built-in localnet asset alias must parse")
+            .to_string(),
+    );
+    for (index, asset) in extra_assets.iter().enumerate() {
+        ensure!(
+            !asset.name.trim().is_empty(),
+            "localnet asset {} has an empty display name",
+            index + 1
+        );
+        let asset_id = AssetDefinitionId::parse_address_literal(&asset.id).wrap_err_with(|| {
+            format!(
+                "localnet asset {} has invalid asset definition id `{}`",
+                index + 1,
+                asset.id
+            )
+        })?;
+        ensure!(
+            seen_asset_ids.insert(asset_id),
+            "localnet asset definition id is duplicated or collides with the built-in asset: `{}`",
+            asset.id
+        );
+        if let Some(alias) = asset.alias.as_deref() {
+            let parsed = alias.parse::<AssetDefinitionAlias>().wrap_err_with(|| {
+                format!("localnet asset {} has invalid alias `{alias}`", index + 1)
+            })?;
+            ensure!(
+                seen_aliases.insert(parsed.to_string()),
+                "localnet asset alias is duplicated or collides with the built-in asset: `{alias}`"
+            );
+        }
+    }
+    Ok(())
+}
 /// Generate a bare-metal local network (no Docker): genesis, per-peer configs, start/stop scripts.
-#[derive(ClapArgs, Debug, Clone)]
+#[derive(ClapArgs)]
 pub struct Args {
     /// Number of peers to generate (minimum four).
     #[arg(long, short, value_name = "COUNT", default_value_t = NonZeroU16::new(4).unwrap())]
     peers: NonZeroU16,
-    /// Optional UTF-8 seed for deterministic keys.
+    /// Optional UTF-8 seed for deterministic development keys.
+    ///
+    /// Omit this option to generate independent keys from operating-system entropy.
     #[arg(long, short)]
     seed: Option<String>,
-    /// Generate every private key from a fresh OS-random, process-local seed.
-    ///
-    /// The seed is never accepted through argv, written to the generated
-    /// bundle, or printed. This mode is intended for real first-release
-    /// custody; use `--seed` only for reproducible development fixtures.
-    #[arg(long, conflicts_with = "seed")]
-    fresh_random_keys: bool,
     /// Canonical chain identifier written into genesis, peer configs, and the client config.
     #[arg(long, value_name = "CHAIN_ID", default_value = DEFAULT_CHAIN_ID)]
     chain_id: String,
@@ -952,18 +1043,8 @@ pub struct Args {
     /// Consensus mode to emit in genesis/configs.
     /// Defaults to `permissioned` for generic localnets.
     /// Sora profile localnets and perf profiles require `npos`.
-    /// Sora profile localnets require `npos` because the global merge ledger is NPoS.
     #[arg(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
-}
-fn fresh_localnet_seed() -> Result<String> {
-    let mut raw = [0_u8; 32];
-    OsRng
-        .try_fill_bytes(&mut raw)
-        .wrap_err("failed to obtain OS entropy for fresh localnet custody")?;
-    let encoded = hex::encode(raw);
-    raw.zeroize();
-    Ok(encoded)
 }
 fn resolve_requested_consensus_mode(
     explicit_mode: Option<ConsensusModeArg>,
@@ -980,10 +1061,32 @@ fn resolve_requested_consensus_mode(
 }
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        let sora_profile = resolve_sora_profile(self.sora_profile, self.private_dataspace)?;
-        let perf_profile = self.perf_profile.map(LocalnetPerfProfile::from);
-        let consensus_mode = resolve_requested_consensus_mode(self.consensus_mode, perf_profile);
-        let mut assets = if self.sample_asset {
+        let Self {
+            peers,
+            seed,
+            chain_id,
+            sora_profile,
+            private_dataspace,
+            perf_profile,
+            bind_host,
+            public_host,
+            base_api_port,
+            base_p2p_port,
+            out_dir,
+            extra_accounts,
+            sample_asset,
+            asset_definition_id,
+            block_cadence_ms,
+            consensus_mode,
+        } = self;
+        // Own the CLI seed in a zeroizing guard before any fallible request
+        // validation. Once validation succeeds, `LocalnetOptions` takes over
+        // the same custody obligation through its `Drop` implementation.
+        let mut seed = seed.map(Zeroizing::new);
+        let sora_profile = resolve_sora_profile(sora_profile, private_dataspace)?;
+        let perf_profile = perf_profile.map(LocalnetPerfProfile::from);
+        let consensus_mode = resolve_requested_consensus_mode(consensus_mode, perf_profile);
+        let mut assets = if sample_asset {
             vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
                 name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
@@ -995,36 +1098,25 @@ impl<T: Write> RunArgs<T> for Args {
         } else {
             vec![]
         };
-        for asset_definition_id in self.asset_definition_id {
+        for asset_definition_id in asset_definition_id {
             assets.push(requested_localnet_asset_spec(&asset_definition_id)?);
         }
-        let fresh_random_keys = self.fresh_random_keys;
-        let chain_id = self.chain_id;
-        let seed = if fresh_random_keys {
-            Some(fresh_localnet_seed()?)
-        } else {
-            self.seed
-        };
-        let mut opts = LocalnetOptions {
+        let opts = LocalnetOptions {
             sora_profile,
             perf_profile,
-            peers: self.peers,
-            seed,
-            bind_host: self.bind_host,
-            public_host: self.public_host,
-            base_api_port: self.base_api_port,
-            base_p2p_port: self.base_p2p_port,
-            out_dir: self.out_dir,
-            extra_accounts: self.extra_accounts,
+            peers,
+            seed: seed.as_mut().map(|seed| std::mem::take(&mut **seed)),
+            bind_host,
+            public_host,
+            base_api_port,
+            base_p2p_port,
+            out_dir,
+            extra_accounts,
             assets,
             consensus_mode,
-            block_cadence_ms: self.block_cadence_ms,
+            block_cadence_ms,
         };
-        let outcome = generate_localnet_inner(&opts, writer, fresh_random_keys, Some(&chain_id));
-        if fresh_random_keys && let Some(seed) = opts.seed.as_mut() {
-            seed.zeroize();
-        }
-        outcome
+        generate_localnet_inner(&opts, writer, Some(&chain_id))
     }
 }
 struct Peer {
@@ -1058,8 +1150,6 @@ struct LocalnetPeerStoragePaths {
     tiered_state: PathBuf,
     da_store: PathBuf,
     streaming_sessions: PathBuf,
-    streaming_soranet_spool: PathBuf,
-    streaming_soravpn_spool: PathBuf,
     soranet_ticket_revocations: PathBuf,
     torii: PathBuf,
     torii_da_replay_cache: PathBuf,
@@ -1078,9 +1168,7 @@ impl LocalnetPeerStoragePaths {
             soracloud_runtime: state.join("soracloud_runtime"),
             tiered_state: state.join("tiered_state"),
             da_store: state.join("da_wsv_snapshots"),
-            streaming_sessions: streaming.clone(),
-            streaming_soranet_spool: streaming.join("soranet_routes"),
-            streaming_soravpn_spool: state.join("streaming").join("soravpn_routes"),
+            streaming_sessions: streaming,
             soranet_ticket_revocations: state.join("soranet").join("ticket_revocations.norito"),
             torii_da_replay_cache: torii.join("da_replay"),
             torii_da_manifests: torii.join("da_manifests"),
@@ -1106,10 +1194,11 @@ struct BlsEntry {
 /// # Errors
 /// Returns an error if port ranges are invalid or if config, genesis, or script files cannot be written.
 pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWriter<T>) -> Outcome {
-    generate_localnet_inner(opts, writer, false, None)
+    generate_localnet_inner(opts, writer, None)
 }
 #[allow(clippy::too_many_lines)]
 fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
+    validate_localnet_asset_specs(&opts.assets)?;
     if let Some(block_ms) = opts.block_cadence_ms
         && block_ms == 0
     {
@@ -1206,31 +1295,13 @@ fn localnet_client_account_literal(chain_discriminant: Option<u16>) -> String {
 fn generate_localnet_inner<T: Write>(
     opts: &LocalnetOptions,
     writer: &mut BufWriter<T>,
-    redact_seed_metadata: bool,
     chain_id: Option<&str>,
 ) -> Outcome {
     init_instruction_registry();
     let hosts = validate_localnet_options(opts)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
-    if redact_seed_metadata {
-        crate::secure_fs::prepare_empty_private_directory(&opts.out_dir)
-            .wrap_err("prepare fresh localnet private output directory")?;
-    } else {
-        fs::create_dir_all(&opts.out_dir)
-            .wrap_err("failed to create output directory for localnet")?;
-    }
-    let out_dir = fs::canonicalize(&opts.out_dir).wrap_err_with(|| {
-        format!(
-            "failed to canonicalize output directory for localnet: {}",
-            opts.out_dir.display()
-        )
-    })?;
-    write_localnet_gitignore(&out_dir)?;
-    tui::status("Copying rANS tables");
-    let rans_tables_path = copy_rans_tables(&out_dir)?;
-    let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
     let chain_id = resolve_localnet_chain_id(chain_id)?;
-    let taira = chain_id == TAIRA_TESTNET_CHAIN_ID;
+    let taira = chain_id == PUBLIC_TAIRA_CHAIN_ID;
     if taira
         && (opts.peers.get() != TAIRA_TESTNET_PEERS
             || opts.consensus_mode != SumeragiConsensusMode::Npos
@@ -1240,6 +1311,18 @@ fn generate_localnet_inner<T: Write>(
             "the canonical Taira chain requires exactly four NPoS validators and the Nexus Sora profile"
         ));
     }
+    crate::shell::quote_path(&opts.out_dir)
+        .wrap_err("validate requested localnet output path for shell handoff commands")?;
+    // No output path is created until every request-level invariant has been
+    // checked. This keeps an invalid invocation retryable with the same path.
+    let out_dir = crate::secure_fs::prepare_empty_private_directory(&opts.out_dir)
+        .wrap_err("prepare fresh localnet private output directory")?;
+    let shell_out_dir = crate::shell::absolute_quote_path(&out_dir)
+        .wrap_err("validate localnet output path for shell handoff commands")?;
+    write_localnet_gitignore(&out_dir)?;
+    tui::status("Copying rANS tables");
+    let rans_tables_path = copy_rans_tables(&out_dir)?;
+    let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
     let chain_discriminant = known_chain_discriminant_for_chain_id(&chain_id);
     // Keep every account literal and permission payload emitted by this localnet
     // generation scoped to the selected chain.  Applying the guard only while
@@ -1453,7 +1536,6 @@ fn generate_localnet_inner<T: Write>(
         &genesis_private_key_path,
         &genesis_public_key,
         &genesis_private,
-        redact_seed_metadata,
     )?;
     let genesis_expected_hash = write_genesis(GenesisWriteContext {
         manifest: &genesis,
@@ -1572,12 +1654,7 @@ fn generate_localnet_inner<T: Write>(
     write_localnet_readme(
         &out_dir,
         &chain_id,
-        if redact_seed_metadata {
-            None
-        } else {
-            opts.seed.as_deref()
-        },
-        redact_seed_metadata,
+        opts.seed.as_deref(),
         opts.consensus_mode,
         opts.peers.get(),
         &primary_torii_url,
@@ -1593,14 +1670,13 @@ fn generate_localnet_inner<T: Write>(
         &onboarding_identity.account_id.to_string(),
         &runtime_bundle,
         &alias_setup_intent_path,
+        &shell_out_dir,
     )?;
-    if redact_seed_metadata {
-        crate::secure_fs::harden_private_tree_with_owner_executables(
-            &out_dir,
-            &[&start_path, &stop_path],
-        )
-        .wrap_err("harden fresh localnet private artifact tree")?;
-    }
+    crate::secure_fs::harden_private_tree_with_owner_executables(
+        &out_dir,
+        &[&start_path, &stop_path],
+    )
+    .wrap_err("harden fresh localnet private artifact tree")?;
     tui::success("Localnet ready");
     writeln!(writer, "out_dir: {}", out_dir.display())?;
     writeln!(writer, "chain_id: {}", chain_id)?;
@@ -1655,15 +1731,15 @@ fn generate_localnet_inner<T: Write>(
     writeln!(
         writer,
         "next_start: cd {} && {}",
-        out_dir.display(),
-        localnet_script_command(redact_seed_metadata, "start.sh")
+        shell_out_dir,
+        localnet_script_command("start.sh")
     )?;
     writeln!(writer, "next_health: curl -sf {}health", primary_torii_url)?;
     writeln!(
         writer,
         "next_stop: cd {} && {}",
-        out_dir.display(),
-        localnet_script_command(redact_seed_metadata, "stop.sh")
+        shell_out_dir,
+        localnet_script_command("stop.sh")
     )?;
     Ok(())
 }
@@ -2179,11 +2255,7 @@ fn resolve_localnet_chain_id(configured: Option<&str>) -> Result<String> {
             "`--chain-id` must not contain leading or trailing whitespace"
         ));
     }
-    if chain_id == RETIRED_TAIRA_CHAIN_ID_ALIAS {
-        return Err(eyre!(
-            "retired Taira chain alias is forbidden; use canonical chain id {TAIRA_TESTNET_CHAIN_ID}"
-        ));
-    }
+    reject_retired_public_chain_id(chain_id)?;
     chain_id
         .parse::<ChainId>()
         .wrap_err("`--chain-id` must be canonical")?;
@@ -2200,6 +2272,7 @@ struct RenderPeerFeatures<'a> {
     onboarding_private_key_file: &'a Path,
     onboarding_token_hash: &'a [u8; 32],
 }
+#[derive(Clone, Copy)]
 enum LocalnetGenesisIdentitySource {
     BootstrapInline(HashOf<BlockHeader>),
     PublishedFile,
@@ -2229,10 +2302,8 @@ fn render_peer_config(
     runtime_block_max_transactions: Option<usize>,
     queue_capacity: usize,
     sumeragi_body_bytes: usize,
-) -> String {
-    use iroha_config::parameters::defaults::streaming::{
-        self as streaming_defaults, codec as codec_defaults,
-    };
+) -> Zeroizing<String> {
+    use iroha_config::parameters::defaults::streaming::codec as codec_defaults;
     use toml::{Table, Value};
     let (bind_host, public_host) = hosts;
     let RenderPeerFeatures {
@@ -2267,7 +2338,7 @@ fn render_peer_config(
             Value::Table(t)
         })
         .collect::<Vec<_>>();
-    let mut root = Table::new();
+    let mut root = crate::secret_toml::Table::new(Table::new());
     root.insert("chain".into(), Value::String(chain_id.to_owned()));
     if let Some(chain_discriminant) = chain_discriminant {
         root.insert(
@@ -2372,8 +2443,17 @@ fn render_peer_config(
         let mut egress = Table::new();
         egress.insert("default_allow".into(), Value::Boolean(false));
         egress.insert("allowed_hosts".into(), Value::Array(Vec::new()));
-        egress.insert("rate_per_minute".into(), Value::Integer(60));
-        egress.insert("max_bytes_per_minute".into(), Value::Integer(1_048_576));
+        egress.insert(
+            "rate_per_minute".into(),
+            Value::Integer(i64::from(taira_defaults::INROU_EGRESS_RATE_PER_MINUTE)),
+        );
+        egress.insert(
+            "max_bytes_per_minute".into(),
+            Value::Integer(
+                i64::try_from(taira_defaults::INROU_EGRESS_MAX_BYTES_PER_MINUTE)
+                    .expect("Taira Inrou egress byte budget fits i64"),
+            ),
+        );
         soracloud_runtime.insert("egress".into(), Value::Table(egress));
     }
     root.insert("soracloud_runtime".into(), Value::Table(soracloud_runtime));
@@ -2456,13 +2536,24 @@ fn render_peer_config(
     let mut nexus = Table::new();
     if npos_bootstrap {
         let mut storage = Table::new();
+        let storage_budget = if taira {
+            taira_defaults::NEXUS_STORAGE_BUDGET_BYTES
+        } else {
+            LOCALNET_NEXUS_STORAGE_BUDGET_BYTES
+        };
         storage.insert(
             "local_budget_bytes".into(),
             Value::Integer(
-                i64::try_from(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES)
-                    .expect("localnet Nexus storage budget fits i64"),
+                i64::try_from(storage_budget).expect("localnet Nexus storage budget fits i64"),
             ),
         );
+        if taira {
+            let weights = TAIRA_NEXUS_STORAGE_WEIGHTS
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), Value::Integer(i64::from(value))))
+                .collect();
+            storage.insert("disk_budget_weights".into(), Value::Table(weights));
+        }
         nexus.insert("storage".into(), Value::Table(storage));
     }
     let mut fusion = Table::new();
@@ -2666,78 +2757,6 @@ fn render_peer_config(
                 .into_owned(),
         ),
     );
-    let mut streaming_soranet = Table::new();
-    streaming_soranet.insert(
-        "enabled".into(),
-        Value::Boolean(streaming_defaults::soranet::ENABLED),
-    );
-    streaming_soranet.insert(
-        "exit_multiaddr".into(),
-        Value::String(streaming_defaults::soranet::EXIT_MULTIADDR.to_owned()),
-    );
-    if let Some(padding_budget_ms) = streaming_defaults::soranet::padding_budget_ms() {
-        streaming_soranet.insert(
-            "padding_budget_ms".into(),
-            Value::Integer(i64::from(padding_budget_ms)),
-        );
-    }
-    streaming_soranet.insert(
-        "access_kind".into(),
-        Value::String(streaming_defaults::soranet::ACCESS_KIND.to_owned()),
-    );
-    streaming_soranet.insert(
-        "channel_salt".into(),
-        Value::String(streaming_defaults::soranet::CHANNEL_SALT.to_owned()),
-    );
-    streaming_soranet.insert(
-        "provision_spool_dir".into(),
-        Value::String(
-            storage_paths
-                .streaming_soranet_spool
-                .to_string_lossy()
-                .into_owned(),
-        ),
-    );
-    streaming_soranet.insert(
-        "provision_spool_max_bytes".into(),
-        Value::Integer(
-            i64::try_from(streaming_defaults::soranet::PROVISION_SPOOL_MAX_BYTES.get())
-                .expect("streaming SoraNet spool maximum fits i64"),
-        ),
-    );
-    streaming_soranet.insert(
-        "provision_window_segments".into(),
-        Value::Integer(
-            i64::try_from(streaming_defaults::soranet::PROVISION_WINDOW_SEGMENTS)
-                .expect("streaming SoraNet provision window fits i64"),
-        ),
-    );
-    streaming_soranet.insert(
-        "provision_queue_capacity".into(),
-        Value::Integer(
-            i64::try_from(streaming_defaults::soranet::PROVISION_QUEUE_CAPACITY)
-                .expect("streaming SoraNet provision queue fits i64"),
-        ),
-    );
-    streaming.insert("soranet".into(), Value::Table(streaming_soranet));
-    let mut streaming_soravpn = Table::new();
-    streaming_soravpn.insert(
-        "provision_spool_dir".into(),
-        Value::String(
-            storage_paths
-                .streaming_soravpn_spool
-                .to_string_lossy()
-                .into_owned(),
-        ),
-    );
-    streaming_soravpn.insert(
-        "provision_spool_max_bytes".into(),
-        Value::Integer(
-            i64::try_from(streaming_defaults::soravpn::PROVISION_SPOOL_MAX_BYTES.get())
-                .expect("streaming SoraVPN spool maximum fits i64"),
-        ),
-    );
-    streaming.insert("soravpn".into(), Value::Table(streaming_soravpn));
     let mut streaming_codec = Table::new();
     streaming_codec.insert(
         "cabac_mode".into(),
@@ -2783,6 +2802,15 @@ fn render_peer_config(
         "data_dir".into(),
         Value::String(storage_paths.sorafs.to_string_lossy().into_owned()),
     );
+    if taira {
+        sorafs_storage.insert(
+            "max_capacity_bytes".into(),
+            Value::Integer(
+                i64::try_from(taira_defaults::SORAFS_STORAGE_CAP_BYTES)
+                    .expect("Taira SoraFS storage cap fits i64"),
+            ),
+        );
+    }
     let mut sorafs = Table::new();
     sorafs.insert("storage".into(), Value::Table(sorafs_storage));
     let mut sorafs_por = Table::new();
@@ -3267,7 +3295,7 @@ fn render_peer_config(
     transport.insert("norito_rpc".into(), Value::Table(norito_rpc));
     torii.insert("transport".into(), Value::Table(transport));
     root.insert("torii".into(), Value::Table(torii));
-    toml::to_string(&Value::Table(root)).expect("serializing peer config to TOML")
+    Zeroizing::new(toml::to_string(&*root).expect("serializing peer config to TOML"))
 }
 fn generate_raw_genesis(
     genesis_public_key: &iroha_crypto::PublicKey,
@@ -4400,7 +4428,6 @@ fn write_genesis_key_files(
     private_path: &Path,
     public_key: &iroha_crypto::PublicKey,
     private_key: &ExposedPrivateKey,
-    private_tree: bool,
 ) -> Result<()> {
     let canonical = Zeroizing::new(
         private_key
@@ -4410,13 +4437,8 @@ fn write_genesis_key_files(
     let mut raw = Zeroizing::new(Vec::with_capacity(canonical.len() + 1));
     raw.extend_from_slice(canonical.as_bytes());
     raw.push(b'\n');
-    if private_tree {
-        crate::secure_fs::write_private_file_atomic(private_path, raw.as_slice())
-            .wrap_err("write genesis private key")?;
-    } else {
-        write_owner_only_localnet_file(private_path, raw.as_slice())
-            .wrap_err("write genesis private key")?;
-    }
+    crate::secure_fs::write_private_file_atomic(private_path, raw.as_slice())
+        .wrap_err("write genesis private key")?;
     let mut public = public_key.to_string();
     public.push('\n');
     let mut options = fs::OpenOptions::new();
@@ -4431,24 +4453,27 @@ fn parse_localnet_peer_config(
     rendered_config: &str,
     config_path: Option<&Path>,
 ) -> Result<actual::Root> {
-    let table = rendered_config.parse::<toml::Table>().map_err(|err| {
-        eyre!(
-            "failed to parse rendered peer config as TOML while deriving consensus policies: {err}"
-        )
-    })?;
+    let description = config_path.map_or_else(
+        || "generated localnet bootstrap config".to_owned(),
+        |path| format!("generated peer config {}", path.display()),
+    );
+    let table = crate::secret_toml::parse_table(rendered_config, &description)?;
     // Scope validation to the chain used to render account-typed fields.
     let chain_discriminant = table
         .get("chain_discriminant")
         .and_then(toml::Value::as_integer)
         .and_then(|value| u16::try_from(value).ok());
     let _chain_discriminant = chain_discriminant.map(ChainDiscriminantGuard::enter);
-    let source = match config_path {
-        Some(path) => TomlSource::new(path.to_path_buf(), table),
-        None => TomlSource::inline(table),
-    };
-    actual::Root::from_toml_source(source).map_err(|err| {
-        eyre!("failed to parse generated peer config while deriving consensus policies: {err:?}")
-    })
+    let source = TomlSource::new_sensitive(
+        config_path.map_or_else(
+            || PathBuf::from("generated:localnet-bootstrap-config"),
+            Path::to_path_buf,
+        ),
+        table,
+        crate::secret_toml::zeroize_table,
+    );
+    actual::Root::from_toml_source(source)
+        .map_err(|_| eyre!("generated peer config is invalid while deriving consensus policies"))
 }
 fn resolve_localnet_da_proof_policies(config: &actual::Root) -> DaProofPolicyBundle {
     iroha_core::da::proof_policy_bundle(&config.nexus.lane_config)
@@ -4572,6 +4597,391 @@ fn default_irohad_bin_paths(taira: bool) -> (PathBuf, PathBuf) {
         target_dir.join("release").join(binary),
     )
 }
+
+fn write_taira_pidfd_preflight(output: &mut impl Write) -> Result<()> {
+    writeln!(
+        output,
+        "command -v python3 >/dev/null 2>&1 || {{ echo \"python3 is required for Taira pidfd process control\" >&2; exit 1; }}"
+    )?;
+    output.write_all(
+        br#"python3 - <<'PY'
+import os
+import platform
+import select
+import signal
+import sys
+
+if platform.system() != "Linux":
+    raise SystemExit("Taira process control requires Linux pidfds and procfs")
+if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+    raise SystemExit("Taira process control requires pidfd_open and pidfd_send_signal")
+if not hasattr(os, "O_CLOEXEC") or not hasattr(os, "O_NOFOLLOW"):
+    raise SystemExit("Taira process control requires safe Linux procfs open flags")
+if not hasattr(select, "poll"):
+    raise SystemExit("Taira process control requires pollable pidfds")
+for required in ("/proc", "/proc/self/stat", "/proc/self/status", "/proc/sys/kernel/random/boot_id"):
+    if not os.path.exists(required):
+        raise SystemExit("Taira process control requires Linux procfs")
+PY
+for legacy_pidfile in "$DIR"/peer*.pid; do
+  if [ -e "$legacy_pidfile" ] || [ -L "$legacy_pidfile" ]; then
+    echo "retired Taira PID file is unsupported: $legacy_pidfile" >&2
+    exit 1
+  fi
+done
+"#,
+    )?;
+    Ok(())
+}
+
+const TAIRA_PROCESS_IDENTITY_PY: &str = r#"
+import errno
+import json
+import re
+import select
+import signal
+import time
+
+_PROCESS_KEYS = {
+    "schema_version", "peer_index", "pid", "boot_id", "start_time_ticks",
+    "executable_path", "executable_device", "executable_inode", "argv",
+    "uid", "gid", "session_id", "process_group_id",
+}
+_RUNTIME_KEYS = _PROCESS_KEYS - {"schema_version", "peer_index"}
+_BOOT_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+def _proc_read(path, limit):
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        payload = bytearray()
+        while len(payload) <= limit:
+            chunk = os.read(descriptor, min(16384, limit + 1 - len(payload)))
+            if not chunk:
+                break
+            payload.extend(chunk)
+    finally:
+        os.close(descriptor)
+    if len(payload) > limit:
+        raise RuntimeError("Linux procfs record exceeds its Taira safety bound: " + path)
+    return bytes(payload)
+
+def _parse_stat(payload, pid):
+    try:
+        fields = payload.decode("ascii").rstrip("\n").rsplit(") ", 1)[1].split()
+        result = (fields[0], int(fields[2]), int(fields[3]), int(fields[19]))
+    except (IndexError, UnicodeDecodeError, ValueError):
+        raise RuntimeError("malformed Linux procfs stat for Taira process {}".format(pid))
+    if len(result[0]) != 1 or result[3] <= 0:
+        raise RuntimeError("malformed Linux procfs stat for Taira process {}".format(pid))
+    return result
+
+def _status_ids(payload, pid):
+    try:
+        text = payload.decode("ascii")
+    except UnicodeDecodeError:
+        raise RuntimeError("malformed Linux procfs status for Taira process {}".format(pid))
+    result = []
+    for label in ("Uid:", "Gid:"):
+        rows = [line for line in text.splitlines() if line.startswith(label)]
+        if len(rows) != 1:
+            raise RuntimeError("malformed Linux procfs status for Taira process {}".format(pid))
+        try:
+            values = tuple(int(value) for value in rows[0][len(label):].split())
+        except ValueError:
+            raise RuntimeError("malformed Linux procfs status for Taira process {}".format(pid))
+        if len(values) != 4 or len(set(values)) != 1:
+            raise RuntimeError("unstable UID/GID identity for Taira process {}".format(pid))
+        result.append(values[0])
+    return tuple(result)
+
+def _open_pidfd(pid):
+    try:
+        return os.pidfd_open(pid, 0)
+    except ProcessLookupError:
+        return None
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return None
+        raise RuntimeError("cannot open pidfd for Taira process {}: {}".format(pid, error))
+
+def _pidfd_signal(descriptor, signal_number):
+    try:
+        signal.pidfd_send_signal(descriptor, signal_number, None, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return False
+        raise RuntimeError("cannot signal exact Taira process through pidfd: {}".format(error))
+
+def _pidfd_wait(descriptor, timeout_seconds):
+    poller = select.poll()
+    poller.register(descriptor, select.POLLIN | select.POLLHUP)
+    return bool(poller.poll(min(int(timeout_seconds * 1000), 2147483647)))
+
+def _observe(pid):
+    root = "/proc/{}".format(pid)
+    try:
+        before = _parse_stat(_proc_read(root + "/stat", 16384), pid)
+        if before[0] == "Z":
+            return None
+        cmdline = _proc_read(root + "/cmdline", 65536)
+        if not cmdline.endswith(b"\0"):
+            raise RuntimeError("malformed Linux procfs cmdline for Taira process {}".format(pid))
+        raw_argv = cmdline[:-1].split(b"\0")
+        if not raw_argv or any(not argument for argument in raw_argv):
+            raise RuntimeError("malformed Linux procfs cmdline for Taira process {}".format(pid))
+        argv = [os.fsdecode(argument) for argument in raw_argv]
+        executable_path = os.readlink(root + "/exe")
+        executable = os.stat(root + "/exe")
+        uid, gid = _status_ids(_proc_read(root + "/status", 131072), pid)
+        after = _parse_stat(_proc_read(root + "/stat", 16384), pid)
+        if after != before:
+            raise RuntimeError("Taira process changed while observing procfs")
+        boot_id = _proc_read("/proc/sys/kernel/random/boot_id", 128).decode("ascii").strip()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except UnicodeDecodeError:
+        raise RuntimeError("malformed Linux boot identity for Taira process {}".format(pid))
+    return {
+        "pid": pid,
+        "boot_id": boot_id,
+        "start_time_ticks": before[3],
+        "executable_path": executable_path,
+        "executable_device": executable.st_dev,
+        "executable_inode": executable.st_ino,
+        "argv": argv,
+        "uid": uid,
+        "gid": gid,
+        "session_id": before[2],
+        "process_group_id": before[1],
+    }
+
+def _bound_observation(descriptor, pid):
+    if not _pidfd_signal(descriptor, 0):
+        return None
+    observed = _observe(pid)
+    if not _pidfd_signal(descriptor, 0):
+        return None
+    return observed
+
+def _runtime_identity(record):
+    return {key: record[key] for key in _RUNTIME_KEYS}
+
+def _validate_record(record, peer_index, config_path, executable_path=None):
+    if type(record) is not dict or set(record) != _PROCESS_KEYS:
+        raise RuntimeError("Taira process record violates the exact V1 schema")
+    if type(record["schema_version"]) is not int or record["schema_version"] != 1:
+        raise RuntimeError("Taira process record has the wrong schema version")
+    if type(record["peer_index"]) is not int or record["peer_index"] != peer_index:
+        raise RuntimeError("Taira process record has the wrong peer index")
+    integer_fields = (
+        "pid", "start_time_ticks", "executable_device", "executable_inode",
+        "uid", "gid", "session_id", "process_group_id",
+    )
+    if any(type(record[field]) is not int for field in integer_fields):
+        raise RuntimeError("Taira process record contains a non-integer identity field")
+    pid = record["pid"]
+    if not (1 < pid <= 2147483647 and record["start_time_ticks"] > 0
+            and record["executable_device"] >= 0 and record["executable_inode"] > 0
+            and 0 <= record["uid"] <= 4294967295 and 0 <= record["gid"] <= 4294967295
+            and record["session_id"] == pid and record["process_group_id"] == pid):
+        raise RuntimeError("Taira process record contains a malformed identity")
+    if type(record["boot_id"]) is not str or _BOOT_ID.fullmatch(record["boot_id"]) is None:
+        raise RuntimeError("Taira process record contains a malformed Linux boot identity")
+    executable = record["executable_path"]
+    if (type(executable) is not str or not os.path.isabs(executable)
+            or os.path.normpath(executable) != executable
+            or os.path.basename(executable) != "iroha3d_taira" or "\0" in executable):
+        raise RuntimeError("Taira process record contains a malformed executable path")
+    if executable_path is not None and executable != executable_path:
+        raise RuntimeError("Taira process record names a substituted executable")
+    if record["argv"] != [executable, "--sora", "--config", config_path]:
+        raise RuntimeError("Taira process record does not bind the exact daemon argv/config")
+    return record
+
+def _no_duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise RuntimeError("duplicate Taira process record key: " + key)
+        result[key] = value
+    return result
+
+def _read_record(path, peer_index, config_path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+                or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
+                or before.st_size <= 0 or before.st_size > 4096):
+            raise RuntimeError("Taira process record lacks exact owner-only custody")
+        payload = bytearray()
+        while len(payload) <= 4096:
+            chunk = os.read(descriptor, min(4097 - len(payload), 4096))
+            if not chunk:
+                break
+            payload.extend(chunk)
+        after = os.fstat(descriptor)
+        fields = ("st_dev", "st_ino", "st_uid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if any(getattr(before, field) != getattr(after, field) for field in fields):
+            raise RuntimeError("Taira process record changed while reading")
+    finally:
+        os.close(descriptor)
+    if len(payload) > 4096:
+        raise RuntimeError("Taira process record exceeds its safety bound")
+    try:
+        record = json.loads(bytes(payload).decode("utf-8"), object_pairs_hook=_no_duplicates)
+    except (UnicodeDecodeError, ValueError) as error:
+        raise RuntimeError("Taira process record is not JSON: {}".format(error))
+    canonical = (json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if canonical != bytes(payload):
+        raise RuntimeError("Taira process record is not canonical JSON")
+    return _validate_record(record, peer_index, config_path), before
+
+def _atomic_publish_record(path, record):
+    payload = (json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(payload) > 4096 or os.path.lexists(path):
+        raise RuntimeError("refusing to replace an existing Taira process record")
+    temporary = os.path.join(os.path.dirname(path), ".peer{}.process.json.{}.tmp".format(record["peer_index"], record["pid"]))
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+    linked = False
+    try:
+        offset = 0
+        while offset < len(payload):
+            count = os.write(descriptor, payload[offset:])
+            if count <= 0:
+                raise RuntimeError("short Taira process-record write")
+            offset += count
+        os.fsync(descriptor)
+        metadata = os.fstat(descriptor)
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_nlink != 1
+                or metadata.st_size != len(payload)):
+            raise RuntimeError("new Taira process record lacks owner-only custody")
+        os.link(temporary, path, follow_symlinks=False)
+        linked = True
+    finally:
+        os.close(descriptor)
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+    if not linked:
+        raise RuntimeError("Taira process record was not published")
+    directory = os.open(os.path.dirname(path), os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+def _unlink_record(path, expected):
+    current = os.lstat(path)
+    if ((current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino)
+            or not stat.S_ISREG(current.st_mode) or current.st_uid != os.geteuid()
+            or stat.S_IMODE(current.st_mode) != 0o600 or current.st_nlink != 1):
+        raise RuntimeError("Taira process record changed before removal")
+    os.unlink(path)
+    directory = os.open(os.path.dirname(path), os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+def _terminate_pidfd(descriptor):
+    if not _pidfd_signal(descriptor, signal.SIGTERM):
+        return
+    if _pidfd_wait(descriptor, 10.0):
+        return
+    if not _pidfd_signal(descriptor, signal.SIGKILL):
+        return
+    if not _pidfd_wait(descriptor, 5.0):
+        raise RuntimeError("exact Taira process did not exit after pidfd SIGKILL")
+
+def preflight_taira_start(record_path, peer_index, expected_argv):
+    config_path = expected_argv[3]
+    if os.path.lexists(record_path):
+        record, _metadata = _read_record(record_path, peer_index, config_path)
+        descriptor = _open_pidfd(record["pid"])
+        if descriptor is None:
+            raise RuntimeError("stale Taira process record must be cleared by stop.sh")
+        try:
+            observed = _bound_observation(descriptor, record["pid"])
+            if observed is None or (observed["boot_id"], observed["start_time_ticks"]) != (record["boot_id"], record["start_time_ticks"]):
+                raise RuntimeError("stale or PID-reused Taira process record must be cleared by stop.sh")
+            if observed != _runtime_identity(record):
+                raise RuntimeError("live Taira process drifted from its persisted identity")
+            raise RuntimeError("Taira peer is already running with its exact process identity")
+        finally:
+            os.close(descriptor)
+    for name in os.listdir("/proc"):
+        if not name.isdigit() or int(name) <= 1:
+            continue
+        pid = int(name)
+        descriptor = _open_pidfd(pid)
+        if descriptor is None:
+            continue
+        try:
+            observed = _bound_observation(descriptor, pid)
+            if observed is not None and observed["argv"] == expected_argv:
+                raise RuntimeError("unrecorded Taira process already owns the exact peer config")
+        finally:
+            os.close(descriptor)
+
+def capture_taira_start(pid, record_path, peer_index, expected_argv):
+    descriptor = _open_pidfd(pid)
+    if descriptor is None:
+        raise RuntimeError("new Taira process exited before pidfd capture")
+    try:
+        deadline = time.monotonic() + 5.0
+        while True:
+            observed = _bound_observation(descriptor, pid)
+            if observed is None:
+                raise RuntimeError("new Taira process exited before identity capture")
+            ready = (
+                observed["executable_path"] == expected_argv[0]
+                and observed["argv"] == expected_argv
+                and observed["uid"] == os.geteuid()
+                and observed["gid"] == os.getegid()
+                and observed["session_id"] == pid
+                and observed["process_group_id"] == pid
+                and _BOOT_ID.fullmatch(observed["boot_id"]) is not None
+            )
+            if ready:
+                break
+            if time.monotonic() >= deadline or _pidfd_wait(descriptor, 0.01):
+                raise RuntimeError("new Taira process never reached its exact executable/argv identity")
+        record = {"schema_version": 1, "peer_index": peer_index, **observed}
+        _validate_record(record, peer_index, expected_argv[3], expected_argv[0])
+        _atomic_publish_record(record_path, record)
+    except BaseException:
+        _terminate_pidfd(descriptor)
+        raise
+    finally:
+        os.close(descriptor)
+
+def stop_taira_process(record_path, peer_index, config_path):
+    record, metadata = _read_record(record_path, peer_index, config_path)
+    descriptor = _open_pidfd(record["pid"])
+    if descriptor is None:
+        _unlink_record(record_path, metadata)
+        return
+    try:
+        observed = _bound_observation(descriptor, record["pid"])
+        if observed is None or (observed["boot_id"], observed["start_time_ticks"]) != (record["boot_id"], record["start_time_ticks"]):
+            _unlink_record(record_path, metadata)
+            return
+        if observed != _runtime_identity(record):
+            raise RuntimeError("refusing to signal a Taira process whose identity drifted")
+        _terminate_pidfd(descriptor)
+        if not _pidfd_wait(descriptor, 0.0):
+            raise RuntimeError("exact Taira process remains live after pidfd termination")
+        _unlink_record(record_path, metadata)
+    finally:
+        os.close(descriptor)
+"#;
+
 fn write_scripts(
     out_dir: &Path,
     peers: u16,
@@ -4590,7 +5000,7 @@ fn write_scripts(
         client_account_literal,
         fee_asset_definition_id,
     )?;
-    write_stop_script(&stop, peers)?;
+    write_stop_script(&stop, peers, taira)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -4613,6 +5023,12 @@ fn write_start_script(
     let (default_irohad_debug, default_irohad_release) = default_irohad_bin_paths(taira);
     let default_iroha_debug = default_irohad_debug.with_file_name("iroha");
     let default_iroha_release = default_irohad_release.with_file_name("iroha");
+    let default_irohad_debug = crate::shell::quote_path(&default_irohad_debug)?;
+    let default_irohad_release = crate::shell::quote_path(&default_irohad_release)?;
+    let default_iroha_debug = crate::shell::quote_path(&default_iroha_debug)?;
+    let default_iroha_release = crate::shell::quote_path(&default_iroha_release)?;
+    let client_account_literal = crate::shell::single_quote(client_account_literal)?;
+    let fee_asset_definition_id = crate::shell::single_quote(fee_asset_definition_id)?;
     let mut start_file = BufWriter::new(File::create(start)?);
     let sora_flag = if sora_profile_enabled { "--sora " } else { "" };
     let sora_mode_env = if sora_profile_enabled { "1" } else { "0" };
@@ -4652,34 +5068,31 @@ fn write_start_script(
     writeln!(start_file, "  fi")?;
     writeln!(start_file, "  SELECTED_PEERS=\"$peer_index\"")?;
     writeln!(start_file, "fi")?;
-    writeln!(start_file, "pid_is_running() {{")?;
-    writeln!(start_file, "  pid=\"$1\"")?;
+    if !taira {
+        writeln!(start_file, "pid_is_running() {{")?;
+        writeln!(start_file, "  pid=\"$1\"")?;
+        writeln!(
+            start_file,
+            "  case \"$pid\" in ''|*[!0-9]*) return 1 ;; esac"
+        )?;
+        writeln!(start_file, "  command -v ps >/dev/null 2>&1 || return 0")?;
+        writeln!(start_file, "  ps -p \"$pid\" -o pid= >/dev/null 2>&1")?;
+        writeln!(start_file, "}}")?;
+    } else {
+        write_taira_pidfd_preflight(&mut start_file)?;
+    }
     writeln!(
         start_file,
-        "  case \"$pid\" in ''|*[!0-9]*) return 1 ;; esac"
-    )?;
-    writeln!(start_file, "  command -v ps >/dev/null 2>&1 || return 0")?;
-    writeln!(start_file, "  ps -p \"$pid\" -o pid= >/dev/null 2>&1")?;
-    writeln!(start_file, "}}")?;
-    writeln!(
-        start_file,
-        "DEFAULT_IROHAD_BIN_DEBUG=\"{}\"",
-        default_irohad_debug.display()
-    )?;
-    writeln!(
-        start_file,
-        "DEFAULT_IROHAD_BIN_RELEASE=\"{}\"",
-        default_irohad_release.display()
+        "DEFAULT_IROHAD_BIN_DEBUG={default_irohad_debug}"
     )?;
     writeln!(
         start_file,
-        "DEFAULT_IROHA_CLI_DEBUG=\"{}\"",
-        default_iroha_debug.display()
+        "DEFAULT_IROHAD_BIN_RELEASE={default_irohad_release}"
     )?;
+    writeln!(start_file, "DEFAULT_IROHA_CLI_DEBUG={default_iroha_debug}")?;
     writeln!(
         start_file,
-        "DEFAULT_IROHA_CLI_RELEASE=\"{}\"",
-        default_iroha_release.display()
+        "DEFAULT_IROHA_CLI_RELEASE={default_iroha_release}"
     )?;
     writeln!(start_file, "if [ -z \"${{IROHAD_BIN:-}}\" ]; then")?;
     writeln!(
@@ -4727,11 +5140,10 @@ fn write_start_script(
     )?;
     writeln!(start_file, "  exit 1")?;
     writeln!(start_file, "fi")?;
-    writeln!(start_file, "FAUCET_ACCOUNT=\"{}\"", client_account_literal)?;
+    writeln!(start_file, "FAUCET_ACCOUNT={client_account_literal}")?;
     writeln!(
         start_file,
-        "FAUCET_ASSET_DEFINITION_ID=\"{}\"",
-        fee_asset_definition_id
+        "FAUCET_ASSET_DEFINITION_ID={fee_asset_definition_id}"
     )?;
     writeln!(
         start_file,
@@ -4752,35 +5164,51 @@ fn write_start_script(
         start_file,
         "  SNAPSHOT_STORE_DIR=\"$DIR/state/peer${{i}}/snapshot\""
     )?;
-    writeln!(start_file, "  PIDFILE=\"$DIR/peer${{i}}.pid\"")?;
-    writeln!(start_file, "  if [ -f \"$PIDFILE\" ]; then")?;
-    writeln!(
-        start_file,
-        "    existing_pid=\"$(cat \"$PIDFILE\" 2>/dev/null || true)\""
-    )?;
-    writeln!(
-        start_file,
-        "    if [ -n \"$existing_pid\" ] && pid_is_running \"$existing_pid\"; then"
-    )?;
-    writeln!(
-        start_file,
-        "      echo \"peer$i already running with pid $existing_pid\" >&2"
-    )?;
-    writeln!(start_file, "      exit 1")?;
-    writeln!(start_file, "    fi")?;
-    writeln!(start_file, "    rm -f \"$PIDFILE\"")?;
-    writeln!(start_file, "  fi")?;
+    if taira {
+        writeln!(
+            start_file,
+            "  PROCESS_RECORD=\"$DIR/peer${{i}}.process.json\""
+        )?;
+    } else {
+        writeln!(start_file, "  PIDFILE=\"$DIR/peer${{i}}.pid\"")?;
+        writeln!(start_file, "  if [ -f \"$PIDFILE\" ]; then")?;
+        writeln!(
+            start_file,
+            "    existing_pid=\"$(cat \"$PIDFILE\" 2>/dev/null || true)\""
+        )?;
+        writeln!(
+            start_file,
+            "    if [ -n \"$existing_pid\" ] && pid_is_running \"$existing_pid\"; then"
+        )?;
+        writeln!(
+            start_file,
+            "      echo \"peer$i already running with pid $existing_pid\" >&2"
+        )?;
+        writeln!(start_file, "      exit 1")?;
+        writeln!(start_file, "    fi")?;
+        writeln!(start_file, "    rm -f \"$PIDFILE\"")?;
+        writeln!(start_file, "  fi")?;
+    }
     writeln!(start_file, "  mkdir -p \"$SNAPSHOT_STORE_DIR/generations\"")?;
     writeln!(start_file, "  if command -v python3 >/dev/null 2>&1; then")?;
     writeln!(
         start_file,
-        "    peer_pid=$(SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=\"${{LOG_LEVEL:-info}}\" LOG_FILTER=\"${{LOG_FILTER:-}}\" IROHAD_BIN=\"$IROHAD_BIN\" IROHA_NETWORK_DIR=\"$DIR\" IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_LOG=\"$DIR/peer${{i}}.log\" IROHA_SORA_MODE=\"{sora_mode_env}\" IROHA_TAIRA_MODE=\"{taira_mode_env}\" python3 - <<'PY'"
+        "    peer_pid=$(SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=\"${{LOG_LEVEL:-info}}\" LOG_FILTER=\"${{LOG_FILTER:-}}\" IROHAD_BIN=\"$IROHAD_BIN\" IROHA_NETWORK_DIR=\"$DIR\" IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_LOG=\"$DIR/peer${{i}}.log\" IROHA_PEER_PROCESS_RECORD=\"${{PROCESS_RECORD:-}}\" IROHA_SORA_MODE=\"{sora_mode_env}\" IROHA_TAIRA_MODE=\"{taira_mode_env}\" python3 - <<'PY'"
     )?;
     writeln!(start_file, "import os")?;
     writeln!(start_file, "import stat")?;
     writeln!(start_file, "import subprocess")?;
+    if taira {
+        start_file.write_all(TAIRA_PROCESS_IDENTITY_PY.as_bytes())?;
+    }
     writeln!(start_file)?;
     writeln!(start_file, "env = os.environ.copy()")?;
+    if taira {
+        writeln!(
+            start_file,
+            "env[\"IROHAD_BIN\"] = os.path.realpath(env[\"IROHAD_BIN\"])"
+        )?;
+    }
     writeln!(start_file, "cmd = [env[\"IROHAD_BIN\"]]")?;
     writeln!(start_file, "if env.get(\"IROHA_SORA_MODE\") == \"1\":")?;
     writeln!(start_file, "    cmd.append(\"--sora\")")?;
@@ -4788,6 +5216,12 @@ fn write_start_script(
         start_file,
         "cmd.extend([\"--config\", env[\"IROHA_PEER_CONFIG\"]])"
     )?;
+    if taira {
+        writeln!(
+            start_file,
+            "preflight_taira_start(env[\"IROHA_PEER_PROCESS_RECORD\"], int(env[\"IROHA_PEER_INDEX\"]), cmd)"
+        )?;
+    }
     writeln!(start_file, "pass_fds = ()")?;
     writeln!(start_file, "if env.get(\"IROHA_TAIRA_MODE\") == \"1\":")?;
     writeln!(
@@ -4894,6 +5328,12 @@ fn write_start_script(
         "process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, close_fds=True, pass_fds=pass_fds, start_new_session=True)"
     )?;
     writeln!(start_file, "if pass_fds: os.close(198)")?;
+    if taira {
+        writeln!(
+            start_file,
+            "capture_taira_start(process.pid, env[\"IROHA_PEER_PROCESS_RECORD\"], int(env[\"IROHA_PEER_INDEX\"]), cmd)"
+        )?;
+    }
     writeln!(start_file, "print(process.pid)")?;
     writeln!(start_file, "PY")?;
     writeln!(start_file, "    )")?;
@@ -4913,8 +5353,15 @@ fn write_start_script(
         writeln!(start_file, "    disown \"$peer_pid\" 2>/dev/null || true")?;
     }
     writeln!(start_file, "  fi")?;
-    writeln!(start_file, "  echo \"$peer_pid\" > \"$PIDFILE\"")?;
-    writeln!(start_file, "  echo \"peer$i pid $(cat \"$PIDFILE\")\"")?;
+    if taira {
+        writeln!(
+            start_file,
+            "  echo \"peer$i exact process identity captured in $PROCESS_RECORD\""
+        )?;
+    } else {
+        writeln!(start_file, "  echo \"$peer_pid\" > \"$PIDFILE\"")?;
+        writeln!(start_file, "  echo \"peer$i pid $(cat \"$PIDFILE\")\"")?;
+    }
     writeln!(start_file, "done")?;
     writeln!(start_file, "ensure_faucet_reserve() {{")?;
     writeln!(
@@ -4931,7 +5378,7 @@ fn write_start_script(
     )?;
     writeln!(
         start_file,
-        "    if asset_json=\"$($IROHA_CLI --machine -c \"$DIR/client.toml\" --output-format json ledger asset get --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" 2>/dev/null)\"; then"
+        "    if asset_json=\"$(\"$IROHA_CLI\" --machine -c \"$DIR/client.toml\" --output-format json ledger asset get --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" 2>/dev/null)\"; then"
     )?;
     writeln!(
         start_file,
@@ -4954,7 +5401,7 @@ fn write_start_script(
     )?;
     writeln!(
         start_file,
-        "      $IROHA_CLI --machine -c \"$DIR/client.toml\" --fee-payer authority --output-format json ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" --quantity \"$mint_amount\" > \"$DIR/faucet-topup.last.json\""
+        "      \"$IROHA_CLI\" --machine -c \"$DIR/client.toml\" --fee-payer authority --output-format json ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" --quantity \"$mint_amount\" > \"$DIR/faucet-topup.last.json\""
     )?;
     writeln!(start_file, "      return 0")?;
     writeln!(start_file, "    fi")?;
@@ -4968,7 +5415,7 @@ fn write_start_script(
     writeln!(start_file, "ensure_faucet_reserve")?;
     Ok(start_file.flush()?)
 }
-fn write_stop_script(stop: &Path, peers: u16) -> Result<()> {
+fn write_stop_script(stop: &Path, peers: u16, taira: bool) -> Result<()> {
     let mut stop_file = BufWriter::new(File::create(stop)?);
     writeln!(stop_file, "#!/usr/bin/env bash")?;
     writeln!(stop_file, "set -euo pipefail")?;
@@ -5183,7 +5630,7 @@ fn write_localnet_runtime_bundle(
     onboarding: &LocalnetClientIdentity,
 ) -> Result<LocalnetRuntimeBundle> {
     let runtime_dir = out_dir.join(LOCALNET_RUNTIME_DIRECTORY);
-    crate::secure_fs::prepare_empty_private_directory(&runtime_dir)
+    let runtime_dir = crate::secure_fs::prepare_empty_private_directory(&runtime_dir)
         .wrap_err("prepare localnet runtime credential directory")?;
     let operator_signer_key = runtime_dir.join(LOCALNET_OPERATOR_SIGNER_KEY_FILE);
     let onboarding_signer_key = runtime_dir.join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE);
@@ -5206,15 +5653,12 @@ fn write_localnet_runtime_bundle(
         onboarding_token_hash,
     })
 }
-fn taira_runtime_signer_key_path(out_dir: &Path, peer_index: usize) -> PathBuf {
-    out_dir
-        .join("runtime")
-        .join(TAIRA_RUNTIME_SIGNER_DIRECTORY)
-        .join(format!("peer{peer_index}.private_key"))
+fn taira_runtime_signer_key_path(directory: &Path, peer_index: usize) -> PathBuf {
+    directory.join(format!("peer{peer_index}.private_key"))
 }
 fn write_taira_runtime_signer_keys(out_dir: &Path, peers: &[Peer]) -> Result<()> {
     let directory = out_dir.join("runtime").join(TAIRA_RUNTIME_SIGNER_DIRECTORY);
-    crate::secure_fs::prepare_empty_private_directory(&directory)
+    let directory = crate::secure_fs::prepare_empty_private_directory(&directory)
         .wrap_err("prepare Taira runtime signer directory")?;
     for (peer_index, peer) in peers.iter().enumerate() {
         let literal = Zeroizing::new(
@@ -5223,7 +5667,7 @@ fn write_taira_runtime_signer_keys(out_dir: &Path, peers: &[Peer]) -> Result<()>
                 .wrap_err("encode canonical Taira runtime signer key")?,
         );
         write_private_key_sidecar(
-            &taira_runtime_signer_key_path(out_dir, peer_index),
+            &taira_runtime_signer_key_path(&directory, peer_index),
             literal.as_str(),
         )?;
     }
@@ -5253,30 +5697,8 @@ fn localnet_client_account_id() -> AccountId {
     AccountId::new(public_key)
 }
 fn write_owner_only_localnet_file(path: &Path, contents: &[u8]) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true).mode(0o600);
-        let mut file = options
-            .open(path)
-            .wrap_err_with(|| format!("create owner-only file {}", path.display()))?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .wrap_err_with(|| format!("protect owner-only file {}", path.display()))?;
-        file.write_all(contents)
-            .wrap_err_with(|| format!("write owner-only file {}", path.display()))?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .wrap_err_with(|| format!("create localnet file {}", path.display()))?;
-        file.write_all(contents)
-            .wrap_err_with(|| format!("write localnet file {}", path.display()))
-    }
+    crate::secure_fs::write_private_file_atomic(path, contents)
+        .wrap_err_with(|| format!("write owner-only localnet file {}", path.display()))
 }
 fn write_client_config(
     out_dir: &Path,
@@ -5292,7 +5714,7 @@ fn write_client_config(
     let chain_discriminant_line = chain_discriminant.map_or_else(String::new, |value| {
         format!("chain_discriminant = {value}\n")
     });
-    let rendered = format!(
+    let rendered = Zeroizing::new(format!(
         concat!(
             "chain = \"{chain}\"\n",
             "network_id_file = \"{network_id_file}\"\n",
@@ -5323,7 +5745,7 @@ fn write_client_config(
         chain_discriminant_line = chain_discriminant_line,
         private_key = client.private_key.as_str(),
         public_key = client.public_key,
-    );
+    ));
     write_owner_only_localnet_file(&path, rendered.as_bytes())
         .wrap_err_with(|| format!("write operator client config {}", path.display()))?;
     Ok(())
@@ -5333,7 +5755,6 @@ fn write_localnet_readme(
     out_dir: &Path,
     chain_id: &str,
     seed: Option<&str>,
-    private_custody: bool,
     consensus_mode: SumeragiConsensusMode,
     peers: u16,
     torii_url: &str,
@@ -5349,10 +5770,11 @@ fn write_localnet_readme(
     onboarding_account_id: &str,
     runtime_bundle: &LocalnetRuntimeBundle,
     alias_setup_intent_path: &Path,
+    shell_out_dir: &str,
 ) -> Result<()> {
     let readme_path = out_dir.join("README.md");
-    let start_command = localnet_script_command(private_custody, "start.sh");
-    let stop_command = localnet_script_command(private_custody, "stop.sh");
+    let start_command = localnet_script_command("start.sh");
+    let stop_command = localnet_script_command("stop.sh");
     let seed_line = seed
         .map(|seed| {
             format!(
@@ -5424,7 +5846,7 @@ fn write_localnet_readme(
         alias_setup_intent = alias_setup_intent_path.display(),
         start_script = start_path.display(),
         stop_script = stop_path.display(),
-        out_dir = out_dir.display(),
+        out_dir = shell_out_dir,
         start_command = start_command,
         stop_command = stop_command,
     );
@@ -5435,12 +5857,8 @@ fn write_localnet_readme(
         )
     })
 }
-fn localnet_script_command(private_custody: bool, script_name: &str) -> String {
-    if private_custody {
-        format!("bash ./{script_name}")
-    } else {
-        format!("./{script_name}")
-    }
+fn localnet_script_command(script_name: &str) -> String {
+    format!("bash ./{script_name}")
 }
 #[cfg(test)]
 mod tests {
@@ -5471,6 +5889,10 @@ mod tests {
     include!("localnet/runtime_artifact_tests.rs");
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "this end-to-end fixture keeps each generated signer, validator registration, config, custody file, and launch-script assertion in one canonical consistency check"
+    )]
     fn canonical_taira_generation_binds_four_runtime_signers_to_validator_peers() {
         let temp = tempfile::tempdir().expect("temporary Taira directory");
         let opts = LocalnetOptions {
@@ -5489,7 +5911,7 @@ mod tests {
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         let mut output = BufWriter::new(Vec::new());
-        generate_localnet_inner(&opts, &mut output, false, Some(TAIRA_TESTNET_CHAIN_ID))
+        generate_localnet_inner(&opts, &mut output, Some(PUBLIC_TAIRA_CHAIN_ID))
             .expect("generate canonical Taira localnet");
         let peers = build_peers(
             TAIRA_TESTNET_PEERS,
@@ -5637,7 +6059,13 @@ mod tests {
             assert!(inrou.portable_vm_uid.is_none());
             assert!(inrou.portable_vm_gid.is_none());
 
-            let key_path = taira_runtime_signer_key_path(temp.path(), peer_index);
+            let key_path = taira_runtime_signer_key_path(
+                &temp
+                    .path()
+                    .join("runtime")
+                    .join(TAIRA_RUNTIME_SIGNER_DIRECTORY),
+                peer_index,
+            );
             let key_record = fs::read_to_string(&key_path).expect("read Taira runtime signer key");
             assert_eq!(key_record.len(), 71);
             assert_eq!(key_record.lines().count(), 1);
@@ -5657,6 +6085,75 @@ mod tests {
                 .expect("read rendered Taira config");
             assert!(!config.contains(key_record.trim_end()));
             assert!(!start_script.contains(key_record.trim_end()));
+            let config: toml::Value = toml::from_str(&config).expect("parse rendered Taira config");
+            let storage = config
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .and_then(|nexus| nexus.get("storage"))
+                .and_then(toml::Value::as_table)
+                .expect("canonical Taira Nexus storage profile");
+            assert_eq!(
+                storage
+                    .get("local_budget_bytes")
+                    .and_then(toml::Value::as_integer),
+                Some(
+                    i64::try_from(taira_defaults::NEXUS_STORAGE_BUDGET_BYTES)
+                        .expect("Taira Nexus storage budget fits i64")
+                )
+            );
+            let weights = storage
+                .get("disk_budget_weights")
+                .and_then(toml::Value::as_table)
+                .expect("canonical Taira Nexus storage weights");
+            for (name, expected) in TAIRA_NEXUS_STORAGE_WEIGHTS {
+                assert_eq!(
+                    weights.get(name).and_then(toml::Value::as_integer),
+                    Some(i64::from(expected))
+                );
+            }
+            let sorafs_storage = config
+                .get("sorafs")
+                .and_then(toml::Value::as_table)
+                .and_then(|sorafs| sorafs.get("storage"))
+                .and_then(toml::Value::as_table)
+                .expect("canonical Taira SoraFS storage profile");
+            assert_eq!(
+                sorafs_storage
+                    .get("max_capacity_bytes")
+                    .and_then(toml::Value::as_integer),
+                Some(
+                    i64::try_from(taira_defaults::SORAFS_STORAGE_CAP_BYTES)
+                        .expect("Taira SoraFS storage cap fits i64")
+                )
+            );
+            let egress = config
+                .get("soracloud_runtime")
+                .and_then(toml::Value::as_table)
+                .and_then(|runtime| runtime.get("egress"))
+                .and_then(toml::Value::as_table)
+                .expect("canonical Taira runtime egress profile");
+            assert_eq!(
+                egress
+                    .get("rate_per_minute")
+                    .and_then(toml::Value::as_integer),
+                Some(i64::from(taira_defaults::INROU_EGRESS_RATE_PER_MINUTE))
+            );
+            assert_eq!(
+                egress
+                    .get("max_bytes_per_minute")
+                    .and_then(toml::Value::as_integer),
+                Some(
+                    i64::try_from(taira_defaults::INROU_EGRESS_MAX_BYTES_PER_MINUTE)
+                        .expect("Taira Inrou egress byte budget fits i64")
+                )
+            );
+            assert!(
+                config
+                    .get("soracloud_runtime")
+                    .and_then(toml::Value::as_table)
+                    .is_none_or(|runtime| !runtime.contains_key("inrou")),
+                "Kagami must leave Inrou disabled until the trusted guest identity is staged"
+            );
         }
         assert_eq!(authorities.len(), usize::from(TAIRA_TESTNET_PEERS));
     }
@@ -6200,7 +6697,7 @@ mod tests {
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         let mut command_output = BufWriter::new(Vec::new());
-        generate_localnet_inner(&opts, &mut command_output, true, None)
+        generate_localnet_inner(&opts, &mut command_output, None)
             .expect("generate fresh-custody localnet files");
         let command_output = String::from_utf8(
             command_output
@@ -7807,6 +8304,32 @@ mod tests {
             .is_err(),
             "private dataspace selection must reject the public Nexus profile"
         );
+        for retired in ["dataspaces", "public", "sora-nexus", "nexus-public"] {
+            assert!(
+                TestArgs::try_parse_from([
+                    "kagami-localnet-test",
+                    "--out-dir",
+                    "/tmp/kagami-localnet-test",
+                    "--sora-profile",
+                    retired,
+                ])
+                .is_err(),
+                "first-release CLI must reject retired profile alias {retired}"
+            );
+        }
+        for retired in ["throughput-10k-permissioned", "throughput-10k-npos"] {
+            assert!(
+                TestArgs::try_parse_from([
+                    "kagami-localnet-test",
+                    "--out-dir",
+                    "/tmp/kagami-localnet-test",
+                    "--perf-profile",
+                    retired,
+                ])
+                .is_err(),
+                "first-release CLI must reject retired performance alias {retired}"
+            );
+        }
     }
     #[test]
     fn localnet_cli_accepts_an_explicit_canonical_chain_id() {
@@ -7821,25 +8344,138 @@ mod tests {
             "--out-dir",
             "/tmp/kagami-localnet-test",
             "--chain-id",
-            TAIRA_TESTNET_CHAIN_ID,
+            PUBLIC_TAIRA_CHAIN_ID,
         ])
         .expect("parse explicit localnet chain id");
         assert_eq!(
             resolve_localnet_chain_id(Some(&parsed.localnet.chain_id))
                 .expect("resolve explicit localnet chain id"),
-            TAIRA_TESTNET_CHAIN_ID
+            PUBLIC_TAIRA_CHAIN_ID
         );
         assert!(resolve_localnet_chain_id(Some("   ")).is_err());
-        assert!(resolve_localnet_chain_id(Some(RETIRED_TAIRA_CHAIN_ID_ALIAS)).is_err());
+        assert!(resolve_localnet_chain_id(Some("iroha3-taira")).is_err());
+        assert!(resolve_localnet_chain_id(Some("iroha3-nexus")).is_err());
+        assert!(resolve_localnet_chain_id(Some("cbdc16")).is_err());
         for padded in [
-            format!(" {TAIRA_TESTNET_CHAIN_ID}"),
-            format!("{TAIRA_TESTNET_CHAIN_ID} "),
-            format!("{TAIRA_TESTNET_CHAIN_ID}\n"),
-            format!("\t{TAIRA_TESTNET_CHAIN_ID}"),
+            format!(" {PUBLIC_TAIRA_CHAIN_ID}"),
+            format!("{PUBLIC_TAIRA_CHAIN_ID} "),
+            format!("{PUBLIC_TAIRA_CHAIN_ID}\n"),
+            format!("\t{PUBLIC_TAIRA_CHAIN_ID}"),
         ] {
             assert!(
                 resolve_localnet_chain_id(Some(&padded)).is_err(),
                 "padded chain identity must fail rather than normalize: {padded:?}"
+            );
+        }
+    }
+    #[test]
+    fn invalid_chain_requests_do_not_create_partial_output_directories() {
+        fn options(out_dir: PathBuf) -> LocalnetOptions {
+            LocalnetOptions {
+                sora_profile: None,
+                perf_profile: None,
+                peers: NonZeroU16::new(4).expect("non-zero"),
+                seed: Some("pre-write-chain-validation".to_owned()),
+                bind_host: DEFAULT_BIND_HOST.to_owned(),
+                public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+                base_api_port: 28_080,
+                base_p2p_port: 28_337,
+                out_dir,
+                extra_accounts: 0,
+                assets: Vec::new(),
+                block_cadence_ms: None,
+                consensus_mode: SumeragiConsensusMode::Permissioned,
+            }
+        }
+
+        let parent = tempfile::tempdir().expect("create localnet validation parent");
+        let malformed_out = parent.path().join("malformed-chain");
+        let malformed = options(malformed_out.clone());
+        let _error =
+            generate_localnet_inner(&malformed, &mut BufWriter::new(Vec::new()), Some(" padded"))
+                .expect_err("malformed chain must fail");
+        assert!(
+            !malformed_out.exists(),
+            "malformed chain must fail before creating its output directory"
+        );
+
+        let taira_out = parent.path().join("invalid-taira-profile");
+        let invalid_taira = options(taira_out.clone());
+        let _error = generate_localnet_inner(
+            &invalid_taira,
+            &mut BufWriter::new(Vec::new()),
+            Some(PUBLIC_TAIRA_CHAIN_ID),
+        )
+        .expect_err("Taira profile mismatch must fail");
+        assert!(
+            !taira_out.exists(),
+            "Taira profile mismatch must fail before creating its output directory"
+        );
+    }
+    #[test]
+    fn invalid_asset_requests_do_not_create_partial_output_directories() {
+        fn options(out_dir: PathBuf, assets: Vec<AssetSpec>) -> LocalnetOptions {
+            LocalnetOptions {
+                sora_profile: None,
+                perf_profile: None,
+                peers: NonZeroU16::new(4).expect("non-zero"),
+                seed: Some("pre-write-asset-validation".to_owned()),
+                bind_host: DEFAULT_BIND_HOST.to_owned(),
+                public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+                base_api_port: 28_080,
+                base_p2p_port: 28_337,
+                out_dir,
+                extra_accounts: 0,
+                assets,
+                block_cadence_ms: None,
+                consensus_mode: SumeragiConsensusMode::Permissioned,
+            }
+        }
+        fn asset(id: String, alias: Option<&str>) -> AssetSpec {
+            AssetSpec {
+                id,
+                name: "Preflight asset".to_owned(),
+                alias: alias.map(str::to_owned),
+                owned_by: ALICE_ID.clone(),
+                mint_to: ALICE_ID.clone(),
+                quantity: 1,
+            }
+        }
+
+        let parent = tempfile::tempdir().expect("create asset-validation parent");
+        let valid_id = localnet_sample_asset_literal();
+        let cases = [
+            ("invalid-id", vec![asset("not-an-id".to_owned(), None)]),
+            (
+                "invalid-alias",
+                vec![asset(valid_id.clone(), Some("not an alias"))],
+            ),
+            (
+                "duplicate-id",
+                vec![asset(valid_id.clone(), None), asset(valid_id, None)],
+            ),
+            (
+                "built-in-collision",
+                vec![asset(localnet_kagemusha_asset_literal(), None)],
+            ),
+            (
+                "duplicate-alias",
+                vec![
+                    asset(localnet_sample_asset_literal(), Some("sample#localnet")),
+                    asset(localnet_fee_asset_literal(), Some("sample#localnet")),
+                ],
+            ),
+        ];
+        for (name, assets) in cases {
+            let out_dir = parent.path().join(name);
+            let _error = generate_localnet(
+                &options(out_dir.clone(), assets),
+                &mut BufWriter::new(Vec::new()),
+            )
+            .expect_err("invalid asset request must fail");
+            assert!(
+                !out_dir.exists(),
+                "invalid asset request `{name}` must fail before creating output"
             );
         }
     }
@@ -9005,6 +9641,27 @@ mod tests {
         assert!(err.to_string().contains("unmatched"));
     }
     #[test]
+    fn canonical_host_rejects_non_dns_names_and_injection_characters() {
+        for raw in [
+            " example.test",
+            "example.test ",
+            "example.test/path",
+            "example.test\nnext",
+            "example\".test",
+            "$(command)",
+            "-leading.example",
+            "trailing-.example",
+            "two..labels",
+            "[localhost]",
+        ] {
+            let _error = CanonicalHost::parse(raw, "--public-host")
+                .expect_err("noncanonical or injectable host must fail");
+        }
+        let host = CanonicalHost::parse("Node-1.Example.Test", "--public-host")
+            .expect("canonical DNS host");
+        assert_eq!(host.url_host(), "node-1.example.test");
+    }
+    #[test]
     fn client_config_renders_ipv6_torii_url() {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
@@ -9024,6 +9681,7 @@ mod tests {
     #[test]
     fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
         let tmp = tempfile::tempdir().expect("tmp dir");
+        let shell_out_dir = crate::shell::quote_path(tmp.path()).expect("quote temp path");
         let runtime_bundle = LocalnetRuntimeBundle {
             operator_signer_key: tmp.path().join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
             onboarding_signer_key: tmp.path().join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE),
@@ -9034,7 +9692,6 @@ mod tests {
             tmp.path(),
             DEFAULT_CHAIN_ID,
             Some("Iroha"),
-            false,
             SumeragiConsensusMode::Npos,
             4,
             "http://127.0.0.1:29080/",
@@ -9050,6 +9707,7 @@ mod tests {
             &localnet_client_account_literal(None),
             &runtime_bundle,
             &tmp.path().join(LOCALNET_ALIAS_SETUP_INTENT_FILE),
+            &shell_out_dir,
         )
         .expect("write readme");
         let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
@@ -9075,6 +9733,7 @@ mod tests {
     #[test]
     fn private_custody_readme_invokes_lifecycle_scripts_through_bash() {
         let tmp = tempfile::tempdir().expect("tmp dir");
+        let shell_out_dir = crate::shell::quote_path(tmp.path()).expect("quote temp path");
         let runtime_bundle = LocalnetRuntimeBundle {
             operator_signer_key: tmp.path().join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
             onboarding_signer_key: tmp.path().join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE),
@@ -9085,7 +9744,6 @@ mod tests {
             tmp.path(),
             DEFAULT_CHAIN_ID,
             None,
-            true,
             SumeragiConsensusMode::Npos,
             4,
             "http://127.0.0.1:29080/",
@@ -9101,6 +9759,7 @@ mod tests {
             &localnet_client_account_literal(None),
             &runtime_bundle,
             &tmp.path().join(LOCALNET_ALIAS_SETUP_INTENT_FILE),
+            &shell_out_dir,
         )
         .expect("write private-custody readme");
         let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
@@ -9112,23 +9771,49 @@ mod tests {
         assert!(!contents.lines().any(|line| line == "./stop.sh"));
     }
     #[test]
-    fn fresh_localnet_seed_uses_independent_256_bit_os_entropy() {
-        let first = fresh_localnet_seed().expect("first OS-random seed");
-        let second = fresh_localnet_seed().expect("second OS-random seed");
-        assert_eq!(first.len(), 64);
-        assert_eq!(second.len(), 64);
-        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        assert!(second.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        assert_ne!(first, second);
+    fn omitted_seed_uses_independent_os_random_keys() {
         let peer_index = 0_u16.to_be_bytes();
-        let (first_public, first_private) =
-            generate_streaming_identity_key_pair(Some(first.as_bytes()), &peer_index)
-                .expect("derive first fresh streaming identity");
+        let (first_public, first_private) = generate_streaming_identity_key_pair(None, &peer_index)
+            .expect("generate first streaming identity");
         let (second_public, second_private) =
-            generate_streaming_identity_key_pair(Some(second.as_bytes()), &peer_index)
-                .expect("derive second fresh streaming identity");
+            generate_streaming_identity_key_pair(None, &peer_index)
+                .expect("generate second streaming identity");
         assert_ne!(first_public, second_public);
         assert_ne!(first_private.to_string(), second_private.to_string());
+    }
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    #[test]
+    fn localnet_refuses_to_mix_with_existing_output() {
+        let output = tempfile::tempdir().expect("localnet output");
+        fs::set_permissions(output.path(), fs::Permissions::from_mode(0o700))
+            .expect("harden localnet output directory");
+        let sentinel = output.path().join("keep.txt");
+        fs::write(&sentinel, b"do not overwrite").expect("write sentinel");
+        let opts = LocalnetOptions {
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("nonzero peers"),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29_080,
+            base_p2p_port: 33_337,
+            out_dir: output.path().to_owned(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_cadence_ms: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+        };
+        let error = generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+            .expect_err("non-empty output must be rejected");
+        assert!(format!("{error:#}").contains("must be empty"));
+        assert_eq!(
+            fs::read(sentinel).expect("read sentinel"),
+            b"do not overwrite"
+        );
     }
     #[test]
     fn onboarding_tokens_remain_random_with_reproducible_identity_keys() {

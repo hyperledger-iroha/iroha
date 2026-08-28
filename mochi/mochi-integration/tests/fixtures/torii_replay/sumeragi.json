@@ -14,11 +14,16 @@
     "details": null
   },
   "leader": 0,
+  "locked_prepare_qc": null,
+  "highest_prepare_qc": null,
+  "last_timeout_certificate": null,
   "body_state": {
     "state": "validated",
     "details": null
   },
+  "pending_persistence_id": null,
   "last_committed_height": 9,
+  "last_committed_subject": null,
   "height_context": {
     "epoch": 1,
     "epoch_end_height": 100,
@@ -33,6 +38,7 @@
       "total_power": 4
     }
   },
+  "last_commit_qc": null,
   "liveness": {
     "generation": 0,
     "prepare_quorums": [],
@@ -66,7 +72,9 @@
       }
     },
     "queues": [],
+    "last_progress": null,
     "no_progress_age_ms": 0,
+    "blocker": null,
     "ignore_counts": []
   }
 }

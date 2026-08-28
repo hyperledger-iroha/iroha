@@ -292,6 +292,10 @@ class CSharpNativePackageTests(unittest.TestCase):
         )
         native_job = workflow[
             workflow.index("  native-release-artifacts:")
+            : workflow.index("  native-release-artifact-linux-arm-cross:")
+        ]
+        arm_cross_job = workflow[
+            workflow.index("  native-release-artifact-linux-arm-cross:")
             : workflow.index("  native-release-artifact-linux-arm:")
         ]
         arm_primary_job = workflow[
@@ -344,31 +348,171 @@ class CSharpNativePackageTests(unittest.TestCase):
         self.assertIn('if [[ "$host_target" != "$target" ]]', native_job)
         self.assertIn('if [[ -e target ]]', native_job)
         self.assertIn('cp "target/$target/release/$library_name" "$artifact"', native_job)
+        self.assertEqual(
+            native_job.count(
+                "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+            ),
+            2,
+        )
+        self.assertEqual(
+            native_job.count("name: csharp-native-${{ matrix.target }}"), 2
+        )
+        self.assertEqual(native_job.count("continue-on-error: true"), 1)
+        self.assertIn(
+            "id: upload_primary\n        continue-on-error: true\n"
+            "        uses: actions/upload-artifact@",
+            native_job,
+        )
+        self.assertIn(
+            "if: steps.upload_primary.outcome == 'failure'\n"
+            "        uses: actions/upload-artifact@",
+            native_job,
+        )
+        self.assertEqual(native_job.count("overwrite: true"), 1)
+
+        self.assertIn("runs-on: ubuntu-24.04", arm_cross_job)
+        self.assertNotIn("runs-on: ubuntu-24.04-arm", arm_cross_job)
+        self.assertIn(
+            "CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc",
+            arm_cross_job,
+        )
+        self.assertIn(
+            "CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++",
+            arm_cross_job,
+        )
+        self.assertIn(
+            "AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar",
+            arm_cross_job,
+        )
+        self.assertIn(
+            "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: "
+            "aarch64-linux-gnu-gcc",
+            arm_cross_job,
+        )
+        for package in (
+            "binutils-aarch64-linux-gnu",
+            "gcc-aarch64-linux-gnu",
+            "g++-aarch64-linux-gnu",
+            "libc6-dev-arm64-cross",
+        ):
+            self.assertIn(package, arm_cross_job)
+        self.assertIn("target: aarch64-unknown-linux-gnu", arm_cross_job)
+        self.assertIn('target="aarch64-unknown-linux-gnu"', arm_cross_job)
+        self.assertIn(
+            'if [[ "$host_target" != "x86_64-unknown-linux-gnu" ]]',
+            arm_cross_job,
+        )
+        self.assertIn('if [[ -e target ]]', arm_cross_job)
+        self.assertNotIn("CARGO_BUILD_JOBS", arm_cross_job)
+        self.assertIn(
+            "cargo rustc --locked --release -p connect_norito_bridge "
+            '\\\n            --target "$target" --lib --crate-type cdylib',
+            arm_cross_job,
+        )
+        self.assertNotIn(
+            "cargo build --locked --release -p connect_norito_bridge",
+            arm_cross_job,
+        )
+        self.assertIn(
+            "python -I scripts/csharp_linux_arm_cross_handoff.py seal",
+            arm_cross_job,
+        )
+        self.assertIn(
+            "python -I scripts/tests/csharp_linux_arm_cross_handoff_test.py",
+            arm_cross_job,
+        )
+        self.assertIn(
+            "name: csharp-linux-arm-cross-candidate-${{ github.sha }}",
+            arm_cross_job,
+        )
+        self.assertEqual(
+            arm_cross_job.count(
+                "name: csharp-linux-arm-cross-candidate-${{ github.sha }}"
+            ),
+            2,
+        )
+        self.assertNotIn("name: csharp-native-", arm_cross_job)
+        self.assertIn(
+            "path: ${{ runner.temp }}/csharp-linux-arm-cross-candidate",
+            arm_cross_job,
+        )
+        self.assertEqual(arm_cross_job.count("retention-days: 14"), 2)
+        self.assertIn("compression-level: 0", arm_cross_job)
+        self.assertEqual(arm_cross_job.count("continue-on-error: true"), 1)
+        self.assertIn(
+            "id: upload_primary\n        continue-on-error: true\n"
+            "        uses: actions/upload-artifact@",
+            arm_cross_job,
+        )
+        self.assertIn(
+            "if: steps.upload_primary.outcome == 'failure'\n"
+            "        uses: actions/upload-artifact@",
+            arm_cross_job,
+        )
+        self.assertEqual(arm_cross_job.count("overwrite: true"), 1)
+        for action in (
+            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+            "actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659",
+        ):
+            self.assertEqual(arm_cross_job.count(action), 1)
+        self.assertEqual(
+            arm_cross_job.count(
+                "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+            ),
+            2,
+        )
 
         for arm_job in (arm_primary_job, arm_retry_job, arm_retry_2_job):
             self.assertIn("runs-on: ubuntu-24.04-arm", arm_job)
-            self.assertIn("target: aarch64-unknown-linux-gnu", arm_job)
+            self.assertIn("timeout-minutes: 20", arm_job)
             self.assertIn('target="aarch64-unknown-linux-gnu"', arm_job)
             self.assertIn('library_name="libconnect_norito_bridge.so"', arm_job)
-            self.assertIn('if [[ "$host_target" != "$target" ]]', arm_job)
-            self.assertIn('if [[ -e target ]]', arm_job)
+            self.assertIn('machine="$(uname -m)"', arm_job)
+            self.assertIn('if [[ "$machine" != "aarch64" ]]', arm_job)
             self.assertNotIn("CARGO_BUILD_JOBS", arm_job)
+            self.assertNotIn("cargo rustc", arm_job)
+            self.assertNotIn("cargo build", arm_job)
             self.assertIn(
-                "cargo build --locked --release -p connect_norito_bridge "
-                '--target "$target"',
+                "name: csharp-linux-arm-cross-candidate-${{ github.sha }}",
                 arm_job,
             )
             self.assertIn(
+                "path: ${{ runner.temp }}/csharp-linux-arm-cross-candidate",
+                arm_job,
+            )
+            self.assertIn(
+                "python -I scripts/csharp_linux_arm_cross_handoff.py verify-stage",
+                arm_job,
+            )
+            self.assertIn('--stage-artifact "$artifact"', arm_job)
+            self.assertIn('--artifact "$artifact"', arm_job)
+            self.assertNotIn(
+                '--artifact "$candidate_root/$library_name"', arm_job
+            )
+            self.assertNotIn(
                 'cp "target/$target/release/$library_name" "$artifact"', arm_job
             )
             self.assertEqual(arm_job.count("check_native_sdk_abi23_artifact.py"), 2)
             self.assertIn("--sdk csharp", arm_job)
             self.assertEqual(
-                arm_job.count("name: csharp-native-aarch64-unknown-linux-gnu"), 1
+                arm_job.count("name: csharp-native-aarch64-unknown-linux-gnu"), 2
             )
             self.assertIn("path: ${{ runner.temp }}/csharp-native-upload", arm_job)
             self.assertIn("if-no-files-found: error", arm_job)
             self.assertIn("retention-days: 14", arm_job)
+            self.assertIn("compression-level: 0", arm_job)
+            self.assertIn(
+                "id: upload_primary\n        continue-on-error: true\n"
+                "        uses: actions/upload-artifact@",
+                arm_job,
+            )
+            self.assertIn(
+                "id: upload_retry\n"
+                "        if: steps.upload_primary.outcome == 'failure'\n"
+                "        uses: actions/upload-artifact@",
+                arm_job,
+            )
             self.assertEqual(
                 arm_job.count(
                     "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
@@ -385,47 +529,87 @@ class CSharpNativePackageTests(unittest.TestCase):
                 arm_job.count(
                     "actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659"
                 ),
+                0,
+            )
+            self.assertEqual(
+                arm_job.count(
+                    "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+                ),
                 1,
             )
             self.assertEqual(
                 arm_job.count(
                     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
                 ),
-                1,
+                2,
             )
 
         self.assertNotIn("CARGO_BUILD_JOBS", workflow)
-        self.assertEqual(workflow.count("continue-on-error: true"), 2)
+        self.assertEqual(workflow.count("continue-on-error: true"), 7)
         self.assertEqual(
             workflow.count(
-                "artifact_id: ${{ steps.upload.outputs.artifact-id }}"
+                "artifact_id: ${{ steps.upload_primary.outcome == 'success' && "
+                "steps.upload_primary.outputs.artifact-id || "
+                "steps.upload_retry.outputs.artifact-id }}"
             ),
             2,
         )
+        self.assertIn(
+            '      - "scripts/csharp_linux_arm_cross_handoff.py"', workflow
+        )
+        self.assertIn(
+            '      - "scripts/tests/csharp_linux_arm_cross_handoff_test.py"',
+            workflow,
+        )
+        self.assertIn(
+            "needs: native-release-artifact-linux-arm-cross", arm_primary_job
+        )
         self.assertIn("continue-on-error: true", arm_primary_job)
         self.assertIn(
-            "artifact_id: ${{ steps.upload.outputs.artifact-id }}", arm_primary_job
+            "artifact_id: ${{ steps.upload_primary.outcome == 'success' && "
+            "steps.upload_primary.outputs.artifact-id || "
+            "steps.upload_retry.outputs.artifact-id }}",
+            arm_primary_job,
         )
-        self.assertIn("        id: upload\n", arm_primary_job)
-        self.assertNotIn("overwrite: true", arm_primary_job)
-        self.assertIn("needs: native-release-artifact-linux-arm", arm_retry_job)
+        self.assertIn("        id: upload_primary\n", arm_primary_job)
+        self.assertIn("        id: upload_retry\n", arm_primary_job)
+        self.assertEqual(arm_primary_job.count("overwrite: true"), 1)
+        self.assertIn(
+            "      - native-release-artifact-linux-arm-cross", arm_retry_job
+        )
+        self.assertIn("      - native-release-artifact-linux-arm", arm_retry_job)
         self.assertIn("!cancelled()", arm_retry_job)
+        self.assertIn(
+            "needs.native-release-artifact-linux-arm-cross.result == 'success'",
+            arm_retry_job,
+        )
         self.assertIn(
             "needs.native-release-artifact-linux-arm.outputs.artifact_id == ''",
             arm_retry_job,
         )
         self.assertIn("continue-on-error: true", arm_retry_job)
         self.assertIn(
-            "artifact_id: ${{ steps.upload.outputs.artifact-id }}", arm_retry_job
+            "artifact_id: ${{ steps.upload_primary.outcome == 'success' && "
+            "steps.upload_primary.outputs.artifact-id || "
+            "steps.upload_retry.outputs.artifact-id }}",
+            arm_retry_job,
         )
-        self.assertIn("        id: upload\n", arm_retry_job)
-        self.assertEqual(arm_retry_job.count("overwrite: true"), 1)
+        self.assertIn("        id: upload_primary\n", arm_retry_job)
+        self.assertIn("        id: upload_retry\n", arm_retry_job)
+        self.assertEqual(arm_retry_job.count("overwrite: true"), 2)
 
+        self.assertIn(
+            "      - native-release-artifact-linux-arm-cross", arm_retry_2_job
+        )
         self.assertIn("      - native-release-artifact-linux-arm", arm_retry_2_job)
         self.assertIn(
             "      - native-release-artifact-linux-arm-retry", arm_retry_2_job
         )
         self.assertIn("!cancelled()", arm_retry_2_job)
+        self.assertIn(
+            "needs.native-release-artifact-linux-arm-cross.result == 'success'",
+            arm_retry_2_job,
+        )
         self.assertIn(
             "needs.native-release-artifact-linux-arm.outputs.artifact_id == ''",
             arm_retry_2_job,
@@ -434,19 +618,25 @@ class CSharpNativePackageTests(unittest.TestCase):
             "needs.native-release-artifact-linux-arm-retry.outputs.artifact_id == ''",
             arm_retry_2_job,
         )
-        self.assertNotIn("continue-on-error: true", arm_retry_2_job)
+        self.assertNotIn("\n    continue-on-error: true\n", arm_retry_2_job)
         self.assertNotIn("    outputs:\n", arm_retry_2_job)
-        self.assertIn("        id: upload\n", arm_retry_2_job)
-        self.assertEqual(arm_retry_2_job.count("overwrite: true"), 1)
+        self.assertIn("        id: upload_primary\n", arm_retry_2_job)
+        self.assertIn("        id: upload_retry\n", arm_retry_2_job)
+        self.assertEqual(arm_retry_2_job.count("overwrite: true"), 2)
         self.assertNotIn("csharp-native-aarch64-unknown-linux-gnu-retry", workflow)
 
         self.assertIn("      - native-release-artifacts", build_job)
+        self.assertIn("      - native-release-artifact-linux-arm-cross", build_job)
         self.assertIn("      - native-release-artifact-linux-arm", build_job)
         self.assertIn("      - native-release-artifact-linux-arm-retry", build_job)
         self.assertIn("      - native-release-artifact-linux-arm-retry-2", build_job)
         self.assertIn("!cancelled()", build_job)
         self.assertIn(
             "needs.native-release-artifacts.result == 'success'", build_job
+        )
+        self.assertIn(
+            "needs.native-release-artifact-linux-arm-cross.result == 'success'",
+            build_job,
         )
         self.assertIn(
             "needs.native-release-artifact-linux-arm.outputs.artifact_id != ''",

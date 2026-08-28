@@ -64,7 +64,7 @@ pub struct ToriiTxHistoryJwt {
 }
 impl ToriiTxHistoryJwt {
     fn parse(self) -> actual::ToriiTxHistoryJwt {
-        let algorithm = self.algorithm.trim().to_ascii_uppercase();
+        let algorithm = self.algorithm;
         if algorithm.is_empty() {
             panic!("torii.tx_history.jwt.algorithm must not be empty");
         }
@@ -83,7 +83,7 @@ impl ToriiTxHistoryJwt {
                 }
             }
             "RS256" | "RS384" | "RS512" | "PS256" | "PS384" | "PS512" | "ES256" | "ES384"
-            | "EDDSA" => {
+            | "EdDSA" => {
                 let public_key_pem = self.public_key_pem.filter(|value| !value.trim().is_empty());
                 if public_key_pem.is_none() {
                     panic!(
@@ -99,7 +99,7 @@ impl ToriiTxHistoryJwt {
                 }
             }
             other => panic!(
-                "invalid torii.tx_history.jwt.algorithm `{other}`; expected HS256/384/512, RS256/384/512, PS256/384/512, ES256/384, or EdDSA"
+                "invalid torii.tx_history.jwt.algorithm `{other}`; expected an exact HS256/384/512, RS256/384/512, PS256/384/512, ES256/384, or EdDSA label"
             ),
         }
     }
@@ -159,6 +159,22 @@ mod torii_tx_history_tests {
             assert!(
                 panic.is_err(),
                 "expected invalid maximum {maximum} to panic"
+            );
+        }
+    }
+    #[test]
+    fn torii_tx_history_jwt_rejects_noncanonical_algorithm_labels() {
+        for algorithm in [" hs256", "hs256", "HS256 ", "EDDSA"] {
+            let jwt = ToriiTxHistoryJwt {
+                algorithm: algorithm.to_owned(),
+                secret: Some("secret".to_owned()),
+                public_key_pem: Some("public key".to_owned()),
+                issuer: None,
+                audience: None,
+            };
+            assert!(
+                std::panic::catch_unwind(|| jwt.parse()).is_err(),
+                "{algorithm:?} must fail closed"
             );
         }
     }

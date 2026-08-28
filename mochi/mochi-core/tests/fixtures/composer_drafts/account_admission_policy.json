@@ -12,7 +12,7 @@
         "asset_definition_id": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi",
         "amount": "1",
         "destination": {
-          "destination": "Burn",
+          "destination": "burn",
           "value": null
         }
       },

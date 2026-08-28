@@ -4959,7 +4959,7 @@ mod tests {
     }
     fn default_runtime_config() -> Config {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../defaults/kagami/iroha3-dev/config.toml");
+            .join("../../defaults/kagami/iroha3-dev/peer0.toml");
         let source = std::fs::read_to_string(path).expect("read checked-in default daemon config");
         let mut table: toml::Table = toml::from_str(&source).expect("parse default daemon config");
         let expected_hash = table

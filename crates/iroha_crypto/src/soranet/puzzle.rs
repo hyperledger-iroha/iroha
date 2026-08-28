@@ -1,9 +1,8 @@
 //! `Argon2id`-based puzzle helpers for the `SoraNet` admission path.
 //!
-//! The puzzle format intentionally mirrors the existing hashcash-style `PoW` tickets so clients can
-//! attach a single frame regardless of which policy a relay enforces. Difficulty adjustments and
-//! TTL validation follow the same rules as the `PoW` implementation, while the work predicate is
-//! backed by Argon2id to raise the cost of GPU/ASIC optimisations.
+//! The first-release puzzle uses the fixed-width `PoW` ticket envelope with an
+//! Argon2id work predicate. Difficulty and TTL validation are part of this one
+//! mandatory admission policy.
 use crate::soranet::pow::{
     self, CHALLENGE_DOMAIN, SOLUTION_DOMAIN, SignedTicket, Ticket, ticket_binding_commitment,
 };
@@ -128,48 +127,6 @@ pub enum ParameterError {
 impl Parameters {
     /// Construct a new parameter set.
     ///
-    /// Invalid timing bounds produce a fail-closed policy that rejects all minted and verified
-    /// tickets. Runtime configuration loaders should prefer [`Parameters::try_new`] so invalid
-    /// policy input can be surfaced as a configuration error.
-    #[must_use]
-    pub fn new(
-        memory_kib: NonZeroU32,
-        time_cost: NonZeroU32,
-        lanes: NonZeroU32,
-        difficulty: u8,
-        max_future_skew: Duration,
-        min_ticket_ttl: Duration,
-    ) -> Self {
-        Self::try_new(
-            memory_kib,
-            time_cost,
-            lanes,
-            difficulty,
-            max_future_skew,
-            min_ticket_ttl,
-        )
-        .unwrap_or_else(|_| Self::fail_closed(memory_kib, time_cost, lanes, difficulty))
-    }
-    fn fail_closed(
-        memory_kib: NonZeroU32,
-        time_cost: NonZeroU32,
-        lanes: NonZeroU32,
-        difficulty: u8,
-    ) -> Self {
-        Self {
-            memory_kib: NonZeroU32::new(memory_kib.get().clamp(MIN_MEMORY_KIB, MAX_MEMORY_KIB))
-                .expect("bounded puzzle memory is non-zero"),
-            time_cost: NonZeroU32::new(time_cost.get().min(MAX_TIME_COST))
-                .expect("bounded puzzle time cost is non-zero"),
-            lanes: NonZeroU32::new(lanes.get().min(MAX_LANES))
-                .expect("bounded puzzle lanes are non-zero"),
-            difficulty: difficulty.min(MAX_DIFFICULTY),
-            max_future_skew: Duration::ZERO,
-            min_ticket_ttl: Duration::MAX,
-        }
-    }
-    /// Construct a new parameter set.
-    ///
     /// # Errors
     /// Returns [`ParameterError`] if a computational resource bound, the
     /// difficulty, or the ticket timing corridor is invalid.
@@ -251,24 +208,6 @@ impl Parameters {
     #[must_use]
     pub fn min_ticket_ttl(&self) -> Duration {
         self.min_ticket_ttl
-    }
-    /// Clone the parameter set with a different difficulty value.
-    ///
-    /// Invalid difficulty values produce the same fail-closed timing policy as
-    /// [`Self::new`].
-    #[must_use]
-    pub fn with_difficulty(self, difficulty: u8) -> Self {
-        Self::try_new(
-            self.memory_kib,
-            self.time_cost,
-            self.lanes,
-            difficulty,
-            self.max_future_skew,
-            self.min_ticket_ttl,
-        )
-        .unwrap_or_else(|_| {
-            Self::fail_closed(self.memory_kib, self.time_cost, self.lanes, difficulty)
-        })
     }
 }
 /// Errors surfaced while verifying puzzle tickets.
@@ -395,17 +334,21 @@ fn fill_random<R: TryCryptoRng>(
     }
     Ok(())
 }
-fn reject_repeated_nonce_material(
-    operation: &'static str,
+fn reject_reused_solution_nonce(
     candidate: &[u8; 32],
-    prior: &[(&'static str, &[u8; 32])],
+    ticket_binding: &[u8; 32],
+    previous_solution: Option<&[u8; 32]>,
 ) -> Result<(), MintError> {
-    if let Some((label, _)) = prior
-        .iter()
-        .find(|(_, bytes)| bool::from(candidate.ct_eq(*bytes)))
-    {
+    let repeated = if bool::from(candidate.ct_eq(ticket_binding)) {
+        Some("ticket binding commitment")
+    } else if previous_solution.is_some_and(|previous| bool::from(candidate.ct_eq(previous))) {
+        Some("previous solution nonce")
+    } else {
+        None
+    };
+    if let Some(label) = repeated {
         return Err(MintError::RandomBytes {
-            operation,
+            operation: "minting puzzle solution nonce",
             message: format!("rng repeated {label} material"),
         });
     }
@@ -428,14 +371,30 @@ pub fn verify(
 /// # Errors
 /// Returns [`Error`] when the ticket metadata violates policy bounds or the derived digest
 /// fails the work predicate.
-#[allow(clippy::too_many_lines)]
 pub fn verify_at(
     ticket: &Ticket,
     binding: &ChallengeBinding<'_>,
     params: &Parameters,
     now: SystemTime,
 ) -> Result<(), Error> {
+    let challenge = preflight_ticket_at(ticket, binding, params, now)?;
+    verify_ticket_solution(ticket, &challenge, params)
+}
+fn preflight_ticket_at(
+    ticket: &Ticket,
+    binding: &ChallengeBinding<'_>,
+    params: &Parameters,
+    now: SystemTime,
+) -> Result<blake3::Hash, Error> {
     validate_binding(binding).map_err(Error::MalformedBinding)?;
+    preflight_ticket_with_valid_binding_at(ticket, binding, params, now)
+}
+fn preflight_ticket_with_valid_binding_at(
+    ticket: &Ticket,
+    binding: &ChallengeBinding<'_>,
+    params: &Parameters,
+    now: SystemTime,
+) -> Result<blake3::Hash, Error> {
     if ticket.version != 1 {
         return Err(Error::UnsupportedVersion(ticket.version));
     }
@@ -468,9 +427,19 @@ pub fn verify_at(
     if !bool::from(ticket.client_nonce.ct_eq(&expected_binding)) {
         return Err(Error::InvalidSolution);
     }
-    let challenge = derive_challenge(binding, &ticket.client_nonce, ticket.expires_at);
+    Ok(derive_challenge(
+        binding,
+        &ticket.client_nonce,
+        ticket.expires_at,
+    ))
+}
+fn verify_ticket_solution(
+    ticket: &Ticket,
+    challenge: &blake3::Hash,
+    params: &Parameters,
+) -> Result<(), Error> {
     let digest =
-        derive_solution_digest(&challenge, &ticket.solution, params).map_err(|err| match err {
+        derive_solution_digest(challenge, &ticket.solution, params).map_err(|err| match err {
             DigestError::Parameters(msg) => Error::Parameters(msg),
             DigestError::Hash(msg) => Error::Hash(msg),
         })?;
@@ -481,9 +450,8 @@ pub fn verify_at(
 }
 /// Verify a canonical ML-DSA envelope over an Argon2 ticket.
 ///
-/// Signed tickets never select the hashcash predicate: after authenticating the
-/// exact relay and transcript bindings, the enclosed ticket is always checked
-/// against the supplied Argon2 policy.
+/// After authenticating the exact relay and transcript bindings, the enclosed
+/// ticket is checked against the supplied Argon2 policy.
 ///
 /// # Errors
 /// Returns [`SignedTicketVerifyError`] when the envelope, signature, bindings,
@@ -526,12 +494,16 @@ pub fn verify_signed_ticket_at(
             pow::Error::TranscriptMismatch,
         ));
     }
-    // Authenticate the cheap, fixed-size envelope before committing bounded
-    // Argon2 resources to the client-controlled proof.
+    // Reject malformed policy, timing, and ticket binding before spending
+    // ML-DSA or Argon2 work on an attacker-controlled envelope.
+    let challenge =
+        preflight_ticket_with_valid_binding_at(&signed_ticket.ticket, binding, params, now)
+            .map_err(SignedTicketVerifyError::Puzzle)?;
     signed_ticket
         .verify(public_key)
         .map_err(SignedTicketVerifyError::Envelope)?;
-    verify_at(&signed_ticket.ticket, binding, params, now).map_err(SignedTicketVerifyError::Puzzle)
+    verify_ticket_solution(&signed_ticket.ticket, &challenge, params)
+        .map_err(SignedTicketVerifyError::Puzzle)
 }
 /// Mint a puzzle ticket for the given descriptor commitment and TTL.
 ///
@@ -602,15 +574,14 @@ where
         let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
         let wire_expires_at =
             unix_time_from_secs(expires_at_secs).ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
-        let mut prior = Vec::with_capacity(2);
-        prior.push(("ticket binding commitment", &*client_nonce));
-        if let Some(previous) = previous_solution.as_ref() {
-            prior.push(("previous solution nonce", &**previous));
-        }
         let challenge = derive_challenge(binding, &client_nonce, expires_at_secs);
         let mut solution = Zeroizing::new([0u8; 32]);
         fill_random(rng, "minting puzzle solution nonce", &mut solution[..])?;
-        reject_repeated_nonce_material("minting puzzle solution nonce", &solution, &prior)?;
+        reject_reused_solution_nonce(
+            &solution,
+            &client_nonce,
+            previous_solution.as_ref().map(|previous| &**previous),
+        )?;
         let digest = Zeroizing::new(derive_digest(&challenge, &solution, params).map_err(
             |err| match err {
                 DigestError::Parameters(msg) => MintError::Parameters(msg),
@@ -747,7 +718,7 @@ mod tests {
     const RELAY: [u8; 32] = [0x22; 32];
     const TRANSCRIPT: [u8; 32] = [0x33; 32];
     fn test_parameters() -> Parameters {
-        Parameters::new(
+        Parameters::try_new(
             NonZeroU32::new(8 * 1024).unwrap(),
             NonZeroU32::new(2).unwrap(),
             NonZeroU32::new(1).unwrap(),
@@ -755,6 +726,7 @@ mod tests {
             Duration::from_secs(30),
             Duration::from_secs(5),
         )
+        .expect("test puzzle parameters must be valid")
     }
     struct FailingTryRng;
     #[derive(Debug)]
@@ -921,110 +893,20 @@ mod tests {
                 && min_ticket_ttl == Duration::from_secs(5)
         ));
     }
-    #[test]
-    fn parameters_new_invalid_bounds_fail_closed_without_panic() {
-        let memory = NonZeroU32::new(8 * 1024).expect("non-zero memory");
-        let time = NonZeroU32::new(2).expect("non-zero time");
-        let lanes = NonZeroU32::new(1).expect("non-zero lanes");
-        let zero_ttl = Parameters::new(
-            memory,
-            time,
-            lanes,
-            0,
-            Duration::from_secs(30),
-            Duration::ZERO,
-        );
-        assert_eq!(zero_ttl.max_future_skew(), Duration::ZERO);
-        assert_eq!(zero_ttl.min_ticket_ttl(), Duration::MAX);
-        let inverted = Parameters::new(
-            memory,
-            time,
-            lanes,
-            0,
-            Duration::from_secs(4),
-            Duration::from_secs(5),
-        );
-        assert_eq!(inverted.max_future_skew(), Duration::ZERO);
-        assert_eq!(inverted.min_ticket_ttl(), Duration::MAX);
-        let excessive = Parameters::new(
-            NonZeroU32::new(u32::MAX).expect("non-zero memory"),
-            NonZeroU32::new(u32::MAX).expect("non-zero time"),
-            NonZeroU32::new(u32::MAX).expect("non-zero lanes"),
-            u8::MAX,
-            Duration::from_secs(30),
-            Duration::from_secs(5),
-        );
-        assert_eq!(excessive.memory_kib().get(), MAX_MEMORY_KIB);
-        assert_eq!(excessive.time_cost().get(), MAX_TIME_COST);
-        assert_eq!(excessive.lanes().get(), MAX_LANES);
-        assert_eq!(excessive.difficulty(), MAX_DIFFICULTY);
-        assert_eq!(excessive.max_future_skew(), Duration::ZERO);
-        assert_eq!(excessive.min_ticket_ttl(), Duration::MAX);
-        let mut rng = ChaCha20Rng::seed_from_u64(99);
-        let mint_err = mint_ticket(&zero_ttl, &binding(), Duration::from_secs(5), &mut rng)
-            .expect_err("fail-closed params must reject minting");
-        assert!(matches!(
-            mint_err,
-            MintError::TtlTooShort {
-                required: Duration::MAX,
-                ..
-            }
-        ));
-        let ticket = Ticket {
-            version: 1,
-            difficulty: 0,
-            expires_at: 1_120,
-            client_nonce: [0u8; 32],
-            solution: [0u8; 32],
-        };
-        let verify_err = verify_at(
-            &ticket,
-            &binding(),
-            &inverted,
-            UNIX_EPOCH + Duration::from_secs(1_000),
-        )
-        .expect_err("fail-closed params must reject verification");
-        assert!(matches!(
-            verify_err,
-            Error::ExpiryWindowTooSmall(Duration::MAX)
-        ));
-    }
-    #[test]
-    fn with_difficulty_cannot_create_zero_work_policy() {
-        let params = test_parameters().with_difficulty(0);
-        assert_eq!(params.max_future_skew(), Duration::ZERO);
-        assert_eq!(params.min_ticket_ttl(), Duration::MAX);
-
-        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let binding = binding();
-        let ticket = Ticket {
-            version: Ticket::VERSION,
-            difficulty: params.difficulty(),
-            expires_at: 1_700_000_010,
-            client_nonce: ticket_binding_commitment(
-                binding.descriptor_commit,
-                binding.relay_id,
-                binding.transcript_hash,
-            ),
-            solution: [0xA5; 32],
-        };
-        let error = verify_at(&ticket, &binding, &params, now)
-            .expect_err("zero adaptive difficulty must fail closed before Argon2 work");
-        assert!(matches!(error, Error::ExpiryWindowTooSmall(Duration::MAX)));
-    }
     fn binding() -> ChallengeBinding<'static> {
         ChallengeBinding::new(&DESCRIPTOR, &RELAY, &TRANSCRIPT)
     }
     #[test]
     fn signed_ticket_authenticates_and_verifies_argon2_proof() {
-        let params = Parameters::new(
+        let params = Parameters::try_new(
             NonZeroU32::new(MIN_MEMORY_KIB).expect("minimum memory is non-zero"),
             NonZeroU32::new(1).expect("one iteration is non-zero"),
             NonZeroU32::new(1).expect("one lane is non-zero"),
             1,
             Duration::from_secs(30),
             Duration::from_secs(5),
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let binding = binding();
         let mut rng = ChaCha20Rng::seed_from_u64(0x51_6e_65_64);
         let ticket = mint_ticket(&params, &binding, Duration::from_secs(10), &mut rng)
@@ -1056,6 +938,35 @@ mod tests {
         assert!(matches!(
             error,
             SignedTicketVerifyError::Envelope(pow::Error::TranscriptMismatch)
+        ));
+    }
+    #[test]
+    fn signed_ticket_rejects_policy_before_signature_crypto() {
+        let params = test_parameters();
+        let binding = binding();
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let signed = SignedTicket {
+            ticket: Ticket {
+                version: Ticket::VERSION,
+                difficulty: params.difficulty().saturating_add(1),
+                expires_at: 1_700_000_010,
+                client_nonce: ticket_binding_commitment(
+                    binding.descriptor_commit,
+                    binding.relay_id,
+                    binding.transcript_hash,
+                ),
+                solution: [0xA5; 32],
+            },
+            relay_id: RELAY,
+            transcript_hash: TRANSCRIPT,
+            signature: Vec::new(),
+        };
+
+        let error = verify_signed_ticket_at(&signed, &[], &binding, &params, now)
+            .expect_err("policy mismatch must fail before signature preflight");
+        assert!(matches!(
+            error,
+            SignedTicketVerifyError::Puzzle(Error::DifficultyMismatch { .. })
         ));
     }
     #[test]
@@ -1113,6 +1024,24 @@ mod tests {
             }
             other => panic!("expected repeated nonce failure, got {other:?}"),
         }
+    }
+    #[test]
+    fn solution_nonce_reuse_is_rejected_against_fixed_history() {
+        let ticket_binding = [0x11; 32];
+        let previous_solution = [0x22; 32];
+        let error = reject_reused_solution_nonce(
+            &previous_solution,
+            &ticket_binding,
+            Some(&previous_solution),
+        )
+        .expect_err("the previous solution nonce must not be reused");
+        assert!(matches!(
+            error,
+            MintError::RandomBytes { message, .. }
+                if message.contains("previous solution nonce")
+        ));
+        reject_reused_solution_nonce(&[0x33; 32], &ticket_binding, Some(&previous_solution))
+            .expect("fresh solution nonce must be accepted");
     }
     #[test]
     fn challenge_hashes_match_canonical_contiguous_layout() {
@@ -1459,7 +1388,7 @@ mod tests {
     }
     #[test]
     fn mint_rejects_malformed_binding_before_solution_search() {
-        let params = test_parameters().with_difficulty(0);
+        let params = test_parameters();
         let mut rng = ChaCha20Rng::from_seed([0x66; 32]);
         let short_descriptor = [0x11; 31];
         let malformed = ChallengeBinding::new(&short_descriptor, &RELAY, &TRANSCRIPT);

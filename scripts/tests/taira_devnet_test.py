@@ -336,6 +336,78 @@ def fake_inrou_operator_preseed_receipt(
     }
 
 
+class FakeProcessOps:
+    """Deterministic pidfd/procfs model for platform-independent lifecycle tests."""
+
+    def __init__(self) -> None:
+        self.observations: dict[int, dict[str, object]] = {}
+        self.process_commands: dict[int, str] = {}
+        self.handles: dict[int, int] = {}
+        self.next_handle = 500
+        self.signals: list[tuple[int, int]] = []
+        self.support_checks = 0
+
+    def require_supported(self) -> None:
+        self.support_checks += 1
+
+    def add(self, observation: dict[str, object]) -> None:
+        pid = int(observation["pid"])
+        self.observations[pid] = {
+            key: list(value) if key == "argv" else value
+            for key, value in observation.items()
+        }
+        self.process_commands[pid] = " ".join(observation["argv"])
+
+    def remove(self, pid: int) -> None:
+        self.observations.pop(pid, None)
+        self.process_commands.pop(pid, None)
+
+    def open_pidfd(self, pid: int) -> int | None:
+        if pid not in self.observations:
+            return None
+        descriptor = self.next_handle
+        self.next_handle += 1
+        self.handles[descriptor] = pid
+        return descriptor
+
+    def close_pidfd(self, descriptor: int) -> None:
+        if descriptor not in self.handles:
+            raise AssertionError(f"closing unknown fake pidfd {descriptor}")
+        del self.handles[descriptor]
+
+    def send_signal(self, descriptor: int, signal_number: int) -> bool:
+        pid = self.handles.get(descriptor)
+        if pid is None:
+            raise AssertionError(f"signaling unknown fake pidfd {descriptor}")
+        self.signals.append((pid, signal_number))
+        return pid in self.observations
+
+    def wait_readable(self, descriptor: int, timeout_seconds: float) -> bool:
+        del timeout_seconds
+        pid = self.handles.get(descriptor)
+        if pid is None:
+            raise AssertionError(f"waiting on unknown fake pidfd {descriptor}")
+        return pid not in self.observations
+
+    def observe(self, pid: int) -> dict[str, object] | None:
+        observation = self.observations.get(pid)
+        command = self.process_commands.get(pid)
+        if observation is None or command is None:
+            return None
+        current = {
+            key: list(value) if key == "argv" else value
+            for key, value in observation.items()
+        }
+        argv = command.split()
+        current["argv"] = argv
+        if argv:
+            current["executable_path"] = argv[0]
+        return current
+
+    def process_ids(self) -> tuple[int, ...]:
+        return tuple(sorted(self.observations))
+
+
 class FakeRuntime:
     """Model the subprocess and HTTP surface consumed by the command."""
 
@@ -353,7 +425,11 @@ class FakeRuntime:
             f"fake-peer-public-key-{index}" for index in range(module.PEER_COUNT)
         )
         self.peer_pids: dict[int, int] = {}
+        self.stopped_peer_pids: dict[int, int] = {}
         self.next_peer_pid = 10_000
+        self.next_start_time_ticks = 80_000
+        self.reuse_pid_on_restart = False
+        self.process_ops = module._PROCESS_OPS
         self.local_placement = {
             "peer_id": self.peer_public_keys[0],
             "validator_account_id": FAKE_VALIDATOR_AUTHORITIES[0],
@@ -377,7 +453,7 @@ class FakeRuntime:
         self.doctor_fails = False
         self.inrou_check_fails = False
         self.leave_peer_running_on_stop = False
-        self.process_commands: dict[int, str] = {}
+        self.process_commands = self.process_ops.process_commands
         self.start_env: dict[str, str] | None = None
         self.mcp_protocol_version = module.MCP_PROTOCOL_VERSION_V1
         self.requests: list[tuple[str, object | None]] = []
@@ -931,6 +1007,10 @@ class FakeRuntime:
                 executable(target / name, b"#!/usr/bin/env bash\n")
             genesis_hash = "a" * 63 + "b"
             network_id = module.network_id_from_genesis_hash(genesis_hash)
+            storage_weights = "".join(
+                f"{name} = {value}\n"
+                for name, value in module.TAIRA_NEXUS_STORAGE_WEIGHTS
+            )
             for index in range(module.PEER_COUNT):
                 sorafs_dir = target / "state" / f"peer{index}" / "sorafs"
                 runtime_dir = (
@@ -943,10 +1023,13 @@ class FakeRuntime:
                     f'[genesis]\nexpected_hash = "{network_id}"\n'
                     f'address = "addr:127.0.0.1:{api_port + index}#ABCD"\n'
                     "[nexus.storage]\n"
-                    f"local_budget_bytes = {module.GENERATED_LOCALNET_NEXUS_STORAGE_BYTES}\n"
-                    "[sorafs.storage]\n"
+                    f"local_budget_bytes = {module.TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES}\n"
+                    "[nexus.storage.disk_budget_weights]\n"
+                    + storage_weights
+                    + "[sorafs.storage]\n"
                     "enabled = false\n"
                     f'data_dir = "{sorafs_dir}"\n'
+                    f"max_capacity_bytes = {module.TAIRA_SORAFS_MAX_CAPACITY_BYTES}\n"
                     "[soracloud_runtime]\n"
                     f'state_dir = "{runtime_dir}"\n'
                     "production_mode = true\n"
@@ -963,8 +1046,8 @@ class FakeRuntime:
                     "[soracloud_runtime.egress]\n"
                     "default_allow = false\n"
                     "allowed_hosts = []\n"
-                    f"rate_per_minute = {module.GENERATED_TAIRA_EGRESS_RATE_PER_MINUTE}\n"
-                    f"max_bytes_per_minute = {module.GENERATED_TAIRA_EGRESS_MAX_BYTES_PER_MINUTE}\n",
+                    f"rate_per_minute = {module.TAIRA_INROU_EGRESS_RATE_PER_MINUTE}\n"
+                    f"max_bytes_per_minute = {module.TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE}\n",
                     encoding="utf-8",
                 )
             signer_directory = target / module.RUNTIME_SIGNER_DIRECTORY
@@ -1047,6 +1130,36 @@ class FakeRuntime:
             for path, payload in staged_files.items():
                 path.write_bytes(payload)
                 path.chmod(0o600)
+            if "--bind-validator-config-dir" in values:
+                config_dir = Path(
+                    values[values.index("--bind-validator-config-dir") + 1]
+                )
+                for index in range(module.PEER_COUNT):
+                    config = config_dir / f"peer{index}.toml"
+                    _, uid, gid = module.taira_inrou_identity(index)
+                    base = config.read_text(encoding="utf-8").rstrip("\n")
+                    config.write_text(
+                        base
+                        + "\n\n[soracloud_runtime.inrou]\n"
+                        + "enabled = true\n"
+                        + f"portable_vm_uid = {uid}\n"
+                        + f"portable_vm_gid = {gid}\n"
+                        + "trusted_guest_manifest_digest_hex = "
+                        + f'"{self.stage_receipt["guest_manifest_digest_hex"]}"\n'
+                        + "trusted_guest_content_cid = "
+                        + f'"{self.stage_receipt["guest_content_cid"]}"\n'
+                        + "guest_image_max_bytes = "
+                        + f"{module.TAIRA_INROU_GUEST_IMAGE_MAX_BYTES}\n"
+                        + f"max_cpu_millis = {module.TAIRA_INROU_MAX_CPU_MILLIS}\n"
+                        + "max_memory_bytes = "
+                        + f"{module.TAIRA_INROU_MAX_MEMORY_BYTES}\n"
+                        + "max_storage_bytes = "
+                        + f"{module.TAIRA_INROU_MAX_STORAGE_BYTES}\n"
+                        + f"start_grace_ms = {module.TAIRA_INROU_START_GRACE_MS}\n"
+                        + f"stop_grace_ms = {module.TAIRA_INROU_STOP_GRACE_MS}\n",
+                        encoding="utf-8",
+                    )
+                    config.chmod(0o600)
             return subprocess.CompletedProcess(
                 values,
                 0,
@@ -1074,13 +1187,45 @@ class FakeRuntime:
             for index in selected:
                 if index in self.peer_pids:
                     raise module.DevnetError(f"fake peer{index} is already running")
-                pid = self.next_peer_pid
-                self.next_peer_pid += 1
+                if targeted and self.reuse_pid_on_restart:
+                    pid = self.stopped_peer_pids.pop(index)
+                else:
+                    pid = self.next_peer_pid
+                    self.next_peer_pid += 1
+                start_time_ticks = self.next_start_time_ticks
+                self.next_start_time_ticks += 1
                 self.peer_pids[index] = pid
-                (target / f"peer{index}.pid").write_text(f"{pid}\n", encoding="utf-8")
-                self.process_commands[pid] = (
-                    f"/fake/iroha3d_taira --sora --config {target / f'peer{index}.toml'}"
+                argv = [
+                    "/fake/iroha3d_taira",
+                    "--sora",
+                    "--config",
+                    str(target / f"peer{index}.toml"),
+                ]
+                observation = {
+                    "pid": pid,
+                    "boot_id": "01234567-89ab-cdef-8123-456789abcdef",
+                    "start_time_ticks": start_time_ticks,
+                    "executable_path": argv[0],
+                    "executable_device": 1,
+                    "executable_inode": 2,
+                    "argv": argv,
+                    "uid": os.geteuid(),
+                    "gid": os.getegid(),
+                    "session_id": pid,
+                    "process_group_id": pid,
+                }
+                record = {
+                    "schema_version": module.TAIRA_PROCESS_RECORD_SCHEMA_VERSION_V1,
+                    "peer_index": index,
+                    **observation,
+                }
+                process_path = target / f"peer{index}.process.json"
+                process_path.write_text(
+                    json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
                 )
+                process_path.chmod(0o600)
+                self.process_ops.add(observation)
                 if targeted:
                     self._advance_restarted_guest(index)
             if targeted:
@@ -1102,16 +1247,11 @@ class FakeRuntime:
             for index in selected:
                 if self.leave_peer_running_on_stop and index == 0:
                     continue
-                (target / f"peer{index}.pid").unlink(missing_ok=True)
+                (target / f"peer{index}.process.json").unlink(missing_ok=True)
                 pid = self.peer_pids.pop(index, None)
                 if pid is not None:
-                    self.process_commands.pop(pid, None)
-        elif values == ("ps", "-axww", "-o", "pid=,command="):
-            stdout = "".join(
-                f"{pid} {command_line}\n"
-                for pid, command_line in self.process_commands.items()
-            )
-            return subprocess.CompletedProcess(values, 0, stdout, "")
+                    self.stopped_peer_pids[index] = pid
+                    self.process_ops.remove(pid)
         elif "ping" in values:
             self.height += 1
             return subprocess.CompletedProcess(values, 0, self.ping_stdout, "")
@@ -1219,6 +1359,13 @@ class TairaDevnetTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name).resolve()
+        self.process_ops = FakeProcessOps()
+        self.process_ops_patch = mock.patch.object(
+            module,
+            "_PROCESS_OPS",
+            self.process_ops,
+        )
+        self.process_ops_patch.start()
         self.target_dir = self.root / "target"
         self.rust_target = "aarch64-unknown-linux-gnu"
         self.bin_dir = (
@@ -1260,7 +1407,7 @@ class TairaDevnetTests(unittest.TestCase):
             module,
             "require_safe_cleanup_target",
             side_effect=lambda _root, target: (
-                (target.stat().st_dev, target.stat().st_ino, 0)
+                (target.stat().st_dev, target.stat().st_ino, target.stat().st_uid)
                 if target.exists()
                 else None
             ),
@@ -1271,6 +1418,7 @@ class TairaDevnetTests(unittest.TestCase):
         self.cleanup_preflight.stop()
         self.host_preflight.stop()
         self.locked_preseed.stop()
+        self.process_ops_patch.stop()
         self.temporary.cleanup()
 
     def test_parallel_map_runs_bounded_work_concurrently_and_retains_order(self) -> None:
@@ -1297,7 +1445,10 @@ class TairaDevnetTests(unittest.TestCase):
             "sys.stdout.buffer.write(b'{\\\"ready\\\":true}\\n');"
             "sys.stdout.buffer.flush();"
             "value=sys.stdin.buffer.read(1);"
-            "pathlib.Path(sys.argv[1]).write_text('eof' if not value else 'byte')"
+            "pathlib.Path(sys.argv[1]).write_text('eof' if not value else 'byte');"
+            "sys.stdout.buffer.write("
+            "b'{\\\"schema_version\\\":1,\\\"status\\\":\\\"released\\\"}\\n');"
+            "sys.stdout.buffer.flush()"
         )
         validated: list[bytes] = []
 
@@ -1317,6 +1468,22 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(validated, [b'{"ready":true}\n'])
         self.assertEqual(released.read_text(encoding="utf-8"), "eof")
 
+    def test_locked_preseed_rejects_delayed_exit_without_eof_acknowledgement(self) -> None:
+        child = (
+            "import sys,time;"
+            "sys.stdout.buffer.write(b'{\\\"ready\\\":true}\\n');"
+            "sys.stdout.buffer.flush();"
+            "time.sleep(0.05)"
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "release acknowledgement"):
+            REAL_RUN_LOCKED_INROU_OPERATOR_PRESEED_SESSION(
+                [sys.executable, "-c", child],
+                cwd=self.root,
+                timeout_seconds=2,
+                verify_ready_receipt=lambda _payload: {"ready": True},
+            )
+
     def test_locked_preseed_rejects_exit_during_ready_validation(self) -> None:
         child = (
             "import sys;"
@@ -1326,7 +1493,7 @@ class TairaDevnetTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             module.DevnetError,
-            "exited|did not retain one live canonical ready barrier",
+            "exited|did not retain one live canonical ready barrier|release acknowledgement",
         ):
             REAL_RUN_LOCKED_INROU_OPERATOR_PRESEED_SESSION(
                 [sys.executable, "-c", child],
@@ -1391,6 +1558,18 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "single-link"):
             module.read_stable_bytes(source, limit=5, label="fixture")
 
+    def test_operation_lock_rejects_concurrent_devnet_commands(self) -> None:
+        root = module.managed_root(self.root / "locked-state", create=True)
+        first = module._acquire_operation_lock(root)
+        try:
+            with self.assertRaisesRegex(module.DevnetError, "already active"):
+                module._acquire_operation_lock(root)
+        finally:
+            os.close(first)
+
+        second = module._acquire_operation_lock(root)
+        os.close(second)
+
     def test_destroy_network_rejects_identity_replacement(self) -> None:
         root = module.managed_root(self.root / "destroy-state", create=True)
         target = root / "network"
@@ -1407,6 +1586,34 @@ class TairaDevnetTests(unittest.TestCase):
             module.destroy_network(root, target, identity)
 
         self.assertEqual(replacement.read_bytes(), b"replacement")
+        self.assertEqual((displaced / "secret").read_bytes(), b"secret")
+
+    def test_destroy_network_quarantines_a_racing_replacement_without_deleting_it(
+        self,
+    ) -> None:
+        root = module.managed_root(self.root / "destroy-race-state", create=True)
+        target = root / "network"
+        target.mkdir(mode=0o700)
+        (target / "secret").write_bytes(b"secret")
+        identity = module.require_safe_cleanup_target(root, target)
+        displaced = root / "displaced-network"
+        real_rename = module.os.rename
+
+        def replace_before_quarantine(source: Path, destination: Path) -> None:
+            real_rename(source, displaced)
+            target.mkdir(mode=0o700)
+            (target / "preserve").write_bytes(b"replacement")
+            real_rename(target, destination)
+
+        with mock.patch.object(module.os, "rename", side_effect=replace_before_quarantine):
+            with self.assertRaisesRegex(
+                module.DevnetError,
+                "changed while it was quarantined",
+            ):
+                module.destroy_network(root, target, identity)
+
+        quarantine = root / module.NETWORK_CLEANUP_QUARANTINE
+        self.assertEqual((quarantine / "preserve").read_bytes(), b"replacement")
         self.assertEqual((displaced / "secret").read_bytes(), b"secret")
 
     def test_first_release_taira_identity_is_exact(self) -> None:
@@ -2042,8 +2249,12 @@ class TairaDevnetTests(unittest.TestCase):
             restart["local_placement"]["placement_incarnation"], "a" * 63 + "b"
         )
         self.assertGreater(restart["height_after"], restart["height_before"])
-        self.assertNotEqual(restart["pids_after"][0], restart["pids_before"][0])
-        self.assertEqual(restart["pids_after"][1:], restart["pids_before"][1:])
+        self.assertNotEqual(
+            restart["processes_after"][0], restart["processes_before"][0]
+        )
+        self.assertEqual(
+            restart["processes_after"][1:], restart["processes_before"][1:]
+        )
         before_rows = report["inrou_canary"]["replica_identities"]
         after_rows = restart["inrou_check"]["replica_identities"]
         self.assertEqual(
@@ -2057,6 +2268,52 @@ class TairaDevnetTests(unittest.TestCase):
             after_rows[0]["guest_boot_id_sha256"],
             before_rows[0]["guest_boot_id_sha256"],
         )
+
+    def test_restart_proof_accepts_same_pid_only_with_new_start_time(self) -> None:
+        runtime = FakeRuntime()
+        runtime.reuse_pid_on_restart = True
+
+        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        restart = report["inrou_restart"]
+        before = restart["processes_before"][0]
+        after = restart["processes_after"][0]
+        self.assertEqual(after["pid"], before["pid"])
+        self.assertNotEqual(after["start_time_ticks"], before["start_time_ticks"])
+        self.assertEqual(
+            restart["processes_after"][1:],
+            restart["processes_before"][1:],
+        )
+
+    def test_pid_reuse_is_rejected_without_nonzero_signal(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        target = self.root / "state" / "network"
+        identity = module.read_taira_process_identity(target, 0)
+        pid = int(identity["pid"])
+        runtime.process_ops.observations[pid]["start_time_ticks"] = (
+            int(identity["start_time_ticks"]) + 1
+        )
+        runtime.process_ops.signals.clear()
+
+        self.assertIsNone(module._bind_taira_process_identity(identity))
+        self.assertTrue(runtime.process_ops.signals)
+        self.assertEqual(
+            {signal_number for _pid, signal_number in runtime.process_ops.signals},
+            {0},
+        )
+        self.assertEqual(runtime.process_ops.handles, {})
+
+    def test_native_process_ops_fail_closed_on_non_linux_before_mutation(self) -> None:
+        state = self.root / "unsupported-state"
+        args = module.parser().parse_args(["--dir", str(state), "down"])
+        with (
+            mock.patch.object(module, "_PROCESS_OPS", module.LinuxPidfdProcessOps()),
+            mock.patch.object(module.platform, "system", return_value="Darwin"),
+            self.assertRaisesRegex(module.DevnetError, "requires Linux pidfds"),
+        ):
+            module.down(args, run=lambda *_args, **_kwargs: None)
+        self.assertFalse(state.exists())
         self.assertEqual(after_rows[1:], before_rows[1:])
         target = self.root / "state" / "network"
         self.assertIn(
@@ -2150,7 +2407,7 @@ class TairaDevnetTests(unittest.TestCase):
             for command in runtime.commands
             if "localnet" in command and "--out-dir" in command
         )
-        self.assertIn("--fresh-random-keys", kagami)
+        self.assertNotIn("--seed", kagami)
         self.assertEqual(kagami[kagami.index("--peers") + 1], "4")
         self.assertEqual(kagami[kagami.index("--sora-profile") + 1], "nexus")
         self.assertEqual(kagami[kagami.index("--consensus-mode") + 1], "npos")
@@ -2369,10 +2626,12 @@ class TairaDevnetTests(unittest.TestCase):
 
         restart = report["inrou_restart"]
         self.assertEqual(restart["peer_index"], 2)
-        self.assertNotEqual(restart["pids_after"][2], restart["pids_before"][2])
+        self.assertNotEqual(
+            restart["processes_after"][2], restart["processes_before"][2]
+        )
         self.assertEqual(
-            [restart["pids_after"][index] for index in (0, 1, 3)],
-            [restart["pids_before"][index] for index in (0, 1, 3)],
+            [restart["processes_after"][index] for index in (0, 1, 3)],
+            [restart["processes_before"][index] for index in (0, 1, 3)],
         )
         target = self.root / "state" / "network"
         self.assertIn(
@@ -2595,6 +2854,42 @@ class TairaDevnetTests(unittest.TestCase):
             1,
         )
         self.assertEqual(report["inrou_canary"]["recovery_outcome"], "Applied")
+
+    def test_ambiguous_recovery_is_backed_off_and_attempt_bounded(self) -> None:
+        runtime = FakeRuntime()
+        runtime.ambiguous_submit_kind = "inrou_guest_pin"
+        runtime.failed_recovery_kind = "inrou_guest_pin"
+
+        with (
+            mock.patch.object(module, "PREPARED_RECOVERY_MAX_ATTEMPTS", 3),
+            mock.patch.object(module.time, "monotonic", return_value=100.0),
+            mock.patch.object(module.time, "sleep", return_value=None) as sleep,
+            self.assertRaisesRegex(
+                module.DevnetError,
+                "3 recovery attempts: simulated recovery transport failure",
+            ),
+        ):
+            module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        guest_commands = [
+            command
+            for command in runtime.commands
+            if "inrou-canary" in command
+            and "--help" not in command
+            and command[command.index("--operation") + 1] == "guest-pin"
+        ]
+        self.assertEqual(
+            sum("--submit-prepared-envelope-fd" in command for command in guest_commands),
+            1,
+        )
+        self.assertEqual(
+            sum("--recover-prepared-envelope-fd" in command for command in guest_commands),
+            3,
+        )
+        recovery_sleeps = [call.args[0] for call in sleep.call_args_list if call.args]
+        self.assertIn(module.PREPARED_RECOVERY_INITIAL_BACKOFF_SECONDS, recovery_sleeps)
+        self.assertIn(0.5, recovery_sleeps)
+        self.assertIn(1.0, recovery_sleeps)
 
     def test_check_rejects_a_tampered_retained_prepared_child(self) -> None:
         runtime = FakeRuntime()
@@ -3033,10 +3328,10 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertTrue(any("inrou-stage" in command for command in help_commands))
         self.assertTrue(any("inrou-canary" in command for command in help_commands))
 
-    def test_storage_overlay_fails_closed_before_rewriting_any_peer(self) -> None:
+    def test_generated_profile_validation_fails_closed_before_guest_staging(self) -> None:
         source_nexus = (
             "[nexus.storage]\n"
-            f"local_budget_bytes = {module.GENERATED_LOCALNET_NEXUS_STORAGE_BYTES}\n"
+            f"local_budget_bytes = {module.TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES}\n"
         )
         source_sorafs = "[sorafs.storage]\nenabled = false\n"
         cases = (
@@ -3053,7 +3348,7 @@ class TairaDevnetTests(unittest.TestCase):
             (
                 "unexpected-section",
                 lambda text: text
-                + "\n[nexus.storage.disk_budget_weights]\nkura_blocks_bps = 1\n",
+                + "\n[nexus.storage.retired]\nlegacy_budget_bytes = 1\n",
                 "unexpected storage sections",
             ),
             (
@@ -3069,36 +3364,28 @@ class TairaDevnetTests(unittest.TestCase):
         for name, mutate, error in cases:
             with self.subTest(name=name):
                 _, target = self.generated_network(f"generated-{name}")
-                peer0 = target / "peer0.toml"
                 peer3 = target / "peer3.toml"
-                peer0_before = peer0.read_text(encoding="utf-8")
                 peer3.write_text(
                     mutate(peer3.read_text(encoding="utf-8")),
                     encoding="utf-8",
                 )
 
                 with self.assertRaisesRegex(module.DevnetError, error):
-                    module.apply_canonical_taira_profiles(target)
+                    module.require_generated_taira_profiles(target)
 
-                self.assertEqual(peer0.read_text(encoding="utf-8"), peer0_before)
-
-    def test_profile_overlay_rejects_retained_inrou_table_before_rewriting(self) -> None:
+    def test_generated_profile_rejects_retained_inrou_table(self) -> None:
         _, target = self.generated_network("generated-retained-inrou")
-        peer0 = target / "peer0.toml"
         peer3 = target / "peer3.toml"
-        peer0_before = peer0.read_text(encoding="utf-8")
         peer3.write_text(
             peer3.read_text(encoding="utf-8")
             + "\n[soracloud_runtime.inrou]\nenabled = false\n",
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(module.DevnetError, "retained an Inrou selector"):
-            module.apply_canonical_taira_profiles(target)
+        with self.assertRaisesRegex(module.DevnetError, "contains Inrou tables"):
+            module.require_generated_taira_profiles(target)
 
-        self.assertEqual(peer0.read_text(encoding="utf-8"), peer0_before)
-
-    def test_profile_overlay_rejects_missing_or_drifted_runtime_resource_bounds(
+    def test_generated_profile_rejects_missing_or_drifted_runtime_resource_bounds(
         self,
     ) -> None:
         hydration = (
@@ -3136,7 +3423,7 @@ class TairaDevnetTests(unittest.TestCase):
                     module.DevnetError,
                     "wrong assignment set|exact first-release Taira resource profile",
                 ):
-                    module.apply_canonical_taira_profiles(target)
+                    module.require_generated_taira_profiles(target)
 
                 self.assertEqual(peer0.read_text(encoding="utf-8"), peer0_before)
 
@@ -3204,73 +3491,62 @@ class TairaDevnetTests(unittest.TestCase):
                 config.parent, self.trusted_guest_artifact()
             )
 
-    def test_trusted_guest_injection_prevalidates_all_peers_before_rewriting(self) -> None:
-        runtime, target = self.generated_network("generated-trust-prevalidation")
-        module.apply_canonical_taira_profiles(target)
-        stage = target / module.INROU_STAGE_DIRECTORY
-        runtime.run(
-            [
-                "iroha",
-                "taira",
-                "inrou-stage",
-                "--sorafs-retention-epoch",
-                "2000000000",
-                "--stage-dir",
-                str(stage),
-            ]
+    def test_prepare_inrou_stage_requires_compiled_config_binding(self) -> None:
+        runtime, target = self.generated_network("compiled-inrou-config-binding")
+        workspace = module.require_inrou_canary_workspace(
+            self.inrou_canary_workspace(name="compiled-binding-input")
         )
-        peer0 = target / "peer0.toml"
-        peer3 = target / "peer3.toml"
-        peer0_before = peer0.read_text(encoding="utf-8")
-        peer3.write_text(
-            peer3.read_text(encoding="utf-8").replace(
-                "portable_vm_uid = 70003",
-                "portable_vm_uid = 70002",
+
+        stage = module.prepare_inrou_stage(
+            target,
+            self.bin_dir / "iroha",
+            workspace,
+            1,
+            runtime.run,
+        )
+
+        command = next(
+            command
+            for command in runtime.commands
+            if "inrou-stage" in command and "--help" not in command
+        )
+        option = command.index("--bind-validator-config-dir")
+        self.assertEqual(command[option + 1], str(target))
+        trusted_guest = module.require_inrou_stage_guest_artifact(stage)
+        module.require_canonical_taira_profiles(target, trusted_guest)
+
+    def test_prepare_inrou_stage_has_no_python_config_writer_fallback(self) -> None:
+        runtime, target = self.generated_network("missing-compiled-inrou-binding")
+        workspace = module.require_inrou_canary_workspace(
+            self.inrou_canary_workspace(name="missing-binding-input")
+        )
+
+        def simulate_unbound_stager(command, **kwargs):
+            values = [str(value) for value in command]
+            if "inrou-stage" in values and "--bind-validator-config-dir" in values:
+                option = values.index("--bind-validator-config-dir")
+                del values[option : option + 2]
+            return runtime.run(values, **kwargs)
+
+        with self.assertRaisesRegex(
+            module.DevnetError,
+            r"must contain one \[soracloud_runtime\.inrou\] table",
+        ):
+            module.prepare_inrou_stage(
+                target,
+                self.bin_dir / "iroha",
+                workspace,
                 1,
-            ),
-            encoding="utf-8",
-        )
+                simulate_unbound_stager,
+            )
+        for config in sorted(target.glob("peer*.toml")):
+            self.assertNotIn("trusted_guest_", config.read_text(encoding="utf-8"))
 
-        with self.assertRaisesRegex(module.DevnetError, "wrong PortableVM V1 profile"):
-            module.inject_trusted_inrou_guest_artifact(target, stage)
-
-        self.assertEqual(peer0.read_text(encoding="utf-8"), peer0_before)
-        self.assertNotIn("trusted_guest_", peer0_before)
-
-    def test_trusted_guest_injection_rejects_untrusted_stage_receipt_without_rewrite(
-        self,
-    ) -> None:
-        runtime, target = self.generated_network("generated-bad-stage-receipt")
-        module.apply_canonical_taira_profiles(target)
-        stage = target / module.INROU_STAGE_DIRECTORY
-        runtime.run(
-            [
-                "iroha",
-                "taira",
-                "inrou-stage",
-                "--sorafs-retention-epoch",
-                "2000000000",
-                "--stage-dir",
-                str(stage),
-            ]
-        )
-        receipt = stage / module.INROU_STAGE_RECEIPT_FILE
-        forged = dict(runtime.stage_receipt)
-        forged["guest_manifest_digest_hex"] = "not-a-digest"
-        receipt.write_text(json.dumps(forged), encoding="utf-8")
-        receipt.chmod(0o600)
-        before = {
-            path: path.read_text(encoding="utf-8")
-            for path in sorted(target.glob("peer*.toml"))
-        }
-
-        with self.assertRaisesRegex(module.DevnetError, "malformed guest_manifest"):
-            module.inject_trusted_inrou_guest_artifact(target, stage)
-
-        self.assertEqual(
-            {path: path.read_text(encoding="utf-8") for path in before},
-            before,
-        )
+    def test_production_harness_contains_no_inrou_toml_mutator(self) -> None:
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("def inject_trusted_inrou_guest_artifact", source)
+        self.assertNotIn("def _trusted_inrou_text", source)
+        self.assertNotIn("def _atomic_replace_generated_config", source)
 
     def test_inrou_stage_receipt_rejects_marker_cleared_hashes(self) -> None:
         runtime, target = self.generated_network("generated-unmarked-stage-receipt")
@@ -3307,7 +3583,7 @@ class TairaDevnetTests(unittest.TestCase):
 
     def test_inrou_stage_rejects_substituted_placement_inventory(self) -> None:
         runtime, target = self.generated_network("generated-placement-substitution")
-        module.apply_canonical_taira_profiles(target)
+        module.require_generated_taira_profiles(target)
         stage = target / module.INROU_STAGE_DIRECTORY
         runtime.run(
             [
@@ -3497,10 +3773,6 @@ class TairaDevnetTests(unittest.TestCase):
             ),
             2,
         )
-
-        for path in module.runtime_signer_launch_paths(state / "network"):
-            path.write_bytes(b"")
-            path.chmod(0o600)
 
         down_args = module.parser().parse_args(["--dir", str(state), "down"])
         down_report = module.down(down_args, run=runtime.run)
@@ -3878,7 +4150,12 @@ class TairaDevnetTests(unittest.TestCase):
 
                 self.assertEqual(runtime.process_commands, {})
                 self.assertEqual(
-                    list((self.root / "state" / "network").glob("peer*.pid")), []
+                    list(
+                        (self.root / "state" / "network").glob(
+                            "peer*.process.json"
+                        )
+                    ),
+                    [],
                 )
 
     def test_signed_smoke_receipts_reject_unknown_and_duplicate_fields(self) -> None:
@@ -3921,12 +4198,18 @@ class TairaDevnetTests(unittest.TestCase):
         state = self.root / "state"
         down_args = module.parser().parse_args(["--dir", str(state), "down"])
 
-        with self.assertRaisesRegex(module.DevnetError, "left peer PID files"):
+        with self.assertRaisesRegex(
+            module.DevnetError,
+            "(?:left peer process records|partial process-record cohort)",
+        ):
             module.down(down_args, run=runtime.run)
-        with self.assertRaisesRegex(module.DevnetError, "left peer PID files"):
+        with self.assertRaisesRegex(
+            module.DevnetError,
+            "(?:left peer process records|partial process-record cohort)",
+        ):
             module.up(self.up_args(), run=runtime.run, request=runtime.request)
 
-        self.assertTrue((state / "network" / "peer0.pid").is_file())
+        self.assertTrue((state / "network" / "peer0.process.json").is_file())
         self.assertTrue((state / "network" / "peer0.toml").is_file())
 
     def test_down_retry_after_completed_delete_is_idempotent(self) -> None:
@@ -3947,7 +4230,7 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(runtime.commands, commands_after_first_down)
         self.assertFalse(target.exists())
 
-    def test_down_recovers_after_partial_removal_deleted_stop_script(self) -> None:
+    def test_down_preserves_partial_quarantine_for_operator_recovery(self) -> None:
         state = module.managed_root(self.root / "state", create=True)
         target = state / "network"
         target.mkdir()
@@ -3964,8 +4247,11 @@ class TairaDevnetTests(unittest.TestCase):
             nonlocal removal_attempts
             removal_attempts += 1
             if removal_attempts == 1:
-                self.assertEqual(Path(cleanup_target), target)
-                stop.unlink()
+                self.assertEqual(
+                    Path(cleanup_target),
+                    state / module.NETWORK_CLEANUP_QUARANTINE,
+                )
+                (Path(cleanup_target) / "stop.sh").unlink()
                 raise OSError("simulated partial recursive removal")
             real_rmtree(cleanup_target)
 
@@ -3976,15 +4262,19 @@ class TairaDevnetTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(OSError, "partial recursive removal"):
                 module.down(args, run=runtime.run)
-            self.assertFalse(stop.exists())
-            self.assertTrue(retained.is_file())
-            report = module.down(args, run=runtime.run)
+            quarantine = state / module.NETWORK_CLEANUP_QUARANTINE
+            self.assertFalse(target.exists())
+            self.assertFalse((quarantine / "stop.sh").exists())
+            self.assertTrue((quarantine / retained.name).is_file())
+            with self.assertRaisesRegex(
+                module.DevnetError,
+                "prior network cleanup quarantine requires recovery",
+            ):
+                module.down(args, run=runtime.run)
 
-        self.assertTrue(report["stopped"])
-        self.assertTrue(report["network_destroyed"])
-        self.assertEqual(removal_attempts, 2)
+        self.assertEqual(removal_attempts, 1)
         self.assertFalse(target.exists())
-        self.assertIn(("ps", "-axww", "-o", "pid=,command="), runtime.commands)
+        self.assertFalse(runtime.process_ops.process_ids())
         self.assertFalse(
             any(
                 command[0] == "/bin/bash" and command[1].endswith("/stop.sh")
@@ -4011,7 +4301,7 @@ class TairaDevnetTests(unittest.TestCase):
         target.mkdir()
         (target / "peer0.pid").write_text("12345\n", encoding="utf-8")
 
-        with self.assertRaisesRegex(module.DevnetError, "left peer PID files"):
+        with self.assertRaisesRegex(module.DevnetError, "retired Taira PID files"):
             module.up(self.up_args(), run=FakeRuntime().run, request=FakeRuntime().request)
 
         self.assertEqual((target / "peer0.pid").read_text(encoding="utf-8"), "12345\n")
@@ -4034,7 +4324,7 @@ class TairaDevnetTests(unittest.TestCase):
             ["--dir", str(self.root / "state"), "check", "--timeout-seconds", "1"]
         )
 
-        with self.assertRaisesRegex(module.DevnetError, "not the sole running process"):
+        with self.assertRaisesRegex(module.DevnetError, "does not bind a live exact process"):
             module.check(args, run=runtime.run, request=runtime.request)
 
     def test_down_does_not_run_generated_stop_before_exact_process_ownership(self) -> None:
@@ -4052,7 +4342,7 @@ class TairaDevnetTests(unittest.TestCase):
             ["--dir", str(self.root / "state"), "down"]
         )
 
-        with self.assertRaisesRegex(module.DevnetError, "not the sole running process"):
+        with self.assertRaisesRegex(module.DevnetError, "retained its incarnation but drifted"):
             module.down(args, run=runtime.run)
 
         self.assertEqual(
@@ -4062,7 +4352,7 @@ class TairaDevnetTests(unittest.TestCase):
             ),
             stop_count,
         )
-        self.assertTrue((target / "peer0.pid").is_file())
+        self.assertTrue((target / "peer0.process.json").is_file())
 
     def test_consensus_status_accepts_exact_unauthenticated_401_contract(self) -> None:
         runtime = FakeRuntime()

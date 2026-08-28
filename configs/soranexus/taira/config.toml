@@ -136,7 +136,6 @@ expose_operator_routes = false
 allow_tool_prefixes = ["iroha."]
 
 [torii.kagemusha_commands]
-enabled = true
 private_key_file = "/run/secrets/iroha/taira-kagemusha-commands-private-key"
 minimum_xor_balance = "1"
 max_tx_value = "1000000000"
@@ -396,11 +395,9 @@ local_budget_bytes = 68719476736
 [nexus.storage.disk_budget_weights]
 # The fixed launcher requires this exact V1 split. Embedded SoraFS provider
 # storage remains disabled even though aggregate accounting reserves its share.
-kura_blocks_bps = 5500
+kura_blocks_bps = 6000
 wsv_snapshots_bps = 2000
 sorafs_bps = 2000
-soranet_spool_bps = 250
-soravpn_spool_bps = 250
 
 [nexus.registry]
 # Public Taira governance lanes require a manifest with explicit validator

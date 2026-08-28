@@ -122,8 +122,6 @@ from iroha_torii_client.client import (
     ToriiClient as _BaseToriiClient,
 )
 from iroha_torii_client.client_status_models import (
-    StreamingSoranetConfig,
-    StreamingTransportConfig,
     TransportConfig,
     TransportNoritoRpcConfig,
     parse_sumeragi_json_object,
@@ -5425,24 +5423,6 @@ def _configuration_snapshot_to_dict(snapshot: ConfigurationSnapshot) -> Dict[str
                 "require_mtls": norito_rpc.require_mtls,
                 "canary_allowlist_size": norito_rpc.canary_allowlist_size,
             }
-        if snapshot.transport.streaming is not None:
-            streaming_payload: Dict[str, Any] = {}
-            soranet = snapshot.transport.streaming.soranet
-            if soranet is not None:
-                streaming_payload["soranet"] = {
-                    "enabled": soranet.enabled,
-                    "stream_tag": soranet.stream_tag,
-                    "exit_multiaddr": soranet.exit_multiaddr,
-                    "padding_budget_ms": soranet.padding_budget_ms,
-                    "access_kind": soranet.access_kind,
-                    "gar_category": soranet.gar_category,
-                    "channel_salt": soranet.channel_salt,
-                    "provision_spool_dir": soranet.provision_spool_dir,
-                    "provision_window_segments": soranet.provision_window_segments,
-                    "provision_queue_capacity": soranet.provision_queue_capacity,
-                }
-            if streaming_payload:
-                transport_payload["streaming"] = streaming_payload
         if transport_payload:
             result["transport"] = transport_payload
     return result
@@ -12973,8 +12953,6 @@ __all__ = [
     "NodeAdminSnapshot",
     "TransportConfig",
     "TransportNoritoRpcConfig",
-    "StreamingTransportConfig",
-    "StreamingSoranetConfig",
     "SorafsPorSubmissionResponse",
     "SorafsPorVerdictResponse",
     "SorafsPinRegisterResponse",

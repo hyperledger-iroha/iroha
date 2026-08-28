@@ -8377,17 +8377,10 @@ mod authoritative_runtime_gate_tests {
         let exact_direct_frame = iroha_p2p::network::data_frame_wire_len(
             maximal_peer,
             Some(maximal_peer),
-            u8::MAX,
-            iroha_p2p::network::message::Priority::High,
             &network_message,
         );
-        let exact_broadcast_frame = iroha_p2p::network::data_frame_wire_len(
-            maximal_peer,
-            None,
-            u8::MAX,
-            iroha_p2p::network::message::Priority::High,
-            &network_message,
-        );
+        let exact_broadcast_frame =
+            iroha_p2p::network::data_frame_wire_len(maximal_peer, None, &network_message);
         let required_control_frame =
             super::fair_v2_ingress_required_p2p_frame_bytes(required_proposal);
         let network_message_bytes = network_message.encoded_len();
@@ -8516,8 +8509,6 @@ mod authoritative_runtime_gate_tests {
         let actual_direct_response_frame = iroha_p2p::network::data_frame_wire_len(
             &validator,
             Some(&validator),
-            u8::MAX,
-            iroha_p2p::network::message::Priority::High,
             &network_response,
         );
         assert_eq!(

@@ -19949,7 +19949,6 @@ fn remote_hydration_car_plan(
             offset: chunk.offset,
             length: chunk.length,
             digest: chunk.digest,
-            taikai_segment_hint: None,
         })
         .collect();
     let files = plan
@@ -24747,7 +24746,6 @@ mod tests {
                 .ok_or_else(|| eyre::eyre!("portable Inrou chunk offset overflow"))?,
             length: u32::try_from(bytes.len())?,
             digest: blake3::hash(bytes).into(),
-            taikai_segment_hint: None,
         });
         Ok(())
     }

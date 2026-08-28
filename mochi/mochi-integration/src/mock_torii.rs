@@ -356,18 +356,6 @@ impl MockToriiBuilder {
             data: MockToriiData::default(),
         }
     }
-    /// Override the initial status payload served from `/status`.
-    #[must_use]
-    pub fn status(mut self, status: TelemetryStatus) -> Self {
-        self.data.status = status;
-        self
-    }
-    /// Override the metrics payload served from `/metrics`.
-    #[must_use]
-    pub fn metrics(mut self, metrics: impl Into<String>) -> Self {
-        self.data.metrics = metrics.into();
-        self
-    }
     /// Override the initial block WebSocket frame.
     #[must_use]
     pub fn block_frame(mut self, frame: Vec<u8>) -> Self {
@@ -472,25 +460,6 @@ impl MockTorii {
     #[must_use]
     pub fn addr(&self) -> SocketAddr {
         self.addr
-    }
-    /// Update the status payload returned by `/status`.
-    pub fn set_status(&self, status: TelemetryStatus) -> Result<()> {
-        let mut guard = self.state.bytes.lock();
-        guard.status_bytes = norito::to_bytes(&status)?;
-        Ok(())
-    }
-    /// Update the metrics payload returned by `/metrics`.
-    pub fn set_metrics(&self, metrics: impl Into<String>) {
-        let mut guard = self.state.bytes.lock();
-        guard.metrics = metrics.into();
-    }
-    /// Broadcast a frame on the `/v1/blocks/stream` feed.
-    pub fn broadcast_block(&self, frame: MockToriiFrame) {
-        if let MockToriiFrame::Binary(bytes) = &frame {
-            let mut guard = self.state.default_block_frame.lock();
-            *guard = bytes.clone();
-        }
-        let _ = self.state.block_tx.send(frame);
     }
     /// Broadcast a frame on the `/v1/events/ws` feed.
     pub fn broadcast_event(&self, frame: MockToriiFrame) {

@@ -1914,9 +1914,6 @@ function normaliseGatewayOptions(options = {}) {
   if (proxyOptions) {
     native.local_proxy = proxyOptions;
   }
-  if (options.taikaiCache != null) {
-    native.taikai_cache = normaliseTaikaiCacheOptions(options.taikaiCache);
-  }
   let scoreboardOutRequested = false;
   if (typeof options.scoreboardOutPath === "string" && options.scoreboardOutPath.trim() !== "") {
     native.scoreboard_out_path = options.scoreboardOutPath.trim();
@@ -1943,91 +1940,6 @@ function normaliseGatewayOptions(options = {}) {
     native.scoreboard_allow_implicit_metadata = options.scoreboardAllowImplicitMetadata;
   }
   return native;
-}
-
-function normaliseTaikaiCacheOptions(cache) {
-  if (!cache || typeof cache !== "object") {
-    throw new TypeError("taikaiCache must be an object");
-  }
-  if (!cache.qos || typeof cache.qos !== "object") {
-    throw new TypeError("taikaiCache.qos must be an object with rate fields");
-  }
-  const qos = cache.qos;
-  const burstValue = assertPositiveIntegerLike(qos.burstMultiplier, "taikaiCache.qos.burstMultiplier");
-  const burst =
-    typeof burstValue === "bigint"
-      ? Number(burstValue)
-      : burstValue;
-  if (!Number.isSafeInteger(burst) || burst > 0xffffffff) {
-    throw new TypeError("taikaiCache.qos.burstMultiplier must fit within a 32-bit unsigned integer");
-  }
-
-  const result = {
-    hot_capacity_bytes: assertPositiveIntegerLike(
-      cache.hotCapacityBytes,
-      "taikaiCache.hotCapacityBytes",
-    ),
-    hot_retention_secs: assertPositiveIntegerLike(
-      cache.hotRetentionSecs,
-      "taikaiCache.hotRetentionSecs",
-    ),
-    warm_capacity_bytes: assertPositiveIntegerLike(
-      cache.warmCapacityBytes,
-      "taikaiCache.warmCapacityBytes",
-    ),
-    warm_retention_secs: assertPositiveIntegerLike(
-      cache.warmRetentionSecs,
-      "taikaiCache.warmRetentionSecs",
-    ),
-    cold_capacity_bytes: assertPositiveIntegerLike(
-      cache.coldCapacityBytes,
-      "taikaiCache.coldCapacityBytes",
-    ),
-    cold_retention_secs: assertPositiveIntegerLike(
-      cache.coldRetentionSecs,
-      "taikaiCache.coldRetentionSecs",
-    ),
-    qos: {
-      priority_rate_bps: assertPositiveIntegerLike(
-        qos.priorityRateBps,
-        "taikaiCache.qos.priorityRateBps",
-      ),
-      standard_rate_bps: assertPositiveIntegerLike(
-        qos.standardRateBps,
-        "taikaiCache.qos.standardRateBps",
-      ),
-      bulk_rate_bps: assertPositiveIntegerLike(
-        qos.bulkRateBps,
-        "taikaiCache.qos.bulkRateBps",
-      ),
-      burst_multiplier: burst,
-    },
-  };
-
-  if (cache.reliability != null) {
-    const reliability = {};
-    if (
-      cache.reliability.failuresToTrip !== undefined &&
-      cache.reliability.failuresToTrip !== null
-    ) {
-      reliability.failures_to_trip = assertPositiveIntegerLike(
-        cache.reliability.failuresToTrip,
-        "taikaiCache.reliability.failuresToTrip",
-      );
-    }
-    if (
-      cache.reliability.openSecs !== undefined &&
-      cache.reliability.openSecs !== null
-    ) {
-      reliability.open_secs = assertPositiveIntegerLike(
-        cache.reliability.openSecs,
-        "taikaiCache.reliability.openSecs",
-      );
-    }
-    result.reliability = reliability;
-  }
-
-  return result;
 }
 
 function transformProviderReport(report) {
@@ -2082,79 +1994,6 @@ function transformCarVerification(raw) {
   };
 }
 
-function normaliseQosCounts(raw) {
-  if (!raw || typeof raw !== "object") {
-    return { priority: 0, standard: 0, bulk: 0 };
-  }
-  return {
-    priority: toSafeNumber(raw.priority ?? 0),
-    standard: toSafeNumber(raw.standard ?? 0),
-    bulk: toSafeNumber(raw.bulk ?? 0),
-  };
-}
-
-function normaliseTierCounts(raw) {
-  if (!raw || typeof raw !== "object") {
-    return { hot: 0, warm: 0, cold: 0 };
-  }
-  return {
-    hot: toSafeNumber(raw.hot ?? 0),
-    warm: toSafeNumber(raw.warm ?? 0),
-    cold: toSafeNumber(raw.cold ?? 0),
-  };
-}
-
-function normaliseEvictionCounts(raw) {
-  if (!raw || typeof raw !== "object") {
-    return { expired: 0, capacity: 0 };
-  }
-  return {
-    expired: toSafeNumber(raw.expired ?? 0),
-    capacity: toSafeNumber(raw.capacity ?? 0),
-  };
-}
-
-function transformTaikaiCacheSummary(raw) {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const evictions = raw.evictions || {};
-  const promotions = raw.promotions || {};
-  return {
-    hits: normaliseTierCounts(raw.hits),
-    misses: toSafeNumber(raw.misses ?? 0),
-    inserts: normaliseTierCounts(raw.inserts),
-    evictions: {
-      hot: normaliseEvictionCounts(evictions.hot),
-      warm: normaliseEvictionCounts(evictions.warm),
-      cold: normaliseEvictionCounts(evictions.cold),
-    },
-    promotions: {
-      warmToHot: toSafeNumber(promotions.warm_to_hot ?? 0),
-      coldToWarm: toSafeNumber(promotions.cold_to_warm ?? 0),
-      coldToHot: toSafeNumber(promotions.cold_to_hot ?? 0),
-    },
-    qosDenials: normaliseQosCounts(raw.qos_denials),
-  };
-}
-
-function transformTaikaiCacheQueue(raw) {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  return {
-    pendingSegments: toSafeNumber(raw.pending_segments ?? 0),
-    pendingBytes: toSafeNumber(raw.pending_bytes ?? 0),
-    pendingBatches: toSafeNumber(raw.pending_batches ?? 0),
-    inFlightBatches: toSafeNumber(raw.in_flight_batches ?? 0),
-    hedgedBatches: toSafeNumber(raw.hedged_batches ?? 0),
-    shaperDenials: normaliseQosCounts(raw.shaper_denials),
-    droppedSegments: toSafeNumber(raw.dropped_segments ?? 0),
-    failovers: toSafeNumber(raw.failovers ?? 0),
-    openCircuits: toSafeNumber(raw.open_circuits ?? 0),
-  };
-}
-
 function transformGatewayResult(raw) {
   const localManifest = raw.local_proxy_manifest_json
     ? JSON.parse(raw.local_proxy_manifest_json)
@@ -2192,8 +2031,6 @@ function transformGatewayResult(raw) {
     carVerification: transformCarVerification(raw.car_verification),
     metadata: transformGatewayMetadata(raw.metadata),
     scoreboard: transformGatewayScoreboard(raw.scoreboard),
-    taikaiCacheSummary: transformTaikaiCacheSummary(raw.taikai_cache_summary),
-    taikaiCacheQueue: transformTaikaiCacheQueue(raw.taikai_cache_queue),
   };
 }
 

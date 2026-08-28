@@ -58,6 +58,13 @@ python3 scripts/taira_devnet.py check
 python3 scripts/taira_devnet.py down
 ```
 
+`up`, `check`, and `down` serialize on the owner-only managed marker. `down` is
+destructive by design: after it proves the exact managed cohort is stopped, it
+atomically quarantines the cleanup directory, proves the same inode again, and
+removes the complete tree, including configs, logs, state, and runtime
+credentials. If either proof fails, it preserves the tree or quarantined racing
+replacement for operator recovery.
+
 `up` builds the current Kagami, daemon, CLI, and SoraFS node and replaces one
 marked owner-only directory under `/var/lib/iroha-taira-devnet/` by default. It
 generates exactly four fresh-key NPoS validators on the canonical Taira chain,
@@ -66,6 +73,9 @@ stages and preseeds the required Inrou guest, starts the validators, requires
 health/readiness, submits a signed ping, waits for its typed `Applied` status,
 requires four-peer height convergence, performs a semantic MCP
 initialize/tools-list smoke, and proves the exact four-replica workload route.
+The preseed helper emits one canonical ready receipt while holding every store
+lock, waits for parent stdin EOF, then emits the exact V1 `released`
+acknowledgment; the parent requires all three protocol events in that order.
 
 Treat `up` as the startup-boundary and guest-workload qualification command. It requires
 Linux/AArch64, uid 0, KVM API version 12, and the four canonical locked Inrou
@@ -109,10 +119,10 @@ same-revision `iroha taira doctor` directly against the public ingress under
 test for that purpose.
 
 The generated bundle contains private keys and tokens. Do not print, move,
-archive, or commit it. On failure the command attempts bounded teardown and
-leaves bounded peer logs for diagnosis; if ownership or termination cannot be
-proved, it warns instead of claiming cleanup. `down` retains those logs; the
-next `up` replaces the bundle.
+archive, or commit it. On failure the command prints bounded peer log tails,
+attempts bounded teardown, and destroys the bundle after proving shutdown and
+directory identity. If either proof fails, it warns and retains the complete
+bundle instead of claiming cleanup.
 
 Build the public-reset evidence binary with the release profile, then admit the
 complete runtime input closure locally before authorizing mutation:
@@ -216,15 +226,34 @@ with a parallel Python implementation.
 Deployment proof always runs a fresh same-revision read-only Inrou check;
 retained receipts are audit evidence and never substitute for current
 liveness. Host cleanup persists one request-bound plan before mutation, then
-removes only marker-admitted upload/release roots through crash-resumable
-tombstones within the signed reclaim-byte cap. It does not scan or prune live
-state, secrets, the selected release, or rollback state.
+removes only marker-admitted upload/release roots and older superseded
+marker-bound Inrou stage roots through crash-resumable tombstones within the
+signed reclaim-byte cap. It does not scan or prune live state, secrets, the
+selected release, its current Inrou stage, rollback state, or durable
+`.operator-preseed-v1` qualifications.
 
 Before other live writes, verify the account exists, holds a positive fee
 asset balance, and has the exact required permission. After any reset, treat
 cached or previously funded signers as suspect until rechecked.
 
 ## MCP transaction and package workflows
+
+When the deployed writer profile advertises
+`iroha.accounts.faucet.prepare` and `iroha.accounts.faucet.submit`, use them as
+one exact two-step workflow: send the typed PoW claim, public-reset mutation
+binding, and fee intent to `prepare`, persist its returned prepared envelope
+unchanged, then send that entire envelope to `submit`. Never reconstruct the
+faucet-signed transaction or place keys, bearer tokens, or runtime authorization
+material inside tool arguments. New prepared envelopes carry a
+signature-bound marker version; consensus consumes the authority-scoped claim
+marker atomically with successful execution, so a duplicate claim through a
+different binding, peer, generic transaction ingress, or restart must be
+treated as a deterministic rejection rather than retried as another payout.
+The marker version applies only to newly prepared transactions. On an in-place
+upgrade, keep writer MCP unavailable, quiesce legacy faucet prepare, wait for
+all legacy prepared envelopes to expire, and advance beyond the configured PoW
+anchor-age window before exposing these tools. A fresh public reset already
+satisfies this cutover condition.
 
 For a pre-signed transaction envelope, prefer
 `iroha.transactions.submit_and_wait`:

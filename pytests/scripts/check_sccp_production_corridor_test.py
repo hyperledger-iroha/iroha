@@ -489,6 +489,7 @@ def test_workflow_path_filters_cover_release_trust_and_fixture_inputs() -> None:
         '"scripts/check_mobile_sdk_artifacts.sh"',
         '"scripts/check_mobile_sdk_artifact_pin_commit.py"',
         '"scripts/exec_with_file_lock.py"',
+        '"scripts/norito_bridge_apple_slice_handoff.py"',
         '"scripts/norito_bridge_source_seal.py"',
         '"scripts/run_mobile_hermetic_command.py"',
         '"scripts/update_norito_bridge_swift_pins.py"',

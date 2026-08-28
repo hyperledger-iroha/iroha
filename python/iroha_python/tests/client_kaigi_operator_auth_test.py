@@ -24,7 +24,7 @@ from iroha_python import (
 )
 from iroha_python.crypto import Ed25519KeyPair
 
-NETWORK_BYTES = bytes([0xB6]) * 32
+NETWORK_BYTES = bytes([0xB5]) * 32
 NETWORK_ID = NetworkId.from_bytes(NETWORK_BYTES)
 FOREIGN_NETWORK_BYTES = bytes([0xB7]) * 32
 KEY_PAIR = Ed25519KeyPair.from_private_key(bytes([0x2D]) * 32)
@@ -391,13 +391,16 @@ def test_kaigi_diagnostics_require_operator_context_and_reject_precomputed_auth(
     assert missing_session.calls == []
 
     precomputed_session = RecordingSession([])
-    precomputed = ToriiClient(
-        "https://torii.example",
-        session=precomputed_session,
-        operator_signing_context=context(),
-        default_headers={"X-Iroha-Operator-Nonce": "precomputed"},
-    )
-    with pytest.raises(ValueError, match="generated operator signing"):
+    with pytest.raises(
+        ValueError,
+        match="canonical authentication headers|generated operator signing",
+    ):
+        precomputed = ToriiClient(
+            "https://torii.example",
+            session=precomputed_session,
+            operator_signing_context=context(),
+            default_headers={"X-Iroha-Operator-Nonce": "precomputed"},
+        )
         precomputed.list_kaigi_relays()
     assert precomputed_session.calls == []
 

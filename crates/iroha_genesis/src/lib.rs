@@ -604,7 +604,10 @@ impl From<ManifestCrypto> for ActualCrypto {
         } = value;
         Self {
             enable_sm_openssl_preview: sm_openssl_preview,
-            sm_intrinsics: SmIntrinsicsPolicyConfig::from(sm_intrinsics.as_str()).into(),
+            sm_intrinsics: sm_intrinsics
+                .parse::<SmIntrinsicsPolicyConfig>()
+                .expect("manifest crypto must be validated before conversion")
+                .into(),
             default_hash,
             allowed_signing,
             sm2_distid_default,

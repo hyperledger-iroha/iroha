@@ -10,6 +10,7 @@ use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, comput
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder,
     PinPolicy, StorageClass,
+    operator_preseed::{OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1, OperatorPreseedSessionReceiptV1},
     por::{
         POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1,
         PorProofV1, derive_challenge_id, derive_challenge_seed,
@@ -18,7 +19,7 @@ use sorafs_manifest::{
 };
 use std::{
     fs, io,
-    io::{BufRead as _, BufReader},
+    io::{BufRead as _, BufReader, Read as _},
     path::Path,
     process::Stdio,
 };
@@ -91,6 +92,26 @@ fn preseed_target_arg(seed: u8, data_dir: &Path) -> String {
         "--target={validator_account_literal},{peer_id},{}",
         data_dir.display()
     )
+}
+
+fn completed_preseed_receipt(
+    output: &[u8],
+) -> Result<OperatorPreseedSessionReceiptV1, Box<dyn std::error::Error>> {
+    let ready_end = output
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .ok_or("preseed output is missing its ready-receipt newline")?;
+    let (ready_with_newline, release) = output.split_at(ready_end + 1);
+    if release != OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1 {
+        return Err("preseed output is missing its exact EOF release acknowledgment".into());
+    }
+    let ready = ready_with_newline
+        .strip_suffix(b"\n")
+        .ok_or("preseed ready receipt is missing its newline")?;
+    if ready.is_empty() || ready.contains(&b'\r') || ready.contains(&b'\n') {
+        return Err("preseed ready receipt is not one canonical line".into());
+    }
+    Ok(norito::json::from_slice(ready)?)
 }
 #[test]
 fn sorafs_node_cli_rejects_manifest_subcommand_alias() -> Result<(), Box<dyn std::error::Error>> {
@@ -292,11 +313,10 @@ fn preseed_session_holds_all_locks_and_exact_rerun_is_idempotent()
         .stdout(Stdio::piped())
         .spawn()?;
     let stdin = child.stdin.take().ok_or("missing session stdin")?;
+    let mut stdout = BufReader::new(child.stdout.take().ok_or("missing session stdout")?);
     let mut receipt_line = String::new();
-    BufReader::new(child.stdout.take().ok_or("missing session stdout")?)
-        .read_line(&mut receipt_line)?;
-    let receipt: sorafs_manifest::operator_preseed::OperatorPreseedSessionReceiptV1 =
-        norito::json::from_str(receipt_line.trim_end())?;
+    stdout.read_line(&mut receipt_line)?;
+    let receipt: OperatorPreseedSessionReceiptV1 = norito::json::from_str(receipt_line.trim_end())?;
     receipt.validate()?;
     assert_eq!(receipt.status, "ready");
     assert_eq!(receipt.mode, "ingest");
@@ -341,17 +361,13 @@ fn preseed_session_holds_all_locks_and_exact_rerun_is_idempotent()
     assert!(stderr.contains("already in use"), "{stderr}");
 
     drop(stdin);
+    let mut release_ack = Vec::new();
+    stdout.read_to_end(&mut release_ack)?;
+    assert_eq!(release_ack, OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1);
     assert!(child.wait()?.success());
     let mut rerun = cargo_bin_cmd!("sorafs-node");
     let rerun_assertion = rerun.args(&session_args).assert().success();
-    let rerun_receipt: sorafs_manifest::operator_preseed::OperatorPreseedSessionReceiptV1 =
-        norito::json::from_slice(
-            rerun_assertion
-                .get_output()
-                .stdout
-                .strip_suffix(b"\n")
-                .ok_or("preseed rerun receipt must end in one newline")?,
-        )?;
+    let rerun_receipt = completed_preseed_receipt(&rerun_assertion.get_output().stdout)?;
     assert_eq!(rerun_receipt, receipt);
 
     let reversed_args = [
@@ -366,14 +382,7 @@ fn preseed_session_holds_all_locks_and_exact_rerun_is_idempotent()
     ];
     let mut reversed = cargo_bin_cmd!("sorafs-node");
     let reversed_assertion = reversed.args(&reversed_args).assert().success();
-    let reversed_receipt: sorafs_manifest::operator_preseed::OperatorPreseedSessionReceiptV1 =
-        norito::json::from_slice(
-            reversed_assertion
-                .get_output()
-                .stdout
-                .strip_suffix(b"\n")
-                .ok_or("reversed preseed receipt must end in one newline")?,
-        )?;
+    let reversed_receipt = completed_preseed_receipt(&reversed_assertion.get_output().stdout)?;
     assert_eq!(
         reversed_receipt, receipt,
         "target and artifact permutations must resolve to one canonical qualification"
@@ -436,14 +445,7 @@ fn preseed_session_holds_all_locks_and_exact_rerun_is_idempotent()
     verify_args.push("--verify-only".to_owned());
     let mut verify = cargo_bin_cmd!("sorafs-node");
     let verify_assertion = verify.args(&verify_args).assert().success();
-    let verify_receipt: sorafs_manifest::operator_preseed::OperatorPreseedSessionReceiptV1 =
-        norito::json::from_slice(
-            verify_assertion
-                .get_output()
-                .stdout
-                .strip_suffix(b"\n")
-                .ok_or("verify-only preseed receipt must end in one newline")?,
-        )?;
+    let verify_receipt = completed_preseed_receipt(&verify_assertion.get_output().stdout)?;
     let mut expected_verify_receipt = receipt.clone();
     expected_verify_receipt.mode = "verify_only".to_owned();
     assert_eq!(verify_receipt, expected_verify_receipt);

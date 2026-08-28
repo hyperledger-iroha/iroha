@@ -51,7 +51,8 @@ use reqwest::{
 };
 use sha2::{Digest as _, Sha256};
 use sorafs_manifest::operator_preseed::{
-    OperatorPreseedSessionReceiptV1, OperatorPreseedTargetReceiptV1,
+    OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1, OperatorPreseedSessionReceiptV1,
+    OperatorPreseedTargetReceiptV1,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -9866,6 +9867,15 @@ fn run_locked_preseed_session(
         }
         drain_nonblocking(&mut stdout, &mut stdout_bytes, &mut stdout_eof)?;
         drain_nonblocking(&mut stderr, &mut stderr_bytes, &mut stderr_eof)?;
+        let release_output = stdout_bytes
+            .get(ready_len..)
+            .expect("ready receipt remains the stdout prefix");
+        if !OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1.starts_with(release_output) {
+            terminate_owned_child(&mut child)?;
+            return Err(eyre!(
+                "authorization-bound SoraFS preseed session emitted a noncanonical release acknowledgment"
+            ));
+        }
         if status.is_none() {
             status = child.try_wait()?;
         }
@@ -9882,9 +9892,9 @@ fn run_locked_preseed_session(
             String::from_utf8_lossy(&stderr_bytes)
         ));
     }
-    if stdout_bytes.len() != ready_len {
+    if stdout_bytes.get(ready_len..) != Some(OPERATOR_PRESEED_SESSION_RELEASE_ACK_V1) {
         return Err(eyre!(
-            "authorization-bound SoraFS preseed session emitted trailing stdout after readiness"
+            "authorization-bound SoraFS preseed session did not emit the exact EOF release acknowledgment"
         ));
     }
     Ok(())
@@ -15239,11 +15249,6 @@ const DOCTOR_EXPECTED_CHECKS: &[(&str, u64, Option<&str>)] = &[
         400,
         Some("mounted route is expected to return HTTP 400 for this preflight shape"),
     ),
-    (
-        "retired_transaction_status_alias",
-        404,
-        Some("mounted route is expected to return HTTP 404 for this preflight shape"),
-    ),
     ("sccp_capabilities", 200, None),
     ("zk_proofs_count", 200, None),
     ("public_lane_validators", 200, None),
@@ -15310,7 +15315,10 @@ fn validate_doctor_report(value: &norito::json::Value, public_root: &str) -> Res
         .and_then(norito::json::Value::as_array)
         .ok_or_else(|| eyre!("Taira doctor checks must be an array"))?;
     if checks.len() != DOCTOR_EXPECTED_CHECKS.len() {
-        return Err(eyre!("Taira doctor report must contain exactly 15 checks"));
+        return Err(eyre!(
+            "Taira doctor report must contain exactly {} checks",
+            DOCTOR_EXPECTED_CHECKS.len()
+        ));
     }
     for (check, &(name, http_status, detail)) in checks.iter().zip(DOCTOR_EXPECTED_CHECKS) {
         let check = check
@@ -17581,7 +17589,9 @@ mod tests {
             Path::new("/bin/sh"),
             &[
                 OsString::from("-c"),
-                OsString::from("printf 'ready\\n'; IFS= read -r unexpected; test $? -ne 0"),
+                OsString::from(
+                    "printf 'ready\\n'; IFS= read -r unexpected; test $? -ne 0 && printf '{\"schema_version\":1,\"status\":\"released\"}\\n'",
+                ),
             ],
             Instant::now() + Duration::from_secs(2),
             |receipt| {
@@ -17609,7 +17619,29 @@ mod tests {
             },
         )
         .expect_err("stdout after the accepted ready line must fail closed");
-        assert!(error.to_string().contains("trailing stdout"));
+        assert!(error.to_string().contains("release acknowledgment"));
+    }
+
+    #[test]
+    fn locked_preseed_session_rejects_exit_without_release_acknowledgment() {
+        let error = run_locked_preseed_session(
+            Path::new("/bin/sh"),
+            &[
+                OsString::from("-c"),
+                OsString::from("printf 'ready\\n'; IFS= read -r unexpected; test $? -ne 0"),
+            ],
+            Instant::now() + Duration::from_secs(2),
+            |receipt| {
+                assert_eq!(receipt, b"ready\n");
+                Ok(())
+            },
+        )
+        .expect_err("release without the exact acknowledgment must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("exact EOF release acknowledgment")
+        );
     }
 
     #[test]

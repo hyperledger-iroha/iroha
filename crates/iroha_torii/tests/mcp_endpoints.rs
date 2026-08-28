@@ -1025,7 +1025,11 @@ async fn mcp_jsonrpc_generic_notifications_return_accepted_without_body() {
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
     let app = build_router(cfg);
-    for method in ["notifications/progress", "notifications/unknown"] {
+    for method in [
+        "notifications/progress",
+        "notifications/cancelled",
+        "notifications/unknown",
+    ] {
         let (status, body) = post_mcp_bytes(
             &app,
             norito::json!({
@@ -1122,12 +1126,15 @@ async fn mcp_writer_prefix_policy_lists_only_curated_iroha_tools() {
             "expected `{required}` in visible tool list, got {names:?}"
         );
     }
-    assert!(
-        !names
-            .iter()
-            .any(|name| name == "iroha.accounts.faucet.prepare"),
-        "replayable faucet authority signing must not be exposed through MCP"
-    );
+    for required in [
+        "iroha.accounts.faucet.prepare",
+        "iroha.accounts.faucet.submit",
+    ] {
+        assert!(
+            names.iter().any(|name| name == required),
+            "consensus consume-once faucet tool `{required}` must be exposed to writers"
+        );
+    }
     for operator_only in [
         "iroha.accounts.onboard.plan",
         "iroha.accounts.onboard.prepare",
@@ -3184,18 +3191,14 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     for required in [
         "iroha.accounts.onboard.prepare",
         "iroha.accounts.onboard.submit",
+        "iroha.accounts.faucet.prepare",
+        "iroha.accounts.faucet.submit",
     ] {
         assert!(
             names.iter().any(|name| name == required),
             "expected explicit prepared-transaction MCP tool `{required}`"
         );
     }
-    assert!(
-        names
-            .iter()
-            .all(|name| !name.starts_with("iroha.accounts.faucet.")),
-        "faucet prepare/submit protocol-handshake routes must stay outside MCP"
-    );
     assert!(names.iter().all(|name| !matches!(
         name.as_str(),
         "iroha.accounts.onboard" | "iroha.accounts.faucet"

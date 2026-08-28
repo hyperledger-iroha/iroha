@@ -19,8 +19,10 @@
 // (`specs/references/configuration.md`).
 #![allow(clippy::doc_markdown, clippy::doc_link_with_quotes)]
 use error_stack::{Report, ResultExt};
+#[cfg(test)]
+use iroha_config_base::ParameterId;
 use iroha_config_base::{
-    ParameterId, ParameterOrigin, ReadConfig, WithOrigin,
+    ParameterOrigin, ReadConfig, WithOrigin,
     attach::ConfigValueAndOrigin,
     env::FromEnvStr,
     read::{ConfigReader, FinalWrap, ReadConfig as ReadConfigTrait},
@@ -463,7 +465,7 @@ impl json::JsonDeserialize for RelayMode {
         parser: &mut json::Parser<'_>,
     ) -> ::core::result::Result<Self, json::Error> {
         let text = parser.parse_string()?;
-        match text.to_ascii_lowercase().as_str() {
+        match text.as_str() {
             "disabled" => Ok(Self::Disabled),
             "hub" => Ok(Self::Hub),
             "spoke" => Ok(Self::Spoke),
@@ -560,46 +562,6 @@ impl json::JsonDeserialize for PerProviderSubmittersConfig {
         Ok(Self(inner))
     }
 }
-/// Boolean wrapper that accepts common truthy/falsy strings when parsing from env.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Boolish(pub bool);
-/// Error returned when parsing a boolean-ish environment value fails.
-#[derive(Debug, Error, PartialEq, Eq, Copy, Clone)]
-#[error("provided string was not a recognised boolean (expected true/false/1/0/on/off/yes/no)")]
-pub struct BoolishParseError;
-impl From<bool> for Boolish {
-    fn from(value: bool) -> Self {
-        Self(value)
-    }
-}
-impl From<Boolish> for bool {
-    fn from(value: Boolish) -> Self {
-        value.0
-    }
-}
-impl FromEnvStr for Boolish {
-    type Error = BoolishParseError;
-    fn from_env_str(value: Cow<'_, str>) -> std::result::Result<Self, Self::Error> {
-        let normalized = value.trim().to_ascii_lowercase();
-        match normalized.as_str() {
-            "true" | "1" | "yes" | "on" => Ok(Self(true)),
-            "false" | "0" | "no" | "off" => Ok(Self(false)),
-            _ => Err(BoolishParseError),
-        }
-    }
-}
-impl json::JsonSerialize for Boolish {
-    fn json_serialize(&self, out: &mut String) {
-        json::JsonSerialize::json_serialize(&self.0, out);
-    }
-}
-impl json::JsonDeserialize for Boolish {
-    fn json_deserialize(
-        parser: &mut json::Parser<'_>,
-    ) -> ::core::result::Result<Self, json::Error> {
-        bool::json_deserialize(parser).map(Self)
-    }
-}
 /// Wrapper around a list of curve identifiers allowing env parsing.
 #[derive(Debug, Clone, Default)]
 pub struct CurveIdListConfig(pub Vec<u8>);
@@ -627,7 +589,6 @@ pub enum SmIntrinsicsPolicyConfig {
     /// Disable SM intrinsics even when the platform supports them.
     ForceDisable,
 }
-impl SmIntrinsicsPolicyConfig {}
 #[derive(Debug, Error)]
 #[error("invalid SM intrinsics policy `{0}` (expected auto, force-enable, or force-disable)")]
 /// Error returned when an SM intrinsics policy string cannot be parsed.
@@ -635,21 +596,12 @@ pub struct SmIntrinsicsPolicyParseError(String);
 impl FromStr for SmIntrinsicsPolicyConfig {
     type Err = SmIntrinsicsPolicyParseError;
     fn from_str(raw: &str) -> core::result::Result<Self, Self::Err> {
-        match raw.trim().to_ascii_lowercase().as_str() {
+        match raw {
             "auto" => Ok(Self::Auto),
-            "force-enable" | "force_enable" | "enable" | "on" | "true" | "1" => {
-                Ok(Self::ForceEnable)
-            }
-            "force-disable" | "force_disable" | "disable" | "off" | "false" | "0" => {
-                Ok(Self::ForceDisable)
-            }
+            "force-enable" => Ok(Self::ForceEnable),
+            "force-disable" => Ok(Self::ForceDisable),
             other => Err(SmIntrinsicsPolicyParseError(other.to_owned())),
         }
-    }
-}
-impl From<&str> for SmIntrinsicsPolicyConfig {
-    fn from(value: &str) -> Self {
-        value.parse().unwrap_or_default()
     }
 }
 impl json::JsonDeserialize for SmIntrinsicsPolicyConfig {
@@ -689,7 +641,20 @@ mod sm_intrinsics_policy_config_tests {
     }
     #[test]
     fn rejects_unknown_policy() {
-        assert!(SmIntrinsicsPolicyConfig::from_str("neon-only").is_err());
+        for value in [
+            "neon-only",
+            "force_enable",
+            "enable",
+            "true",
+            "1",
+            "AUTO",
+            " auto",
+        ] {
+            assert!(
+                SmIntrinsicsPolicyConfig::from_str(value).is_err(),
+                "noncanonical policy {value:?} must be rejected"
+            );
+        }
     }
 }
 impl From<CurveIdListConfig> for Vec<u8> {
@@ -976,6 +941,12 @@ pub enum ParseError {
     /// Sumeragi consensus parameters failed validation.
     #[error("Invalid Sumeragi consensus configuration")]
     InvalidSumeragiConfig,
+    /// Peer-to-peer network parameters failed validation.
+    #[error("Invalid network configuration")]
+    InvalidNetworkConfig,
+    /// Transaction pipeline parameters failed validation.
+    #[error("Invalid pipeline configuration")]
+    InvalidPipelineConfig,
     /// Streaming configuration block lacked required or valid values.
     #[error("Invalid streaming configuration")]
     InvalidStreamingConfig,
@@ -1035,55 +1006,6 @@ impl AccountAddressParseScope {
     }
 }
 impl Root {
-    /// Read the root configuration after canonicalizing explicitly disabled
-    /// optional service subtrees across all ordered TOML sources.
-    ///
-    /// `torii.kagemusha_commands` is an optional online command-submission
-    /// service. Its own explicit `enabled = false` switch makes subordinate
-    /// values dormant. Offline application support has no node enable switch
-    /// and is never inspected or rewritten here.
-    ///
-    /// # Errors
-    ///
-    /// Returns the ordinary collective configuration-reader error when an
-    /// active or otherwise non-canonicalized parameter is invalid.
-    pub fn read_and_complete(
-        reader: ConfigReader,
-    ) -> core::result::Result<Self, Report<[iroha_config_base::read::Error]>> {
-        fn effective_bool_source(
-            sources: &[iroha_config_base::toml::TomlSource],
-            path: &[&str],
-        ) -> Option<(usize, Option<bool>)> {
-            let id = ParameterId::from(path);
-            sources
-                .iter()
-                .enumerate()
-                .rev()
-                .find_map(|(index, source)| source.fetch(&id).map(|value| (index, value.as_bool())))
-        }
-        fn remove_path(table: &mut toml::Table, path: &[&str]) {
-            let Some((segment, tail)) = path.split_first() else {
-                return;
-            };
-            if tail.is_empty() {
-                table.remove(*segment);
-                return;
-            }
-            if let Some(child) = table.get_mut(*segment).and_then(toml::Value::as_table_mut) {
-                remove_path(child, tail);
-            }
-        }
-        let reader = reader.rewrite_toml_sources(|sources| {
-            const COMMANDS: &[&str] = &["torii", "kagemusha_commands"];
-            const COMMANDS_ENABLED: &[&str] = &["torii", "kagemusha_commands", "enabled"];
-            if let Some((_, Some(false))) = effective_bool_source(sources, COMMANDS_ENABLED) {
-                for source in sources.iter_mut() {
-                    remove_path(source.table_mut(), COMMANDS);
-                }
-            }
-        });
-        reader.read_and_complete::<Self>()
-    }
     fn derive_default_snapshot_store_dir(snapshot: &mut Snapshot, kura: &actual::Kura) {
         if !matches!(snapshot.store_dir.origin(), ParameterOrigin::Default { .. }) {
             return;
@@ -1412,7 +1334,7 @@ impl Root {
                 );
             }
         }
-        let pipeline = self.pipeline.parse();
+        let pipeline = self.pipeline.parse(&mut emitter);
         let tiered_state = self.tiered_state.parse();
         let compute = self.compute.parse(&mut emitter);
         let content = self.content.parse();
@@ -1755,7 +1677,7 @@ pub struct SorafsPinPolicyConstraints {
     pub max_replicas_ceiling: Option<u16>,
     /// Optional retention epoch cap (inclusive).
     pub max_retention_epoch: Option<u64>,
-    /// Allowed storage classes (case-insensitive). `None` permits any class.
+    /// Allowed exact first-release storage-class labels. `None` permits any class.
     pub allowed_storage_classes: Option<AlgorithmListConfig>,
     /// Require council signatures on pin manifests. Public paid pin submissions require an authenticated account.
     #[config(
@@ -1846,12 +1768,12 @@ impl SorafsPinPolicyConstraints {
             classes
                 .into_vec()
                 .into_iter()
-                .map(|class| match class.trim().to_ascii_lowercase().as_str() {
+                .map(|class| match class.as_str() {
                     "hot" => SorafsStorageClass::Hot,
                     "warm" => SorafsStorageClass::Warm,
                     "cold" => SorafsStorageClass::Cold,
-                    other => panic!(
-                        "Invalid governance.sorafs_pin_policy.allowed_storage_classes entry `{other}`; expected hot, warm, or cold"
+                    _ => panic!(
+                        "Invalid governance.sorafs_pin_policy.allowed_storage_classes entry `{class}`; expected exactly hot, warm, or cold"
                     ),
                 })
                 .collect::<BTreeSet<_>>()
@@ -1966,6 +1888,22 @@ impl SorafsPinPolicyConstraints {
             max_bytes_per_authority: self.max_bytes_per_authority,
             max_lineage_depth: self.max_lineage_depth,
             max_successor_fanout: self.max_successor_fanout,
+        }
+    }
+}
+#[cfg(test)]
+mod exact_sorafs_pin_policy_label_tests {
+    use super::*;
+
+    #[test]
+    fn pin_policy_storage_classes_reject_case_and_whitespace_aliases() {
+        for invalid in ["HOT", " hot", "hot "] {
+            let mut policy = SorafsPinPolicyConstraints::default();
+            policy.allowed_storage_classes = Some(AlgorithmListConfig(vec![invalid.to_owned()]));
+            assert!(
+                std::panic::catch_unwind(|| policy.parse()).is_err(),
+                "{invalid:?} must fail closed"
+            );
         }
     }
 }
@@ -3250,19 +3188,12 @@ max_corpus_entries = 16
         );
     }
     #[test]
-    fn jdg_signature_schemes_accepts_aliases() {
+    fn jdg_signature_schemes_rejects_aliases() {
         let mut cfg = Governance::default();
         cfg.jdg_signature_schemes = vec!["simple".to_string(), "bls-aggregate".to_string()];
-        let parsed = cfg.parse();
         assert!(
-            parsed
-                .jdg_signature_schemes
-                .contains(&JdgSignatureScheme::SimpleThreshold)
-        );
-        assert!(
-            parsed
-                .jdg_signature_schemes
-                .contains(&JdgSignatureScheme::BlsNormalAggregate)
+            std::panic::catch_unwind(|| cfg.parse()).is_err(),
+            "first-release configuration must reject noncanonical aliases"
         );
     }
 }
@@ -3782,7 +3713,7 @@ pub struct TieredState {
         env = "TIERED_STATE_HOT_RETAINED_BYTES",
         default = "defaults::tiered_state::HOT_RETAINED_BYTES"
     )]
-    pub hot_retained_bytes: Bytes<u64>,
+    pub hot_retained_bytes: Bytes,
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
     #[config(
         env = "TIERED_STATE_HOT_RETAINED_GRACE_SNAPSHOTS",
@@ -3806,7 +3737,7 @@ pub struct TieredState {
         env = "TIERED_STATE_MAX_COLD_BYTES",
         default = "defaults::tiered_state::MAX_COLD_BYTES"
     )]
-    pub max_cold_bytes: Bytes<u64>,
+    pub max_cold_bytes: Bytes,
 }
 impl TieredState {
     fn parse(self) -> actual::TieredState {
@@ -3839,10 +3770,10 @@ pub struct Compute {
     pub max_ttl_slots: NonZeroU64,
     /// Maximum request payload size (bytes).
     #[config(default = "defaults::compute::MAX_REQUEST_BYTES")]
-    pub max_request_bytes: Bytes<u64>,
+    pub max_request_bytes: Bytes,
     /// Maximum response payload size (bytes).
     #[config(default = "defaults::compute::MAX_RESPONSE_BYTES")]
-    pub max_response_bytes: Bytes<u64>,
+    pub max_response_bytes: Bytes,
     /// Per-call gas cap applied at admission.
     #[config(default = "defaults::compute::max_gas_per_call()")]
     pub max_gas_per_call: NonZeroU64,
@@ -4403,7 +4334,7 @@ impl Oracle {
     }
 }
 impl Pipeline {
-    fn parse(self) -> actual::Pipeline {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Pipeline {
         actual::Pipeline {
             dynamic_prepass: self.dynamic_prepass,
             access_set_cache_enabled: self.access_set_cache_enabled,
@@ -4426,7 +4357,7 @@ impl Pipeline {
             overlay_max_instructions: self.overlay_max_instructions,
             overlay_max_bytes: self.overlay_max_bytes,
             overlay_chunk_instructions: self.overlay_chunk_instructions,
-            gas: self.gas.parse(),
+            gas: self.gas.parse(emitter),
             ivm_max_cycles_upper_bound: self.ivm_max_cycles_upper_bound,
             ivm_max_decoded_instructions: self.ivm_max_decoded_instructions,
             ivm_max_decoded_bytes: self.ivm_max_decoded_bytes,
@@ -4526,10 +4457,16 @@ mod pipeline_tests {
     }
     #[test]
     fn pipeline_parse_maps_debug_flags() {
-        let baseline = pipeline_with_debug(false, false).parse();
+        let mut emitter = Emitter::new();
+        let baseline = pipeline_with_debug(false, false).parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("baseline pipeline must be valid");
         assert!(!baseline.debug_trace_scheduler_inputs);
         assert!(!baseline.debug_trace_tx_eval);
-        let debug_enabled = pipeline_with_debug(true, true).parse();
+        let mut emitter = Emitter::new();
+        let debug_enabled = pipeline_with_debug(true, true).parse(&mut emitter);
+        emitter.into_result().expect("debug pipeline must be valid");
         assert!(debug_enabled.debug_trace_scheduler_inputs);
         assert!(debug_enabled.debug_trace_tx_eval);
     }
@@ -5161,7 +5098,7 @@ pub struct Fastpq {
     pub proof_sidecar_queue_cap: NonZeroUsize,
     /// Maximum encoded FASTPQ proof snapshot accepted for sidecar persistence.
     #[config(default = "defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES")]
-    pub proof_sidecar_max_bytes: Bytes<u64>,
+    pub proof_sidecar_max_bytes: Bytes,
     /// Maximum merge attempts for a FASTPQ proof snapshot while the pipeline sidecar is pending.
     #[config(default = "defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES")]
     pub proof_sidecar_max_retries: NonZeroUsize,
@@ -5195,15 +5132,15 @@ pub struct Fastpq {
     /// Emit verbose Metal device enumeration logs (developer diagnostic; defaults off).
     #[config(
         env = "FASTPQ_DEBUG_METAL_ENUM",
-        default = "Boolish::from(defaults::zk::fastpq::METAL_DEBUG_ENUM)"
+        default = "defaults::zk::fastpq::METAL_DEBUG_ENUM"
     )]
-    pub metal_debug_enum: Boolish,
+    pub metal_debug_enum: bool,
     /// Emit verbose fused Poseidon failure diagnostics (developer diagnostic; defaults off).
     #[config(
         env = "FASTPQ_DEBUG_FUSED",
-        default = "Boolish::from(defaults::zk::fastpq::METAL_DEBUG_FUSED)"
+        default = "defaults::zk::fastpq::METAL_DEBUG_FUSED"
     )]
-    pub metal_debug_fused: Boolish,
+    pub metal_debug_fused: bool,
 }
 impl Fastpq {
     fn parse(self) -> actual::Fastpq {
@@ -5255,8 +5192,8 @@ impl Fastpq {
                 );
             }),
             metal_trace: self.metal_trace,
-            metal_debug_enum: self.metal_debug_enum.into(),
-            metal_debug_fused: self.metal_debug_fused.into(),
+            metal_debug_enum: self.metal_debug_enum,
+            metal_debug_fused: self.metal_debug_fused,
         }
     }
 }
@@ -5353,7 +5290,7 @@ impl std::fmt::Display for CabacMode {
 impl FromStr for CabacMode {
     type Err = ();
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
+        match s {
             "disabled" => Ok(Self::Disabled),
             "adaptive" => Ok(Self::Adaptive),
             "forced" => Ok(Self::Forced),
@@ -5375,6 +5312,32 @@ impl json::JsonDeserialize for CabacMode {
             field: "streaming.codec.cabac_mode".into(),
             message: format!("invalid CABAC mode `{text}`"),
         })
+    }
+}
+#[cfg(test)]
+mod canonical_network_and_codec_label_tests {
+    use super::{CabacMode, RelayMode};
+    use std::str::FromStr;
+    #[test]
+    fn relay_mode_requires_canonical_lowercase_labels() {
+        let parsed = norito::json::from_str::<RelayMode>(r#""hub""#).expect("canonical relay mode");
+        assert_eq!(parsed, RelayMode::Hub);
+        for value in [r#""HUB""#, r#"" Hub ""#] {
+            assert!(
+                norito::json::from_str::<RelayMode>(value).is_err(),
+                "noncanonical relay mode {value} must be rejected"
+            );
+        }
+    }
+    #[test]
+    fn cabac_mode_requires_canonical_lowercase_labels() {
+        assert_eq!(CabacMode::from_str("adaptive"), Ok(CabacMode::Adaptive));
+        for value in ["Adaptive", " adaptive"] {
+            assert!(
+                CabacMode::from_str(value).is_err(),
+                "noncanonical CABAC mode {value:?} must be rejected"
+            );
+        }
     }
 }
 /// User-facing codec toggles (CABAC/trellis gating, rANS artefact path).
@@ -5569,8 +5532,7 @@ impl StreamingCodec {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<EntropyMode> {
         let (mode_text, origin) = entropy_mode.into_tuple();
-        let normalized = mode_text.trim().to_ascii_lowercase();
-        if normalized != "rans_bundled" && normalized != "rans-bundled" {
+        if mode_text != "rans_bundled" {
             emitter.emit(
                 Report::new(ParseError::InvalidStreamingConfig)
                     .attach(
@@ -5590,7 +5552,7 @@ impl StreamingCodec {
             );
             return None;
         }
-        let mode = EntropyMode::from_str(&normalized).ok()?;
+        let mode = EntropyMode::from_str(&mode_text).ok()?;
         debug_assert_eq!(mode, EntropyMode::RansBundled);
         Some(mode)
     }
@@ -5645,10 +5607,9 @@ impl StreamingCodec {
             return None;
         }
         let (raw_value, origin) = bundle_accel.into_tuple();
-        let normalized = raw_value.trim().to_ascii_lowercase().replace('-', "_");
-        let accel = match normalized.as_str() {
+        let accel = match raw_value.as_str() {
             "none" => actual::BundleAcceleration::None,
-            "cpu_simd" | "cpusimd" => actual::BundleAcceleration::CpuSimd,
+            "cpu_simd" => actual::BundleAcceleration::CpuSimd,
             "gpu" => actual::BundleAcceleration::Gpu,
             _ => {
                 emitter.emit(
@@ -6006,57 +5967,77 @@ pub struct Gas {
     pub units_per_gas: Vec<GasRate>,
 }
 impl Gas {
-    fn parse(self) -> actual::Gas {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Gas {
         actual::Gas {
             tech_account_id: self.tech_account_id,
             accepted_assets: self.accepted_assets,
             units_per_gas: self
                 .units_per_gas
                 .into_iter()
-                .map(|r| {
+                .filter_map(|r| {
                     let asset = r.asset;
-                    let twap = r
-                        .twap_local_per_xor
-                        .as_deref()
-                        .map_or_else(Numeric::one, |value| {
-                            let parsed = Numeric::from_str(value).unwrap_or_else(|error| {
-                                panic!(
-                                    "invalid pipeline.gas.units_per_gas twap `{value}` for asset `{asset}`: {error}"
-                                )
-                            });
-                            assert!(
-                                parsed > Numeric::zero(),
-                                "invalid pipeline.gas.units_per_gas twap `{value}` for asset `{asset}`: value must be positive"
-                            );
-                            parsed
-                        });
-                    let liquidity = r.liquidity_profile.as_deref().map_or_else(
-                        actual::GasLiquidity::default,
-                        |value| {
-                            actual::GasLiquidity::from_str(value).unwrap_or_else(|()| {
-                                panic!(
-                                    "invalid pipeline.gas.units_per_gas liquidity `{value}` for asset `{asset}`"
-                                )
-                            })
+                    let twap = match r.twap_local_per_xor.as_deref() {
+                        None => Some(Numeric::one()),
+                        Some(value) => match Numeric::from_str(value) {
+                            Ok(parsed) if parsed > Numeric::zero() => Some(parsed),
+                            Ok(_) => {
+                                emitter.emit(
+                                    Report::new(ParseError::InvalidPipelineConfig).attach(format!(
+                                        "pipeline.gas.units_per_gas twap `{value}` for asset `{asset}` must be positive"
+                                    )),
+                                );
+                                None
+                            }
+                            Err(error) => {
+                                emitter.emit(
+                                    Report::new(ParseError::InvalidPipelineConfig).attach(format!(
+                                        "invalid pipeline.gas.units_per_gas twap `{value}` for asset `{asset}`: {error}"
+                                    )),
+                                );
+                                None
+                            }
                         },
-                    );
-                    let volatility = r.volatility_class.as_deref().map_or_else(
-                        actual::GasVolatility::default,
-                        |value| {
-                            actual::GasVolatility::from_str(value).unwrap_or_else(|()| {
-                                panic!(
-                                    "invalid pipeline.gas.units_per_gas volatility `{value}` for asset `{asset}`"
-                                )
-                            })
+                    };
+                    let liquidity = match r.liquidity_profile.as_deref() {
+                        None => Some(actual::GasLiquidity::default()),
+                        Some(value) => match actual::GasLiquidity::from_str(value) {
+                            Ok(parsed) => Some(parsed),
+                            Err(()) => {
+                                emitter.emit(
+                                    Report::new(ParseError::InvalidPipelineConfig).attach(format!(
+                                        "invalid pipeline.gas.units_per_gas liquidity `{value}` for asset `{asset}`; expected exactly `tier1`, `tier2`, or `tier3`"
+                                    )),
+                                );
+                                None
+                            }
                         },
-                    );
-                    actual::GasRate {
+                    };
+                    let volatility = match r.volatility_class.as_deref() {
+                        None => Some(actual::GasVolatility::default()),
+                        Some(value) => match actual::GasVolatility::from_str(value) {
+                            Ok(parsed) => Some(parsed),
+                            Err(()) => {
+                                emitter.emit(
+                                    Report::new(ParseError::InvalidPipelineConfig).attach(format!(
+                                        "invalid pipeline.gas.units_per_gas volatility `{value}` for asset `{asset}`; expected exactly `stable`, `elevated`, or `dislocated`"
+                                    )),
+                                );
+                                None
+                            }
+                        },
+                    };
+                    let (Some(twap), Some(liquidity), Some(volatility)) =
+                        (twap, liquidity, volatility)
+                    else {
+                        return None;
+                    };
+                    Some(actual::GasRate {
                         asset,
                         units_per_gas: r.units_per_gas,
                         twap_local_per_xor: twap,
                         liquidity,
                         volatility,
-                    }
+                    })
                 })
                 .collect(),
         }
@@ -6075,6 +6056,35 @@ pub struct GasRate {
     pub liquidity_profile: Option<String>,
     /// Override for the volatility bucket (`stable`, `elevated`, `dislocated`).
     pub volatility_class: Option<String>,
+}
+#[cfg(test)]
+mod gas_parse_error_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_gas_rate_labels_emit_errors_without_unwinding() {
+        for (twap, liquidity, volatility) in [
+            (Some("invalid"), Some("tier1"), Some("stable")),
+            (Some("1"), Some("deep"), Some("stable")),
+            (Some("1"), Some("tier1"), Some("calm")),
+        ] {
+            let gas = Gas {
+                tech_account_id: "system".to_owned(),
+                accepted_assets: vec!["xor#universal".to_owned()],
+                units_per_gas: vec![GasRate {
+                    asset: "xor#universal".to_owned(),
+                    units_per_gas: 1,
+                    twap_local_per_xor: twap.map(str::to_owned),
+                    liquidity_profile: liquidity.map(str::to_owned),
+                    volatility_class: volatility.map(str::to_owned),
+                }],
+            };
+            let mut emitter = Emitter::new();
+            let parsed = gas.parse(&mut emitter);
+            assert!(parsed.units_per_gas.is_empty());
+            assert!(emitter.into_result().is_err());
+        }
+    }
 }
 /// User-level configuration container for `Genesis`.
 #[derive(Debug, ReadConfig)]
@@ -6174,7 +6184,7 @@ pub struct SumeragiQueues {
 pub struct SumeragiStorage {
     /// Aggregate checksummed body-frame bytes retained for one active height.
     #[config(default = "defaults::sumeragi::BODY_STORE_MAX_BYTES_PER_HEIGHT")]
-    pub body_store_max_bytes_per_height: Bytes<u64>,
+    pub body_store_max_bytes_per_height: Bytes,
 }
 /// User-facing finite runtime bounds for Sumeragi v2 lane, merge, and Native AMX services.
 #[derive(Debug, Clone, Copy, ReadConfig)]
@@ -6711,7 +6721,8 @@ impl SoranetHandshake {
         // overrides. Origin and exact-match checks ensure operator-supplied
         // vectors remain authoritative and are validated strictly by P2P.
         if client_uses_defaults {
-            // First TLV: snnet.pqkem (u16 type, u16 length, u8 KEM id).
+            // First TLV: snnet.pqkem. Replace the preferred KEM and retain the
+            // remaining canonical fallback list from the default vector.
             client_capabilities[4] = kem_id;
         }
         if relay_uses_defaults {
@@ -7787,11 +7798,11 @@ pub struct Network {
     /// Enable QUIC transport (feature-gated).
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
-    /// Enable QUIC DATAGRAM support for best-effort topics (feature-gated by QUIC).
+    /// Request QUIC DATAGRAM support for best-effort topics (feature-gated by QUIC).
     ///
-    /// When enabled and QUIC is negotiated, small best-effort frames (gossip/health)
-    /// may be sent over QUIC datagrams instead of streams to avoid retransmission and
-    /// head-of-line blocking.
+    /// The first-release runtime rejects `true` while the locked Quinn receive
+    /// queue lacks fixed per-entry accounting. Leave this disabled so gossip
+    /// and health frames use their reliable-stream fallback.
     #[config(default = "defaults::network::QUIC_DATAGRAMS_ENABLED")]
     pub quic_datagrams_enabled: bool,
     /// Upper bound (bytes) for QUIC datagram payloads.
@@ -7823,17 +7834,31 @@ pub struct Network {
     /// Note: this list must be empty when `p2p_proxy_required=true`.
     #[config(default)]
     pub p2p_no_proxy: Vec<String>,
+    /// CIDR ranges that outbound peer and proxy dials may resolve to.
+    ///
+    /// Empty permits every range not explicitly denied.
+    #[config(default)]
+    pub outbound_dial_allow_cidrs: Vec<String>,
+    /// CIDR ranges that outbound peer and proxy dials must never reach.
+    #[config(default)]
+    pub outbound_dial_deny_cidrs: Vec<String>,
+    /// DNS suffixes allowed for outbound peer and proxy dials.
+    ///
+    /// Empty permits every valid DNS name not explicitly denied.
+    #[config(default)]
+    pub outbound_dial_allow_dns_suffixes: Vec<String>,
+    /// DNS suffixes denied for outbound peer and proxy dials.
+    #[config(default)]
+    pub outbound_dial_deny_dns_suffixes: Vec<String>,
     /// Verify an `https://` proxy hop (default: true).
     ///
-    /// When enabled, the proxy connection uses certificate pinning via
-    /// `p2p_proxy_tls_pinned_cert_der_base64`. If no pin is configured, dialing an `https://`
-    /// proxy fails. When disabled, the proxy hop is encrypted but susceptible to MITM (which can
-    /// leak proxy credentials).
+    /// HTTPS proxy dials require this to remain enabled and require an exact leaf-certificate
+    /// pin in `p2p_proxy_tls_pinned_cert_der_base64`; invalid settings fail before connecting.
     #[config(default = "true")]
     pub p2p_proxy_tls_verify: bool,
     /// Optional pinned end-entity certificate for `https://` proxies (DER, base64).
     ///
-    /// When `p2p_proxy_tls_verify` is enabled, the dialer pins the proxy certificate to this value.
+    /// Every HTTPS proxy dial pins the proxy leaf certificate to this value.
     pub p2p_proxy_tls_pinned_cert_der_base64: Option<String>,
     /// Optional interval to refresh DNS hostnames (when `public_address` is a hostname).
     /// Disabled if not set. Useful to catch IP changes faster.
@@ -8061,6 +8086,10 @@ impl Network {
             p2p_proxy,
             p2p_proxy_required,
             p2p_no_proxy,
+            outbound_dial_allow_cidrs,
+            outbound_dial_deny_cidrs,
+            outbound_dial_allow_dns_suffixes,
+            outbound_dial_deny_dns_suffixes,
             p2p_proxy_tls_verify,
             p2p_proxy_tls_pinned_cert_der_base64,
             p2p_queue_cap_high,
@@ -8130,15 +8159,17 @@ impl Network {
         if matches!(relay_mode, RelayMode::Spoke | RelayMode::Assist)
             && relay_hub_addresses.is_empty()
         {
-            panic!(
-                "network.relay_hub_addresses must be set when network.relay_mode is spoke or assist"
-            );
+            emitter.emit(Report::new(ParseError::InvalidNetworkConfig).attach(
+                "network.relay_hub_addresses must be set when network.relay_mode is spoke or assist",
+            ));
         }
         if transaction_gossip_size > defaults::network::TRANSACTION_GOSSIP_MAX_SIZE {
-            panic!(
-                "network.transaction_gossip_size must not exceed the canonical per-message maximum of {}, got {}",
-                defaults::network::TRANSACTION_GOSSIP_MAX_SIZE,
-                transaction_gossip_size,
+            emitter.emit(
+                Report::new(ParseError::InvalidNetworkConfig).attach(format!(
+                    "network.transaction_gossip_size must not exceed the canonical per-message maximum of {}, got {}",
+                    defaults::network::TRANSACTION_GOSSIP_MAX_SIZE,
+                    transaction_gossip_size,
+                )),
             );
         }
         let transaction_gossip_restricted_target_cap = transaction_gossip_restricted_target_cap
@@ -8178,7 +8209,14 @@ impl Network {
         let soranet_handshake = soranet_handshake.parse(emitter);
         let soranet_privacy = user_soranet_privacy.parse(emitter);
         let soranet_vpn = soranet_vpn.parse();
-        let lane_profile = actual::LaneProfile::from_label(&lane_profile);
+        let lane_profile = actual::LaneProfile::parse_label(&lane_profile).unwrap_or_else(|| {
+            emitter.emit(
+                Report::new(ParseError::InvalidNetworkConfig).attach(format!(
+                    "network.lane_profile must be exactly `core` or `home`, got `{lane_profile}`"
+                )),
+            );
+            actual::LaneProfile::Core
+        });
         let limits = lane_profile.derived_limits();
         let max_incoming = max_incoming.or(limits.max_incoming);
         let max_total_connections = max_total_connections.or(limits.max_total_connections);
@@ -8186,35 +8224,30 @@ impl Network {
             low_priority_rate_per_sec.or(limits.low_priority_rate_per_sec);
         let low_priority_bytes_per_sec =
             low_priority_bytes_per_sec.or(limits.low_priority_bytes_per_sec);
-        let restricted_fallback = match transaction_gossip_restricted_fallback
-            .to_ascii_lowercase()
-            .as_str()
-        {
+        let restricted_fallback = match transaction_gossip_restricted_fallback.as_str() {
             "drop" => actual::DataspaceGossipFallback::Drop,
             "public_overlay" => actual::DataspaceGossipFallback::UsePublicOverlay,
-            other => panic!(
-                "transaction_gossip_restricted_fallback must be drop|public_overlay, got {other}"
-            ),
+            other => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidNetworkConfig).attach(format!(
+                        "network.transaction_gossip_restricted_fallback must be exactly `drop` or `public_overlay`, got `{other}`"
+                    )),
+                );
+                actual::DataspaceGossipFallback::Drop
+            }
         };
-        let _restricted_public_payload = match transaction_gossip_restricted_public_payload
-            .to_ascii_lowercase()
-            .as_str()
+        let restricted_public_payload = match transaction_gossip_restricted_public_payload.as_str()
         {
             "refuse" => actual::RestrictedPublicPayload::Refuse,
             "forward" => actual::RestrictedPublicPayload::Forward,
-            other => panic!(
-                "transaction_gossip_restricted_public_payload must be refuse|forward, got {other}"
-            ),
-        };
-        let restricted_public_payload = match transaction_gossip_restricted_public_payload
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "refuse" => actual::RestrictedPublicPayload::Refuse,
-            "forward" => actual::RestrictedPublicPayload::Forward,
-            other => panic!(
-                "transaction_gossip_restricted_public_payload must be refuse|forward, got {other}"
-            ),
+            other => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidNetworkConfig).attach(format!(
+                        "network.transaction_gossip_restricted_public_payload must be exactly `refuse` or `forward`, got `{other}`"
+                    )),
+                );
+                actual::RestrictedPublicPayload::Refuse
+            }
         };
         let min_interval = MIN_TIMER_INTERVAL;
         let idle_timeout = idle_timeout.get().max(min_interval);
@@ -8275,6 +8308,10 @@ impl Network {
                 p2p_proxy,
                 p2p_proxy_required,
                 p2p_no_proxy,
+                outbound_dial_allow_cidrs,
+                outbound_dial_deny_cidrs,
+                outbound_dial_allow_dns_suffixes,
+                outbound_dial_deny_dns_suffixes,
                 p2p_proxy_tls_verify,
                 p2p_proxy_tls_pinned_cert_der_base64,
                 quic_enabled,
@@ -8982,10 +9019,6 @@ pub struct Streaming {
     pub session_store_dir: WithOrigin<PathBuf>,
     /// Feature bitmask advertised during streaming capability negotiation.
     pub feature_bits: WithOrigin<u32>,
-    /// Optional overrides for SoraNet circuit integration defaults.
-    pub soranet: Option<WithOrigin<StreamingSoranet>>,
-    /// Optional overrides for SoraVPN provisioning spools.
-    pub soravpn: Option<WithOrigin<StreamingSoravpn>>,
     /// Optional overrides for audio/video sync enforcement.
     pub sync: Option<WithOrigin<StreamingSync>>,
     /// Optional codec overrides (CABAC gating, trellis scopes, rANS tables).
@@ -9031,14 +9064,6 @@ impl ReadConfigTrait for Streaming {
             .read_parameter::<u32>(["feature_bits"])
             .value_or_else(|| 0)
             .finish_with_origin();
-        let soranet = reader
-            .read_parameter::<StreamingSoranet>(["soranet"])
-            .value_optional()
-            .finish_with_origin();
-        let soravpn = reader
-            .read_parameter::<StreamingSoravpn>(["soravpn"])
-            .value_optional()
-            .finish_with_origin();
         let sync = reader
             .read_parameter::<StreamingSync>(["sync"])
             .value_optional()
@@ -9056,8 +9081,6 @@ impl ReadConfigTrait for Streaming {
             identity_private_key_file: identity_private_key_file.unwrap(),
             session_store_dir: session_store_dir.unwrap(),
             feature_bits: feature_bits.unwrap(),
-            soranet: soranet.unwrap(),
-            soravpn: soravpn.unwrap(),
             sync: sync.unwrap(),
             codec: codec.unwrap(),
         })
@@ -9070,8 +9093,6 @@ impl Streaming {
         identity: &KeyPair,
         emitter: &mut Emitter<ParseError>,
     ) -> Option<actual::Streaming> {
-        let soranet_overrides = self.soranet.clone().map(WithOrigin::into_tuple);
-        let soravpn_overrides = self.soravpn.clone().map(WithOrigin::into_tuple);
         let sync_overrides = self.sync.clone().map(WithOrigin::into_tuple);
         let codec_overrides = self.codec.clone().map(WithOrigin::into_tuple);
         let streaming_identity = self.resolve_identity(identity, emitter)?;
@@ -9094,20 +9115,10 @@ impl Streaming {
         }
         let store_dir = self.session_store_dir.into_value();
         let feature_bits = self.feature_bits.into_value();
-        let soranet = match soranet_overrides {
-            Some((overrides, _origin)) => overrides.parse(emitter)?,
-            None => actual::StreamingSoranet::from_defaults(),
-        };
-        let soravpn = match soravpn_overrides {
-            Some((overrides, _origin)) => overrides.parse(emitter)?,
-            None => actual::StreamingSoravpn::from_defaults(),
-        };
         Some(actual::Streaming {
             key_material,
             session_store_dir: store_dir,
             feature_bits,
-            soranet,
-            soravpn,
             sync: match sync_overrides {
                 Some((sync_cfg, _origin)) => sync_cfg.parse(emitter)?,
                 None => actual::StreamingSync::from_defaults(),
@@ -9408,199 +9419,6 @@ impl StreamingSync {
         Some(config)
     }
 }
-/// SoraNet integration defaults surfaced in user configuration.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
-pub struct StreamingSoranet {
-    #[config(default = "defaults::streaming::soranet::ENABLED")]
-    /// Reserved SoraNet exit-publication switch; V1 rejects `true`.
-    pub enabled: bool,
-    #[config(default = "defaults::streaming::soranet::EXIT_MULTIADDR.to_string()")]
-    /// Default exit relay multi-address.
-    pub exit_multiaddr: WithOrigin<String>,
-    #[config(default = "defaults::streaming::soranet::padding_budget_ms()")]
-    /// Optional padding jitter budget expressed in milliseconds.
-    pub padding_budget_ms: WithOrigin<Option<u16>>,
-    #[config(default = "defaults::streaming::soranet::ACCESS_KIND.to_string()")]
-    /// Access policy applied when establishing SoraNet circuits.
-    pub access_kind: WithOrigin<String>,
-    /// Optional override hashed into blinded channel identifiers.
-    pub channel_salt: Option<WithOrigin<String>>,
-    #[config(default = "PathBuf::from(defaults::streaming::soranet::PROVISION_SPOOL_DIR)")]
-    /// Reserved spool path; V1 never creates or writes it.
-    pub provision_spool_dir: WithOrigin<PathBuf>,
-    /// Reserved spool budget; unused while V1 publication is disabled.
-    #[config(default = "defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES")]
-    pub provision_spool_max_bytes: WithOrigin<Bytes<u64>>,
-    /// Segment window (inclusive) used when provisioning privacy routes.
-    #[config(default = "defaults::streaming::soranet::PROVISION_WINDOW_SEGMENTS")]
-    pub provision_window_segments: WithOrigin<u64>,
-    /// Maximum number of queued privacy-route provisioning jobs.
-    #[config(default = "defaults::streaming::soranet::PROVISION_QUEUE_CAPACITY")]
-    pub provision_queue_capacity: WithOrigin<u64>,
-}
-impl StreamingSoranet {
-    /// Convert user-supplied overrides into runtime defaults.
-    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::StreamingSoranet> {
-        let mut config = actual::StreamingSoranet::from_defaults();
-        if self.enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig).attach(
-                    "streaming.soranet.enabled cannot be enabled in V1: token-bearing filesystem exit publication requires RouteOpen proof and durable revocation tombstones",
-                ),
-            );
-            return None;
-        }
-        config.enabled = self.enabled;
-        let (exit_multiaddr, exit_origin) = self.exit_multiaddr.into_tuple();
-        if exit_multiaddr.trim().is_empty() {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach("streaming.soranet.exit_multiaddr must not be empty")
-                    .attach(ConfigValueAndOrigin::new(exit_multiaddr, exit_origin)),
-            );
-            return None;
-        }
-        config.exit_multiaddr = exit_multiaddr;
-        let (padding_budget_ms, _padding_origin) = self.padding_budget_ms.into_tuple();
-        config.padding_budget_ms = padding_budget_ms;
-        let (access_label, access_origin) = self.access_kind.into_tuple();
-        if let Ok(kind) = access_label.parse::<actual::StreamingSoranetAccessKind>() {
-            config.access_kind = kind;
-        } else {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach(format!(
-                        "unknown streaming.soranet.access_kind `{access_label}`; expected `authenticated` or `read-only`"
-                    ))
-                    .attach(ConfigValueAndOrigin::new(access_label, access_origin)),
-            );
-            return None;
-        }
-        if let Some(channel_salt) = self.channel_salt {
-            let (label, origin) = channel_salt.into_tuple();
-            if label.trim().is_empty() {
-                emitter.emit(
-                    Report::new(ParseError::InvalidStreamingConfig)
-                        .attach("streaming.soranet.channel_salt must not be empty when provided")
-                        .attach(ConfigValueAndOrigin::new(label, origin)),
-                );
-                return None;
-            }
-            config.channel_salt = label;
-        }
-        let (spool_dir, spool_origin) = self.provision_spool_dir.into_tuple();
-        if spool_dir.as_os_str().is_empty() {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach("streaming.soranet.provision_spool_dir must not be empty")
-                    .attach(ConfigValueAndOrigin::new(
-                        spool_dir.to_string_lossy().into_owned(),
-                        spool_origin,
-                    )),
-            );
-            return None;
-        }
-        config.provision_spool_dir = spool_dir;
-        let (spool_max_bytes, _spool_max_origin) = self.provision_spool_max_bytes.into_tuple();
-        config.provision_spool_max_bytes = spool_max_bytes;
-        let (window_segments, window_origin) = self.provision_window_segments.into_tuple();
-        if window_segments == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach("streaming.soranet.provision_window_segments must be greater than zero")
-                    .attach(ConfigValueAndOrigin::new(
-                        window_segments.to_string(),
-                        window_origin,
-                    )),
-            );
-            return None;
-        }
-        config.provision_window_segments = window_segments;
-        let (queue_capacity, queue_origin) = self.provision_queue_capacity.into_tuple();
-        if queue_capacity == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach("streaming.soranet.provision_queue_capacity must be greater than zero")
-                    .attach(ConfigValueAndOrigin::new(
-                        queue_capacity.to_string(),
-                        queue_origin,
-                    )),
-            );
-            return None;
-        }
-        if usize::try_from(queue_capacity).is_err() {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach(
-                        "streaming.soranet.provision_queue_capacity must fit the platform usize",
-                    )
-                    .attach(ConfigValueAndOrigin::new(
-                        queue_capacity.to_string(),
-                        queue_origin,
-                    )),
-            );
-            return None;
-        }
-        config.provision_queue_capacity = queue_capacity;
-        Some(config)
-    }
-}
-/// SoraVPN provisioning spools surfaced in user configuration.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
-pub struct StreamingSoravpn {
-    #[config(default = "PathBuf::from(defaults::streaming::soravpn::PROVISION_SPOOL_DIR)")]
-    /// Directory where SoraVPN route updates are spooled for local VPN nodes.
-    pub provision_spool_dir: WithOrigin<PathBuf>,
-    /// Maximum on-disk footprint for the SoraVPN provision spool (0 = unlimited).
-    #[config(default = "defaults::streaming::soravpn::PROVISION_SPOOL_MAX_BYTES")]
-    pub provision_spool_max_bytes: WithOrigin<Bytes<u64>>,
-}
-impl StreamingSoravpn {
-    /// Convert user-supplied overrides into runtime defaults.
-    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::StreamingSoravpn> {
-        let mut config = actual::StreamingSoravpn::from_defaults();
-        let (spool_dir, spool_origin) = self.provision_spool_dir.into_tuple();
-        if spool_dir.as_os_str().is_empty() {
-            emitter.emit(
-                Report::new(ParseError::InvalidStreamingConfig)
-                    .attach("streaming.soravpn.provision_spool_dir must not be empty")
-                    .attach(ConfigValueAndOrigin::new(
-                        spool_dir.to_string_lossy().into_owned(),
-                        spool_origin,
-                    )),
-            );
-            return None;
-        }
-        config.provision_spool_dir = spool_dir;
-        let (spool_max_bytes, _spool_max_origin) = self.provision_spool_max_bytes.into_tuple();
-        config.provision_spool_max_bytes = spool_max_bytes;
-        Some(config)
-    }
-}
-#[cfg(test)]
-#[path = "user/streaming_soranet_tests.rs"]
-mod streaming_soranet_tests;
-#[cfg(test)]
-mod streaming_soravpn_tests {
-    use super::*;
-    #[test]
-    fn streaming_soravpn_rejects_empty_spool_dir() {
-        let mut emitter = Emitter::<ParseError>::new();
-        let config = StreamingSoravpn {
-            provision_spool_dir: WithOrigin::inline(PathBuf::new()),
-            provision_spool_max_bytes: WithOrigin::inline(Bytes(0)),
-        };
-        assert!(config.parse(&mut emitter).is_none());
-        let err = emitter
-            .into_result()
-            .expect_err("empty spool dir must be rejected");
-        let debug = format!("{err:?}");
-        assert!(
-            debug.contains("streaming.soravpn.provision_spool_dir"),
-            "unexpected error payload: {debug}"
-        );
-    }
-}
 /// Cryptography configuration (user view).
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Crypto {
@@ -9613,7 +9431,7 @@ pub struct Crypto {
     /// SM intrinsic dispatch policy (`auto`, `force-enable`, `force-disable`).
     #[config(
         env = "CRYPTO_SM_INTRINSICS",
-        default = "SmIntrinsicsPolicyConfig::from(defaults::crypto::SM_INTRINSICS_POLICY)"
+        default = "defaults::crypto::SM_INTRINSICS_POLICY.parse().expect(\"valid SM intrinsics policy default\")"
     )]
     pub sm_intrinsics: SmIntrinsicsPolicyConfig,
     /// Default hash algorithm identifier (e.g., `blake2b-256`, `sm3-256`).
@@ -9890,13 +9708,13 @@ pub struct NexusStorage {
     ///
     /// When omitted, `irohad` derives a filesystem-aware budget at runtime without modifying the
     /// operator configuration.
-    pub local_budget_bytes: Option<Bytes<u64>>,
+    pub local_budget_bytes: Option<Bytes>,
     /// Block interval between disk budget enforcement scans (0 = every block).
     #[config(default = "defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS")]
     pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     #[config(default = "defaults::nexus::storage::MAX_WSV_MEMORY_BYTES")]
-    pub max_wsv_memory_bytes: Bytes<u64>,
+    pub max_wsv_memory_bytes: Bytes,
     /// Budget weights for dividing the disk cap across subsystems.
     #[config(nested)]
     pub disk_budget_weights: NexusStorageWeights,
@@ -9925,8 +9743,6 @@ impl NexusStorage {
                 weights.kura_blocks_bps,
                 weights.wsv_snapshots_bps,
                 weights.sorafs_bps,
-                weights.soranet_spool_bps,
-                weights.soravpn_spool_bps,
             ]
             .into_iter()
             .map(|weight| {
@@ -9969,35 +9785,23 @@ pub struct NexusStorageWeights {
     /// Budget share for SoraFS storage (basis points).
     #[config(default = "defaults::nexus::storage::SORAFS_BPS")]
     pub sorafs_bps: u16,
-    /// Budget share for SoraNet route spools (basis points).
-    #[config(default = "defaults::nexus::storage::SORANET_SPOOL_BPS")]
-    pub soranet_spool_bps: u16,
-    /// Budget share reserved for future SoraVPN storage (basis points).
-    #[config(default = "defaults::nexus::storage::SORAVPN_SPOOL_BPS")]
-    pub soravpn_spool_bps: u16,
 }
 impl_default!(NexusStorageWeights {
     kura_blocks_bps: defaults::nexus::storage::KURA_BLOCKS_BPS,
     wsv_snapshots_bps: defaults::nexus::storage::WSV_SNAPSHOTS_BPS,
     sorafs_bps: defaults::nexus::storage::SORAFS_BPS,
-    soranet_spool_bps: defaults::nexus::storage::SORANET_SPOOL_BPS,
-    soravpn_spool_bps: defaults::nexus::storage::SORAVPN_SPOOL_BPS,
 });
 impl NexusStorageWeights {
     fn total_bps(&self) -> u32 {
         u32::from(self.kura_blocks_bps)
             + u32::from(self.wsv_snapshots_bps)
             + u32::from(self.sorafs_bps)
-            + u32::from(self.soranet_spool_bps)
-            + u32::from(self.soravpn_spool_bps)
     }
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorageWeights> {
         if let Some((field, _)) = [
             ("kura_blocks_bps", self.kura_blocks_bps),
             ("wsv_snapshots_bps", self.wsv_snapshots_bps),
             ("sorafs_bps", self.sorafs_bps),
-            ("soranet_spool_bps", self.soranet_spool_bps),
-            ("soravpn_spool_bps", self.soravpn_spool_bps),
         ]
         .into_iter()
         .find(|(_, weight)| *weight == 0)
@@ -10019,8 +9823,6 @@ impl NexusStorageWeights {
             kura_blocks_bps: self.kura_blocks_bps,
             wsv_snapshots_bps: self.wsv_snapshots_bps,
             sorafs_bps: self.sorafs_bps,
-            soranet_spool_bps: self.soranet_spool_bps,
-            soravpn_spool_bps: self.soravpn_spool_bps,
         })
     }
 }
@@ -14034,7 +13836,7 @@ pub struct Torii {
     pub address: WithOrigin<SocketAddr>,
     /// Maximum HTTP payload size accepted by the API.
     #[config(default = "defaults::torii::MAX_CONTENT_LEN")]
-    pub max_content_len: Bytes<u64>,
+    pub max_content_len: Bytes,
     /// Base directory for Torii persistence (attachments, webhooks, DA queues).
     #[config(default = "defaults::torii::data_dir()")]
     pub data_dir: PathBuf,
@@ -14061,7 +13863,7 @@ pub struct Torii {
     pub query_heavy_max_inflight: NonZeroUsize,
     /// Aggregate bytes for signed-query ingress and cross-dataspace fanout.
     #[config(default = "defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES")]
-    pub query_fanout_max_retained_bytes: Bytes<u64>,
+    pub query_fanout_max_retained_bytes: Bytes,
     /// Absolute deadline for reading one admitted App API routed-read body.
     #[config(default = "app_routed_read_config::default_body_timeout()")]
     pub app_api_routed_read_body_read_timeout_ms: DurationMs,
@@ -14119,7 +13921,7 @@ pub struct Torii {
     pub soracloud_public_max_inflight: NonZeroUsize,
     /// Maximum hosted Soracloud response body buffered for P2P proxy forwarding.
     #[config(default = "defaults::torii::SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES")]
-    pub soracloud_public_max_response_bytes: Bytes<u64>,
+    pub soracloud_public_max_response_bytes: Bytes,
     /// Signed Soracloud mutation rate per account+origin (tokens/sec). None disables.
     pub soracloud_mutation_rate_per_account_origin_per_sec: Option<u32>,
     /// Signed Soracloud mutation burst per account+origin (tokens). None disables.
@@ -14129,14 +13931,14 @@ pub struct Torii {
     pub soracloud_mutation_max_inflight: NonZeroUsize,
     /// Maximum signed Soracloud mutation body size before signature verification.
     #[config(default = "defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES")]
-    pub soracloud_mutation_max_body_bytes: Bytes<u64>,
+    pub soracloud_mutation_max_body_bytes: Bytes,
     /// Proof endpoint steady-state rate (requests per minute). None disables.
     pub proof_rate_per_minute: Option<u32>,
     /// Proof endpoint burst tokens (requests).
     pub proof_burst: Option<u32>,
     /// Maximum proof request payload size (bytes).
     #[config(default = "defaults::torii::PROOF_MAX_BODY_BYTES")]
-    pub proof_max_body_bytes: Bytes<u64>,
+    pub proof_max_body_bytes: Bytes,
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
     ///
     /// This aggregate gate also covers SCCP bridge proof/message submissions.
@@ -14399,7 +14201,7 @@ pub struct Torii {
         env = "TORII_ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES",
         default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES"
     )]
-    pub zk_ivm_prove_job_max_retained_bytes: Bytes<u64>,
+    pub zk_ivm_prove_job_max_retained_bytes: Bytes,
     /// Maximum number of retained `/v1/zk/ivm/prove` jobs for one authenticated account.
     ///
     /// Set to 0 to disable the per-account count cap (not recommended).
@@ -14415,7 +14217,7 @@ pub struct Torii {
         env = "TORII_ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER",
         default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER"
     )]
-    pub zk_ivm_prove_job_max_retained_bytes_per_owner: Bytes<u64>,
+    pub zk_ivm_prove_job_max_retained_bytes_per_owner: Bytes,
     /// Push notification configuration (feature-gated in runtime).
     #[config(nested)]
     pub push: ToriiPush,
@@ -14488,7 +14290,7 @@ pub struct ToriiBootleLanternIssuer {
     pub max_records: usize,
     /// Maximum reserved canonical authorization-store bytes.
     #[config(default = "defaults::torii::privacy_bootle_lantern_issuer::MAX_TOTAL_BYTES")]
-    pub max_total_bytes: Bytes<u64>,
+    pub max_total_bytes: Bytes,
     /// Terminal records retained after their authoritative horizon.
     #[config(
         default = "defaults::torii::privacy_bootle_lantern_issuer::TERMINAL_RETENTION_BLOCKS"
@@ -14867,10 +14669,11 @@ impl ToriiPush {
                 .unwrap_or(nonzero!(1_usize)),
             fcm_project_id: trim_optional(self.fcm_project_id),
             fcm_service_account_path: self.fcm_service_account_path,
-            apns_environment: if self.apns_environment.trim().is_empty() {
-                defaults::torii::PUSH_APNS_ENVIRONMENT.to_owned()
-            } else {
-                self.apns_environment.trim().to_ascii_lowercase()
+            apns_environment: match self.apns_environment.as_str() {
+                "sandbox" | "production" => self.apns_environment,
+                value => panic!(
+                    "torii.push.apns_environment must be exactly `sandbox` or `production`, got `{value}`"
+                ),
             },
             apns_topic: trim_optional(self.apns_topic),
             apns_team_id: trim_optional(self.apns_team_id),
@@ -14929,7 +14732,7 @@ mod torii_push_tests {
             max_topics_per_device: 0,
             fcm_project_id: Some("  taira-mobile  ".to_owned()),
             fcm_service_account_path: Some(PathBuf::from("/run/secrets/fcm.json")),
-            apns_environment: "  PRODUCTION  ".to_owned(),
+            apns_environment: "production".to_owned(),
             apns_topic: Some("  org.sora.wallet  ".to_owned()),
             apns_team_id: Some("  TEAMID  ".to_owned()),
             apns_key_id: Some("  KEYID  ".to_owned()),
@@ -14961,33 +14764,69 @@ mod torii_push_tests {
             Some("https://apns.internal.example")
         );
     }
+    #[test]
+    fn torii_push_rejects_noncanonical_apns_environment_labels() {
+        for apns_environment in ["", " PRODUCTION ", "Production", "sandbox "] {
+            let config = ToriiPush {
+                apns_environment: apns_environment.to_owned(),
+                ..ToriiPush::default()
+            };
+            assert!(
+                std::panic::catch_unwind(|| config.parse()).is_err(),
+                "{apns_environment:?} must fail closed"
+            );
+        }
+    }
 }
 impl Torii {
     fn parse_receipt_signer(
         receipt_public_key: Option<&PublicKey>,
         receipt_private_key: Option<&PrivateKey>,
+        emitter: &mut Emitter<ParseError>,
     ) -> Option<KeyPair> {
         match (receipt_public_key, receipt_private_key) {
             (None, None) => None,
             (Some(_), None) => {
-                panic!(
-                    "torii.receipt_private_key must be set when torii.receipt_public_key is set"
+                emit_torii_config_error(
+                    emitter,
+                    "torii.receipt_private_key must be set when torii.receipt_public_key is set",
                 );
+                None
             }
             (None, Some(_)) => {
-                panic!(
-                    "torii.receipt_public_key must be set when torii.receipt_private_key is set"
+                emit_torii_config_error(
+                    emitter,
+                    "torii.receipt_public_key must be set when torii.receipt_private_key is set",
                 );
+                None
             }
             (Some(public_key), Some(private_key)) => {
-                let key_pair = KeyPair::new(public_key.clone(), private_key.clone())
-                    .unwrap_or_else(|err| panic!("invalid torii receipt key pair: {err}"));
-                let algorithm = key_pair
-                    .public_key()
-                    .try_algorithm()
-                    .unwrap_or_else(|err| panic!("invalid torii receipt public key: {err}"));
+                let key_pair = match KeyPair::new(public_key.clone(), private_key.clone()) {
+                    Ok(key_pair) => key_pair,
+                    Err(err) => {
+                        emit_torii_config_error(
+                            emitter,
+                            format!("invalid torii receipt key pair: {err}"),
+                        );
+                        return None;
+                    }
+                };
+                let algorithm = match key_pair.public_key().try_algorithm() {
+                    Ok(algorithm) => algorithm,
+                    Err(err) => {
+                        emit_torii_config_error(
+                            emitter,
+                            format!("invalid torii receipt public key: {err}"),
+                        );
+                        return None;
+                    }
+                };
                 if matches!(algorithm, Algorithm::BlsNormal | Algorithm::BlsSmall) {
-                    panic!("torii.receipt_* must not use BLS keys; use ed25519 or secp256k1");
+                    emit_torii_config_error(
+                        emitter,
+                        "torii.receipt_* must not use BLS keys; use ed25519 or secp256k1",
+                    );
+                    return None;
                 }
                 Some(key_pair)
             }
@@ -15235,7 +15074,16 @@ impl Torii {
         let receipt_signer = Self::parse_receipt_signer(
             self.receipt_public_key.as_ref(),
             self.receipt_private_key.as_ref(),
+            emitter,
         );
+        let operator_auth = self.operator_auth.parse(emitter);
+        let attachments_sanitizer_mode = parse_attachment_sanitizer_mode(
+            &self.attachments_sanitizer_mode,
+        )
+        .unwrap_or_else(|message| {
+            emit_torii_config_error(emitter, message);
+            actual::AttachmentSanitizerMode::Subprocess
+        });
         let torii = actual::Torii {
             address: self.address,
             max_content_len: self.max_content_len,
@@ -15330,7 +15178,7 @@ impl Torii {
             soranet_privacy_ingest: self.soranet_privacy_ingest.parse(),
             privacy_bootle_lantern_issuer,
             debug_match_filters: self.debug_match_filters,
-            operator_auth: self.operator_auth.parse(),
+            operator_auth,
             operator_signatures: self.operator_signatures.parse(),
             preauth_max_connections: self
                 .preauth_max_connections
@@ -15376,9 +15224,7 @@ impl Torii {
             attachments_allowed_mime_types: self.attachments_allowed_mime_types,
             attachments_max_expanded_bytes: self.attachments_max_expanded_bytes,
             attachments_max_archive_depth: self.attachments_max_archive_depth,
-            attachments_sanitizer_mode: parse_attachment_sanitizer_mode(
-                &self.attachments_sanitizer_mode,
-            ),
+            attachments_sanitizer_mode,
             attachments_sanitize_timeout_ms: self.attachments_sanitize_timeout_ms,
             zk_prover_enabled: self.zk_prover_enabled,
             zk_prover_scan_period_secs: self.zk_prover_scan_period_secs,
@@ -15413,8 +15259,8 @@ impl Torii {
             sorafs_gateway,
             sorafs_por,
             sorafs_appeal_finance_settlement,
-            transport: self.transport.into(),
-            mcp: self.mcp.into(),
+            transport: self.transport.parse(emitter),
+            mcp: self.mcp.parse(emitter),
             cors: self.cors.parse(emitter),
             webhook,
             webhook_security,
@@ -15425,12 +15271,12 @@ impl Torii {
             faucet: self.faucet.and_then(|config| config.parse(emitter)),
             kagemusha_commands: self
                 .kagemusha_commands
-                .and_then(ToriiKagemushaCommands::parse),
+                .and_then(|config| config.parse(emitter)),
             ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
             tx_history: self.tx_history.map(ToriiTxHistory::parse),
             recipient_lookup: self
                 .recipient_lookup
-                .map(ToriiRecipientLookup::parse)
+                .and_then(|config| config.parse(emitter))
                 .unwrap_or_default(),
             app_api: actual::AppApi {
                 default_list_limit,
@@ -15463,8 +15309,14 @@ mod torii_receipt_signer_tests {
         )
         .expect("fixture seed derives Torii receipt Ed25519 keypair");
         let private_key = key_pair.private_key().clone();
-        let parsed = Torii::parse_receipt_signer(Some(key_pair.public_key()), Some(&private_key))
-            .expect("receipt signer");
+        let mut emitter = Emitter::new();
+        let parsed = Torii::parse_receipt_signer(
+            Some(key_pair.public_key()),
+            Some(&private_key),
+            &mut emitter,
+        )
+        .expect("receipt signer");
+        emitter.into_result().expect("valid receipt signer");
         assert_eq!(
             parsed
                 .public_key()
@@ -15472,6 +15324,23 @@ mod torii_receipt_signer_tests {
                 .expect("receipt signer public key is valid"),
             Algorithm::Ed25519
         );
+    }
+
+    #[test]
+    fn torii_receipt_signer_reports_incomplete_key_pair() {
+        let key_pair = KeyPair::try_from_seed(
+            b"iroha:config:test:torii-receipt-signer-incomplete".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("fixture seed derives Torii receipt Ed25519 keypair");
+        let mut emitter = Emitter::new();
+        assert!(
+            Torii::parse_receipt_signer(Some(key_pair.public_key()), None, &mut emitter).is_none()
+        );
+        let error = emitter
+            .into_result()
+            .expect_err("incomplete receipt signer must be rejected");
+        assert!(format!("{error:?}").contains("receipt_private_key must be set"));
     }
 }
 include!("user/torii_tx_history.rs");
@@ -15494,28 +15363,64 @@ pub struct ToriiRecipientLookup {
     pub routes: Vec<ToriiRecipientLookupRoute>,
 }
 impl ToriiRecipientLookup {
-    fn parse(self) -> actual::ToriiRecipientLookup {
-        let policy_id = self
-            .policy_id
-            .parse()
-            .unwrap_or_else(|err| panic!("invalid torii.recipient_lookup.policy_id: {err}"));
-        assert!(
-            (1..=defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE)
-                .contains(&self.requests_per_minute),
-            "torii.recipient_lookup.requests_per_minute must be between 1 and {}",
-            defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE,
-        );
-        actual::ToriiRecipientLookup {
-            policy_id,
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiRecipientLookup> {
+        let mut valid = true;
+        let policy_id = match self.policy_id.parse() {
+            Ok(policy_id) => Some(policy_id),
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!("invalid torii.recipient_lookup.policy_id: {err}"),
+                );
+                valid = false;
+                None
+            }
+        };
+        if !(1..=defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE)
+            .contains(&self.requests_per_minute)
+        {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.recipient_lookup.requests_per_minute must be between 1 and {}",
+                    defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE,
+                ),
+            );
+            valid = false;
+        }
+        if self.request_timeout_ms.get().is_zero() {
+            emit_torii_config_error(
+                emitter,
+                "torii.recipient_lookup.request_timeout_ms must be greater than zero",
+            );
+            valid = false;
+        }
+        let mut route_ids = BTreeSet::new();
+        let mut routes = Vec::with_capacity(self.routes.len());
+        for (index, route) in self.routes.into_iter().enumerate() {
+            if let Some(route) = route.parse(index, emitter) {
+                if !route_ids.insert(route.fi_id.clone()) {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.recipient_lookup.routes contains duplicate FI id `{}`",
+                            route.fi_id
+                        ),
+                    );
+                    valid = false;
+                } else {
+                    routes.push(route);
+                }
+            } else {
+                valid = false;
+            }
+        }
+        valid.then(|| actual::ToriiRecipientLookup {
+            policy_id: policy_id.expect("validated recipient lookup policy id"),
             requests_per_minute: self.requests_per_minute,
             request_timeout: self.request_timeout_ms.get(),
-            routes: self
-                .routes
-                .into_iter()
-                .enumerate()
-                .map(|(index, route)| route.parse(index))
-                .collect(),
-        }
+            routes,
+        })
     }
 }
 /// Single bank Core API route used by the retail recipient lookup endpoint.
@@ -15529,23 +15434,37 @@ pub struct ToriiRecipientLookupRoute {
     pub bearer_token: String,
 }
 impl ToriiRecipientLookupRoute {
-    fn parse(self, index: usize) -> actual::ToriiRecipientLookupRoute {
-        let fi_id = match self.fi_id.trim().to_ascii_lowercase().as_str() {
-            "hbl.sbp" => "hbl.sbp".to_owned(),
-            "ubl.sbp" => "ubl.sbp".to_owned(),
-            other => panic!(
-                "invalid torii.recipient_lookup.routes[{index}].fi_id `{other}`; expected `hbl.sbp` or `ubl.sbp`"
-            ),
+    fn parse(
+        self,
+        index: usize,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::ToriiRecipientLookupRoute> {
+        let fi_id = match self.fi_id.as_str() {
+            "hbl.sbp" | "ubl.sbp" => self.fi_id,
+            _ => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "invalid torii.recipient_lookup.routes[{index}].fi_id `{}`; expected exactly `hbl.sbp` or `ubl.sbp`",
+                        self.fi_id
+                    ),
+                );
+                return None;
+            }
         };
         let bearer_token = self.bearer_token.trim().to_owned();
         if bearer_token.is_empty() {
-            panic!("torii.recipient_lookup.routes[{index}].bearer_token must not be empty");
+            emit_torii_config_error(
+                emitter,
+                format!("torii.recipient_lookup.routes[{index}].bearer_token must not be empty"),
+            );
+            return None;
         }
-        actual::ToriiRecipientLookupRoute {
+        Some(actual::ToriiRecipientLookupRoute {
             fi_id,
             base_url: self.base_url,
             bearer_token,
-        }
+        })
     }
 }
 #[cfg(test)]
@@ -15553,17 +15472,20 @@ mod torii_recipient_lookup_tests {
     use super::*;
     #[test]
     fn torii_recipient_lookup_parse_accepts_canonical_fi_routes() {
+        let mut emitter = Emitter::new();
         let parsed = ToriiRecipientLookup {
             policy_id: "cbuae_aed_sbp_pkr".to_owned(),
             requests_per_minute: 30,
             request_timeout_ms: DurationMs(Duration::from_millis(750)),
             routes: vec![ToriiRecipientLookupRoute {
-                fi_id: " HBL.SBP ".to_owned(),
+                fi_id: "hbl.sbp".to_owned(),
                 base_url: Url::parse("https://core-api.example/hbl.sbp").expect("valid URL"),
                 bearer_token: " service-token ".to_owned(),
             }],
         }
-        .parse();
+        .parse(&mut emitter)
+        .expect("valid recipient lookup");
+        emitter.into_result().expect("valid recipient lookup");
         assert_eq!(parsed.request_timeout, Duration::from_millis(750));
         assert_eq!(parsed.policy_id.as_ref(), "cbuae_aed_sbp_pkr");
         assert_eq!(parsed.requests_per_minute, 30);
@@ -15577,8 +15499,49 @@ mod torii_recipient_lookup_tests {
             base_url: Url::parse("https://core-api.example/hbl").expect("valid URL"),
             bearer_token: "service-token".to_owned(),
         };
-        let panic = std::panic::catch_unwind(|| route.parse(0));
-        assert!(panic.is_err(), "expected short FI id to panic");
+        let mut emitter = Emitter::new();
+        assert!(route.parse(0, &mut emitter).is_none());
+        let error = emitter.into_result().expect_err("reject short FI id");
+        assert!(format!("{error:?}").contains("expected exactly `hbl.sbp` or `ubl.sbp`"));
+    }
+    #[test]
+    fn torii_recipient_lookup_rejects_noncanonical_fi_labels() {
+        for fi_id in ["HBL.SBP", " hbl.sbp", "hbl.sbp "] {
+            let route = ToriiRecipientLookupRoute {
+                fi_id: fi_id.to_owned(),
+                base_url: Url::parse("https://bank.example").expect("valid URL"),
+                bearer_token: "secret".to_owned(),
+            };
+            let mut emitter = Emitter::new();
+            assert!(route.parse(0, &mut emitter).is_none());
+            let _error = emitter
+                .into_result()
+                .expect_err("noncanonical FI id must fail closed");
+        }
+    }
+
+    #[test]
+    fn torii_recipient_lookup_rejects_zero_timeout_and_duplicate_routes() {
+        let route = ToriiRecipientLookupRoute {
+            fi_id: "hbl.sbp".to_owned(),
+            base_url: Url::parse("https://bank.example").expect("valid URL"),
+            bearer_token: "secret".to_owned(),
+        };
+        let mut emitter = Emitter::new();
+        let parsed = ToriiRecipientLookup {
+            policy_id: "cbuae_aed_sbp_pkr".to_owned(),
+            requests_per_minute: 1,
+            request_timeout_ms: DurationMs(Duration::ZERO),
+            routes: vec![route.clone(), route],
+        }
+        .parse(&mut emitter);
+        assert!(parsed.is_none());
+        let error = emitter
+            .into_result()
+            .expect_err("unsafe recipient lookup must be rejected");
+        let error = format!("{error:?}");
+        assert!(error.contains("request_timeout_ms must be greater than zero"));
+        assert!(error.contains("duplicate FI id `hbl.sbp`"));
     }
 }
 /// Operator request-signature authentication configuration for Torii operator endpoints.
@@ -15695,9 +15658,17 @@ pub struct ToriiOperatorWebAuthn {
     pub allowed_algorithms: Vec<String>,
 }
 impl ToriiOperatorAuth {
-    fn parse(self) -> actual::ToriiOperatorAuth {
-        let token_fallback = parse_operator_token_fallback(&self.token_fallback);
-        let token_source = parse_operator_token_source(&self.token_source);
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::ToriiOperatorAuth {
+        let token_fallback =
+            parse_operator_token_fallback(&self.token_fallback).unwrap_or_else(|message| {
+                emit_torii_config_error(emitter, message);
+                actual::OperatorTokenFallback::Disabled
+            });
+        let token_source =
+            parse_operator_token_source(&self.token_source).unwrap_or_else(|message| {
+                emit_torii_config_error(emitter, message);
+                actual::OperatorTokenSource::OperatorTokens
+            });
         let rate_per_minute = self
             .rate_per_minute
             .or(super::defaults::torii::operator_auth::RATE_PER_MIN)
@@ -15710,13 +15681,14 @@ impl ToriiOperatorAuth {
         let lockout_window = Duration::from_secs(self.lockout_window_secs.max(1));
         let lockout_duration = Duration::from_secs(self.lockout_duration_secs.max(1));
         let webauthn = if self.enabled {
-            self.webauthn.parse()
+            self.webauthn.parse(emitter)
         } else {
             None
         };
         if self.enabled && webauthn.is_none() {
-            panic!(
-                "torii.operator_auth.webauthn.enabled must be true when operator auth is enabled"
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn must be valid and enabled when operator auth is enabled",
             );
         }
         actual::ToriiOperatorAuth {
@@ -15738,50 +15710,119 @@ impl ToriiOperatorAuth {
     }
 }
 impl ToriiOperatorWebAuthn {
-    fn parse(self) -> Option<actual::OperatorWebAuthnConfig> {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::OperatorWebAuthnConfig> {
         if !self.enabled {
             return None;
         }
+        let mut invalid = false;
         let rp_id = self.rp_id.unwrap_or_else(|| {
-            panic!("torii.operator_auth.webauthn.rp_id must be set when WebAuthn is enabled");
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn.rp_id must be set when WebAuthn is enabled",
+            );
+            String::new()
         });
-        validate_webauthn_rp_id_v1(&rp_id).unwrap_or_else(|error| {
-            panic!(
-                "torii.operator_auth.webauthn.rp_id must be a canonical V1 DNS relying-party id: {error:?}"
-            )
-        });
+        if let Err(error) = validate_webauthn_rp_id_v1(&rp_id) {
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.operator_auth.webauthn.rp_id must be a canonical V1 DNS relying-party id: {error:?}"
+                ),
+            );
+        }
         if self.origins.is_empty() {
-            panic!("torii.operator_auth.webauthn.origins must not be empty");
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn.origins must not be empty",
+            );
         }
         let mut unique_origins = BTreeSet::new();
         let origins = self
             .origins
             .into_iter()
-            .map(|origin| {
+            .filter_map(|origin| {
                 if !unique_origins.insert(origin.clone()) {
-                    panic!(
-                        "torii.operator_auth.webauthn.origins must not contain duplicate origins"
+                    invalid = true;
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.operator_auth.webauthn.origins contains duplicate origin `{origin}`"
+                        ),
                     );
+                    return None;
                 }
-                validate_webauthn_origin_v1(&origin, &rp_id).unwrap_or_else(|error| {
-                    panic!(
-                        "invalid torii.operator_auth.webauthn.origins entry `{origin}`: {error:?}"
-                    )
-                });
-                url::Url::parse(&origin).unwrap_or_else(|err| {
-                    panic!("invalid torii.operator_auth.webauthn.origins entry `{origin}`: {err}")
-                })
+                if let Err(error) = validate_webauthn_origin_v1(&origin, &rp_id) {
+                    invalid = true;
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "invalid torii.operator_auth.webauthn.origins entry `{origin}`: {error:?}"
+                        ),
+                    );
+                    return None;
+                }
+                match url::Url::parse(&origin) {
+                    Ok(origin) => Some(origin),
+                    Err(error) => {
+                        invalid = true;
+                        emit_torii_config_error(
+                            emitter,
+                            format!(
+                                "invalid torii.operator_auth.webauthn.origins entry `{origin}`: {error}"
+                            ),
+                        );
+                        None
+                    }
+                }
             })
             .collect();
         let user_id = self.user_id.into_bytes();
         if user_id.is_empty() || user_id.len() > 64 {
-            panic!("torii.operator_auth.webauthn.user_id must be 1..=64 bytes");
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn.user_id must be 1..=64 bytes",
+            );
         }
         let algorithms = self
             .allowed_algorithms
             .into_iter()
-            .map(|label| parse_operator_webauthn_algorithm(&label))
-            .collect();
+            .filter_map(|label| match parse_operator_webauthn_algorithm(&label) {
+                Ok(algorithm) => Some(algorithm),
+                Err(message) => {
+                    invalid = true;
+                    emit_torii_config_error(emitter, message);
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        if algorithms.is_empty() {
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn.allowed_algorithms must not be empty",
+            );
+        }
+        if self.challenge_ttl_secs == 0 {
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn.challenge_ttl_secs must be greater than zero",
+            );
+        }
+        if self.session_ttl_secs == 0 {
+            invalid = true;
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.webauthn.session_ttl_secs must be greater than zero",
+            );
+        }
+        if invalid {
+            return None;
+        }
         Some(actual::OperatorWebAuthnConfig {
             rp_id,
             rp_name: self.rp_name,
@@ -15789,8 +15830,8 @@ impl ToriiOperatorWebAuthn {
             user_id,
             user_name: self.user_name,
             user_display_name: self.user_display_name,
-            challenge_ttl: Duration::from_secs(self.challenge_ttl_secs.max(1)),
-            session_ttl: Duration::from_secs(self.session_ttl_secs.max(1)),
+            challenge_ttl: Duration::from_secs(self.challenge_ttl_secs),
+            session_ttl: Duration::from_secs(self.session_ttl_secs),
             require_user_verification: self.require_user_verification,
             allowed_algorithms: algorithms,
         })
@@ -15819,7 +15860,13 @@ mod torii_operator_webauthn_tests {
     }
     #[test]
     fn operator_webauthn_accepts_exact_rp_and_subdomain_origins() {
-        let parsed = valid_config().parse().expect("enabled WebAuthn policy");
+        let mut emitter = Emitter::new();
+        let parsed = valid_config()
+            .parse(&mut emitter)
+            .expect("enabled WebAuthn policy");
+        emitter
+            .into_result()
+            .expect("valid WebAuthn configuration must not emit errors");
         assert_eq!(parsed.rp_id, "review.example");
         assert_eq!(
             parsed.origins.iter().map(Url::as_str).collect::<Vec<_>>(),
@@ -15834,10 +15881,9 @@ mod torii_operator_webauthn_tests {
         for rp_id in ["Review.example", "localhost", "127.0.0.1"] {
             let mut config = valid_config();
             config.rp_id = Some(rp_id.to_owned());
-            assert!(
-                std::panic::catch_unwind(|| config.parse()).is_err(),
-                "{rp_id:?} must fail closed"
-            );
+            let mut emitter = Emitter::new();
+            assert!(config.parse(&mut emitter).is_none(), "{rp_id:?}");
+            assert!(emitter.into_result().is_err(), "{rp_id:?}");
         }
         for origin in [
             "http://review.example",
@@ -15850,55 +15896,98 @@ mod torii_operator_webauthn_tests {
         ] {
             let mut config = valid_config();
             config.origins = vec![origin.to_owned()];
-            assert!(
-                std::panic::catch_unwind(|| config.parse()).is_err(),
-                "{origin:?} must fail closed"
-            );
+            let mut emitter = Emitter::new();
+            assert!(config.parse(&mut emitter).is_none(), "{origin:?}");
+            assert!(emitter.into_result().is_err(), "{origin:?}");
         }
         let mut duplicate = valid_config();
         duplicate.origins = vec![
             "https://review.example".to_owned(),
             "https://review.example".to_owned(),
         ];
-        assert!(std::panic::catch_unwind(|| duplicate.parse()).is_err());
+        let mut emitter = Emitter::new();
+        assert!(duplicate.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
     }
 }
-fn parse_operator_token_fallback(value: &str) -> actual::OperatorTokenFallback {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "disabled" => actual::OperatorTokenFallback::Disabled,
-        "bootstrap" => actual::OperatorTokenFallback::Bootstrap,
-        "always" => actual::OperatorTokenFallback::Always,
-        other => panic!(
+fn parse_operator_token_fallback(
+    value: &str,
+) -> core::result::Result<actual::OperatorTokenFallback, String> {
+    match value {
+        "disabled" => Ok(actual::OperatorTokenFallback::Disabled),
+        "bootstrap" => Ok(actual::OperatorTokenFallback::Bootstrap),
+        "always" => Ok(actual::OperatorTokenFallback::Always),
+        other => Err(format!(
             "invalid torii.operator_auth.token_fallback `{other}`; expected `disabled`, `bootstrap`, or `always`"
-        ),
+        )),
     }
 }
-fn parse_operator_token_source(value: &str) -> actual::OperatorTokenSource {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "operator" => actual::OperatorTokenSource::OperatorTokens,
-        "api" => actual::OperatorTokenSource::ApiTokens,
-        "both" => actual::OperatorTokenSource::Both,
-        other => panic!(
+fn parse_operator_token_source(
+    value: &str,
+) -> core::result::Result<actual::OperatorTokenSource, String> {
+    match value {
+        "operator" => Ok(actual::OperatorTokenSource::OperatorTokens),
+        "api" => Ok(actual::OperatorTokenSource::ApiTokens),
+        "both" => Ok(actual::OperatorTokenSource::Both),
+        other => Err(format!(
             "invalid torii.operator_auth.token_source `{other}`; expected `operator`, `api`, or `both`"
-        ),
+        )),
     }
 }
-fn parse_attachment_sanitizer_mode(value: &str) -> actual::AttachmentSanitizerMode {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "in_process" | "inprocess" | "inline" => actual::AttachmentSanitizerMode::InProcess,
-        "subprocess" | "external" | "process" => actual::AttachmentSanitizerMode::Subprocess,
-        other => panic!(
+fn parse_attachment_sanitizer_mode(
+    value: &str,
+) -> core::result::Result<actual::AttachmentSanitizerMode, String> {
+    match value {
+        "in_process" => Ok(actual::AttachmentSanitizerMode::InProcess),
+        "subprocess" => Ok(actual::AttachmentSanitizerMode::Subprocess),
+        other => Err(format!(
             "invalid torii.attachments_sanitizer_mode `{other}`; expected `subprocess` or `in_process`"
-        ),
+        )),
     }
 }
-fn parse_operator_webauthn_algorithm(value: &str) -> actual::OperatorWebAuthnAlgorithm {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "es256" | "p256" => actual::OperatorWebAuthnAlgorithm::Es256,
-        "ed25519" | "eddsa" => actual::OperatorWebAuthnAlgorithm::Ed25519,
-        other => panic!(
+fn parse_operator_webauthn_algorithm(
+    value: &str,
+) -> core::result::Result<actual::OperatorWebAuthnAlgorithm, String> {
+    match value {
+        "es256" => Ok(actual::OperatorWebAuthnAlgorithm::Es256),
+        "ed25519" => Ok(actual::OperatorWebAuthnAlgorithm::Ed25519),
+        other => Err(format!(
             "invalid torii.operator_auth.webauthn.allowed_algorithms entry `{other}`; expected `es256` or `ed25519`"
-        ),
+        )),
+    }
+}
+#[cfg(test)]
+mod exact_torii_label_tests {
+    use super::*;
+
+    #[test]
+    fn operator_and_sanitizer_labels_reject_aliases_and_normalization() {
+        parse_operator_token_fallback("disabled").expect("canonical fallback");
+        parse_operator_token_source("operator").expect("canonical source");
+        parse_attachment_sanitizer_mode("in_process").expect("canonical sanitizer");
+        parse_operator_webauthn_algorithm("es256").expect("canonical algorithm");
+
+        for invalid in ["DISABLED", " disabled", "disabled "] {
+            assert!(
+                parse_operator_token_fallback(invalid).is_err(),
+                "{invalid:?}"
+            );
+        }
+        for invalid in ["API", " api", "api "] {
+            assert!(parse_operator_token_source(invalid).is_err(), "{invalid:?}");
+        }
+        for invalid in ["inline", "inprocess", "external", "process", "IN_PROCESS"] {
+            assert!(
+                parse_attachment_sanitizer_mode(invalid).is_err(),
+                "{invalid:?}"
+            );
+        }
+        for invalid in ["p256", "eddsa", "ES256", " ed25519"] {
+            assert!(
+                parse_operator_webauthn_algorithm(invalid).is_err(),
+                "{invalid:?}"
+            );
+        }
     }
 }
 /// Transport-specific Torii configuration (Norito-RPC rollout, streaming knobs).
@@ -15939,7 +16028,7 @@ pub struct ToriiHttpTransport {
     pub max_headers: NonZeroUsize,
     /// Maximum HTTP/1 parser buffer, including the request head.
     #[config(default = "defaults::torii::transport::http::MAX_HEADER_BYTES")]
-    pub max_header_bytes: Bytes<u64>,
+    pub max_header_bytes: Bytes,
 }
 impl Default for ToriiHttpTransport {
     fn default() -> Self {
@@ -15988,6 +16077,43 @@ impl Default for ToriiNoritoRpcTransport {
         }
     }
 }
+impl ToriiNoritoRpcTransport {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::NoritoRpcTransport {
+        let stage = actual::NoritoRpcStage::parse(&self.stage).unwrap_or_else(|| {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.transport.norito_rpc.stage must be exactly `disabled`, `canary`, or `ga`, got `{}`",
+                    self.stage
+                ),
+            );
+            actual::NoritoRpcStage::Disabled
+        });
+        actual::NoritoRpcTransport {
+            enabled: self.enabled,
+            require_mtls: self.require_mtls,
+            mtls_trusted_proxy_cidrs: self.mtls_trusted_proxy_cidrs,
+            allowed_clients: self.allowed_clients,
+            stage,
+        }
+    }
+}
+impl ToriiTransport {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::ToriiTransport {
+        actual::ToriiTransport {
+            trusted_proxy_cidrs: self.trusted_proxy_cidrs,
+            http: actual::ToriiHttpTransport {
+                max_connections: self.http.max_connections,
+                max_connections_per_ip: self.http.max_connections_per_ip,
+                header_read_timeout: self.http.header_read_timeout_ms.get(),
+                write_timeout: self.http.write_timeout_ms.get(),
+                max_headers: self.http.max_headers,
+                max_header_bytes: self.http.max_header_bytes,
+            },
+            norito_rpc: self.norito_rpc.parse(emitter),
+        }
+    }
+}
 /// Native MCP endpoint configuration parameters.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiMcp {
@@ -16019,6 +16145,73 @@ pub struct ToriiMcp {
     pub rate_per_minute: Option<u32>,
     /// Optional MCP burst budget.
     pub burst: Option<u32>,
+}
+impl ToriiMcp {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::ToriiMcp {
+        let profile = actual::ToriiMcpProfile::parse(&self.profile).unwrap_or_else(|| {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.mcp.profile must be exactly `read_only`, `writer`, or `operator`, got `{}`",
+                    self.profile
+                ),
+            );
+            actual::ToriiMcpProfile::ReadOnly
+        });
+        actual::ToriiMcp {
+            enabled: self.enabled,
+            max_request_bytes: self.max_request_bytes.max(1),
+            max_tools_per_list: self.max_tools_per_list.max(1),
+            max_inflight_dispatches: NonZeroUsize::new(self.max_inflight_dispatches.max(1))
+                .expect("clamped MCP in-flight dispatch limit is non-zero"),
+            profile,
+            expose_operator_routes: self.expose_operator_routes,
+            allow_tool_prefixes: self.allow_tool_prefixes,
+            deny_tool_prefixes: self.deny_tool_prefixes,
+            rate_per_minute: self
+                .rate_per_minute
+                .or(defaults::torii::mcp::RATE_PER_MINUTE)
+                .and_then(NonZeroU32::new),
+            burst: self
+                .burst
+                .or(defaults::torii::mcp::BURST)
+                .and_then(NonZeroU32::new),
+        }
+    }
+}
+#[cfg(test)]
+mod exact_torii_transport_label_tests {
+    use super::*;
+
+    #[test]
+    fn rpc_and_mcp_aliases_emit_errors_without_unwinding() {
+        for stage in ["general", "general_availability", "GA", " ga"] {
+            let mut transport = ToriiTransport::default();
+            transport.norito_rpc.stage = stage.to_owned();
+            let mut emitter = Emitter::new();
+            let _ = transport.parse(&mut emitter);
+            assert!(emitter.into_result().is_err(), "{stage:?}");
+        }
+        for profile in ["readonly", "read-only", "write", "ops", "OPERATOR"] {
+            let mut mcp = ToriiMcp::default();
+            mcp.profile = profile.to_owned();
+            let mut emitter = Emitter::new();
+            let _ = mcp.parse(&mut emitter);
+            assert!(emitter.into_result().is_err(), "{profile:?}");
+        }
+    }
+
+    #[test]
+    fn mcp_inflight_dispatch_limit_is_never_zero() {
+        let mut mcp = ToriiMcp::default();
+        mcp.max_inflight_dispatches = 0;
+        let mut emitter = Emitter::new();
+        let actual = mcp.parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("the canonical default MCP profile is valid");
+        assert_eq!(actual.max_inflight_dispatches.get(), 1);
+    }
 }
 /// CORS response-header policy for Torii.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
@@ -17309,16 +17502,14 @@ impl ToriiFaucet {
     }
 }
 /// Kagemusha command-submission configuration for app-facing lifecycle routes.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+///
+/// The whole table is optional. When present, every policy and capacity field is required.
+#[derive(Debug, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct ToriiKagemushaCommands {
-    /// Master enable switch (defaults to enabled when the section is present).
-    #[config(default = "true")]
-    pub enabled: bool,
     /// Private key for the account submitting typed Kagemusha instructions.
-    #[config(env = "TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY")]
     pub private_key: Option<PrivateKey>,
     /// Owner-held file containing the Kagemusha command submitter's private key.
-    #[config(env = "TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY_FILE")]
     pub private_key_file: Option<WithOrigin<PathBuf>>,
     /// Minimum live XOR balance required for the self-funded command authority.
     ///
@@ -17326,74 +17517,138 @@ pub struct ToriiKagemushaCommands {
     /// positive operational funding floor.
     pub minimum_xor_balance: Quantity,
     /// Maximum value accepted for one Kagemusha command.
-    #[config(default = "defaults::torii::kagemusha_commands::max_tx_value()")]
     pub max_tx_value: Quantity,
     /// Maximum number of admitted and in-flight operations retained in memory.
-    #[config(default = "defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES")]
     pub operation_registry_max_entries: usize,
     /// Maximum canonical bytes reserved by admitted and in-flight operations.
-    #[config(default = "defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_BYTES")]
     pub operation_registry_max_bytes: usize,
 }
 impl ToriiKagemushaCommands {
-    fn parse(self) -> Option<actual::ToriiKagemushaCommands> {
-        if !self.enabled {
-            return None;
-        }
-        let private_key = match (self.private_key, self.private_key_file) {
-            (Some(_), Some(_)) => panic!(
-                "torii.kagemusha_commands.private_key and torii.kagemusha_commands.private_key_file are mutually exclusive"
-            ),
-            (Some(private_key), None) => private_key,
-            (None, Some(file)) => {
-                read_private_key_file(file, "torii.kagemusha_commands.private_key_file")
-                    .unwrap_or_else(|err| panic!("invalid Kagemusha command key file: {err}"))
-                    .0
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiKagemushaCommands> {
+        let Self {
+            private_key,
+            private_key_file,
+            minimum_xor_balance,
+            max_tx_value,
+            operation_registry_max_entries,
+            operation_registry_max_bytes,
+        } = self;
+        let private_key = match (private_key, private_key_file) {
+            (Some(_), Some(_)) => {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.kagemusha_commands.private_key and torii.kagemusha_commands.private_key_file are mutually exclusive",
+                );
+                None
             }
-            (None, None) => panic!(
-                "exactly one of torii.kagemusha_commands.private_key or torii.kagemusha_commands.private_key_file is required"
-            ),
+            (Some(private_key), None) => Some(private_key),
+            (None, Some(file)) => {
+                match read_private_key_file(file, "torii.kagemusha_commands.private_key_file") {
+                    Ok((private_key, _)) => Some(private_key),
+                    Err(error) => {
+                        emit_torii_config_error(emitter, error);
+                        None
+                    }
+                }
+            }
+            (None, None) => {
+                emit_torii_config_error(
+                    emitter,
+                    "exactly one of torii.kagemusha_commands.private_key or torii.kagemusha_commands.private_key_file is required",
+                );
+                None
+            }
         };
-        let key_pair = KeyPair::from_private_key(private_key.clone())
-            .unwrap_or_else(|err| panic!("invalid torii.kagemusha_commands.private_key: {err}"));
-        let algorithm = key_pair
-            .public_key()
-            .try_algorithm()
-            .unwrap_or_else(|err| panic!("invalid torii.kagemusha_commands.public_key: {err}"));
-        if !matches!(algorithm, Algorithm::Ed25519 | Algorithm::Secp256k1) {
-            panic!("torii.kagemusha_commands.private_key must use ed25519 or secp256k1");
-        }
-        if self.minimum_xor_balance.is_zero() {
-            panic!("torii.kagemusha_commands.minimum_xor_balance must be greater than zero");
-        }
-        if self.max_tx_value.is_zero() {
-            panic!("torii.kagemusha_commands.max_tx_value must be greater than zero");
-        }
-        let operation_registry_max_entries =
-            NonZeroUsize::new(self.operation_registry_max_entries).unwrap_or_else(|| {
-                panic!(
-                    "torii.kagemusha_commands.operation_registry_max_entries must be greater than zero"
-                )
-            });
-        let operation_registry_max_bytes =
-            NonZeroUsize::new(self.operation_registry_max_bytes).unwrap_or_else(|| {
-                panic!(
-                    "torii.kagemusha_commands.operation_registry_max_bytes must be greater than zero"
-                )
-            });
-        if operation_registry_max_bytes.get()
-            < defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
-        {
-            panic!(
-                "torii.kagemusha_commands.operation_registry_max_bytes must be at least {}",
-                defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+        let key_pair = private_key.and_then(|private_key| {
+            let key_pair = match KeyPair::from_private_key(private_key) {
+                Ok(key_pair) => key_pair,
+                Err(error) => {
+                    emit_torii_config_error(
+                        emitter,
+                        format!("invalid torii.kagemusha_commands.private_key: {error}"),
+                    );
+                    return None;
+                }
+            };
+            match key_pair.public_key().try_algorithm() {
+                Ok(Algorithm::Ed25519 | Algorithm::Secp256k1) => Some(key_pair),
+                Ok(_) => {
+                    emit_torii_config_error(
+                        emitter,
+                        "torii.kagemusha_commands.private_key must use ed25519 or secp256k1",
+                    );
+                    None
+                }
+                Err(error) => {
+                    emit_torii_config_error(
+                        emitter,
+                        format!("invalid torii.kagemusha_commands.public_key: {error}"),
+                    );
+                    None
+                }
+            }
+        });
+        let minimum_xor_balance_valid = !minimum_xor_balance.is_zero();
+        if !minimum_xor_balance_valid {
+            emit_torii_config_error(
+                emitter,
+                "torii.kagemusha_commands.minimum_xor_balance must be greater than zero",
             );
         }
+        let max_tx_value_valid = !max_tx_value.is_zero();
+        if !max_tx_value_valid {
+            emit_torii_config_error(
+                emitter,
+                "torii.kagemusha_commands.max_tx_value must be greater than zero",
+            );
+        }
+        let operation_registry_max_entries = NonZeroUsize::new(operation_registry_max_entries);
+        if operation_registry_max_entries.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.kagemusha_commands.operation_registry_max_entries must be greater than zero",
+            );
+        }
+        let operation_registry_max_bytes = NonZeroUsize::new(operation_registry_max_bytes);
+        if operation_registry_max_bytes.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.kagemusha_commands.operation_registry_max_bytes must be greater than zero",
+            );
+        } else if operation_registry_max_bytes.is_some_and(|limit| {
+            limit.get()
+                < defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+        }) {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.kagemusha_commands.operation_registry_max_bytes must be at least {}",
+                    defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+                ),
+            );
+            return None;
+        }
+        let (
+            Some(key_pair),
+            true,
+            true,
+            Some(operation_registry_max_entries),
+            Some(operation_registry_max_bytes),
+        ) = (
+            key_pair,
+            minimum_xor_balance_valid,
+            max_tx_value_valid,
+            operation_registry_max_entries,
+            operation_registry_max_bytes,
+        )
+        else {
+            return None;
+        };
         Some(actual::ToriiKagemushaCommands {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
-            minimum_xor_balance: self.minimum_xor_balance,
-            max_tx_value: self.max_tx_value,
+            minimum_xor_balance,
+            max_tx_value,
             operation_registry_max_entries,
             operation_registry_max_bytes,
         })
@@ -17759,7 +18014,7 @@ pub struct IsoBridge {
     #[config(default = "defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES")]
     #[norito(default = "defaults::torii::iso_bridge_max_body_bytes")]
     /// Maximum request body accepted by an ISO 20022 submission endpoint.
-    pub max_body_bytes: Bytes<u64>,
+    pub max_body_bytes: Bytes,
     #[config(
         env = "ISO_BRIDGE_DEDUPE_TTL_SECS",
         default = "defaults::torii::ISO_BRIDGE_DEDUPE_TTL_SECS"
@@ -18424,12 +18679,11 @@ mod da_rent_policy_tests {
     }
 }
 fn parse_blob_class(value: &str) -> BlobClass {
-    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
-    match normalized.as_str() {
-        "taikai_segment" | "taikai" => BlobClass::TaikaiSegment,
-        "nexus_lane_sidecar" | "lane_sidecar" | "sidecar" => BlobClass::NexusLaneSidecar,
-        "governance_artifact" | "governance" => BlobClass::GovernanceArtifact,
-        _ => normalized.strip_prefix("custom:").map_or_else(
+    match value {
+        "taikai_segment" => BlobClass::TaikaiSegment,
+        "nexus_lane_sidecar" => BlobClass::NexusLaneSidecar,
+        "governance_artifact" => BlobClass::GovernanceArtifact,
+        _ => value.strip_prefix("custom:").map_or_else(
             || {
                 panic!("unsupported blob class `{value}`");
             },
@@ -18451,7 +18705,7 @@ fn format_blob_class(class: BlobClass) -> String {
     }
 }
 fn parse_taikai_availability_class(value: &str) -> TaikaiAvailabilityClass {
-    match value.trim().to_ascii_lowercase().as_str() {
+    match value {
         "hot" => TaikaiAvailabilityClass::Hot,
         "warm" => TaikaiAvailabilityClass::Warm,
         "cold" => TaikaiAvailabilityClass::Cold,
@@ -18467,7 +18721,7 @@ fn format_taikai_availability_class(class: TaikaiAvailabilityClass) -> String {
     .to_string()
 }
 fn parse_storage_class(value: &str) -> SorafsStorageClass {
-    match value.trim().to_ascii_lowercase().as_str() {
+    match value {
         "hot" => SorafsStorageClass::Hot,
         "warm" => SorafsStorageClass::Warm,
         "cold" => SorafsStorageClass::Cold,
@@ -18479,6 +18733,43 @@ fn storage_class_to_str(class: SorafsStorageClass) -> &'static str {
         SorafsStorageClass::Hot => "hot",
         SorafsStorageClass::Warm => "warm",
         SorafsStorageClass::Cold => "cold",
+    }
+}
+#[cfg(test)]
+mod exact_da_label_tests {
+    use super::*;
+
+    #[test]
+    fn da_class_labels_reject_aliases_case_and_whitespace() {
+        assert_eq!(parse_blob_class("taikai_segment"), BlobClass::TaikaiSegment);
+        assert_eq!(
+            parse_taikai_availability_class("hot"),
+            TaikaiAvailabilityClass::Hot
+        );
+        assert_eq!(parse_storage_class("warm"), SorafsStorageClass::Warm);
+
+        for invalid in [
+            "taikai",
+            "sidecar",
+            "governance",
+            "TAIKAI_SEGMENT",
+            " taikai_segment",
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| parse_blob_class(invalid)).is_err(),
+                "{invalid:?}"
+            );
+        }
+        for invalid in ["HOT", " hot", "hot "] {
+            assert!(
+                std::panic::catch_unwind(|| parse_taikai_availability_class(invalid)).is_err(),
+                "{invalid:?}"
+            );
+            assert!(
+                std::panic::catch_unwind(|| parse_storage_class(invalid)).is_err(),
+                "{invalid:?}"
+            );
+        }
     }
 }
 /// User-facing Taikai anchoring configuration.
@@ -20108,12 +20399,12 @@ pub struct SorafsModerationOrchestrator {
     pub max_submit_attempts: u16,
     /// Maximum canonical checkpoint size.
     #[config(default = "defaults::sorafs::storage::moderation_orchestrator::CHECKPOINT_MAX_BYTES")]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
     /// Maximum canonical panel-notification archive artifact size.
     #[config(
         default = "defaults::sorafs::storage::moderation_orchestrator::PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES"
     )]
-    pub panel_notification_archive_max_bytes: Bytes<u64>,
+    pub panel_notification_archive_max_bytes: Bytes,
     /// Finalized reconciliation and maintenance cadence.
     #[config(default = "defaults::sorafs::storage::moderation_orchestrator::WORKER_INTERVAL_MS")]
     pub worker_interval_ms: u64,
@@ -20743,7 +21034,7 @@ pub struct SorafsEvidenceViewerConfig {
     pub checkpoint_path: PathBuf,
     /// Maximum canonical checkpoint size.
     #[config(default = "defaults::sorafs::storage::evidence_viewer::CHECKPOINT_MAX_BYTES")]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
     /// Identity-pinned authoritative checkpoint-store runtime handle.
     pub checkpoint_store_handle: Option<String>,
     /// Exact non-zero checkpoint-store adapter and public-policy revision.
@@ -20761,7 +21052,7 @@ pub struct SorafsEvidenceViewerConfig {
     pub challenge_ttl_ms: u64,
     /// Maximum authenticated plaintext range.
     #[config(default = "defaults::sorafs::storage::evidence_viewer::MAX_RANGE_BYTES")]
-    pub max_range_bytes: Bytes<u64>,
+    pub max_range_bytes: Bytes,
     /// Maximum retained challenges.
     #[config(default = "defaults::sorafs::storage::evidence_viewer::MAX_CHALLENGES")]
     pub max_challenges: u32,
@@ -21369,7 +21660,7 @@ pub struct SorafsProviderIngestOutboxConfig {
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::CHECKPOINT_MAX_BYTES"
     )]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
     /// Deadline for one external sealed-checkpoint operation, in milliseconds.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::CHECKPOINT_OPERATION_TIMEOUT_MS"
@@ -21400,7 +21691,7 @@ pub struct SorafsProviderIngestOutboxConfig {
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::MAX_SIGNED_TRANSACTION_BYTES"
     )]
-    pub max_signed_transaction_bytes: Bytes<u64>,
+    pub max_signed_transaction_bytes: Bytes,
     /// Maximum payload-free rows returned by one status page.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::MAX_STATUS_PAGE_SIZE"
@@ -21441,7 +21732,7 @@ pub struct SorafsProviderIngestFinalizedArchiveConfig {
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::finalized_archive::MAX_RECORD_BYTES"
     )]
-    pub max_record_bytes: Bytes<u64>,
+    pub max_record_bytes: Bytes,
     /// Maximum immutable anchor records admitted by one archive namespace.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::finalized_archive::MAX_ARCHIVE_ENTRIES"
@@ -21451,7 +21742,7 @@ pub struct SorafsProviderIngestFinalizedArchiveConfig {
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::finalized_archive::MAX_TOTAL_BYTES"
     )]
-    pub max_total_bytes: Bytes<u64>,
+    pub max_total_bytes: Bytes,
     /// Maximum provider projections admitted at one finalized anchor.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::finalized_archive::MAX_PROVIDERS_PER_ANCHOR"
@@ -21816,7 +22107,7 @@ pub struct SorafsProviderAttestationJournalConfig {
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::CHECKPOINT_MAX_BYTES"
     )]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
     /// Maximum CAS conflicts retried by one journal operation.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::MAX_CAS_RETRIES"
@@ -23444,12 +23735,12 @@ pub struct SorafsReputationRuntimeConfig {
     #[config(
         default = "defaults::sorafs::storage::reputation_runtime::INGEST_CHECKPOINT_MAX_BYTES"
     )]
-    pub ingest_checkpoint_max_bytes: Bytes<u64>,
+    pub ingest_checkpoint_max_bytes: Bytes,
     /// Maximum canonical publication checkpoint size.
     #[config(
         default = "defaults::sorafs::storage::reputation_runtime::PUBLICATION_CHECKPOINT_MAX_BYTES"
     )]
-    pub publication_checkpoint_max_bytes: Bytes<u64>,
+    pub publication_checkpoint_max_bytes: Bytes,
     /// Governed PoR-success weight.
     #[config(default = "defaults::sorafs::storage::reputation_runtime::POR_SUCCESS_BPS")]
     pub por_success_bps: u16,
@@ -24154,7 +24445,7 @@ pub struct SorafsReserveTransparencyRuntimeConfig {
     #[config(
         default = "defaults::sorafs::storage::reserve_transparency_runtime::CHECKPOINT_MAX_BYTES"
     )]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
 }
 impl Default for SorafsReserveTransparencyRuntimeConfig {
     fn default() -> Self {
@@ -25225,7 +25516,7 @@ pub struct SorafsStorage {
     pub data_dir: PathBuf,
     /// Maximum on-disk capacity allotted to stored chunks (bytes).
     #[config(default = "defaults::sorafs::storage::MAX_CAPACITY_BYTES")]
-    pub max_capacity_bytes: Bytes<u64>,
+    pub max_capacity_bytes: Bytes,
     /// Maximum number of fetch streams served concurrently.
     #[config(default = "defaults::sorafs::storage::MAX_PARALLEL_FETCHES")]
     pub max_parallel_fetches: usize,
@@ -25240,7 +25531,7 @@ pub struct SorafsStorage {
     pub pdp_sample_window: u16,
     /// Aggregate in-memory budget for canonical PDP tree indexes.
     #[config(default = "defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES")]
-    pub pdp_tree_memory_limit_bytes: Bytes<u64>,
+    pub pdp_tree_memory_limit_bytes: Bytes,
     /// Enables authenticated moderation-screening admission.
     #[config(default = "defaults::sorafs::storage::MODERATION_SCREENING_ENABLED")]
     pub moderation_screening_enabled: bool,
@@ -25957,10 +26248,10 @@ pub struct SorafsGovernanceDagService {
     pub dns_timeout_ms: u64,
     /// Maximum accepted remote response body.
     #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_RESPONSE_BYTES")]
-    pub max_response_bytes: Bytes<u64>,
+    pub max_response_bytes: Bytes,
     /// Maximum local block, head, or CAR request payload.
     #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_REQUEST_BYTES")]
-    pub max_request_bytes: Bytes<u64>,
+    pub max_request_bytes: Bytes,
     /// Maximum accepted future clock skew for blocks and heads.
     #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_FUTURE_SKEW_SECS")]
     pub max_future_skew_secs: u64,
@@ -27192,13 +27483,13 @@ pub struct SorafsPdpProviderPolicy {
     pub max_terminal_records: u32,
     /// Maximum canonical durable checkpoint size.
     #[config(default = "defaults::sorafs::storage::pdp_provider::CHECKPOINT_MAX_BYTES")]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
     /// Maximum canonical challenge payload size.
     #[config(default = "defaults::sorafs::storage::pdp_provider::CHALLENGE_MAX_BYTES")]
-    pub challenge_max_bytes: Bytes<u64>,
+    pub challenge_max_bytes: Bytes,
     /// Maximum canonical proof payload size.
     #[config(default = "defaults::sorafs::storage::pdp_provider::PROOF_MAX_BYTES")]
-    pub proof_max_bytes: Bytes<u64>,
+    pub proof_max_bytes: Bytes,
     /// Minimum governed challenge response window in seconds.
     #[config(default = "defaults::sorafs::storage::pdp_provider::MIN_RESPONSE_WINDOW_SECS")]
     pub min_response_window_secs: u64,
@@ -27294,7 +27585,7 @@ pub struct SorafsRuntimeRetentionConfig {
     pub state_entry_limit: usize,
     /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
     #[config(default = "defaults::sorafs::storage::RUNTIME_CHECKPOINT_MAX_BYTES")]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
     /// Finalized reconciliation cadence for durable proof-outcome delivery.
     #[config(default = "defaults::sorafs::storage::RUNTIME_PROOF_OUTCOME_FORWARDER_INTERVAL_MS")]
     pub proof_outcome_forwarder_interval_ms: NonZeroU64,
@@ -27376,7 +27667,7 @@ pub struct SorafsOrderbookWorkerConfig {
     pub max_attempts: NonZeroU32,
     /// Maximum canonical durable checkpoint size.
     #[config(default = "defaults::sorafs::storage::orderbook_worker::CHECKPOINT_MAX_BYTES")]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
 }
 impl Default for SorafsOrderbookWorkerConfig {
     fn default() -> Self {
@@ -27499,7 +27790,7 @@ pub struct SorafsReserveWorkerConfig {
     pub max_attempts: NonZeroU32,
     /// Maximum canonical durable checkpoint size.
     #[config(default = "defaults::sorafs::storage::reserve_worker::CHECKPOINT_MAX_BYTES")]
-    pub checkpoint_max_bytes: Bytes<u64>,
+    pub checkpoint_max_bytes: Bytes,
 }
 impl Default for SorafsReserveWorkerConfig {
     fn default() -> Self {
@@ -29877,7 +30168,7 @@ pub struct SorafsGatewaySiteBindings {
     pub path: Option<PathBuf>,
     /// Maximum encoded document size accepted at startup.
     #[config(default = "defaults::sorafs::gateway::site_bindings::MAX_BYTES")]
-    pub max_bytes: Bytes<u64>,
+    pub max_bytes: Bytes,
     /// Maximum number of host entries accepted at startup.
     #[config(default = "defaults::sorafs::gateway::site_bindings::MAX_SITES")]
     pub max_sites: NonZeroUsize,
@@ -30177,10 +30468,10 @@ pub struct SorafsGatewayCompliance {
     pub feeds: Vec<SorafsGatewayComplianceFeed>,
     /// Maximum encoded feed response.
     #[config(default = "defaults::sorafs::gateway::compliance::MAX_ENCODED_BYTES")]
-    pub max_encoded_bytes: Bytes<u64>,
+    pub max_encoded_bytes: Bytes,
     /// Maximum normalized/decompressed feed response.
     #[config(default = "defaults::sorafs::gateway::compliance::MAX_DECODED_BYTES")]
-    pub max_decoded_bytes: Bytes<u64>,
+    pub max_decoded_bytes: Bytes,
     /// Maximum redirect count.
     #[config(default = "defaults::sorafs::gateway::compliance::MAX_REDIRECTS")]
     pub max_redirects: u8,
@@ -31335,6 +31626,35 @@ mod offline_cfg_tests {
         assert!(emitter.into_result().is_err());
     }
     #[test]
+    fn codec_parse_rejects_noncanonical_entropy_and_acceleration_aliases() {
+        for entropy_mode in ["rans-bundled", "RANS_BUNDLED", " rans_bundled"] {
+            let codec = StreamingCodec {
+                cabac_mode: WithOrigin::inline(CabacMode::Disabled),
+                trellis_blocks: WithOrigin::inline(Vec::new()),
+                rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+                entropy_mode: WithOrigin::inline(entropy_mode.to_owned()),
+                bundle_width: WithOrigin::inline(2),
+                bundle_accel: WithOrigin::inline("cpu_simd".to_owned()),
+            };
+            let mut emitter = Emitter::new();
+            assert!(codec.parse(&mut emitter).is_none(), "{entropy_mode:?}");
+            assert!(emitter.into_result().is_err());
+        }
+        for bundle_accel in ["cpusimd", "cpu-simd", "CPU_SIMD", " cpu_simd"] {
+            let codec = StreamingCodec {
+                cabac_mode: WithOrigin::inline(CabacMode::Disabled),
+                trellis_blocks: WithOrigin::inline(Vec::new()),
+                rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+                entropy_mode: WithOrigin::inline("rans_bundled".to_owned()),
+                bundle_width: WithOrigin::inline(2),
+                bundle_accel: WithOrigin::inline(bundle_accel.to_owned()),
+            };
+            let mut emitter = Emitter::new();
+            assert!(codec.parse(&mut emitter).is_none(), "{bundle_accel:?}");
+            assert!(emitter.into_result().is_err());
+        }
+    }
+    #[test]
     fn codec_parse_enforces_bundled_build_support() {
         assert!(
             norito::streaming::BUNDLED_RANS_BUILD_AVAILABLE,
@@ -32034,6 +32354,27 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .read_and_complete::<super::Root>()
             .expect("load minimal user config")
     }
+    #[test]
+    fn network_enum_labels_reject_aliases_without_panicking() {
+        for (field, value) in [
+            ("lane_profile", "CORE"),
+            ("lane_profile", " core"),
+            ("transaction_gossip_restricted_fallback", "PUBLIC_OVERLAY"),
+            ("transaction_gossip_restricted_public_payload", "FORWARD"),
+        ] {
+            let mut table = base_table();
+            table
+                .get_mut("network")
+                .and_then(Value::as_table_mut)
+                .expect("network table")
+                .insert(field.to_owned(), Value::String(value.to_owned()));
+            let result = std::panic::catch_unwind(|| {
+                actual::Root::from_toml_source(TomlSource::inline(table))
+            });
+            let parsed = result.expect("ordinary network config errors must not unwind");
+            assert!(parsed.is_err(), "{field}={value:?} must fail closed");
+        }
+    }
     fn torii_http_table_mut(table: &mut Table) -> &mut Table {
         table
             .get_mut("torii")
@@ -32298,7 +32639,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         config.torii.receipt_public_key = Some(key_pair.public_key().clone());
         config.torii.receipt_private_key = Some(private_key.clone());
         config.torii.kagemusha_commands = Some(super::ToriiKagemushaCommands {
-            enabled: true,
             private_key: Some(private_key.clone()),
             private_key_file: None,
             minimum_xor_balance: Quantity::from(1_u64),
@@ -32479,7 +32819,6 @@ policy_digest_hex = "{policy_digest_hex}"
         torii.insert(
             "kagemusha_commands".into(),
             Value::Table(Table::from_iter([
-                ("enabled".into(), Value::Boolean(true)),
                 ("private_key".into(), Value::String(private_key)),
                 ("minimum_xor_balance".into(), Value::String("1".into())),
                 ("max_tx_value".into(), Value::String("1000000000".into())),
@@ -32539,8 +32878,16 @@ policy_digest_hex = "{policy_digest_hex}"
     include!("user/verified_source_ingress_tests.rs");
     include!("user/iso_bridge_store_memory_tests.rs");
     #[test]
-    fn disabled_kagemusha_command_middleware_ignores_dormant_subordinates() {
+    fn kagemusha_commands_reject_redundant_enabled_switch() {
         let mut table = base_table();
+        let key_pair = KeyPair::try_from_seed(
+            b"iroha:config:test:kagemusha-enabled-retired".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("fixture seed derives command-service keypair");
+        let private_key = ExposedPrivateKey(key_pair.private_key().clone())
+            .try_to_multihash_string()
+            .expect("encode command-service private key");
         let torii = table
             .get_mut("torii")
             .and_then(Value::as_table_mut)
@@ -32548,18 +32895,28 @@ policy_digest_hex = "{policy_digest_hex}"
         torii.insert(
             "kagemusha_commands".into(),
             Value::Table(Table::from_iter([
-                ("enabled".into(), Value::Boolean(false)),
-                ("private_key".into(), Value::Integer(7)),
-                ("minimum_xor_balance".into(), Value::Array(Vec::new())),
+                ("private_key".into(), Value::String(private_key)),
+                ("minimum_xor_balance".into(), Value::String("1".into())),
+                ("max_tx_value".into(), Value::String("1000000000".into())),
+                (
+                    "operation_registry_max_entries".into(),
+                    Value::Integer(4096),
+                ),
                 (
                     "operation_registry_max_bytes".into(),
-                    Value::String("bad".into()),
+                    Value::Integer(524_288),
                 ),
+                ("enabled".into(), Value::Boolean(false)),
             ])),
         );
-        let actual = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect("disabled command service must ignore dormant subordinate values");
-        assert!(actual.torii.kagemusha_commands.is_none());
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("section presence is the only first-release enable switch");
+        let report = format!("{error:?}");
+        assert!(report.contains("enabled"), "unexpected error: {report}");
+        assert!(
+            report.contains("unknown") || report.contains("unexpected"),
+            "retired switch must be reported as an unknown field: {report}"
+        );
     }
     #[test]
     fn enabled_kagemusha_commands_keep_malformed_subordinates_strict() {
@@ -32571,7 +32928,6 @@ policy_digest_hex = "{policy_digest_hex}"
         torii.insert(
             "kagemusha_commands".into(),
             Value::Table(Table::from_iter([
-                ("enabled".into(), Value::Boolean(true)),
                 ("private_key".into(), Value::Integer(7)),
                 ("minimum_xor_balance".into(), Value::Array(Vec::new())),
             ])),
@@ -34613,6 +34969,53 @@ publish_delay_seconds = 17
         );
     }
     #[test]
+    fn network_outbound_dial_policy_defaults_and_parses() {
+        let default = load_root(base_table());
+        assert!(default.network.outbound_dial_allow_cidrs.is_empty());
+        assert!(default.network.outbound_dial_deny_cidrs.is_empty());
+        assert!(default.network.outbound_dial_allow_dns_suffixes.is_empty());
+        assert!(default.network.outbound_dial_deny_dns_suffixes.is_empty());
+
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        for (key, values) in [
+            ("outbound_dial_allow_cidrs", &["192.0.2.0/24"][..]),
+            ("outbound_dial_deny_cidrs", &["127.0.0.0/8"][..]),
+            ("outbound_dial_allow_dns_suffixes", &[".example.com"][..]),
+            (
+                "outbound_dial_deny_dns_suffixes",
+                &["blocked.example.com"][..],
+            ),
+        ] {
+            network.insert(
+                key.to_owned(),
+                Value::Array(
+                    values
+                        .iter()
+                        .map(|value| Value::String((*value).to_owned()))
+                        .collect(),
+                ),
+            );
+        }
+        let configured = load_root(table);
+        assert_eq!(
+            configured.network.outbound_dial_allow_cidrs,
+            ["192.0.2.0/24"]
+        );
+        assert_eq!(configured.network.outbound_dial_deny_cidrs, ["127.0.0.0/8"]);
+        assert_eq!(
+            configured.network.outbound_dial_allow_dns_suffixes,
+            [".example.com"]
+        );
+        assert_eq!(
+            configured.network.outbound_dial_deny_dns_suffixes,
+            ["blocked.example.com"]
+        );
+    }
+    #[test]
     fn network_defaults_apply_transaction_gossip_target_caps() {
         let actual = load_root(base_table());
         assert_eq!(
@@ -35197,11 +35600,9 @@ publish_delay_seconds = 17
         storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
         storage.insert("max_wsv_memory_bytes".into(), Value::Integer(128));
         let mut weights = Table::new();
-        weights.insert("kura_blocks_bps".into(), Value::Integer(3_000));
+        weights.insert("kura_blocks_bps".into(), Value::Integer(3_500));
         weights.insert("wsv_snapshots_bps".into(), Value::Integer(2_000));
-        weights.insert("sorafs_bps".into(), Value::Integer(4_000));
-        weights.insert("soranet_spool_bps".into(), Value::Integer(500));
-        weights.insert("soravpn_spool_bps".into(), Value::Integer(500));
+        weights.insert("sorafs_bps".into(), Value::Integer(4_500));
         storage.insert("disk_budget_weights".into(), Value::Table(weights));
         nexus.insert("storage".into(), Value::Table(storage));
         let actual = load_root(table);
@@ -35217,7 +35618,7 @@ publish_delay_seconds = 17
                 .map(Bytes::get),
             Some(1_024)
         );
-        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 309);
+        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 360);
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 128);
     }
     #[test]
@@ -35238,11 +35639,9 @@ publish_delay_seconds = 17
                 Value::Integer(i64::try_from(BUDGET_BYTES).expect("budget fits TOML integer")),
             );
             let mut weights = Table::new();
-            weights.insert("kura_blocks_bps".into(), Value::Integer(5_500));
+            weights.insert("kura_blocks_bps".into(), Value::Integer(6_000));
             weights.insert("wsv_snapshots_bps".into(), Value::Integer(2_000));
             weights.insert("sorafs_bps".into(), Value::Integer(2_000));
-            weights.insert("soranet_spool_bps".into(), Value::Integer(250));
-            weights.insert("soravpn_spool_bps".into(), Value::Integer(250));
             storage.insert("disk_budget_weights".into(), Value::Table(weights));
             nexus.insert("storage".into(), Value::Table(storage));
 

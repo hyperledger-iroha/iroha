@@ -184,7 +184,6 @@ use std::{
     ffi::OsString,
     fs,
     future::Future,
-    io,
     num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, Weak},
@@ -8549,7 +8548,6 @@ impl Iroha {
             .apply_codec_config(&config.streaming.codec)
             .map_err(|err| Report::new(err).change_context(StartError::StartP2p))?;
         streaming.apply_crypto_config(&config.crypto);
-        streaming.set_soranet_config(&config.streaming.soranet);
         streaming.apply_sync_config(&config.streaming.sync);
         #[cfg(feature = "telemetry")]
         if let Some(ref telemetry_handle) = streaming_telemetry {
@@ -8557,10 +8555,9 @@ impl Iroha {
         }
         if emergency_fast {
             iroha_logger::warn!(
-                "emergency Fast startup disabled streaming control, durable session snapshots, and filesystem spool provisioning"
+                "emergency Fast startup disabled streaming control and durable session snapshots"
             );
         } else {
-            configure_soranet_transport(&mut streaming, &config.streaming.soranet)?;
             let snapshot_file = config
                 .streaming
                 .session_store_dir
@@ -8605,8 +8602,6 @@ impl Iroha {
         let zk_cfg = config.zk.clone();
         let gov_cfg = config.gov.clone();
         let oracle_cfg = config.oracle.clone();
-        let streaming_soranet_spool_dir = config.streaming.soranet.provision_spool_dir.clone();
-        let streaming_soravpn_spool_dir = config.streaming.soravpn.provision_spool_dir.clone();
         let merge_cache_capacity = config.kura.merge_ledger_cache_capacity;
         if emergency_fast {
             iroha_logger::warn!(
@@ -8622,10 +8617,6 @@ impl Iroha {
             state.set_pipeline(pipeline_cfg);
             state.set_sumeragi_parameters(&sumeragi_cfg);
             state.set_oracle(oracle_cfg);
-            state.set_streaming_storage_paths(
-                streaming_soranet_spool_dir,
-                streaming_soravpn_spool_dir,
-            );
             state.set_fraud_monitoring(fraud_cfg);
             // Settlement runtime state was installed before Kura replay. Preserve
             // its lazily derived escrow bindings instead of replacing the replayed snapshot after Kura has started.
@@ -10414,20 +10405,6 @@ impl Iroha {
         ManifestPublisher::new(self.streaming.clone(), self.network.clone())
     }
 }
-fn configure_soranet_transport(
-    streaming: &mut iroha_core::streaming::StreamingHandle,
-    soranet: &iroha_config::parameters::actual::StreamingSoranet,
-) -> ReportResult<(), StartError> {
-    streaming.set_soranet_transport(None);
-    if soranet.enabled {
-        return Err(Report::new(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "streaming.soranet.enabled cannot be enabled in V1: token-bearing filesystem exit publication requires RouteOpen proof and durable revocation tombstones",
-        ))
-        .change_context(StartError::StartP2p));
-    }
-    Ok(())
-}
 #[cfg(feature = "telemetry")]
 async fn start_telemetry(
     logger: &LoggerHandle,
@@ -11019,7 +10996,7 @@ mod genesis_key_tests {
 /// Errors raised while reading configuration and genesis data.
 #[derive(Debug, Clone)]
 pub enum ConfigError {
-    /// Failed to read configuration from disk or environment.
+    /// Failed to read the selected configuration source.
     ReadConfig,
     /// Configuration contents failed validation.
     ParseConfig,
@@ -11070,10 +11047,7 @@ pub enum ConfigError {
 impl core::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::ReadConfig => write!(
-                f,
-                "Error occurred while reading configuration from file(s) and environment"
-            ),
+            Self::ReadConfig => write!(f, "Error occurred while reading configuration sources"),
             Self::ParseConfig => {
                 write!(f, "Error occurred while validating configuration integrity")
             }
@@ -11215,7 +11189,11 @@ fn read_config_and_genesis_with_kagemusha_sources(
     ConfigError,
 > {
     let mut flattened_toml_config_source = None;
-    let mut config = ConfigReader::new();
+    let mut config = if args.config.is_some() {
+        ConfigReader::new().without_env()
+    } else {
+        ConfigReader::new()
+    };
     if let Some(path) = &args.config {
         config = if let Some(expected) = args.startup.config_blake3.as_deref() {
             if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -11271,7 +11249,8 @@ fn read_config_and_genesis_with_kagemusha_sources(
         config.contains_toml_parameter(["sorafs", "storage", "enabled"]);
     let sorafs_discovery_enabled_is_explicit =
         config.contains_toml_parameter(["sorafs", "discovery", "discovery_enabled"]);
-    let mut config = UserConfig::read_and_complete(config)
+    let mut config = config
+        .read_and_complete::<UserConfig>()
         .change_context(ConfigError::ReadConfig)?
         .parse()
         .change_context(ConfigError::ParseConfig)?;
@@ -11651,14 +11630,6 @@ fn effective_nexus_storage_component_roots(
         NexusStorageBudgetComponent::Sorafs,
         config.torii.sorafs_storage.data_dir.clone(),
     ));
-    roots.push((
-        NexusStorageBudgetComponent::SoranetSpool,
-        config.streaming.soranet.provision_spool_dir.clone(),
-    ));
-    roots.push((
-        NexusStorageBudgetComponent::SoravpnSpool,
-        config.streaming.soravpn.provision_spool_dir.clone(),
-    ));
     roots
 }
 fn derive_runtime_nexus_storage_budget(
@@ -11768,12 +11739,6 @@ fn effective_assigned_budget_for_filesystem(
                 NexusStorageBudgetComponent::WsvCold => config.tiered_state.max_cold_bytes.get(),
                 NexusStorageBudgetComponent::Sorafs => {
                     config.torii.sorafs_storage.max_capacity_bytes.get()
-                }
-                NexusStorageBudgetComponent::SoranetSpool => {
-                    config.streaming.soranet.provision_spool_max_bytes.get()
-                }
-                NexusStorageBudgetComponent::SoravpnSpool => {
-                    config.streaming.soravpn.provision_spool_max_bytes.get()
                 }
             };
             total.saturating_add(component_budget)
@@ -13447,7 +13412,7 @@ fn run_main_with_config_guard(
             .change_context(MainError::Config)
             .attach_with(|| {
             args.config.as_ref().map_or_else(
-                || "`--config` arg was not set, therefore configuration relies fully on environment variables".to_owned(),
+                || "`--config` arg was not set, therefore development environment inputs and built-in defaults are in use".to_owned(),
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;
@@ -15257,7 +15222,7 @@ mod tests {
     #[test]
     fn repository_iroha3_dev_default_config_requests_no_runtime_providers() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../defaults/kagami/iroha3-dev/config.toml");
+            .join("../../defaults/kagami/iroha3-dev/peer0.toml");
         let config = load_unprovisioned_profile_for_inspection(&path);
         let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
             .expect("project default provider bindings");
@@ -15743,7 +15708,6 @@ mod tests {
             .split_once("}else{")
             .expect("Strict streaming branch")
             .1;
-        assert!(strict_branch.contains("configure_soranet_transport("));
         assert!(strict_branch.contains("streaming.set_snapshot_path("));
         assert!(strict_branch.contains("streaming.load_snapshots()"));
 

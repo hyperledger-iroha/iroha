@@ -15,7 +15,7 @@ pub struct Kura {
         env = "KURA_MAX_DISK_USAGE_BYTES",
         default = "defaults::kura::MAX_DISK_USAGE_BYTES"
     )]
-    pub max_disk_usage_bytes: Bytes<u64>,
+    pub max_disk_usage_bytes: Bytes,
     /// Number of most-recent blocks kept in memory for fast access.
     #[config(
         env = "KURA_BLOCKS_IN_MEMORY",
