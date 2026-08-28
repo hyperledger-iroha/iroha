@@ -1971,7 +1971,14 @@ impl ProductionLifecycleOwnerV1 {
             .expect("the startup owner transfers its body store exactly once");
         let identity = body_store.instance_identity();
         let context = self.verified.context().clone();
-        let requester = context.roster[0].validator.clone();
+        let local_index = usize::try_from(local_validator)
+            .expect("lifecycle Completion fixture validator index fits usize");
+        let requester = context
+            .roster
+            .get(local_index)
+            .expect("lifecycle Completion fixture validator belongs to its context")
+            .validator
+            .clone();
         let (mut executor, body_store) =
             crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
                 runtime,

@@ -64,10 +64,10 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "3fcd0a6dabf5a9aa5380225bdaf66db4678f9144ec349a024d573e307a1571b2"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b"
+        "0d89b39300b4d1b83e28623a75bcabdf31574451dfe68d8f1b67a49afd1dc440"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "0f8c776e7ba182a8abe9aeb8c630d9946736389b7279d31939a20a7b7f8b7f16"
+        "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
     ),
 }
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
@@ -504,21 +504,21 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 864
-_G_UNIT_TEST_COUNT = 522
+_PRODUCTION_TEST_COUNT = 863
+_G_UNIT_TEST_COUNT = 518
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        316,
+        313,
         "lib",
     ),
     (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        143,
+        142,
         "lib",
     ),
     (
@@ -590,6 +590,7 @@ _PRODUCTION_MODULES = (
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-state-governance-unlock-audit", "state::tests", 1),
+    ("production-queue-replica-disposition", "queue::tests", 1),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 17),
     (
@@ -612,7 +613,7 @@ _PRODUCTION_MODULES = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 48),
+    ("production-v2-adapter", "sumeragi::v2::tests", 49),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     (
         "production-v2-certified-serve-payload-store",
@@ -621,7 +622,7 @@ _PRODUCTION_MODULES = (
     ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 70),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 65),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
@@ -640,7 +641,7 @@ _PRODUCTION_MODULES = (
     (
         "production-v2-lifecycle-height-driver",
         "sumeragi::v2_runner::lifecycle_height_driver::tests",
-        1,
+        2,
     ),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 90),
     (
@@ -686,7 +687,7 @@ _PRODUCTION_MODULES = (
     (
         "production-p2p-network-reliable-actor",
         "network::tests",
-        84,
+        83,
     ),
     (
         "production-p2p-source-memory-geometry",
@@ -706,7 +707,7 @@ _PRODUCTION_MODULES = (
     (
         "production-irohad-network-relay",
         "network_relay_tests",
-        4,
+        5,
     ),
     (
         "production-irohad-authenticated-via",

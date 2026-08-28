@@ -20,7 +20,7 @@ class SccpV1Test {
     @Test
     fun closedInventoryReservesRetiredTagsAndAliases() {
         assertEquals(
-            listOf(1, 2, 3, 4, 5, 10, 11, 12),
+            listOf(1, 2, 3, 4, 5, 10, 11, 12, 14, 15),
             SccpNetworkV1.values().map(SccpNetworkV1::tag),
         )
         assertSame(SccpNetworkV1.SORA_TAIRA, SccpNetworkV1.fromProfileKey("sora-taira"))
@@ -31,7 +31,6 @@ class SccpV1Test {
             "sora-nexus",
             "sora_nexus",
             "solana-mainnet-beta",
-            "ton-mainnet",
             "SORA-TAIRA",
             "sora_taira",
             "sora-taira ",
@@ -141,7 +140,7 @@ class SccpV1Test {
 
     @Test
     fun transferRejectsRetiredDomainsCodecsAndInvalidWidths() {
-        for (domain in listOf(3, 4, 6, -1)) {
+        for (domain in listOf(3, 6, -1)) {
             assertFailsWith<IllegalArgumentException> {
                 transfer(source = domain, destination = 0, senderCodec = 1, recipientCodec = 1)
             }
@@ -161,6 +160,38 @@ class SccpV1Test {
         assertFailsWith<IllegalArgumentException> {
             transfer(destination = 5, recipientCodec = 5, recipient = byteArrayOf(0x42) + ByteArray(20) { 1 })
         }
+        val tonRecipient = ByteArray(36).also { it.fill(0x31.toByte(), 4) }
+        val ton = transfer(
+            destination = 4,
+            recipientCodec = 7,
+            recipient = tonRecipient,
+            route = "taira_ton_xor".toByteArray(),
+        )
+        assertContentEquals(tonRecipient, ton.recipient())
+        assertFailsWith<IllegalArgumentException> {
+            transfer(
+                destination = 4,
+                recipientCodec = 7,
+                recipient = tonRecipient.copyOf().also { it[3] = 1 },
+            )
+        }
+    }
+
+    @Test
+    fun tonProfilesBindCanonicalZeroStates() {
+        val mainnet = SccpV1.canonicalNetworkBytes(SccpNetworkV1.TON_MAINNET)
+        val testnet = SccpV1.canonicalNetworkBytes(SccpNetworkV1.TON_TESTNET)
+        assertEquals(90, mainnet.size)
+        assertEquals(90, testnet.size)
+        assertContentEquals(
+            byteArrayOf(1, 14, 4, 0, 0, 0, 0x11, 0xff.toByte(), 0xff.toByte(), 0xff.toByte()),
+            mainnet.copyOfRange(0, 10),
+        )
+        assertContentEquals(
+            byteArrayOf(1, 15, 4, 0, 0, 0, 0xfd.toByte(), 0xff.toByte(), 0xff.toByte(), 0xff.toByte()),
+            testnet.copyOfRange(0, 10),
+        )
+        assertFalse(mainnet.contentEquals(testnet))
     }
 
     @Test

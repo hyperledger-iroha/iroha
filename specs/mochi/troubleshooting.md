@@ -151,9 +151,11 @@ sized for your preset (`peer_count` peers → `peer_count` ports per transport).
 readiness. If startup reaches `serve.log` output such as `failed while
 validating local MCP`, confirm:
 
-- the active peer responds on `GET <torii>/v1/mcp`;
+- the active peer accepts `initialize` on `POST <torii>/v1/mcp` and returns the
+  negotiated MCP protocol version;
+- later MCP POSTs carry that exact version in `MCP-Protocol-Version`;
 - `tools/list` exposes curated `iroha.*` tools such as
-  `iroha.status`, `iroha.sumeragi.status`,
+  `iroha.health`, `iroha.node.capabilities`,
   `iroha.transactions.submit`, and
   `iroha.transactions.submit_and_wait`; and
 - raw `torii.*` tools are not leaking through the local curated surface.

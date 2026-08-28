@@ -162,6 +162,22 @@ fn runtime_from_handshake_fails_closed_on_corrupt_revocation_snapshot() {
         "unexpected error: {err:?}"
     );
 }
+#[test]
+fn mandatory_admission_never_bypasses_persistent_replay_state() {
+    let mut handshake = ActualSoranetHandshake::default();
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("intentionally-unused-revocations.norito");
+    fs::write(&path, b"corrupt snapshot").expect("write corrupt revocation file");
+    handshake.pow.revocation_store_path = path.to_string_lossy().into_owned().into();
+    let error = runtime_from_handshake(handshake)
+        .expect_err("mandatory admission must load and validate persistent replay state");
+    assert!(matches!(
+        error,
+        Error::HandshakeSoranet(message)
+            if message.contains("failed to load soranet revocation store")
+    ));
+}
+
 fn handshake_with_replay_path(path: &std::path::Path) -> ActualSoranetHandshake {
     let mut handshake = ActualSoranetHandshake::default();
     handshake.pow.revocation_store_path = path.to_string_lossy().into_owned().into();

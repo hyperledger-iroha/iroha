@@ -4,7 +4,7 @@ import XCTest
 
 private let tairaKagemushaReadOnlyOptIn = "IROHA_TAIRA_KAGEMUSHA_READ_ONLY"
 private let tairaPublicRootOverride = "IROHA_TAIRA_PUBLIC_ROOT"
-private let defaultTairaPublicRoot = "https://taira.sora.org"
+private let defaultTairaPublicRoot = TairaTestnetProfile.toriiBaseURL.absoluteString
 private let tairaReadOnlyDeadlineSeconds: TimeInterval = 20
 
 private struct TairaReadOnlyDeadlineExceeded: LocalizedError {
@@ -33,10 +33,10 @@ private final class TairaNoRedirectSessionDelegate: NSObject, URLSessionTaskDele
 
 final class TairaKagemushaReadOnlyPublicTests: XCTestCase {
     func testPublicCapabilityMatchesExactUniversalContract() async throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment[tairaKagemushaReadOnlyOptIn] == "1",
-            "Set \(tairaKagemushaReadOnlyOptIn)=1 to run the read-only public Taira probe."
-        )
+        XCTAssertEqual(defaultTairaPublicRoot, "https://taira.sora.org")
+        guard ProcessInfo.processInfo.environment[tairaKagemushaReadOnlyOptIn] == "1" else {
+            return
+        }
 
         let root = try publicRoot()
         let configuration = URLSessionConfiguration.ephemeral

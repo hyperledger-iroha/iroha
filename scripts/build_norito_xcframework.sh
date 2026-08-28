@@ -352,7 +352,7 @@ CI_HANDOFF_ONLY=0
 CI_APPLE_SLICE=""
 CI_ASSEMBLE_APPLE_SLICES=""
 CI_APPLE_SLICE_SHA256=()
-CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+CARGO_LOCKFILE="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-$ROOT_DIR/Cargo.lock}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bridge-version)
@@ -812,6 +812,14 @@ PY
 }
 
 CARGO_LOCK_SHA256_START="$(selected_cargo_lock_sha256)"
+if [[ -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]; then
+  if [[ "$CARGO_LOCKFILE" == "$ROOT_DIR/Cargo.lock" \
+      || "$CARGO_LOCK_SHA256_START" != \
+        "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]; then
+    echo "[-] Privacy release builds require the distinct authenticated cd9e Cargo.lock" >&2
+    exit 1
+  fi
+fi
 
 assert_selected_cargo_lock() {
   local phase="$1"
@@ -1668,6 +1676,8 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
     "connect_norito_validation_fee_current_policy_proof_request_v1",
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
+    "connect_norito_validation_fee_hijiri_quote_request_v1",
+    "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v4",

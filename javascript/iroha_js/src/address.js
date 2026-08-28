@@ -546,6 +546,30 @@ function curveIdFromAlgorithm(algorithm) {
 }
 
 function encodeHeader({ version, classId, normVersion, extFlag }) {
+  if (version !== HEADER_VERSION_V1) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_HEADER_VERSION,
+      `unsupported address header version: ${version}`,
+    );
+  }
+  if (normVersion !== HEADER_NORM_VERSION_V1) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_NORM_VERSION,
+      `unsupported normalization version: ${normVersion}`,
+    );
+  }
+  if (!Object.values(AddressClass).includes(classId)) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.UNKNOWN_ADDRESS_CLASS,
+      `unknown address class: ${classId}`,
+    );
+  }
+  if (extFlag) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.UNEXPECTED_EXTENSION_FLAG,
+      "unexpected address header extension flag",
+    );
+  }
   let byte = ((version & 0b111) << 5) | ((classId & 0b11) << 3);
   byte |= (normVersion & 0b11) << 1;
   byte |= extFlag ? 1 : 0;
@@ -557,16 +581,16 @@ function decodeHeader(byte) {
   const classBits = (byte >> 3) & 0b11;
   const normVersion = (byte >> 1) & 0b11;
   const extFlag = (byte & 0b1) === 1;
-  if (version > 0b111) {
+  if (version !== HEADER_VERSION_V1) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_HEADER_VERSION,
-      `invalid address header version: ${version}`,
+      `unsupported address header version: ${version}`,
     );
   }
-  if (normVersion > 0b11) {
+  if (normVersion !== HEADER_NORM_VERSION_V1) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_NORM_VERSION,
-      `invalid normalization version: ${normVersion}`,
+      `unsupported normalization version: ${normVersion}`,
     );
   }
   if (!Object.values(AddressClass).includes(classBits)) {
@@ -582,6 +606,22 @@ function decodeHeader(byte) {
     );
   }
   return { version, classId: classBits, normVersion, extFlag };
+}
+
+function assertHeaderMatchesController(header, controller) {
+  const expectedClass =
+    controller.tag === CONTROLLER_TAG_MULTISIG
+      ? AddressClass.MULTI_SIG
+      : controller.tag === CONTROLLER_TAG_SINGLE ||
+          controller.tag === CONTROLLER_TAG_SINGLE_EXTENDED
+        ? AddressClass.SINGLE_KEY
+        : undefined;
+  if (expectedClass !== undefined && header.classId !== expectedClass) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      "address header class does not match controller tag",
+    );
+  }
 }
 
 function encodeController(controller) {
@@ -932,6 +972,7 @@ export class AccountAddress {
         "unexpected trailing bytes in canonical payload",
       );
     }
+    assertHeaderMatchesController(header, controller);
     return new AccountAddress(header, controller);
   }
 
@@ -999,6 +1040,7 @@ export class AccountAddress {
   }
 
   canonicalBytes() {
+    assertHeaderMatchesController(this._header, this._controller);
     const headerByte = encodeHeader(this._header);
     const header = Uint8Array.of(headerByte);
     const controller = encodeController(this._controller);
@@ -1096,6 +1138,7 @@ export function parseCanonicalI105AccountLiteral(input) {
       "unexpected trailing bytes in canonical payload",
     );
   }
+  assertHeaderMatchesController(header, controller);
   const normalized = concatBytes([
     Uint8Array.of(encodeHeader(header)),
     encodeController(controller),

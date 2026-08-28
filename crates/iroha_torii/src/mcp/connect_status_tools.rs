@@ -8,7 +8,7 @@ async fn dispatch_connect_session_status(
     reject_unknown_arguments(
         arguments,
         &["sid", "token_management", "accept"],
-        "connect.session.status",
+        "iroha.connect.session.status",
     )?;
     let sid = canonical_connect_sid_argument(arguments)?;
     decode_canonical(arguments, "token_management", 32)?;
@@ -31,10 +31,10 @@ async fn dispatch_connect_session_status(
     )
     .await
 }
-fn connect_session_status_tool() -> ToolSpec {
+fn iroha_connect_session_status_tool() -> ToolSpec {
     ToolSpec {
-        name: "connect.session.status".to_owned(),
-        effect: manual_tool_effect_from_name("connect.session.status"),
+        name: "iroha.connect.session.status".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.connect.session.status"),
         description: "Get one Iroha Connect session status using its management token; node aggregate telemetry is not projected through MCP.".to_owned(),
         method: Method::GET,
         path_template: "/v1/connect/status".to_owned(),
@@ -50,25 +50,19 @@ fn connect_session_status_tool() -> ToolSpec {
                 "token_management": {
                     "type": "string",
                     "pattern": "^[A-Za-z0-9_-]{43}$",
-                    "description": "Management bearer token returned by `connect.session.create`."
+                    "description": "Management bearer token returned by `iroha.connect.session.create`."
                 },
                 "accept": { "type": "string" }
             }
         }),
     }
 }
-fn iroha_connect_session_status_tool() -> ToolSpec {
-    let mut tool = connect_session_status_tool();
-    tool.name = "iroha.connect.session.status".to_owned();
-    tool.description = "Alias for connect.session.status.".to_owned();
-    tool
-}
 #[cfg(test)]
 mod connect_status_tests {
-    use super::{ToolEffect, connect_session_status_tool};
+    use super::{ToolEffect, iroha_connect_session_status_tool};
     #[test]
     fn session_status_requires_exact_sid_and_management_token() {
-        let tool = connect_session_status_tool();
+        let tool = iroha_connect_session_status_tool();
         assert_eq!(tool.effect, ToolEffect::Read);
         assert_eq!(tool.path_template, "/v1/connect/status");
         let required = tool.input_schema["required"]

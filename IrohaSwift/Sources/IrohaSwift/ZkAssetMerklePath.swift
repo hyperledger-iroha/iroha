@@ -714,6 +714,13 @@ enum StrictJSONDuplicateKeyRejector {
             guard let character = peek() else {
                 throw ZkAssetMerklePathError.invalidField("json")
             }
+            if requireInteger {
+                guard Self.isASCIIDigit(character) else {
+                    throw ZkAssetMerklePathError.invalidField("json.integer")
+                }
+                try parseNumber(requireInteger: true)
+                return
+            }
             switch character {
             case "{":
                 try parseObject(depth: depth)

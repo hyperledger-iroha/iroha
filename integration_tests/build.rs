@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 const SAMPLE_MANIFEST: &str = include_str!("../crates/ivm/prebuilt_samples.txt");
+const SKIP_PREBUILT_STAGE_ENV: &str = "IROHA_INTEGRATION_TESTS_SKIP_PREBUILT_STAGE";
 fn prebuilt_sample_names() -> Vec<&'static str> {
     SAMPLE_MANIFEST
         .lines()
@@ -39,6 +40,12 @@ fn write_file_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../crates/ivm/prebuilt_samples.txt");
+    println!("cargo:rerun-if-env-changed={SKIP_PREBUILT_STAGE_ENV}");
+    // OpenAPI-only xtask builds link this crate but never load its runtime fixtures.
+    // Their sealed source clones therefore opt out before this script writes ignored files.
+    if env::var(SKIP_PREBUILT_STAGE_ENV).ok().as_deref() == Some("1") {
+        return;
+    }
     let root = workspace_root();
     let fixtures_dir = root.join("integration_tests/fixtures/ivm");
     let prebuilt_dir = root.join("crates/ivm/target/prebuilt");

@@ -18,6 +18,8 @@ public enum SccpNetworkV1 : byte
     TronMainnet = 10,
     TronNile = 11,
     TronShasta = 12,
+    TonMainnet = 14,
+    TonTestnet = 15,
 }
 
 /// <summary>Exact profile metadata for <see cref="SccpNetworkV1"/>.</summary>
@@ -33,6 +35,8 @@ public static class SccpNetworkV1Extensions
         SccpNetworkV1.TronMainnet => "tron-mainnet",
         SccpNetworkV1.TronNile => "tron-nile",
         SccpNetworkV1.TronShasta => "tron-shasta",
+        SccpNetworkV1.TonMainnet => "ton-mainnet",
+        SccpNetworkV1.TonTestnet => "ton-testnet",
         _ => throw new ArgumentOutOfRangeException(nameof(network)),
     };
 
@@ -41,6 +45,7 @@ public static class SccpNetworkV1Extensions
         SccpNetworkV1.SoraTaira => 0,
         SccpNetworkV1.EthereumMainnet or SccpNetworkV1.EthereumSepolia => 1,
         SccpNetworkV1.BscMainnet or SccpNetworkV1.BscTestnet => 2,
+        SccpNetworkV1.TonMainnet or SccpNetworkV1.TonTestnet => 4,
         SccpNetworkV1.TronMainnet or SccpNetworkV1.TronNile or SccpNetworkV1.TronShasta => 5,
         _ => throw new ArgumentOutOfRangeException(nameof(network)),
     };
@@ -94,6 +99,7 @@ public enum SccpCodecV1 : byte
     CanonicalText = 1,
     EvmAddress20 = 2,
     TronAddress21 = 5,
+    TonAccount36 = 7,
 }
 
 /// <summary>Canonical binary codec validation.</summary>
@@ -106,6 +112,7 @@ public static class SccpCodecV1Extensions
         SccpCodecV1.CanonicalText => "canonical_text",
         SccpCodecV1.EvmAddress20 => "evm_address20",
         SccpCodecV1.TronAddress21 => "tron_address21",
+        SccpCodecV1.TonAccount36 => "ton_account36",
         _ => throw new ArgumentOutOfRangeException(nameof(codec)),
     };
 
@@ -116,6 +123,7 @@ public static class SccpCodecV1Extensions
             SccpCodecV1.CanonicalText => IsCanonicalText(value),
             SccpCodecV1.EvmAddress20 => value.Length == 20 && !IsZero(value),
             SccpCodecV1.TronAddress21 => value.Length == 21 && value[0] == 0x41 && !IsZero(value[1..]),
+            SccpCodecV1.TonAccount36 => value.Length == 36 && IsZero(value[..4]) && !IsZero(value[4..]),
             _ => false,
         };
         if (!valid)
@@ -173,6 +181,7 @@ public enum SccpNativeBackendV1
     EthereumBeacon,
     BscParlia,
     TronDpos,
+    TonMasterchain,
 }
 
 public static class SccpNativeBackendV1Extensions
@@ -182,6 +191,7 @@ public static class SccpNativeBackendV1Extensions
         SccpNativeBackendV1.EthereumBeacon => "ethereum_beacon_v1",
         SccpNativeBackendV1.BscParlia => "bsc_parlia_v1",
         SccpNativeBackendV1.TronDpos => "tron_dpos_v1",
+        SccpNativeBackendV1.TonMasterchain => "ton_masterchain_v1",
         _ => throw new ArgumentOutOfRangeException(nameof(backend)),
     };
 
@@ -190,6 +200,7 @@ public static class SccpNativeBackendV1Extensions
         SccpNativeBackendV1.EthereumBeacon => "bridge/sccp/native/ethereum-beacon-v1",
         SccpNativeBackendV1.BscParlia => "bridge/sccp/native/bsc-parlia-v1",
         SccpNativeBackendV1.TronDpos => "bridge/sccp/native/tron-dpos-v1",
+        SccpNativeBackendV1.TonMasterchain => "bridge/sccp/native/ton-masterchain-v1",
         _ => throw new ArgumentOutOfRangeException(nameof(backend)),
     };
 
@@ -198,6 +209,7 @@ public static class SccpNativeBackendV1Extensions
         SccpNativeBackendV1.EthereumBeacon => network is SccpNetworkV1.EthereumMainnet or SccpNetworkV1.EthereumSepolia,
         SccpNativeBackendV1.BscParlia => network is SccpNetworkV1.BscMainnet or SccpNetworkV1.BscTestnet,
         SccpNativeBackendV1.TronDpos => network is SccpNetworkV1.TronMainnet or SccpNetworkV1.TronNile or SccpNetworkV1.TronShasta,
+        SccpNativeBackendV1.TonMasterchain => network is SccpNetworkV1.TonMainnet or SccpNetworkV1.TonTestnet,
         _ => false,
     };
 
@@ -386,7 +398,7 @@ public sealed class SccpTransferPayloadV1 : SccpPayloadV1
 
     private static void RequireDomain(uint value, string field)
     {
-        if (value is not (0 or 1 or 2 or 5))
+        if (value is not (0 or 1 or 2 or 4 or 5))
         {
             throw new ArgumentOutOfRangeException(field, "SCCP domain is unsupported or retired.");
         }
@@ -396,6 +408,7 @@ public sealed class SccpTransferPayloadV1 : SccpPayloadV1
     {
         0 => SccpCodecV1.CanonicalText,
         1 or 2 => SccpCodecV1.EvmAddress20,
+        4 => SccpCodecV1.TonAccount36,
         5 => SccpCodecV1.TronAddress21,
         _ => throw new ArgumentOutOfRangeException(nameof(domain)),
     };
@@ -668,11 +681,42 @@ public static class SccpV1
             case SccpNetworkV1.TronShasta:
                 WriteUInt32(output, 0x94a9059e);
                 break;
+            case SccpNetworkV1.TonMainnet:
+                WriteTonNetwork(
+                    output,
+                    -239,
+                    "17a3a92992aabea785a7a090985a265cd31f323d849da51239737e321fb05569",
+                    "5e994fcf4d425c0a6ce6a792594b7173205f740a39cd56f537defd28b48a0f6e");
+                break;
+            case SccpNetworkV1.TonTestnet:
+                WriteTonNetwork(
+                    output,
+                    -3,
+                    "823f81f306ff02694f935cf5021548e3ce2b86b529812af6a12148879e95a128",
+                    "67e20ac184b9e039a62667acc3f9c00f90f359a76738233379efa47604980ce8");
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(network));
         }
 
         return output.ToArray();
+    }
+
+    private static void WriteTonNetwork(
+        Stream output,
+        int globalId,
+        string zeroStateRootHex,
+        string zeroStateFileHex)
+    {
+        Span<byte> signed = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(signed, globalId);
+        output.Write(signed);
+        BinaryPrimitives.WriteInt32LittleEndian(signed, -1);
+        output.Write(signed);
+        WriteUInt64(output, 0x8000_0000_0000_0000UL);
+        WriteUInt32(output, 0);
+        output.Write(Convert.FromHexString(zeroStateRootHex));
+        output.Write(Convert.FromHexString(zeroStateFileHex));
     }
 
     public static byte[] CanonicalLaneBytes(SccpLaneIdV1 lane)

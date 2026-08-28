@@ -2,7 +2,7 @@
 """Assemble and verify the exact ABI-23 native inventory for the C# NuGet SDK.
 
 Each native artifact must have been exercised on its matching host and recorded
-with ``check_native_sdk_abi22_artifact.py``.  This helper deliberately does not
+with ``check_native_sdk_abi23_artifact.py``.  This helper deliberately does not
 load cross-platform libraries.  It binds the five target-host evidence
 manifests to one clean source revision, stages the canonical NuGet RID layout,
 and verifies that a produced package contains exactly those native bytes.
@@ -28,12 +28,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-import check_native_sdk_abi22_artifact as artifact_checker  # noqa: E402
+import check_native_sdk_abi23_artifact as artifact_checker  # noqa: E402
 
 
 SCHEMA = "iroha.csharp-native-package.v1"
 PACKAGE_MANIFEST_NAME = "native-package-manifest.json"
-EVIDENCE_MANIFEST_NAME = "native-sdk-abi22.json"
+EVIDENCE_MANIFEST_NAME = "native-sdk-abi23.json"
 MAX_TREE_ENTRIES = 128
 MAX_PACKAGE_BYTES = 1024 * 1024 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")

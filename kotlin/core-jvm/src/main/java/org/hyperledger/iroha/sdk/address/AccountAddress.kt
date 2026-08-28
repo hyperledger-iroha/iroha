@@ -14,6 +14,8 @@ private const val I105_DISCRIMINANT_TEST = 0x0171
 private const val I105_DISCRIMINANT_DEV = 0x0000
 private const val I105_CHECKSUM_LEN = 6
 private const val BECH32M_CONST = 0x2bc830a3
+private const val HEADER_VERSION_V1 = 0
+private const val HEADER_NORM_VERSION_V1 = 1
 private const val ADDRESS_CLASS_SINGLE_KEY = 0
 private const val ADDRESS_CLASS_MULTISIG = 1
 private const val CONTROLLER_SINGLE_KEY_TAG = 0x00
@@ -655,8 +657,22 @@ private fun encodeHeader(version: Int, classId: Int, normVersion: Int): Byte {
 
 @Throws(AccountAddressException::class)
 private fun decodeHeader(header: Byte): Int {
+    val version = (header.toInt() ushr 5) and 0b111
     val classBits = (header.toInt() shr 3) and 0b11
+    val normVersion = (header.toInt() shr 1) and 0b11
     val extFlag = header.toInt() and 0x01
+    if (version != HEADER_VERSION_V1) {
+        throw AccountAddressException(
+            AccountAddressErrorCode.INVALID_HEADER_VERSION,
+            "unsupported address header version: $version",
+        )
+    }
+    if (normVersion != HEADER_NORM_VERSION_V1) {
+        throw AccountAddressException(
+            AccountAddressErrorCode.INVALID_NORM_VERSION,
+            "unsupported normalization version: $normVersion",
+        )
+    }
     if (extFlag != 0) {
         throw AccountAddressException(
             AccountAddressErrorCode.UNEXPECTED_EXTENSION_FLAG,

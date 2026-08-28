@@ -1528,10 +1528,7 @@ fn install_retained_validation_fee_unregister_fixture(
         },
     };
 
-    let network_id: NetworkId =
-        "hash:00000000000000000000000000000000000000000000000000000000000000D1#C50E"
-            .parse()
-            .expect("validation-fee unregister fixture network id");
+    let network_id = *state_transaction.network_id();
     let contract_address =
         ContractAddress::derive(&network_id, &ALICE_ID, 369, DataSpaceId::UNIVERSAL)
             .expect("validation-fee unregister fixture contract address");

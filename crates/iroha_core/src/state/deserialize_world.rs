@@ -3411,6 +3411,7 @@ impl SoracloudInrouPersistedStateV1<'_> {
         }
 
         let mut inrou_reservation_usage = BTreeMap::<AccountId, (u32, u64, u64, u64)>::new();
+        let mut inrou_available_hosts = BTreeSet::<AccountId>::new();
         for (key, placement) in inrou_service_placements.iter() {
             placement.validate().map_err(|error| {
                 invalid_soracloud_state("soracloud_inrou_service_placements", error.to_string())
@@ -3549,38 +3550,60 @@ impl SoracloudInrouPersistedStateV1<'_> {
                         ),
                     ));
                 }
-                let capability = inrou_host_capabilities
-                    .get(&assignment.validator_account_id)
+                if !admitted_bundle
+                    .service
+                    .placement_targets
+                    .iter()
+                    .any(|target| {
+                        target.validator_account_id == assignment.validator_account_id
+                            && target.peer_id == assignment.peer_id
+                    })
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_inrou_service_placements",
+                        "Inrou assignment must match an exact admitted placement target",
+                    ));
+                }
+                let selected_guest_artifact = inrou
+                    .guest_images
+                    .get(&assignment.selected_guest_isa)
+                    .map(|image| &image.published_artifact)
                     .ok_or_else(|| {
                         invalid_soracloud_state(
                             "soracloud_inrou_service_placements",
-                            "Inrou assignment is missing its authoritative host capability",
+                            "Inrou assignment selected guest ISA is absent from its admitted revision",
                         )
                     })?;
-                if !inrou
-                    .guest_images
-                    .get(&assignment.selected_guest_isa)
-                    .is_some_and(|image| {
-                        image.published_artifact == capability.trusted_guest_artifact
-                    })
-                    || capability.peer_id != assignment.peer_id
-                    || !capability
-                        .supported_guest_isas
-                        .contains(&assignment.selected_guest_isa)
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_inrou_service_placements",
-                        "Inrou assignment must exactly match its retained capability peer and a guest ISA supported by both host and revision",
-                    ));
-                }
-                if per_replica_cpu_millis > u64::from(capability.max_cpu_millis)
-                    || per_replica_memory_bytes > capability.max_memory_bytes
-                    || per_replica_storage_bytes > capability.max_storage_bytes
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_inrou_service_placements",
-                        "Inrou assignment's per-replica resources exceed its retained host capability",
-                    ));
+                if assignment.host_availability.is_available() {
+                    inrou_available_hosts.insert(assignment.validator_account_id.clone());
+                    let capability = inrou_host_capabilities
+                        .get(&assignment.validator_account_id)
+                        .ok_or_else(|| {
+                            invalid_soracloud_state(
+                                "soracloud_inrou_service_placements",
+                                "available Inrou assignment is missing its exact authoritative host capability",
+                            )
+                        })?;
+                    if capability.peer_id != assignment.peer_id
+                        || !capability
+                            .supported_guest_isas
+                            .contains(&assignment.selected_guest_isa)
+                        || selected_guest_artifact != &capability.trusted_guest_artifact
+                    {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_inrou_service_placements",
+                            "available Inrou assignment must exactly match its retained capability peer, selected guest ISA, and trusted artifact",
+                        ));
+                    }
+                    if per_replica_cpu_millis > u64::from(capability.max_cpu_millis)
+                        || per_replica_memory_bytes > capability.max_memory_bytes
+                        || per_replica_storage_bytes > capability.max_storage_bytes
+                    {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_inrou_service_placements",
+                            "available Inrou assignment's per-replica resources exceed its retained host capability",
+                        ));
+                    }
                 }
                 let usage = inrou_reservation_usage
                     .entry(assignment.validator_account_id.clone())
@@ -3620,14 +3643,15 @@ impl SoracloudInrouPersistedStateV1<'_> {
         for (validator_account_id, (replicas, cpu_millis, memory_bytes, storage_bytes)) in
             inrou_reservation_usage
         {
-            let capability = inrou_host_capabilities
-                .get(&validator_account_id)
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_inrou_service_placements",
-                        "Inrou reservation aggregate has no retained host capability",
-                    )
-                })?;
+            if !inrou_available_hosts.contains(&validator_account_id) {
+                continue;
+            }
+            let Some(capability) = inrou_host_capabilities.get(&validator_account_id) else {
+                return Err(invalid_soracloud_state(
+                    "soracloud_inrou_service_placements",
+                    "available Inrou reservation aggregate has no retained host capability",
+                ));
+            };
             if replicas > u32::from(capability.max_hosted_replica_capacity)
                 || cpu_millis > u64::from(capability.max_cpu_millis)
                 || memory_bytes > capability.max_memory_bytes
@@ -5706,6 +5730,9 @@ fn timed_ovn_phase_matches_ballot_status_v1(
             BallotStatus::NoResult | BallotStatus::Superseded,
             Some(FailureKind::ReleasePulseUnavailable | FailureKind::OpeningDeadlineExpired),
         ) => phase == PersistedTimedOvnPhaseV1::Sealed,
+        (BallotStatus::NoResult, Some(FailureKind::ConfirmationJuryCapacityUnavailable)) => {
+            phase == PersistedTimedOvnPhaseV1::Released
+        }
         _ => false,
     }
 }
@@ -5714,6 +5741,7 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
     let mut validated_key_sessions = BTreeMap::new();
     let parliament_attempts = world.parliament_attempts.view();
     let timed_ovn_evidence = world.timed_ovn_evidence.view();
+    let tle_key_session_rosters = world.tle_key_session_rosters.view();
     let finalized_beacon_heights = world
         .global_beacon_pulses
         .view()
@@ -5733,7 +5761,31 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                 format!("invalid persisted adaptive TLE key session {key_session_id}: {error}"),
             )
         })?;
+        let ordered_roster = tle_key_session_rosters.get(key_session_id).ok_or_else(|| {
+            invalid_tle_ovn_persistence(
+                "tle_key_session_rosters",
+                format!("TLE key session {key_session_id} is missing its frozen ordered roster"),
+            )
+        })?;
+        validate_tle_key_session_roster_binding_v1(public_state, ordered_roster).map_err(|_| {
+            invalid_tle_ovn_persistence(
+                "tle_key_session_rosters",
+                format!(
+                    "TLE key session {key_session_id} has an invalid frozen ordered roster binding"
+                ),
+            )
+        })?;
         validated_key_sessions.insert(*key_session_id, validated);
+    }
+    for (key_session_id, _) in tle_key_session_rosters.iter() {
+        if !validated_key_sessions.contains_key(key_session_id) {
+            return Err(invalid_tle_ovn_persistence(
+                "tle_key_session_rosters",
+                format!(
+                    "frozen ordered roster references missing TLE key session {key_session_id}"
+                ),
+            ));
+        }
     }
     let active_tle_sessions = world.tle_active_key_session.view();
     for (key, key_session_id) in active_tle_sessions.iter() {
@@ -6120,6 +6172,25 @@ mod timed_ovn_persistence_phase_tests {
                 }
             }
         }
+        for phase in phases {
+            assert_eq!(
+                timed_ovn_phase_matches_ballot_status_v1(
+                    BallotStatus::NoResult,
+                    Some(FailureKind::ConfirmationJuryCapacityUnavailable),
+                    phase,
+                ),
+                phase == Phase::Released,
+                "Confirmation-capacity NoResult must retain its released timed-OVN evidence"
+            );
+            assert!(
+                !timed_ovn_phase_matches_ballot_status_v1(
+                    BallotStatus::Superseded,
+                    Some(FailureKind::ConfirmationJuryCapacityUnavailable),
+                    phase,
+                ),
+                "terminal Confirmation-capacity failure must not become retryable"
+            );
+        }
         for status in [
             BallotStatus::Registration,
             BallotStatus::SurvivorFreeze,
@@ -6194,6 +6265,103 @@ mod timed_ovn_persistence_phase_tests {
             "rejection identifies the cross-network restore: {error}"
         );
     }
+
+    fn world_with_frozen_tle_roster_binding_v1() -> (World, TleKeySessionId, Vec<PeerId>) {
+        let ordered_roster = (0..4)
+            .map(|_| PeerId::new(crate::state::checked_keypair().public_key().clone()))
+            .collect::<Vec<_>>();
+        let public_state = public_key_session_fixture_for_context_v1(
+            [0xC1; 32],
+            0xC2,
+            crate::beacon::global_threshold_beacon_roster_hash_v1(&ordered_roster),
+        );
+        let key_session_id = public_state.key_session_id;
+        let mut world = World::default();
+        world.tle_key_sessions.insert(key_session_id, public_state);
+        world
+            .tle_key_session_rosters
+            .insert(key_session_id, ordered_roster.clone());
+        (world, key_session_id, ordered_roster)
+    }
+
+    #[test]
+    fn restore_requires_an_exact_bijective_frozen_tle_roster_binding() {
+        let (mut world, key_session_id, ordered_roster) = world_with_frozen_tle_roster_binding_v1();
+        validate_tle_ovn_persistence(&world)
+            .expect("an exact public session/ordered-roster pair restores");
+
+        world.tle_key_session_rosters = Storage::default();
+        let missing = validate_tle_ovn_persistence(&world)
+            .expect_err("a session without its frozen roster must fail restore");
+        assert!(
+            matches!(
+                &missing,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_key_session_rosters"
+                        && message.contains("missing its frozen ordered roster")
+            ),
+            "unexpected missing-roster rejection: {missing}"
+        );
+
+        let mut reordered_roster = ordered_roster.clone();
+        reordered_roster.swap(0, 1);
+        world
+            .tle_key_session_rosters
+            .insert(key_session_id, reordered_roster);
+        let reordered = validate_tle_ovn_persistence(&world)
+            .expect_err("a reordered roster must fail its session hash binding");
+        assert!(
+            matches!(
+                &reordered,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_key_session_rosters"
+                        && message.contains("invalid frozen ordered roster binding")
+            ),
+            "unexpected reordered-roster rejection: {reordered}"
+        );
+
+        let duplicate_roster = vec![ordered_roster[0].clone(); ordered_roster.len()];
+        let duplicate_public_state = public_key_session_fixture_for_context_v1(
+            [0xC1; 32],
+            0xC3,
+            crate::beacon::global_threshold_beacon_roster_hash_v1(&duplicate_roster),
+        );
+        let duplicate_key_session_id = duplicate_public_state.key_session_id;
+        let mut duplicated = World::default();
+        duplicated
+            .tle_key_sessions
+            .insert(duplicate_key_session_id, duplicate_public_state);
+        duplicated
+            .tle_key_session_rosters
+            .insert(duplicate_key_session_id, duplicate_roster);
+        let duplicate = validate_tle_ovn_persistence(&duplicated)
+            .expect_err("duplicate PeerIds cannot occupy distinct frozen seats");
+        assert!(
+            matches!(
+                &duplicate,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_key_session_rosters"
+                        && message.contains("invalid frozen ordered roster binding")
+            ),
+            "unexpected duplicate-seat rejection: {duplicate}"
+        );
+
+        let mut orphaned = World::default();
+        orphaned
+            .tle_key_session_rosters
+            .insert(key_session_id, ordered_roster);
+        let orphan = validate_tle_ovn_persistence(&orphaned)
+            .expect_err("a roster without its public session must fail restore");
+        assert!(
+            matches!(
+                &orphan,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_key_session_rosters"
+                        && message.contains("references missing TLE key session")
+            ),
+            "unexpected orphan-roster rejection: {orphan}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -6226,6 +6394,395 @@ mod parliament_attempt_size_restore_tests {
                         && message.contains("authoritative encoded-size bound")
             ),
             "restore rejection identifies the authoritative attempt bound: {error}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod validation_fee_registry_restore_tests {
+    use super::*;
+    use crate::query::store::LiveQueryStore;
+    use iroha_data_model::{
+        governance::types::{GovernanceCertificateId, ProposalKind, ValidationFeePolicyProposal},
+        parameter::Parameter,
+        validation_fee::{
+            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
+            VALIDATION_FEE_POLICY_SCHEMA_VERSION, ValidationFeeChargingMode,
+            ValidationFeeParliamentAuthorizationV1, ValidationFeePolicyRegistryEntryV1,
+            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
+        },
+    };
+
+    const REGISTRY_CANDIDATE_SEED: u8 = 20;
+    const RESTORED_HEIGHT: u64 = 20;
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive deterministic validation-fee restore account");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn candidates(first_seed: u8) -> Vec<AccountId> {
+        (first_seed..first_seed + 24).map(account).collect()
+    }
+
+    fn network_id() -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::prehashed([0x91; 32]),
+        ))
+    }
+
+    fn registry_world_with_policy_network(
+        stored_candidate_seed: u8,
+        policy_network_id: iroha_data_model::NetworkId,
+    ) -> (World, ValidationFeePolicyRegistryV1) {
+        let parliament_network_id = network_id();
+        let proposal_operator = account(250);
+        let enacted_at_height = RESTORED_HEIGHT;
+        let effective_from_height = enacted_at_height
+            .checked_add(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS)
+            .expect("validation-fee activation height");
+        let policy = ValidationFeePolicyV1 {
+            schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            network_id: policy_network_id,
+            policy_version: 1,
+            previous_policy_hash: None,
+            ds_asset_id: AssetDefinitionId::derive_from_components(
+                DomainId::try_new("validation", "fees").expect("fee domain"),
+                "ds".parse().expect("fee asset name"),
+            ),
+            ds_scale: VALIDATION_FEE_DS_SCALE,
+            fee: Quantity::zero(),
+            treasury_account_id: account(249),
+            charging_mode: ValidationFeeChargingMode::Disabled,
+            effective_from_height,
+            expires_after_height: None,
+            exemption_classes: Vec::new(),
+            treasury_payout_binding: None,
+        };
+        let kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+            proposal_operator: proposal_operator.clone(),
+            policy: policy.clone(),
+            payout_lifecycle_proposal_id: None,
+        });
+        let registry_fixture =
+            crate::governance::parliament::tests::enacted_parliament_attempt_restore_fixture_v1(
+                &kind,
+                candidates(REGISTRY_CANDIDATE_SEED),
+                &parliament_network_id,
+                enacted_at_height,
+            );
+        let registry_attempt = registry_fixture.attempt;
+        let certificate = registry_attempt
+            .certificate()
+            .cloned()
+            .expect("enacted registry attempt retains its certificate");
+        let authorization = ValidationFeeParliamentAuthorizationV1 {
+            proposal_operator: proposal_operator.clone(),
+            proposal_fingerprint: kind.fingerprint(),
+            governance_certificate_id: GovernanceCertificateId::derive_v1(&certificate),
+            governance_certificate: certificate,
+            enacted_at_height,
+        };
+        let registry = ValidationFeePolicyRegistryV1 {
+            registered_policies: vec![
+                ValidationFeePolicyRegistryEntryV1::from_enactment(policy, authorization, None)
+                    .expect("canonical validation-fee registry entry"),
+            ],
+        };
+        registry
+            .validate()
+            .expect("restore fixture registry is intrinsically valid");
+
+        let stored_fixture =
+            crate::governance::parliament::tests::enacted_parliament_attempt_restore_fixture_v1(
+                &kind,
+                candidates(stored_candidate_seed),
+                &parliament_network_id,
+                enacted_at_height,
+            );
+        let stored_attempt = stored_fixture.attempt;
+        assert_eq!(
+            stored_attempt.attempt().id,
+            registry_attempt.attempt().id,
+            "same proposal and attempt sequence share one canonical attempt id"
+        );
+        if stored_candidate_seed != REGISTRY_CANDIDATE_SEED {
+            assert_ne!(
+                stored_attempt.certificate(),
+                registry_attempt.certificate(),
+                "different exact rosters must produce different enacted certificates"
+            );
+        }
+        let mut world = World::default();
+        world.governance_proposals.insert(
+            kind.fingerprint(),
+            GovernanceProposalRecord {
+                proposer: proposal_operator,
+                kind,
+                created_height: 1,
+                status: GovernanceProposalStatus::Enacted,
+            },
+        );
+        world
+            .parliament_attempts
+            .insert(stored_attempt.attempt().id, stored_attempt);
+        for key_session in stored_fixture.tle_key_sessions {
+            world
+                .tle_key_sessions
+                .insert(key_session.key_session_id, key_session);
+        }
+        for (key_session_id, ordered_roster) in stored_fixture.tle_key_session_rosters {
+            world
+                .tle_key_session_rosters
+                .insert(key_session_id, ordered_roster);
+        }
+        for (ballot_attempt_id, lifecycle) in stored_fixture.timed_ovn_evidence {
+            world
+                .timed_ovn_evidence
+                .insert(ballot_attempt_id, lifecycle);
+        }
+        {
+            let mut parameters = world.parameters.block();
+            parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(registry.clone().into_custom_parameter()));
+            parameters.commit();
+        }
+        (world, registry)
+    }
+
+    fn registry_world(stored_candidate_seed: u8) -> (World, ValidationFeePolicyRegistryV1) {
+        registry_world_with_policy_network(stored_candidate_seed, network_id())
+    }
+
+    fn restore_world_with_network(
+        world: World,
+        restored_network_id: iroha_data_model::NetworkId,
+    ) -> Result<State, json::Error> {
+        let mut state = State::new_with_chain_and_network_id_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            "validation-fee-restore"
+                .parse()
+                .expect("validation-fee restore chain id"),
+            restored_network_id,
+        );
+        for height in 1..=RESTORED_HEIGHT {
+            state.push_block_hash_for_testing(HashOf::from_untyped_unchecked(Hash::new(
+                height.to_le_bytes(),
+            )));
+        }
+        let resolver_revision = MusubiResolverIndexRevisionV1::default();
+        let genesis_hash = state
+            .block_hashes
+            .view()
+            .iter()
+            .next()
+            .copied()
+            .expect("restore fixture retains its genesis hash");
+        let genesis_checkpoint = MusubiRegistrySnapshotV1 {
+            finalized_height: 1,
+            finalized_block_hash: *genesis_hash.as_ref(),
+            index_revision: resolver_revision.get(),
+        };
+        genesis_checkpoint
+            .validate()
+            .expect("restore fixture genesis resolver checkpoint is canonical");
+        {
+            let mut world = state.world.block();
+            assert!(
+                world
+                    .musubi_resolver_index_checkpoints
+                    .insert(resolver_revision, genesis_checkpoint)
+                    .is_none(),
+                "restore fixture installs exactly one genesis resolver checkpoint"
+            );
+            world.commit();
+        }
+        let snapshot = json::to_value(&state).expect("serialize validation-fee restore fixture");
+        KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json(snapshot)
+    }
+
+    fn restore_world(world: World) -> Result<State, json::Error> {
+        restore_world_with_network(world, network_id())
+    }
+
+    fn assert_registry_restore_error(error: &json::Error, expected: &str) {
+        assert!(
+            matches!(
+                error,
+                json::Error::InvalidField { field, message }
+                    if field == "parameters" && message.contains(expected)
+            ),
+            "restore rejection must identify the protected registry provenance: {error}"
+        );
+    }
+
+    #[test]
+    fn restore_accepts_exact_validation_fee_registry_governance_provenance() {
+        let (world, _) = registry_world(REGISTRY_CANDIDATE_SEED);
+        crate::validation_fee::validate_persisted_policy_registry_governance_v1(&world.view())
+            .expect("exact registry proposal and attempt provenance");
+        restore_world(world).expect("exact protected registry provenance restores");
+    }
+
+    #[test]
+    fn restore_rejects_validation_fee_registry_with_missing_governance_provenance() {
+        let (world, registry) = registry_world(REGISTRY_CANDIDATE_SEED);
+        let authorization = &registry.registered_policies[0].parliament_authorization;
+        {
+            let mut proposals = world.governance_proposals.block();
+            assert!(
+                proposals
+                    .remove(authorization.proposal_fingerprint)
+                    .is_some()
+            );
+            proposals.commit();
+        }
+        registry
+            .validate()
+            .expect("missing proposal provenance does not corrupt the registry payload");
+        let registry_error =
+            crate::validation_fee::validate_persisted_policy_registry_governance_v1(&world.view())
+                .expect_err("the registry validator must reject its missing exact proposal");
+        assert!(
+            registry_error.contains("authorized governance proposal is missing"),
+            "registry validation identifies the missing proposal: {registry_error}"
+        );
+        let error = restore_world(world)
+            .err()
+            .expect("an internally valid registry cannot restore without its proposal");
+        assert!(
+            matches!(
+                &error,
+                json::Error::InvalidField { field, message }
+                    if field == "parliament_attempts"
+                        && message.contains("missing exact governance proposal")
+            ),
+            "the complete restore boundary rejects the same missing proposal before publication: {error}"
+        );
+    }
+
+    #[test]
+    fn restore_validator_rejects_validation_fee_registry_with_missing_authorized_attempt() {
+        let (world, registry) = registry_world(REGISTRY_CANDIDATE_SEED);
+        let authorization = &registry.registered_policies[0].parliament_authorization;
+        {
+            let mut attempts = world.parliament_attempts.block();
+            assert!(
+                attempts
+                    .remove(authorization.governance_certificate.governance_attempt_id)
+                    .is_some()
+            );
+            attempts.commit();
+        }
+        registry
+            .validate()
+            .expect("missing cross-store attempt does not corrupt the registry payload");
+        let error =
+            crate::validation_fee::validate_persisted_policy_registry_governance_v1(&world.view())
+                .expect_err("the registry must retain its exact authorized Parliament attempt");
+        assert!(
+            error.contains("authorized Parliament attempt is missing"),
+            "restore validator identifies the missing attempt: {error}"
+        );
+        assert!(
+            restore_world(world).is_err(),
+            "the complete restore boundary must also reject the missing attempt"
+        );
+    }
+
+    #[test]
+    fn restore_rejects_validation_fee_registry_for_another_exact_network() {
+        let foreign_network = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x92; 32])),
+        );
+        let (world, registry) =
+            registry_world_with_policy_network(REGISTRY_CANDIDATE_SEED, foreign_network);
+        registry
+            .validate()
+            .expect("foreign-network registry remains intrinsically valid");
+        let error = restore_world(world)
+            .err()
+            .expect("a restored registry cannot target another exact network");
+        assert!(
+            matches!(
+                &error,
+                json::Error::InvalidField { field, message }
+                    if field == "state.durable_merge_ledger"
+                        && message.contains("validation-fee policy network mismatch")
+            ),
+            "restore rejection identifies the foreign validation-fee network: {error}"
+        );
+    }
+
+    #[test]
+    fn emergency_fast_build_cannot_bypass_validation_fee_registry_network_binding() {
+        let foreign_policy_network = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x92; 32])),
+        );
+        let (world, _) =
+            registry_world_with_policy_network(REGISTRY_CANDIDATE_SEED, foreign_policy_network);
+        let block_hashes: Vec<HashOf<BlockHeader>> = (1..=RESTORED_HEIGHT)
+            .map(|height| HashOf::from_untyped_unchecked(Hash::new(height.to_le_bytes())))
+            .collect();
+        let error = build_state(
+            BuildStateInputs {
+                world,
+                block_hashes: BlockHashes::new(block_hashes),
+                transactions: TransactionsStorage::new(),
+                commit_topology: Cell::new(Vec::new()),
+                prev_commit_topology: Cell::new(Vec::new()),
+                ivm: IVM::new(0),
+                nexus: iroha_config::parameters::actual::Nexus::default(),
+                lane_incarnations: BTreeMap::new(),
+                lane_incarnation_lineage: BTreeMap::new(),
+                lane_incarnation_activation_heights: BTreeMap::new(),
+                autoscale_sample_history: VecDeque::new(),
+                chain_id: "validation-fee-emergency-fast"
+                    .parse()
+                    .expect("validation-fee emergency-fast chain id"),
+                network_id: network_id(),
+                snapshot_v2_bootstrap_candidate: None,
+                nexus_runtime_restored_from_snapshot: false,
+                kura: Kura::blank_kura_for_testing(),
+                query_handle: LiveQueryStore::start_test(),
+                #[cfg(feature = "telemetry")]
+                telemetry: crate::telemetry::StateTelemetry::default(),
+            },
+            false,
+            true,
+        )
+        .err()
+        .expect("emergency-fast construction cannot bypass exact fee-policy network binding");
+        assert!(
+            error
+                .to_string()
+                .contains("validation-fee policy network mismatch"),
+            "emergency-fast rejection identifies the foreign validation-fee network: {error}"
+        );
+    }
+
+    #[test]
+    fn restore_rejects_validation_fee_registry_with_mismatched_enacted_attempt() {
+        let (world, registry) = registry_world(80);
+        registry
+            .validate()
+            .expect("mismatched cross-store provenance does not corrupt the registry payload");
+        let error = restore_world(world)
+            .err()
+            .expect("an internally valid registry cannot restore with another certificate");
+        assert_registry_restore_error(
+            &error,
+            "authorized Parliament attempt does not retain the exact enacted certificate",
         );
     }
 }
@@ -6496,6 +7053,8 @@ fn parse_world(
         .validate_sccp_registry()?;
     let sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1> =
         take_required(&mut map, "sccp_registry")?;
+    let sccp_route_liabilities: Storage<SccpRouteKeyV1, SccpRouteLiabilityV1> =
+        take_required(&mut map, "sccp_route_liabilities")?;
     let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
     let sccp_outbound_pending_messages = take_required(&mut map, "sccp_outbound_pending_messages")?;
     let sccp_outbound_message_locator = take_required(&mut map, "sccp_outbound_message_locator")?;
@@ -6740,6 +7299,7 @@ fn parse_world(
     let parliament_bodies = take_required(&mut map, "parliament_bodies")?;
     let parliament_attempts = take_required(&mut map, "parliament_attempts")?;
     let tle_key_sessions = take_required(&mut map, "tle_key_sessions")?;
+    let tle_key_session_rosters = take_required(&mut map, "tle_key_session_rosters")?;
     let tle_active_key_session = take_required(&mut map, "tle_active_key_session")?;
     let timed_ovn_evidence = take_required(&mut map, "timed_ovn_evidence")?;
     let global_beacon_dkg = take_required(&mut map, "global_beacon_dkg")?;
@@ -6861,6 +7421,7 @@ fn parse_world(
         axt_replay_ledger,
         axt_handle_budget_ledger,
         sccp_registry,
+        sccp_route_liabilities,
         sccp_outbound_pending_usage,
         sccp_outbound_pending_messages,
         sccp_outbound_message_locator,
@@ -7013,6 +7574,7 @@ fn parse_world(
         parliament_attempts,
         parliament_timed_ovn_resource_reservations: Storage::default(),
         tle_key_sessions,
+        tle_key_session_rosters,
         tle_active_key_session,
         timed_ovn_evidence,
         global_beacon_dkg,
@@ -7216,6 +7778,11 @@ fn parse_world(
             });
             }
         }
+        crate::validation_fee::validate_persisted_policy_registry_governance_v1(&world.view())
+            .map_err(|message| json::Error::InvalidField {
+                field: "parameters".into(),
+                message,
+            })?;
         MusubiPersistedState {
             namespace_bindings: &world.musubi_namespace_bindings,
             packages: &world.musubi_packages,
@@ -7561,6 +8128,15 @@ fn build_state(
         view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
         sccp_registry_cache: parking_lot::Mutex::new(SccpRegistryCache::default()),
     };
+    crate::validation_fee::validate_persisted_policy_registry_runtime_v1(
+        &state.view(),
+        restored_height,
+    )
+    .map_err(|error| {
+        MergeLedgerCommitError::ExecutionStatePublication(format!(
+            "restored validation-fee policy registry is invalid: {error}"
+        ))
+    })?;
     state
         .finalize_snapshot_derived_state_indexes(emergency_fast)
         .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
@@ -7857,7 +8433,9 @@ fn reject_unknown(map: &SnapshotJsonMap<'_>, context: &str) -> Result<(), json::
 #[cfg(test)]
 mod decode_tests {
     use super::*;
+    use crate::query::store::LiveQueryStore;
     use iroha_crypto::SignatureOf;
+    use iroha_data_model::account::AccountDetails;
     use iroha_data_model::musubi::{
         MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiAliasHistoryActionV1,
         MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1, MusubiArtifactGovernanceStateV1,
@@ -7875,8 +8453,8 @@ mod decode_tests {
         MusubiTakedownArtifactActionV1, MusubiVerificationLockDigestV1,
     };
     use iroha_data_model::sorafs::pin_registry::{
-        ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionSignerPolicyV1,
-        ProviderIngestFinalizedAnchorV1,
+        ChunkerProfileHandle, ManifestAliasBinding, ManifestRootCid,
+        ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
     };
 
     #[test]
@@ -8735,14 +9313,30 @@ mod decode_tests {
     #[test]
     fn first_release_world_decoder_requires_every_canonical_field() {
         let encoded = json::to_json(&World::default()).expect("serialize default World");
-        let mut map = SnapshotJsonMap::parse(&encoded, "world").expect("parse default World");
-        map.remove("account_aliases")
-            .expect("canonical World contains account_aliases");
         let ivm = IVM::new(0);
         let seed = IvmSeed {
             ivm: &ivm,
             _marker: PhantomData,
         };
+
+        assert!(
+            !encoded.contains("\"account_aliases_by_account\"")
+                && !encoded.contains("\"account_scope_directory\""),
+            "derived account indexes must remain outside the canonical snapshot"
+        );
+        assert!(
+            encoded.contains("\"manifest_aliases\""),
+            "authoritative SoraFS alias records must remain in the canonical snapshot"
+        );
+        parse_world(
+            SnapshotJsonMap::parse(&encoded, "world").expect("parse default World"),
+            &seed,
+        )
+        .expect("canonical World must decode while rebuilding skipped account indexes");
+
+        let mut map = SnapshotJsonMap::parse(&encoded, "world").expect("parse default World");
+        map.remove("account_aliases")
+            .expect("canonical World contains account_aliases");
 
         let error = match parse_world(map, &seed) {
             Ok(_) => panic!("a first-release snapshot cannot default a missing World field"),
@@ -8751,6 +9345,98 @@ mod decode_tests {
         assert!(
             error.to_string().contains("account_aliases"),
             "unexpected missing-field diagnostic: {error}"
+        );
+    }
+    #[test]
+    fn canonical_state_snapshot_persists_manifest_aliases_and_rebuilds_account_indexes() {
+        let mut world = World::default();
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let alias_domain =
+            AccountAliasDomain::new("parliament".parse().expect("account alias domain"));
+        let account_alias = AccountAlias::new(
+            "member".parse().expect("account alias label"),
+            Some(alias_domain.clone()),
+            DataSpaceId::UNIVERSAL,
+        );
+        let account_details = AccountDetails::new(
+            Metadata::default(),
+            Some(account_alias.clone()),
+            None,
+            Vec::new(),
+        );
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(account_details));
+        world
+            .account_aliases
+            .insert(account_alias.clone(), account_id.clone());
+        world.account_rekey_records.insert(
+            account_alias.clone(),
+            AccountRekeyRecord::new(account_alias.clone(), account_id.clone()),
+        );
+
+        let manifest_binding = ManifestAliasBinding {
+            name: "parliament".to_owned(),
+            namespace: "sora".to_owned(),
+            proof: vec![0xA5; 32],
+        };
+        let manifest_alias_id = ManifestAliasId::from(&manifest_binding);
+        let manifest_alias_record = ManifestAliasRecord::new(
+            manifest_binding,
+            ManifestDigest::new([0xB6; 32]),
+            account_id.clone(),
+            7,
+            19,
+        );
+        world
+            .manifest_aliases
+            .insert(manifest_alias_id.clone(), manifest_alias_record.clone());
+
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
+        let encoded = json::to_json(&state).expect("serialize populated State");
+        assert!(!encoded.contains("\"account_aliases_by_account\""));
+        assert!(!encoded.contains("\"account_scope_directory\""));
+        let snapshot = json::to_value(&state).expect("serialize populated State snapshot");
+        let restored = KuraSeed {
+            kura,
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json(snapshot)
+        .expect("restore populated canonical State");
+
+        assert_eq!(
+            restored
+                .world
+                .manifest_aliases
+                .view()
+                .get(&manifest_alias_id),
+            Some(&manifest_alias_record),
+            "authoritative manifest alias metadata must survive restart"
+        );
+        assert_eq!(
+            restored
+                .world
+                .account_aliases_by_account
+                .view()
+                .get(&account_id),
+            Some(&BTreeSet::from([account_alias.clone()])),
+            "the reverse alias index must be rebuilt from authoritative bindings"
+        );
+        let restored_scope = restored
+            .world
+            .account_scope_directory
+            .view()
+            .get(&account_id)
+            .cloned()
+            .expect("the account scope directory must be rebuilt");
+        assert!(
+            restored_scope.iter().any(|(dataspace, domains)| {
+                *dataspace == DataSpaceId::UNIVERSAL && domains.contains(&alias_domain)
+            }),
+            "the rebuilt account scope must retain the authoritative alias domain"
         );
     }
     #[test]

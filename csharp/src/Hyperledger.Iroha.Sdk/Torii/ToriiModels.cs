@@ -6049,6 +6049,41 @@ public sealed record class ToriiContractViewRequest
     public ulong GasLimit { get; init; }
 }
 
+/// <summary>
+/// Caller-trusted exact contract-call intent used to validate an unsigned Torii draft.
+/// </summary>
+/// <remarks>
+/// Construct the invocation from a trusted contract artifact and argument schema.
+/// <c>metadata</c> is the exact final transaction metadata, including
+/// every deterministic system or event entry Torii is expected to add. This intent
+/// is local-only and is never serialized in the request.
+/// </remarks>
+public sealed class ToriiContractCallDraftIntent
+{
+    private readonly Dictionary<string, JsonNode?> metadata;
+
+    public ToriiContractCallDraftIntent(
+        TransactionContractInvocation invocation,
+        IReadOnlyDictionary<string, JsonNode?> metadata)
+    {
+        Invocation = invocation ?? throw new ArgumentNullException(nameof(invocation));
+        ArgumentNullException.ThrowIfNull(metadata);
+        this.metadata = metadata.ToDictionary(
+            static pair => pair.Key,
+            static pair => ToriiJsonSnapshots.Copy(pair.Value),
+            StringComparer.Ordinal);
+    }
+
+    /// <summary>The exact resolved invocation authorized by the caller.</summary>
+    public TransactionContractInvocation Invocation { get; }
+
+    /// <summary>The exact final transaction metadata authorized by the caller.</summary>
+    public IReadOnlyDictionary<string, JsonNode?> Metadata => metadata.ToDictionary(
+        static pair => pair.Key,
+        static pair => ToriiJsonSnapshots.Copy(pair.Value),
+        StringComparer.Ordinal);
+}
+
 public sealed record class ToriiContractCallRequest
 {
     private JsonNode? payload;
@@ -6080,6 +6115,10 @@ public sealed record class ToriiContractCallRequest
         get => ToriiJsonSnapshots.Copy(payload);
         init => payload = ToriiJsonSnapshots.Copy(value);
     }
+
+    /// <summary>Exact local-only intent required to accept an unsigned transaction draft.</summary>
+    [JsonIgnore]
+    public ToriiContractCallDraftIntent? DraftIntent { get; init; }
 
     [JsonPropertyName("creation_time_ms")]
     public ulong? CreationTimeMilliseconds { get; init; }
@@ -7204,9 +7243,6 @@ public sealed record class ToriiMultisigProposeRequest
     [JsonPropertyName("signer_account_id")]
     public string SignerAccountId { get; init; } = string.Empty;
 
-    [JsonPropertyName("private_key")]
-    public string? PrivateKey { get; init; }
-
     [JsonPropertyName("public_key_hex")]
     public string? PublicKeyHex { get; init; }
 
@@ -7258,9 +7294,6 @@ public sealed record class ToriiMultisigContractCallProposeRequest
     [JsonPropertyName("signer_account_id")]
     public string SignerAccountId { get; init; } = string.Empty;
 
-    [JsonPropertyName("private_key")]
-    public string? PrivateKey { get; init; }
-
     [JsonPropertyName("public_key_hex")]
     public string? PublicKeyHex { get; init; }
 
@@ -7286,6 +7319,10 @@ public sealed record class ToriiMultisigContractCallProposeRequest
         init => payload = ToriiJsonSnapshots.Copy(value);
     }
 
+    /// <summary>Exact local-only intent required to accept an unsigned transaction draft.</summary>
+    [JsonIgnore]
+    public ToriiContractCallDraftIntent? DraftIntent { get; init; }
+
     [JsonPropertyName("fee_payment")]
     public FeePaymentIntent FeePayment { get; init; } = null!;
 }
@@ -7300,9 +7337,6 @@ public sealed record class ToriiMultisigContractCallApproveRequest
 
     [JsonPropertyName("signer_account_id")]
     public string SignerAccountId { get; init; } = string.Empty;
-
-    [JsonPropertyName("private_key")]
-    public string? PrivateKey { get; init; }
 
     [JsonPropertyName("public_key_hex")]
     public string? PublicKeyHex { get; init; }
@@ -7334,9 +7368,6 @@ public sealed record class ToriiMultisigApproveRequest
     [JsonPropertyName("signer_account_id")]
     public string SignerAccountId { get; init; } = string.Empty;
 
-    [JsonPropertyName("private_key")]
-    public string? PrivateKey { get; init; }
-
     [JsonPropertyName("public_key_hex")]
     public string? PublicKeyHex { get; init; }
 
@@ -7366,9 +7397,6 @@ public sealed record class ToriiMultisigCancelRequest
 
     [JsonPropertyName("signer_account_id")]
     public string SignerAccountId { get; init; } = string.Empty;
-
-    [JsonPropertyName("private_key")]
-    public string? PrivateKey { get; init; }
 
     [JsonPropertyName("public_key_hex")]
     public string? PublicKeyHex { get; init; }
@@ -7465,6 +7493,9 @@ public sealed record class ToriiMultisigResponse
             nameof(CreationTimeMilliseconds));
     }
 
+    [JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; } = null!;
+
     [JsonPropertyName("transaction_payload_b64")]
     public string? TransactionPayloadBase64
     {
@@ -7515,6 +7546,9 @@ public sealed record class ToriiMultisigCancelResponse
 
     [JsonPropertyName("creation_time_ms")]
     public ulong? CreationTimeMilliseconds { get; init; }
+
+    [JsonRequired, JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; } = null!;
 
     [JsonPropertyName("transaction_payload_b64")]
     public string? TransactionPayloadBase64 { get; init; }
@@ -7597,6 +7631,9 @@ public sealed record class ToriiMultisigContractCallResponse
             value,
             nameof(CreationTimeMilliseconds));
     }
+
+    [JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; } = null!;
 
     [JsonPropertyName("transaction_payload_b64")]
     public string? TransactionPayloadBase64

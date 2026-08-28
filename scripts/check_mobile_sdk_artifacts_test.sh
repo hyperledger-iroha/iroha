@@ -1905,6 +1905,14 @@ for parliament_c_symbol in \
     "$parliament_c_symbol" \
     "$inspection_tools"
 done
+for hijiri_quote_c_symbol in \
+  connect_norito_validation_fee_hijiri_quote_request_v1 \
+  connect_norito_validation_fee_hijiri_quote_response_verify_v1; do
+  run_expect_reference_only_binary_fail \
+    "$extra_binary_symbol" \
+    "$hijiri_quote_c_symbol" \
+    "$inspection_tools"
+done
 run_expect_binary_fail \
   "$extra_binary_symbol" \
   "Kagemusha export inventory is not exact" \
@@ -2549,6 +2557,18 @@ for parliament_jni_symbol in \
   run_expect_android_missing_symbol_fail \
     "$with_android_outputs" \
     "$parliament_jni_symbol" \
+    "$android_inspection_tools"
+done
+for hijiri_quote_jni_symbol in \
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1 \
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1 \
+  Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1 \
+  Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1; do
+  run_expect_android_missing_symbol_fail \
+    "$with_android_outputs" \
+    "$hijiri_quote_jni_symbol" \
     "$android_inspection_tools"
 done
 run_expect_android_missing_symbol_fail \

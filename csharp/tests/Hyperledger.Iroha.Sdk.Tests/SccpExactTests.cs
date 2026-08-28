@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Linq;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Hyperledger.Iroha.Address;
@@ -14,12 +15,18 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed partial class SccpExactTests
 {
+    private static readonly UInt128 RegistryMaxOutstandingLiability = 1_000_000_000_000;
+    private static readonly UInt128 EvmRegistryMaxWrappedSupply =
+        RegistryMaxOutstandingLiability * 1_000_000_000;
+    private static readonly UInt128 TonRegistryMaxWrappedSupply =
+        RegistryMaxOutstandingLiability;
+
     private const ulong DefaultTransactionTimeToLiveMilliseconds = 100_000;
     private static readonly string MessageId = SccpV1.LowerHex(SccpV1.MessageId(BundleLane(), ExactTransfer()));
     private static readonly FeePaymentIntent BridgeFeePayment = FeePaymentIntent.Authority([]);
 
     [Fact]
-    public void ClosedInventoryContainsOnlyEthBscTronAndThreeCodecs()
+    public void ClosedInventoryContainsOnlyFirstReleaseNetworksAndCodecs()
     {
         Assert.Equal(
         new[]
@@ -28,9 +35,14 @@ public sealed partial class SccpExactTests
             SccpNetworkV1.EthereumMainnet, SccpNetworkV1.EthereumSepolia,
             SccpNetworkV1.BscMainnet, SccpNetworkV1.BscTestnet,
             SccpNetworkV1.TronMainnet, SccpNetworkV1.TronNile, SccpNetworkV1.TronShasta,
+            SccpNetworkV1.TonMainnet, SccpNetworkV1.TonTestnet,
         }, Enum.GetValues<SccpNetworkV1>());
         Assert.Equal(
-            new[] { SccpCodecV1.CanonicalText, SccpCodecV1.EvmAddress20, SccpCodecV1.TronAddress21 },
+            new[]
+            {
+                SccpCodecV1.CanonicalText, SccpCodecV1.EvmAddress20,
+                SccpCodecV1.TronAddress21, SccpCodecV1.TonAccount36,
+            },
             Enum.GetValues<SccpCodecV1>());
         Assert.False(Enum.IsDefined((SccpNetworkV1)0));
         Assert.False(Enum.IsDefined((SccpNetworkV1)6));
@@ -42,7 +54,7 @@ public sealed partial class SccpExactTests
         foreach (var alias in new[]
         {
             "sora-nexus", "sora_nexus", "eth-mainnet", "Ethereum-mainnet", "ethereum_mainnet", " ethereum-mainnet",
-            "solana-mainnet-beta", "ton-mainnet", "tron-testnet",
+            "solana-mainnet-beta", "ton_mainnet", "Ton-mainnet", "tron-testnet",
         })
         {
             Assert.Throws<ArgumentException>(() => SccpNetworkV1Extensions.ParseProfileKey(alias));
@@ -90,10 +102,34 @@ public sealed partial class SccpExactTests
         Assert.Equal(21, SccpCodecV1.TronAddress21.Validate(tron).Length);
         tron[0] = 0x42;
         Assert.Throws<ArgumentException>(() => SccpCodecV1.TronAddress21.Validate(tron));
+        var ton = Enumerable.Repeat((byte)0x33, 36).ToArray();
+        ton.AsSpan(0, 4).Clear();
+        Assert.Equal(36, SccpCodecV1.TonAccount36.Validate(ton).Length);
+        ton[3] = 1;
+        Assert.Throws<ArgumentException>(() => SccpCodecV1.TonAccount36.Validate(ton));
+        Assert.Throws<ArgumentException>(() => SccpCodecV1.TonAccount36.Validate(new byte[36]));
         Assert.Throws<ArgumentException>(() => new SccpSourceEmitterV1.Evm(
             Enumerable.Repeat((byte)1, 20).ToArray(),
             Enumerable.Repeat((byte)2, 32).ToArray(),
             Enumerable.Repeat((byte)2, 32).ToArray()));
+        Assert.Equal("ton_masterchain_v1", SccpNativeBackendV1.TonMasterchain.WireKey());
+        Assert.True(SccpNativeBackendV1.TonMasterchain.Supports(SccpNetworkV1.TonMainnet));
+    }
+
+    [Fact]
+    public void TonNetworkIdentitiesCommitCanonicalGlobalAndZeroStateMaterial()
+    {
+        var mainnet = SccpV1.CanonicalNetworkBytes(SccpNetworkV1.TonMainnet);
+        var testnet = SccpV1.CanonicalNetworkBytes(SccpNetworkV1.TonTestnet);
+        Assert.Equal(90, mainnet.Length);
+        Assert.Equal(1, mainnet[0]);
+        Assert.Equal(14, mainnet[1]);
+        Assert.Equal(4U, BinaryPrimitives.ReadUInt32LittleEndian(mainnet.AsSpan(2, 4)));
+        Assert.Equal(-239, BinaryPrimitives.ReadInt32LittleEndian(mainnet.AsSpan(6, 4)));
+        Assert.Equal(-1, BinaryPrimitives.ReadInt32LittleEndian(mainnet.AsSpan(10, 4)));
+        Assert.Equal(0x8000_0000_0000_0000UL, BinaryPrimitives.ReadUInt64LittleEndian(mainnet.AsSpan(14, 8)));
+        Assert.Equal(-3, BinaryPrimitives.ReadInt32LittleEndian(testnet.AsSpan(6, 4)));
+        Assert.NotEqual(mainnet, testnet);
     }
 
     [Fact]
@@ -292,8 +328,12 @@ public sealed partial class SccpExactTests
             .ToHashSet(StringComparer.Ordinal);
         Assert.True(fields.SetEquals(
             [
-                "authority", "signature_b64", "transaction_payload_b64",
-                "fee_payment", "destination_proof_b64", "creation_time_ms",
+                "authority",
+                "signature_b64",
+                "transaction_payload_b64",
+                "fee_payment",
+                "destination_proof_b64",
+                "creation_time_ms",
             ]));
         var prepared = BridgeProofRequest(
             authority,
@@ -396,9 +436,25 @@ public sealed partial class SccpExactTests
     [Fact]
     public void SubmitArtifactsRejectReservedNoritoFlagsPaddingAndAllSmallOrderSignatures()
     {
+        Assert.Equal(
+            16 * 1024 * 1024 + 64 * 1024,
+            SccpSubmitValidation.MaximumGroth16ArtifactBytes);
+        Assert.Equal(
+            16 * 1024 * 1024 + 128 * 1024,
+            SccpSubmitValidation.MaximumDestinationArtifactBytes);
+        Assert.Equal(22_544_384, SccpSubmitValidation.MaximumDestinationArtifactBase64Bytes);
+        Assert.Equal(
+            "iroha_data_model::bridge::BridgeSccpDestinationProofV1",
+            SccpSubmitValidation.DestinationArtifactSchemaName);
         var pair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)7, 32).ToArray());
         var authority = pair.ToAccountAddress().ToI105(AccountAddress.TestChainDiscriminant);
         var archive = NoritoCodec.Encode(SccpSubmitValidation.DestinationArtifactSchemaName, [1]);
+        var legacyBn254Artifact = NoritoCodec.Encode(
+            "iroha_sccp::SccpGroth16Bn254ProofArtifactV1",
+            [1]);
+        Assert.Throws<ArgumentException>(() => BridgeProofRequest(
+            authority,
+            Convert.ToBase64String(legacyBn254Artifact)));
 
         foreach (var mutation in new Func<byte[], byte[]>[]
         {
@@ -449,6 +505,44 @@ public sealed partial class SccpExactTests
                 Convert.ToBase64String(CanonicalTransactionPayload(7, destinationProof: true)),
                 creationTimeMs: 7));
         }
+    }
+
+    [Fact]
+    public async Task ToriiProofRequestNoritoAcceptsOnlyTheTwoConcreteCurveTypes()
+    {
+        foreach (var schemaName in SccpSubmitValidation.ProofRequestSchemaNames)
+        {
+            var frame = NoritoCodec.Encode(schemaName, [1]);
+            string? observedAccept = null;
+            var handler = new StubHandler(request =>
+            {
+                observedAccept = request.Headers.Accept.Single().MediaType;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(frame),
+                }.WithNoritoContentType();
+            });
+            using var client = new ToriiClient(new Uri("https://example.test"), new HttpClient(handler));
+            Assert.Equal(
+                frame,
+                await client.GetSccpProofRequestNoritoAsync(
+                    MessageId,
+                    TestContext.Current.CancellationToken));
+            Assert.Equal("application/x-norito", observedAccept);
+        }
+
+        var unknown = NoritoCodec.Encode("example::UnknownProofRequestV1", [1]);
+        var unknownHandler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(unknown),
+        }.WithNoritoContentType());
+        using var unknownClient = new ToriiClient(
+            new Uri("https://example.test"),
+            new HttpClient(unknownHandler));
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            unknownClient.GetSccpProofRequestNoritoAsync(
+                MessageId,
+                TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -521,8 +615,20 @@ public sealed partial class SccpExactTests
                 "max_bls_signer_contributions_per_block"
             ),
             (
+                "max_ed25519_signature_checks_per_transaction",
+                "max_ed25519_signature_checks_per_block"
+            ),
+            (
+                "max_ed25519_validator_key_checks_per_transaction",
+                "max_ed25519_validator_key_checks_per_block"
+            ),
+            (
                 "max_bn254_pairing_checks_per_transaction",
                 "max_bn254_pairing_checks_per_block"
+            ),
+            (
+                "max_bls12_381_pairing_checks_per_transaction",
+                "max_bls12_381_pairing_checks_per_block"
             ),
         ];
         foreach (var (lower, upper) in orderingRelations)
@@ -664,6 +770,8 @@ public sealed partial class SccpExactTests
         Assert.Equal("taira_bsc_xor", route.RouteId);
         Assert.Equal(1U, route.Revision);
         Assert.Equal(SccpRouteActivationV1.Staged, route.Activation);
+        Assert.Equal(EvmRegistryMaxWrappedSupply, route.Destination.MaxWrappedSupply);
+        Assert.Equal(RegistryMaxOutstandingLiability, route.MaxOutstandingLiability);
 
         var tron = SccpRegistryV1.Parse(Json(TronRegistryObject()));
         Assert.Equal("taira_tron_xor", Assert.Single(Assert.Single(tron.Lanes).Routes).RouteId);
@@ -686,10 +794,12 @@ public sealed partial class SccpExactTests
             value => ((Dictionary<string, object?>)((Dictionary<string, object?>)Route(value)["destination"]!)["deployment"]!)["route_code_hash"] = Upper(0x32, 32),
             value => ((Dictionary<string, object?>)((Dictionary<string, object?>)Route(value)["destination"]!)["deployment"]!)["verifier_key_hash"] = Upper(0x33, 32),
             value => ((Dictionary<string, object?>)((Dictionary<string, object?>)Route(value)["destination"]!)["deployment"]!)["taira_to_token_multiplier"] = 1_000_000_001,
+            value => ((Dictionary<string, object?>)((Dictionary<string, object?>)Route(value)["destination"]!)["deployment"]!)["max_wrapped_supply"] = EvmRegistryMaxWrappedSupply - 1,
             value => Route(value)["route_id"] = "Taira_Bsc_Xor",
             value => Route(value)["revision"] = 2,
             value => Route(value)["activation"] = new Dictionary<string, object?> { ["activation"] = "bidirectional", ["direction"] = null },
             value => ((Dictionary<string, object?>)Route(value)["settlement"]!)["payload_amount_scale"] = 8,
+            value => ((Dictionary<string, object?>)Route(value)["settlement"]!)["max_outstanding_liability"] = RegistryMaxOutstandingLiability - 1,
             value => ((Dictionary<string, object?>)Route(value)["settlement"]!)["asset_definition_id"] = "xor",
         };
         foreach (var mutation in mutations)
@@ -715,6 +825,75 @@ public sealed partial class SccpExactTests
         secondRoute["revision"] = 2;
         laneObject["routes"] = new object[] { firstRoute, secondRoute };
         Assert.Throws<ArgumentException>(() => SccpRegistryV1.Parse(Json(reusedDeployment)));
+    }
+
+    [Fact]
+    public void RegistryParsesExactTonDeploymentAndRejectsCurveAddressAndProfileAliases()
+    {
+        var parsedLane = Assert.Single(SccpRegistryV1.Parse(Json(TonRegistryObject())).Lanes);
+        var parsed = Assert.Single(parsedLane.Routes);
+        Assert.Equal(SccpNetworkV1.TonMainnet, parsed.Lane.Source);
+        Assert.Equal(SccpDestinationProofBackendV1.TonGroth16Bls12381, parsed.Destination.Family);
+        Assert.Equal(SccpSemanticProofProfileKindV1.Groth16Bls12381, parsed.Destination.SemanticProofProfile.Kind);
+        Assert.Equal(0, parsed.Destination.TonRouteAddress!.Workchain);
+        Assert.IsType<SccpTonSourceEmitterV1>(parsed.SourceEmitter);
+
+        var changedInitialData = TonRegistryObject();
+        TonDeployment(changedInitialData)["jetton_master_initial_data_hash"] = Upper(0x38, 32);
+        TonDeployment(changedInitialData)["route_initial_data_hash"] = Upper(0x39, 32);
+        _ = SccpRegistryV1.Parse(Json(changedInitialData));
+
+        var missingInitialData = TonRegistryObject();
+        TonDeployment(missingInitialData).Remove("route_initial_data_hash");
+        Assert.Throws<ArgumentException>(() => SccpRegistryV1.Parse(Json(missingInitialData)));
+
+        var aliasedInitialData = TonRegistryObject();
+        TonDeployment(aliasedInitialData)["route_initial_data_hash"] =
+            TonDeployment(aliasedInitialData)["jetton_master_code_hash"];
+        Assert.Throws<ArgumentException>(() => SccpRegistryV1.Parse(Json(aliasedInitialData)));
+
+        var anchored = TonRegistryObject();
+        var anchor = NativeTrustAnchor(0x91, 1);
+        ((Dictionary<string, object?>)anchor["backend"]!)["backend"] = "ton_masterchain_v1";
+        GovernedLane(anchored)["native_trust_anchors"] = new object[] { anchor };
+        GovernedLane(anchored)["current_native_trust_anchor_hash"] = anchor["anchor_hash"];
+        Route(anchored)["activation"] = Activation("inbound_only");
+        Assert.Equal(
+            SccpNativeBackendV1.TonMasterchain,
+            Assert.Single(SccpRegistryV1.Parse(Json(anchored)).Lanes).NativeTrustAnchors[0].Backend);
+
+        var wrongWorkchain = TonRegistryObject();
+        TonDeployment(wrongWorkchain, "route_address")["workchain"] = -1;
+        Assert.Throws<ArgumentException>(() => SccpRegistryV1.Parse(Json(wrongWorkchain)));
+
+        var sameAddress = TonRegistryObject();
+        TonDeployment(sameAddress)["route_address"] =
+            CloneValue(TonDeployment(sameAddress)["jetton_master_address"]);
+        Assert.Throws<ArgumentException>(() => SccpRegistryV1.Parse(Json(sameAddress)));
+
+        var aliasedEmitterAddress = TonRegistryObject();
+        TonEmitterIdentity(aliasedEmitterAddress)["address"] =
+            CloneValue(TonDeployment(aliasedEmitterAddress)["jetton_master_address"]);
+        Assert.Throws<ArgumentException>(() => SccpRegistryV1.Parse(Json(aliasedEmitterAddress)));
+
+        var aliasedEmitterCode = TonRegistryObject();
+        TonEmitterIdentity(aliasedEmitterCode)["code_hash"] =
+            TonDeployment(aliasedEmitterCode)["jetton_master_code_hash"];
+        Assert.Throws<ArgumentException>(() => SccpRegistryV1.Parse(Json(aliasedEmitterCode)));
+
+        var uncompressedKey = TonRegistryObject();
+        ((Dictionary<string, object?>)TonDeployment(uncompressedKey)["verifying_key"]!)["alpha1"] =
+            Upper(0x01, 48);
+        Assert.Throws<ArgumentException>(() => SccpRegistryV1.Parse(Json(uncompressedKey)));
+
+        var wrongProofProfile = TonRegistryObject();
+        TonDeployment(wrongProofProfile)["proof_profile_commitment"] = Upper(0x98, 32);
+        Assert.Throws<ArgumentException>(() => SccpRegistryV1.Parse(Json(wrongProofProfile)));
+
+        var wrongEmitterShape = TonRegistryObject();
+        var identity = TonEmitterIdentity(wrongEmitterShape);
+        identity["runtime_code_hash"] = identity["code_hash"];
+        Assert.Throws<ArgumentException>(() => SccpRegistryV1.Parse(Json(wrongEmitterShape)));
     }
 
     [Fact]
@@ -953,6 +1132,36 @@ public sealed partial class SccpExactTests
     }
 
     [Fact]
+    public void TonProofRequestRequiresBlsSignalsCircuitAndProofProfile()
+    {
+        var valid = TonProofRequestObject();
+        var parsed = SccpGroth16ProofRequestV1.Parse(Json(valid));
+        Assert.Equal(SccpDestinationProofBackendV1.TonGroth16Bls12381, parsed.Backend);
+        Assert.Equal(SccpNetworkV1.TonMainnet, parsed.TargetNetwork);
+        Assert.Equal(SccpSemanticProofProfileKindV1.Groth16Bls12381, parsed.SemanticProofProfile.Kind);
+        Assert.Equal(11, parsed.TonPublicSignals!.Count);
+        Assert.Equal(valid["verifier_circuit_hash"], parsed.TonVerifierCircuitHash);
+        Assert.Equal(valid["proof_profile_commitment"], parsed.TonProofProfileCommitment);
+
+        foreach (var mutation in new Action<Dictionary<string, object?>>[]
+        {
+            value => value.Remove("public_signals"),
+            value => value["legacy_public_signals"] = value["public_signals"],
+            value => value["proof_profile_commitment"] = PrefixHash(0x91),
+            value => value["verifier_circuit_hash"] = PrefixHash(0x92),
+            value => ((Dictionary<string, object?>)value["public_signals"]!)["route_configuration_hash"] = PrefixHash(0x93),
+            value => ((Dictionary<string, object?>)value["verifying_key"]!)["beta2"] = Upper(0x40, 96),
+            value => ((Dictionary<string, object?>)value["semantic_proof_profile"]!)["profile"] =
+                "sora_taira_finality_inclusion_groth16_bn254",
+        })
+        {
+            var candidate = DeepClone(valid);
+            mutation(candidate);
+            Assert.ThrowsAny<ArgumentException>(() => SccpGroth16ProofRequestV1.Parse(Json(candidate)));
+        }
+    }
+
+    [Fact]
     public void BundleAndRecentDiscoveryRejectRetiredPayloadsLinksAndInjection()
     {
         var bundle = BundleObject(MessageId);
@@ -1143,6 +1352,33 @@ public sealed partial class SccpExactTests
         {
             Assert.ThrowsAny<ArgumentException>(() => SccpRecentMessages.Parse(Json(response)));
         }
+    }
+
+    [Fact]
+    public void RecentDiscoveryAcceptsOnlyCanonicalTonAccount36Projection()
+    {
+        var item = RecentItem(9, MessageId);
+        item["target_profile"] = "ton-mainnet";
+        item["target_domain"] = 4;
+        item["route_id"] = "taira_ton_xor";
+        item["payload_projection"] = TransferProjection(4);
+        var parsed = Assert.Single(SccpRecentMessages.Parse(Json(
+            new Dictionary<string, object?> { ["items"] = new[] { item } })).Items);
+        Assert.Equal(SccpNetworkV1.TonMainnet, parsed.Lane.Target);
+
+        var masterchain = DeepClone(item);
+        var transfer = (Dictionary<string, object?>)((Dictionary<string, object?>)masterchain["payload_projection"]!)["Transfer"]!;
+        var recipient = (Dictionary<string, object?>)((Dictionary<string, object?>)transfer["recipient"]!)["TonAccount36"]!;
+        recipient["workchain"] = -1;
+        Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(
+            new Dictionary<string, object?> { ["items"] = new[] { masterchain } })));
+
+        var aliased = DeepClone(item);
+        transfer = (Dictionary<string, object?>)((Dictionary<string, object?>)aliased["payload_projection"]!)["Transfer"]!;
+        recipient = (Dictionary<string, object?>)((Dictionary<string, object?>)transfer["recipient"]!)["TonAccount36"]!;
+        recipient["account"] = "0x" + new string('0', 64);
+        Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(
+            new Dictionary<string, object?> { ["items"] = new[] { aliased } })));
     }
 
     [Fact]
@@ -1800,8 +2036,14 @@ public sealed partial class SccpExactTests
             ["max_bls_aggregate_checks_per_block"] = 4_016,
             ["max_bls_signer_contributions_per_transaction"] = 131_713,
             ["max_bls_signer_contributions_per_block"] = 526_852,
+            ["max_ed25519_signature_checks_per_transaction"] = 65_536,
+            ["max_ed25519_signature_checks_per_block"] = 262_144,
+            ["max_ed25519_validator_key_checks_per_transaction"] = 198_656,
+            ["max_ed25519_validator_key_checks_per_block"] = 794_624,
             ["max_bn254_pairing_checks_per_transaction"] = 1,
             ["max_bn254_pairing_checks_per_block"] = 4,
+            ["max_bls12_381_pairing_checks_per_transaction"] = 1,
+            ["max_bls12_381_pairing_checks_per_block"] = 4,
         },
         ["proof_submit_path"] = "/v1/bridge/proofs/submit",
         ["native_message_submit_path"] = "/v1/bridge/messages",
@@ -1887,6 +2129,91 @@ public sealed partial class SccpExactTests
         };
     }
 
+    private static Dictionary<string, object?> TonProofRequestObject()
+    {
+        var key = Bls12381VerifyingKey();
+        var keyBytes = Bls12381VerifyingKeyBytes(key);
+        var keyHash = SHA256.HashData(keyBytes);
+        var policy = TonOutboundPolicy();
+        var semantic = (Dictionary<string, object?>)policy["semantic_profile"]!;
+        var anchor = (Dictionary<string, object?>)policy["sora_finality_anchor"]!;
+        var semanticHash = SemanticProfileHash(semantic);
+        var anchorHash = FinalityAnchorHash(anchor);
+        var circuit = Convert.FromHexString((string)((Dictionary<string, object?>)semantic["commitments"]!)["circuit_commitment"]!);
+        var proofProfile = TonProofProfileCommitment();
+        var bundleBytes = TonCanonicalBundleBytes();
+        var bundle = SccpV1.DecodeCanonicalMessageBundle(bundleBytes);
+        var finalityHash = Enumerable.Repeat((byte)0x14, 32).ToArray();
+        var binding = bundle.Commitment.Context.DestinationBindingHash;
+        var configuration = bundle.Commitment.Context.RouteConfigurationHash;
+        var hashes = TonProofRequestHashes(
+            bundle,
+            bundleBytes,
+            finalityHash,
+            keyBytes,
+            keyHash,
+            semantic,
+            semanticHash,
+            anchor,
+            anchorHash,
+            circuit,
+            proofProfile);
+        string[] signalFields =
+        [
+            "message_id",
+            "payload_hash",
+            "target_domain",
+            "commitment_root",
+            "finality_height",
+            "finality_block_hash",
+            "source_domain",
+            "statement_hash",
+            "destination_binding_hash",
+            "route_configuration_hash",
+            "sora_finality_anchor_hash",
+        ];
+        var publicSignals = signalFields
+            .Select((field, index) => new KeyValuePair<string, object?>(
+                field,
+                "0x" + SccpV1.LowerHex(hashes.PublicSignals[index])))
+            .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal);
+        return new Dictionary<string, object?>
+        {
+            ["version"] = 1,
+            ["backend"] = new Dictionary<string, object?>
+            {
+                ["backend"] = "ton_groth16_bls12381_v1",
+                ["family"] = null,
+            },
+            ["source_network"] = Network("sora-taira"),
+            ["target_network"] = Network("ton-mainnet"),
+            ["public_inputs"] = new Dictionary<string, object?>
+            {
+                ["version"] = 1,
+                ["message_id"] = "0x" + SccpV1.LowerHex(bundle.Commitment.MessageId),
+                ["payload_hash"] = "0x" + SccpV1.LowerHex(bundle.Commitment.PayloadHash),
+                ["target_domain"] = 4,
+                ["commitment_root"] = "0x" + SccpV1.LowerHex(bundle.CommitmentRoot),
+                ["finality_height"] = "9",
+                ["finality_block_hash"] = "0x" + SccpV1.LowerHex(finalityHash),
+            },
+            ["public_signals"] = publicSignals,
+            ["verifying_key"] = key,
+            ["verifier_key_hash"] = "0x" + SccpV1.LowerHex(keyHash),
+            ["verifier_circuit_hash"] = "0x" + SccpV1.LowerHex(circuit),
+            ["proof_profile_commitment"] = "0x" + SccpV1.LowerHex(proofProfile),
+            ["semantic_proof_profile"] = semantic,
+            ["semantic_proof_profile_hash"] = "0x" + SccpV1.LowerHex(semanticHash),
+            ["sora_finality_anchor"] = anchor,
+            ["sora_finality_anchor_hash"] = "0x" + SccpV1.LowerHex(anchorHash),
+            ["bundle_bytes"] = "0x" + SccpV1.LowerHex(bundleBytes),
+            ["statement_hash"] = "0x" + SccpV1.LowerHex(hashes.StatementHash),
+            ["destination_binding_hash"] = "0x" + SccpV1.LowerHex(binding),
+            ["route_configuration_hash"] = "0x" + SccpV1.LowerHex(configuration),
+            ["request_hash"] = "0x" + SccpV1.LowerHex(hashes.RequestHash),
+        };
+    }
+
     private static Dictionary<string, object?> BundleObject(string messageId)
     {
         var lane = BundleLane();
@@ -1928,36 +2255,45 @@ public sealed partial class SccpExactTests
         ulong height,
         string id,
         uint commitmentIndex = 0) => new()
-    {
-        ["height"] = height,
-        ["commitment_index"] = commitmentIndex,
-        ["message_id_hex"] = id,
-        ["kind"] = "transfer",
-        ["source_profile"] = "sora-taira",
-        ["target_profile"] = "bsc-mainnet",
-        ["destination_binding_hash"] = PrefixHash(0x71),
-        ["route_configuration_hash"] = PrefixHash(0x72),
-        ["target_domain"] = 2,
-        ["asset_id"] = "xor",
-        ["route_id"] = "taira_bsc_xor",
-        ["recipient"] = null,
-        ["amount"] = "1000",
-        ["payload_projection"] = TransferProjection(2),
-        ["links"] = new Dictionary<string, object?>
         {
-            ["bundle_path"] = $"/v1/sccp/proofs/message/{id}",
-            ["proof_request_path"] = $"/v1/sccp/proof-requests/{id}",
-        },
-    };
+            ["height"] = height,
+            ["commitment_index"] = commitmentIndex,
+            ["message_id_hex"] = id,
+            ["kind"] = "transfer",
+            ["source_profile"] = "sora-taira",
+            ["target_profile"] = "bsc-mainnet",
+            ["destination_binding_hash"] = PrefixHash(0x71),
+            ["route_configuration_hash"] = PrefixHash(0x72),
+            ["target_domain"] = 2,
+            ["asset_id"] = "xor",
+            ["route_id"] = "taira_bsc_xor",
+            ["recipient"] = null,
+            ["amount"] = "1000",
+            ["payload_projection"] = TransferProjection(2),
+            ["links"] = new Dictionary<string, object?>
+            {
+                ["bundle_path"] = $"/v1/sccp/proofs/message/{id}",
+                ["proof_request_path"] = $"/v1/sccp/proof-requests/{id}",
+            },
+        };
 
     private static Dictionary<string, object?> TransferPayload() => new()
     {
-        ["version"] = 1, ["source_domain"] = 0, ["dest_domain"] = 2, ["nonce"] = "7",
-        ["route_revision"] = 1, ["asset_home_domain"] = 0,
-        ["asset_id_codec"] = 1, ["asset_id"] = "0x786f72", ["amount"] = "1000",
-        ["sender_codec"] = 1, ["sender"] = "0x616c696365407461697261",
-        ["recipient_codec"] = 2, ["recipient"] = "0x" + new string('1', 40),
-        ["route_id_codec"] = 1, ["route_id"] = "0x74616972615f6273635f786f72",
+        ["version"] = 1,
+        ["source_domain"] = 0,
+        ["dest_domain"] = 2,
+        ["nonce"] = "7",
+        ["route_revision"] = 1,
+        ["asset_home_domain"] = 0,
+        ["asset_id_codec"] = 1,
+        ["asset_id"] = "0x786f72",
+        ["amount"] = "1000",
+        ["sender_codec"] = 1,
+        ["sender"] = "0x616c696365407461697261",
+        ["recipient_codec"] = 2,
+        ["recipient"] = "0x" + new string('1', 40),
+        ["route_id_codec"] = 1,
+        ["route_id"] = "0x74616972615f6273635f786f72",
     };
 
     private static Dictionary<string, object?> TransferProjection(uint destinationDomain)
@@ -1966,24 +2302,35 @@ public sealed partial class SccpExactTests
         {
             1 => "taira_eth_xor",
             2 => "taira_bsc_xor",
+            4 => "taira_ton_xor",
             5 => "taira_tron_xor",
             _ => throw new ArgumentOutOfRangeException(nameof(destinationDomain)),
         };
-        Dictionary<string, object?> recipient = destinationDomain == 5
-            ? new()
+        Dictionary<string, object?> recipient = destinationDomain switch
+        {
+            4 => new()
+            {
+                ["TonAccount36"] = new Dictionary<string, object?>
+                {
+                    ["workchain"] = 0,
+                    ["account"] = "0x" + new string('1', 64),
+                },
+            },
+            5 => new()
             {
                 ["TronAddress21"] = new Dictionary<string, object?>
                 {
                     ["bytes"] = "0x41" + new string('1', 40),
                 },
-            }
-            : new()
+            },
+            _ => new()
             {
                 ["EvmAddress20"] = new Dictionary<string, object?>
                 {
                     ["bytes"] = "0x" + new string('1', 40),
                 },
-            };
+            },
+        };
         return new Dictionary<string, object?>
         {
             ["Transfer"] = new Dictionary<string, object?>
@@ -2045,6 +2392,35 @@ public sealed partial class SccpExactTests
             FinalityProofBytes());
     }
 
+    private static byte[] TonCanonicalBundleBytes()
+    {
+        var lane = new SccpLaneIdV1(SccpNetworkV1.SoraTaira, SccpNetworkV1.TonMainnet);
+        var context = new SccpOutboundMessageContextV1(
+            lane,
+            Enumerable.Repeat((byte)0x71, 32).ToArray(),
+            Enumerable.Repeat((byte)0x72, 32).ToArray());
+        var payload = new SccpTransferPayloadV1(
+            0,
+            4,
+            7,
+            1,
+            0,
+            SccpCodecV1.CanonicalText,
+            "xor"u8.ToArray(),
+            1000,
+            SccpCodecV1.CanonicalText,
+            "alice@taira"u8.ToArray(),
+            SccpCodecV1.TonAccount36,
+            new byte[4].Concat(Enumerable.Repeat((byte)0x11, 32)).ToArray(),
+            SccpCodecV1.CanonicalText,
+            "taira_ton_xor"u8.ToArray());
+        return SccpV1.CanonicalMessageBundleBytes(
+            SccpV1.Commitment(context, payload),
+            payload,
+            [],
+            FinalityProofBytes());
+    }
+
     private static byte[] FinalityProofBytes() =>
         NoritoCodec.Encode("iroha_sccp::TairaBridgeFinalityProofV1", [1]);
 
@@ -2083,7 +2459,8 @@ public sealed partial class SccpExactTests
             verifierCodeHash,
             verifierKeyHash,
             semanticHash,
-            anchorHash);
+            anchorHash,
+            EvmRegistryMaxWrappedSupply);
         var custody = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x29, 32).ToArray())
             .ToAccountAddress()
             .ToI105();
@@ -2129,6 +2506,7 @@ public sealed partial class SccpExactTests
                     ["route_address"] = Convert.ToHexString(routeAddress),
                     ["route_code_hash"] = Convert.ToHexString(routeCodeHash),
                     ["taira_to_token_multiplier"] = 1_000_000_000,
+                    ["max_wrapped_supply"] = EvmRegistryMaxWrappedSupply,
                 },
             },
             ["settlement"] = new Dictionary<string, object?>
@@ -2136,6 +2514,7 @@ public sealed partial class SccpExactTests
                 ["asset_definition_id"] = "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
                 ["custody_owner"] = custody,
                 ["payload_amount_scale"] = 9,
+                ["max_outstanding_liability"] = RegistryMaxOutstandingLiability,
             },
         };
         return new Dictionary<string, object?>
@@ -2204,10 +2583,138 @@ public sealed partial class SccpExactTests
             verifierKeyHash,
             semanticHash,
             anchorHash,
+            EvmRegistryMaxWrappedSupply,
             source: SccpNetworkV1.TronMainnet,
             destinationBinding: binding));
         return result;
     }
+
+    private static Dictionary<string, object?> TonRegistryObject()
+    {
+        var key = Bls12381VerifyingKey();
+        var keyHash = SHA256.HashData(Bls12381VerifyingKeyBytes(key));
+        var policy = TonOutboundPolicy();
+        var semantic = (Dictionary<string, object?>)policy["semantic_profile"]!;
+        var anchor = (Dictionary<string, object?>)policy["sora_finality_anchor"]!;
+        var semanticHash = SemanticProfileHash(semantic);
+        var anchorHash = FinalityAnchorHash(anchor);
+        var master = TonAddress(0x21);
+        var routeAddress = TonAddress(0x23);
+        var masterCode = Enumerable.Repeat((byte)0x31, 32).ToArray();
+        var masterInitialData = Enumerable.Repeat((byte)0x36, 32).ToArray();
+        var walletCode = Enumerable.Repeat((byte)0x32, 32).ToArray();
+        var routeCode = Enumerable.Repeat((byte)0x34, 32).ToArray();
+        var routeInitialData = Enumerable.Repeat((byte)0x37, 32).ToArray();
+        var verifierCode = Enumerable.Repeat((byte)0x35, 32).ToArray();
+        var circuit = Convert.FromHexString((string)((Dictionary<string, object?>)semantic["commitments"]!)["circuit_commitment"]!);
+        var proofProfile = TonProofProfileCommitment();
+        var binding = TonDestinationBindingHash(
+            SccpNetworkV1.TonMainnet,
+            masterCode,
+            walletCode,
+            routeCode,
+            verifierCode,
+            circuit,
+            keyHash,
+            proofProfile,
+            semanticHash,
+            anchorHash);
+        var configuration = TonRouteConfigurationHash(
+            SccpNetworkV1.TonMainnet,
+            masterCode,
+            walletCode,
+            routeCode,
+            verifierCode,
+            circuit,
+            keyHash,
+            proofProfile,
+            semanticHash,
+            anchorHash,
+            binding,
+            1,
+            TonRegistryMaxWrappedSupply);
+        var custody = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x29, 32).ToArray())
+            .ToAccountAddress()
+            .ToI105();
+        var lane = Lane("ton-mainnet", "sora-taira");
+        var route = new Dictionary<string, object?>
+        {
+            ["lane_id"] = lane,
+            ["route_id"] = "taira_ton_xor",
+            ["asset_key"] = "xor",
+            ["revision"] = 1,
+            ["activation"] = Activation("staged"),
+            ["inbound_finality_cutoff"] = null,
+            ["source_identity"] = new Dictionary<string, object?>
+            {
+                ["lane"] = Lane("ton-mainnet", "sora-taira"),
+                ["emitter"] = new Dictionary<string, object?>
+                {
+                    ["emitter"] = "ton",
+                    ["identity"] = new Dictionary<string, object?>
+                    {
+                        ["address"] = routeAddress,
+                        ["code_hash"] = Convert.ToHexString(routeCode),
+                        ["route_config_hash"] = Convert.ToHexString(configuration),
+                    },
+                },
+            },
+            ["destination"] = new Dictionary<string, object?>
+            {
+                ["family"] = "ton",
+                ["deployment"] = new Dictionary<string, object?>
+                {
+                    ["jetton_master_address"] = master,
+                    ["jetton_master_code_hash"] = Convert.ToHexString(masterCode),
+                    ["jetton_master_initial_data_hash"] = Convert.ToHexString(masterInitialData),
+                    ["jetton_wallet_code_hash"] = Convert.ToHexString(walletCode),
+                    ["route_address"] = routeAddress,
+                    ["route_code_hash"] = Convert.ToHexString(routeCode),
+                    ["route_initial_data_hash"] = Convert.ToHexString(routeInitialData),
+                    ["embedded_verifier_code_hash"] = Convert.ToHexString(verifierCode),
+                    ["verifier_circuit_hash"] = Convert.ToHexString(circuit),
+                    ["verifying_key"] = key,
+                    ["verifier_key_hash"] = Convert.ToHexString(keyHash),
+                    ["proof_profile_commitment"] = Convert.ToHexString(proofProfile),
+                    ["outbound_proof_policy"] = policy,
+                    ["taira_to_token_multiplier"] = 1,
+                    ["max_wrapped_supply"] = TonRegistryMaxWrappedSupply,
+                },
+            },
+            ["settlement"] = new Dictionary<string, object?>
+            {
+                ["asset_definition_id"] = "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+                ["custody_owner"] = custody,
+                ["payload_amount_scale"] = 9,
+                ["max_outstanding_liability"] = RegistryMaxOutstandingLiability,
+            },
+        };
+        return new Dictionary<string, object?>
+        {
+            ["version"] = 1,
+            ["lanes"] = new object[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["lane_id"] = lane,
+                    ["native_trust_anchors"] = Array.Empty<object>(),
+                    ["current_native_trust_anchor_hash"] = null,
+                    ["routes"] = new object[] { route },
+                },
+            },
+        };
+    }
+
+    private static Dictionary<string, object?> TonDeployment(Dictionary<string, object?> registry) =>
+        (Dictionary<string, object?>)((Dictionary<string, object?>)Route(registry)["destination"]!)["deployment"]!;
+
+    private static Dictionary<string, object?> TonDeployment(
+        Dictionary<string, object?> registry,
+        string addressField) =>
+        (Dictionary<string, object?>)TonDeployment(registry)[addressField]!;
+
+    private static Dictionary<string, object?> TonEmitterIdentity(Dictionary<string, object?> registry) =>
+        (Dictionary<string, object?>)((Dictionary<string, object?>)((Dictionary<string, object?>)Route(registry)["source_identity"]!)["emitter"]!)["identity"]!;
 
     private static Dictionary<string, object?> Route(Dictionary<string, object?> registry)
     {
@@ -2275,6 +2782,7 @@ public sealed partial class SccpExactTests
             Convert.FromHexString((string)deployment["verifier_key_hash"]!),
             SemanticProfileHash(semantic),
             FinalityAnchorHash(anchor),
+            (UInt128)deployment["max_wrapped_supply"]!,
             revision);
         identity["route_config_hash"] = Convert.ToHexString(configurationHash);
         return route;
@@ -2288,6 +2796,7 @@ public sealed partial class SccpExactTests
         byte[] verifierKeyHash,
         byte[] semanticHash,
         byte[] anchorHash,
+        UInt128 maxWrappedSupply,
         uint revision = 1,
         SccpNetworkV1 source = SccpNetworkV1.BscMainnet,
         byte[]? destinationBinding = null)
@@ -2325,7 +2834,8 @@ public sealed partial class SccpExactTests
             SccpV1.Keccak256("xor"u8),
             SccpV1.Keccak256(Encoding.UTF8.GetBytes(routeId)),
             AbiWord(revision),
-            AbiWord(1_000_000_000)));
+            AbiWord(1_000_000_000),
+            AbiWord(maxWrappedSupply)));
         return SccpV1.Keccak256(Concat(
             SccpV1.Keccak256("sccp:concrete-route-config:v1"u8),
             AbiWord(source.DomainId()),
@@ -2388,6 +2898,14 @@ public sealed partial class SccpExactTests
         return result;
     }
 
+    private static byte[] AbiWord(UInt128 value)
+    {
+        var result = new byte[32];
+        BinaryPrimitives.WriteUInt64BigEndian(result.AsSpan(16), (ulong)(value >> 64));
+        BinaryPrimitives.WriteUInt64BigEndian(result.AsSpan(24), (ulong)value);
+        return result;
+    }
+
     private static Dictionary<string, object?> OutboundPolicy(ushort protocolVersion = 4)
     {
         var anchor = FinalityAnchor(protocolVersion);
@@ -2435,16 +2953,22 @@ public sealed partial class SccpExactTests
 
         return new Dictionary<string, object?>
         {
-            ["version"] = 1, ["alpha1"] = G1(), ["beta2"] = G2(),
-            ["gamma2"] = G2(), ["delta2"] = G2(), ["ic"] = ic,
+            ["version"] = 1,
+            ["alpha1"] = G1(),
+            ["beta2"] = G2(),
+            ["gamma2"] = G2(),
+            ["delta2"] = G2(),
+            ["ic"] = ic,
         };
     }
 
     private static Dictionary<string, object?> G1() => new() { ["x"] = Upper(1, 32), ["y"] = Upper(2, 32) };
     private static Dictionary<string, object?> G2() => new()
     {
-        ["x_c0"] = Upper(3, 32), ["x_c1"] = Upper(4, 32),
-        ["y_c0"] = Upper(5, 32), ["y_c1"] = Upper(6, 32),
+        ["x_c0"] = Upper(3, 32),
+        ["x_c1"] = Upper(4, 32),
+        ["y_c0"] = Upper(5, 32),
+        ["y_c1"] = Upper(6, 32),
     };
 
     private static byte[] VerifyingKeyBytes(Dictionary<string, object?> key)
@@ -2476,15 +3000,57 @@ public sealed partial class SccpExactTests
         return Concat(words.ToArray());
     }
 
+    private static Dictionary<string, object?> Bls12381VerifyingKey()
+    {
+        var g1 = "80" + new string('0', 94);
+        var g2 = "80" + new string('0', 190);
+        var ic = new Dictionary<string, object?> { ["constant"] = g1 };
+        for (var index = 0; index <= 10; index++)
+        {
+            ic[$"signal_{index}"] = g1;
+        }
+        return new Dictionary<string, object?>
+        {
+            ["version"] = 1,
+            ["alpha1"] = g1,
+            ["beta2"] = g2,
+            ["gamma2"] = g2,
+            ["delta2"] = g2,
+            ["ic"] = ic,
+        };
+    }
+
+    private static byte[] Bls12381VerifyingKeyBytes(Dictionary<string, object?> key)
+    {
+        using var output = new MemoryStream();
+        output.WriteByte(1);
+        output.Write(Convert.FromHexString((string)key["alpha1"]!));
+        output.Write(Convert.FromHexString((string)key["beta2"]!));
+        output.Write(Convert.FromHexString((string)key["gamma2"]!));
+        output.Write(Convert.FromHexString((string)key["delta2"]!));
+        var ic = (Dictionary<string, object?>)key["ic"]!;
+        output.Write(Convert.FromHexString((string)ic["constant"]!));
+        for (var index = 0; index <= 10; index++)
+        {
+            output.Write(Convert.FromHexString((string)ic[$"signal_{index}"]!));
+        }
+        return output.ToArray();
+    }
+
     private static byte[] PublicSignalSchemaHash()
     {
         string[] labels =
         [
-            "sccp:groth16-bn254:signal:message-id:v1", "sccp:groth16-bn254:signal:payload-hash:v1",
-            "sccp:groth16-bn254:signal:target-domain:v1", "sccp:groth16-bn254:signal:commitment-root:v1",
-            "sccp:groth16-bn254:signal:finality-height:v1", "sccp:groth16-bn254:signal:finality-block-hash:v1",
-            "sccp:groth16-bn254:signal:source-domain:v1", "sccp:groth16-bn254:signal:statement-hash:v1",
-            "sccp:groth16-bn254:signal:destination-binding-hash:v1", "sccp:groth16-bn254:signal:route-configuration-hash:v1",
+            "sccp:groth16-bn254:signal:message-id:v1",
+            "sccp:groth16-bn254:signal:payload-hash:v1",
+            "sccp:groth16-bn254:signal:target-domain:v1",
+            "sccp:groth16-bn254:signal:commitment-root:v1",
+            "sccp:groth16-bn254:signal:finality-height:v1",
+            "sccp:groth16-bn254:signal:finality-block-hash:v1",
+            "sccp:groth16-bn254:signal:source-domain:v1",
+            "sccp:groth16-bn254:signal:statement-hash:v1",
+            "sccp:groth16-bn254:signal:destination-binding-hash:v1",
+            "sccp:groth16-bn254:signal:route-configuration-hash:v1",
             "sccp:groth16-bn254:signal:sora-finality-anchor-hash:v1",
         ];
         using var canonical = new MemoryStream();
@@ -2499,12 +3065,336 @@ public sealed partial class SccpExactTests
         return SccpV1.Keccak256(Concat("sccp:groth16-bn254:public-signal-schema:v1"u8.ToArray(), canonical.ToArray()));
     }
 
+    private static byte[] Bls12381PublicSignalSchemaHash()
+    {
+        string[] labels =
+        [
+            "sccp:groth16-bls12381:signal:message-id:v1",
+            "sccp:groth16-bls12381:signal:payload-hash:v1",
+            "sccp:groth16-bls12381:signal:target-domain:v1",
+            "sccp:groth16-bls12381:signal:commitment-root:v1",
+            "sccp:groth16-bls12381:signal:finality-height:v1",
+            "sccp:groth16-bls12381:signal:finality-block-hash:v1",
+            "sccp:groth16-bls12381:signal:source-domain:v1",
+            "sccp:groth16-bls12381:signal:statement-hash:v1",
+            "sccp:groth16-bls12381:signal:destination-binding-hash:v1",
+            "sccp:groth16-bls12381:signal:route-config-hash:v1",
+            "sccp:groth16-bls12381:signal:sora-finality-anchor-hash:v1",
+        ];
+        using var canonical = new MemoryStream();
+        canonical.WriteByte(1);
+        WriteUInt32(canonical, checked((uint)labels.Length));
+        foreach (var label in labels)
+        {
+            WriteVector(canonical, Encoding.UTF8.GetBytes(label));
+        }
+        return SHA256.HashData(Concat(
+            "sccp:groth16-bls12381:public-signal-schema:v1"u8.ToArray(),
+            canonical.ToArray()));
+    }
+
+    private static Dictionary<string, object?> TonOutboundPolicy()
+    {
+        var anchor = FinalityAnchor();
+        return new Dictionary<string, object?>
+        {
+            ["version"] = 1,
+            ["semantic_profile"] = new Dictionary<string, object?>
+            {
+                ["profile"] = "sora_taira_finality_inclusion_groth16_bls12381",
+                ["commitments"] = new Dictionary<string, object?>
+                {
+                    ["version"] = 1,
+                    ["circuit_commitment"] = Upper(0xc1, 32),
+                    ["witness_generator_commitment"] = Upper(0xc2, 32),
+                    ["public_signal_schema_hash"] = Convert.ToHexString(Bls12381PublicSignalSchemaHash()),
+                },
+            },
+            ["sora_finality_anchor"] = anchor,
+        };
+    }
+
+    private static byte[] TonProofProfileCommitment() => SHA256.HashData(Concat(
+        "sccp:ton:groth16-bls12381:proof-profile:v1"u8.ToArray(),
+        [1],
+        "ietf-bls12381-compressed-g1-48-g2-96"u8.ToArray(),
+        "groth16-a-g1-b-g2-c-g1"u8.ToArray(),
+        "sha256-sha256-label-value-mod-r"u8.ToArray(),
+        Convert.FromHexString("73EDA753299D7D483339D80809A1D80553BDA402FFFE5BFEFFFFFFFF00000001"),
+        Bls12381PublicSignalSchemaHash()));
+
+    private static Dictionary<string, object?> TonAddress(byte value) => new()
+    {
+        ["workchain"] = 0,
+        ["account"] = Upper(value, 32),
+    };
+
+    private static byte[] TonDestinationBindingHash(
+        SccpNetworkV1 network,
+        byte[] masterCode,
+        byte[] walletCode,
+        byte[] routeCode,
+        byte[] verifierCode,
+        byte[] circuit,
+        byte[] keyHash,
+        byte[] proofProfile,
+        byte[] semanticHash,
+        byte[] anchorHash)
+    {
+        using var payload = new MemoryStream();
+        payload.Write("iroha:sccp:ton-destination-binding:v1"u8);
+        payload.WriteByte(1);
+        WriteVector(payload, "ton-groth16-bls12381-v1"u8);
+        WriteVector(payload, SccpV1.CanonicalNetworkBytes(network));
+        WriteInt32(payload, network == SccpNetworkV1.TonMainnet ? -239 : -3);
+        WriteUInt32(payload, 0);
+        WriteUInt32(payload, 4);
+        payload.Write(masterCode);
+        payload.Write(walletCode);
+        payload.Write(routeCode);
+        payload.Write(verifierCode);
+        payload.Write(circuit);
+        payload.Write(keyHash);
+        payload.Write(proofProfile);
+        payload.Write(semanticHash);
+        payload.Write(anchorHash);
+        return SHA256.HashData(payload.ToArray());
+    }
+
+    private static byte[] TonRouteConfigurationHash(
+        SccpNetworkV1 network,
+        byte[] masterCode,
+        byte[] walletCode,
+        byte[] routeCode,
+        byte[] verifierCode,
+        byte[] circuit,
+        byte[] keyHash,
+        byte[] proofProfile,
+        byte[] semanticHash,
+        byte[] anchorHash,
+        byte[] binding,
+        uint revision,
+        UInt128 maxWrappedSupply)
+    {
+        using var deployment = new MemoryStream();
+        deployment.Write(masterCode);
+        deployment.Write(walletCode);
+        deployment.Write(routeCode);
+        deployment.Write(verifierCode);
+        deployment.Write(circuit);
+        deployment.Write(keyHash);
+        deployment.Write(proofProfile);
+        deployment.Write(semanticHash);
+        deployment.Write(anchorHash);
+        deployment.Write(binding);
+        var deploymentHash = SHA256.HashData(deployment.ToArray());
+        using var assetRoute = new MemoryStream();
+        WriteVector(assetRoute, "xor"u8);
+        WriteVector(assetRoute, "taira_ton_xor"u8);
+        WriteUInt32(assetRoute, revision);
+        WriteUInt64(assetRoute, 1);
+        WriteUInt128(assetRoute, maxWrappedSupply);
+        var assetRouteHash = SHA256.HashData(assetRoute.ToArray());
+        var inbound = new SccpLaneIdV1(network, SccpNetworkV1.SoraTaira);
+        var outbound = new SccpLaneIdV1(SccpNetworkV1.SoraTaira, network);
+        using var payload = new MemoryStream();
+        payload.Write("sccp:concrete-route-config:v1"u8);
+        payload.WriteByte(1);
+        WriteUInt32(payload, 4);
+        WriteVector(payload, SccpV1.CanonicalNetworkBytes(network));
+        WriteInt32(payload, network == SccpNetworkV1.TonMainnet ? -239 : -3);
+        payload.Write(SccpV1.LaneHash(inbound));
+        payload.Write(SccpV1.LaneHash(outbound));
+        payload.Write(deploymentHash);
+        payload.Write(assetRouteHash);
+        return SHA256.HashData(payload.ToArray());
+    }
+
+    private static (
+        byte[] StatementHash,
+        byte[] RequestHash,
+        IReadOnlyList<byte[]> PublicSignals) TonProofRequestHashes(
+        SccpCanonicalMessageBundleV1 bundle,
+        byte[] bundleBytes,
+        byte[] finalityHash,
+        byte[] keyBytes,
+        byte[] keyHash,
+        Dictionary<string, object?> semantic,
+        byte[] semanticHash,
+        Dictionary<string, object?> anchor,
+        byte[] anchorHash,
+        byte[] circuit,
+        byte[] proofProfile)
+    {
+        var semanticCommitments = (Dictionary<string, object?>)semantic["commitments"]!;
+        var semanticBytes = Concat(
+            [1, 1, 1],
+            Convert.FromHexString((string)semanticCommitments["circuit_commitment"]!),
+            Convert.FromHexString((string)semanticCommitments["witness_generator_commitment"]!),
+            Convert.FromHexString((string)semanticCommitments["public_signal_schema_hash"]!));
+        var anchorBytes = CanonicalFinalityAnchorBytes(anchor);
+        var publicInputs = CanonicalPublicInputsBytes(
+            bundle.Commitment.MessageId,
+            bundle.Commitment.PayloadHash,
+            4,
+            bundle.CommitmentRoot,
+            9,
+            finalityHash);
+        var binding = bundle.Commitment.Context.DestinationBindingHash;
+        var configuration = bundle.Commitment.Context.RouteConfigurationHash;
+        using var statement = new MemoryStream();
+        statement.WriteByte(1);
+        statement.WriteByte(3);
+        WriteVector(statement, SccpV1.CanonicalNetworkBytes(SccpNetworkV1.SoraTaira));
+        WriteVector(statement, SccpV1.CanonicalNetworkBytes(SccpNetworkV1.TonMainnet));
+        statement.Write(binding);
+        statement.Write(configuration);
+        statement.Write(circuit);
+        statement.Write(keyHash);
+        statement.Write(proofProfile);
+        statement.Write(semanticHash);
+        statement.Write(anchorHash);
+        WriteVector(statement, semanticBytes);
+        WriteVector(statement, anchorBytes);
+        statement.Write(publicInputs);
+        WriteVector(statement, bundle.Payload.CanonicalBytes());
+        WriteVector(statement, bundleBytes);
+        var statementHash = SHA256.HashData(Concat(
+            "sccp:groth16-bls12381:statement:v1"u8.ToArray(),
+            statement.ToArray()));
+        string[] labels =
+        [
+            "sccp:groth16-bls12381:signal:message-id:v1",
+            "sccp:groth16-bls12381:signal:payload-hash:v1",
+            "sccp:groth16-bls12381:signal:target-domain:v1",
+            "sccp:groth16-bls12381:signal:commitment-root:v1",
+            "sccp:groth16-bls12381:signal:finality-height:v1",
+            "sccp:groth16-bls12381:signal:finality-block-hash:v1",
+            "sccp:groth16-bls12381:signal:source-domain:v1",
+            "sccp:groth16-bls12381:signal:statement-hash:v1",
+            "sccp:groth16-bls12381:signal:destination-binding-hash:v1",
+            "sccp:groth16-bls12381:signal:route-config-hash:v1",
+            "sccp:groth16-bls12381:signal:sora-finality-anchor-hash:v1",
+        ];
+        var values = new byte[][]
+        {
+            bundle.Commitment.MessageId,
+            bundle.Commitment.PayloadHash,
+            AbiWord(4),
+            bundle.CommitmentRoot,
+            AbiWord(9),
+            finalityHash,
+            AbiWord(0),
+            statementHash,
+            binding,
+            configuration,
+            anchorHash,
+        };
+        var signals = labels.Select((label, index) => Bls12381Signal(label, values[index])).ToArray();
+        using var request = new MemoryStream();
+        request.WriteByte(1);
+        request.WriteByte(3);
+        WriteVector(request, SccpV1.CanonicalNetworkBytes(SccpNetworkV1.SoraTaira));
+        WriteVector(request, SccpV1.CanonicalNetworkBytes(SccpNetworkV1.TonMainnet));
+        request.Write(publicInputs);
+        foreach (var signal in signals)
+        {
+            request.Write(signal);
+        }
+        WriteVector(request, keyBytes);
+        WriteVector(request, semanticBytes);
+        WriteVector(request, anchorBytes);
+        WriteVector(request, bundle.Payload.CanonicalBytes());
+        WriteVector(request, bundleBytes);
+        request.Write(statementHash);
+        request.Write(binding);
+        request.Write(configuration);
+        request.Write(circuit);
+        request.Write(keyHash);
+        request.Write(proofProfile);
+        request.Write(semanticHash);
+        request.Write(anchorHash);
+        var requestHash = SHA256.HashData(Concat(
+            "sccp:groth16-bls12381:proof-request:v1"u8.ToArray(),
+            request.ToArray()));
+        return (statementHash, requestHash, signals);
+    }
+
+    private static byte[] CanonicalPublicInputsBytes(
+        byte[] messageId,
+        byte[] payloadHash,
+        uint targetDomain,
+        byte[] commitmentRoot,
+        ulong finalityHeight,
+        byte[] finalityHash)
+    {
+        using var output = new MemoryStream();
+        output.WriteByte(1);
+        output.Write(messageId);
+        output.Write(payloadHash);
+        WriteUInt32(output, targetDomain);
+        output.Write(commitmentRoot);
+        WriteUInt64(output, finalityHeight);
+        output.Write(finalityHash);
+        return output.ToArray();
+    }
+
+    private static byte[] CanonicalFinalityAnchorBytes(Dictionary<string, object?> anchor)
+    {
+        using var output = new MemoryStream();
+        output.WriteByte(1);
+        output.WriteByte((byte)SccpNetworkV1.SoraTaira);
+        Span<byte> protocol = stackalloc byte[2];
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            protocol,
+            Convert.ToUInt16(anchor["protocol_version"], System.Globalization.CultureInfo.InvariantCulture));
+        output.Write(protocol);
+        output.Write(Convert.FromHexString((string)anchor["chain_id_hash"]!));
+        WriteUInt64(
+            output,
+            Convert.ToUInt64(anchor["checkpoint_height"], System.Globalization.CultureInfo.InvariantCulture));
+        output.Write(Convert.FromHexString((string)anchor["checkpoint_block_hash"]!));
+        output.Write(Convert.FromHexString((string)anchor["checkpoint_context_id"]!));
+        output.Write(Convert.FromHexString((string)anchor["checkpoint_finality_artifact_hash"]!));
+        return output.ToArray();
+    }
+
+    private static byte[] Bls12381Signal(string label, byte[] value)
+    {
+        var scalar = Convert.FromHexString(
+            "73EDA753299D7D483339D80809A1D80553BDA402FFFE5BFEFFFFFFFF00000001");
+        var word = SHA256.HashData(Concat(SHA256.HashData(Encoding.UTF8.GetBytes(label)), value));
+        while (word.AsSpan().SequenceCompareTo(scalar) >= 0)
+        {
+            var borrow = 0;
+            for (var index = word.Length - 1; index >= 0; index--)
+            {
+                var difference = word[index] - scalar[index] - borrow;
+                if (difference < 0)
+                {
+                    difference += 256;
+                    borrow = 1;
+                }
+                else
+                {
+                    borrow = 0;
+                }
+                word[index] = (byte)difference;
+            }
+        }
+        return word;
+    }
+
     private static byte[] SemanticProfileHash(Dictionary<string, object?> profile)
     {
         var values = (Dictionary<string, object?>)profile["commitments"]!;
+        var profileTag = (string)profile["profile"]! ==
+            "sora_taira_finality_inclusion_groth16_bls12381"
+            ? (byte)1
+            : (byte)0;
         return SccpV1.Keccak256(Concat(
             "sccp:semantic-proof-profile:v1"u8.ToArray(),
-            [1, 0, 1],
+            [1, profileTag, 1],
             Convert.FromHexString((string)values["circuit_commitment"]!),
             Convert.FromHexString((string)values["witness_generator_commitment"]!),
             Convert.FromHexString((string)values["public_signal_schema_hash"]!)));
@@ -2539,7 +3429,8 @@ public sealed partial class SccpExactTests
 
     private static Dictionary<string, object?> Lane(string source, string target) => new()
     {
-        ["source"] = Network(source), ["target"] = Network(target),
+        ["source"] = Network(source),
+        ["target"] = Network(target),
     };
 
     private static string PrefixHash(byte value) => "0x" + Lower(value, 32);
@@ -2552,13 +3443,21 @@ public sealed partial class SccpExactTests
         string? payload,
         string? signing,
         string backend = "bridge/sccp/native/bsc-parlia-v1") => Json(new Dictionary<string, object?>
-    {
-        ["submitted"] = submitted, ["payload_kind"] = "transfer", ["message_id_hex"] = new string('1', 64),
-        ["backend"] = backend, ["counterparty_domain"] = 2,
-        ["counterparty_chain"] = "bsc-mainnet", ["route_configuration_hash_hex"] = new string('2', 64),
-        ["range_start_height"] = 4, ["range_end_height"] = 9, ["creation_time_ms"] = 7,
-        ["tx_hash_hex"] = txHash, ["transaction_payload_b64"] = payload, ["signing_message_b64"] = signing,
-    });
+        {
+            ["submitted"] = submitted,
+            ["payload_kind"] = "transfer",
+            ["message_id_hex"] = new string('1', 64),
+            ["backend"] = backend,
+            ["counterparty_domain"] = 2,
+            ["counterparty_chain"] = "bsc-mainnet",
+            ["route_configuration_hash_hex"] = new string('2', 64),
+            ["range_start_height"] = 4,
+            ["range_end_height"] = 9,
+            ["creation_time_ms"] = 7,
+            ["tx_hash_hex"] = txHash,
+            ["transaction_payload_b64"] = payload,
+            ["signing_message_b64"] = signing,
+        });
 
     private static byte[] CanonicalTransactionPayload(
         ulong creationTimeMs,
@@ -2893,11 +3792,32 @@ public sealed partial class SccpExactTests
         output.Write(bytes);
     }
 
+    private static void WriteInt32(Stream output, int value)
+    {
+        Span<byte> bytes = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(bytes, value);
+        output.Write(bytes);
+    }
+
     private static void WriteUInt64(Stream output, ulong value)
     {
         Span<byte> bytes = stackalloc byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
         output.Write(bytes);
+    }
+
+    private static void WriteUInt128(Stream output, UInt128 value)
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes, (ulong)value);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes[8..], (ulong)(value >> 64));
+        output.Write(bytes);
+    }
+
+    private static void WriteVector(Stream output, ReadOnlySpan<byte> value)
+    {
+        WriteUInt32(output, checked((uint)value.Length));
+        output.Write(value);
     }
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
@@ -2970,6 +3890,13 @@ public sealed partial class SccpExactTests
 
 internal static class SccpTestHttpExtensions
 {
+    internal static HttpResponseMessage WithNoritoContentType(this HttpResponseMessage response)
+    {
+        response.Content.Headers.ContentType =
+            new System.Net.Http.Headers.MediaTypeHeaderValue("application/x-norito");
+        return response;
+    }
+
     internal static HttpResponseMessage WithJsonContentType(this HttpResponseMessage response)
     {
         response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");

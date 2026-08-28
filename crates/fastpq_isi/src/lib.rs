@@ -12,6 +12,12 @@
 #![deny(missing_docs)]
 pub mod params;
 pub mod poseidon;
+pub mod poseidon_digest384;
 pub use params::{
     CANONICAL_PARAMETER_SETS, FieldDescriptor, HashDescriptor, StarkParameterSet, find_by_name,
+};
+pub use poseidon_digest384::{
+    GOLDILOCKS_DIGEST384_BYTES_V1, GOLDILOCKS_DIGEST384_LANES_V1,
+    GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1, GoldilocksDigest384V1, GoldilocksDigestDomainV1,
+    hash_bytes_384_v1,
 };

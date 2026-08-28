@@ -13,6 +13,7 @@ use iroha::{
     },
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
+        ValidationFail,
         account::AccountId,
         block::{
             SignedBlock,
@@ -36,14 +37,15 @@ use iroha::{
                 CreateParliamentGovernanceAttemptV1, ParliamentAdvanceBodyPhaseV1,
                 ParliamentBeginBallotOpeningBatchV1, ParliamentBeginInvitationAcceptanceV1,
                 ParliamentCloseBallotRegistrationV1, ParliamentConsumeSortitionPulseBatchV1,
-                ParliamentEndorsePublicFindingV1, ParliamentFinalizeOpenedBallotV1,
-                ParliamentFreezeBallotSurvivorsV1, ParliamentFreezeTimedOvnCorpusV1,
-                ParliamentInvitationDecisionV1, ParliamentLifecycleTransitionV1,
-                ParliamentRecordAttemptAbsenceV1, ParliamentRecordInvitationResponseV1,
-                ParliamentRegisterBallotAttemptV1, ParliamentRegisterBallotParticipantV1,
-                ParliamentRegisterSortitionRequestV1, ParliamentSealBodyRosterV1,
-                ParliamentSortitionRequestRegistrationV1, ParliamentTleFinalReleaseSignatureV1,
-                ProposeDeployContract, RegisterCitizen, SubmitParliamentLifecycleTransitionV1,
+                ParliamentEndorsePublicFindingV1, ParliamentFailPublicFindingNoResultV1,
+                ParliamentFinalizeOpenedBallotV1, ParliamentFreezeBallotSurvivorsV1,
+                ParliamentFreezeTimedOvnCorpusV1, ParliamentInvitationDecisionV1,
+                ParliamentLifecycleTransitionV1, ParliamentRecordAttemptAbsenceV1,
+                ParliamentRecordInvitationResponseV1, ParliamentRegisterBallotAttemptV1,
+                ParliamentRegisterBallotParticipantV1, ParliamentRegisterSortitionRequestV1,
+                ParliamentSealBodyRosterV1, ParliamentSortitionRequestRegistrationV1,
+                ParliamentTleFinalReleaseSignatureV1, ProposeDeployContract, RegisterCitizen,
+                SubmitParliamentLifecycleTransitionV1,
             },
             smart_contract_code::{
                 FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
@@ -60,17 +62,22 @@ use iroha::{
         peer::PeerId,
         permission::Permission,
         prelude::{
-            Account, FeePaymentIntent, FindBlocks, Grant, Level, QueryBuilderExt as _, Register,
-            SetParameter,
+            Account, AssetId, FeePaymentIntent, FindAssetById, FindBlocks, Grant, Level,
+            QueryBuilderExt as _, Register, SetParameter,
         },
+        query::error::{FindError, QueryExecutionFail},
         smart_contract::ContractAddress,
     },
+    query::QueryError,
 };
 use iroha_core::{
     beacon::{
         GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_npos_successor_seed_v1,
         global_threshold_beacon_roster_hash_v1,
-        parliament_test_network_signer::deterministic_parliament_beacon_key_record_v1,
+        parliament_test_network_signer::{
+            deterministic_parliament_beacon_key_record_v1,
+            deterministic_parliament_beacon_successor_key_record_v1,
+        },
         validate_global_threshold_beacon_session_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
     },
@@ -104,14 +111,30 @@ use rand::{SeedableRng as _, rngs::StdRng};
 const VALIDATOR_COUNT: usize = 4;
 const CITIZEN_COUNT: usize = 24;
 const BODY_SEATS: u32 = 3;
-const INVITATION_PHASE_BLOCKS: u64 = 30;
-const REGISTRATION_PHASE_BLOCKS: u64 = 9;
+// Six 3-seat bodies can draw eighteen distinct invitees. QueuePlan gives each
+// separately signed response its H + 1 admission and H + 2 execution, so keep
+// enough room for all 36 response heights plus the exact H - 2 roster-seal
+// authority point without relying on accidental cross-body member overlap.
+const INVITATION_PHASE_BLOCKS: u64 = 40;
+// The public QueuePlan corridor deliberately executes three proof-valid
+// registrations and one proof-invalid early close before the exact close. Each
+// blocking submission consumes its H + 1 admission and H + 2 execution, so the
+// close needs ten blocks from registration.
+const REGISTRATION_PHASE_BLOCKS: u64 = 10;
 const SURVIVOR_PHASE_BLOCKS: u64 = 8;
-const COMMITMENT_PHASE_BLOCKS: u64 = 4;
-const RELEASE_DELAY_BLOCKS: u64 = 3;
+// A replayed survivor freeze and an early corpus freeze consume four blocks;
+// retain the H + 4 authority point needed to execute the corpus freeze at H + 6.
+const COMMITMENT_PHASE_BLOCKS: u64 = 6;
+// The replayed corpus freeze and wrong-pulse opening consume four blocks before
+// the autonomous release pulse must still finalize at the exact fifth height.
+const RELEASE_DELAY_BLOCKS: u64 = 5;
 const OPENING_PHASE_BLOCKS: u64 = 8;
 const MIN_ENACTMENT_DELAY: u64 = 3;
 const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;
+// Exact-roster lifecycle certificates bind their containing height. Keep a
+// deterministic submission window while public QueuePlanSynced admission
+// commits its owner at H + 1 and executes the admitted transaction at H + 2.
+const EXACT_HEIGHT_SUBMISSION_CADENCE: Duration = Duration::from_secs(5);
 const PARLIAMENT_NETWORK_STACK_BYTES: usize = 32 * 1024 * 1024;
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1_073_741_824;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
@@ -137,6 +160,13 @@ fn fee() -> FeePaymentIntent {
 }
 
 fn minimal_contract_artifact() -> Vec<u8> {
+    minimal_contract_artifact_with_identity("ParliamentLifecycleSmoke", "integration-tests")
+}
+
+fn minimal_contract_artifact_with_identity(
+    seiyaku_name: &str,
+    compiler_fingerprint: &str,
+) -> Vec<u8> {
     let metadata = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
@@ -146,8 +176,8 @@ fn minimal_contract_artifact() -> Vec<u8> {
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
-        seiyaku_name: "ParliamentLifecycleSmoke".to_owned(),
-        compiler_fingerprint: "integration-tests".to_owned(),
+        seiyaku_name: seiyaku_name.to_owned(),
+        compiler_fingerprint: compiler_fingerprint.to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap: 0,
         access_set_hints: None,
@@ -237,6 +267,86 @@ fn advance_to_predecessor(client: &Client, target_height: u64, label: &str) -> R
     }
 }
 
+fn next_queue_plan_execution_height(
+    client: &Client,
+    minimum_height: u64,
+    label: &str,
+) -> Result<u64> {
+    loop {
+        let authority_height = current_height(client)?;
+        let execution_height = authority_height
+            .checked_add(2)
+            .ok_or_else(|| eyre!("{label}: QueuePlan execution height overflow"))?;
+        if execution_height >= minimum_height {
+            return Ok(execution_height);
+        }
+        tick(
+            client,
+            format!("{label} authority-height tick {}", authority_height + 1),
+        )?;
+    }
+}
+
+async fn advance_to_height_with_queue_plan_carriers(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    target_height: u64,
+    label: &str,
+) -> Result<()> {
+    loop {
+        let height = current_height(client)?;
+        if height == target_height {
+            return Ok(());
+        }
+        if height > target_height {
+            return Err(eyre!(
+                "{label}: exact height {target_height} passed at finalized height {height}"
+            ));
+        }
+        let carrier_height = height
+            .checked_add(1)
+            .ok_or_else(|| eyre!("{label}: QueuePlan carrier height overflow"))?;
+        client.submit(
+            Log::new(
+                Level::INFO,
+                format!("{label} admission carrier {carrier_height}"),
+            ),
+            fee(),
+        )?;
+        network.ensure_blocks(carrier_height).await?;
+        let observed_height = current_height(client)?;
+        if observed_height != carrier_height {
+            return Err(eyre!(
+                "{label}: QueuePlan carrier expected exact height {carrier_height}, observed {observed_height}"
+            ));
+        }
+    }
+}
+
+async fn advance_to_queue_plan_authority_height(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    execution_height: u64,
+    label: &str,
+) -> Result<()> {
+    let authority_height = execution_height.checked_sub(2).ok_or_else(|| {
+        eyre!("{label}: QueuePlan execution height {execution_height} has no H - 2 authority")
+    })?;
+    advance_to_height_with_queue_plan_carriers(network, client, authority_height, label).await
+}
+
+async fn advance_to_autonomous_predecessor(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    target_height: u64,
+    label: &str,
+) -> Result<()> {
+    let predecessor_height = target_height.checked_sub(1).ok_or_else(|| {
+        eyre!("{label}: autonomous target height {target_height} has no predecessor")
+    })?;
+    advance_to_height_with_queue_plan_carriers(network, client, predecessor_height, label).await
+}
+
 fn submit_transition(
     client: &Client,
     attempt_id: GovernanceAttemptId,
@@ -297,6 +407,129 @@ fn assert_transition_rejected_without_state_change(
     Ok(())
 }
 
+fn assert_governed_contract_absent(
+    client: &Client,
+    contract_address: &ContractAddress,
+    label: &str,
+) -> Result<()> {
+    let response = client
+        .get_gov_contract_response(contract_address)
+        .wrap_err_with(|| format!("{label}: inactive governed-contract lookup failed"))?;
+    if response.status() != iroha::http::StatusCode::OK {
+        return Err(eyre!(
+            "{label}: expected governed-contract HTTP 200, observed {}",
+            response.status(),
+        ));
+    }
+    let projection: norito::json::Value = norito::json::from_slice(response.body())
+        .wrap_err_with(|| format!("{label}: inactive governed-contract response is not JSON"))?;
+    let object = projection
+        .as_object()
+        .ok_or_else(|| eyre!("{label}: inactive governed-contract response is not an object"))?;
+    if object.len() != 3
+        || object.get("found").and_then(norito::json::Value::as_bool) != Some(false)
+        || object
+            .get("contract_address")
+            .and_then(norito::json::Value::as_str)
+            != Some(contract_address.as_ref())
+        || object
+            .get("dataspace")
+            .and_then(norito::json::Value::as_str)
+            != Some("universal")
+    {
+        return Err(eyre!(
+            "{label}: expected the exact inactive governed-contract projection, got {object:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn assert_governed_contract_binding(
+    client: &Client,
+    contract_address: &ContractAddress,
+    expected_code_hash: ContractCodeHash,
+    expected_abi_hash: ContractAbiHash,
+    label: &str,
+) -> Result<()> {
+    let response = client
+        .get_gov_contract_json(contract_address)
+        .wrap_err_with(|| format!("{label}: active governed-contract lookup failed"))?;
+    let object = response
+        .as_object()
+        .ok_or_else(|| eyre!("{label}: active governed-contract response is not an object"))?;
+    let expected_subject = contract_address.subject_id().to_string();
+    let expected_code_hash = expected_code_hash.to_hex();
+    let expected_abi_hash = expected_abi_hash.to_hex();
+    let has_exact_entrypoints = object
+        .get("public_entrypoints")
+        .and_then(norito::json::Value::as_array)
+        .is_some_and(|entrypoints| {
+            entrypoints.len() == 1 && entrypoints[0].as_str() == Some("main")
+        });
+    if object.len() != 7
+        || object.get("found").and_then(norito::json::Value::as_bool) != Some(true)
+        || object
+            .get("contract_address")
+            .and_then(norito::json::Value::as_str)
+            != Some(contract_address.as_ref())
+        || object
+            .get("contract_subject_account")
+            .and_then(norito::json::Value::as_str)
+            != Some(expected_subject.as_str())
+        || object
+            .get("dataspace")
+            .and_then(norito::json::Value::as_str)
+            != Some("universal")
+        || object
+            .get("code_hash_hex")
+            .and_then(norito::json::Value::as_str)
+            != Some(expected_code_hash.as_str())
+        || object
+            .get("abi_hash_hex")
+            .and_then(norito::json::Value::as_str)
+            != Some(expected_abi_hash.as_str())
+        || !has_exact_entrypoints
+    {
+        return Err(eyre!(
+            "{label}: expected the exact active governed-contract projection, got {object:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str) -> Result<()> {
+    match client.query_single(FindAssetById::new(asset_id.clone())) {
+        Ok(_) => Err(eyre!(
+            "{label}: expected asset `{asset_id}` to be absent, but the query returned it"
+        )),
+        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+            FindError::Asset(missing),
+        )))) if missing.as_ref() == asset_id => Ok(()),
+        Err(error) => Err(eyre!(
+            "{label}: expected a typed asset-not-found result for `{asset_id}`, got {error:?}"
+        )),
+    }
+}
+
+fn assert_timed_ovn_casting_context_not_castable(
+    client: &Client,
+    ballot_attempt_id: BallotAttemptId,
+    label: &str,
+) -> Result<()> {
+    let error = client
+        .get_parliament_timed_ovn_casting_context(ballot_attempt_id)
+        .expect_err("a sealed timed-OVN corpus must not return a casting context");
+    let rendered = format!("{error:#}");
+    const PHASE_NOT_CASTABLE: &str = "Parliament timed-OVN casting context is not authorized: \
+        timed-OVN lifecycle is no longer in a casting phase";
+    if !rendered.contains("400 Bad Request") || !rendered.contains(PHASE_NOT_CASTABLE) {
+        return Err(eyre!(
+            "{label}: expected the exact sealed-corpus casting-context rejection, got {rendered}"
+        ));
+    }
+    Ok(())
+}
+
 fn read_attempt(
     client: &Client,
     attempt_id: GovernanceAttemptId,
@@ -324,10 +557,32 @@ fn lifecycle_certificate(
     public_state: Vec<u8>,
     effective_height: u64,
 ) -> Result<ApplyThresholdKeyLifecycleCertificateV1> {
+    lifecycle_certificate_replacing(
+        network,
+        ordered_roster,
+        action,
+        None,
+        session_id,
+        transcript_hash,
+        public_state,
+        effective_height,
+    )
+}
+
+fn lifecycle_certificate_replacing(
+    network: &sandbox::SerializedNetwork,
+    ordered_roster: &[PeerId],
+    action: ThresholdKeyLifecycleActionV1,
+    expected_active_session_id: Option<[u8; 32]>,
+    session_id: [u8; 32],
+    transcript_hash: [u8; 32],
+    public_state: Vec<u8>,
+    effective_height: u64,
+) -> Result<ApplyThresholdKeyLifecycleCertificateV1> {
     let mut certificate = ThresholdKeyLifecycleCertificateV1 {
         version: THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
         action,
-        expected_active_session_id: None,
+        expected_active_session_id,
         effective_height,
         network_id: network.network_id(),
         roster_hash: global_threshold_beacon_roster_hash_v1(ordered_roster),
@@ -567,310 +822,17 @@ fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
         .ok_or_else(|| eyre!("peer does not retain finalized block {height}"))
 }
 
-async fn exercise_public_finding_impossible_quorum_retry(
-    network: &sandbox::SerializedNetwork,
-    client: &Client,
-    citizens: &[AccountId],
-    citizen_keys: &[KeyPair],
-    contract_address: &ContractAddress,
-    code_hash: ContractCodeHash,
-    abi_hash: ContractAbiHash,
-    logical_beacon: BeaconSessionId,
-) -> Result<()> {
-    let proposal = ProposalKind::DeployContract(DeployContractProposal {
-        contract_address: contract_address.clone(),
-        code_hash,
-        abi_hash,
-        abi_version: AbiVersion::new(1),
-        manifest_provenance: None,
-    });
-    let create = CreateParliamentGovernanceAttemptV1 {
-        proposal: proposal.clone(),
-        attempt_sequence: 0,
-    };
-    let attempt_id = create.governance_attempt_id();
-    client.submit_all_blocking(
-        [
-            InstructionBox::from(ProposeDeployContract {
-                contract_address: contract_address.clone(),
-                code_hash,
-                abi_hash,
-                abi_version: AbiVersion::new(1),
-                manifest_provenance: None,
-            }),
-            InstructionBox::from(create),
-        ],
-        fee(),
-    )?;
-    submit_transition(
-        client,
-        attempt_id,
-        ParliamentLifecycleTransitionV1::CompleteQualification,
-    )?;
-
-    let expected_bodies = [
-        ParliamentBody::RulesCommittee,
-        ParliamentBody::AgendaCouncil,
-        ParliamentBody::InterestPanel,
-        ParliamentBody::ReviewPanel,
-        ParliamentBody::OversightCommittee,
-        ParliamentBody::PolicyJury,
-    ];
-    let request_height = current_height(client)? + 1;
-    let sortition_pulse_height = request_height + 4;
-    let mut election_ids = BTreeMap::new();
-    let mut request_ids = Vec::new();
-    let mut registrations = Vec::new();
-    for body in expected_bodies {
-        let election_id = BodyElectionAttemptId::derive_v1(attempt_id, body, 0);
-        let request = SortitionRequestV1::try_new_canonical(
-            attempt_id,
-            election_id,
-            body,
-            parliament_candidate_root_v1(attempt_id, body, citizens),
-            u32::try_from(citizens.len())?,
-            BODY_SEATS,
-            request_height,
-            sortition_pulse_height,
-            logical_beacon,
-            None,
-        )
-        .map_err(|error| eyre!("construct no-result sortition request: {error}"))?;
-        election_ids.insert(body, election_id);
-        request_ids.push(request.id);
-        registrations.push(ParliamentSortitionRequestRegistrationV1 {
-            sequence: 0,
-            request,
-        });
-    }
-    request_ids.sort_unstable();
-    submit_transition(
-        client,
-        attempt_id,
-        ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
-            ParliamentRegisterSortitionRequestV1 {
-                requests: registrations,
-            },
-        ),
-    )?;
-    assert_eq!(current_height(client)?, request_height);
-    advance_to_predecessor(
-        client,
-        sortition_pulse_height,
-        "no-result retry sortition pulse",
-    )?;
-    network.ensure_blocks(sortition_pulse_height).await?;
-    let pulses = network
-        .peers()
-        .iter()
-        .map(|peer| pulse_at(&peer.client(), sortition_pulse_height))
-        .collect::<Result<Vec<_>>>()?;
-    assert!(pulses.windows(2).all(|pair| pair[0] == pair[1]));
-    let pulse = &pulses[0];
-    submit_transition(
-        client,
-        attempt_id,
-        ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(
-            ParliamentConsumeSortitionPulseBatchV1 {
-                request_ids,
-                beacon_session_id: logical_beacon,
-                pulse_height: sortition_pulse_height,
-                pulse_id: BeaconPulseId::new(pulse.pulse_id),
-            },
-        ),
-    )?;
-
-    submit_transitions(
-        client,
-        attempt_id,
-        expected_bodies.into_iter().map(|body| {
-            ParliamentLifecycleTransitionV1::BeginInvitationAcceptance(
-                ParliamentBeginInvitationAcceptanceV1 {
-                    election_attempt_id: election_ids[&body],
-                },
-            )
-        }),
-    )?;
-    let invitation_state = read_attempt(client, attempt_id)?;
-    let invitation_close_height = expected_bodies
-        .into_iter()
-        .map(|body| {
-            invitation_state
-                .election(&election_ids[&body])
-                .and_then(|election| election.invitation_close_height())
-                .expect("no-result invitation deadline is frozen")
-        })
-        .reduce(|left, right| {
-            assert_eq!(left, right);
-            left
-        })
-        .expect("the no-result attempt requires Parliament bodies");
-    let mut invitations_by_member =
-        BTreeMap::<AccountId, Vec<(ParliamentBody, BodyElectionAttemptId)>>::new();
-    for body in expected_bodies {
-        let election = invitation_state
-            .election(&election_ids[&body])
-            .expect("no-result body election");
-        for assignment in election.primary_assignments() {
-            invitations_by_member
-                .entry(assignment.member.clone())
-                .or_default()
-                .push((body, election_ids[&body]));
-        }
-    }
-    for (member, invitations) in invitations_by_member {
-        submit_transitions(
-            &client_for(client, &member, citizen_keys),
-            attempt_id,
-            invitations.into_iter().map(|(body, election_attempt_id)| {
-                ParliamentLifecycleTransitionV1::RecordInvitationResponse(
-                    ParliamentRecordInvitationResponseV1 {
-                        election_attempt_id,
-                        body,
-                        decision: ParliamentInvitationDecisionV1::Accept,
-                    },
-                )
-            }),
-        )?;
-    }
-    assert!(current_height(client)? <= invitation_close_height);
-    let roster_seal_height = invitation_close_height
-        .checked_add(1)
-        .ok_or_else(|| eyre!("no-result roster-seal height overflow"))?;
-    advance_to_predecessor(client, roster_seal_height, "no-result retry roster sealing")?;
-    submit_transitions(
-        client,
-        attempt_id,
-        expected_bodies.into_iter().map(|body| {
-            ParliamentLifecycleTransitionV1::SealBodyRoster(ParliamentSealBodyRosterV1 {
-                election_attempt_id: election_ids[&body],
-            })
-        }),
-    )?;
-
-    let rules_body_id = read_attempt(client, attempt_id)?
-        .sealed_body_for_role(ParliamentBody::RulesCommittee)
-        .expect("no-result Rules Committee is sealed")
-        .instance()
-        .id;
-    submit_transitions(
-        client,
-        attempt_id,
-        [
-            DeliberationPhaseV1::Orientation,
-            DeliberationPhaseV1::Evidence,
-            DeliberationPhaseV1::Questions,
-            DeliberationPhaseV1::Responses,
-            DeliberationPhaseV1::Deliberation,
-            DeliberationPhaseV1::Reflection,
-        ]
-        .into_iter()
-        .map(|target| {
-            ParliamentLifecycleTransitionV1::AdvanceBodyPhase(ParliamentAdvanceBodyPhaseV1 {
-                body_instance_id: rules_body_id,
-                target,
-            })
-        }),
-    )?;
-    let reflecting = read_attempt(client, attempt_id)?;
-    let rules = reflecting
-        .body(&rules_body_id)
-        .expect("reflecting no-result Rules Committee");
-    let public_finding_deadline = rules
-        .public_finding_deadline_height()
-        .expect("no-result public-finding deadline is frozen");
-    let absent_assignments = rules.assignments()[..2].to_vec();
-    for (index, assignment) in absent_assignments.iter().enumerate() {
-        submit_transition(
-            &client_for(client, &assignment.member, citizen_keys),
-            attempt_id,
-            ParliamentLifecycleTransitionV1::RecordAttemptAbsence(
-                ParliamentRecordAttemptAbsenceV1 {
-                    body_instance_id: rules_body_id,
-                    assignment_id: assignment.assignment_id,
-                },
-            ),
-        )?;
-        let observed = read_attempt(client, attempt_id)?;
-        let observed_rules = observed
-            .body(&rules_body_id)
-            .expect("no-result Rules Committee survives projection");
-        assert_eq!(observed_rules.excluded_assignments().len(), index + 1);
-        if index == 0 {
-            assert_eq!(observed.attempt().status, GovernanceAttemptStatusV1::Active);
-            assert_eq!(
-                observed_rules.instance().status,
-                BodyInstanceStatusV1::Deliberating(DeliberationPhaseV1::Reflection),
-            );
-        }
-    }
-    let failed_height = current_height(client)?;
-    assert!(
-        failed_height < public_finding_deadline,
-        "objective quorum impossibility must terminate before the frozen deadline",
-    );
-    let rejected = read_attempt(client, attempt_id)?;
-    let rejected_rules = rejected
-        .body(&rules_body_id)
-        .expect("rejected Rules Committee remains auditable");
-    assert_eq!(
-        rejected.attempt().status,
-        GovernanceAttemptStatusV1::Rejected,
-    );
-    assert_eq!(
-        rejected_rules.instance().status,
-        BodyInstanceStatusV1::NoResult
-    );
-    assert_eq!(
-        rejected_rules.public_finding_no_result_kind(),
-        Some(ParliamentNoResultKindV1::PublicFindingQuorumUnreachable),
-    );
-    assert_eq!(
-        rejected_rules.public_finding_no_result_height(),
-        Some(failed_height),
-    );
-    assert!(
-        client.get_gov_contract_json(contract_address).is_err(),
-        "a no-result Parliament attempt must not apply its governed effect",
-    );
-
-    let retry = CreateParliamentGovernanceAttemptV1 {
-        proposal,
-        attempt_sequence: 1,
-    };
-    let retry_id = retry.governance_attempt_id();
-    client.submit_blocking(retry, fee())?;
-    let retry_height = current_height(client)?;
-    network.ensure_blocks(retry_height).await?;
-    let retry_state = read_attempt(client, retry_id)?;
-    assert_eq!(retry_state.attempt().sequence, 1);
-    assert_eq!(
-        retry_state.attempt().status,
-        GovernanceAttemptStatusV1::Active
-    );
-    assert_eq!(
-        retry_state.attempt().stage,
-        GovernanceStageV1::Qualification
-    );
-
-    let rejected_response = client.get_parliament_attempt(attempt_id)?;
-    let retry_response = client.get_parliament_attempt(retry_id)?;
-    for peer in network.peers() {
-        let peer_client = peer.client();
-        let peer_rejected = peer_client.get_parliament_attempt(attempt_id)?;
-        let peer_retry = peer_client.get_parliament_attempt(retry_id)?;
-        assert_eq!(
-            peer_rejected.state_payload_hex,
-            rejected_response.state_payload_hex
-        );
-        assert_eq!(
-            peer_retry.state_payload_hex,
-            retry_response.state_payload_hex
-        );
-        assert!(
-            peer_client.get_gov_contract_json(contract_address).is_err(),
-            "every validator must preserve no-result effect isolation",
-        );
+fn assert_no_global_beacon_pulse_at(client: &Client, height: u64, label: &str) -> Result<()> {
+    let block = exact_block(client, height)
+        .wrap_err_with(|| format!("{label}: exact finalized block is unavailable"))?;
+    if block
+        .npos_consensus_effects()
+        .and_then(|effects| effects.finalized_global_beacon_pulse)
+        .is_some()
+    {
+        return Err(eyre!(
+            "{label}: finalized block {height} unexpectedly carries a global beacon pulse"
+        ));
     }
     Ok(())
 }
@@ -911,7 +873,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
         .with_parliament_beacon_signer_modes(POSITIVE_BEACON_SIGNER_MODES)
-        .with_block_cadence(Duration::from_secs(1))
+        .with_block_cadence(EXACT_HEIGHT_SUBMISSION_CADENCE)
         .with_config_layer(|layer| {
             layer
                 // Keep mandatory SoraNet admission enabled while bounding the
@@ -1046,34 +1008,45 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     let tle_public_state =
         deterministic_parliament_tle_key_public_state_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive exact public TLE fixture")?;
-    let install_height =
-        (current_height(&client)? + 1).max(beacon_record.session.adaptive_dkg.finalized_at_height);
-    advance_to_predecessor(&client, install_height, "threshold-key installation")?;
-    client.submit_all_blocking(
-        [
-            InstructionBox::from(lifecycle_certificate(
-                &network,
-                &ordered_roster,
-                ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
-                beacon_record.session.session_id,
-                beacon_record.session.transcript_hash,
-                norito::encode_canonical(&beacon_record)?,
-                install_height,
-            )?),
-            InstructionBox::from(lifecycle_certificate(
-                &network,
-                &ordered_roster,
-                ThresholdKeyLifecycleActionV1::InstallParliamentTleKey,
-                *tle_public_state.key_session_id.as_bytes(),
-                tle_public_state.transcript_hash,
-                norito::encode_canonical(&tle_public_state)?,
-                install_height,
-            )?),
-        ],
+    let install_height = next_queue_plan_execution_height(
+        &client,
+        beacon_record.session.adaptive_dkg.finalized_at_height,
+        "threshold-key installation",
+    )?;
+    let lifecycle_certificates = [
+        InstructionBox::from(lifecycle_certificate(
+            &network,
+            &ordered_roster,
+            ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+            beacon_record.session.session_id,
+            beacon_record.session.transcript_hash,
+            norito::encode_canonical(&beacon_record)?,
+            install_height,
+        )?),
+        InstructionBox::from(lifecycle_certificate(
+            &network,
+            &ordered_roster,
+            ThresholdKeyLifecycleActionV1::InstallParliamentTleKey,
+            *tle_public_state.key_session_id.as_bytes(),
+            tle_public_state.transcript_hash,
+            norito::encode_canonical(&tle_public_state)?,
+            install_height,
+        )?),
+    ];
+    client.submit_all_blocking(lifecycle_certificates, fee())?;
+    assert_eq!(current_height(&client)?, install_height);
+    let activation_height = install_height
+        .checked_add(1)
+        .ok_or_else(|| eyre!("threshold-key activation height overflow"))?;
+    client.submit(
+        Log::new(
+            Level::INFO,
+            "carry Parliament threshold-key activation".to_owned(),
+        ),
         fee(),
     )?;
-    assert_eq!(current_height(&client)?, install_height);
-    tick(&client, "activate installed global beacon session")?;
+    network.ensure_blocks(activation_height).await?;
+    assert_eq!(current_height(&client)?, activation_height);
 
     let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
@@ -1118,7 +1091,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     let initial = read_attempt(&client, attempt_id)?;
     assert_eq!(initial.required_bodies().len(), expected_bodies.len());
     assert_eq!(initial.attempt().stage, GovernanceStageV1::Rules);
-    let request_height = current_height(&client)? + 1;
+    let request_height =
+        next_queue_plan_execution_height(&client, 0, "canonical sortition registration")?;
     let sortition_pulse_height = request_height + 4;
     let logical_beacon = BeaconSessionId::for_network_v1(&network.network_id());
     let mut election_ids = BTreeMap::new();
@@ -1157,7 +1131,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         ),
     )?;
     assert_eq!(current_height(&client)?, request_height);
-    advance_to_predecessor(&client, sortition_pulse_height, "sortition pulse")?;
+    advance_to_autonomous_predecessor(&network, &client, sortition_pulse_height, "sortition pulse")
+        .await?;
     network.ensure_blocks(sortition_pulse_height).await?;
     assert_eq!(
         current_height(&client)?,
@@ -1284,11 +1259,13 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     let roster_seal_height = common_invitation_close[0]
         .checked_add(1)
         .ok_or_else(|| eyre!("invitation close height overflow"))?;
-    advance_to_predecessor(
+    advance_to_queue_plan_authority_height(
+        &network,
         &client,
         roster_seal_height,
         "canonical Parliament roster sealing",
-    )?;
+    )
+    .await?;
     submit_transitions(
         &client,
         attempt_id,
@@ -1411,7 +1388,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         }),
     )?;
     let ballot_attempt_id = BallotAttemptId::derive_v1(policy_body_id, 0);
-    let registered_at_height = current_height(&client)? + 1;
+    let registered_at_height =
+        next_queue_plan_execution_height(&client, 0, "timed-OVN ballot registration")?;
     let registration_close_height = registered_at_height + REGISTRATION_PHASE_BLOCKS;
     let survivor_freeze_height = registration_close_height + SURVIVOR_PHASE_BLOCKS;
     let commitment_close_height = survivor_freeze_height + COMMITMENT_PHASE_BLOCKS;
@@ -1498,11 +1476,13 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         ),
         "registration close before the frozen exact height",
     )?;
-    advance_to_predecessor(
+    advance_to_queue_plan_authority_height(
+        &network,
         &client,
         registration_close_height,
         "timed-OVN registration close",
-    )?;
+    )
+    .await?;
     assert_eq!(
         submit_transition(
             &client,
@@ -1547,7 +1527,13 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         }),
         "survivor freeze before the frozen exact height",
     )?;
-    advance_to_predecessor(&client, survivor_freeze_height, "timed-OVN survivor freeze")?;
+    advance_to_queue_plan_authority_height(
+        &network,
+        &client,
+        survivor_freeze_height,
+        "timed-OVN survivor freeze",
+    )
+    .await?;
     assert_eq!(
         submit_transition(
             &client,
@@ -1616,11 +1602,13 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         }),
         "timed-OVN corpus freeze before the frozen exact height",
     )?;
-    advance_to_predecessor(
+    advance_to_queue_plan_authority_height(
+        &network,
         &client,
         commitment_close_height,
         "timed-OVN commitment close",
-    )?;
+    )
+    .await?;
     assert_eq!(
         submit_transition(
             &client,
@@ -1644,12 +1632,11 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         committed_ballot.attempt().status,
         BallotAttemptStatusV1::AwaitingRelease,
     );
-    assert!(
-        client
-            .get_parliament_timed_ovn_casting_context(ballot_attempt_id)
-            .is_err(),
+    assert_timed_ovn_casting_context_not_castable(
+        &client,
+        ballot_attempt_id,
         "a sealed corpus is no longer a cast-capable context",
-    );
+    )?;
     assert_transition_rejected_without_state_change(
         &client,
         attempt_id,
@@ -1673,7 +1660,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         "ballot opening before the frozen release height and authoritative pulse",
     )?;
 
-    advance_to_predecessor(&client, release_height, "timed-OVN release pulse")?;
+    advance_to_autonomous_predecessor(&network, &client, release_height, "timed-OVN release pulse")
+        .await?;
     network.ensure_blocks(release_height).await?;
     assert_eq!(
         current_height(&client)?,
@@ -1904,26 +1892,29 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         "replayed aggregate ballot finalization",
     )?;
 
-    advance_to_predecessor(
+    advance_to_autonomous_predecessor(
+        &network,
         &client,
         certificate.enact_at_height,
         "automatic exact-height Parliament enactment",
-    )?;
-    assert_eq!(
-        tick(&client, "drive automatic due-certificate execution")?,
-        certificate.enact_at_height,
-    );
+    )
+    .await?;
     let enacted_height = certificate.enact_at_height;
     network.ensure_blocks(enacted_height).await?;
+    assert_eq!(current_height(&client)?, enacted_height);
     let enacted_response = client.get_parliament_attempt(attempt_id)?;
     let enacted = read_attempt(&client, attempt_id)?;
     assert_eq!(enacted.attempt().status, GovernanceAttemptStatusV1::Enacted);
     assert_eq!(enacted.attempt().stage, GovernanceStageV1::Enactment);
     assert_eq!(enacted.terminal_height(), Some(enacted_height));
     assert_eq!(enacted.certificate(), Some(&certificate));
-    client
-        .get_gov_contract_json(&contract_address)
-        .wrap_err("consensus-owned certificate enactment must bind the staged contract")?;
+    assert_governed_contract_binding(
+        &client,
+        &contract_address,
+        code_hash,
+        abi_hash,
+        "consensus-owned certificate enactment must bind the staged contract",
+    )?;
 
     let peer_blocks = network
         .peers()
@@ -1986,9 +1977,13 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             response.state_payload_hex,
             enacted_response.state_payload_hex
         );
-        peer_client
-            .get_gov_contract_json(&contract_address)
-            .wrap_err("every validator must expose the consensus-enacted contract")?;
+        assert_governed_contract_binding(
+            &peer_client,
+            &contract_address,
+            code_hash,
+            abi_hash,
+            "every validator must expose the consensus-enacted contract",
+        )?;
         let status = peer_client.get_sumeragi_status()?;
         status
             .validate()
@@ -2029,10 +2024,13 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     );
     let restarted_block = exact_block(&restart_peer.client(), enacted_height)?;
     assert_eq!(restarted_block.hash(), peer_blocks[0].hash());
-    restart_peer
-        .client()
-        .get_gov_contract_json(&contract_address)
-        .wrap_err("normal restart must restore the consensus-enacted contract")?;
+    assert_governed_contract_binding(
+        &restart_peer.client(),
+        &contract_address,
+        code_hash,
+        abi_hash,
+        "normal restart must restore the consensus-enacted contract",
+    )?;
     let restarted_status = restart_peer.client().get_sumeragi_status()?;
     restarted_status
         .validate()
@@ -2041,7 +2039,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         !restarted_status.restart_required,
         "normal restart must restore a live non-fail-stopped consensus reducer",
     );
-    exercise_public_finding_impossible_quorum_retry(
+    no_result_paths::exercise_public_finding_no_result_retries_and_restore(
         &network,
         &client,
         &citizens,
@@ -2094,7 +2092,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
         .with_parliament_beacon_signer_modes(POSITIVE_BEACON_SIGNER_MODES)
-        .with_block_cadence(Duration::from_secs(1))
+        .with_block_cadence(EXACT_HEIGHT_SUBMISSION_CADENCE)
         .with_config_layer(|layer| {
             layer
                 .write(
@@ -2148,32 +2146,84 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let validated_beacon_session =
         validate_global_threshold_beacon_session_v1(beacon_record.session.clone(), &beacon_binding)
             .wrap_err("replay mandatory NPoS beacon transcript")?;
+    let successor_beacon_record = deterministic_parliament_beacon_successor_key_record_v1(
+        network.network_id(),
+        &ordered_roster,
+    )
+    .wrap_err("derive mandatory NPoS successor beacon fixture")?;
+    assert_ne!(
+        successor_beacon_record.session.session_id,
+        beacon_record.session.session_id,
+    );
+    assert_ne!(
+        successor_beacon_record.session.transcript_hash,
+        beacon_record.session.transcript_hash,
+    );
+    let successor_beacon_binding = GlobalThresholdBeaconSessionBindingV1 {
+        network_id: successor_beacon_record.session.network_id,
+        session_id: successor_beacon_record.session.session_id,
+        roster_hash: successor_beacon_record.session.roster_hash,
+        transcript_hash: successor_beacon_record.session.transcript_hash,
+    };
+    let validated_successor_beacon_session = validate_global_threshold_beacon_session_v1(
+        successor_beacon_record.session.clone(),
+        &successor_beacon_binding,
+    )
+    .wrap_err("replay mandatory NPoS successor beacon transcript")?;
 
-    let install_height =
-        (current_height(&client)? + 1).max(beacon_record.session.adaptive_dkg.finalized_at_height);
-    advance_to_predecessor(&client, install_height, "mandatory beacon-key installation")?;
-    client.submit_blocking(
-        lifecycle_certificate(
-            &network,
-            &ordered_roster,
-            ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
-            beacon_record.session.session_id,
-            beacon_record.session.transcript_hash,
-            norito::encode_canonical(&beacon_record)?,
-            install_height,
-        )?,
+    let install_height = next_queue_plan_execution_height(
+        &client,
+        beacon_record.session.adaptive_dkg.finalized_at_height,
+        "mandatory beacon-key installation",
+    )?;
+    let lifecycle_certificate = lifecycle_certificate(
+        &network,
+        &ordered_roster,
+        ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+        beacon_record.session.session_id,
+        beacon_record.session.transcript_hash,
+        norito::encode_canonical(&beacon_record)?,
+        install_height,
+    )?;
+    client.submit_blocking(lifecycle_certificate, fee())?;
+    assert_eq!(current_height(&client)?, install_height);
+    let activation_height = install_height
+        .checked_add(1)
+        .ok_or_else(|| eyre!("mandatory beacon-key activation height overflow"))?;
+    client.submit(
+        Log::new(
+            Level::INFO,
+            "carry mandatory beacon-key activation".to_owned(),
+        ),
         fee(),
     )?;
-    assert_eq!(current_height(&client)?, install_height);
-    tick(&client, "activate mandatory NPoS beacon session")?;
+    network.ensure_blocks(activation_height).await?;
+    assert_eq!(current_height(&client)?, activation_height);
 
     let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;
     let pulse_height = boundary_height - 1;
-    advance_to_predecessor(&client, pulse_height, "mandatory pre-boundary pulse")?;
-    assert!(
-        pulse_at(&client, pulse_height - 1).is_err(),
-        "an unrequested non-boundary height must not emit a global pulse"
+    assert_eq!(
+        activation_height.checked_add(2),
+        Some(boundary_height),
+        "the exact fixture must rotate in the boundary block after one old-session pulse",
     );
+    let rotation_certificate = lifecycle_certificate_replacing(
+        &network,
+        &ordered_roster,
+        ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+        Some(beacon_record.session.session_id),
+        successor_beacon_record.session.session_id,
+        successor_beacon_record.session.transcript_hash,
+        norito::encode_canonical(&successor_beacon_record)?,
+        boundary_height,
+    )?;
+    client.submit(rotation_certificate, fee())?;
+    advance_to_predecessor(&client, pulse_height, "mandatory pre-boundary pulse")?;
+    assert_no_global_beacon_pulse_at(
+        &client,
+        pulse_height - 1,
+        "an unrequested non-boundary height must not emit a global pulse",
+    )?;
     network.ensure_blocks(pulse_height).await?;
     assert_eq!(
         current_height(&client)?,
@@ -2210,15 +2260,17 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let successor_epoch = 1;
     let successor_seed =
         global_threshold_beacon_npos_successor_seed_v1(pulse, boundary_height, successor_epoch);
-    assert_eq!(
-        tick(&client, "commit mandatory NPoS boundary")?,
-        boundary_height
-    );
-    assert_eq!(
-        tick(&client, "prove successor epoch can finalize")?,
-        boundary_height + 1
-    );
+    client.submit(
+        Log::new(
+            Level::INFO,
+            "carry post-rotation successor progression".to_owned(),
+        ),
+        fee(),
+    )?;
+    network.ensure_blocks(boundary_height).await?;
+    assert_eq!(current_height(&client)?, boundary_height);
     network.ensure_blocks(boundary_height + 1).await?;
+    assert_eq!(current_height(&client)?, boundary_height + 1);
     for peer in network.peers() {
         let status = peer.client().get_sumeragi_status()?;
         status
@@ -2234,6 +2286,79 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         assert_eq!(
             status.height_context.epoch_end_height,
             boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
+        );
+    }
+
+    let successor_pulse_height = boundary_height
+        .checked_add(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
+        .and_then(|height| height.checked_sub(1))
+        .ok_or_else(|| eyre!("successor mandatory pulse height overflow"))?;
+    advance_to_autonomous_predecessor(
+        &network,
+        &client,
+        successor_pulse_height,
+        "successor-session mandatory pre-boundary pulse",
+    )
+    .await?;
+    network.ensure_blocks(successor_pulse_height).await?;
+    let successor_pulses = network
+        .peers()
+        .iter()
+        .map(|peer| pulse_at(&peer.client(), successor_pulse_height))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(successor_pulses.windows(2).all(|pair| pair[0] == pair[1]));
+    let successor_pulse = &successor_pulses[0];
+    assert_eq!(successor_pulse.height, successor_pulse_height);
+    assert_eq!(
+        successor_pulse.session_id,
+        successor_beacon_record.session.session_id
+    );
+    assert_eq!(
+        successor_pulse.roster_hash,
+        successor_beacon_record.session.roster_hash
+    );
+    assert_eq!(
+        successor_pulse.transcript_hash,
+        successor_beacon_record.session.transcript_hash
+    );
+    assert_ne!(successor_pulse.session_id, pulse.session_id);
+    verify_finalized_global_threshold_beacon_pulse_v1(
+        &validated_successor_beacon_session,
+        successor_pulse,
+        successor_pulse.finalized_chain_anchor,
+    )
+    .wrap_err("independently verify the successor-session mandatory pulse")?;
+
+    let second_boundary_height = boundary_height
+        .checked_add(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
+        .ok_or_else(|| eyre!("second mandatory NPoS boundary overflow"))?;
+    let second_successor_epoch = 2;
+    let second_successor_seed = global_threshold_beacon_npos_successor_seed_v1(
+        successor_pulse,
+        second_boundary_height,
+        second_successor_epoch,
+    );
+    client.submit(
+        Log::new(
+            Level::INFO,
+            "carry the successor-session NPoS boundary".to_owned(),
+        ),
+        fee(),
+    )?;
+    network.ensure_blocks(second_boundary_height).await?;
+    network.ensure_blocks(second_boundary_height + 1).await?;
+    for peer in network.peers() {
+        let status = peer.client().get_sumeragi_status()?;
+        status
+            .validate()
+            .map_err(|error| eyre!("invalid rotated-session NPoS status: {error}"))?;
+        assert!(!status.restart_required);
+        assert!(status.last_committed_height >= second_boundary_height + 1);
+        assert_eq!(status.height_context.epoch, second_successor_epoch);
+        assert_eq!(status.height_context.epoch_seed, second_successor_seed);
+        assert_eq!(
+            status.height_context.epoch_end_height,
+            second_boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
         );
     }
 
@@ -2283,7 +2408,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
         .with_parliament_beacon_signer_modes(FAIL_CLOSED_BEACON_SIGNER_MODES)
-        .with_block_cadence(Duration::from_secs(1))
+        .with_block_cadence(EXACT_HEIGHT_SUBMISSION_CADENCE)
         .with_config_layer(|layer| {
             layer
                 .write(
@@ -2327,32 +2452,41 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
             .wrap_err("derive fail-closed NPoS beacon fixture")?;
     assert_eq!(beacon_record.session.committee_size, 4);
     assert_eq!(beacon_record.session.threshold, 2);
-    let install_height =
-        (current_height(&client)? + 1).max(beacon_record.session.adaptive_dkg.finalized_at_height);
-    advance_to_predecessor(
+    let install_height = next_queue_plan_execution_height(
         &client,
-        install_height,
+        beacon_record.session.adaptive_dkg.finalized_at_height,
         "fail-closed beacon-key installation",
     )?;
-    client.submit_blocking(
-        lifecycle_certificate(
-            &network,
-            &ordered_roster,
-            ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
-            beacon_record.session.session_id,
-            beacon_record.session.transcript_hash,
-            norito::encode_canonical(&beacon_record)?,
-            install_height,
-        )?,
+    let lifecycle_certificate = lifecycle_certificate(
+        &network,
+        &ordered_roster,
+        ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+        beacon_record.session.session_id,
+        beacon_record.session.transcript_hash,
+        norito::encode_canonical(&beacon_record)?,
+        install_height,
+    )?;
+    client.submit_blocking(lifecycle_certificate, fee())?;
+    assert_eq!(current_height(&client)?, install_height);
+    let activation_height = install_height
+        .checked_add(1)
+        .ok_or_else(|| eyre!("fail-closed beacon-key activation height overflow"))?;
+    client.submit(
+        Log::new(
+            Level::INFO,
+            "carry fail-closed beacon-key activation".to_owned(),
+        ),
         fee(),
     )?;
-    assert_eq!(current_height(&client)?, install_height);
-    tick(&client, "activate fail-closed NPoS beacon session")?;
+    network.ensure_blocks(activation_height).await?;
+    assert_eq!(current_height(&client)?, activation_height);
 
     let pulse_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS - 1;
-    advance_to_predecessor(&client, pulse_height, "fail-closed pre-boundary pulse")?;
     let predecessor_height = pulse_height - 1;
-    assert_eq!(current_height(&client)?, predecessor_height);
+    assert_eq!(
+        activation_height, predecessor_height,
+        "the retained deterministic fixture must expose the below-threshold pulse immediately after activation",
+    );
     let unexpected_pulse_height = tokio::time::timeout(
         FAIL_CLOSED_BEACON_OBSERVATION_WINDOW,
         network.peers()[0].once_block(pulse_height),
@@ -2392,7 +2526,12 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
 
 #[test]
 fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
-    let source = include_str!("sora_parliament_lifecycle_smoke.rs");
+    let source = [
+        include_str!("sora_parliament_lifecycle_smoke.rs"),
+        include_str!("sora_parliament_no_result_paths.rs"),
+        include_str!("sora_parliament_failure_paths.rs"),
+    ]
+    .concat();
     let forbidden = [
         concat!("Cast", "PlainBallot"),
         concat!("Cast", "ParliamentBallot"),
@@ -2434,8 +2573,8 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
     let boundary_helper = concat!("assert_transition_rejected_without_state_", "change(");
     assert_eq!(
         source.matches(boundary_helper).count(),
-        10,
-        "the helper definition plus nine exact checkpoint/replay calls must remain",
+        12,
+        "the helper definition plus eleven exact checkpoint/replay calls must remain",
     );
     for required in [
         concat!("ConsumeSortition", "PulseBatch"),
@@ -2446,12 +2585,19 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         concat!("combine_partial_", "releases"),
         concat!("FinalizeOpened", "Ballot"),
         concat!("GovernanceAttemptStatusV1::", "Enacted"),
-        concat!("exercise_public_finding_", "impossible_quorum_retry"),
+        concat!("exercise_public_finding_", "no_result_retries_and_restore"),
         concat!(
             "ParliamentNoResultKindV1::",
             "PublicFindingQuorumUnreachable"
         ),
+        concat!("ParliamentNoResultKindV1::", "PublicFindingDeadlineExpired"),
+        concat!("attempt_sequence:", " 2"),
         concat!("attempt_sequence:", " 1"),
+        concat!(
+            "deterministic_parliament_beacon_",
+            "successor_key_record_v1"
+        ),
+        concat!("lifecycle_certificate_", "replacing"),
         concat!("shutdown_if_", "started"),
         concat!("start_", "checked"),
     ] {
@@ -2461,3 +2607,9 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         );
     }
 }
+
+#[path = "sora_parliament_failure_paths.rs"]
+mod failure_paths;
+
+#[path = "sora_parliament_no_result_paths.rs"]
+mod no_result_paths;

@@ -7,6 +7,11 @@ mod tests {
     };
 
     #[test]
+    fn mcp_inflight_dispatch_limit_default_is_nonzero() {
+        assert_eq!(ToriiMcp::default().max_inflight_dispatches.get(), 32);
+    }
+
+    #[test]
     fn first_release_labels_are_exact_and_alias_free() {
         assert_eq!(LaneProfile::parse_label("core"), Some(LaneProfile::Core));
         assert_eq!(LaneProfile::parse_label("home"), Some(LaneProfile::Home));
@@ -18,10 +23,7 @@ mod tests {
         for label in ["deep", "tier1-deep", "TIER1", " tier1"] {
             assert!(GasLiquidity::from_str(label).is_err(), "{label:?}");
         }
-        assert_eq!(
-            GasVolatility::from_str("stable"),
-            Ok(GasVolatility::Stable)
-        );
+        assert_eq!(GasVolatility::from_str("stable"), Ok(GasVolatility::Stable));
         for label in ["calm", "STABLE", "stable "] {
             assert!(GasVolatility::from_str(label).is_err(), "{label:?}");
         }

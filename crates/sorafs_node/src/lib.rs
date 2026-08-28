@@ -19,6 +19,7 @@ mod moderation;
 pub mod moderation_orchestrator;
 mod native_repair_singleflight;
 pub mod native_repair_worker;
+pub mod operator_preseed;
 pub mod orderbook_transaction_forwarder;
 pub mod pdp_provider;
 pub mod pop_credentials;

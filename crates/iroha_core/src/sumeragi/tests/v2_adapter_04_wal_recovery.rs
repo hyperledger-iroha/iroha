@@ -1018,6 +1018,103 @@ fn bls_timeout_intent_control_sign_repairs_and_coalesces_exactly() {
     assert_control_repair_and_coalesce(false, 0xC2);
 }
 
+fn recovered_control_producer_boundary_result(
+    proposal_intent: bool,
+    remove_carrier: bool,
+    marker: u8,
+) -> Result<bool, super::super::v2_lifecycle_coordinator::ProductionCompletionDispatchErrorV1> {
+    let safety = TempDir::new().expect("temporary control boundary safety store");
+    let storage = TempDir::new().expect("temporary control boundary lifecycle stores");
+    if proposal_intent {
+        persist_proposal_intent_for_control_recovery(&safety, marker);
+    } else {
+        persist_timeout_intent_for_control_recovery(&safety);
+    }
+    let mut owner = open_control_owner_for_test(&safety, &storage, proposal_intent);
+    let runtime_directory = TempDir::new().expect("temporary control boundary runtime");
+    let (adapter, startup) = open_test(&runtime_directory).expect("open control boundary runtime");
+    assert!(startup.is_empty());
+    let runtime = super::super::v2_runtime::SerializedV2Runtime::new(
+        adapter,
+        startup,
+        Instant::now(),
+        Duration::from_secs(10),
+        super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+    )
+    .expect("wrap control boundary runtime")
+    .0;
+    let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
+    let (mut services, _) = super::super::v2_worker::tests::fixture();
+    let (executor, planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+        &mut services,
+        runtime,
+        Arc::clone(&output_guard),
+        0,
+        2,
+    );
+    let fence = executor.lifecycle_reducer_fence_observation();
+    if remove_carrier {
+        assert!(owner.remove_ready_proposal_sign_carrier_for_boundary_test());
+    }
+    let result = owner.ready_proposal_sign_preempts_bounded_producer_point(fence);
+    drop(executor);
+    planner_io.detach(&mut services);
+    result
+}
+
+#[test]
+fn ready_proposal_sign_boundary_predicate_authenticates_exact_control_carrier() {
+    const THREAD_NAME: &str = "ready-proposal-sign-boundary";
+    if std::thread::current().name() != Some(THREAD_NAME) {
+        let handle = std::thread::Builder::new()
+            .name(THREAD_NAME.to_owned())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(ready_proposal_sign_boundary_predicate_authenticates_exact_control_carrier)
+            .expect("spawn Ready proposal-Sign boundary fixture");
+        if let Err(payload) = handle.join() {
+            std::panic::resume_unwind(payload);
+        }
+        return;
+    }
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    assert_eq!(
+        recovered_control_producer_boundary_result(true, false, 0xC3),
+        Ok(true),
+        "an exact Ready ProposalIntent Sign must regain Completion rank"
+    );
+    assert_eq!(
+        recovered_control_producer_boundary_result(false, false, 0xC4),
+        Ok(false),
+        "a genuine Ready timeout Sign preserves bounded Producer-point fairness"
+    );
+    assert_eq!(
+        recovered_control_producer_boundary_result(true, true, 0xC5),
+        Err(
+            super::super::v2_lifecycle_coordinator::ProductionCompletionDispatchErrorV1::InvalidCarrier
+        ),
+        "a missing proposal-Sign carrier fails closed"
+    );
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate() {
+    const THREAD_NAME: &str = "ready-local-proposal-sign-output-boundary";
+    if std::thread::current().name() != Some(THREAD_NAME) {
+        let handle = std::thread::Builder::new()
+            .name(THREAD_NAME.to_owned())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate)
+            .expect("spawn Ready local-Proposal Sign output boundary fixture");
+        if let Err(payload) = handle.join() {
+            std::panic::resume_unwind(payload);
+        }
+        return;
+    }
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::run_ready_local_proposal_sign_boundary_fixture_for_test();
+}
+
 #[cfg(feature = "bls")]
 fn persist_timeout_broadcasts_and_successor_timeout_intent(
     directory: &TempDir,
@@ -1920,6 +2017,69 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
             .recovered_fetch_dispatch_projection_for_test(&executor, first_summary.0)
             .expect("published recovered Fetch parks its exact request owner externally");
         assert_eq!(first_dispatch_projection.2.observed_generation(), 0);
+        let actor_admissions = Arc::new(Mutex::new(0_usize));
+        let observed_admissions = Arc::clone(&actor_admissions);
+        services.set_exact_output_admission_hook(move |_post, _ticket| {
+            let mut admissions = observed_admissions
+                .lock()
+                .expect("count recovered Fetch actor admissions");
+            *admissions = admissions.saturating_add(1);
+            Ok(())
+        });
+        assert!(
+            !services
+                .retry_pending_exact_output()
+                .expect("admit the initial recovered Fetch occurrence"),
+            "actor admission releases the physical exact-output occurrence"
+        );
+        let initial_admissions = *actor_admissions
+            .lock()
+            .expect("read initial recovered Fetch actor admissions");
+        assert!(initial_admissions > 0);
+        let before_due = Instant::now();
+        let mut next_attempt = before_due
+            .checked_add(Duration::from_secs(1))
+            .expect("construct a future recovered Fetch retry deadline");
+        assert!(
+            !super::super::v2_runner::retry_recovered_decision_fetch_if_due(
+                before_due,
+                &mut next_attempt,
+                Duration::from_millis(25),
+                &executor,
+                &services,
+            )
+            .expect("a future recovered Fetch retry is a no-op")
+        );
+        assert_eq!(
+            *actor_admissions
+                .lock()
+                .expect("read pre-deadline actor admissions"),
+            initial_admissions
+        );
+        let due = next_attempt;
+        assert!(
+            super::super::v2_runner::retry_recovered_decision_fetch_if_due(
+                due,
+                &mut next_attempt,
+                Duration::from_millis(25),
+                &executor,
+                &services,
+            )
+            .expect("recreate the actor-admitted recovered Fetch occurrence")
+        );
+        assert!(next_attempt > due);
+        assert!(
+            *actor_admissions
+                .lock()
+                .expect("read retransmitted recovered Fetch actor admissions")
+                > initial_admissions,
+            "the retained executor owner must recreate a remotely lost occurrence"
+        );
+        assert_eq!(
+            reopened.recovered_fetch_dispatch_projection_for_test(&executor, first_summary.0,),
+            Some(first_dispatch_projection),
+            "retransmission must not replace the external wait or signed request owner"
+        );
         let foreign_source = super::super::v2_lifecycle_coordinator::WaitSource::External(
             super::super::v2_lifecycle_coordinator::LifecycleDigest::new([0xEE; 32]),
         );
@@ -1980,7 +2140,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
     assert!(
         error
             .to_string()
-            .contains("neither an exact live Fetch nor an exact advanced Store parent"),
+            .contains("neither an exact live Fetch nor an exact Store/Validate crash prefix"),
         "a live-Fetch mismatch must not be misclassified as a body-fsynced Store cut: {error}"
     );
     assert_eq!(

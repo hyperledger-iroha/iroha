@@ -408,6 +408,37 @@ impl PreparedCertifiedBodyFetchOwnerRemoval<'_> {
         services.commit_exact_body_fetch_owner_removal(&task, owner);
     }
 }
+/// Exact recovered Decision-Fetch request-output removal frozen before its
+/// Store successor crosses the durable lifecycle boundary.
+///
+/// The recovered Fetch owns no ordinary body-fetch service task, so this
+/// reservation carries only the already validated exact-output mutation. Its
+/// exclusive service borrow keeps that plan current until the post-fsync tail.
+#[must_use = "recovered Decision-Fetch request output remains live until committed"]
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchRequestOutputRetirement<'a> {
+    services: &'a mut ProductionV2Services,
+    request_cancellation: Option<PendingExactOutputRemovalPlan>,
+}
+impl PreparedRecoveredDecisionFetchRequestOutputRetirement<'_> {
+    /// Retire the exact request fanout after its durable Store successor is published.
+    pub(in crate::sumeragi) fn commit_after_publication(self, permit: &ConsensusOutputPermit<'_>) {
+        let Self {
+            services,
+            request_cancellation,
+        } = self;
+        assert!(
+            permit.authorizes(services.output_guard.as_ref()),
+            "recovered Decision-Fetch request retirement requires this service's live output permit"
+        );
+        if let Some(request_cancellation) = request_cancellation {
+            services
+                .pending_exact_output
+                .get_mut()
+                .expect("preflighted recovered Decision-Fetch output lock remains healthy")
+                .commit_fanout_removal(request_cancellation);
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CompletionSource {
     Io,

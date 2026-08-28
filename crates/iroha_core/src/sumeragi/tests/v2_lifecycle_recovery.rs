@@ -7,14 +7,18 @@ use crate::{
     prelude::World,
     query::store::LiveQueryStore,
     queue::{
-        LaneQueueReservationKeyV1, LaneQueueReservationScopeV1, Queue, RoutingDecision,
-        RoutingPlan, canonical_lane_queue_reservation_group_identity_projection,
+        LaneQueueReservationGroupBindingV1, LaneQueueReservationKeyV1,
+        LaneQueueReservationReconciliationSnapshotV1, LaneQueueReservationScopeV1, Queue,
+        RoutingDecision, RoutingPlan, canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
+        strictly_absent_lane_reservation_snapshot_recovery_state,
     },
     state::State,
     sumeragi::{
         lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal,
-        v2_apply::LaneReservationSnapshotPlannerEvidence,
+        v2_apply::{
+            LaneReservationSnapshotPlannerEvidence, LaneReservationSnapshotPlannerProjectionKind,
+        },
         v2_core::{
             IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED, IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
             ProductionInFlightFirstReleaseCarrierProjection,
@@ -695,7 +699,10 @@ fn lifecycle_payload_with_exact_ordinary_fifo(
     context: &wire::HeightContext,
     state: &State,
     queue: &Queue,
-) -> crate::lane_consensus::LaneExecutablePayloadV1 {
+) -> (
+    crate::lane_consensus::LaneExecutablePayloadV1,
+    Vec<crate::torii_proxy::QueuePlanAdmissionBindingV1>,
+) {
     let lane_incarnation = state
         .lane_incarnations_snapshot()
         .get(&LaneId::SINGLE)
@@ -706,12 +713,14 @@ fn lifecycle_payload_with_exact_ordinary_fifo(
         .iter()
         .map(|validator| validator.validator.clone())
         .collect::<Vec<_>>();
-    let (network_id, epoch, template) = lifecycle_payload_for_validators_with_count(
+    let (network_id, epoch, template) = lifecycle_payload_for_validators_with_count_and_lane(
         producer_signer,
         context,
         validator_set,
+        LaneId::new(1),
         lane_incarnation,
         2,
+        Some(core::time::Duration::ZERO),
     );
     let mut proposal = template.origin_proposal.clone();
     proposal.descriptor.lane_id = LaneId::SINGLE;
@@ -719,6 +728,7 @@ fn lifecycle_payload_with_exact_ordinary_fifo(
     proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
     proposal.proposal_hash = proposal.computed_proposal_hash();
     let entrypoints = template.entrypoints.clone();
+    let mut admission_bindings = Vec::with_capacity(entrypoints.len());
     for entrypoint in &entrypoints {
         let TransactionEntrypoint::External(transaction) = entrypoint else {
             panic!("lifecycle FIFO fixture uses only external transactions");
@@ -754,6 +764,7 @@ fn lifecycle_payload_with_exact_ordinary_fifo(
         state
             .install_queue_plan_pending_binding_for_test(&admission)
             .expect("install lifecycle FIFO QueuePlan registry value");
+        admission_bindings.push(admission);
     }
     let producer = PeerId::new(producer_signer.public_key().clone());
     let (reservation_owner_hash, proposal_identity_hash) =
@@ -818,7 +829,7 @@ fn lifecycle_payload_with_exact_ordinary_fifo(
         payload.entrypoint_hashes
     );
     assert!(queue.live_lane_reservations().is_empty());
-    payload
+    (payload, admission_bindings)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -831,6 +842,32 @@ enum NonproducerReplicaQueueCut {
 enum NonproducerRetirementClaimPrefix {
     ReleasePending,
     ReplicaReleased,
+}
+
+fn nonproducer_retirement_planner_evidence(
+    snapshot: &LaneQueueReservationReconciliationSnapshotV1,
+    unrelated_owner: Option<&(
+        LaneQueueReservationGroupBindingV1,
+        Vec<LaneQueueReservationKeyV1>,
+    )>,
+) -> LaneReservationSnapshotPlannerEvidence {
+    let groups = unrelated_owner
+        .map(|(reservation_group, ordered_keys)| {
+            let recovered_state = strictly_absent_lane_reservation_snapshot_recovery_state(
+                snapshot,
+                *reservation_group,
+                ordered_keys,
+            )
+            .expect("derive unrelated pre-Kura planner state");
+            (
+                *reservation_group,
+                ordered_keys.clone(),
+                LaneReservationSnapshotPlannerProjectionKind::StrictlyAbsent { recovered_state },
+            )
+        })
+        .into_iter()
+        .collect();
+    LaneReservationSnapshotPlannerEvidence::from_parts_for_test(snapshot.clone(), groups)
 }
 #[derive(Clone, Copy, Debug)]
 enum LifecycleRecoveryPostCasBoundary {
@@ -1989,6 +2026,7 @@ fn exercise_nonproducer_retired_attempt_startup(
     queue_cut: NonproducerReplicaQueueCut,
     claim_prefix: NonproducerRetirementClaimPrefix,
     exercise_complete_claim_presweep: bool,
+    with_unrelated_quarantined_owner: bool,
 ) {
     let kura_dir = TempDir::new().expect("nonproducer retirement Kura directory");
     let queue_dir = TempDir::new().expect("nonproducer retirement Queue directory");
@@ -2007,7 +2045,14 @@ fn exercise_nonproducer_retired_attempt_startup(
     };
     let (kura, state) = open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
     let queue = open_empty_lifecycle_recovery_queue(&queue_dir, &state);
-    let payload = match queue_cut {
+    let validator_keys = [
+        lifecycle_key_pair(71),
+        lifecycle_key_pair(91),
+        lifecycle_key_pair(92),
+        lifecycle_key_pair(93),
+    ];
+    install_lifecycle_queue_plan_validator_authority(&state, &queue, &context, &validator_keys);
+    let (payload, mut admission_bindings) = match queue_cut {
         NonproducerReplicaQueueCut::ExactOrdinaryFifo => {
             lifecycle_payload_with_exact_ordinary_fifo(&producer_signer, &context, &state, &queue)
         }
@@ -2022,15 +2067,51 @@ fn exercise_nonproducer_retired_attempt_startup(
                 .iter()
                 .map(|validator| validator.validator.clone())
                 .collect();
-            lifecycle_payload_for_validators_with_count(
+            (
+                lifecycle_payload_for_validators_with_count(
+                    &producer_signer,
+                    &context,
+                    validator_set,
+                    lane_incarnation,
+                    2,
+                )
+                .2,
+                Vec::new(),
+            )
+        }
+    };
+    let unrelated_owner = if with_unrelated_quarantined_owner {
+        assert!(
+            matches!(queue_cut, NonproducerReplicaQueueCut::StrictQueueAbsent),
+            "the quarantined-owner integration cut isolates replica strict absence",
+        );
+        let lane_incarnation = state
+            .lane_incarnations_snapshot()
+            .get(&LaneId::SINGLE)
+            .copied()
+            .expect("State primary-lane incarnation for unrelated owner");
+        let validator_set = context
+            .roster
+            .iter()
+            .map(|validator| validator.validator.clone())
+            .collect();
+        let (unrelated_payload, unrelated_admission_bindings) =
+            reserve_lifecycle_replica_retirement_payload(
+                &queue,
+                &state,
                 &producer_signer,
                 &context,
                 validator_set,
                 lane_incarnation,
-                2,
-            )
-            .2
-        }
+            );
+        admission_bindings.extend(unrelated_admission_bindings);
+        let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
+            unrelated_payload.reservation_keys.iter(),
+        )
+        .expect("bind unrelated quarantined Queue owner");
+        Some((reservation_group, unrelated_payload.reservation_keys))
+    } else {
+        None
     };
     let network_id = payload.network_id;
     let epoch = payload.epoch;
@@ -2112,7 +2193,11 @@ fn exercise_nonproducer_retired_attempt_startup(
     let queue_snapshot_before = queue
         .lane_reservation_reconciliation_snapshot()
         .expect("capture nonproducer Queue cut");
-    assert!(queue_snapshot_before.is_empty());
+    assert_eq!(
+        queue_snapshot_before.is_empty(),
+        unrelated_owner.is_none(),
+        "only the optional unrelated owner may populate the reconciliation snapshot",
+    );
     let fifo_before = queue.fifo_snapshot_for_test();
     match queue_cut {
         NonproducerReplicaQueueCut::ExactOrdinaryFifo => {
@@ -2130,14 +2215,19 @@ fn exercise_nonproducer_retired_attempt_startup(
     let live_before = queue.live_lane_reservations();
     let commit_barriers_before = queue.lane_reservation_commit_barriers();
     let release_barriers_before = queue.lane_reservation_release_barriers();
-    let quarantine_before = queue.lane_reservation_startup_reconciliation_pending();
-    assert!(live_before.is_empty());
+    let precrash_quarantine = queue.lane_reservation_startup_reconciliation_pending();
+    if let Some((_, ordered_keys)) = &unrelated_owner {
+        assert_eq!(live_before.len(), ordered_keys.len());
+    } else {
+        assert!(live_before.is_empty());
+    }
     assert!(commit_barriers_before.is_empty());
     assert!(release_barriers_before.is_empty());
-    assert!(!quarantine_before);
+    assert!(!precrash_quarantine);
     drop(generation_one);
     drop(state);
     drop(kura);
+    drop(queue);
 
     let (restarted, restarted_state) =
         open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
@@ -2148,15 +2238,51 @@ fn exercise_nonproducer_retired_attempt_startup(
         .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim restarted nonproducer retirement generation");
     assert_eq!(generation_two.generation(), 2);
+    let (_time_handle, time_source) = TimeSource::new_mock(core::time::Duration::ZERO);
+    let queue = Queue::test(QueueConfig::default(), &time_source);
+    queue.reconfigure_nexus_with_state(&restarted_state.nexus_snapshot(), &restarted_state, None);
+    install_lifecycle_queue_plan_validator_authority(
+        &restarted_state,
+        &queue,
+        &context,
+        &validator_keys,
+    );
+    for admission_binding in &admission_bindings {
+        restarted_state
+            .install_queue_plan_pending_binding_for_test(admission_binding)
+            .expect("restore nonproducer retirement QueuePlan registry owner");
+    }
+    queue
+        .install_plan_journal(
+            queue_dir.path().join("queue-plan.norito"),
+            1024 * 1024,
+            true,
+        )
+        .expect("reopen nonproducer retirement QueuePlan journal");
+    queue
+        .install_lane_reservation_journal(
+            queue_dir.path().join("lane-reservation.norito"),
+            1024 * 1024,
+        )
+        .expect("reopen nonproducer retirement reservation journal");
+    queue
+        .replay_plan_journal(&restarted_state)
+        .expect("replay nonproducer retirement QueuePlan journal");
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture replayed nonproducer Queue cut"),
+        queue_snapshot_before,
+    );
+    assert_eq!(queue.fifo_snapshot_for_test(), fifo_before);
+    let quarantine_before = queue.lane_reservation_startup_reconciliation_pending();
+    assert_eq!(quarantine_before, !queue_snapshot_before.is_empty());
     let recovered = reconcile_autonomous_lifecycle_startup(
         &restarted_state,
         &queue,
         restarted.as_ref(),
         &context,
-        LaneReservationSnapshotPlannerEvidence::from_parts_for_test(
-            queue_snapshot_before.clone(),
-            Vec::new(),
-        ),
+        nonproducer_retirement_planner_evidence(&queue_snapshot_before, unrelated_owner.as_ref()),
         AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
         Some(&generation_two),
         &local_peer,
@@ -2235,10 +2361,7 @@ fn exercise_nonproducer_retired_attempt_startup(
         &queue,
         restarted.as_ref(),
         &context,
-        LaneReservationSnapshotPlannerEvidence::from_parts_for_test(
-            repeated_snapshot.clone(),
-            Vec::new(),
-        ),
+        nonproducer_retirement_planner_evidence(&repeated_snapshot, unrelated_owner.as_ref()),
         AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
         Some(&generation_two),
         &local_peer,
@@ -2354,6 +2477,7 @@ fn nonproducer_release_pending_attempt_startup_completes_replica_for_fifo_and_ab
             queue_cut,
             NonproducerRetirementClaimPrefix::ReleasePending,
             false,
+            false,
         );
     }
 }
@@ -2367,6 +2491,7 @@ fn nonproducer_released_attempt_startup_completes_replica_for_fifo_and_absent_qu
         exercise_nonproducer_retired_attempt_startup(
             queue_cut,
             NonproducerRetirementClaimPrefix::ReplicaReleased,
+            false,
             false,
         );
     }
@@ -2382,8 +2507,19 @@ fn strict_kura_startup_seals_complete_replica_outcome_claim_suffix_idempotently(
             queue_cut,
             NonproducerRetirementClaimPrefix::ReplicaReleased,
             true,
+            false,
         );
     }
+}
+
+#[test]
+fn nonproducer_absent_replica_terminalizes_while_unrelated_owner_stays_quarantined() {
+    exercise_nonproducer_retired_attempt_startup(
+        NonproducerReplicaQueueCut::StrictQueueAbsent,
+        NonproducerRetirementClaimPrefix::ReleasePending,
+        false,
+        true,
+    );
 }
 
 #[test]

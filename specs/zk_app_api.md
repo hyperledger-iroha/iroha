@@ -109,12 +109,14 @@ Details:
 - Content‑Type: normalized to the sniffed type (magic‑byte inspection). The declared header is recorded in `provenance.declared_type`.
 - Provenance: responses include `provenance` with `{ declared_type, sniffed_type, hashes { blake2b_256, sha256 }, sanitizer { verdict, expanded_bytes, archive_depth, sandboxed } }`.
 - Rejections: unsupported types return `415 Unsupported Media Type`; expansion/sandbox failures return `413`/`400` with the rejection reason in the body.
-- Size cap: enforced per item via `torii.attachments_max_bytes` (default 4 MiB). Requests exceeding the cap receive `413 Payload Too Large`.
-- Per-tenant quota: Torii enforces per-tenant attachment limits using `torii.attachments_per_tenant_max_count` (count) and `torii.attachments_per_tenant_max_bytes` (aggregate bytes). The tenant is the canonically authenticated `AccountId`; there is no anonymous or token-derived fallback. If an upload would exceed either limit, Torii deterministically evicts the oldest attachments for that account before persisting the new body. When the incoming body alone exceeds `torii.attachments_per_tenant_max_bytes`, Torii returns `413 Payload Too Large`.
+- Sanitizer admission: upload POST and compressed-origin export GET share the configured proof-work semaphore. The lease is acquired before handler work and remains owned by detached blocking work, the sandbox child, and its stdout reader after HTTP cancellation, so authenticated retries cannot create unbounded sanitizer tasks.
+- Size cap: enforced per item via `torii.attachments_max_bytes` (default 4 MiB) against both the submitted bytes and the canonical sanitized bytes. A compressed request whose sanitized body exceeds the cap receives `413 Payload Too Large` and is not retained.
+- Per-tenant quota: Torii enforces per-tenant attachment limits using `torii.attachments_per_tenant_max_count` (count) and `torii.attachments_per_tenant_max_bytes` (aggregate bytes). The tenant is the canonically authenticated `AccountId`; there is no anonymous or token-derived fallback. If an upload can fit after eviction, Torii first fsyncs a bounded, validated transaction intent, then durably commits the new body, metadata, and prover reference before removing the oldest attachments for that account. Recovery rolls back a partial incoming commit or completes victim deletion after a complete commit; deletion failure returns `500` and preserves the intent for a later retry. When the incoming body alone exceeds `torii.attachments_per_tenant_max_bytes`, Torii returns `413 Payload Too Large`.
+- Node-global quota: `torii.attachments_global_max_count` (range `1..=20000`) and `torii.attachments_global_max_bytes` bound retained attachment copies and sanitized body bytes across every tenant. Admission and tenant-local eviction run under the same mutation lock as explicit deletion and TTL collection. Torii may evict only the submitting tenant's oldest entries; if that cannot make the complete upload fit, it returns `413 Payload Too Large` before deleting anything and never evicts another tenant's data. Deleting the last attachment for a tenant removes its empty storage directory. Accounting examines at most 20000 root entries and 40000 aggregate tenant-child entries, charges malformed/raw entries against those bounds, and fails closed. The background prover starts only after quota recovery succeeds.
 - Retention (TTL): attachments older than `torii.attachments_ttl_secs` (default 7 days) are removed by a background GC that runs approximately every 60 seconds.
 - Storage layout:
-  - Data: `storage/torii/zk_attachments/<id>.bin`
-  - Metadata: `storage/torii/zk_attachments/<id>.json`
+  - Data: `storage/torii/zk_attachments/<tenant-key>/<id>.bin`
+  - Metadata: `storage/torii/zk_attachments/<tenant-key>/<id>.json`
 
 ## IVM Prove (Non-Consensus Helper)
 
@@ -264,7 +266,9 @@ TOML (recommended for production):
 attachments_ttl_secs = 604800         # 7 days
 attachments_max_bytes = 4_194_304     # 4 MiB
 attachments_per_tenant_max_count = 128
-attachments_per_tenant_max_bytes = 8_388_608   # 8 MiB aggregate per tenant
+attachments_per_tenant_max_bytes = 67_108_864  # 64 MiB aggregate per tenant
+attachments_global_max_count = 4096
+attachments_global_max_bytes = 1_073_741_824   # 1 GiB aggregate per node
 attachments_allowed_mime_types = ["application/x-norito", "application/json", "application/x-zk1"]
 attachments_max_expanded_bytes = 16_777_216    # 16 MiB expanded payload cap
 attachments_max_archive_depth = 2              # max nested gzip/zstd layers

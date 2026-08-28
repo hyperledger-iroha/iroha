@@ -5,6 +5,7 @@
 #![allow(clippy::module_name_repetitions)]
 pub mod blinding;
 pub mod certificate;
+pub mod constant_rate;
 pub mod directory;
 pub mod handshake;
 pub mod pow;

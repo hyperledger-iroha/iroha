@@ -6609,7 +6609,7 @@ mod tests {
 
     fn fixture<T>(path: &str) -> T
     where
-        for<'de> T: Deserialize<'de>,
+        for<'de> T: Deserialize<'de> + norito::NoritoSerialize,
     {
         decode_from_bytes(&fixture_bytes(path))
             .unwrap_or_else(|error| panic!("decode `{path}`: {error}"))

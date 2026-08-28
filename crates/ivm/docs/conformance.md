@@ -4,7 +4,7 @@ This checklist pins required golden tests/vectors and their locations to keep im
 
 - Decoder/Encoder
   - Canonical IVM 32-bit words roundtrip; compact and mixed-width streams are rejected.
-  - Deployable-artifact admission rejects undefined and noncanonical opcode forms before control-flow analysis, and the configured predecode cap is inclusive: exactly `max_decoded_ops` instructions are accepted while the first excess instruction is rejected.
+  - Deployable-artifact admission rejects undefined and noncanonical opcode forms before control-flow analysis. `max_decoded_ops` is a local cache-retention limit: streams at or below the limit are cacheable, while larger valid streams decode without being cached and remain subject to the consensus instruction limit at admission.
   - Files: `crates/ivm/tests/decoder_roundtrip.rs`, `crates/ivm/tests/contract_artifact.rs`, `crates/ivm/tests/predecode_max_ops.rs`
 
 - Opcode Semantics

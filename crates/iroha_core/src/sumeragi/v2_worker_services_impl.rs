@@ -487,6 +487,49 @@ impl ProductionV2Services {
         )
     }
 
+    /// Re-offer the exact WAL-recovered Decision Fetch request retained by the
+    /// executor until an authenticated response claims it.
+    pub(crate) fn retry_recovered_decision_fetch(
+        &self,
+        executor: &V2EffectExecutor<SerializedV2Runtime>,
+    ) -> Result<bool, String> {
+        let Some(owner) = executor
+            .recovered_decision_fetch_retransmission_owner()
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(false);
+        };
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        let Some(fanout) = self.recovered_decision_fetch_fanout(owner)? else {
+            operation.complete();
+            return Ok(true);
+        };
+        let ownership = {
+            let mut pending = self.lock_pending_exact_output()?;
+            if self.exact_output_handoff_owner.is_sealed() {
+                return Err(
+                    "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
+                );
+            }
+            let ownership = pending.enqueue(fanout)?;
+            if ownership == ExactFanoutOwnership::Owned {
+                let _ = self.drive_pending_exact_output(&mut pending)?;
+            }
+            ownership
+        };
+        if ownership == ExactFanoutOwnership::SourceRetained {
+            iroha_logger::debug!(
+                request_hash = %owner.request_hash(),
+                "deferred recovered Decision Fetch retransmission to its executor owner"
+            );
+        }
+        operation.complete();
+        Ok(true)
+    }
+
     /// Freeze output/worker cuts for one preencoded recovered-Completion plan
     /// until typed selection or explicit no-selection completion.
     pub(in crate::sumeragi) fn capture_lifecycle_completion_capacity_census(
@@ -1508,6 +1551,31 @@ impl ProductionV2Services {
             services: self,
             task: task.clone(),
             owner,
+            request_cancellation,
+        })
+    }
+    /// Freeze cancellation of the exact recovered Decision-Fetch request fanout.
+    ///
+    /// A healthy archive can answer while a sibling topology target still owns
+    /// a ranked actor ticket. The durable Fetch-to-Store transaction must
+    /// therefore retire that now-obsolete request output together with its
+    /// executor owner, before terminal rollover waits for exact-output
+    /// quiescence.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_request_output_retirement(
+        &mut self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+    ) -> Result<PreparedRecoveredDecisionFetchRequestOutputRetirement<'_>, String> {
+        let request_cancellation = {
+            let pending = self.lock_pending_exact_output()?;
+            if self.exact_output_handoff_owner.is_sealed() {
+                debug_assert!(!pending.is_pending());
+                None
+            } else {
+                Some(pending.plan_certified_body_request_cancellation(request_hash)?)
+            }
+        };
+        Ok(PreparedRecoveredDecisionFetchRequestOutputRetirement {
+            services: self,
             request_cancellation,
         })
     }
@@ -2621,6 +2689,15 @@ impl ProductionV2Services {
     ) -> Result<usize, EffectExecutorError> {
         let outcome = self.drain_completions_inner(executor, 1)?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
+    }
+
+    /// Return whether the inert ordinary Completion test head remains retained.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn has_auxiliary_completion_head_for_test(&self) -> bool {
+        matches!(
+            self.held_io_completion.as_ref(),
+            Some(V2IoCompletion::AuxiliaryNoop)
+        )
     }
     /// Prepare one ordinary Completion head while a same-address Validate successor waits.
     ///
@@ -3798,6 +3875,24 @@ impl ProductionV2Services {
         }
     }
     fn drive_pending_exact_output(&self, pending: &mut PendingExactOutput) -> Result<bool, String> {
+        if pending.applied_height_finality.is_none()
+            && u64::try_from(self.state.committed_height())
+                .is_ok_and(|height| height >= self.context.height)
+        {
+            let artifact = self
+                .kura
+                .v2_finality_artifact(self.context.height)
+                .map_err(|error| error.to_string())?;
+            if let Some(artifact) = artifact {
+                if artifact.height_context != self.context {
+                    return Err(
+                        "Sumeragi v2 committed exact-output height differs from Kura finality"
+                            .to_owned(),
+                    );
+                }
+                pending.applied_height_finality = Some(artifact);
+            }
+        }
         pending.poll_reply_flushes()?;
         let outcome = {
             #[cfg(test)]
@@ -4182,6 +4277,19 @@ impl ProductionV2Services {
             return Ok(0);
         }
         pending.cancel_certified_merge_sidecar_requests(request_hashes)
+    }
+    /// Cancel canonical requester Request/Close output made obsolete by each
+    /// authenticated successor-generation fence for its exact endpoint pair.
+    pub(crate) fn cancel_obsolete_certified_merge_sidecar_generation_hints(
+        &self,
+        hints: &[CertifiedMergeSidecarGenerationHintV1],
+    ) -> Result<usize, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            debug_assert!(!pending.is_pending());
+            return Ok(0);
+        }
+        pending.cancel_obsolete_certified_merge_sidecar_generation_hints(hints)
     }
     /// Cancel requester-side Close retries covered by cumulative acknowledgements.
     pub(crate) fn cancel_acknowledged_certified_merge_sidecar_closes(

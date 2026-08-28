@@ -116,6 +116,7 @@ fn parse_algorithm_arg_accepts_exact_supported_aliases() {
         ("ed-25519", Algorithm::Ed25519),
         ("ECDSA-SECP256K1-SHA256", Algorithm::Secp256k1),
         ("ml_dsa", Algorithm::MlDsa),
+        ("ML-DSA-65", Algorithm::MlDsa),
         (
             "gost3410_2012_512_paramset_b",
             Algorithm::Gost3410_2012_512ParamSetB,
@@ -158,6 +159,8 @@ fn parse_algorithm_arg_rejects_empty_padded_control_and_non_ascii_labels() {
         ("ed\u{200B}25519", "unsupported crypto algorithm"),
         ("\u{0435}d25519", "unsupported crypto algorithm"),
         ("ed\u{FF0D}25519", "unsupported crypto algorithm"),
+        ("dilithium", "unsupported crypto algorithm"),
+        ("dilithium3", "unsupported crypto algorithm"),
     ] {
         let err = parse_algorithm_arg(label).expect_err(label);
         let message = py_err_message(err);

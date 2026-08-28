@@ -13,6 +13,7 @@ from typing import Any, Optional, Union, cast
 from ._account_id import decode_canonical_i105_account_id
 
 _U64_MAX = (1 << 64) - 1
+_U128_MAX = (1 << 128) - 1
 _U32_MAX = (1 << 32) - 1
 _JSON_SAFE_UINT_MAX = (1 << 53) - 1
 _BECH32M_CONST = 0x2BC830A3
@@ -1149,6 +1150,7 @@ class GovernanceSccpEvmDestinationDeployment:
     route_address: str
     route_code_hash: str
     taira_to_token_multiplier: int
+    max_wrapped_supply: int
 
     @classmethod
     def from_payload(
@@ -1166,6 +1168,7 @@ class GovernanceSccpEvmDestinationDeployment:
                 "route_address",
                 "route_code_hash",
                 "taira_to_token_multiplier",
+                "max_wrapped_supply",
             }
         )
         record = _exact(value, fields, context)
@@ -1191,6 +1194,12 @@ class GovernanceSccpEvmDestinationDeployment:
             _upper_hex(record["route_address"], f"{context}.route_address", 20),
             _upper_hex(record["route_code_hash"], f"{context}.route_code_hash", 32),
             multiplier,
+            _uint(
+                record["max_wrapped_supply"],
+                f"{context}.max_wrapped_supply",
+                _U128_MAX,
+                positive=True,
+            ),
         )
 
 
@@ -1208,6 +1217,7 @@ class GovernanceSccpTronDestinationDeployment:
     route_address: str
     route_code_hash: str
     taira_to_token_multiplier: int
+    max_wrapped_supply: int
 
     @classmethod
     def from_payload(
@@ -1225,6 +1235,7 @@ class GovernanceSccpTronDestinationDeployment:
                 "route_address",
                 "route_code_hash",
                 "taira_to_token_multiplier",
+                "max_wrapped_supply",
             }
         )
         record = _exact(value, fields, context)
@@ -1250,6 +1261,12 @@ class GovernanceSccpTronDestinationDeployment:
             _upper_hex(record["route_address"], f"{context}.route_address", 20),
             _upper_hex(record["route_code_hash"], f"{context}.route_code_hash", 32),
             multiplier,
+            _uint(
+                record["max_wrapped_supply"],
+                f"{context}.max_wrapped_supply",
+                _U128_MAX,
+                positive=True,
+            ),
         )
 
 
@@ -1273,6 +1290,7 @@ class GovernanceSccpSolanaDestinationDeployment:
     verifier_key_hash: str
     outbound_proof_policy: GovernanceSccpOutboundProofPolicy
     taira_to_token_multiplier: int
+    max_wrapped_supply: int
 
     @classmethod
     def from_payload(
@@ -1296,6 +1314,7 @@ class GovernanceSccpSolanaDestinationDeployment:
                 "verifier_key_hash",
                 "outbound_proof_policy",
                 "taira_to_token_multiplier",
+                "max_wrapped_supply",
             }
         )
         record = _exact(value, fields, context)
@@ -1361,6 +1380,12 @@ class GovernanceSccpSolanaDestinationDeployment:
                 record["outbound_proof_policy"], f"{context}.outbound_proof_policy"
             ),
             multiplier,
+            _uint(
+                record["max_wrapped_supply"],
+                f"{context}.max_wrapped_supply",
+                _U128_MAX,
+                positive=True,
+            ),
         )
 
 
@@ -1420,12 +1445,20 @@ class GovernanceSccpSoraSettlement:
     asset_definition_id: str
     custody_owner: str
     payload_amount_scale: int
+    max_outstanding_liability: int
 
     @classmethod
     def from_payload(cls, value: Any, context: str) -> "GovernanceSccpSoraSettlement":
         record = _exact(
             value,
-            frozenset({"asset_definition_id", "custody_owner", "payload_amount_scale"}),
+            frozenset(
+                {
+                    "asset_definition_id",
+                    "custody_owner",
+                    "payload_amount_scale",
+                    "max_outstanding_liability",
+                }
+            ),
             context,
         )
         asset = _string(record["asset_definition_id"], f"{context}.asset_definition_id")
@@ -1440,6 +1473,12 @@ class GovernanceSccpSoraSettlement:
             asset,
             _account_id(record["custody_owner"], f"{context}.custody_owner"),
             scale,
+            _uint(
+                record["max_outstanding_liability"],
+                f"{context}.max_outstanding_liability",
+                _U128_MAX,
+                positive=True,
+            ),
         )
 
 
@@ -1531,6 +1570,18 @@ class GovernanceSccpGovernedRoute:
                 != destination.deployment.route_code_hash
             ):
                 raise TypeError(f"{context} source emitter does not identify the route deployment")
+        settlement = GovernanceSccpSoraSettlement.from_payload(
+            record["settlement"], f"{context}.settlement"
+        )
+        if (
+            destination.deployment.max_wrapped_supply
+            != settlement.max_outstanding_liability
+            * destination.deployment.taira_to_token_multiplier
+        ):
+            raise TypeError(
+                f"{context}.destination.max_wrapped_supply must equal "
+                "settlement.max_outstanding_liability multiplied by the destination multiplier"
+            )
         return cls(
             lane,
             route_id,
@@ -1544,9 +1595,7 @@ class GovernanceSccpGovernedRoute:
                 record["sora_outbound_execution_policy"],
                 f"{context}.sora_outbound_execution_policy",
             ),
-            GovernanceSccpSoraSettlement.from_payload(
-                record["settlement"], f"{context}.settlement"
-            ),
+            settlement,
         )
 
 

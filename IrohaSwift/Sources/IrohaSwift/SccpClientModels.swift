@@ -324,15 +324,24 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
 
 enum SccpSubmitValidation {
     static let destinationArtifactTypeName =
-        "iroha_sccp::SccpGroth16Bn254ProofArtifactV1"
+        "iroha_data_model::bridge::BridgeSccpDestinationProofV1"
     static let nativeInboundProofTypeName =
         "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
     static let registryTypeName =
         "iroha_data_model::bridge::sccp_registry::SccpRegistryV1"
     static let messageBundleTypeName = "iroha_sccp::TairaSccpMessageProofV1"
-    static let proofRequestTypeName = "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
+    static let bn254ProofRequestTypeName = "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
+    static let tonProofRequestTypeName =
+        "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1"
+    static let proofRequestTypeNames = [
+        bn254ProofRequestTypeName,
+        tonProofRequestTypeName,
+    ]
     static let maximumNativeArtifactBytes = 16 * 1024 * 1024
-    static let maximumDestinationArtifactBytes = maximumNativeArtifactBytes + 64 * 1024
+    static let maximumGroth16ArtifactBytes = maximumNativeArtifactBytes + 64 * 1024
+    static let maximumDestinationArtifactBytes = maximumGroth16ArtifactBytes + 64 * 1024
+    static let maximumDestinationArtifactBase64Bytes =
+        4 * ((maximumDestinationArtifactBytes + 2) / 3)
     static let maximumDetachedSignatureBytes = 16 * 1024
     static let maximumTransactionPayloadBytes = 16 * 1024 * 1024
     static let maximumArtifactBytes = maximumDestinationArtifactBytes
@@ -978,8 +987,8 @@ private struct SccpCompactTransactionCursor {
 
 enum SccpStrictJSON {
     static func object(_ data: Data, label: String) throws -> [String: Any] {
-        try rejectDuplicateKeys(data)
-        guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        let losslessData = try quoteUInt128IntegerValues(data)
+        guard let value = try JSONSerialization.jsonObject(with: losslessData) as? [String: Any] else {
             throw SccpV1Error.invalid("\(label) must be a JSON object")
         }
         return value
@@ -1056,27 +1065,56 @@ enum SccpStrictJSON {
         return result
     }
 
-    private static func rejectDuplicateKeys(_ data: Data) throws {
+    static func uint128(_ value: [String: Any], _ field: String) throws -> String {
+        guard let result = value[field] as? String else {
+            throw SccpV1Error.invalid("\(field) must be a canonical positive UInt128 JSON integer")
+        }
+        guard SccpUInt128.parse(result, positive: true) != nil else {
+            throw SccpV1Error.invalid("\(field) must be a canonical positive UInt128 JSON integer")
+        }
+        return result
+    }
+
+    /// Quote the two UInt128 wire integers only after the lexical scanner has
+    /// proved that they are unquoted canonical JSON integers. Foundation's
+    /// generic JSON number bridge rounds some 39-digit values through Decimal,
+    /// so retaining their original digit strings is required for exact bounds
+    /// checks and route-hash construction.
+    private static func quoteUInt128IntegerValues(_ data: Data) throws -> Data {
         guard let text = String(data: data, encoding: .utf8), Data(text.utf8) == data else {
             throw SccpV1Error.invalid("JSON must be valid UTF-8")
         }
         var parser = DuplicateKeyParser(text)
-        try parser.parse()
+        let ranges = try parser.parse()
+        var transformed = ""
+        transformed.reserveCapacity(text.utf8.count + ranges.count * 2)
+        var cursor = text.startIndex
+        for range in ranges {
+            transformed.append(contentsOf: text[cursor..<range.lowerBound])
+            transformed.append("\"")
+            transformed.append(contentsOf: text[range])
+            transformed.append("\"")
+            cursor = range.upperBound
+        }
+        transformed.append(contentsOf: text[cursor...])
+        return Data(transformed.utf8)
     }
 
     private struct DuplicateKeyParser {
         let text: String
         var index: String.Index
+        var uint128Ranges: [Range<String.Index>] = []
 
         init(_ text: String) {
             self.text = text
             index = text.startIndex
         }
 
-        mutating func parse() throws {
+        mutating func parse() throws -> [Range<String.Index>] {
             try value()
             whitespace()
             guard index == text.endIndex else { throw SccpV1Error.invalid("invalid JSON") }
+            return uint128Ranges
         }
 
         mutating func value() throws {
@@ -1107,7 +1145,14 @@ enum SccpStrictJSON {
                 }
                 whitespace()
                 try consume(":")
-                try value()
+                if key == "max_wrapped_supply" || key == "max_outstanding_liability" {
+                    whitespace()
+                    let start = index
+                    try number()
+                    uint128Ranges.append(start..<index)
+                } else {
+                    try value()
+                }
                 whitespace()
                 if consumeIf("}") { return }
                 try consume(",")
@@ -1220,5 +1265,64 @@ enum SccpStrictJSON {
 
         func peek() -> Character? { index == text.endIndex ? nil : text[index] }
         mutating func advance() { index = text.index(after: index) }
+    }
+}
+
+enum SccpUInt128 {
+    struct Words: Equatable {
+        let low: UInt64
+        let high: UInt64
+    }
+
+    static func parse(_ decimal: String, positive: Bool = false) -> Words? {
+        guard !decimal.isEmpty,
+              decimal == "0" || decimal.first != "0",
+              !positive || decimal != "0"
+        else { return nil }
+
+        var words = Words(low: 0, high: 0)
+        for byte in decimal.utf8 {
+            guard byte >= 0x30, byte <= 0x39 else { return nil }
+            let digit = UInt64(byte - 0x30)
+            let lowProduct = words.low.multipliedFullWidth(by: 10)
+            let (highProduct, highOverflow) = words.high.multipliedReportingOverflow(by: 10)
+            let (highWithCarry, carryOverflow) = highProduct.addingReportingOverflow(lowProduct.high)
+            let (low, lowOverflow) = lowProduct.low.addingReportingOverflow(digit)
+            let (high, digitOverflow) = highWithCarry.addingReportingOverflow(lowOverflow ? 1 : 0)
+            guard !highOverflow, !carryOverflow, !digitOverflow else { return nil }
+            words = Words(low: low, high: high)
+        }
+        return words
+    }
+
+    static func littleEndianData(_ decimal: String) -> Data? {
+        guard let words = parse(decimal) else { return nil }
+        var low = words.low.littleEndian
+        var high = words.high.littleEndian
+        var data = Data(capacity: 16)
+        withUnsafeBytes(of: &low) { data.append(contentsOf: $0) }
+        withUnsafeBytes(of: &high) { data.append(contentsOf: $0) }
+        return data
+    }
+
+    static func abiWord(_ decimal: String) -> Data? {
+        guard let words = parse(decimal) else { return nil }
+        var high = words.high.bigEndian
+        var low = words.low.bigEndian
+        var data = Data(repeating: 0, count: 16)
+        withUnsafeBytes(of: &high) { data.append(contentsOf: $0) }
+        withUnsafeBytes(of: &low) { data.append(contentsOf: $0) }
+        return data
+    }
+
+    static func product(_ decimal: String, by multiplier: UInt64, equals expected: String) -> Bool {
+        guard let value = parse(decimal, positive: true),
+              let expectedValue = parse(expected, positive: true)
+        else { return false }
+        let lowProduct = value.low.multipliedFullWidth(by: multiplier)
+        let highProduct = value.high.multipliedFullWidth(by: multiplier)
+        let (high, overflow) = highProduct.low.addingReportingOverflow(lowProduct.high)
+        guard highProduct.high == 0, !overflow else { return false }
+        return Words(low: lowProduct.low, high: high) == expectedValue
     }
 }

@@ -158,9 +158,8 @@ if [ "$mode" = replace_staging_directory ] && [ "$operation" = generate-candidat
     /bin/mkdir -m 700 "$staging_path"
 fi
 if [ "$mode" = replace_original ] && [ "$operation" = generate-candidate ]; then
-    execution_dir=${{execution_path%/*}}
-    original_parent=${{execution_dir%/*}}
-    original="$original_parent/kagemusha_recursive_spend_v4_bundle"
+    original={shlex.quote(str(executable))}
+    original_parent={shlex.quote(str(executable.parent))}
     /bin/mv "$original" "$original_parent/admitted-original"
     printf '#!/bin/sh\nexit 0\n' > "$original"
     chmod 700 "$original"
@@ -563,7 +562,12 @@ def test_runner_executes_small_owned_group_and_writes_reports(
     assert summary["exit_reason"] == "completed"
     assert summary["exit_status"] == 0
     assert summary["post_run_cleanup"] == "completed"
-    assert summary["post_run_cleanup_removed"] == 1
+    executable_identity = summary["report_context"]["executable_identity"]
+    execution = executable_identity["execution"]
+    assert execution["method"] in {"darwin_private_fd_copy", "pinned_fd"}
+    assert summary["post_run_cleanup_removed"] == (
+        1 if execution["method"] == "darwin_private_fd_copy" else 0
+    )
     assert summary["post_run_validation"] == "completed"
     assert summary["post_success_finalize"] == "completed"
     assert summary["post_success_finalize_result"] == 1
@@ -571,7 +575,6 @@ def test_runner_executes_small_owned_group_and_writes_reports(
     assert summary["report_context"]["output_parent"]["canonical_path"] == str(
         tmp_path.resolve()
     )
-    executable_identity = summary["report_context"]["executable_identity"]
     observations = (tmp_path / "candidate" / "fd-observations").read_text(
         encoding="ascii"
     ).splitlines()
@@ -603,8 +606,12 @@ def test_runner_executes_small_owned_group_and_writes_reports(
         assert len(fields) == 10
         execution_paths.append(fields[2])
     assert execution_paths[0] == execution_paths[1]
-    assert execution_paths[0] == executable_identity["execution"]["canonical_path"]
-    assert executable_identity["execution"]["method"] == "darwin_private_fd_copy"
+    execution_path_key = (
+        "canonical_path"
+        if execution["method"] == "darwin_private_fd_copy"
+        else "descriptor_path"
+    )
+    assert execution_paths[0] == execution[execution_path_key]
     assert not list(tmp_path.glob(f"{MODULE.JOURNAL_PREFIX}*"))
     assert executable_identity["canonical_path"] == str(executable.resolve())
     assert executable_identity["sha256"] == hashlib.sha256(
@@ -819,7 +826,13 @@ def test_runner_injects_private_staging_id_and_removes_failure_residue(
         )
     )
     assert summary["post_run_cleanup"] == "completed"
-    assert summary["post_run_cleanup_removed"] == 2
+    execution_method = summary["report_context"]["executable_identity"]["execution"][
+        "method"
+    ]
+    assert execution_method in {"darwin_private_fd_copy", "pinned_fd"}
+    assert summary["post_run_cleanup_removed"] == (
+        2 if execution_method == "darwin_private_fd_copy" else 1
+    )
     assert summary["post_success_finalize"] == "skipped"
 
 

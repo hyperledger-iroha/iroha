@@ -1275,6 +1275,70 @@ mod platform {
         Ok(names)
     }
 }
+
+/// Atomically rename one direct file without replacing an existing destination.
+///
+/// The sole parent directory is retained for the syscall and synchronized before its pathname
+/// identity is rechecked. Platform-native create-only rename semantics close the check/install
+/// race without ever resolving the parent twice for the mutation itself.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn rename_path_exclusive(source: &Path, destination: &Path) -> io::Result<()> {
+    let source_parent_path = source
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "source path has no parent"))?;
+    let destination_parent_path = destination.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "destination path has no parent",
+        )
+    })?;
+    let source_name = source.file_name().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "source path has no file name")
+    })?;
+    let destination_name = destination.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "destination path has no file name",
+        )
+    })?;
+    if source_parent_path != destination_parent_path {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "exclusive qualification rename requires one lexical parent",
+        ));
+    }
+    let named_parent_before = fs::symlink_metadata(source_parent_path)?;
+    validate_directory_metadata(source_parent_path, &named_parent_before)?;
+    let parent = File::open(source_parent_path)?;
+    let opened_parent = parent.metadata()?;
+    validate_directory_metadata(source_parent_path, &opened_parent)?;
+    let parent_identity = file_identity(&opened_parent)?;
+    if file_identity(&named_parent_before)? != parent_identity {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "exclusive qualification rename parent changed while it was opened",
+        ));
+    }
+    platform::rename_exclusive(&parent, source_name, &parent, destination_name)?;
+    parent.sync_all()?;
+    let named_parent_after = fs::symlink_metadata(source_parent_path)?;
+    validate_directory_metadata(source_parent_path, &named_parent_after)?;
+    if file_identity(&named_parent_after)? != parent_identity {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "exclusive qualification rename parent changed during installation",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn rename_path_exclusive(_source: &Path, _destination: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "exclusive rename is available only on Linux and macOS",
+    ))
+}
 #[cfg(windows)]
 mod platform {
     use super::{FileIdentity, RootedDirectory, file_identity, windows_dacl};

@@ -4,9 +4,10 @@
 //! representation using the canonical decoder and caches the result by the
 //! SHA-256 digest of the code bytes. Metadata cannot affect fixed-width decoding.
 //!
-//! A bounded `HashMap` stores decoded streams while a `VecDeque` tracks LRU
-//! order. Accessing an entry moves its digest to the back; capacity or byte
-//! budget overflow evicts from the front.
+//! A bounded `HashMap` stores eligible decoded streams while a `VecDeque`
+//! tracks LRU order. Accessing an entry moves its digest to the back; capacity
+//! or byte budget overflow evicts from the front. Per-entry decoded-op limits
+//! affect cache retention only and never change whether valid code decodes.
 use crate::{decoder, metadata::ProgramMetadata};
 use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
 use sha2::{Digest, Sha256};
@@ -136,15 +137,7 @@ impl IvmCache {
         let result: Result<Vec<DecodedOp>, crate::VMError> = (|| {
             let mut pc = 0u64;
             let mut out = Vec::new();
-            // Hard cap on the number of decoded instructions per entry. This prevents
-            // pathological byte streams from consuming excessive memory during
-            // pre-decode. Hosts configure the limit via `iroha_config`; tests override
-            // through `CacheLimitsGuard`.
-            let max_ops = configured_max_decoded_ops();
             while (pc as usize) < code.len() {
-                if out.len() >= max_ops {
-                    return Err(crate::VMError::DecodeError);
-                }
                 let inst = decoder::decode_slice(code, pc)?;
                 out.push(DecodedOp { pc, inst });
                 pc += 4;
@@ -172,7 +165,7 @@ impl IvmCache {
             }
         }
     }
-    /// Get a pre-decoded stream from cache or decode and insert.
+    /// Get a pre-decoded stream from cache or decode it, retaining eligible results.
     pub fn get_or_predecode(&mut self, code: &[u8]) -> Result<Arc<[DecodedOp]>, crate::VMError> {
         let key = Self::key_for(code);
         self.get_or_predecode_with_key(key, code)
@@ -225,6 +218,9 @@ impl IvmCache {
         }
         self.misses += 1;
         let decoded = Self::decode_stream(code)?;
+        if decoded.len() > configured_max_decoded_ops() {
+            return Ok(decoded);
+        }
         let sz = Self::entry_size(&decoded);
         self.cur_bytes = self.cur_bytes.saturating_add(sz);
         self.map.insert(key, decoded.clone());
@@ -491,7 +487,7 @@ fn normalize_limits(limits: CacheLimits) -> CacheLimits {
 fn denormalize(value: usize) -> usize {
     if value == usize::MAX { 0 } else { value }
 }
-/// Configure cache limits (capacity, byte budget, decoded-op guard) from host config.
+/// Configure cache limits (capacity, byte budget, and per-entry retention cap) from host config.
 pub fn configure_limits(limits: CacheLimits) {
     let _configuration = lock_cache_configuration();
     configure_limits_locked(limits);

@@ -77,7 +77,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         let extra = extraField ? ",\"legacy_deployment\":null" : ""
         return Data(
             """
-            {"family":"evm","deployment":{"token_address":\(fixedBytes(35, count: 20)),"token_code_hash":\(fixedBytes(36)),"verifier_address":\(fixedBytes(37, count: 20)),"verifier_code_hash":\(fixedBytes(38)),"verifying_key":\(sccpVerifyingKeyJSON()),"verifier_key_hash":\(fixedBytes(39)),"outbound_proof_policy":\(sccpOutboundProofPolicyJSON()),"route_address":\(fixedBytes(40, count: 20)),"route_code_hash":\(fixedBytes(41)),"taira_to_token_multiplier":1000000000\(extra)}}
+            {"family":"evm","deployment":{"token_address":\(fixedBytes(35, count: 20)),"token_code_hash":\(fixedBytes(36)),"verifier_address":\(fixedBytes(37, count: 20)),"verifier_code_hash":\(fixedBytes(38)),"verifying_key":\(sccpVerifyingKeyJSON()),"verifier_key_hash":\(fixedBytes(39)),"outbound_proof_policy":\(sccpOutboundProofPolicyJSON()),"route_address":\(fixedBytes(40, count: 20)),"route_code_hash":\(fixedBytes(41)),"taira_to_token_multiplier":1000000000,"max_wrapped_supply":1000000000000000000000\(extra)}}
             """.utf8
         )
     }
@@ -307,12 +307,70 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         }
         XCTAssertEqual(deployment.tokenAddress, Data(repeating: 35, count: 20))
         XCTAssertEqual(deployment.outboundProofPolicy.version, 1)
+        XCTAssertEqual(deployment.maxWrappedSupply, "1000000000000000000000")
         XCTAssertThrowsError(
             try JSONDecoder().decode(
                 ToriiGovernanceSccpDestination.self,
                 from: sccpEvmDestinationJSON(extraField: true)
             )
         )
+    }
+
+    func testGovernanceSccpSettlementRequiresExactUInt128Liability() throws {
+        let canonical = Data(
+            """
+            {"asset_definition_id":"6TEAJqbb8oEPmLncoNiMRbLEK6tw","custody_owner":"\(Self.governanceOwner)","payload_amount_scale":9,"max_outstanding_liability":1000000000000}
+            """.utf8
+        )
+        let settlement = try JSONDecoder().decode(
+            ToriiGovernanceSccpSettlement.self,
+            from: canonical
+        )
+        XCTAssertEqual(settlement.maxOutstandingLiability, "1000000000000")
+        let maximum = String(UInt128.max)
+        let maximumJSON = Data(
+            String(decoding: canonical, as: UTF8.self).replacingOccurrences(
+                of: "1000000000000",
+                with: maximum
+            ).utf8
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode(
+                ToriiGovernanceSccpSettlement.self,
+                from: maximumJSON
+            ).maxOutstandingLiability,
+            maximum
+        )
+        for invalid in ["0", "340282366920938463463374607431768211456", "\"1000000000000\""] {
+            let candidate = Data(
+                String(decoding: canonical, as: UTF8.self).replacingOccurrences(
+                    of: "1000000000000",
+                    with: invalid
+                ).utf8
+            )
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiGovernanceSccpSettlement.self, from: candidate)
+            )
+        }
+    }
+
+    func testParliamentRawScannerPinsCanonicalSccpUInt128Spelling() throws {
+        let maximum = String(UInt128.max)
+        XCTAssertNoThrow(
+            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
+                in: Data("{\"max_wrapped_supply\":\(maximum)}".utf8),
+                integerKeys: ["max_wrapped_supply", "max_outstanding_liability"]
+            )
+        )
+        for literal in ["1.0", "1e0", "\"1\"", "-1", "01"] {
+            XCTAssertThrowsError(
+                try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
+                    in: Data("{\"max_outstanding_liability\":\(literal)}".utf8),
+                    integerKeys: ["max_wrapped_supply", "max_outstanding_liability"]
+                ),
+                literal
+            )
+        }
     }
 
     func testGovernanceProposalKindRejectsUnknownAndRetiredShapes() {

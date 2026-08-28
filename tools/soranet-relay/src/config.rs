@@ -2934,18 +2934,16 @@ impl Default for PaddingConfig {
         }
     }
 }
-/// Capability advertisement for best-effort constant-rate cover lanes.
+/// Capability advertisement for authenticated constant-rate transport lanes.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct ConstantRateCapabilityConfig {
-    /// Whether best-effort constant-rate cover support is advertised.
+    /// Whether constant-rate transport support is advertised.
     #[norito(default = "ConstantRateCapabilityConfig::default_enabled")]
     pub enabled: bool,
     /// Protocol version for the capability handshake.
     #[norito(default = "ConstantRateCapabilityConfig::default_version")]
     pub version: u8,
-    /// Whether to require peers to honour constant-rate strictly.
-    ///
-    /// Strict mode is rejected until application payload is carried by the fixed-rate scheduler.
+    /// Whether to require peers to use the authenticated fixed-rate DATAGRAM mux.
     #[norito(default = "ConstantRateCapabilityConfig::default_strict")]
     pub strict: bool,
 }
@@ -2968,7 +2966,7 @@ impl ConstantRateCapabilityConfig {
         }
         if self.enabled && self.strict {
             return Err(ConfigError::ConstantRateCapability(
-                "strict mode is unavailable until application payload is carried by the fixed-rate scheduler and DATAGRAM failures close the circuit"
+                "strict constant-rate mode is unavailable while locked Quinn 0.11.9 / quinn-proto 0.11.15 accounts DATAGRAM receive buffering by payload bytes instead of entries"
                     .to_owned(),
             ));
         }

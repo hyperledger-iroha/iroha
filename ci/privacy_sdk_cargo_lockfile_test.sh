@@ -2032,7 +2032,7 @@ printf '%s\n' \
   'if [[ "${1:-}" == "-I" && "${2:-}" == "-c" ]]; then' \
   '  case "${3:-}" in *"version(\"maturin\")"*) python_invocation_kind=probe:maturin-version ;; *) python_invocation_kind=probe:python-version ;; esac' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "--version" ]]; then python_invocation_kind=probe:python-version-output' \
-  'elif [[ "${1:-}" == "-I" && "${2:-}" == "-S" && "${3:-}" == */check_native_sdk_abi22_artifact.py ]]; then python_invocation_kind=abi22-checker' \
+  'elif [[ "${1:-}" == "-I" && "${2:-}" == "-S" && "${3:-}" == */check_native_sdk_abi23_artifact.py ]]; then python_invocation_kind=abi23-checker' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == */verify_privacy_python_wheel.py ]]; then python_invocation_kind=verifier' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == "-m" ]]; then python_invocation_kind="module:${4:-}"' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "-m" ]]; then python_invocation_kind="module:${3:-}"' \
@@ -2065,16 +2065,16 @@ printf '%s\n' \
   '  printf "%s\\n" "${native}"' \
   '  exit 0' \
   'fi' \
-  'if [[ "${1:-}" == "-I" && "${2:-}" == "-S" && "${3:-}" == */check_native_sdk_abi22_artifact.py ]]; then' \
+  'if [[ "${1:-}" == "-I" && "${2:-}" == "-S" && "${3:-}" == */check_native_sdk_abi23_artifact.py ]]; then' \
   '  action="${4:-}"' \
   '  manifest=""' \
   '  previous=""' \
   '  for argument in "$@"; do if [[ "${previous}" == "--manifest" ]]; then manifest="${argument}"; fi; previous="${argument}"; done' \
-  '  [[ -n "${manifest}" ]] || { echo "ABI22 checker did not receive a manifest" >&2; exit 121; }' \
+  '  [[ -n "${manifest}" ]] || { echo "ABI23 checker did not receive a manifest" >&2; exit 121; }' \
   '  case "${action}" in' \
   '    record) printf "%s\n" "{\"fake\":true}" >"${manifest}" ;;' \
-  '    verify) [[ -f "${manifest}" ]] || { echo "ABI22 manifest is unavailable" >&2; exit 122; } ;;' \
-  '    *) echo "unexpected ABI22 checker action" >&2; exit 123 ;;' \
+  '    verify) [[ -f "${manifest}" ]] || { echo "ABI23 manifest is unavailable" >&2; exit 122; } ;;' \
+  '    *) echo "unexpected ABI23 checker action" >&2; exit 123 ;;' \
   '  esac' \
   '  exit 0' \
   'fi' \
@@ -3607,10 +3607,10 @@ expected_kinds = [
     "verifier",
     "module:pip",
     "verifier",
-    "abi22-checker",
-    "abi22-checker",
+    "abi23-checker",
+    "abi23-checker",
     "module:pytest",
-    "abi22-checker",
+    "abi23-checker",
 ]
 if [group["kind"] for group in groups] != expected_kinds:
     raise SystemExit(
@@ -3775,14 +3775,14 @@ if arguments(7) != [
 ]:
     raise SystemExit("installed wheel verification transcript drifted")
 
-checker = root / "scripts/check_native_sdk_abi22_artifact.py"
+checker = root / "scripts/check_native_sdk_abi23_artifact.py"
 record = arguments(8)
 first_verify = arguments(9)
 final_verify = arguments(11)
 if record[:4] != ["-I", "-S", str(checker), "record"]:
-    raise SystemExit(f"ABI22 record transcript drifted: {record!r}")
+    raise SystemExit(f"ABI23 record transcript drifted: {record!r}")
 if "--manifest" not in record or "--artifact" not in record:
-    raise SystemExit("ABI22 record omitted its manifest or artifact binding")
+    raise SystemExit("ABI23 record omitted its manifest or artifact binding")
 manifest = record[record.index("--manifest") + 1]
 artifact = record[record.index("--artifact") + 1]
 expected_verify = [
@@ -3800,7 +3800,7 @@ expected_verify = [
     str(venv / "bin/python"),
 ]
 if first_verify != expected_verify or final_verify != expected_verify:
-    raise SystemExit("ABI22 verification transcript drifted")
+    raise SystemExit("ABI23 verification transcript drifted")
 
 if arguments(10) != [
     "-I",
@@ -4268,12 +4268,12 @@ run_artifact_set_negative_control delete
 run_artifact_set_negative_control hardlink
 run_artifact_set_negative_control symlink
 
-# JavaScript's native builder still requires a root-selected lock. Until it is
-# requalified for the distinct external cd9e authority, the gate must stop
-# before Cargo rather than replacing the tracked c90b root.
-grep -Fq 'TRACKED_ROOT_CARGO_LOCK_SHA256="c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+# JavaScript's native builder consumes the distinct authenticated cd9e release
+# lock directly while preserving the tracked d5b8 root as source authority.
+grep -Fq 'TRACKED_ROOT_CARGO_LOCK_SHA256="d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 grep -Fq 'FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
-grep -Fq 'external-lock requalification' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+grep -Fq 'export IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVACY_RELEASE_CARGO_LOCK}"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+! grep -Fq 'external-lock requalification' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 ! grep -Eq '(install|rm -f --).*\$\{WORKSPACE_CARGO_LOCKFILE\}' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 
 # Source-level CI coverage: the root lock is tracked as the exact source
@@ -4542,7 +4542,7 @@ for workflow_path in \
   'crates/sorafs_car/**' \
   'crates/sorafs_chunker/**' \
   'crates/sorafs_orchestrator/**' \
-  ci/verify_privacy_python_wheel.py scripts/check_native_sdk_abi22_artifact.py scripts/tests/check_privacy_csharp_native_contract_test.py \
+  ci/verify_privacy_python_wheel.py scripts/check_native_sdk_abi23_artifact.py scripts/tests/check_privacy_csharp_native_contract_test.py \
   python/iroha_python/pyproject.toml \
   python/iroha_python/iroha_python_rs/build.rs \
   'python/iroha_python/iroha_python_rs/src/**' \
@@ -4624,7 +4624,8 @@ def validate(source: str) -> None:
     counts = {
         "ci/privacy_sdk_cargo_lockfile.sh provision-ci": 4,
         "ci/privacy_sdk_cargo_lockfile.sh verify-ci": 8,
-        "cargo fetch --locked": 6,
+        "cargo fetch --locked": 4,
+        "fetch --locked --lockfile-path": 2,
         'python-version: "3.12"': 6,
         "update-environment: false": 6,
     }
@@ -4672,10 +4673,10 @@ def validate(source: str) -> None:
             (
                 "Install host-qualified privacy",
                 "Download frozen source-bound privacy lock input",
-                "Authenticate distinct privacy release lock and enforce requalification blocker",
+                "Authenticate distinct privacy release lock",
                 frozen,
                 fetch,
-                "cargo fetch --locked",
+                "fetch --locked --lockfile-path",
                 consumer,
             ),
             name,
@@ -4698,13 +4699,13 @@ for name in private:
     for marker in ("provision-ci", "verify-ci", "RUSTUP_DIST_SERVER", "cargo fetch --locked"):
         must_reject(mutated_job(workflow, name, marker), f"{name} {marker}")
 for name in artifact:
-    for marker in ("Download frozen source-bound privacy lock input", frozen, "cargo fetch --locked"):
+    for marker in ("Download frozen source-bound privacy lock input", frozen, "fetch --locked --lockfile-path"):
         must_reject(mutated_job(workflow, name, marker), f"{name} {marker}")
 PY
 ! grep -Eq '(^|[[:space:]])cp[[:space:]].*Cargo\.lock' "${WORKFLOW_PATH}" || { echo "privacy SDK workflow copies Cargo.lock into the tracked root" >&2; exit 1; }
 [[ "$(grep -Ec 'install -m 600 .*Cargo\.lock.*Cargo\.lock' "${WORKFLOW_PATH}")" -eq 0 ]] && grep -Fxq '**/Cargo.lock' "${SOURCE_ROOT}/.gitignore" && grep -Fxq '!/Cargo.lock' "${SOURCE_ROOT}/.gitignore"
 ROOT_LOCK_INDEX_ENTRY="$(git -C "${SOURCE_ROOT}" ls-files --stage -- Cargo.lock)"; ROOT_LOCK_HEAD_ENTRY="$(git -C "${SOURCE_ROOT}" ls-tree HEAD -- Cargo.lock)"
 [[ "${ROOT_LOCK_INDEX_ENTRY}" =~ ^100644\ ([0-9a-f]{40})\ 0$'\t'Cargo\.lock$ ]]; ROOT_LOCK_INDEX_OID="${BASH_REMATCH[1]}"
-[[ "${ROOT_LOCK_HEAD_ENTRY}" =~ ^100644\ blob\ ([0-9a-f]{40})$'\t'Cargo\.lock$ ]]; ROOT_LOCK_HEAD_OID="${BASH_REMATCH[1]}"; [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" && "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" && "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" ]]
+[[ "${ROOT_LOCK_HEAD_ENTRY}" =~ ^100644\ blob\ ([0-9a-f]{40})$'\t'Cargo\.lock$ ]]; ROOT_LOCK_HEAD_OID="${BASH_REMATCH[1]}"; [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" && "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" && "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" ]]
 grep -Fq 'PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" && grep -Fq 'PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
 printf '%s\n' "privacy SDK authenticated Cargo.lock guard tests passed"

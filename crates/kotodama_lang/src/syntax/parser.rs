@@ -6,9 +6,67 @@ use super::{
 };
 use crate::{
     ast::Program,
-    diagnostic::DiagnosticBundle,
+    diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase},
     source::{FrontendBudget, SourceFile},
 };
+use std::sync::{Condvar, Mutex, OnceLock};
+
+// Recursive expression grammar is isolated from editor/linker caller stacks.
+// The V1 nesting preflight bounds the logical depth at 256; the reserved stack
+// is twice the 16 MiB debug-build boundary corpus exercised below. A global
+// permit cap keeps concurrent parser workers to at most 64 MiB of reserved
+// stack even when the linker has more outer module workers available.
+const PARSER_STACK_BYTES: usize = 32 * 1024 * 1024;
+pub(crate) const MAX_PARSER_WORKERS: usize = 2;
+
+struct ParserWorkerGate {
+    active: Mutex<usize>,
+    ready: Condvar,
+}
+
+impl ParserWorkerGate {
+    fn acquire(&'static self) -> ParserWorkerPermit {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        while *active >= MAX_PARSER_WORKERS {
+            active = self
+                .ready
+                .wait(active)
+                .unwrap_or_else(|poison| poison.into_inner());
+        }
+        *active = active.saturating_add(1);
+        ParserWorkerPermit { gate: self }
+    }
+}
+
+struct ParserWorkerPermit {
+    gate: &'static ParserWorkerGate,
+}
+
+impl Drop for ParserWorkerPermit {
+    fn drop(&mut self) {
+        let mut active = self
+            .gate
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *active = active.saturating_sub(1);
+        self.gate.ready.notify_one();
+    }
+}
+
+static PARSER_WORKER_GATE: OnceLock<ParserWorkerGate> = OnceLock::new();
+
+fn acquire_parser_worker() -> ParserWorkerPermit {
+    PARSER_WORKER_GATE
+        .get_or_init(|| ParserWorkerGate {
+            active: Mutex::new(0),
+            ready: Condvar::new(),
+        })
+        .acquire()
+}
 /// Result of parsing for lossless editor and formatter consumers.
 #[derive(Clone, Debug)]
 pub struct ParseOutput {
@@ -108,33 +166,43 @@ fn parse_program_internal(
         )
     } else {
         match crate::parser::validate_nesting(source, budget, &lowered_tokens) {
-            Ok(()) => {
-                let parsed = crate::parser::parse_with_syntax(source, budget, &lowered_tokens);
-                let (program, sourced_program, ast_facts) =
-                    parsed.spanned.map_or((None, None, None), |spanned| {
-                        if produce_plain_program {
-                            let mut plain = spanned.program;
-                            crate::ast::strip_program_provenance(&mut plain);
-                            (Some(plain), None, None)
-                        } else {
-                            (None, Some(spanned.program), Some(spanned.facts))
-                        }
-                    });
-                let tokens = if produce_plain_program {
-                    Vec::new()
-                } else {
-                    lowered_tokens
-                };
-                (
-                    program,
-                    sourced_program,
-                    ast_facts,
-                    parsed.diagnostics,
-                    tokens,
-                    parsed.outline,
-                    parsed.missing,
-                )
-            }
+            Ok(()) => match parse_with_bounded_stack(source, budget, &lowered_tokens) {
+                Ok(parsed) => {
+                    let (program, sourced_program, ast_facts) =
+                        parsed.spanned.map_or((None, None, None), |spanned| {
+                            if produce_plain_program {
+                                let mut plain = spanned.program;
+                                crate::ast::strip_program_provenance(&mut plain);
+                                (Some(plain), None, None)
+                            } else {
+                                (None, Some(spanned.program), Some(spanned.facts))
+                            }
+                        });
+                    let tokens = if produce_plain_program {
+                        Vec::new()
+                    } else {
+                        lowered_tokens
+                    };
+                    (
+                        program,
+                        sourced_program,
+                        ast_facts,
+                        parsed.diagnostics,
+                        tokens,
+                        parsed.outline,
+                        parsed.missing,
+                    )
+                }
+                Err(diagnostics) => (
+                    None,
+                    None,
+                    None,
+                    diagnostics,
+                    Vec::new(),
+                    error_outline(source),
+                    Vec::new(),
+                ),
+            },
             Err(diagnostics) => (
                 None,
                 None,
@@ -198,6 +266,43 @@ fn parse_program_internal(
         ast_facts,
     }
 }
+fn parse_with_bounded_stack(
+    source: &SourceFile,
+    budget: FrontendBudget,
+    tokens: &[crate::lexer::Token],
+) -> Result<crate::parser::GrammarParseOutput, DiagnosticBundle> {
+    if crate::session::compiler_worker_active() {
+        #[cfg(test)]
+        crate::parser::record_direct_cst_lowering();
+        return Ok(crate::parser::parse_with_syntax(source, budget, tokens));
+    }
+    let _permit = acquire_parser_worker();
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .name("kotodama-parser".to_owned())
+            .stack_size(PARSER_STACK_BYTES)
+            .spawn_scoped(scope, || {
+                crate::parser::parse_with_syntax(source, budget, tokens)
+            });
+        let worker = match worker {
+            Ok(worker) => worker,
+            Err(_) => {
+                return Err(DiagnosticBundle::single(Diagnostic::error(
+                    "K0003",
+                    DiagnosticPhase::Parse,
+                    "compiler could not allocate the bounded stack required to validate source nesting",
+                    None,
+                )));
+            }
+        };
+        #[cfg(test)]
+        crate::parser::record_direct_cst_lowering();
+        match worker.join() {
+            Ok(parsed) => Ok(parsed),
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    })
+}
 /// Parse one source file into the canonical lossless CST.
 #[must_use]
 pub fn parse(source: &SourceFile, budget: FrontendBudget) -> ParseOutput {
@@ -224,8 +329,102 @@ fn error_outline(source: &SourceFile) -> SyntaxOutline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::SourceId;
+    use crate::source::{MAX_NESTING_DEPTH, SourceId};
     use std::fmt::Write as _;
+
+    const DIRECT_PARSER_TEST_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+    fn nested_expression(depth: usize, opening: &str, closing: &str) -> String {
+        format!("{}0{}", opening.repeat(depth), closing.repeat(depth))
+    }
+
+    fn nested_calls(depth: usize) -> String {
+        format!("{}0{}", "wrap(".repeat(depth), ")".repeat(depth))
+    }
+
+    fn nested_if_expressions(depth: usize) -> String {
+        let mut expression = String::from("0");
+        for _ in 0..depth {
+            expression = format!("if true {{ {expression} }} else {{ 0 }}");
+        }
+        expression
+    }
+
+    fn nested_match_expressions(depth: usize) -> String {
+        let mut expression = String::from("0");
+        for _ in 0..depth {
+            expression = format!("match Option::none {{ Option::none => {expression}, }}");
+        }
+        expression
+    }
+
+    fn nested_mixed_expressions(depth: usize) -> String {
+        let mut expression = String::from("0");
+        for index in 0..depth {
+            expression = match index % 6 {
+                0 => format!("[{expression}]"),
+                1 => format!("wrap({expression})"),
+                2 => format!("root[{expression}]"),
+                3 => format!("json[{expression}]"),
+                4 => format!("json{{ value: {expression} }}"),
+                5 => format!("Node {{ value: {expression} }}"),
+                _ => unreachable!("modulo constrains the wrapper kind"),
+            };
+        }
+        expression
+    }
+
+    fn function_expression_source(expression: &str) -> String {
+        format!("seiyaku Margin {{ fn f() {{ let value = {expression}; }} }}")
+    }
+
+    fn direct_parse_assertion(text: String, source_id: u32, label: &str, valid: bool) {
+        let source = SourceFile::new(SourceId(source_id), format!("{label}.ko"), text.clone());
+        let budget = FrontendBudget::v1();
+        let lexed = lex(&source, budget);
+        assert!(
+            lexed.diagnostics.is_empty(),
+            "{label}: {:?}",
+            lexed.diagnostics
+        );
+        let lossless_tokens = lexed.tokens.clone();
+        let tokens = crate::lexer::lower_lexed(&source, budget, lexed)
+            .expect("boundary corpus must lower into significant tokens");
+        crate::parser::validate_nesting(&source, budget, &tokens)
+            .unwrap_or_else(|diagnostics| panic!("{label}: {diagnostics:?}"));
+        let crate::parser::GrammarParseOutput {
+            spanned,
+            diagnostics,
+            outline,
+            missing,
+        } = crate::parser::parse_with_syntax(&source, budget, &tokens);
+        if valid {
+            assert!(
+                diagnostics.diagnostics.is_empty(),
+                "{label}: {diagnostics:?}"
+            );
+            let spanned = spanned.unwrap_or_else(|| panic!("{label}: missing AST"));
+            crate::ast::drop_program_iterative(spanned.program);
+        } else {
+            assert!(
+                spanned.is_none(),
+                "{label}: malformed source produced an AST"
+            );
+            assert!(
+                !diagnostics.diagnostics.is_empty(),
+                "{label}: malformed source produced no diagnostic"
+            );
+            assert!(
+                diagnostics
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| diagnostic.code != "K0003"),
+                "{label}: exact-boundary recovery was misclassified: {diagnostics:?}"
+            );
+        }
+        let tree = build_tree_from_outline(source.id(), &lossless_tokens, &outline, &missing);
+        assert_eq!(tree.text(&source), text, "{label}");
+    }
     fn count_nodes(node: &crate::syntax::GreenNode, kind: SyntaxKind) -> usize {
         let mut count = usize::from(node.kind == kind);
         for child in &node.children {
@@ -310,6 +509,85 @@ mod tests {
         assert!(output.is_ok(), "{:?}", output.diagnostics);
         assert_eq!(crate::parser::direct_cst_lowering_count(), 1);
         assert_eq!(output.tree.text(&source), text);
+    }
+
+    #[test]
+    fn direct_grammar_parser_fits_half_the_reserved_stack_at_v1_boundary() {
+        std::thread::Builder::new()
+            .name("kotodama-direct-parser-stack-margin".to_owned())
+            .stack_size(DIRECT_PARSER_TEST_STACK_BYTES)
+            .spawn(|| {
+                let expression_depth = MAX_NESTING_DEPTH - 2;
+                let type_depth = MAX_NESTING_DEPTH - 1;
+                let nested_type = format!("{}T{}", "T<".repeat(type_depth), ">".repeat(type_depth));
+                let nested_blocks = format!(
+                    "seiyaku Margin {{ fn f() {{ {}let value = 0;{} }} }}",
+                    "if true { ".repeat(expression_depth),
+                    " }".repeat(expression_depth)
+                );
+                let valid = [
+                    (
+                        "parentheses",
+                        function_expression_source(&nested_expression(expression_depth, "(", ")")),
+                    ),
+                    (
+                        "lists",
+                        function_expression_source(&nested_expression(expression_depth, "[", "]")),
+                    ),
+                    (
+                        "calls",
+                        function_expression_source(&nested_calls(expression_depth)),
+                    ),
+                    (
+                        "mixed-expressions",
+                        function_expression_source(&nested_mixed_expressions(expression_depth)),
+                    ),
+                    (
+                        "if-expressions",
+                        function_expression_source(&nested_if_expressions(expression_depth)),
+                    ),
+                    (
+                        "match-expressions",
+                        function_expression_source(&nested_match_expressions(expression_depth)),
+                    ),
+                    (
+                        "generic-types",
+                        format!("seiyaku Margin {{ state {nested_type} value; }}"),
+                    ),
+                    ("statement-blocks", nested_blocks),
+                ];
+                for (index, (label, text)) in valid.into_iter().enumerate() {
+                    direct_parse_assertion(text, 100 + index as u32, label, true);
+                }
+
+                let malformed_list = format!(
+                    "seiyaku Margin {{ fn f() {{ let value = {}0{}; }} }}",
+                    "[".repeat(expression_depth),
+                    "]".repeat(expression_depth - 1)
+                );
+                let malformed_type = format!(
+                    "seiyaku Margin {{ state {}T{} value; }}",
+                    "T<".repeat(type_depth),
+                    ">".repeat(type_depth - 1)
+                );
+                let malformed_blocks = format!(
+                    "seiyaku Margin {{ fn f() {{ {}let value = 0;",
+                    "if true { ".repeat(expression_depth)
+                );
+                for (index, (label, text)) in [
+                    ("malformed-list", malformed_list),
+                    ("malformed-type", malformed_type),
+                    ("malformed-blocks", malformed_blocks),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    direct_parse_assertion(text, 120 + index as u32, label, false);
+                }
+            })
+            .expect("spawn direct grammar parser margin worker")
+            .join()
+            .expect("direct grammar parser must fit the verified 16 MiB stack margin");
     }
     #[test]
     fn public_ast_is_plain_but_internal_ast_retains_direct_node_ids() {

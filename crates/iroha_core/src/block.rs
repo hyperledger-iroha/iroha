@@ -312,6 +312,7 @@ fn commit_stateful_admission_sequence(
             .tx_sequences
             .insert(admission.authority.clone(), seq);
     }
+    crate::tx::commit_faucet_claim_consumption(state_tx, admission);
     Ok(())
 }
 #[cfg(test)]

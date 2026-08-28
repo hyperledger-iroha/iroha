@@ -25,12 +25,15 @@ use crate::{
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use flate2::read::GzDecoder;
 use iroha_config::parameters::actual::AttachmentSanitizerMode;
-use iroha_data_model::account::AccountId;
+use iroha_data_model::{account::AccountId, proof::PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1};
 use iroha_logger::prelude::*;
 use norito::json;
 use parking_lot::{Mutex as SyncMutex, RwLock};
 use sha2::{Digest as _, Sha256};
+#[cfg(test)]
+use std::sync::Arc;
 use std::{
+    collections::BTreeSet,
     env,
     ffi::OsStr,
     fs,
@@ -57,7 +60,14 @@ const ATTACHMENT_SANITIZER_SANDBOXED_ENV: &str = "IROHA_ATTACHMENT_SANITIZER_OS_
 const ATTACHMENT_SANITIZER_BINARY_STEM: &str = "attachment_sanitizer";
 const SANITIZER_POLL_INTERVAL_MS: u64 = 5;
 const SANITIZER_RESPONSE_OVERHEAD_BYTES: usize = 64 * 1024;
-const ATTACHMENT_META_SCAN_MAX_FILES: usize = 20_000;
+const ATTACHMENT_META_SCAN_MAX_FILES: u64 =
+    iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT_MAX;
+const ATTACHMENT_TENANT_SCAN_MAX_ENTRIES: u64 = ATTACHMENT_META_SCAN_MAX_FILES * 2;
+const ATTACHMENT_QUOTA_TRANSACTION_VERSION: u16 = 1;
+const ATTACHMENT_QUOTA_TRANSACTION_MAX_BYTES: u64 = 2 * 1024 * 1024;
+const ATTACHMENT_QUOTA_TRANSACTION_DIR: &str = "zk_attachment_quota";
+const ATTACHMENT_QUOTA_TRANSACTION_FILE: &str = "pending_v1.json";
+const ATTACHMENT_QUOTA_TRANSACTION_TEMP_PREFIX: &str = ".tmp";
 pub(super) const ZK_PROVER_PROCESSING_STATE_VERSION: u16 = 1;
 const ZK_PROVER_PROCESSING_REFERENCE_MARKER: &[u8] = b"iroha-torii-zk-prover-live-reference-v1\n";
 const ZK_PROVER_PROCESSING_RECEIPT_MAX_BYTES: u64 = 16 * 1024;
@@ -185,6 +195,22 @@ pub struct AttachmentMeta {
     crate::json_macros::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+struct AttachmentQuotaTransaction {
+    version: u16,
+    tenant: String,
+    incoming_meta: AttachmentMeta,
+    previous_meta: Option<AttachmentMeta>,
+    victim_ids: Vec<String>,
+}
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 pub(super) struct ProverProcessingReceipt {
     pub(super) version: u16,
     pub(super) id: String,
@@ -192,6 +218,80 @@ pub(super) struct ProverProcessingReceipt {
     pub(super) terminal: bool,
     pub(super) retry_not_before_ms: Option<u64>,
     pub(super) retry_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub(super) completed_proof_indices: Vec<u16>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub(super) processing_context_hash: Option<String>,
+}
+impl ProverProcessingReceipt {
+    pub(super) fn disposition_is_valid(&self) -> bool {
+        let completed_indices_valid = self.completed_proof_indices.len()
+            <= PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1
+            && self
+                .completed_proof_indices
+                .iter()
+                .all(|index| usize::from(*index) < PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1)
+            && self
+                .completed_proof_indices
+                .windows(2)
+                .all(|pair| pair[0] < pair[1]);
+        let context_hash_valid = self.processing_context_hash.as_deref().is_some_and(|hash| {
+            hash.len() == ATTACHMENT_ID_HEX_LEN
+                && hash
+                    .as_bytes()
+                    .iter()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        });
+        let cache_valid = if self.completed_proof_indices.is_empty() {
+            self.processing_context_hash.is_none()
+        } else {
+            context_hash_valid
+        };
+        if self.terminal {
+            self.retry_not_before_ms.is_none()
+                && self.retry_count == 0
+                && self.completed_proof_indices.is_empty()
+                && self.processing_context_hash.is_none()
+        } else {
+            self.retry_not_before_ms.is_some()
+                && self.retry_count > 0
+                && completed_indices_valid
+                && cache_valid
+        }
+    }
+    pub(super) fn reconcile_committed(durable: Option<Self>, committed: Self) -> Self {
+        if committed.terminal {
+            return committed;
+        }
+        let Some(durable) = durable else {
+            return committed;
+        };
+        if durable.terminal {
+            return durable;
+        }
+        let committed_is_newer = (committed.retry_count, committed.processed_ms)
+            >= (durable.retry_count, durable.processed_ms);
+        if durable.processing_context_hash != committed.processing_context_hash {
+            return if committed_is_newer {
+                committed
+            } else {
+                durable
+            };
+        }
+        let (mut selected, other) = if committed_is_newer {
+            (committed, durable)
+        } else {
+            (durable, committed)
+        };
+        selected
+            .completed_proof_indices
+            .extend(other.completed_proof_indices);
+        selected.completed_proof_indices.sort_unstable();
+        selected.completed_proof_indices.dedup();
+        selected
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProverProcessingDecision {
@@ -228,6 +328,53 @@ fn meta_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
 fn bin_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
     attachments_dir(tenant).join(format!("{}.bin", id))
 }
+fn attachment_quota_transaction_dir() -> PathBuf {
+    base_dir().join(ATTACHMENT_QUOTA_TRANSACTION_DIR)
+}
+fn attachment_quota_transaction_path() -> PathBuf {
+    attachment_quota_transaction_dir().join(ATTACHMENT_QUOTA_TRANSACTION_FILE)
+}
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    fs::File::open(path)?.sync_all()
+}
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> std::io::Result<()> {
+    // Rust does not expose a portable directory-sync primitive. File data is
+    // still synchronized before rename on these targets.
+    Ok(())
+}
+fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid_attachment_file("persisted path has no containing directory"))?;
+    sync_directory(parent)
+}
+fn persist_bytes_atomically(path: &Path, body: &[u8], prefix: &str) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid_attachment_file("persisted path has no containing directory"))?;
+    fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempfile_in(parent)?;
+    temporary.write_all(body)?;
+    temporary.flush()?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    sync_directory(parent)
+}
+fn ensure_attachment_dirs_durable(tenant: &AttachmentTenant) -> std::io::Result<()> {
+    let root = attachments_root_dir();
+    fs::create_dir_all(&root)?;
+    sync_directory(&base_dir())?;
+    fs::create_dir_all(attachments_dir(tenant))?;
+    sync_directory(&root)
+}
+fn ensure_attachment_quota_transaction_dir_durable() -> std::io::Result<()> {
+    fs::create_dir_all(attachment_quota_transaction_dir())?;
+    sync_directory(&base_dir())
+}
 fn prover_processing_state_dir() -> PathBuf {
     base_dir()
         .join("zk_prover")
@@ -246,19 +393,11 @@ fn prover_processing_state_lock() -> &'static SyncMutex<()> {
     ZK_PROVER_PROCESSING_STATE_LOCK.get_or_init(|| SyncMutex::new(()))
 }
 fn persist_processing_marker(path: &Path) -> std::io::Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        invalid_attachment_file("ZK prover processing marker has no parent directory")
-    })?;
-    fs::create_dir_all(parent)?;
-    let mut temporary = tempfile::Builder::new()
-        .prefix(ZK_PROVER_PROCESSING_TEMP_PREFIX)
-        .tempfile_in(parent)?;
-    temporary.write_all(ZK_PROVER_PROCESSING_REFERENCE_MARKER)?;
-    temporary.flush()?;
-    temporary
-        .persist(path)
-        .map(|_| ())
-        .map_err(|error| error.error)
+    persist_bytes_atomically(
+        path,
+        ZK_PROVER_PROCESSING_REFERENCE_MARKER,
+        ZK_PROVER_PROCESSING_TEMP_PREFIX,
+    )
 }
 fn is_regular_processing_marker(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
@@ -294,13 +433,16 @@ fn load_prover_processing_receipt_locked(id: &str) -> Option<ProverProcessingRec
         read_bounded_attachment_regular_file(&path, ZK_PROVER_PROCESSING_RECEIPT_MAX_BYTES).ok()?;
     let text = std::str::from_utf8(&bytes).ok()?;
     let receipt = json::from_json::<ProverProcessingReceipt>(text).ok()?;
-    let disposition_valid = if receipt.terminal {
-        receipt.retry_not_before_ms.is_none() && receipt.retry_count == 0
-    } else {
-        receipt.retry_not_before_ms.is_some() && receipt.retry_count > 0
-    };
-    (receipt.version == ZK_PROVER_PROCESSING_STATE_VERSION && receipt.id == id && disposition_valid)
-        .then_some(receipt)
+    (receipt.version == ZK_PROVER_PROCESSING_STATE_VERSION
+        && receipt.id == id
+        && receipt.disposition_is_valid())
+    .then_some(receipt)
+}
+/// Load a validated processing receipt for one content ID.
+pub(super) fn load_prover_processing_receipt(id: &str) -> Option<ProverProcessingReceipt> {
+    let id = sanitize_attachment_id(id)?;
+    let _guard = prover_processing_state_lock().lock();
+    load_prover_processing_receipt_locked(&id)
 }
 /// Resolve whether a durable content-ID receipt suppresses work at `now_ms`.
 pub(super) fn prover_processing_decision(id: &str, now_ms: u64) -> ProverProcessingDecision {
@@ -350,21 +492,22 @@ pub(super) fn persist_prover_processing_receipt_if_referenced(
 ) -> std::io::Result<bool> {
     let id = sanitize_attachment_id(&receipt.id)
         .ok_or_else(|| invalid_attachment_file("invalid processing-receipt attachment id"))?;
-    let disposition_valid = if receipt.terminal {
-        receipt.retry_not_before_ms.is_none() && receipt.retry_count == 0
-    } else {
-        receipt.retry_not_before_ms.is_some() && receipt.retry_count > 0
-    };
     if receipt.version != ZK_PROVER_PROCESSING_STATE_VERSION
         || receipt.id != id
-        || !disposition_valid
+        || !receipt.disposition_is_valid()
     {
         return Err(invalid_attachment_file(
             "invalid ZK prover processing receipt",
         ));
     }
     let _guard = prover_processing_state_lock().lock();
-    if !processing_reference_dir_has_shards(&id)? {
+    persist_prover_processing_receipt_if_referenced_locked(receipt, &id)
+}
+fn persist_prover_processing_receipt_if_referenced_locked(
+    receipt: &ProverProcessingReceipt,
+    id: &str,
+) -> std::io::Result<bool> {
+    if !processing_reference_dir_has_shards(id)? {
         return Ok(false);
     }
     let body = json::to_json(receipt).map_err(|error| {
@@ -375,29 +518,45 @@ pub(super) fn persist_prover_processing_receipt_if_referenced(
             "ZK prover processing receipt exceeds its persistence limit",
         ));
     }
-    let path = prover_processing_receipt_path(&id);
-    let parent = path.parent().ok_or_else(|| {
-        invalid_attachment_file("ZK prover processing receipt has no parent directory")
-    })?;
-    fs::create_dir_all(parent)?;
-    let mut temporary = tempfile::Builder::new()
-        .prefix(ZK_PROVER_PROCESSING_TEMP_PREFIX)
-        .tempfile_in(parent)?;
-    temporary.write_all(body.as_bytes())?;
-    temporary.flush()?;
-    temporary.persist(path).map_err(|error| error.error)?;
+    persist_bytes_atomically(
+        &prover_processing_receipt_path(id),
+        body.as_bytes(),
+        ZK_PROVER_PROCESSING_TEMP_PREFIX,
+    )?;
     Ok(true)
+}
+/// Atomically reconcile a committed report disposition with its durable receipt.
+pub(super) fn reconcile_prover_processing_receipt_if_referenced(
+    committed: &ProverProcessingReceipt,
+) -> std::io::Result<ProverProcessingReceipt> {
+    let id = sanitize_attachment_id(&committed.id)
+        .ok_or_else(|| invalid_attachment_file("invalid processing-receipt attachment id"))?;
+    if committed.version != ZK_PROVER_PROCESSING_STATE_VERSION
+        || committed.id != id
+        || !committed.disposition_is_valid()
+    {
+        return Err(invalid_attachment_file(
+            "invalid ZK prover processing receipt",
+        ));
+    }
+    let _guard = prover_processing_state_lock().lock();
+    let durable = load_prover_processing_receipt_locked(&id);
+    let selected = ProverProcessingReceipt::reconcile_committed(durable.clone(), committed.clone());
+    if durable.as_ref() != Some(&selected) {
+        let _ = persist_prover_processing_receipt_if_referenced_locked(&selected, &id)?;
+    }
+    Ok(selected)
 }
 fn remove_file_if_present(path: &Path) -> std::io::Result<()> {
     match fs::remove_file(path) {
-        Ok(()) => Ok(()),
+        Ok(()) => sync_parent_directory(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
 }
 fn remove_dir_if_present(path: &Path) -> std::io::Result<()> {
     match fs::remove_dir(path) {
-        Ok(()) => Ok(()),
+        Ok(()) => sync_parent_directory(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
@@ -583,9 +742,20 @@ pub(super) fn read_bounded_attachment_regular_file(
     }
     Ok(bytes)
 }
-/// Initialize on-disk directories for attachments storage.
-pub fn init_persistence() {
+/// Initialize on-disk directories and recover any pending quota transaction.
+///
+/// Returns `true` when recovery completed or no transaction was pending. A
+/// `false` result must prevent consumers such as the prover from observing the
+/// attachment store until a later recovery attempt succeeds.
+pub fn init_persistence() -> bool {
     ensure_root_dir();
+    match recover_attachment_quota_transaction() {
+        Ok(_) => true,
+        Err(error) => {
+            warn!(%error, "failed to recover a pending attachment quota transaction at startup");
+            false
+        }
+    }
 }
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -634,12 +804,8 @@ fn save_meta(tenant: &AttachmentTenant, meta: &AttachmentMeta) -> std::io::Resul
     validate_attachment_metadata_contract(meta, tenant.as_str(), &id)
         .map_err(invalid_attachment_file)?;
     let path = meta_path(tenant, &id);
-    ensure_dirs(tenant);
-    let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
-    tmp.write_all(body.as_bytes())?;
-    tmp.flush()?;
-    tmp.persist(&path).map(|_| ()).map_err(|e| e.error)?;
+    ensure_attachment_dirs_durable(tenant)?;
+    persist_bytes_atomically(&path, body.as_bytes(), ".tmp")?;
     ensure_prover_processing_reference(tenant.as_str(), &id)
 }
 fn persist_body(tenant: &AttachmentTenant, id: &str, body: &[u8]) -> std::io::Result<()> {
@@ -650,12 +816,22 @@ fn persist_body(tenant: &AttachmentTenant, id: &str, body: &[u8]) -> std::io::Re
         )
     })?;
     let path = bin_path(tenant, &id);
-    ensure_dirs(tenant);
-    let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
-    tmp.write_all(body)?;
-    tmp.flush()?;
-    tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
+    ensure_attachment_dirs_durable(tenant)?;
+    persist_bytes_atomically(&path, body, ".tmp")
+}
+fn remove_empty_tenant_dir_if_present(tenant: &AttachmentTenant) -> std::io::Result<()> {
+    match fs::remove_dir(attachments_dir(tenant)) {
+        Ok(()) => sync_directory(&attachments_root_dir()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 fn delete_attachment_files(tenant: &AttachmentTenant, id: &str) -> std::io::Result<()> {
     if let Some(clean) = sanitize_attachment_id(id) {
@@ -668,8 +844,169 @@ fn delete_attachment_files(tenant: &AttachmentTenant, id: &str) -> std::io::Resu
         let body = bin_path(tenant, &clean);
         remove_file_if_present(&meta)?;
         remove_file_if_present(&body)?;
+        remove_empty_tenant_dir_if_present(tenant)?;
     }
     Ok(())
+}
+fn validate_attachment_quota_transaction(
+    transaction: &AttachmentQuotaTransaction,
+) -> std::io::Result<()> {
+    if transaction.version != ATTACHMENT_QUOTA_TRANSACTION_VERSION {
+        return Err(invalid_attachment_file(
+            "unsupported attachment quota transaction version",
+        ));
+    }
+    let tenant = sanitize_tenant_key(&transaction.tenant)
+        .filter(|tenant| tenant == &transaction.tenant)
+        .ok_or_else(|| invalid_attachment_file("invalid attachment quota transaction tenant"))?;
+    let incoming_id = sanitize_attachment_id(&transaction.incoming_meta.id)
+        .filter(|id| id == &transaction.incoming_meta.id)
+        .ok_or_else(|| {
+            invalid_attachment_file("invalid attachment quota transaction incoming id")
+        })?;
+    validate_attachment_metadata_contract(&transaction.incoming_meta, &tenant, &incoming_id)
+        .map_err(invalid_attachment_file)?;
+    if let Some(previous) = &transaction.previous_meta {
+        validate_attachment_metadata_contract(previous, &tenant, &incoming_id)
+            .map_err(invalid_attachment_file)?;
+    }
+    let victim_count = u64::try_from(transaction.victim_ids.len()).unwrap_or(u64::MAX);
+    if victim_count == 0 || victim_count > ATTACHMENT_META_SCAN_MAX_FILES {
+        return Err(invalid_attachment_file(format!(
+            "attachment quota transaction must contain 1..={ATTACHMENT_META_SCAN_MAX_FILES} victims"
+        )));
+    }
+    let mut unique_victims = BTreeSet::new();
+    for victim_id in &transaction.victim_ids {
+        let victim_id = sanitize_attachment_id(victim_id)
+            .filter(|id| id == victim_id)
+            .ok_or_else(|| {
+                invalid_attachment_file("invalid attachment quota transaction victim id")
+            })?;
+        if victim_id == incoming_id {
+            return Err(invalid_attachment_file(
+                "attachment quota transaction cannot evict its incoming attachment",
+            ));
+        }
+        if !unique_victims.insert(victim_id) {
+            return Err(invalid_attachment_file(
+                "attachment quota transaction contains a duplicate victim",
+            ));
+        }
+    }
+    Ok(())
+}
+fn persist_attachment_quota_transaction(
+    transaction: &AttachmentQuotaTransaction,
+) -> std::io::Result<()> {
+    validate_attachment_quota_transaction(transaction)?;
+    let body = json::to_json_pretty(transaction).map_err(|error| {
+        invalid_attachment_file(format!("encode attachment quota transaction: {error}"))
+    })?;
+    if u64::try_from(body.len()).unwrap_or(u64::MAX) > ATTACHMENT_QUOTA_TRANSACTION_MAX_BYTES {
+        return Err(invalid_attachment_file(format!(
+            "attachment quota transaction exceeds the {ATTACHMENT_QUOTA_TRANSACTION_MAX_BYTES}-byte persistence limit"
+        )));
+    }
+    let path = attachment_quota_transaction_path();
+    match fs::symlink_metadata(&path) {
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "an attachment quota transaction is already pending",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    ensure_attachment_quota_transaction_dir_durable()?;
+    persist_bytes_atomically(
+        &path,
+        body.as_bytes(),
+        ATTACHMENT_QUOTA_TRANSACTION_TEMP_PREFIX,
+    )
+}
+fn load_attachment_quota_transaction() -> std::io::Result<Option<AttachmentQuotaTransaction>> {
+    let path = attachment_quota_transaction_path();
+    let body =
+        match read_bounded_attachment_regular_file(&path, ATTACHMENT_QUOTA_TRANSACTION_MAX_BYTES) {
+            Ok(body) => body,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+    let text = std::str::from_utf8(&body).map_err(|error| {
+        invalid_attachment_file(format!("decode quota transaction UTF-8: {error}"))
+    })?;
+    let transaction = json::from_json::<AttachmentQuotaTransaction>(text).map_err(|error| {
+        invalid_attachment_file(format!("decode attachment quota transaction: {error}"))
+    })?;
+    validate_attachment_quota_transaction(&transaction)?;
+    Ok(Some(transaction))
+}
+fn clear_attachment_quota_transaction() -> std::io::Result<()> {
+    remove_file_if_present(&attachment_quota_transaction_path())
+}
+fn attachment_quota_incoming_is_complete(
+    transaction: &AttachmentQuotaTransaction,
+) -> std::io::Result<bool> {
+    let tenant = AttachmentTenant(transaction.tenant.clone());
+    let Some(current_meta) = load_meta(&tenant, &transaction.incoming_meta.id) else {
+        return Ok(false);
+    };
+    if current_meta != transaction.incoming_meta {
+        return Ok(false);
+    }
+    let body = match read_bounded_attachment_regular_file(
+        &bin_path(&tenant, &transaction.incoming_meta.id),
+        transaction.incoming_meta.size,
+    ) {
+        Ok(body) => body,
+        Err(_) => return Ok(false),
+    };
+    if validate_attachment_body_contract(&transaction.incoming_meta, &body).is_err() {
+        return Ok(false);
+    }
+    // A metadata rename can complete before its live-reference marker. Repair
+    // that final durable side effect before any quota victim is removed.
+    ensure_prover_processing_reference(&transaction.tenant, &transaction.incoming_meta.id)?;
+    Ok(true)
+}
+fn rollback_attachment_quota_transaction(
+    transaction: &AttachmentQuotaTransaction,
+) -> std::io::Result<()> {
+    let tenant = AttachmentTenant(transaction.tenant.clone());
+    if let Some(previous_meta) = &transaction.previous_meta {
+        let body = read_bounded_attachment_regular_file(
+            &bin_path(&tenant, &previous_meta.id),
+            previous_meta.size,
+        )?;
+        validate_attachment_body_contract(previous_meta, &body).map_err(invalid_attachment_file)?;
+        save_meta(&tenant, previous_meta)?;
+    } else {
+        delete_attachment_files(&tenant, &transaction.incoming_meta.id)?;
+    }
+    clear_attachment_quota_transaction()
+}
+fn finalize_attachment_quota_transaction(
+    transaction: &AttachmentQuotaTransaction,
+) -> std::io::Result<()> {
+    let tenant = AttachmentTenant(transaction.tenant.clone());
+    for victim_id in &transaction.victim_ids {
+        delete_attachment_files(&tenant, victim_id)?;
+    }
+    clear_attachment_quota_transaction()
+}
+/// Recover one quota transaction while the caller holds the attachment quota mutex.
+fn recover_attachment_quota_transaction() -> std::io::Result<bool> {
+    let Some(transaction) = load_attachment_quota_transaction()? else {
+        return Ok(false);
+    };
+    if attachment_quota_incoming_is_complete(&transaction)? {
+        finalize_attachment_quota_transaction(&transaction)?;
+    } else {
+        rollback_attachment_quota_transaction(&transaction)?;
+    }
+    Ok(true)
 }
 fn hash_identity_hex(label: &str, value: &str) -> String {
     let mut buf = Vec::with_capacity(label.len() + 1 + value.len());
@@ -1157,25 +1494,76 @@ fn sanitize_attachment_sync(
 async fn sanitize_attachment(
     declared_type: Option<String>,
     body: axum::body::Bytes,
+    admission: Option<crate::ProofBodyAdmissionLease>,
 ) -> Result<SanitizerOutcome, SanitizeError> {
     let cfg = sanitizer_config();
     match cfg.mode {
         AttachmentSanitizerMode::InProcess => {
-            sanitize_attachment_in_process(declared_type, body, cfg).await
+            sanitize_attachment_in_process(declared_type, body, cfg, admission).await
         }
         AttachmentSanitizerMode::Subprocess => {
-            sanitize_attachment_subprocess(declared_type, body, cfg).await
+            sanitize_attachment_subprocess(declared_type, body, cfg, admission).await
         }
+    }
+}
+#[cfg(test)]
+struct SanitizerWorkerTestGate {
+    entered: Arc<tokio::sync::Notify>,
+    release: SyncMutex<mpsc::Receiver<()>>,
+}
+#[cfg(test)]
+fn sanitizer_worker_test_gate() -> &'static SyncMutex<Option<Arc<SanitizerWorkerTestGate>>> {
+    static GATE: OnceLock<SyncMutex<Option<Arc<SanitizerWorkerTestGate>>>> = OnceLock::new();
+    GATE.get_or_init(|| SyncMutex::new(None))
+}
+#[cfg(test)]
+pub(crate) struct SanitizerWorkerTestGateGuard;
+#[cfg(test)]
+impl Drop for SanitizerWorkerTestGateGuard {
+    fn drop(&mut self) {
+        *sanitizer_worker_test_gate().lock() = None;
+    }
+}
+#[cfg(test)]
+pub(crate) fn install_sanitizer_worker_test_gate(
+    entered: Arc<tokio::sync::Notify>,
+    release: mpsc::Receiver<()>,
+) -> SanitizerWorkerTestGateGuard {
+    let mut slot = sanitizer_worker_test_gate().lock();
+    assert!(
+        slot.is_none(),
+        "sanitizer worker test gate already installed"
+    );
+    *slot = Some(Arc::new(SanitizerWorkerTestGate {
+        entered,
+        release: SyncMutex::new(release),
+    }));
+    SanitizerWorkerTestGateGuard
+}
+#[cfg(test)]
+fn wait_for_sanitizer_worker_test_gate() {
+    let gate = sanitizer_worker_test_gate().lock().clone();
+    if let Some(gate) = gate {
+        gate.entered.notify_one();
+        gate.release
+            .lock()
+            .recv()
+            .expect("release sanitizer worker test gate");
     }
 }
 async fn sanitize_attachment_in_process(
     declared_type: Option<String>,
     body: axum::body::Bytes,
     cfg: SanitizerConfig,
+    admission: Option<crate::ProofBodyAdmissionLease>,
 ) -> Result<SanitizerOutcome, SanitizeError> {
     let declared = declared_type.clone();
     let mut outcome = task::spawn_blocking(move || {
-        sanitize_attachment_sync(declared.as_deref(), body.as_ref(), &cfg)
+        #[cfg(test)]
+        wait_for_sanitizer_worker_test_gate();
+        let outcome = sanitize_attachment_sync(declared.as_deref(), body.as_ref(), &cfg);
+        drop(admission);
+        outcome
     })
     .await
     .map_err(|err| {
@@ -1191,6 +1579,7 @@ async fn sanitize_attachment_subprocess(
     declared_type: Option<String>,
     body: axum::body::Bytes,
     cfg: SanitizerConfig,
+    admission: Option<crate::ProofBodyAdmissionLease>,
 ) -> Result<SanitizerOutcome, SanitizeError> {
     let request = SanitizerRequest {
         declared_type,
@@ -1200,19 +1589,26 @@ async fn sanitize_attachment_subprocess(
         max_archive_depth: cfg.max_archive_depth,
         timeout_ms: cfg.timeout.as_millis().max(1) as u64,
     };
-    let outcome = task::spawn_blocking(move || run_sanitizer_subprocess(request, cfg.timeout))
-        .await
-        .map_err(|err| {
-            SanitizeError::new(
-                SanitizeRejectReason::Sandbox,
-                format!("attachment sanitize task failed: {err}"),
-            )
-        })??;
+    let outcome = task::spawn_blocking(move || {
+        #[cfg(test)]
+        wait_for_sanitizer_worker_test_gate();
+        let outcome = run_sanitizer_subprocess(request, cfg.timeout, admission.clone());
+        drop(admission);
+        outcome
+    })
+    .await
+    .map_err(|err| {
+        SanitizeError::new(
+            SanitizeRejectReason::Sandbox,
+            format!("attachment sanitize task failed: {err}"),
+        )
+    })??;
     Ok(outcome)
 }
 fn run_sanitizer_subprocess(
     request: SanitizerRequest,
     timeout: Duration,
+    admission: Option<crate::ProofBodyAdmissionLease>,
 ) -> Result<SanitizerOutcome, SanitizeError> {
     let exe = sanitizer_executable()?;
     let exe = validate_sanitizer_executable(&exe)?;
@@ -1255,17 +1651,13 @@ fn run_sanitizer_subprocess(
                 )
             })?;
         }
-        let mut stdout = child.stdout.take().ok_or_else(|| {
+        let stdout = child.stdout.take().ok_or_else(|| {
             SanitizeError::new(
                 SanitizeRejectReason::Sandbox,
                 "attachment sanitizer stdout unavailable",
             )
         })?;
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let result = read_sanitizer_stdout_limited(&mut stdout, max_output_bytes);
-            let _ = tx.send(result);
-        });
+        let rx = spawn_sanitizer_stdout_reader(stdout, max_output_bytes, admission);
         let deadline = Instant::now() + timeout;
         loop {
             let Some(status) = child.try_wait().map_err(|err| {
@@ -1312,6 +1704,23 @@ fn run_sanitizer_subprocess(
         let _ = child.wait();
     }
     result
+}
+fn spawn_sanitizer_stdout_reader(
+    mut stdout: impl std::io::Read + Send + 'static,
+    max_output_bytes: usize,
+    admission: Option<crate::ProofBodyAdmissionLease>,
+) -> mpsc::Receiver<Result<Vec<u8>, String>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        // A sandbox descendant can inherit stdout after the direct child exits.
+        // Keep physical admission for as long as this reader can remain blocked
+        // so detached pipe readers cannot accumulate outside the semaphore.
+        let admission = admission;
+        let result = read_sanitizer_stdout_limited(&mut stdout, max_output_bytes);
+        drop(admission);
+        let _ = tx.send(result);
+    });
+    rx
 }
 fn read_sanitizer_stdout_limited(
     stdout: &mut impl std::io::Read,
@@ -1594,20 +2003,124 @@ fn executable_file(path: &Path) -> bool {
     #[cfg(not(unix))]
     true
 }
-fn enforce_per_tenant_quota(
+#[derive(Debug, Clone, Copy)]
+struct AttachmentQuotaLimits {
+    per_tenant_max_count: u64,
+    per_tenant_max_bytes: u64,
+    global_max_count: u64,
+    global_max_bytes: u64,
+}
+#[derive(Debug)]
+struct AttachmentQuotaScanBudget {
+    metadata_records: u64,
+    child_entries: u64,
+    child_entry_limit: u64,
+}
+impl AttachmentQuotaScanBudget {
+    fn new(child_entry_limit: u64) -> Self {
+        Self {
+            metadata_records: 0,
+            child_entries: 0,
+            child_entry_limit,
+        }
+    }
+}
+fn quota_scan_entry_within_limit(scanned: &mut u64, limit: u64) -> bool {
+    *scanned = (*scanned).saturating_add(1);
+    *scanned <= limit
+}
+fn quota_metas_for_tenant(
+    tenant: &AttachmentTenant,
+    scan: &mut AttachmentQuotaScanBudget,
+) -> std::io::Result<Vec<AttachmentMeta>> {
+    let entries = match fs::read_dir(attachments_dir(tenant)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut metas = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if !quota_scan_entry_within_limit(&mut scan.child_entries, scan.child_entry_limit) {
+            return Err(invalid_attachment_file(format!(
+                "attachment quota scan exceeds {} aggregate tenant child entries",
+                scan.child_entry_limit
+            )));
+        }
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(id) = file_name
+            .to_str()
+            .and_then(|name| name.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        let Some(id) = sanitize_attachment_id(id) else {
+            continue;
+        };
+        scan.metadata_records = scan.metadata_records.saturating_add(1);
+        if scan.metadata_records > ATTACHMENT_META_SCAN_MAX_FILES {
+            return Err(invalid_attachment_file(format!(
+                "attachment quota scan exceeds {ATTACHMENT_META_SCAN_MAX_FILES} metadata records"
+            )));
+        }
+        let meta = load_meta(tenant, &id).ok_or_else(|| {
+            invalid_attachment_file(format!(
+                "attachment quota scan found invalid metadata for {id}"
+            ))
+        })?;
+        metas.push(meta);
+    }
+    Ok(metas)
+}
+fn other_tenants_quota_usage(
+    submitting_tenant: &AttachmentTenant,
+    scan: &mut AttachmentQuotaScanBudget,
+) -> std::io::Result<(u64, u64)> {
+    let entries = match fs::read_dir(attachments_root_dir()) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((0, 0)),
+        Err(error) => return Err(error),
+    };
+    let mut count = 0_u64;
+    let mut bytes = 0_u64;
+    let mut root_entries_scanned = 0_u64;
+    for entry in entries {
+        let entry = entry?;
+        if !quota_scan_entry_within_limit(&mut root_entries_scanned, ATTACHMENT_META_SCAN_MAX_FILES)
+        {
+            return Err(invalid_attachment_file(format!(
+                "attachment quota root scan exceeds {ATTACHMENT_META_SCAN_MAX_FILES} entries"
+            )));
+        }
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(tenant_key) = file_name.to_str().and_then(sanitize_tenant_key) else {
+            continue;
+        };
+        if tenant_key == submitting_tenant.as_str() {
+            continue;
+        }
+        let tenant = AttachmentTenant(tenant_key);
+        for meta in quota_metas_for_tenant(&tenant, scan)? {
+            count = count.saturating_add(1);
+            bytes = bytes.saturating_add(meta.size);
+        }
+    }
+    Ok((count, bytes))
+}
+fn plan_attachment_quota_admission(
     tenant: &AttachmentTenant,
     incoming_id: &str,
     incoming_size: u64,
-) -> bool {
-    let max_count_raw = per_tenant_max_count_cfg();
-    let max_bytes_raw = per_tenant_max_bytes_cfg();
-    if max_count_raw == 0 && max_bytes_raw == 0 {
-        return true;
-    }
-    let mut metas: Vec<AttachmentMeta> = list_all_ids(tenant)
-        .into_iter()
-        .filter_map(|id| load_meta(tenant, &id))
-        .collect();
+) -> std::io::Result<Option<Vec<String>>> {
+    let limits = quota_limits_cfg();
+    let mut scan = AttachmentQuotaScanBudget::new(ATTACHMENT_TENANT_SCAN_MAX_ENTRIES);
+    let mut metas = quota_metas_for_tenant(tenant, &mut scan)?;
     let current_count = metas.len();
     // A content-addressed repost replaces the same tenant-local entry. Do not
     // count or evict it as if another attachment were being added: doing so
@@ -1619,21 +2132,32 @@ fn enforce_per_tenant_quota(
             .cmp(&b.created_ms)
             .then_with(|| a.id.cmp(&b.id))
     });
-    let mut total_bytes: u64 = metas.iter().map(|m| m.size).sum();
-    let mut count_after_add = metas.len() as u64 + 1;
-    let max_count = if max_count_raw == 0 {
+    let mut total_bytes = metas
+        .iter()
+        .fold(0_u64, |total, meta| total.saturating_add(meta.size));
+    let mut count_after_add = u64::try_from(metas.len())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let per_tenant_max_count = if limits.per_tenant_max_count == 0 {
         u64::MAX
     } else {
-        max_count_raw
+        limits.per_tenant_max_count
     };
-    let max_bytes = if max_bytes_raw == 0 {
+    let per_tenant_max_bytes = if limits.per_tenant_max_bytes == 0 {
         u64::MAX
     } else {
-        max_bytes_raw
+        limits.per_tenant_max_bytes
     };
+    let (other_tenants_count, other_tenants_bytes) = other_tenants_quota_usage(tenant, &mut scan)?;
     let mut idx = 0usize;
     let mut removed_ids: Vec<String> = Vec::new();
-    while (count_after_add > max_count || total_bytes.saturating_add(incoming_size) > max_bytes)
+    while (count_after_add > per_tenant_max_count
+        || total_bytes.saturating_add(incoming_size) > per_tenant_max_bytes
+        || other_tenants_count.saturating_add(count_after_add) > limits.global_max_count
+        || other_tenants_bytes
+            .saturating_add(total_bytes)
+            .saturating_add(incoming_size)
+            > limits.global_max_bytes)
         && idx < metas.len()
     {
         let victim = &metas[idx];
@@ -1642,42 +2166,49 @@ fn enforce_per_tenant_quota(
         count_after_add = count_after_add.saturating_sub(1);
         idx += 1;
     }
-    if count_after_add > max_count || total_bytes.saturating_add(incoming_size) > max_bytes {
+    let exceeds_per_tenant = count_after_add > per_tenant_max_count
+        || total_bytes.saturating_add(incoming_size) > per_tenant_max_bytes;
+    let exceeds_global = other_tenants_count.saturating_add(count_after_add)
+        > limits.global_max_count
+        || other_tenants_bytes
+            .saturating_add(total_bytes)
+            .saturating_add(incoming_size)
+            > limits.global_max_bytes;
+    if exceeds_per_tenant || exceeds_global {
         warn!(
             tenant = tenant.as_str(),
-            max_count,
-            max_bytes,
+            per_tenant_max_count,
+            per_tenant_max_bytes,
+            global_max_count = limits.global_max_count,
+            global_max_bytes = limits.global_max_bytes,
             current_count,
             current_bytes = total_bytes,
+            other_tenants_count,
+            other_tenants_bytes,
             incoming_bytes = incoming_size,
-            "rejecting attachment: unable to make room within tenant quota"
+            "rejecting attachment: unable to make room within attachment quotas"
         );
-        return false;
+        return Ok(None);
     }
-    for id in removed_ids.iter() {
-        if let Err(error) = delete_attachment_files(tenant, id) {
-            warn!(
-                tenant = tenant.as_str(),
-                attachment_id = %id,
-                %error,
-                "rejecting attachment: failed to evict an existing attachment safely"
-            );
-            return false;
-        }
-    }
+    // Feasibility is established without mutating retained state. The caller
+    // must durably commit the incoming attachment before deleting these
+    // tenant-local victims, so a later write failure or process stop cannot
+    // discard old data while leaving no replacement.
     if !removed_ids.is_empty() {
-        info!(
+        debug!(
             tenant = tenant.as_str(),
-            removed = removed_ids.len(),
-            max_count,
-            max_bytes,
+            planned_evictions = removed_ids.len(),
+            per_tenant_max_count,
+            per_tenant_max_bytes,
+            global_max_count = limits.global_max_count,
+            global_max_bytes = limits.global_max_bytes,
             count_after_add,
             bytes_after_removal = total_bytes,
             incoming_bytes = incoming_size,
-            "evicted attachments to satisfy tenant quota"
+            "planned tenant-local attachment evictions after durable commit"
         );
     }
-    true
+    Ok(Some(removed_ids))
 }
 /// POST /v1/zk/attachments — store an attachment and return its metadata.
 pub async fn handle_post_attachment(
@@ -1685,6 +2216,22 @@ pub async fn handle_post_attachment(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    handle_post_attachment_inner(tenant, headers, body, None).await
+}
+pub(crate) async fn handle_post_attachment_with_admission(
+    tenant: AttachmentTenant,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+    admission: crate::ProofBodyAdmissionLease,
+) -> axum::response::Response {
+    handle_post_attachment_inner(tenant, headers, body, Some(admission)).await
+}
+async fn handle_post_attachment_inner(
+    tenant: AttachmentTenant,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+    admission: Option<crate::ProofBodyAdmissionLease>,
+) -> axum::response::Response {
     // Enforce size cap
     if body.len() > max_bytes_cfg() {
         return (
@@ -1702,7 +2249,7 @@ pub async fn handle_post_attachment(
         .and_then(|v| v.to_str().ok())
         .and_then(normalize_mime);
     let sanitize_start = Instant::now();
-    let sanitize_result = sanitize_attachment(declared_type.clone(), body.clone()).await;
+    let sanitize_result = sanitize_attachment(declared_type.clone(), body.clone(), admission).await;
     let sanitize_ms = sanitize_start.elapsed().as_millis() as u64;
     let telemetry = telemetry_handle();
     telemetry.with_metrics(|tel| tel.observe_torii_attachment_sanitize_ms(sanitize_ms));
@@ -1728,6 +2275,20 @@ pub async fn handle_post_attachment(
         sanitized_body,
     } = sanitized;
     let stored_size = sanitized_body.len() as u64;
+    let max_bytes = max_bytes_u64_cfg();
+    if stored_size > max_bytes {
+        warn!(
+            tenant = tenant.as_str(),
+            limit_bytes = max_bytes,
+            body_bytes = stored_size,
+            "rejecting attachment: sanitized body exceeds per-item byte cap"
+        );
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("sanitized attachment exceeds max bytes (>{max_bytes} bytes)"),
+        )
+            .into_response();
+    }
     let per_tenant_max_bytes = per_tenant_max_bytes_cfg();
     if per_tenant_max_bytes > 0 && stored_size > per_tenant_max_bytes {
         warn!(
@@ -1742,6 +2303,20 @@ pub async fn handle_post_attachment(
                 "attachment exceeds per-tenant max bytes (>{} bytes)",
                 per_tenant_max_bytes
             ),
+        )
+            .into_response();
+    }
+    let global_max_bytes = global_max_bytes_cfg();
+    if stored_size > global_max_bytes {
+        warn!(
+            tenant = tenant.as_str(),
+            limit_bytes = global_max_bytes,
+            body_bytes = stored_size,
+            "rejecting attachment: exceeds node-global byte cap"
+        );
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("attachment exceeds node-global max bytes (>{global_max_bytes} bytes)"),
         )
             .into_response();
     }
@@ -1765,19 +2340,48 @@ pub async fn handle_post_attachment(
         hex::encode::<[u8; 32]>(h.into())
     };
     let _guard = quota_lock().lock().await;
-    let replacing_existing = load_meta(&tenant, &id).is_some();
-    if !enforce_per_tenant_quota(&tenant, &id, stored_size) {
+    if let Err(error) = recover_attachment_quota_transaction() {
         warn!(
             tenant = tenant.as_str(),
-            body_bytes = stored_size,
-            "rejecting attachment: per-tenant quota exceeded"
+            %error,
+            "rejecting attachment: pending quota transaction recovery failed"
         );
         return (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "per-tenant attachment quota exceeded".to_string(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "attachment quota recovery failed".to_string(),
         )
             .into_response();
     }
+    let previous_meta = load_meta(&tenant, &id);
+    let replacing_existing = previous_meta.is_some();
+    let eviction_ids = match plan_attachment_quota_admission(&tenant, &id, stored_size) {
+        Ok(Some(eviction_ids)) => eviction_ids,
+        Ok(None) => {
+            warn!(
+                tenant = tenant.as_str(),
+                body_bytes = stored_size,
+                "rejecting attachment: node-global quota exceeded"
+            );
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "node-global attachment quota exceeded".to_string(),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            warn!(
+                tenant = tenant.as_str(),
+                body_bytes = stored_size,
+                %error,
+                "rejecting attachment: quota accounting failed"
+            );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "attachment quota accounting failed".to_string(),
+            )
+                .into_response();
+        }
+    };
     let sha256 = Sha256::digest(&sanitized_body);
     let hashes = AttachmentHashes {
         blake2b_256: id.clone(),
@@ -1802,7 +2406,81 @@ pub async fn handle_post_attachment(
         }),
         zk1_tags,
     };
+    let quota_transaction = if eviction_ids.is_empty() {
+        None
+    } else {
+        if let Some(previous_meta) = &previous_meta {
+            let previous_body = match read_bounded_attachment_regular_file(
+                &bin_path(&tenant, &id),
+                previous_meta.size,
+            ) {
+                Ok(body) => body,
+                Err(error) => {
+                    warn!(
+                        tenant = tenant.as_str(),
+                        attachment_id = %id,
+                        %error,
+                        "rejecting attachment: existing replacement body is not recoverable"
+                    );
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "existing attachment is not recoverable".to_string(),
+                    )
+                        .into_response();
+                }
+            };
+            if let Err(error) = validate_attachment_body_contract(previous_meta, &previous_body) {
+                warn!(
+                    tenant = tenant.as_str(),
+                    attachment_id = %id,
+                    %error,
+                    "rejecting attachment: existing replacement body failed validation"
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "existing attachment is not recoverable".to_string(),
+                )
+                    .into_response();
+            }
+        }
+        let transaction = AttachmentQuotaTransaction {
+            version: ATTACHMENT_QUOTA_TRANSACTION_VERSION,
+            tenant: tenant.as_str().to_owned(),
+            incoming_meta: meta.clone(),
+            previous_meta: previous_meta.clone(),
+            victim_ids: eviction_ids.clone(),
+        };
+        if let Err(error) = persist_attachment_quota_transaction(&transaction) {
+            warn!(
+                tenant = tenant.as_str(),
+                attachment_id = %id,
+                %error,
+                "rejecting attachment: failed to persist quota transaction"
+            );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to persist attachment quota transaction".to_string(),
+            )
+                .into_response();
+        }
+        Some(transaction)
+    };
     if let Err(e) = persist_body(&tenant, &id, &sanitized_body) {
+        let rollback = if quota_transaction.is_some() {
+            recover_attachment_quota_transaction().map(|_| ())
+        } else if replacing_existing {
+            Ok(())
+        } else {
+            delete_attachment_files(&tenant, &id)
+        };
+        if let Err(error) = rollback {
+            warn!(
+                tenant = tenant.as_str(),
+                attachment_id = %id,
+                %error,
+                "failed to roll back attachment quota transaction after body persistence failure"
+            );
+        }
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to persist body: {e}"),
@@ -1810,15 +2488,19 @@ pub async fn handle_post_attachment(
             .into_response();
     }
     if let Err(e) = save_meta(&tenant, &meta) {
-        // A same-content replacement wrote identical body bytes atomically,
-        // while the old metadata remains intact when its atomic replace fails.
-        // Only a genuinely new attachment needs rollback.
-        if !replacing_existing && let Err(error) = delete_attachment_files(&tenant, &id) {
+        let rollback = if quota_transaction.is_some() {
+            recover_attachment_quota_transaction().map(|_| ())
+        } else if replacing_existing {
+            Ok(())
+        } else {
+            delete_attachment_files(&tenant, &id)
+        };
+        if let Err(error) = rollback {
             warn!(
                 tenant = tenant.as_str(),
                 attachment_id = %id,
                 %error,
-                "failed to roll back attachment body after metadata persistence failure"
+                "failed to roll back attachment quota transaction after metadata persistence failure"
             );
         }
         return (
@@ -1826,6 +2508,42 @@ pub async fn handle_post_attachment(
             format!("failed to persist metadata: {e}"),
         )
             .into_response();
+    }
+    if quota_transaction.is_some() {
+        match recover_attachment_quota_transaction() {
+            Ok(true) => {
+                info!(
+                    tenant = tenant.as_str(),
+                    planned = eviction_ids.len(),
+                    "completed durable tenant-local attachment quota transaction"
+                );
+            }
+            Ok(false) => {
+                error!(
+                    tenant = tenant.as_str(),
+                    attachment_id = %id,
+                    "durable quota transaction disappeared before eviction"
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "attachment quota transaction was lost".to_string(),
+                )
+                    .into_response();
+            }
+            Err(error) => {
+                warn!(
+                    tenant = tenant.as_str(),
+                    attachment_id = %id,
+                    %error,
+                    "durable attachment committed but quota eviction recovery failed"
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "attachment quota eviction failed".to_string(),
+                )
+                    .into_response();
+            }
+        }
     }
     let body = json::to_json_pretty(&meta).unwrap_or_else(|_| "{}".into());
     (
@@ -1869,7 +2587,7 @@ pub async fn handle_list_attachments_filtered(
     NoritoQuery(q): NoritoQuery<AttachmentListQuery>,
 ) -> impl IntoResponse {
     let mut metas: Vec<AttachmentMeta> = Vec::new();
-    let mut scanned = 0usize;
+    let mut scanned = 0_u64;
     let ids = if let Some(id) = q.id.as_deref() {
         let Some(clean) = sanitize_attachment_id(id) else {
             return (
@@ -1945,7 +2663,7 @@ pub async fn handle_count_attachments(
     NoritoQuery(q): NoritoQuery<AttachmentListQuery>,
 ) -> impl IntoResponse {
     let mut count = 0u64;
-    let mut scanned = 0usize;
+    let mut scanned = 0_u64;
     let ids = if let Some(id) = q.id.as_deref() {
         let Some(clean) = sanitize_attachment_id(id) else {
             return (
@@ -2012,6 +2730,20 @@ pub async fn handle_get_attachment(
     tenant: AttachmentTenant,
     AxumPath(id): AxumPath<String>,
 ) -> impl IntoResponse {
+    handle_get_attachment_inner(tenant, id, None).await
+}
+pub(crate) async fn handle_get_attachment_with_admission(
+    tenant: AttachmentTenant,
+    AxumPath(id): AxumPath<String>,
+    admission: crate::ProofBodyAdmissionLease,
+) -> axum::response::Response {
+    handle_get_attachment_inner(tenant, id, Some(admission)).await
+}
+async fn handle_get_attachment_inner(
+    tenant: AttachmentTenant,
+    id: String,
+    admission: Option<crate::ProofBodyAdmissionLease>,
+) -> axum::response::Response {
     let Some(clean) = sanitize_attachment_id(&id) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -2040,6 +2772,7 @@ pub async fn handle_get_attachment(
     let sanitize_result = sanitize_attachment(
         Some(meta.content_type.clone()),
         axum::body::Bytes::from(bytes),
+        admission,
     )
     .await;
     let sanitized = match sanitize_result {
@@ -2083,6 +2816,20 @@ pub async fn handle_delete_attachment(
         )
             .into_response();
     };
+    let _guard = quota_lock().lock().await;
+    if let Err(error) = recover_attachment_quota_transaction() {
+        warn!(
+            tenant = tenant.as_str(),
+            attachment_id = %clean,
+            %error,
+            "failed to recover attachment quota transaction before deletion"
+        );
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "attachment quota recovery failed".to_string(),
+        )
+            .into_response();
+    }
     let existed = meta_path(&tenant, &clean).exists() || bin_path(&tenant, &clean).exists();
     if let Err(error) = delete_attachment_files(&tenant, &clean) {
         warn!(
@@ -2103,6 +2850,42 @@ pub async fn handle_delete_attachment(
         StatusCode::NOT_FOUND.into_response()
     }
 }
+async fn delete_attachment_if_expired(
+    tenant: &AttachmentTenant,
+    id: &str,
+    ttl: Duration,
+) -> std::io::Result<bool> {
+    delete_attachment_if_expired_with_before_lock(tenant, id, ttl, || {}).await
+}
+async fn delete_attachment_if_expired_with_before_lock(
+    tenant: &AttachmentTenant,
+    id: &str,
+    ttl: Duration,
+    before_lock: impl FnOnce(),
+) -> std::io::Result<bool> {
+    let Some(id) = sanitize_attachment_id(id) else {
+        return Ok(false);
+    };
+    // POST, explicit DELETE, quota eviction, and TTL collection all mutate the
+    // same content-addressed entry. Re-read its timestamp after acquiring the
+    // common lock so an old GC observation cannot delete a successful repost.
+    before_lock();
+    let _guard = quota_lock().lock().await;
+    recover_attachment_quota_transaction()?;
+    let Some(meta) = load_meta(tenant, &id) else {
+        return Ok(false);
+    };
+    let meta_time = UNIX_EPOCH + Duration::from_millis(meta.created_ms);
+    if SystemTime::now()
+        .duration_since(meta_time)
+        .unwrap_or_default()
+        <= ttl
+    {
+        return Ok(false);
+    }
+    delete_attachment_files(tenant, &id)?;
+    Ok(true)
+}
 /// Start a background GC worker that removes expired attachments.
 pub fn start_gc_worker() {
     ensure_root_dir();
@@ -2110,7 +2893,6 @@ pub fn start_gc_worker() {
         let ttl = Duration::from_secs(ttl_secs_cfg());
         let interval = Duration::from_secs(GC_INTERVAL_SECS);
         loop {
-            let now = SystemTime::now();
             if let Ok(rd) = fs::read_dir(attachments_root_dir()) {
                 for e in rd.flatten() {
                     let Ok(file_type) = e.file_type() else {
@@ -2136,19 +2918,14 @@ pub fn start_gc_worker() {
                             let Some(id) = tname.strip_suffix(".json") else {
                                 continue;
                             };
-                            let Some(meta) = load_meta(&tenant, id) else {
-                                continue;
-                            };
-                            let meta_time = UNIX_EPOCH + Duration::from_millis(meta.created_ms);
-                            if now.duration_since(meta_time).unwrap_or_default() > ttl {
-                                if let Err(error) = delete_attachment_files(&tenant, id) {
-                                    warn!(
-                                        tenant = tenant.as_str(),
-                                        attachment_id = %id,
-                                        %error,
-                                        "failed to garbage-collect an expired attachment safely"
-                                    );
-                                }
+                            if let Err(error) = delete_attachment_if_expired(&tenant, id, ttl).await
+                            {
+                                warn!(
+                                    tenant = tenant.as_str(),
+                                    attachment_id = %id,
+                                    %error,
+                                    "failed to garbage-collect an expired attachment safely"
+                                );
                             }
                         }
                     }
@@ -2164,6 +2941,8 @@ struct AttachConfig {
     max_bytes: u64,
     per_tenant_max_count: u64,
     per_tenant_max_bytes: u64,
+    global_max_count: u64,
+    global_max_bytes: u64,
     allowed_mime_types: Vec<String>,
     max_expanded_bytes: u64,
     max_archive_depth: u32,
@@ -2177,8 +2956,14 @@ impl Default for AttachConfig {
         Self {
             ttl_secs: ATTACHMENT_TTL_SECS_FALLBACK,
             max_bytes: MAX_ATTACHMENT_BYTES_FALLBACK as u64,
-            per_tenant_max_count: 0,
-            per_tenant_max_bytes: 0,
+            per_tenant_max_count:
+                iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
+            per_tenant_max_bytes:
+                iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_BYTES,
+            global_max_count:
+                iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT,
+            global_max_bytes:
+                iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_BYTES,
             allowed_mime_types:
                 iroha_config::parameters::defaults::torii::attachments_allowed_mime_types()
                     .into_iter()
@@ -2201,7 +2986,34 @@ static ATTACH_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 fn attach_cfg() -> &'static RwLock<AttachConfig> {
     ATTACH_CFG.get_or_init(|| RwLock::new(AttachConfig::default()))
 }
-/// Configure attachments TTL, per-item size cap, and per-tenant quotas from Torii config.
+#[cfg(test)]
+pub(crate) struct SanitizerModeTestGuard {
+    previous_mode: AttachmentSanitizerMode,
+    previous_executable: Option<PathBuf>,
+}
+#[cfg(test)]
+impl Drop for SanitizerModeTestGuard {
+    fn drop(&mut self) {
+        let mut config = attach_cfg().write();
+        config.sanitizer_mode = self.previous_mode;
+        config.sanitizer_exe_override = self.previous_executable.take();
+    }
+}
+#[cfg(test)]
+pub(crate) fn set_sanitizer_mode_for_test(
+    mode: AttachmentSanitizerMode,
+    executable: Option<PathBuf>,
+) -> SanitizerModeTestGuard {
+    let mut config = attach_cfg().write();
+    let guard = SanitizerModeTestGuard {
+        previous_mode: config.sanitizer_mode,
+        previous_executable: config.sanitizer_exe_override.clone(),
+    };
+    config.sanitizer_mode = mode;
+    config.sanitizer_exe_override = executable;
+    guard
+}
+/// Configure attachment retention and sanitization from Torii config.
 /// The sanitizer executable override is intended for tests and tooling.
 #[allow(clippy::too_many_arguments)]
 pub fn configure(
@@ -2209,6 +3021,8 @@ pub fn configure(
     max_bytes: u64,
     per_tenant_max_count: u64,
     per_tenant_max_bytes: u64,
+    global_max_count: u64,
+    global_max_bytes: u64,
     allowed_mime_types: Vec<String>,
     max_expanded_bytes: u64,
     max_archive_depth: u32,
@@ -2226,6 +3040,8 @@ pub fn configure(
         max_bytes,
         per_tenant_max_count,
         per_tenant_max_bytes,
+        global_max_count,
+        global_max_bytes,
         allowed_mime_types,
         max_expanded_bytes,
         max_archive_depth,
@@ -2236,8 +3052,11 @@ pub fn configure(
     };
 }
 pub(super) fn max_bytes_cfg() -> usize {
-    let max_bytes = attach_cfg().read().max_bytes;
+    let max_bytes = max_bytes_u64_cfg();
     usize::try_from(max_bytes).unwrap_or(usize::MAX)
+}
+fn max_bytes_u64_cfg() -> u64 {
+    attach_cfg().read().max_bytes
 }
 fn ttl_secs_cfg() -> u64 {
     attach_cfg().read().ttl_secs
@@ -2247,6 +3066,18 @@ fn per_tenant_max_count_cfg() -> u64 {
 }
 fn per_tenant_max_bytes_cfg() -> u64 {
     attach_cfg().read().per_tenant_max_bytes
+}
+fn global_max_bytes_cfg() -> u64 {
+    attach_cfg().read().global_max_bytes
+}
+fn quota_limits_cfg() -> AttachmentQuotaLimits {
+    let config = attach_cfg().read();
+    AttachmentQuotaLimits {
+        per_tenant_max_count: config.per_tenant_max_count,
+        per_tenant_max_bytes: config.per_tenant_max_bytes,
+        global_max_count: config.global_max_count,
+        global_max_bytes: config.global_max_bytes,
+    }
 }
 fn allowed_mime_types_cfg() -> Vec<String> {
     attach_cfg().read().allowed_mime_types.clone()
@@ -2455,11 +3286,11 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::account::AccountId;
     use sha2::{Digest as _, Sha256};
-    use std::{ffi::OsStr, fs, path::PathBuf, process::Command};
+    use std::{collections::BTreeSet, ffi::OsStr, fs, path::PathBuf, process::Command};
     use std::{
         io,
         io::Write as _,
-        sync::Once,
+        sync::{Arc, Once},
         time::{Duration, Instant},
     };
     #[test]
@@ -2471,6 +3302,97 @@ mod tests {
         .join();
         assert!(panic.is_err());
         let _guard = super::attach_cfg().read();
+    }
+    #[test]
+    fn quota_scan_entry_bound_counts_every_raw_entry() {
+        let mut scanned = 0_u64;
+        assert!(super::quota_scan_entry_within_limit(&mut scanned, 2));
+        assert!(super::quota_scan_entry_within_limit(&mut scanned, 2));
+        assert!(!super::quota_scan_entry_within_limit(&mut scanned, 2));
+        assert_eq!(scanned, 3);
+    }
+    #[test]
+    fn attachment_sanitizer_stdout_reader_retains_admission_until_eof() {
+        struct BlockingReader {
+            entered: std::sync::mpsc::Sender<()>,
+            release: std::sync::mpsc::Receiver<()>,
+        }
+        impl std::io::Read for BlockingReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.entered
+                    .send(())
+                    .expect("signal blocked sanitizer stdout read");
+                self.release
+                    .recv()
+                    .expect("release blocked sanitizer stdout read");
+                Ok(0)
+            }
+        }
+
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = semaphore
+            .clone()
+            .try_acquire_owned()
+            .expect("acquire sanitizer admission");
+        let admission = crate::ProofBodyAdmissionLease::new(permit);
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let result = super::spawn_sanitizer_stdout_reader(
+            BlockingReader {
+                entered: entered_tx,
+                release: release_rx,
+            },
+            16,
+            Some(admission),
+        );
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("sanitizer stdout reader must block");
+        assert_eq!(
+            semaphore.available_permits(),
+            0,
+            "a detached stdout reader must retain physical admission"
+        );
+        release_tx
+            .send(())
+            .expect("release sanitizer stdout reader");
+        assert_eq!(
+            result
+                .recv_timeout(Duration::from_secs(1))
+                .expect("sanitizer stdout result")
+                .expect("sanitizer stdout read"),
+            Vec::<u8>::new()
+        );
+        assert_eq!(semaphore.available_permits(), 1);
+    }
+    #[test]
+    fn quota_child_entry_budget_is_aggregate_across_tenants() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let first = super::AttachmentTenant("a".repeat(super::TENANT_KEY_HEX_LEN));
+        let second = super::AttachmentTenant("b".repeat(super::TENANT_KEY_HEX_LEN));
+        super::ensure_dirs(&first);
+        super::ensure_dirs(&second);
+        for (tenant, prefix) in [(&first, "first"), (&second, "second")] {
+            for index in 0..2 {
+                fs::write(
+                    super::attachments_dir(tenant).join(format!("{prefix}-{index}.noise")),
+                    b"noise",
+                )
+                .expect("write raw tenant entry");
+            }
+        }
+
+        let mut scan = super::AttachmentQuotaScanBudget::new(3);
+        assert!(
+            super::quota_metas_for_tenant(&first, &mut scan)
+                .expect("first tenant fits aggregate child-entry budget")
+                .is_empty()
+        );
+        let error = super::quota_metas_for_tenant(&second, &mut scan)
+            .expect_err("second tenant must share the first tenant's scan budget");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(scan.child_entries, 4);
     }
     fn test_sanitizer_config(max_expanded_bytes: u64, max_archive_depth: u32) -> SanitizerConfig {
         SanitizerConfig {
@@ -2515,6 +3437,41 @@ mod tests {
             zk1_tags: None,
         }
     }
+    fn quota_transaction(
+        tenant: &super::AttachmentTenant,
+        incoming_meta: AttachmentMeta,
+        previous_meta: Option<AttachmentMeta>,
+        victim_ids: Vec<String>,
+    ) -> super::AttachmentQuotaTransaction {
+        super::AttachmentQuotaTransaction {
+            version: super::ATTACHMENT_QUOTA_TRANSACTION_VERSION,
+            tenant: tenant.as_str().to_owned(),
+            incoming_meta,
+            previous_meta,
+            victim_ids,
+        }
+    }
+    fn persist_canonical_test_attachment(
+        tenant: &super::AttachmentTenant,
+        body: &[u8],
+        created_ms: u64,
+    ) -> AttachmentMeta {
+        let mut meta = canonical_test_meta(tenant, body);
+        meta.created_ms = created_ms;
+        super::persist_body(tenant, &meta.id, body).expect("persist canonical attachment body");
+        super::save_meta(tenant, &meta).expect("persist canonical attachment metadata");
+        meta
+    }
+    fn padded_json_body(tenant: &str, index: usize, target_len: usize) -> Vec<u8> {
+        let prefix = format!(r#"{{"tenant":"{tenant}","index":{index},"padding":""#);
+        let suffix = r#""}"#;
+        assert!(prefix.len() + suffix.len() <= target_len);
+        let mut body = prefix;
+        body.push_str(&"x".repeat(target_len - body.len() - suffix.len()));
+        body.push_str(suffix);
+        assert_eq!(body.len(), target_len);
+        body.into_bytes()
+    }
     fn load_fixture_base64(name: &str) -> Vec<u8> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
@@ -2539,6 +3496,8 @@ mod tests {
                 1024,
                 10,
                 4096,
+                20,
+                8192,
                 vec![
                     super::NORITO_MIME_TYPE.to_string(),
                     super::JSON_MIME_TYPE.to_string(),
@@ -2638,6 +3597,7 @@ mod tests {
         let tenant = super::AttachmentTenant::anonymous();
         let body = br#"{"valid":true}"#;
         let meta = canonical_test_meta(&tenant, body);
+        super::persist_body(&tenant, &meta.id, body).expect("persist canonical body");
         super::save_meta(&tenant, &meta).expect("persist canonical metadata");
         assert_eq!(
             super::load_meta(&tenant, &meta.id),
@@ -2730,6 +3690,8 @@ mod tests {
             terminal: true,
             retry_not_before_ms: None,
             retry_count: 0,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
         };
         assert!(
             super::persist_prover_processing_receipt_if_referenced(&receipt)
@@ -2776,6 +3738,8 @@ mod tests {
             terminal: true,
             retry_not_before_ms: None,
             retry_count: 0,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
         };
         assert!(
             super::persist_prover_processing_receipt_if_referenced(&receipt)
@@ -2815,6 +3779,8 @@ mod tests {
             terminal: true,
             retry_not_before_ms: None,
             retry_count: 0,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
         };
         assert!(
             super::persist_prover_processing_receipt_if_referenced(&receipt)
@@ -2859,6 +3825,8 @@ mod tests {
             terminal: true,
             retry_not_before_ms: None,
             retry_count: 0,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
         };
         assert!(
             super::persist_prover_processing_receipt_if_referenced(&receipt)
@@ -2911,6 +3879,8 @@ mod tests {
             terminal: false,
             retry_not_before_ms: Some(1_000),
             retry_count: 3,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
         };
         assert!(
             super::persist_prover_processing_receipt_if_referenced(&receipt)
@@ -3469,6 +4439,470 @@ mod tests {
         assert_eq!(provenance.sanitizer.archive_depth, 0);
     }
     #[tokio::test]
+    async fn compressed_attachment_cannot_expand_beyond_per_item_storage_cap() {
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        ensure_test_config();
+        let tenant = super::AttachmentTenant::anonymous();
+        let expanded = format!(r#"{{"padding":"{}"}}"#, "x".repeat(2_000)).into_bytes();
+        assert!(expanded.len() > super::max_bytes_cfg());
+        assert!(expanded.len() as u64 <= super::max_expanded_bytes_cfg());
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder
+            .write_all(&expanded)
+            .expect("compress oversized canonical attachment");
+        let compressed = encoder.finish().expect("finish attachment compression");
+        assert!(compressed.len() <= super::max_bytes_cfg());
+
+        let response = super::handle_post_attachment(
+            tenant.clone(),
+            HeaderMap::new(),
+            axum::body::Bytes::from(compressed),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(
+            super::list_all_ids(&tenant).is_empty(),
+            "an expanded body above the per-item cap must not be persisted"
+        );
+        assert!(
+            !super::attachments_dir(&tenant).exists(),
+            "a rejected expanded body must not leave a tenant directory"
+        );
+    }
+    #[test]
+    fn quota_transaction_validation_rejects_duplicate_and_unbounded_victim_sets() {
+        let tenant = super::AttachmentTenant("a".repeat(super::TENANT_KEY_HEX_LEN));
+        let incoming = canonical_test_meta(&tenant, br#"{"incoming":true}"#);
+        let victim = "b".repeat(super::ATTACHMENT_ID_HEX_LEN);
+        let duplicate = quota_transaction(
+            &tenant,
+            incoming.clone(),
+            None,
+            vec![victim.clone(), victim.clone()],
+        );
+        assert_eq!(
+            super::validate_attachment_quota_transaction(&duplicate)
+                .expect_err("duplicate victims must be rejected")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        let too_many = quota_transaction(
+            &tenant,
+            incoming,
+            None,
+            vec![
+                victim;
+                usize::try_from(super::ATTACHMENT_META_SCAN_MAX_FILES)
+                    .expect("test scan bound fits usize")
+                    + 1
+            ],
+        );
+        assert_eq!(
+            super::validate_attachment_quota_transaction(&too_many)
+                .expect_err("unbounded victim sets must be rejected")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+    #[test]
+    fn quota_recovery_rejects_oversized_journal_without_mutating_attachments() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        ensure_test_config();
+        let tenant = super::AttachmentTenant::from_account(&checked_attachment_account(0x57));
+        let victim = persist_canonical_test_attachment(&tenant, br#"{"victim":"untouched"}"#, 1);
+        super::ensure_attachment_quota_transaction_dir_durable()
+            .expect("create durable transaction directory");
+        fs::write(
+            super::attachment_quota_transaction_path(),
+            vec![
+                b'x';
+                usize::try_from(super::ATTACHMENT_QUOTA_TRANSACTION_MAX_BYTES)
+                    .expect("test journal bound fits usize")
+                    + 1
+            ],
+        )
+        .expect("write oversized quota journal");
+
+        assert!(super::recover_attachment_quota_transaction().is_err());
+        assert!(
+            !super::init_persistence(),
+            "startup recovery failure must be visible to worker orchestration"
+        );
+        assert!(super::meta_path(&tenant, &victim.id).is_file());
+        assert!(super::bin_path(&tenant, &victim.id).is_file());
+        assert!(super::attachment_quota_transaction_path().is_file());
+    }
+    #[test]
+    fn quota_recovery_rolls_back_partial_incoming_and_preserves_victims() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        ensure_test_config();
+        let tenant = super::AttachmentTenant::from_account(&checked_attachment_account(0x54));
+        let victim_body = br#"{"victim":"preserved"}"#;
+        let victim = persist_canonical_test_attachment(&tenant, victim_body, 1);
+        let incoming_body = br#"{"incoming":"partial"}"#;
+        let incoming = canonical_test_meta(&tenant, incoming_body);
+        let transaction =
+            quota_transaction(&tenant, incoming.clone(), None, vec![victim.id.clone()]);
+        super::persist_attachment_quota_transaction(&transaction)
+            .expect("persist quota transaction intent");
+        super::persist_body(&tenant, &incoming.id, incoming_body)
+            .expect("persist only the incoming body phase");
+
+        assert!(
+            super::recover_attachment_quota_transaction().expect("recover partial transaction")
+        );
+        assert!(super::meta_path(&tenant, &victim.id).is_file());
+        assert!(super::bin_path(&tenant, &victim.id).is_file());
+        assert!(!super::meta_path(&tenant, &incoming.id).exists());
+        assert!(!super::bin_path(&tenant, &incoming.id).exists());
+        assert!(!super::attachment_quota_transaction_path().exists());
+    }
+    #[test]
+    fn quota_recovery_restores_previous_metadata_for_partial_repost() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        ensure_test_config();
+        let tenant = super::AttachmentTenant::from_account(&checked_attachment_account(0x55));
+        let victim =
+            persist_canonical_test_attachment(&tenant, br#"{"victim":"preserved-on-repost"}"#, 1);
+        let incoming_body = br#"{"incoming":"same-id-repost"}"#;
+        let previous = persist_canonical_test_attachment(&tenant, incoming_body, 2);
+        let mut replacement = previous.clone();
+        replacement.created_ms = 3;
+        let transaction = quota_transaction(
+            &tenant,
+            replacement,
+            Some(previous.clone()),
+            vec![victim.id.clone()],
+        );
+        super::persist_attachment_quota_transaction(&transaction)
+            .expect("persist repost quota transaction intent");
+        super::persist_body(&tenant, &previous.id, incoming_body)
+            .expect("persist repost body phase only");
+
+        assert!(super::recover_attachment_quota_transaction().expect("recover partial repost"));
+        assert_eq!(super::load_meta(&tenant, &previous.id), Some(previous));
+        assert!(super::meta_path(&tenant, &victim.id).is_file());
+        assert!(super::bin_path(&tenant, &victim.id).is_file());
+        assert!(!super::attachment_quota_transaction_path().exists());
+    }
+    #[test]
+    fn quota_recovery_finalizes_evictions_after_complete_incoming_commit() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        ensure_test_config();
+        let tenant = super::AttachmentTenant::from_account(&checked_attachment_account(0x56));
+        let victim = persist_canonical_test_attachment(&tenant, br#"{"victim":"evicted"}"#, 1);
+        let incoming_body = br#"{"incoming":"complete"}"#;
+        let incoming = canonical_test_meta(&tenant, incoming_body);
+        let transaction =
+            quota_transaction(&tenant, incoming.clone(), None, vec![victim.id.clone()]);
+        super::persist_attachment_quota_transaction(&transaction)
+            .expect("persist quota transaction intent");
+        super::persist_body(&tenant, &incoming.id, incoming_body).expect("persist incoming body");
+        super::save_meta(&tenant, &incoming).expect("persist incoming metadata");
+
+        assert!(
+            super::recover_attachment_quota_transaction().expect("recover complete transaction")
+        );
+        assert!(super::meta_path(&tenant, &incoming.id).is_file());
+        assert!(super::bin_path(&tenant, &incoming.id).is_file());
+        assert!(!super::meta_path(&tenant, &victim.id).exists());
+        assert!(!super::bin_path(&tenant, &victim.id).exists());
+        assert!(!super::attachment_quota_transaction_path().exists());
+    }
+    #[tokio::test]
+    async fn global_count_quota_evicts_only_the_submitting_tenant() {
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        ensure_test_config();
+        let first = super::AttachmentTenant::from_account(&checked_attachment_account(0x51));
+        let second = super::AttachmentTenant::from_account(&checked_attachment_account(0x52));
+        let third = super::AttachmentTenant::from_account(&checked_attachment_account(0x53));
+
+        let mut first_oldest = None;
+        for index in 0..10 {
+            let body = format!(r#"{{"tenant":"first","index":{index}}}"#).into_bytes();
+            let meta = persist_canonical_test_attachment(
+                &first,
+                &body,
+                u64::try_from(index).expect("test index fits u64") + 1,
+            );
+            if index == 0 {
+                first_oldest = Some(meta.id);
+            }
+        }
+        for index in 0..10 {
+            let body = format!(r#"{{"tenant":"second","index":{index}}}"#).into_bytes();
+            persist_canonical_test_attachment(
+                &second,
+                &body,
+                u64::try_from(index).expect("test index fits u64") + 100,
+            );
+        }
+        let second_before = super::list_all_ids(&second)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        let response = super::handle_post_attachment(
+            first.clone(),
+            headers.clone(),
+            axum::body::Bytes::from_static(br#"{"tenant":"first","index":10}"#),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(super::list_all_ids(&first).len(), 10);
+        assert!(
+            !super::meta_path(&first, &first_oldest.expect("oldest first-tenant id")).exists(),
+            "the submitting tenant's oldest entry should make room"
+        );
+        assert_eq!(
+            super::list_all_ids(&second)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            second_before,
+            "same-tenant replacement must not evict another tenant"
+        );
+        let first_before_rejection = super::list_all_ids(&first)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        let response = super::handle_post_attachment(
+            third.clone(),
+            headers,
+            axum::body::Bytes::from_static(br#"{"tenant":"third","index":0}"#),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(super::list_all_ids(&third).is_empty());
+        assert_eq!(
+            super::list_all_ids(&first)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            first_before_rejection,
+            "global exhaustion must reject before deleting another tenant's data"
+        );
+        assert_eq!(
+            super::list_all_ids(&second)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            second_before,
+            "global exhaustion must preserve all non-submitting tenants"
+        );
+    }
+    #[tokio::test]
+    async fn quota_victims_survive_incoming_persistence_failure() {
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        ensure_test_config();
+        let tenant = super::AttachmentTenant::from_account(&checked_attachment_account(0x5a));
+        for index in 0..10 {
+            let body = format!(r#"{{"retained":{index}}}"#).into_bytes();
+            persist_canonical_test_attachment(
+                &tenant,
+                &body,
+                u64::try_from(index).expect("test index fits u64") + 1,
+            );
+        }
+        let retained_before = super::list_all_ids(&tenant)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let incoming = br#"{"incoming":"must-fail-before-eviction"}"#;
+        let incoming_id = canonical_test_meta(&tenant, incoming).id;
+        fs::create_dir(super::bin_path(&tenant, &incoming_id))
+            .expect("install a real filesystem persistence failure");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+
+        let response = super::handle_post_attachment(
+            tenant.clone(),
+            headers,
+            axum::body::Bytes::from_static(incoming),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            super::list_all_ids(&tenant)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            retained_before,
+            "a failed incoming write must not delete any planned quota victim"
+        );
+        assert!(!super::meta_path(&tenant, &incoming_id).exists());
+        assert!(
+            super::bin_path(&tenant, &incoming_id).is_dir(),
+            "the injected directory should be the only incoming-path artifact"
+        );
+    }
+    #[tokio::test]
+    async fn quota_eviction_failure_returns_error_and_retains_recovery_intent() {
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        ensure_test_config();
+        let tenant = super::AttachmentTenant::from_account(&checked_attachment_account(0x5b));
+        let mut oldest = None;
+        for index in 0..10 {
+            let body = format!(r#"{{"retained":{index}}}"#).into_bytes();
+            let meta = persist_canonical_test_attachment(
+                &tenant,
+                &body,
+                u64::try_from(index).expect("test index fits u64") + 1,
+            );
+            if index == 0 {
+                oldest = Some(meta.id);
+            }
+        }
+        let oldest = oldest.expect("oldest quota victim");
+        let victim_body = super::bin_path(&tenant, &oldest);
+        fs::remove_file(&victim_body).expect("replace victim body with deletion fault");
+        fs::create_dir(&victim_body).expect("create victim body obstruction");
+        let obstruction = victim_body.join("still-present");
+        fs::write(&obstruction, b"block deletion").expect("write deletion obstruction");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        let incoming = br#"{"incoming":"durable-before-eviction"}"#;
+        let incoming_id = canonical_test_meta(&tenant, incoming).id;
+
+        let response = super::handle_post_attachment(
+            tenant.clone(),
+            headers,
+            axum::body::Bytes::from_static(incoming),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(super::meta_path(&tenant, &incoming_id).is_file());
+        assert!(super::bin_path(&tenant, &incoming_id).is_file());
+        assert!(
+            super::attachment_quota_transaction_path().is_file(),
+            "failed eviction must retain its durable recovery intent"
+        );
+
+        fs::remove_file(&obstruction).expect("remove deletion obstruction file");
+        fs::remove_dir(&victim_body).expect("remove deletion obstruction directory");
+        assert!(
+            super::recover_attachment_quota_transaction()
+                .expect("retry durable quota eviction after fault repair")
+        );
+        assert!(!super::attachment_quota_transaction_path().exists());
+        assert!(!super::meta_path(&tenant, &oldest).exists());
+        assert!(!super::bin_path(&tenant, &oldest).exists());
+        assert_eq!(super::list_all_ids(&tenant).len(), 10);
+    }
+    #[tokio::test]
+    async fn global_byte_quota_rejects_cross_tenant_growth_without_eviction() {
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        ensure_test_config();
+        let first = super::AttachmentTenant::from_account(&checked_attachment_account(0x61));
+        let second = super::AttachmentTenant::from_account(&checked_attachment_account(0x62));
+        let third = super::AttachmentTenant::from_account(&checked_attachment_account(0x63));
+        for index in 0..4 {
+            let body = padded_json_body("first", index, 1_000);
+            persist_canonical_test_attachment(
+                &first,
+                &body,
+                u64::try_from(index).expect("test index fits u64") + 1,
+            );
+            let body = padded_json_body("second", index, 1_000);
+            persist_canonical_test_attachment(
+                &second,
+                &body,
+                u64::try_from(index).expect("test index fits u64") + 100,
+            );
+        }
+        let first_before = super::list_all_ids(&first)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let second_before = super::list_all_ids(&second)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        let response = super::handle_post_attachment(
+            third.clone(),
+            headers,
+            axum::body::Bytes::from(padded_json_body("third", 0, 300)),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(super::list_all_ids(&third).is_empty());
+        assert_eq!(
+            super::list_all_ids(&first)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            first_before
+        );
+        assert_eq!(
+            super::list_all_ids(&second)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            second_before
+        );
+    }
+    #[tokio::test]
+    async fn attachment_tenant_churn_does_not_leave_empty_quota_directories() {
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        ensure_test_config();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        for index in 0_u8..32 {
+            let tenant = super::AttachmentTenant::from_account(&checked_attachment_account(
+                index.saturating_add(0x80),
+            ));
+            let body = format!(r#"{{"tenant_churn":{index}}}"#).into_bytes();
+            let id = canonical_test_meta(&tenant, &body).id;
+            let response = super::handle_post_attachment(
+                tenant.clone(),
+                headers.clone(),
+                axum::body::Bytes::from(body),
+            )
+            .await
+            .into_response();
+            assert_eq!(response.status(), StatusCode::CREATED);
+            assert!(super::attachments_dir(&tenant).is_dir());
+
+            let response = super::handle_delete_attachment(tenant.clone(), axum::extract::Path(id))
+                .await
+                .into_response();
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+            assert!(
+                !super::attachments_dir(&tenant).exists(),
+                "deleted tenant {index} left an empty quota directory"
+            );
+        }
+        assert_eq!(
+            fs::read_dir(super::attachments_root_dir())
+                .expect("read attachment root after churn")
+                .count(),
+            0,
+            "tenant churn must not accumulate unaccounted root entries"
+        );
+    }
+    #[tokio::test]
     async fn same_id_repost_at_quota_preserves_processing_receipt() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
@@ -3516,6 +4950,8 @@ mod tests {
                     terminal: true,
                     retry_not_before_ms: None,
                     retry_count: 0,
+                    completed_proof_indices: Vec::new(),
+                    processing_context_hash: None,
                 }
             )
             .expect("persist terminal processing receipt")
@@ -3539,6 +4975,85 @@ mod tests {
             super::prover_processing_decision(&target_meta.id, u64::MAX),
             super::ProverProcessingDecision::Suppress,
             "reposting identical content must not evict its durable processing state"
+        );
+    }
+    #[tokio::test]
+    async fn gc_rechecks_expiry_after_waiting_for_a_repost() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        ensure_test_config();
+        let tenant = super::AttachmentTenant::anonymous();
+        let body = br#"{"attachment":"gc-race"}"#.to_vec();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        let response =
+            super::handle_post_attachment(tenant.clone(), headers, axum::body::Bytes::from(body))
+                .await
+                .into_response();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let meta_bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("attachment response")
+            .to_bytes();
+        let mut meta: AttachmentMeta =
+            json::from_json(std::str::from_utf8(&meta_bytes).expect("attachment metadata UTF-8"))
+                .expect("attachment metadata JSON");
+        meta.created_ms = 0;
+        super::save_meta(&tenant, &meta).expect("mark attachment as initially expired");
+        assert!(
+            super::persist_prover_processing_receipt_if_referenced(
+                &super::ProverProcessingReceipt {
+                    version: super::ZK_PROVER_PROCESSING_STATE_VERSION,
+                    id: meta.id.clone(),
+                    processed_ms: 1,
+                    terminal: true,
+                    retry_not_before_ms: None,
+                    retry_count: 0,
+                    completed_proof_indices: Vec::new(),
+                    processing_context_hash: None,
+                }
+            )
+            .expect("persist terminal processing receipt")
+        );
+
+        let mutation_guard = super::quota_lock().lock().await;
+        let gc_tenant = tenant.clone();
+        let gc_id = meta.id.clone();
+        let (before_lock_tx, before_lock_rx) = tokio::sync::oneshot::channel();
+        let gc = tokio::spawn(async move {
+            super::delete_attachment_if_expired_with_before_lock(
+                &gc_tenant,
+                &gc_id,
+                Duration::from_secs(60),
+                move || {
+                    let _ = before_lock_tx.send(());
+                },
+            )
+            .await
+        });
+        before_lock_rx
+            .await
+            .expect("GC task reaches the shared mutation lock");
+        meta.created_ms = super::now_ms();
+        super::save_meta(&tenant, &meta).expect("refresh attachment metadata during repost");
+        drop(mutation_guard);
+
+        assert!(
+            !gc.await
+                .expect("GC task joins")
+                .expect("GC recheck succeeds"),
+            "GC must not delete content refreshed while it waited for the mutation lock"
+        );
+        assert!(super::meta_path(&tenant, &meta.id).is_file());
+        assert!(super::bin_path(&tenant, &meta.id).is_file());
+        assert_eq!(
+            super::prover_processing_decision(&meta.id, u64::MAX),
+            super::ProverProcessingDecision::Suppress
         );
     }
     #[tokio::test]

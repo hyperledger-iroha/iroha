@@ -845,8 +845,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 444:
-        errors.append("internal release-regression seal must contain exactly 444 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 447:
+        errors.append("internal release-regression seal must contain exactly 447 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1274,9 +1274,10 @@ def _production_liveness_release_inventory_errors(
             let _ = adapter.drain_effects(usize::MAX);
             adapter
                 .schedule_retransmission()
-                .expect("schedule exact missing-certificate discovery");
+                .expect("schedule the first exact missing-certificate discovery round");
+            let first_round = adapter.drain_effects(usize::MAX);
             assert!(
-                adapter.drain_effects(usize::MAX).iter().any(|effect| {
+                first_round.iter().any(|effect| {
                     matches!(
                         effect,
                         V2LaneWorkEffect::PostLaneBlock {
@@ -1287,9 +1288,25 @@ def _production_liveness_release_inventory_errors(
                 }),
                 "the rehydrated proposal must become a bounded certificate request source"
             );
+            adapter
+                .schedule_retransmission()
+                .expect("reissue exact discovery after the first round is dropped");
+            assert!(
+                adapter.drain_effects(usize::MAX).iter().any(|effect| {
+                    matches!(
+                        effect,
+                        V2LaneWorkEffect::PostLaneBlock {
+                            message: BlockMessage::LaneBlockProposal(pending),
+                            ..
+                        } if pending == &proposal
+                    )
+                }),
+                "a dropped first discovery round must not make decided-lane recovery passive"
+            );
             """,
-            "late canonical lane recovery must expose one bounded exact "
-            "certificate-discovery source while the predecessor stays active",
+            "late canonical lane recovery must keep one bounded exact "
+            "certificate-discovery source live across a dropped round while the "
+            "predecessor stays active",
             errors,
         )
         _require_rust_token_sequence(
@@ -1412,7 +1429,7 @@ def _production_liveness_release_inventory_errors(
     if modules != list(_PRODUCTION_LIVENESS_RELEASE_MODULES):
         errors.append(
             f"{release_path}: production liveness modules must equal the reviewed "
-            f"ordered 43-module inventory; found {modules}"
+            f"ordered 44-module inventory; found {modules}"
         )
     inventory_rows = ["module\ttest"]
     inventory_has_exact_modules = True
@@ -1444,7 +1461,7 @@ def _production_liveness_release_inventory_errors(
     if leg_ids != expected_leg_ids or len(set(leg_ids)) != len(leg_ids):
         errors.append(
             f"{release_path}: production module leg IDs must equal the reviewed "
-            f"43-entry inventory; found {leg_ids}"
+            f"44-entry inventory; found {leg_ids}"
         )
     for _, module, expected_count in _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS:
         observed_count = sum(
@@ -2371,22 +2388,22 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current\ninventory to 864 tests across 43 modules.\n"
+            "current inventory to 863 tests across 44 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 864-test, 43-module inventory. The complete source-sealed\n"
+            "current 863-test,\n44-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current\nsource-bound inventory to 864 exact tests across 43 modules and "
-            f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network\nlegs.",
+            "current inventory to 863\nexact tests across 44 modules and "
+            f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
@@ -2400,7 +2417,7 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test `G-UNIT` receipt",
             "contain exactly "
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} unique required\n"
-            "tests: 316 core, 143 queue-journal, 13 configuration, eight data-model,\n"
+            "tests: 313 core, 142 queue-journal, 13 configuration, eight data-model,\n"
             "39 Torii, one Torii-shared, and two integration.",
             "both require that exact\n"
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row shape",

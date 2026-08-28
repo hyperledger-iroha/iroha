@@ -660,6 +660,542 @@ async fn zk_attachment_route_authenticates_before_decode_and_rejects_replay() {
     assert_eq!(replayed_error.code(), "query_validation_failed");
 }
 #[tokio::test]
+async fn oversized_hijiri_quote_keeps_canonical_account_private_cache_headers() {
+    use axum::{Router, routing::post};
+    use tower::ServiceExt as _;
+
+    async fn unreachable_handler() -> StatusCode {
+        panic!("oversized Hijiri quote must be rejected before handler dispatch")
+    }
+
+    let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+    let max_body_bytes =
+        iroha_torii_shared::validation_fee_api::VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1;
+    let router = Router::new()
+        .route("/v1/validation-fee/hijiri/quote", post(unreachable_handler))
+        .layer(axum::middleware::from_fn_with_state(
+            CanonicalAccountBodyAuthState {
+                app,
+                max_body_bytes,
+                missing_auth_code: "canonical_authentication_required",
+                missing_auth_message: "canonical account request authentication is required",
+            },
+            enforce_canonical_account_body_authentication,
+        ));
+    let response = router
+        .oneshot(
+            axum::http::Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/validation-fee/hijiri/quote")
+                .body(Body::from(vec![0_u8; max_body_bytes + 1]))
+                .expect("oversized Hijiri quote request"),
+        )
+        .await
+        .expect("oversized Hijiri quote response");
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        response.headers().get(axum::http::header::CACHE_CONTROL),
+        Some(&HeaderValue::from_static("private, no-store"))
+    );
+    assert_eq!(
+        response.headers().get(axum::http::header::VARY),
+        Some(&HeaderValue::from_static(
+            crate::content::CANONICAL_CONTENT_AUTH_VARY
+        ))
+    );
+    assert_eq!(
+        response.headers().get("x-iroha-reject-code"),
+        Some(&HeaderValue::from_static("request_payload_too_large"))
+    );
+    assert_eq!(
+        response.headers().get(axum::http::header::CONTENT_TYPE),
+        Some(&HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE))
+    );
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("oversized Hijiri quote error body")
+        .to_bytes();
+    let envelope = norito::decode_from_bytes::<super::ErrorEnvelope>(&body)
+        .expect("oversized Hijiri quote ErrorEnvelope");
+    assert_eq!(envelope.code(), "request_payload_too_large");
+}
+#[tokio::test]
+async fn zk_attachment_admission_precedes_body_polling_and_covers_handler_work() {
+    use axum::{Extension, Router, routing::post};
+    use tower::ServiceExt as _;
+
+    let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+        crate::app_auth::CanonicalRequestAuthConfig::default(),
+    );
+    let key_pair = checked_torii_test_ed25519_keypair(0x45, "ZK attachment admission fixture key");
+    let account_id = AccountId::new(key_pair.public_key().clone());
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+        crate::tests_runtime_handlers::world_with_account(&account_id),
+    );
+    let app_state = Arc::get_mut(&mut app).expect("unique attachment admission app state");
+    app_state.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+    app_state.proof_limits.body_read_timeout = Duration::from_millis(30);
+
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let probe_entered = Arc::clone(&entered);
+    let probe_release = Arc::clone(&release);
+    let router = Router::new()
+        .route(
+            "/v1/zk/attachments",
+            post(
+                move |Extension(_verified): Extension<
+                    crate::app_auth::VerifiedCanonicalRequest,
+                >,
+                      Extension(_admission): Extension<ProofBodyAdmissionLease>,
+                      _body: Bytes| {
+                    let entered = Arc::clone(&probe_entered);
+                    let release = Arc::clone(&probe_release);
+                    async move {
+                        entered.notify_one();
+                        release.notified().await;
+                        StatusCode::NO_CONTENT
+                    }
+                },
+            ),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            CanonicalAccountBodyAuthState {
+                app: app.clone(),
+                max_body_bytes: 1024,
+                missing_auth_code: "canonical_authentication_required",
+                missing_auth_message: "canonical account request authentication is required",
+            },
+            enforce_canonical_account_body_authentication,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            ProofBodyAdmissionState::new(app.clone(), 1024),
+            proof_body_admission_middleware,
+        ));
+    let method = axum::http::Method::POST;
+    let uri: axum::http::Uri = "/v1/zk/attachments".parse().expect("attachment URI");
+    let body = br#"{"attachment":"test"}"#;
+    let signed_request = || {
+        let headers = crate::tests_runtime_handlers::signed_app_headers(
+            &account_id,
+            &key_pair,
+            &method,
+            &uri,
+            body,
+        );
+        let mut request = axum::http::Request::builder()
+            .method(method.clone())
+            .uri(uri.clone())
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_vec()))
+            .expect("signed attachment request");
+        request.headers_mut().extend(headers);
+        request
+    };
+
+    let first_request = signed_request();
+    let first_router = router.clone();
+    let first = tokio::spawn(async move {
+        first_router
+            .oneshot(first_request)
+            .await
+            .expect("first attachment response")
+    });
+    tokio::time::timeout(Duration::from_secs(1), entered.notified())
+        .await
+        .expect("first attachment must reach handler work");
+    assert_eq!(app.proof_body_inflight.available_permits(), 0);
+
+    let body_that_must_not_be_polled = Body::from_stream(futures::stream::poll_fn(
+        |_context| -> std::task::Poll<Option<Result<Bytes, std::convert::Infallible>>> {
+            panic!("saturated attachment admission polled the request body")
+        },
+    ));
+    let saturated = router
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method(method.clone())
+                .uri(uri.clone())
+                .body(body_that_must_not_be_polled)
+                .expect("saturated attachment request"),
+        )
+        .await
+        .expect("saturated attachment response");
+    assert_eq!(saturated.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    release.notify_one();
+    assert_eq!(
+        first.await.expect("first attachment task").status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(app.proof_body_inflight.available_permits(), 1);
+
+    let oversized = router
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method(method.clone())
+                .uri(uri.clone())
+                .body(Body::from(vec![0_u8; 1025]))
+                .expect("oversized attachment request"),
+        )
+        .await
+        .expect("oversized attachment response");
+    assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let stalled =
+        futures::stream::pending::<std::result::Result<Bytes, std::convert::Infallible>>();
+    let timed_out = router
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method(method.clone())
+                .uri(uri.clone())
+                .body(Body::from_stream(stalled))
+                .expect("stalled attachment request"),
+        )
+        .await
+        .expect("stalled attachment response");
+    assert_eq!(timed_out.status(), StatusCode::REQUEST_TIMEOUT);
+
+    release.notify_one();
+    let accepted = router
+        .oneshot(signed_request())
+        .await
+        .expect("accepted attachment response");
+    assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+
+    let worker_entered = Arc::new(tokio::sync::Notify::new());
+    let worker_release = Arc::new(tokio::sync::Notify::new());
+    let worker_finished = Arc::new(tokio::sync::Notify::new());
+    let probe_worker_entered = Arc::clone(&worker_entered);
+    let probe_worker_release = Arc::clone(&worker_release);
+    let probe_worker_finished = Arc::clone(&worker_finished);
+    let cancellation_router = Router::new()
+        .route(
+            "/v1/zk/attachments",
+            post(
+                move |Extension(_verified): Extension<
+                    crate::app_auth::VerifiedCanonicalRequest,
+                >,
+                      Extension(admission): Extension<ProofBodyAdmissionLease>,
+                      _body: Bytes| {
+                    let entered = Arc::clone(&probe_worker_entered);
+                    let release = Arc::clone(&probe_worker_release);
+                    let finished = Arc::clone(&probe_worker_finished);
+                    async move {
+                        let runtime = tokio::runtime::Handle::current();
+                        tokio::task::spawn_blocking(move || {
+                            entered.notify_one();
+                            runtime.block_on(release.notified());
+                            drop(admission);
+                            finished.notify_one();
+                        })
+                        .await
+                        .expect("physical attachment worker");
+                        StatusCode::NO_CONTENT
+                    }
+                },
+            ),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            CanonicalAccountBodyAuthState {
+                app: app.clone(),
+                max_body_bytes: 1024,
+                missing_auth_code: "canonical_authentication_required",
+                missing_auth_message: "canonical account request authentication is required",
+            },
+            enforce_canonical_account_body_authentication,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            ProofBodyAdmissionState::new(app.clone(), 1024),
+            proof_body_admission_middleware,
+        ));
+    let cancellation_request = signed_request();
+    let cancellation = tokio::spawn(async move {
+        cancellation_router
+            .oneshot(cancellation_request)
+            .await
+            .expect("cancelled attachment response")
+    });
+    tokio::time::timeout(Duration::from_secs(1), worker_entered.notified())
+        .await
+        .expect("physical attachment worker must start");
+    assert_eq!(app.proof_body_inflight.available_permits(), 0);
+    cancellation.abort();
+    assert!(
+        cancellation
+            .await
+            .expect_err("request must be cancelled")
+            .is_cancelled()
+    );
+    assert_eq!(
+        app.proof_body_inflight.available_permits(),
+        0,
+        "HTTP cancellation must not release physical admission while detached work runs"
+    );
+    worker_release.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), worker_finished.notified())
+        .await
+        .expect("physical attachment worker must finish");
+    assert_eq!(app.proof_body_inflight.available_permits(), 1);
+}
+#[tokio::test]
+async fn cancelled_attachment_request_retains_admission_in_real_sanitizer_workers() {
+    use axum::{Router, routing::post};
+    use tower::ServiceExt as _;
+
+    let _data_dir = crate::test_utils::TestDataDirGuard::new();
+    let _auth_guard = crate::tests_runtime_handlers::app_auth_test_guard(
+        crate::app_auth::CanonicalRequestAuthConfig::default(),
+    );
+    let key_pair = checked_torii_test_ed25519_keypair(0x46, "ZK sanitizer cancellation key");
+    let account_id = AccountId::new(key_pair.public_key().clone());
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+        crate::tests_runtime_handlers::world_with_account(&account_id),
+    );
+    let app_state = Arc::get_mut(&mut app).expect("unique sanitizer cancellation app state");
+    app_state.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+    app_state.proof_limits.body_read_timeout = Duration::from_secs(1);
+    let method = axum::http::Method::POST;
+    let uri: axum::http::Uri = "/v1/zk/attachments".parse().expect("attachment URI");
+    let body = br#"{"attachment":"cancel-real-sanitizer"}"#;
+    let missing_sanitizer = _data_dir.path().join("missing-attachment-sanitizer");
+
+    for (mode, executable) in [
+        (
+            iroha_config::parameters::actual::AttachmentSanitizerMode::InProcess,
+            None,
+        ),
+        (
+            iroha_config::parameters::actual::AttachmentSanitizerMode::Subprocess,
+            Some(missing_sanitizer.clone()),
+        ),
+    ] {
+        let _mode_guard = crate::zk_attachments::set_sanitizer_mode_for_test(mode, executable);
+        let worker_entered = Arc::new(tokio::sync::Notify::new());
+        let (worker_release, release_rx) = std::sync::mpsc::channel();
+        let _worker_gate = crate::zk_attachments::install_sanitizer_worker_test_gate(
+            Arc::clone(&worker_entered),
+            release_rx,
+        );
+        let router = Router::new()
+            .route("/v1/zk/attachments", post(handler_zk_attachments_create))
+            .with_state(app.clone())
+            .layer(axum::middleware::from_fn_with_state(
+                CanonicalAccountBodyAuthState {
+                    app: app.clone(),
+                    max_body_bytes: 1024,
+                    missing_auth_code: "canonical_authentication_required",
+                    missing_auth_message: "canonical account request authentication is required",
+                },
+                enforce_canonical_account_body_authentication,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                ProofBodyAdmissionState::new(app.clone(), 1024),
+                proof_body_admission_middleware,
+            ));
+        let headers = crate::tests_runtime_handlers::signed_app_headers(
+            &account_id,
+            &key_pair,
+            &method,
+            &uri,
+            body,
+        );
+        let mut request = axum::http::Request::builder()
+            .method(method.clone())
+            .uri(uri.clone())
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_vec()))
+            .expect("signed attachment request");
+        request.headers_mut().extend(headers);
+        request.extensions_mut().insert(axum::extract::ConnectInfo(
+            "127.0.0.1:8080"
+                .parse::<std::net::SocketAddr>()
+                .expect("loopback socket"),
+        ));
+
+        let request_task = tokio::spawn(async move {
+            router
+                .oneshot(request)
+                .await
+                .expect("cancelled attachment response")
+        });
+        tokio::time::timeout(Duration::from_secs(1), worker_entered.notified())
+            .await
+            .expect("real sanitizer worker must start");
+        assert_eq!(app.proof_body_inflight.available_permits(), 0);
+        request_task.abort();
+        assert!(
+            request_task
+                .await
+                .expect_err("attachment request must be cancelled")
+                .is_cancelled()
+        );
+        assert_eq!(
+            app.proof_body_inflight.available_permits(),
+            0,
+            "{mode:?} worker must retain admission after HTTP cancellation"
+        );
+        worker_release
+            .send(())
+            .expect("release real sanitizer worker");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while app.proof_body_inflight.available_permits() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("real sanitizer worker must eventually release admission");
+        assert_eq!(app.proof_body_inflight.available_permits(), 1);
+    }
+}
+#[tokio::test]
+async fn cancelled_attachment_get_retains_admission_in_real_sanitizer_worker() {
+    use std::io::Write as _;
+
+    use axum::{Router, response::IntoResponse as _, routing::get};
+    use flate2::{Compression, write::GzEncoder};
+    use http_body_util::BodyExt as _;
+    use tower::ServiceExt as _;
+
+    let _data_dir = crate::test_utils::TestDataDirGuard::new();
+    let _auth_guard = crate::tests_runtime_handlers::app_auth_test_guard(
+        crate::app_auth::CanonicalRequestAuthConfig::default(),
+    );
+    let key_pair = checked_torii_test_ed25519_keypair(0x47, "ZK export cancellation key");
+    let account_id = AccountId::new(key_pair.public_key().clone());
+    let tenant = crate::zk_attachments::AttachmentTenant::from_account(&account_id);
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+        crate::tests_runtime_handlers::world_with_account(&account_id),
+    );
+    let app_state = Arc::get_mut(&mut app).expect("unique export cancellation app state");
+    app_state.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+    app_state.proof_limits.body_read_timeout = Duration::from_secs(1);
+    let _mode_guard = crate::zk_attachments::set_sanitizer_mode_for_test(
+        iroha_config::parameters::actual::AttachmentSanitizerMode::InProcess,
+        None,
+    );
+
+    let payload = br#"{"attachment":"compressed-export-cancellation"}"#;
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(payload).expect("compress attachment");
+    let compressed = encoder.finish().expect("finish attachment compression");
+    let mut upload_headers = HeaderMap::new();
+    upload_headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    let upload = crate::zk_attachments::handle_post_attachment(
+        tenant,
+        upload_headers,
+        Bytes::from(compressed),
+    )
+    .await
+    .into_response();
+    assert_eq!(upload.status(), StatusCode::CREATED);
+    let upload_body = upload
+        .into_body()
+        .collect()
+        .await
+        .expect("attachment metadata response")
+        .to_bytes();
+    let metadata = norito::json::from_json::<crate::zk_attachments::AttachmentMeta>(
+        std::str::from_utf8(&upload_body).expect("attachment metadata UTF-8"),
+    )
+    .expect("decode attachment metadata");
+    assert!(
+        metadata
+            .provenance
+            .as_ref()
+            .is_some_and(|provenance| provenance.sanitizer.archive_depth > 0),
+        "fixture must exercise export re-sanitization"
+    );
+
+    let worker_entered = Arc::new(tokio::sync::Notify::new());
+    let (worker_release, release_rx) = std::sync::mpsc::channel();
+    let _worker_gate = crate::zk_attachments::install_sanitizer_worker_test_gate(
+        Arc::clone(&worker_entered),
+        release_rx,
+    );
+    let router = Router::new()
+        .route("/v1/zk/attachments/{id}", get(handler_zk_attachment_get))
+        .with_state(app.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            CanonicalAccountBodyAuthState {
+                app: app.clone(),
+                max_body_bytes: 0,
+                missing_auth_code: "canonical_authentication_required",
+                missing_auth_message: "canonical account request authentication is required",
+            },
+            enforce_canonical_account_body_authentication,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            ProofBodyAdmissionState::new(app.clone(), 0),
+            proof_body_admission_middleware,
+        ));
+    let method = axum::http::Method::GET;
+    let uri: axum::http::Uri = format!("/v1/zk/attachments/{}", metadata.id)
+        .parse()
+        .expect("attachment export URI");
+    let headers = crate::tests_runtime_handlers::signed_app_headers(
+        &account_id,
+        &key_pair,
+        &method,
+        &uri,
+        b"",
+    );
+    let mut request = axum::http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(Body::empty())
+        .expect("signed attachment export request");
+    request.headers_mut().extend(headers);
+    request.extensions_mut().insert(axum::extract::ConnectInfo(
+        "127.0.0.1:8080"
+            .parse::<std::net::SocketAddr>()
+            .expect("loopback socket"),
+    ));
+
+    let request_task = tokio::spawn(async move {
+        router
+            .oneshot(request)
+            .await
+            .expect("cancelled attachment export response")
+    });
+    tokio::time::timeout(Duration::from_secs(1), worker_entered.notified())
+        .await
+        .expect("real export sanitizer worker must start");
+    assert_eq!(app.proof_body_inflight.available_permits(), 0);
+    request_task.abort();
+    assert!(
+        request_task
+            .await
+            .expect_err("attachment export request must be cancelled")
+            .is_cancelled()
+    );
+    assert_eq!(
+        app.proof_body_inflight.available_permits(),
+        0,
+        "export sanitizer must retain admission after HTTP cancellation"
+    );
+    worker_release
+        .send(())
+        .expect("release real export sanitizer worker");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while app.proof_body_inflight.available_permits() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("real export sanitizer worker must eventually release admission");
+    assert_eq!(app.proof_body_inflight.available_permits(), 1);
+}
+#[tokio::test]
 async fn rpc_capabilities_reflect_transport_config() {
     let cfg = actual::NoritoRpcTransport {
             enabled: true,

@@ -7,6 +7,9 @@ import "./SccpExactTransferCodec.sol";
 
 interface ITairaXorExactEvmToken {
     function bridge() external view returns (address);
+    function decimals() external view returns (uint8);
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
     function mint(address to, uint256 value) external returns (bool);
     function burnFrom(address from, uint256 value) external returns (bool);
 }
@@ -35,6 +38,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         uint32 externalDomain;
         uint8 networkProfile;
         uint32 routeRevision;
+        uint256 maxWrappedSupply;
         uint256 externalChainId;
         bytes32 sourceLaneHash;
         bytes32 destinationLaneHash;
@@ -62,6 +66,7 @@ abstract contract TairaXorExactEvmSccpBridge {
     uint32 public immutable externalDomain;
     uint8 public immutable networkProfile;
     uint32 public immutable routeRevision;
+    uint256 public immutable maxWrappedSupply;
     uint256 public immutable externalChainId;
     bytes32 public immutable tokenCodeHash;
     bytes32 public immutable verifierCodeHash;
@@ -73,7 +78,7 @@ abstract contract TairaXorExactEvmSccpBridge {
     bytes32 public immutable routeConfigHash;
     bytes32 public immutable destinationBindingHash;
 
-    uint64 public transferNonce;
+    mapping(address => uint64) public transferNonces;
     mapping(bytes32 => bool) public usedSourceMessages;
     mapping(bytes32 => bool) public usedDestinationMessages;
     uint256 private reentrancyState = 1;
@@ -111,7 +116,8 @@ abstract contract TairaXorExactEvmSccpBridge {
         VerifierPolicyV1 memory configuredVerifierPolicy,
         uint32 configuredExternalDomain,
         uint8 configuredNetworkProfile,
-        uint32 configuredRouteRevision
+        uint32 configuredRouteRevision,
+        uint256 configuredMaxWrappedSupply
     ) {
         require(
             tokenAddress != address(0) && configuredVerifierPolicy.verifierAddress != address(0),
@@ -122,6 +128,10 @@ abstract contract TairaXorExactEvmSccpBridge {
         require(_profileDomain(configuredNetworkProfile) == configuredExternalDomain,
             "Profile/domain mismatch");
         require(configuredRouteRevision != 0, "Route revision is required");
+        require(
+            configuredMaxWrappedSupply != 0 && configuredMaxWrappedSupply <= MAX_U128,
+            "Invalid wrapped supply cap"
+        );
         require(
             configuredVerifierPolicy.semanticProofProfileHash != bytes32(0),
             "Semantic proof profile hash is required"
@@ -140,6 +150,8 @@ abstract contract TairaXorExactEvmSccpBridge {
 
         ITairaXorExactEvmToken configuredToken = ITairaXorExactEvmToken(tokenAddress);
         require(configuredToken.bridge() == address(this), "Token route mismatch");
+        require(configuredToken.decimals() == 18, "Unexpected token decimals");
+        require(configuredToken.totalSupply() == 0, "Token supply must start at zero");
         bytes32 actualTokenCodeHash = _codeHash(tokenAddress);
         require(actualTokenCodeHash != bytes32(0) && actualTokenCodeHash != EMPTY_CODE_HASH,
             "Token contract is required");
@@ -165,6 +177,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         deployment.externalDomain = configuredExternalDomain;
         deployment.networkProfile = configuredNetworkProfile;
         deployment.routeRevision = configuredRouteRevision;
+        deployment.maxWrappedSupply = configuredMaxWrappedSupply;
         deployment.externalChainId = expectedChainId;
         deployment.sourceLaneHash = inboundLaneHash;
         deployment.destinationLaneHash = outboundLaneHash;
@@ -174,6 +187,7 @@ abstract contract TairaXorExactEvmSccpBridge {
         externalDomain = configuredExternalDomain;
         networkProfile = configuredNetworkProfile;
         routeRevision = configuredRouteRevision;
+        maxWrappedSupply = configuredMaxWrappedSupply;
         externalChainId = expectedChainId;
         tokenCodeHash = actualTokenCodeHash;
         verifierCodeHash = configuredVerifierPolicy.verifierCodeHash;
@@ -204,7 +218,8 @@ abstract contract TairaXorExactEvmSccpBridge {
             keccak256(ASSET_ID),
             keccak256(_routeIdForDomain(deployment.externalDomain)),
             deployment.routeRevision,
-            TAIRA_TO_TOKEN_SCALE
+            TAIRA_TO_TOKEN_SCALE,
+            deployment.maxWrappedSupply
         ));
         return keccak256(abi.encode(
             ROUTE_CONFIG_SEPARATOR,
@@ -234,10 +249,11 @@ abstract contract TairaXorExactEvmSccpBridge {
             "Amount is not aligned to Taira scale");
         uint256 tairaAmount = tokenAmount / TAIRA_TO_TOKEN_SCALE;
         require(tairaAmount != 0 && tairaAmount <= MAX_U128, "Amount exceeds SCCP u128");
-        require(transferNonce != type(uint64).max, "Transfer nonce exhausted");
+        uint64 currentNonce = transferNonces[msg.sender];
+        require(currentNonce != type(uint64).max, "Transfer nonce exhausted");
         require(_codeHash(address(token)) == tokenCodeHash, "Token code changed");
 
-        uint64 nonce = transferNonce;
+        uint64 nonce = currentNonce;
         SccpExactTransferCodec.TransferFields memory fields;
         fields.sourceDomain = externalDomain;
         fields.destinationDomain = DOMAIN_SORA;
@@ -262,9 +278,9 @@ abstract contract TairaXorExactEvmSccpBridge {
         );
         require(!usedSourceMessages[messageId], "Source message already used");
 
-        transferNonce = nonce + 1;
+        transferNonces[msg.sender] = nonce + 1;
         usedSourceMessages[messageId] = true;
-        require(token.burnFrom(msg.sender, tokenAmount), "Token burn failed");
+        _mutateTokenExact(msg.sender, tokenAmount, false);
         emit SccpTransfer(
             sourceLaneHash,
             messageId,
@@ -302,8 +318,36 @@ abstract contract TairaXorExactEvmSccpBridge {
         uint256 tokenAmount = tairaAmount * TAIRA_TO_TOKEN_SCALE;
 
         usedDestinationMessages[messageId] = true;
-        require(token.mint(recipient, tokenAmount), "Token mint failed");
+        _mutateTokenExact(recipient, tokenAmount, true);
         emit TairaXorMintFinalized(messageId, recipient, tokenAmount, canonicalPayloadHash);
+    }
+
+    function _mutateTokenExact(address account, uint256 amount, bool minting) private {
+        uint256 expectedSupply = token.totalSupply();
+        uint256 expectedBalance = token.balanceOf(account);
+        if (minting) {
+            require(
+                amount <= maxWrappedSupply
+                    && expectedSupply <= maxWrappedSupply - amount,
+                "Wrapped supply cap exceeded"
+            );
+            require(
+                expectedSupply <= type(uint256).max - amount
+                    && expectedBalance <= type(uint256).max - amount
+            );
+            expectedSupply += amount;
+            expectedBalance += amount;
+            require(token.mint(account, amount), "Token mint failed");
+        } else {
+            require(expectedSupply >= amount && expectedBalance >= amount);
+            expectedSupply -= amount;
+            expectedBalance -= amount;
+            require(token.burnFrom(account, amount), "Token burn failed");
+        }
+        require(
+            token.totalSupply() == expectedSupply && token.balanceOf(account) == expectedBalance,
+            "Token delta mismatch"
+        );
     }
 
     function sourceEventDigest(bytes32 messageId, bytes32 canonicalPayloadHash)

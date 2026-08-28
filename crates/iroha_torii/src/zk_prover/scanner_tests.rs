@@ -21,8 +21,8 @@ fn store_scanner_attachment(tenant_key: &str, body: &[u8], content_type: &str) -
 
 #[test]
 fn scan_and_report_single_attachment() {
-    configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     // Create an attachment manually
     let body = fixture_attachment_bytes();
     let id = attachment_body_id(&body);
@@ -62,15 +62,29 @@ fn scan_and_report_single_attachment() {
 
 #[test]
 fn report_capacity_eviction_does_not_requeue_completed_attachment() {
-    configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     let body = fixture_attachment_bytes();
     let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
 
     let first = block_on_scan();
     assert_eq!(first.processed_reports, 1);
-    assert!(load_report(&id).expect("initial report").ok);
+    let initial_report = load_report(&id).expect("initial report");
+    assert!(initial_report.ok);
+    assert!(
+        persist_prover_processing_receipt_if_referenced(&ProverProcessingReceipt {
+            version: ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: id.clone(),
+            processed_ms: initial_report.processed_ms,
+            terminal: false,
+            retry_not_before_ms: Some(u64::MAX),
+            retry_count: 1,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
+        })
+        .expect("persist a simulated crash-window provisional receipt")
+    );
     assert_eq!(
         prover_processing_decision(&id, now_ms()),
         ProverProcessingDecision::Suppress
@@ -87,6 +101,12 @@ fn report_capacity_eviction_does_not_requeue_completed_attachment() {
         load_report(&id).is_none(),
         "capacity enforcement must evict the original report"
     );
+    assert!(
+        load_prover_processing_receipt(&id)
+            .expect("eviction-secured processing receipt")
+            .terminal,
+        "report eviction must finalize the committed disposition first"
+    );
 
     let second = block_on_scan();
     assert_eq!(
@@ -98,8 +118,8 @@ fn report_capacity_eviction_does_not_requeue_completed_attachment() {
 
 #[test]
 fn report_persistence_failure_leaves_a_retryable_provisional_receipt() {
-    configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     let body = fixture_attachment_bytes();
     let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
@@ -122,9 +142,9 @@ fn report_persistence_failure_leaves_a_retryable_provisional_receipt() {
 }
 
 #[test]
-fn successful_report_finalizes_a_due_provisional_receipt_without_reverification() {
-    configure_test_cfg(Vec::new());
+fn successful_report_finalizes_a_suppressed_provisional_receipt_without_reverification() {
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     let body = fixture_attachment_bytes();
     let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
@@ -137,8 +157,10 @@ fn successful_report_finalizes_a_due_provisional_receipt_without_reverification(
             id: id.clone(),
             processed_ms: report.processed_ms,
             terminal: false,
-            retry_not_before_ms: Some(0),
+            retry_not_before_ms: Some(u64::MAX),
             retry_count: 1,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
         })
         .expect("replace terminal receipt with crash-window fixture")
     );
@@ -156,8 +178,8 @@ fn successful_report_finalizes_a_due_provisional_receipt_without_reverification(
 
 #[test]
 fn failed_legacy_report_without_disposition_is_retried() {
-    configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     let body = fixture_attachment_bytes();
     let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
@@ -183,8 +205,8 @@ fn failed_legacy_report_without_disposition_is_retried() {
 
 #[test]
 fn malformed_report_file_does_not_suppress_processing() {
-    configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     let body = fixture_attachment_bytes();
     let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
@@ -198,8 +220,8 @@ fn malformed_report_file_does_not_suppress_processing() {
 
 #[test]
 fn committed_terminal_failure_repairs_a_due_provisional_receipt() {
-    configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     let body = fixture_attachment_bytes();
     let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
@@ -224,6 +246,8 @@ fn committed_terminal_failure_repairs_a_due_provisional_receipt() {
             terminal: false,
             retry_not_before_ms: Some(0),
             retry_count: 1,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
         })
         .expect("persist simulated pre-report provisional receipt")
     );
@@ -240,8 +264,8 @@ fn committed_terminal_failure_repairs_a_due_provisional_receipt() {
 
 #[test]
 fn cross_tenant_duplicate_uses_one_receipt_even_without_a_report() {
-    configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     let first_tenant = anon_tenant_key();
     let second_tenant = "4".repeat(TENANT_KEY_HEX_LEN);
     let body = fixture_attachment_bytes();
@@ -272,10 +296,172 @@ fn cross_tenant_duplicate_uses_one_receipt_even_without_a_report() {
         "the shared content receipt must remain authoritative without a report"
     );
 }
+
+#[test]
+fn retryable_mixed_list_reuses_successful_proof_results() {
+    let _env = TestDataDirGuard::new();
+    let tenant_key = anon_tenant_key();
+    let successful = fixture_attachment();
+    let mut retryable = successful.clone();
+    retryable.vk_ref = VerifyingKeyId::new("halo2/ipa", "temporarily-missing-vk");
+    let list = ProofAttachmentList::try_from(vec![successful, retryable])
+        .expect("two proofs fit the bounded attachment list");
+    let body = norito::encode_canonical(&list).expect("canonical attachment list");
+    let max_scan_bytes = u64::try_from(body.len())
+        .expect("test attachment length fits u64")
+        .saturating_add(TEST_SCAN_BUDGET_MARGIN_BYTES)
+        .max(ATTACHMENT_DISCOVERY_BYTES_PER_LOCATION.saturating_mul(8));
+    configure_test_cfg_with_state_and_scan_bytes(Vec::new(), fixture_state(), max_scan_bytes);
+    let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
+
+    let first = block_on_scan();
+    assert_eq!(first.processed_reports, 1);
+    assert_eq!(
+        proof_verification_attempt_count(),
+        1,
+        "only the verifier-eligible sibling reaches cryptographic verification"
+    );
+    let first_report = load_report(&id).expect("mixed-list retry report");
+    let first_processing = first_report
+        .processing
+        .as_ref()
+        .expect("processing disposition");
+    assert_eq!(first_processing.completed_proof_indices, vec![0]);
+    let first_context_hash = first_processing
+        .processing_context_hash
+        .clone()
+        .expect("a reusable proof result is bound to its verifier context");
+    assert!(
+        persist_prover_processing_receipt_if_referenced(&ProverProcessingReceipt {
+            version: ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: id.clone(),
+            processed_ms: first_report.processed_ms.saturating_sub(1),
+            terminal: false,
+            retry_not_before_ms: Some(0),
+            retry_count: 1,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
+        })
+        .expect("persist an older provisional receipt")
+    );
+    assert_eq!(
+        completed_proof_cache_for_retry(&id).indices,
+        vec![0],
+        "a committed retry report must win over its older provisional receipt"
+    );
+    let newer_context_hash = "b".repeat(64);
+    assert!(
+        persist_prover_processing_receipt_if_referenced(&ProverProcessingReceipt {
+            version: ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: id.clone(),
+            processed_ms: first_report.processed_ms.saturating_add(1),
+            terminal: false,
+            retry_not_before_ms: Some(0),
+            retry_count: 2,
+            completed_proof_indices: vec![0],
+            processing_context_hash: Some(newer_context_hash.clone()),
+        })
+        .expect("persist a newer in-flight checkpoint")
+    );
+    assert_eq!(
+        committed_report_processing_decision(&id, u64::MAX),
+        Some(ProverProcessingDecision::Due { retry_count: 2 }),
+        "an older committed retry report must not roll back a newer checkpoint"
+    );
+    let reconciled = load_prover_processing_receipt(&id).expect("reconciled retry receipt");
+    assert_eq!(reconciled.retry_count, 2);
+    assert_eq!(
+        reconciled.processing_context_hash.as_deref(),
+        Some(newer_context_hash.as_str())
+    );
+    {
+        let _guard = report_summary_lock().lock();
+        delete_report_files_locked(&id).expect("evict retry report");
+    }
+    assert!(
+        persist_prover_processing_receipt_if_referenced(&ProverProcessingReceipt {
+            version: ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: id.clone(),
+            processed_ms: first_report.processed_ms,
+            terminal: false,
+            retry_not_before_ms: Some(0),
+            retry_count: 1,
+            completed_proof_indices: vec![0],
+            processing_context_hash: Some(first_context_hash),
+        })
+        .expect("make the mixed-list retry immediately due")
+    );
+
+    let second = block_on_scan();
+    assert_eq!(second.processed_reports, 1);
+    assert_eq!(
+        proof_verification_attempt_count(),
+        1,
+        "a report eviction and retry must reuse successful sibling verification"
+    );
+    let second_report = load_report(&id).expect("second mixed-list retry report");
+    assert!(second_report.proofs[0].ok);
+    assert_eq!(
+        second_report.proofs[0].circuit_id.as_deref(),
+        Some(iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID),
+        "a cached proof report must preserve registry circuit attribution"
+    );
+    assert!(!second_report.proofs[1].ok);
+    let second_processing = second_report
+        .processing
+        .as_ref()
+        .expect("retry processing disposition");
+    assert_eq!(second_processing.completed_proof_indices, vec![0]);
+    let second_context_hash = second_processing
+        .processing_context_hash
+        .clone()
+        .expect("retry cache context hash");
+
+    {
+        let _guard = report_summary_lock().lock();
+        delete_report_files_locked(&id).expect("evict second retry report");
+    }
+    assert!(
+        persist_prover_processing_receipt_if_referenced(&ProverProcessingReceipt {
+            version: ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: id.clone(),
+            processed_ms: second_report.processed_ms,
+            terminal: false,
+            retry_not_before_ms: Some(0),
+            retry_count: 2,
+            completed_proof_indices: vec![0],
+            processing_context_hash: Some(second_context_hash.clone()),
+        })
+        .expect("make the second mixed-list retry immediately due")
+    );
+    let attempts_before_reconfigure = proof_verification_attempt_count();
+    let changed_state = fixture_state_with_vk_window_and_zk(None, None, |zk| {
+        zk.halo2.enabled = true;
+        zk.halo2.max_k = zk.halo2.max_k.saturating_add(1);
+    });
+    configure_test_cfg_with_state_and_scan_bytes(Vec::new(), changed_state, max_scan_bytes);
+    set_proof_verification_attempt_count(attempts_before_reconfigure);
+
+    let third = block_on_scan();
+    assert_eq!(third.processed_reports, 1);
+    assert_eq!(
+        proof_verification_attempt_count(),
+        attempts_before_reconfigure + 1,
+        "a verifier policy change must invalidate the cached success"
+    );
+    let third_report = load_report(&id).expect("third mixed-list retry report");
+    let third_context_hash = third_report
+        .processing
+        .as_ref()
+        .and_then(|processing| processing.processing_context_hash.as_ref())
+        .expect("recomputed retry context hash");
+    assert_ne!(third_context_hash, &second_context_hash);
+}
+
 #[test]
 fn attachment_file_loading_is_bounded_and_metadata_size_is_not_trusted() {
-    configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
     let oversized_id = format!("{:064x}", 0xBAD0u64);
@@ -331,8 +517,8 @@ fn attachment_file_loading_is_bounded_and_metadata_size_is_not_trusted() {
 }
 #[test]
 fn nonregular_attachment_body_produces_a_zero_read_rejection_report() {
-    init_test_cfg();
     let _env = TestDataDirGuard::new();
+    init_test_cfg();
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
     let id = format!("{:064x}", 0xBAD4u64);
@@ -378,8 +564,8 @@ fn nonregular_attachment_body_produces_a_zero_read_rejection_report() {
 #[test]
 fn attachment_body_secure_open_rejects_symlinks_without_reading() {
     use std::os::unix::fs::symlink;
-    init_test_cfg();
     let _env = TestDataDirGuard::new();
+    init_test_cfg();
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
     let id = format!("{:064x}", 0xBAD5u64);
@@ -402,8 +588,8 @@ fn attachment_body_secure_open_rejects_symlinks_without_reading() {
 #[test]
 fn attachment_body_secure_open_rejects_a_symlinked_tenant_anchor() {
     use std::os::unix::fs::symlink;
-    init_test_cfg();
     let env = TestDataDirGuard::new();
+    init_test_cfg();
     let tenant_key = anon_tenant_key();
     fs::create_dir_all(attachments_root_dir()).expect("create attachment root");
     let outside = env.path().join("outside-tenant");
@@ -425,8 +611,8 @@ fn attachment_body_secure_open_rejects_a_symlinked_tenant_anchor() {
 #[cfg(any(unix, windows))]
 #[test]
 fn attachment_body_secure_open_rejects_hard_links_without_reading() {
-    init_test_cfg();
     let _env = TestDataDirGuard::new();
+    init_test_cfg();
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
     let id = format!("{:064x}", 0xBAD7u64);
@@ -449,8 +635,8 @@ fn attachment_body_secure_open_rejects_hard_links_without_reading() {
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn attachment_body_secure_open_rejects_fifo_without_blocking_or_reading() {
-    init_test_cfg();
     let _env = TestDataDirGuard::new();
+    init_test_cfg();
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
     let id = format!("{:064x}", 0xBAD6u64);
@@ -470,8 +656,8 @@ fn attachment_body_secure_open_rejects_fifo_without_blocking_or_reading() {
 }
 #[test]
 fn attachment_body_loader_accepts_the_closed_eight_mib_boundary() {
-    init_test_cfg();
     let _env = TestDataDirGuard::new();
+    init_test_cfg();
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
     let id = format!("{:064x}", 0xBAD3u64);
@@ -496,8 +682,8 @@ fn attachment_body_loader_accepts_the_closed_eight_mib_boundary() {
 }
 #[test]
 fn immutable_snapshot_survives_path_replacement_without_reread() {
-    configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
     let body = fixture_attachment_bytes();
@@ -522,6 +708,8 @@ fn immutable_snapshot_survives_path_replacement_without_reread() {
         norito::json::to_json_pretty(&meta).expect("metadata JSON"),
     )
     .expect("write canonical attachment snapshot metadata");
+    ensure_prover_processing_reference(&tenant_key, &id)
+        .expect("scanner creates a durable live-content reference before snapshotting");
     let snapshot = match load_attachment_snapshot(&loc, body.len() as u64)
         .expect("snapshot files are present")
     {
@@ -543,8 +731,8 @@ fn immutable_snapshot_survives_path_replacement_without_reread() {
 }
 #[test]
 fn same_size_body_substitution_is_rejected_by_content_address() {
-    configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
     let body = fixture_attachment_bytes();
@@ -700,8 +888,8 @@ fn snapshot_metadata_and_provenance_invariants_fail_closed() {
 }
 #[test]
 fn first_release_scanner_ignores_retired_root_attachment_layout() {
-    init_test_cfg();
     let _env = TestDataDirGuard::new();
+    init_test_cfg();
     fs::create_dir_all(attachments_root_dir()).expect("create attachment root");
     let body = fixture_attachment_bytes();
     let id = attachment_body_id(&body);
@@ -935,8 +1123,8 @@ fn attachment_discovery_work_and_time_boundaries_do_not_consume_later_entries() 
 }
 #[test]
 fn oversized_first_attachment_cannot_starve_later_valid_work() {
-    configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
     let oversized_id = "0".repeat(ATTACHMENT_ID_HEX_LEN);
@@ -1000,8 +1188,8 @@ fn oversized_first_attachment_cannot_starve_later_valid_work() {
 }
 #[test]
 fn attachment_metadata_loading_rejects_oversized_files_before_parsing() {
-    init_test_cfg();
     let _env = TestDataDirGuard::new();
+    init_test_cfg();
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
     let id = format!("{:064x}", 0xBAD2u64);
@@ -1017,8 +1205,8 @@ fn attachment_metadata_loading_rejects_oversized_files_before_parsing() {
 }
 #[test]
 fn scan_respects_byte_budget() {
-    init_test_cfg();
     let _env = TestDataDirGuard::new();
+    init_test_cfg();
     let budget = super::cfg_max_scan_bytes().max(2);
     let budget = usize::try_from(budget).unwrap_or(usize::MAX);
     let first_size = budget.saturating_sub(1).max(1);
@@ -1056,8 +1244,8 @@ fn scan_respects_byte_budget() {
 }
 #[test]
 fn deferred_attachment_cannot_head_of_line_block_later_fitting_work() {
-    init_test_cfg();
     let _env = TestDataDirGuard::new();
+    init_test_cfg();
     let budget = cfg_max_scan_bytes();
     assert!(budget > 8, "test scan budget must leave a tail");
     let first_size = usize::try_from(budget - 4).expect("test budget fits usize");
@@ -1103,8 +1291,8 @@ fn snapshot_that_crosses_time_budget_is_charged_and_completed_once() {
     let body = fixture_attachment_bytes();
     let body_size = body.len() as u64;
     let max_scan_millis = 100;
-    configure_test_cfg(iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits());
     let _delay_reset = SnapshotLoadDelayReset;
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
@@ -1139,8 +1327,8 @@ fn snapshot_that_crosses_time_budget_is_charged_and_completed_once() {
 }
 #[test]
 fn scan_bounds_concurrency() {
-    init_test_cfg();
     let _env = TestDataDirGuard::new();
+    init_test_cfg();
     super::TEST_PROCESSING_DELAY_MS.store(50, AtomicOrdering::SeqCst);
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);
@@ -1176,8 +1364,8 @@ fn scan_bounds_concurrency() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn scan_once_handles_current_thread_runtime() {
-    init_test_cfg();
     let _env = TestDataDirGuard::new();
+    init_test_cfg();
     assert_eq!(super::scan_once(), 0);
 }
 #[test]
@@ -1215,8 +1403,8 @@ fn zk1_tlv_count_is_bounded_and_duplicate_tags_are_compacted() {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn background_worker_processes_pending_attachments() {
-    configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();
+    configure_test_cfg(Vec::new());
     // Prepare attachment directory with one valid proof attachment and one malformed ZK1 payload.
     let tenant_key = anon_tenant_key();
     ensure_tenant_dir(&tenant_key);

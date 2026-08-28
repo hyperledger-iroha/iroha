@@ -1291,7 +1291,7 @@ async fn start_network(
 }
 fn update_topology_and_peers_addresses<T>(network: &NetworkHandle<T>, peers: &[Peer])
 where
-    T: iroha_p2p::boilerplate::Pload + iroha_p2p::network::message::ClassifyTopic,
+    T: iroha_p2p::boilerplate::Pload + iroha_p2p::network::message::ClassifyTopic + Sync,
 {
     let topology = peers.iter().map(|peer| peer.id().clone()).collect();
     network.update_topology(UpdateTopology(topology));

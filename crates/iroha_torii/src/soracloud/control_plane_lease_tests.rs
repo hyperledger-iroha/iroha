@@ -7,8 +7,11 @@ fn fixture_control_plane_service_lease(
     let validator_peer_id = iroha_data_model::peer::PeerId::from(validator_public_key).to_string();
     SoraServiceLeaseStateV1 {
         schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
+        economic_clock:
+            iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
         status: SoraServiceLeaseStatusV1::Active,
         quota_class: "taira-open".to_owned(),
+        replica_count: std::num::NonZeroU16::new(4).expect("non-zero replica count"),
         deployment_deposit: "1".parse().expect("deployment deposit quantity"),
         prepaid_runtime_balance: "50".parse().expect("prepaid runtime quantity"),
         runtime_price_per_block: "0.00025".parse().expect("runtime price quantity"),
@@ -27,12 +30,14 @@ fn fixture_control_plane_service_lease(
                         service_version: service_version.to_owned(),
                         placement: iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
                             replica_slot: 1,
+                            economic_clock: iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                            lease_started_height: 1,
+                            placement_incarnation: Hash::new(b"control-plane-lease-placement"),
+                            host_availability: iroha_data_model::soracloud::SoraInrouReplicaHostAvailabilityV1::Available,
                             validator_account_id,
                             peer_id: validator_peer_id,
                             selected_guest_isa:
                                 iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
-                            selected_geography_tag: None,
-                            selection_latency_ms: None,
                         },
                         placement_reconciled_at_ms: 1,
                     },
@@ -65,7 +70,7 @@ fn control_plane_snapshot_projects_full_hosted_service_lease() -> Result<(), eyr
         &bundle,
     )
     .map_err(eyre::Report::msg)?;
-    let accounted_storage_bytes = deployment.accounted_storage_bytes();
+    let accounted_storage_bytes = deployment.accounted_storage_bytes()?;
     let mut invalid_deployment = deployment.clone();
     invalid_deployment
         .lease_volume_states
@@ -131,6 +136,7 @@ fn control_plane_audit_event_projects_lease_reporting_epoch_rollover() {
     event.from_version = Some(event.to_version.clone());
     let reporter_account_id = AccountId::new(event.signer.clone());
     let reporter_peer_id = iroha_data_model::peer::PeerId::from(event.signer.clone()).to_string();
+    let placement_incarnation = Hash::new(b"control-plane-rollover-placement");
     event.lease_usage = Some(iroha_data_model::soracloud::SoraServiceLeaseUsageAuditV1 {
         schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
         reporting_epoch: 4,
@@ -140,11 +146,15 @@ fn control_plane_audit_event_projects_lease_reporting_epoch_rollover() {
             service_version: event.to_version.clone(),
             placement: iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
                 replica_slot: 2,
+                economic_clock:
+                    iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                lease_started_height: 1,
+                placement_incarnation,
+                host_availability:
+                    iroha_data_model::soracloud::SoraInrouReplicaHostAvailabilityV1::Available,
                 validator_account_id: reporter_account_id.clone(),
                 peer_id: reporter_peer_id,
                 selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
-                selected_geography_tag: None,
-                selection_latency_ms: None,
             },
             placement_reconciled_at_ms: 1,
         },
@@ -155,12 +165,14 @@ fn control_plane_audit_event_projects_lease_reporting_epoch_rollover() {
     event.lease_reporting_epoch_rollover = Some(SoraServiceLeaseReportingEpochRolloverV1 {
         schema_version:
             iroha_data_model::soracloud::SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
+        economic_clock: iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
         lease_started_height: 1,
         previous_reporting_epoch: 3,
         new_reporting_epoch: 4,
         reporter_account_id,
         active_service_version: event.to_version.clone(),
         replica_slot: 2,
+        placement_incarnation,
         finalized_checkpoint_count: u32::try_from(
             iroha_data_model::soracloud::SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
         )

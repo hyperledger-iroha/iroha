@@ -21,6 +21,7 @@ use std::{
 use tokio::time::{sleep, timeout};
 const ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(15);
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "dormant until quinn-proto 0.11.17 per-entry DATAGRAM accounting is in the lockfile"]
 async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
     let vector = baseline_test_vector();
     let snapshot = vector
@@ -248,7 +249,7 @@ async fn run_viewer(
     }
     // Keep the viewer endpoint alive until the publisher closes so all chunk
     // acknowledgements are delivered before connection teardown.
-    let _ = client.connection().quic_connection().closed().await;
+    let _ = client.connection().closed().await;
     client.close().await;
     Ok((manifest, chunks))
 }

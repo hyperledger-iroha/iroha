@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -32,9 +33,18 @@ finally:
 
 REAL_REQUIRE_INROU_QUALIFICATION_HOST = module.require_inrou_qualification_host
 REAL_REQUIRE_SAFE_CLEANUP_TARGET = module.require_safe_cleanup_target
+REAL_RUN_LOCKED_INROU_OPERATOR_PRESEED_SESSION = (
+    module.run_locked_inrou_operator_preseed_session
+)
 FAKE_FAUCET_AUTHORITY = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uﾽoPGｱﾔnjﾑKﾋTCW2PV"
 FEE_QUOTE_AUTHORITY = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 OTHER_CANONICAL_AUTHORITY = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
+FAKE_VALIDATOR_AUTHORITIES = (
+    "test" + FEE_QUOTE_AUTHORITY.removeprefix("sora"),
+    "test" + OTHER_CANONICAL_AUTHORITY.removeprefix("sora"),
+    "testuﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+    "testuﾛ1PYﾛ9ｵﾆﾘﾐ3Yf8wﾜｿﾋﾉajｼｱ6eﾑbHｱﾜｶBｳdUｺcヰｲnﾌNP21YC",
+)
 FAKE_FAUCET_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 FAKE_FAUCET_AMOUNT = "25000"
 
@@ -201,7 +211,12 @@ def fake_prepared_payload(
             "fee_payment": fake_fee_payment(),
             "fee_quote": fake_fee_quote(),
         }
-    assert tag in {"inrou_bundle_pin", "inrou_guest_pin", "inrou_canary"}
+    assert tag in {
+        "inrou_bundle_pin",
+        "inrou_guest_pin",
+        "inrou_discovery_pin",
+        "inrou_canary",
+    }
     assert transaction_hash is not None
     return {
         "schema": "iroha.taira.prepared-soracloud-transaction.v1",
@@ -220,7 +235,7 @@ def fake_inrou_stage() -> dict[str, str]:
         "service_name": "taira_inrou_canary",
         "service_version": "artifact-" + "0" * 63 + "1",
         "route_host": module.INROU_CANARY_ROUTE_HOST_V1,
-        "route_path_prefix": "/api/v1",
+        "route_path_prefix": module.INROU_CANARY_ROUTE_PREFIX_V1,
         "healthcheck_path": module.INROU_CANARY_HEALTH_PATH_V1,
         "stage_mode": "deploy",
         "bundle_hash": "a" * 63 + "b",
@@ -228,6 +243,17 @@ def fake_inrou_stage() -> dict[str, str]:
         "bundle_manifest_digest_hex": "1" * 64,
         "guest_content_cid": "b" + "b" * 58,
         "guest_manifest_digest_hex": "2" * 64,
+        "discovery_payload_dir": str(module.INROU_STAGE_DISCOVERY_PAYLOAD),
+        "discovery_document_hash": "8" * 63 + "9",
+        "discovery_content_cid": "b" + "c" * 58,
+        "discovery_manifest_digest_hex": "9" * 64,
+        "public_discovery_url": (
+            "https://taira.sora.org/sorafs/cid/" + "b" + "c" * 58 + "/index.json"
+        ),
+        "public_discovery_cid_host_url": (
+            "https://" + "b" + "c" * 58 + ".sorafs.taira.sora.org/index.json"
+        ),
+        "deployment_bundle_hash": "d" * 63 + "f",
         "container_manifest_hash": "3" * 64,
         "service_manifest_hash": "4" * 63 + "5",
     }
@@ -239,6 +265,150 @@ def executable(path: Path, body: bytes = b"current binary\n") -> Path:
     path.write_bytes(body)
     path.chmod(0o700)
     return path
+
+
+def fake_inrou_operator_preseed_receipt(
+    command: tuple[str, ...],
+) -> dict[str, object]:
+    """Build the exact fake V1 ready receipt from one requested session."""
+
+    assert Path(command[0]).name == "sorafs-node"
+    assert command[1] == "preseed-session"
+    target_arguments = [
+        value.removeprefix("--target=")
+        for value in command
+        if value.startswith("--target=")
+    ]
+    assert len(target_arguments) == module.PEER_COUNT
+    targets = []
+    for target_argument in target_arguments:
+        authority, peer_id, store_root = target_argument.split(",", 2)
+        root = Path(store_root)
+        assert root.is_absolute() and root.is_dir()
+        targets.append(
+            {
+                "validator_account_id": authority,
+                "peer_id": peer_id,
+                "store_root": str(root),
+            }
+        )
+    capacity = next(
+        value.removeprefix("--max-capacity-bytes=")
+        for value in command
+        if value.startswith("--max-capacity-bytes=")
+    )
+    manifests = [
+        Path(value.removeprefix("--manifest="))
+        for value in command
+        if value.startswith("--manifest=")
+    ]
+    assert len(manifests) == 3
+    stage = json.loads(
+        (manifests[0].parent.parent / module.INROU_STAGE_RECEIPT_FILE).read_text(
+            encoding="utf-8"
+        )
+    )
+    return {
+        "schema_version": 1,
+        "status": "ready",
+        "mode": "ingest",
+        "max_capacity_bytes": int(capacity),
+        "targets": targets,
+        "artifacts": [
+            {
+                "manifest_digest_blake3": stage["bundle_manifest_digest_hex"],
+                "payload_digest_blake3": "5" * 64,
+                "content_length": 6,
+                "store_count": module.PEER_COUNT,
+            },
+            {
+                "manifest_digest_blake3": stage["guest_manifest_digest_hex"],
+                "payload_digest_blake3": "6" * 64,
+                "content_length": 6,
+                "store_count": module.PEER_COUNT,
+            },
+            {
+                "manifest_digest_blake3": stage["discovery_manifest_digest_hex"],
+                "payload_digest_blake3": "7" * 64,
+                "content_length": 6,
+                "store_count": module.PEER_COUNT,
+            },
+        ],
+    }
+
+
+class FakeProcessOps:
+    """Deterministic pidfd/procfs model for platform-independent lifecycle tests."""
+
+    def __init__(self) -> None:
+        self.observations: dict[int, dict[str, object]] = {}
+        self.process_commands: dict[int, str] = {}
+        self.handles: dict[int, int] = {}
+        self.next_handle = 500
+        self.signals: list[tuple[int, int]] = []
+        self.support_checks = 0
+
+    def require_supported(self) -> None:
+        self.support_checks += 1
+
+    def add(self, observation: dict[str, object]) -> None:
+        pid = int(observation["pid"])
+        self.observations[pid] = {
+            key: list(value) if key == "argv" else value
+            for key, value in observation.items()
+        }
+        self.process_commands[pid] = " ".join(observation["argv"])
+
+    def remove(self, pid: int) -> None:
+        self.observations.pop(pid, None)
+        self.process_commands.pop(pid, None)
+
+    def open_pidfd(self, pid: int) -> int | None:
+        if pid not in self.observations:
+            return None
+        descriptor = self.next_handle
+        self.next_handle += 1
+        self.handles[descriptor] = pid
+        return descriptor
+
+    def close_pidfd(self, descriptor: int) -> None:
+        if descriptor not in self.handles:
+            raise AssertionError(f"closing unknown fake pidfd {descriptor}")
+        del self.handles[descriptor]
+
+    def send_signal(self, descriptor: int, signal_number: int) -> bool:
+        pid = self.handles.get(descriptor)
+        if pid is None:
+            raise AssertionError(f"signaling unknown fake pidfd {descriptor}")
+        self.signals.append((pid, signal_number))
+        return pid in self.observations
+
+    def wait_readable(self, descriptor: int, timeout_seconds: float) -> bool:
+        del timeout_seconds
+        pid = self.handles.get(descriptor)
+        if pid is None:
+            raise AssertionError(f"waiting on unknown fake pidfd {descriptor}")
+        return pid not in self.observations
+
+    def observe(self, pid: int) -> dict[str, object] | None:
+        if pid not in self.handles.values():
+            raise AssertionError(f"observing fake process {pid} without a held pidfd")
+        observation = self.observations.get(pid)
+        command = self.process_commands.get(pid)
+        if observation is None or command is None:
+            return None
+        current = {
+            key: list(value) if key == "argv" else value
+            for key, value in observation.items()
+        }
+        argv = command.split()
+        current["argv"] = argv
+        if argv:
+            current["executable_path"] = argv[0]
+        return current
+
+    def process_ids(self) -> tuple[int, ...]:
+        return tuple(sorted(self.observations))
 
 
 class FakeRuntime:
@@ -254,11 +424,39 @@ class FakeRuntime:
         self.validator_target_triple = "aarch64-unknown-linux-gnu"
         self.client_git_head = self.git_head
         self.height = 1
+        self.peer_public_keys = tuple(
+            f"fake-peer-public-key-{index}" for index in range(module.PEER_COUNT)
+        )
+        self.peer_pids: dict[int, int] = {}
+        self.stopped_peer_pids: dict[int, int] = {}
+        self.next_peer_pid = 10_000
+        self.next_start_time_ticks = 80_000
+        self.reuse_pid_on_restart = False
+        self.process_ops = module._PROCESS_OPS
+        self.local_placement = {
+            "peer_id": self.peer_public_keys[0],
+            "validator_account_id": FAKE_VALIDATOR_AUTHORITIES[0],
+            "replica_slot": 1,
+            "placement_incarnation": "a" * 63 + "b",
+        }
+        self.replica_markers = [
+            hashlib.sha256(f"marker-{slot}".encode()).hexdigest()
+            for slot in range(1, module.PEER_COUNT + 1)
+        ]
+        self.replica_boot_sequences = [1] * module.PEER_COUNT
+        self.replica_boot_ids = [
+            hashlib.sha256(f"boot-{slot}-1".encode()).hexdigest()
+            for slot in range(1, module.PEER_COUNT + 1)
+        ]
+        self.fail_targeted_start = False
+        self.restart_keeps_boot_sequence = False
+        self.restart_changes_marker = False
+        self.restart_changes_other_replica = False
         self.unhealthy_peer: int | None = None
         self.doctor_fails = False
         self.inrou_check_fails = False
         self.leave_peer_running_on_stop = False
-        self.process_commands: dict[int, str] = {}
+        self.process_commands = self.process_ops.process_commands
         self.start_env: dict[str, str] | None = None
         self.mcp_protocol_version = module.MCP_PROTOCOL_VERSION_V1
         self.requests: list[tuple[str, object | None]] = []
@@ -273,6 +471,11 @@ class FakeRuntime:
             for option in options
         } | {"--public-root", "--json"}
         self.sumeragi_status_http = 401
+        self.initial_sumeragi_transport_unavailable_once = False
+        self.restart_sumeragi_transport_unavailable_once = False
+        self.targeted_restart_started = False
+        self.initial_sumeragi_transport_unavailable_seen: set[int] = set()
+        self.restart_sumeragi_transport_unavailable_seen: set[int] = set()
         self.restart_required_peer: int | None = None
         self.sumeragi_blocker_peer: int | None = None
         self.onboarding_proof_required = False
@@ -320,8 +523,17 @@ class FakeRuntime:
                         "http_status": 200,
                         "ok": True,
                         "detail": (
-                            "observed deterministic identities for replica slots "
-                            "1, 2, 3, and 4"
+                            "observed distinct durable identities and guest boots for "
+                            "replica slots 1, 2, 3, and 4"
+                        ),
+                    },
+                    {
+                        "name": "inrou_public_discovery",
+                        "http_status": 200,
+                        "ok": True,
+                        "detail": (
+                            "current and revision authority plus public path and "
+                            "CID-host bytes, headers, and hash are exact"
                         ),
                     },
                 ],
@@ -339,8 +551,26 @@ class FakeRuntime:
                 "bundle_manifest_digest_hex": "1" * 64,
                 "guest_content_cid": "b" + "b" * 58,
                 "guest_manifest_digest_hex": "2" * 64,
+                "discovery_payload_dir": str(module.INROU_STAGE_DISCOVERY_PAYLOAD),
+                "discovery_document_hash": "8" * 63 + "9",
+                "discovery_content_cid": "b" + "c" * 58,
+                "discovery_manifest_digest_hex": "9" * 64,
+                "public_discovery_url": (
+                    "https://taira.sora.org/sorafs/cid/"
+                    + "b"
+                    + "c" * 58
+                    + "/index.json"
+                ),
+                "public_discovery_cid_host_url": (
+                    "https://"
+                    + "b"
+                    + "c" * 58
+                    + ".sorafs.taira.sora.org/index.json"
+                ),
+                "deployment_bundle_hash": "d" * 63 + "f",
                 "container_manifest_hash": "3" * 64,
                 "service_manifest_hash": "4" * 63 + "5",
+                "observed_at_unix_ms": 1,
                 "authorization_sha256": "5" * 64,
                 "authorization_nonce": "n" * 32,
                 "mutation_kind": "inrou_canary",
@@ -360,14 +590,8 @@ class FakeRuntime:
                 "execution_expires_at_unix_ms": 9_999_999_999_999,
                 "fee_payment": fake_fee_payment(),
                 "fee_quote": fake_fee_quote(),
-                "replica_identities": [
-                    {
-                        "replica_slot": slot,
-                        "identity": f"taira_inrou_canary:replica:{slot}",
-                        "response_sha256": f"{slot:064x}",
-                    }
-                    for slot in range(1, module.PEER_COUNT + 1)
-                ],
+                "replica_identities": self._current_replica_identities(),
+                "local_placement": dict(self.local_placement),
             }
         )
         self.inrou_check_stdout = json.dumps(
@@ -387,8 +611,17 @@ class FakeRuntime:
                         "http_status": 200,
                         "ok": True,
                         "detail": (
-                            "observed deterministic identities for replica slots "
-                            "1, 2, 3, and 4"
+                            "observed distinct durable identities and guest boots for "
+                            "replica slots 1, 2, 3, and 4"
+                        ),
+                    },
+                    {
+                        "name": "inrou_public_discovery",
+                        "http_status": 200,
+                        "ok": True,
+                        "detail": (
+                            "current and revision authority plus public path and "
+                            "CID-host bytes, headers, and hash are exact"
                         ),
                     },
                 ],
@@ -405,22 +638,45 @@ class FakeRuntime:
                 "bundle_manifest_digest_hex": "1" * 64,
                 "guest_content_cid": "b" + "b" * 58,
                 "guest_manifest_digest_hex": "2" * 64,
+                "discovery_payload_dir": str(module.INROU_STAGE_DISCOVERY_PAYLOAD),
+                "discovery_document_hash": "8" * 63 + "9",
+                "discovery_content_cid": "b" + "c" * 58,
+                "discovery_manifest_digest_hex": "9" * 64,
+                "public_discovery_url": (
+                    "https://taira.sora.org/sorafs/cid/"
+                    + "b"
+                    + "c" * 58
+                    + "/index.json"
+                ),
+                "public_discovery_cid_host_url": (
+                    "https://"
+                    + "b"
+                    + "c" * 58
+                    + ".sorafs.taira.sora.org/index.json"
+                ),
+                "deployment_bundle_hash": "d" * 63 + "f",
                 "container_manifest_hash": "3" * 64,
                 "service_manifest_hash": "4" * 63 + "5",
                 "observed_at_unix_ms": 1,
-                "replica_identities": [
-                    {
-                        "replica_slot": slot,
-                        "identity": f"taira_inrou_canary:replica:{slot}",
-                        "response_sha256": f"{slot:064x}",
-                    }
-                    for slot in range(1, module.PEER_COUNT + 1)
-                ],
+                "replica_identities": self._current_replica_identities(),
+                "local_placement": dict(self.local_placement),
             }
         )
         self.stage_receipt = {
             "schema_version": 1,
+            "sorafs_retention_epoch": 2_000_000_000,
             "mutation_mode": "deploy",
+            "placement_targets": [
+                {
+                    "validator_account_id": authority,
+                    "peer_id": peer_id,
+                }
+                for authority, peer_id in zip(
+                    FAKE_VALIDATOR_AUTHORITIES,
+                    self.peer_public_keys,
+                    strict=True,
+                )
+            ],
             "service_name": "taira_inrou_canary",
             "service_version": "artifact-" + "0" * 63 + "1",
             "container_file": str(module.INROU_STAGE_CONTAINER_FILE),
@@ -435,9 +691,83 @@ class FakeRuntime:
             "guest_manifest_file": str(module.INROU_STAGE_GUEST_MANIFEST),
             "guest_content_cid": "b" + "b" * 58,
             "guest_manifest_digest_hex": "2" * 64,
+            "discovery_payload_dir": str(module.INROU_STAGE_DISCOVERY_PAYLOAD),
+            "discovery_manifest_file": str(module.INROU_STAGE_DISCOVERY_MANIFEST),
+            "discovery_document_hash": "8" * 63 + "9",
+            "discovery_content_cid": "b" + "c" * 58,
+            "discovery_manifest_digest_hex": "9" * 64,
+            "public_discovery_url": (
+                "https://taira.sora.org/sorafs/cid/"
+                + "b"
+                + "c" * 58
+                + "/index.json"
+            ),
+            "public_discovery_cid_host_url": (
+                "https://"
+                + "b"
+                + "c" * 58
+                + ".sorafs.taira.sora.org/index.json"
+            ),
             "container_manifest_hash": "3" * 64,
             "service_manifest_hash": "4" * 63 + "5",
         }
+
+    def _current_replica_identities(self) -> list[dict[str, object]]:
+        """Return health rows derived from the fake durable guest state."""
+
+        rows: list[dict[str, object]] = []
+        for index in range(module.PEER_COUNT):
+            slot = index + 1
+            health = {
+                "schema_version": 1,
+                "service": "taira_inrou_canary",
+                "service_version": "artifact-" + "0" * 63 + "1",
+                "runtime": "Inrou",
+                "replica_slot": slot,
+                "identity": f"taira_inrou_canary:replica:{slot}",
+                "app_data_marker_sha256": self.replica_markers[index],
+                "boot_sequence": self.replica_boot_sequences[index],
+                "guest_boot_id_sha256": self.replica_boot_ids[index],
+            }
+            response = json.dumps(
+                health,
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("ascii")
+            rows.append(
+                {
+                    "replica_slot": slot,
+                    "identity": health["identity"],
+                    "response_sha256": hashlib.sha256(response).hexdigest(),
+                    "app_data_marker_sha256": health["app_data_marker_sha256"],
+                    "boot_sequence": health["boot_sequence"],
+                    "guest_boot_id_sha256": health["guest_boot_id_sha256"],
+                }
+            )
+        return rows
+
+    def _advance_restarted_guest(self, peer_index: int) -> None:
+        """Advance only the replica placed on the selected fake peer."""
+
+        placed_peer = self.peer_public_keys.index(self.local_placement["peer_id"])
+        if peer_index != placed_peer:
+            return
+        slot_index = int(self.local_placement["replica_slot"]) - 1
+        if not self.restart_keeps_boot_sequence:
+            self.replica_boot_sequences[slot_index] += 1
+            self.replica_boot_ids[slot_index] = hashlib.sha256(
+                f"boot-{slot_index + 1}-{self.replica_boot_sequences[slot_index]}".encode()
+            ).hexdigest()
+        if self.restart_changes_marker:
+            self.replica_markers[slot_index] = hashlib.sha256(
+                f"replaced-marker-{slot_index + 1}".encode()
+            ).hexdigest()
+        if self.restart_changes_other_replica:
+            other = (slot_index + 1) % module.PEER_COUNT
+            self.replica_boot_sequences[other] += 1
+            self.replica_boot_ids[other] = hashlib.sha256(
+                f"boot-{other + 1}-{self.replica_boot_sequences[other]}".encode()
+            ).hexdigest()
 
     @staticmethod
     def _prepared_child_identity(values: tuple[str, ...]) -> tuple[str, str, str]:
@@ -453,6 +783,11 @@ class FakeRuntime:
         return {
             "bundle-pin": ("inrou_bundle_pin", "bundle_pin", "inrou_bundle_pin"),
             "guest-pin": ("inrou_guest_pin", "guest_pin", "inrou_guest_pin"),
+            "discovery-pin": (
+                "inrou_discovery_pin",
+                "discovery_pin",
+                "inrou_discovery_pin",
+            ),
             "service-mutation": ("inrou_canary", "service_mutation", "inrou_canary"),
         }[operation]
 
@@ -552,6 +887,7 @@ class FakeRuntime:
         )
         if kind == "inrou_canary" and outcome == "Applied":
             receipt = json.loads(self.inrou_canary_stdout)
+            receipt["observed_at_unix_ms"] = module.time.time_ns() // 1_000_000
         else:
             receipt = {
                 "command": command_name,
@@ -684,6 +1020,7 @@ class FakeRuntime:
                     target / "state" / f"peer{index}" / "soracloud_runtime"
                 )
                 (target / f"peer{index}.toml").write_text(
+                    f'public_key = "{self.peer_public_keys[index]}"\n'
                     f'chain = "{module.DEFAULT_CHAIN_ID}"\n'
                     f"chain_discriminant = {module.DEFAULT_CHAIN_DISCRIMINANT}\n"
                     f'[genesis]\nexpected_hash = "{network_id}"\n'
@@ -702,6 +1039,8 @@ class FakeRuntime:
                     f"hydration_concurrency = {module.TAIRA_SORACLOUD_HYDRATION_CONCURRENCY}\n"
                     "prepared_runtime_cache_capacity = "
                     f"{module.TAIRA_SORACLOUD_PREPARED_RUNTIME_CACHE_CAPACITY}\n"
+                    "[soracloud_runtime.submission.signer]\n"
+                    f'authority = "{FAKE_VALIDATOR_AUTHORITIES[index]}"\n'
                     "[torii.faucet]\n"
                     "enabled = true\n"
                     f'authority = "{FAKE_FAUCET_AUTHORITY}"\n'
@@ -747,16 +1086,35 @@ class FakeRuntime:
             )
         elif "inrou-stage" in values:
             stage = Path(values[values.index("--stage-dir") + 1])
+            self.stage_receipt["sorafs_retention_epoch"] = int(
+                values[values.index("--sorafs-retention-epoch") + 1]
+            )
+            placement_values = [
+                values[index + 1]
+                for index, value in enumerate(values[:-1])
+                if value == "--placement-target"
+            ]
+            if placement_values:
+                self.stage_receipt["placement_targets"] = [
+                    {
+                        "validator_account_id": value.split(",", 1)[0],
+                        "peer_id": value.split(",", 1)[1],
+                    }
+                    for value in placement_values
+                ]
             manifests = stage / "manifests"
             guest = stage / module.INROU_STAGE_GUEST_PAYLOAD / "aarch64"
+            discovery = stage / module.INROU_STAGE_DISCOVERY_PAYLOAD
             manifests.mkdir(parents=True, mode=0o700)
             guest.mkdir(parents=True, mode=0o700)
+            discovery.mkdir(parents=True, mode=0o700)
             for directory in (
                 stage,
                 manifests,
                 stage / "payloads",
                 stage / module.INROU_STAGE_GUEST_PAYLOAD,
                 guest,
+                discovery,
             ):
                 directory.chmod(0o700)
             staged_files = {
@@ -768,11 +1126,43 @@ class FakeRuntime:
                 stage / module.INROU_STAGE_BUNDLE_PAYLOAD: b"bundle",
                 stage / module.INROU_STAGE_BUNDLE_MANIFEST: b"bundle-manifest",
                 stage / module.INROU_STAGE_GUEST_MANIFEST: b"guest-manifest",
+                stage / module.INROU_STAGE_DISCOVERY_MANIFEST: b"discovery-manifest",
+                stage / module.INROU_STAGE_DISCOVERY_DOCUMENT: b"public",
                 guest / "kernel": b"kernel",
             }
             for path, payload in staged_files.items():
                 path.write_bytes(payload)
                 path.chmod(0o600)
+            if "--bind-validator-config-dir" in values:
+                config_dir = Path(
+                    values[values.index("--bind-validator-config-dir") + 1]
+                )
+                for index in range(module.PEER_COUNT):
+                    config = config_dir / f"peer{index}.toml"
+                    _, uid, gid = module.taira_inrou_identity(index)
+                    base = config.read_text(encoding="utf-8").rstrip("\n")
+                    config.write_text(
+                        base
+                        + "\n\n[soracloud_runtime.inrou]\n"
+                        + "enabled = true\n"
+                        + f"portable_vm_uid = {uid}\n"
+                        + f"portable_vm_gid = {gid}\n"
+                        + "trusted_guest_manifest_digest_hex = "
+                        + f'"{self.stage_receipt["guest_manifest_digest_hex"]}"\n'
+                        + "trusted_guest_content_cid = "
+                        + f'"{self.stage_receipt["guest_content_cid"]}"\n'
+                        + "guest_image_max_bytes = "
+                        + f"{module.TAIRA_INROU_GUEST_IMAGE_MAX_BYTES}\n"
+                        + f"max_cpu_millis = {module.TAIRA_INROU_MAX_CPU_MILLIS}\n"
+                        + "max_memory_bytes = "
+                        + f"{module.TAIRA_INROU_MAX_MEMORY_BYTES}\n"
+                        + "max_storage_bytes = "
+                        + f"{module.TAIRA_INROU_MAX_STORAGE_BYTES}\n"
+                        + f"start_grace_ms = {module.TAIRA_INROU_START_GRACE_MS}\n"
+                        + f"stop_grace_ms = {module.TAIRA_INROU_STOP_GRACE_MS}\n",
+                        encoding="utf-8",
+                    )
+                    config.chmod(0o600)
             return subprocess.CompletedProcess(
                 values,
                 0,
@@ -782,26 +1172,95 @@ class FakeRuntime:
         elif values[0] == "/bin/bash" and values[1].endswith("/start.sh"):
             target = Path(str(kwargs["cwd"]))
             self.start_env = dict(kwargs["env"])
-            for index in range(module.PEER_COUNT):
-                pid = 10_000 + index
-                (target / f"peer{index}.pid").write_text(f"{pid}\n", encoding="utf-8")
-                self.process_commands[pid] = (
-                    f"/fake/iroha3d_taira --sora --config {target / f'peer{index}.toml'}"
+            selector = values[2:]
+            if not selector:
+                selected = tuple(range(module.PEER_COUNT))
+                targeted = False
+            elif (
+                len(selector) == 2
+                and selector[0] == "--peer-index"
+                and selector[1] in {str(index) for index in range(module.PEER_COUNT)}
+            ):
+                selected = (int(selector[1]),)
+                targeted = True
+            else:
+                raise AssertionError(f"invalid generated start selector: {selector}")
+            if targeted and self.fail_targeted_start:
+                raise module.DevnetError("simulated selected peer restart failure")
+            for index in selected:
+                if index in self.peer_pids:
+                    raise module.DevnetError(f"fake peer{index} is already running")
+                if targeted and self.reuse_pid_on_restart:
+                    pid = self.stopped_peer_pids.pop(index)
+                else:
+                    pid = self.next_peer_pid
+                    self.next_peer_pid += 1
+                start_time_ticks = self.next_start_time_ticks
+                self.next_start_time_ticks += 1
+                self.peer_pids[index] = pid
+                argv = [
+                    "/fake/iroha3d_taira",
+                    "--sora",
+                    "--config",
+                    str(target / f"peer{index}.toml"),
+                ]
+                observation = {
+                    "pid": pid,
+                    "boot_id": "01234567-89ab-cdef-8123-456789abcdef",
+                    "start_time_ticks": start_time_ticks,
+                    "executable_path": argv[0],
+                    "executable_device": 1,
+                    "executable_inode": 2,
+                    "argv": argv,
+                    "uid": os.geteuid(),
+                    "gid": os.getegid(),
+                    "session_id": pid,
+                    "process_group_id": pid,
+                }
+                record = {
+                    "schema_version": module.TAIRA_PROCESS_RECORD_SCHEMA_VERSION_V1,
+                    "peer_index": index,
+                    **observation,
+                }
+                process_path = target / f"peer{index}.process.json"
+                process_path.write_text(
+                    json.dumps(
+                        record,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n",
+                    encoding="utf-8",
                 )
+                process_path.chmod(0o600)
+                self.process_ops.add(observation)
+                if targeted:
+                    self._advance_restarted_guest(index)
+            if targeted:
+                self.targeted_restart_started = True
+                self.height += 1
         elif values[0] == "/bin/bash" and values[1].endswith("/stop.sh"):
             target = Path(str(kwargs["cwd"]))
-            first_retained = self.leave_peer_running_on_stop
-            for index in range(module.PEER_COUNT):
-                if first_retained and index == 0:
+            selector = values[2:]
+            if not selector:
+                selected = tuple(range(module.PEER_COUNT))
+            elif (
+                len(selector) == 2
+                and selector[0] == "--peer-index"
+                and selector[1] in {str(index) for index in range(module.PEER_COUNT)}
+            ):
+                selected = (int(selector[1]),)
+            else:
+                raise AssertionError(f"invalid generated stop selector: {selector}")
+            for index in selected:
+                if self.leave_peer_running_on_stop and index == 0:
                     continue
-                (target / f"peer{index}.pid").unlink(missing_ok=True)
-                self.process_commands.pop(10_000 + index, None)
-        elif values == ("ps", "-axww", "-o", "pid=,command="):
-            stdout = "".join(
-                f"{pid} {command_line}\n"
-                for pid, command_line in self.process_commands.items()
-            )
-            return subprocess.CompletedProcess(values, 0, stdout, "")
+                (target / f"peer{index}.process.json").unlink(missing_ok=True)
+                pid = self.peer_pids.pop(index, None)
+                if pid is not None:
+                    self.stopped_peer_pids[index] = pid
+                    self.process_ops.remove(pid)
         elif "ping" in values:
             self.height += 1
             return subprocess.CompletedProcess(values, 0, self.ping_stdout, "")
@@ -826,6 +1285,8 @@ class FakeRuntime:
             receipt = json.loads(self.inrou_check_stdout)
             receipt["public_root"] = values[values.index("--public-root") + 1]
             receipt["observed_at_unix_ms"] = module.time.time_ns() // 1_000_000
+            receipt["replica_identities"] = self._current_replica_identities()
+            receipt["local_placement"] = dict(self.local_placement)
             return subprocess.CompletedProcess(values, 0, json.dumps(receipt), "")
         elif "write-canary" in values or "inrou-canary" in values:
             return self._prepared_child_result(values)
@@ -836,11 +1297,6 @@ class FakeRuntime:
     def request(self, url: str, payload: object | None) -> tuple[int, object | None]:
         self.requests.append((url, payload))
         if url.endswith("v1/mcp"):
-            if payload is None:
-                return 200, {
-                    "enabled": True,
-                    "protocolVersion": self.mcp_protocol_version,
-                }
             assert isinstance(payload, dict)
             if payload.get("method") == "initialize":
                 params = payload.get("params")
@@ -864,6 +1320,20 @@ class FakeRuntime:
             if f":{self.api_port + index}/" not in url:
                 continue
             if url.endswith("v1/sumeragi/status"):
+                if (
+                    not self.targeted_restart_started
+                    and self.initial_sumeragi_transport_unavailable_once
+                    and index not in self.initial_sumeragi_transport_unavailable_seen
+                ):
+                    self.initial_sumeragi_transport_unavailable_seen.add(index)
+                    return 0, None
+                if (
+                    self.targeted_restart_started
+                    and self.restart_sumeragi_transport_unavailable_once
+                    and index not in self.restart_sumeragi_transport_unavailable_seen
+                ):
+                    self.restart_sumeragi_transport_unavailable_seen.add(index)
+                    return 0, None
                 if self.sumeragi_status_http != 200:
                     return self.sumeragi_status_http, None
                 blocker = (
@@ -898,6 +1368,13 @@ class TairaDevnetTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name).resolve()
+        self.process_ops = FakeProcessOps()
+        self.process_ops_patch = mock.patch.object(
+            module,
+            "_PROCESS_OPS",
+            self.process_ops,
+        )
+        self.process_ops_patch.start()
         self.target_dir = self.root / "target"
         self.rust_target = "aarch64-unknown-linux-gnu"
         self.bin_dir = (
@@ -906,6 +1383,31 @@ class TairaDevnetTests(unittest.TestCase):
         self.bin_dir.mkdir(parents=True)
         for name in ("kagami", "iroha3d_taira", "iroha", "sorafs-node"):
             executable(self.bin_dir / name)
+        self.inrou_operator_preseed_commands: list[tuple[str, ...]] = []
+
+        def locked_preseed_session(
+            command: list[str] | tuple[str, ...],
+            *,
+            cwd: Path,
+            timeout_seconds: float,
+            verify_ready_receipt: object,
+        ) -> dict[str, object]:
+            del cwd, timeout_seconds
+            values = tuple(str(value) for value in command)
+            self.inrou_operator_preseed_commands.append(values)
+            receipt = fake_inrou_operator_preseed_receipt(values)
+            payload = (
+                json.dumps(receipt, ensure_ascii=False, separators=(",", ":")) + "\n"
+            ).encode("utf-8")
+            assert callable(verify_ready_receipt)
+            return verify_ready_receipt(payload)
+
+        self.locked_preseed = mock.patch.object(
+            module,
+            "run_locked_inrou_operator_preseed_session",
+            side_effect=locked_preseed_session,
+        )
+        self.locked_preseed_mock = self.locked_preseed.start()
         self.host_preflight = mock.patch.object(
             module, "require_inrou_qualification_host", return_value=None
         )
@@ -924,6 +1426,8 @@ class TairaDevnetTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.cleanup_preflight.stop()
         self.host_preflight.stop()
+        self.locked_preseed.stop()
+        self.process_ops_patch.stop()
         self.temporary.cleanup()
 
     def test_parallel_map_runs_bounded_work_concurrently_and_retains_order(self) -> None:
@@ -942,6 +1446,106 @@ class TairaDevnetTests(unittest.TestCase):
             [0, 10, 20, 30],
         )
         self.assertEqual(len(worker_ids), module.PEER_COUNT)
+
+    def test_locked_preseed_releases_by_eof_only_after_ready_validation(self) -> None:
+        released = self.root / "preseed-released"
+        child = (
+            "import pathlib,sys;"
+            "sys.stdout.buffer.write(b'{\\\"ready\\\":true}\\n');"
+            "sys.stdout.buffer.flush();"
+            "value=sys.stdin.buffer.read(1);"
+            "pathlib.Path(sys.argv[1]).write_text('eof' if not value else 'byte');"
+            "sys.stdout.buffer.write("
+            "b'{\\\"schema_version\\\":1,\\\"status\\\":\\\"released\\\"}\\n');"
+            "sys.stdout.buffer.flush()"
+        )
+        validated: list[bytes] = []
+
+        def verify(payload: bytes) -> dict[str, bool]:
+            self.assertFalse(released.exists())
+            validated.append(payload)
+            return {"ready": True}
+
+        receipt = REAL_RUN_LOCKED_INROU_OPERATOR_PRESEED_SESSION(
+            [sys.executable, "-c", child, str(released)],
+            cwd=self.root,
+            timeout_seconds=2,
+            verify_ready_receipt=verify,
+        )
+
+        self.assertEqual(receipt, {"ready": True})
+        self.assertEqual(validated, [b'{"ready":true}\n'])
+        self.assertEqual(released.read_text(encoding="utf-8"), "eof")
+
+    def test_locked_preseed_rejects_delayed_exit_without_eof_acknowledgement(self) -> None:
+        child = (
+            "import sys,time;"
+            "sys.stdout.buffer.write(b'{\\\"ready\\\":true}\\n');"
+            "sys.stdout.buffer.flush();"
+            "time.sleep(0.05)"
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "release acknowledgement"):
+            REAL_RUN_LOCKED_INROU_OPERATOR_PRESEED_SESSION(
+                [sys.executable, "-c", child],
+                cwd=self.root,
+                timeout_seconds=2,
+                verify_ready_receipt=lambda _payload: {"ready": True},
+            )
+
+    def test_locked_preseed_rejects_exit_during_ready_validation(self) -> None:
+        child = (
+            "import sys;"
+            "sys.stdout.buffer.write(b'{\\\"ready\\\":true}\\n');"
+            "sys.stdout.buffer.flush()"
+        )
+
+        with self.assertRaisesRegex(
+            module.DevnetError,
+            "exited|did not retain one live canonical ready barrier|release acknowledgement",
+        ):
+            REAL_RUN_LOCKED_INROU_OPERATOR_PRESEED_SESSION(
+                [sys.executable, "-c", child],
+                cwd=self.root,
+                timeout_seconds=2,
+                verify_ready_receipt=lambda _payload: {"ready": True},
+            )
+
+    def test_locked_preseed_rejects_trailing_stdout(self) -> None:
+        child = (
+            "import sys;"
+            "sys.stdout.buffer.write(b'{\\\"ready\\\":true}\\ntrailing');"
+            "sys.stdout.buffer.flush();"
+            "sys.stdin.buffer.read(1)"
+        )
+
+        with self.assertRaisesRegex(
+            module.DevnetError,
+            "live canonical ready barrier|trailing stdout",
+        ):
+            REAL_RUN_LOCKED_INROU_OPERATOR_PRESEED_SESSION(
+                [sys.executable, "-c", child],
+                cwd=self.root,
+                timeout_seconds=2,
+                verify_ready_receipt=lambda _payload: {"ready": True},
+            )
+
+    def test_locked_preseed_rejects_nonzero_exit_after_eof(self) -> None:
+        child = (
+            "import sys;"
+            "sys.stdout.buffer.write(b'{\\\"ready\\\":true}\\n');"
+            "sys.stdout.buffer.flush();"
+            "sys.stdin.buffer.read(1);"
+            "sys.exit(7)"
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "status 7"):
+            REAL_RUN_LOCKED_INROU_OPERATOR_PRESEED_SESSION(
+                [sys.executable, "-c", child],
+                cwd=self.root,
+                timeout_seconds=2,
+                verify_ready_receipt=lambda _payload: {"ready": True},
+            )
 
     def test_stable_reader_enforces_bounds_and_direct_single_link_custody(self) -> None:
         source = self.root / "stable-input"
@@ -1645,6 +2249,45 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertNotIn("inrou_configured_vm_capacity_per_peer", report)
         self.assertEqual(report["inrou_canary"]["recovery_outcome"], "Applied")
         self.assertEqual(report["inrou_canary"]["operation"], "service_mutation")
+        restart = report["inrou_restart"]
+        self.assertEqual(restart["peer_index"], 0)
+        self.assertEqual(
+            restart["local_placement"]["peer_id"], runtime.peer_public_keys[0]
+        )
+        self.assertEqual(
+            restart["local_placement"]["placement_incarnation"], "a" * 63 + "b"
+        )
+        self.assertGreater(restart["height_after"], restart["height_before"])
+        self.assertNotEqual(
+            restart["processes_after"][0], restart["processes_before"][0]
+        )
+        self.assertEqual(
+            restart["processes_after"][1:], restart["processes_before"][1:]
+        )
+        before_rows = report["inrou_canary"]["replica_identities"]
+        after_rows = restart["inrou_check"]["replica_identities"]
+        self.assertEqual(
+            after_rows[0]["app_data_marker_sha256"],
+            before_rows[0]["app_data_marker_sha256"],
+        )
+        self.assertEqual(
+            after_rows[0]["boot_sequence"], before_rows[0]["boot_sequence"] + 1
+        )
+        self.assertNotEqual(
+            after_rows[0]["guest_boot_id_sha256"],
+            before_rows[0]["guest_boot_id_sha256"],
+        )
+
+        self.assertEqual(after_rows[1:], before_rows[1:])
+        target = self.root / "state" / "network"
+        self.assertIn(
+            ("/bin/bash", str(target / "stop.sh"), "--peer-index", "0"),
+            runtime.commands,
+        )
+        self.assertIn(
+            ("/bin/bash", str(target / "start.sh"), "--peer-index", "0"),
+            runtime.commands,
+        )
         self.assertEqual(
             report["inrou_guest_workload_qualification"], "verified"
         )
@@ -1697,6 +2340,11 @@ class TairaDevnetTests(unittest.TestCase):
             },
         )
         self.assertEqual(qualification_record["toolchain"], report["toolchain"])
+        self.assertEqual(
+            qualification_record["inrou_operator_preseed"],
+            report["inrou_operator_preseed"],
+        )
+        self.assertEqual(qualification_record["inrou_restart"], restart)
 
         self.assertNotIn("source_revision", qualification_record)
         self.assertNotIn("qualifying_cli", qualification_record)
@@ -1903,7 +2551,7 @@ class TairaDevnetTests(unittest.TestCase):
         mcp_roots = {
             url.removesuffix("v1/mcp")
             for url, payload in runtime.requests
-            if url.endswith("v1/mcp") and payload is None
+            if url.endswith("v1/mcp") and isinstance(payload, dict)
         }
         self.assertEqual(mcp_roots, set(module.torii_roots(module.DEFAULT_API_PORT)))
         faucet_commands = [
@@ -1927,6 +2575,344 @@ class TairaDevnetTests(unittest.TestCase):
                 command[command.index("--faucet-amount") + 1],
                 FAKE_FAUCET_AMOUNT,
             )
+
+    def test_restart_proof_accepts_same_pid_only_with_new_start_time(self) -> None:
+        runtime = FakeRuntime()
+        runtime.reuse_pid_on_restart = True
+
+        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        restart = report["inrou_restart"]
+        before = restart["processes_before"][0]
+        after = restart["processes_after"][0]
+        self.assertEqual(after["pid"], before["pid"])
+        self.assertNotEqual(after["start_time_ticks"], before["start_time_ticks"])
+        self.assertEqual(
+            restart["processes_after"][1:],
+            restart["processes_before"][1:],
+        )
+
+    def test_pid_reuse_is_rejected_without_nonzero_signal(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        target = self.root / "state" / "network"
+        identity = module.read_taira_process_identity(target, 0)
+        pid = int(identity["pid"])
+        runtime.process_ops.observations[pid]["start_time_ticks"] = (
+            int(identity["start_time_ticks"]) + 1
+        )
+        runtime.process_ops.signals.clear()
+
+        self.assertIsNone(module._bind_taira_process_identity(identity))
+        self.assertTrue(runtime.process_ops.signals)
+        self.assertEqual(
+            {signal_number for _pid, signal_number in runtime.process_ops.signals},
+            {0},
+        )
+        self.assertEqual(runtime.process_ops.handles, {})
+
+    def test_process_record_requires_exact_canonical_owner_only_v1(self) -> None:
+        runtime, target = self.generated_network("process-record-schema")
+        runtime.run(
+            ["/bin/bash", str(target / "start.sh")],
+            cwd=target,
+            env={},
+            capture_output=False,
+        )
+        path = target / "peer0.process.json"
+        original = path.read_bytes()
+        identity = module.read_taira_process_identity(target, 0)
+        self.assertEqual(set(identity), module.TAIRA_PROCESS_RECORD_KEYS_V1)
+
+        extended = json.loads(original)
+        extended["legacy_pid"] = extended["pid"]
+        path.write_text(
+            json.dumps(extended, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o600)
+        with self.assertRaisesRegex(module.DevnetError, "exact Taira process V1 schema"):
+            module.read_taira_process_identity(target, 0)
+
+        path.write_bytes(original.replace(b"{", b"{\n", 1))
+        path.chmod(0o600)
+        with self.assertRaisesRegex(module.DevnetError, "not canonical JSON"):
+            module.read_taira_process_identity(target, 0)
+
+        duplicate = original[:-2] + b',"pid":123}\n'
+        path.write_bytes(duplicate)
+        path.chmod(0o600)
+        with self.assertRaisesRegex(module.DevnetError, "not canonical JSON"):
+            module.read_taira_process_identity(target, 0)
+
+        path.write_bytes(original)
+        path.chmod(0o644)
+        with self.assertRaisesRegex(module.DevnetError, "mode 0600"):
+            module.read_taira_process_identity(target, 0)
+
+    def test_restart_proof_rejects_retired_bare_pid_vectors(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        target = self.root / "state" / "network"
+        qualification_path = target / module.INROU_GUEST_QUALIFICATION_FILE
+        qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
+        restart = qualification["inrou_restart"]
+        before = restart.pop("processes_before")
+        after = restart.pop("processes_after")
+        restart["pids_before"] = [identity["pid"] for identity in before]
+        restart["pids_after"] = [identity["pid"] for identity in after]
+        qualification_path.write_text(
+            json.dumps(qualification, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        qualification_path.chmod(0o600)
+        args = module.parser().parse_args(
+            ["--dir", str(target.parent), "check", "--timeout-seconds", "1"]
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "restart proof violates the exact V1"):
+            module.check(args, run=runtime.run, request=runtime.request)
+
+    def test_same_incarnation_executable_drift_is_never_signaled(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        target = self.root / "state" / "network"
+        identity = module.read_taira_process_identity(target, 0)
+        pid = int(identity["pid"])
+        runtime.process_ops.observations[pid]["executable_inode"] = 999
+        runtime.process_ops.signals.clear()
+
+        with self.assertRaisesRegex(module.DevnetError, "retained its incarnation but drifted"):
+            module._bind_taira_process_identity(identity)
+        self.assertTrue(runtime.process_ops.signals)
+        self.assertEqual(
+            {signal_number for _pid, signal_number in runtime.process_ops.signals},
+            {0},
+        )
+        self.assertEqual(runtime.process_ops.handles, {})
+
+    def test_native_process_ops_fail_closed_on_non_linux_before_mutation(self) -> None:
+        state = self.root / "unsupported-state"
+        args = module.parser().parse_args(["--dir", str(state), "down"])
+        with (
+            mock.patch.object(module, "_PROCESS_OPS", module.LinuxPidfdProcessOps()),
+            mock.patch.object(module.platform, "system", return_value="Darwin"),
+            self.assertRaisesRegex(module.DevnetError, "requires Linux pidfds"),
+        ):
+            module.down(args, run=lambda *_args, **_kwargs: None)
+        self.assertFalse(state.exists())
+
+    def test_kagami_taira_lifecycle_source_is_pidfd_only_and_linux_only(self) -> None:
+        source = (
+            REPO_ROOT / "crates" / "iroha_kagami" / "src" / "localnet.rs"
+        ).read_text(encoding="utf-8")
+        embedded_match = re.search(
+            r'const TAIRA_PROCESS_IDENTITY_PY: &str = r#"(.*?)"#;',
+            source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(embedded_match)
+        embedded = embedded_match.group(1)
+        compile(embedded, "<TAIRA_PROCESS_IDENTITY_PY>", "exec")
+        for required in (
+            "os.pidfd_open(pid, 0)",
+            "signal.pidfd_send_signal(descriptor, signal_number, None, 0)",
+            "select.poll()",
+            "if not cmdline or not cmdline.endswith",
+            '"schema_version": 1',
+            '"start_time_ticks"',
+            '"executable_device"',
+            '"executable_inode"',
+            '"process_group_id"',
+            "_atomic_publish_record(record_path, record)",
+            "stop_taira_process(record_path, peer_index, config_path)",
+        ):
+            self.assertIn(required, embedded)
+        for forbidden in (
+            "os.kill(",
+            "os.killpg(",
+            "subprocess.run",
+            "subprocess.call",
+            "process.terminate(",
+            "process.kill(",
+        ):
+            self.assertNotIn(forbidden, embedded)
+        self.assertIn("descriptor = os.pidfd_open(os.getpid(), 0)", source)
+        stop_writer = source[source.index("fn write_stop_script(") :]
+        taira_return = stop_writer.index("return Ok(stop_file.flush()?);")
+        generic_pid_logic = stop_writer.index('writeln!(stop_file, "pid_matches_peer()')
+        generic_kill = stop_writer.index('writeln!(stop_file, "  kill \\"$pid\\"')
+        self.assertLess(taira_return, generic_pid_logic)
+        self.assertLess(taira_return, generic_kill)
+        self.assertIn("write_taira_pidfd_preflight(&mut stop_file)?", stop_writer)
+        self.assertIn("peer${{i}}.process.json", stop_writer[:taira_return])
+
+    def test_up_maps_local_placement_peer_id_without_slot_index_fallback(self) -> None:
+        runtime = FakeRuntime()
+        placement = dict(runtime.local_placement)
+        placement["peer_id"] = runtime.peer_public_keys[2]
+        placement["validator_account_id"] = FAKE_VALIDATOR_AUTHORITIES[2]
+        runtime.local_placement = placement
+        deploy = json.loads(runtime.inrou_canary_stdout)
+        deploy["local_placement"] = placement
+        runtime.inrou_canary_stdout = json.dumps(deploy)
+
+        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        restart = report["inrou_restart"]
+        self.assertEqual(restart["peer_index"], 2)
+        self.assertNotEqual(
+            restart["processes_after"][2], restart["processes_before"][2]
+        )
+        self.assertEqual(
+            [restart["processes_after"][index] for index in (0, 1, 3)],
+            [restart["processes_before"][index] for index in (0, 1, 3)],
+        )
+        target = self.root / "state" / "network"
+        self.assertIn(
+            ("/bin/bash", str(target / "stop.sh"), "--peer-index", "2"),
+            runtime.commands,
+        )
+        self.assertIn(
+            ("/bin/bash", str(target / "start.sh"), "--peer-index", "2"),
+            runtime.commands,
+        )
+
+    def test_up_rejects_cross_wired_local_placement_account_and_peer(self) -> None:
+        runtime = FakeRuntime()
+        placement = dict(runtime.local_placement)
+        placement["validator_account_id"] = FAKE_VALIDATOR_AUTHORITIES[1]
+        placement["peer_id"] = runtime.peer_public_keys[2]
+        runtime.local_placement = placement
+        deploy = json.loads(runtime.inrou_canary_stdout)
+        deploy["local_placement"] = placement
+        runtime.inrou_canary_stdout = json.dumps(deploy)
+
+        with self.assertRaisesRegex(module.DevnetError, "account\\+peer pair"):
+            module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertFalse(runtime.process_commands)
+
+    def test_up_rejects_cross_wired_operator_preseed_receipt_before_start(self) -> None:
+        runtime = FakeRuntime()
+
+        def cross_wired_preseed(
+            command: list[str] | tuple[str, ...],
+            **kwargs: object,
+        ) -> object:
+            receipt = fake_inrou_operator_preseed_receipt(
+                tuple(str(value) for value in command)
+            )
+            targets = receipt["targets"]
+            assert isinstance(targets, list) and isinstance(targets[2], dict)
+            targets[2]["validator_account_id"] = FAKE_VALIDATOR_AUTHORITIES[1]
+            payload = (
+                json.dumps(receipt, ensure_ascii=False, separators=(",", ":")) + "\n"
+            ).encode("utf-8")
+            verify = kwargs["verify_ready_receipt"]
+            assert callable(verify)
+            return verify(payload)
+
+        self.locked_preseed_mock.side_effect = cross_wired_preseed
+
+        with self.assertRaisesRegex(module.DevnetError, "account\\+peer targets"):
+            module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertFalse(
+            any(
+                command[0] == "/bin/bash" and command[1].endswith("start.sh")
+                for command in runtime.commands
+            )
+        )
+
+    def test_up_rejects_unmapped_local_placement_peer_and_stops(self) -> None:
+        runtime = FakeRuntime()
+        deploy = json.loads(runtime.inrou_canary_stdout)
+        deploy["local_placement"]["peer_id"] = "unmapped-peer-public-key"
+        runtime.inrou_canary_stdout = json.dumps(deploy)
+
+        with self.assertRaisesRegex(module.DevnetError, "does not map to exactly one"):
+            module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertFalse(runtime.process_commands)
+
+    def test_up_rejects_malformed_local_placement_validator_account_and_stops(self) -> None:
+        runtime = FakeRuntime()
+        deploy = json.loads(runtime.inrou_canary_stdout)
+        deploy["local_placement"]["validator_account_id"] = "not-an-i105-account"
+        runtime.inrou_canary_stdout = json.dumps(deploy)
+
+        with self.assertRaisesRegex(module.DevnetError, "canonical testnet I105"):
+            module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertFalse(runtime.process_commands)
+
+    def test_up_rejects_non_testnet_local_placement_validator_account_and_stops(self) -> None:
+        runtime = FakeRuntime()
+        deploy = json.loads(runtime.inrou_canary_stdout)
+        deploy["local_placement"]["validator_account_id"] = FEE_QUOTE_AUTHORITY
+        runtime.inrou_canary_stdout = json.dumps(deploy)
+
+        with self.assertRaisesRegex(module.DevnetError, "canonical testnet I105"):
+            module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertFalse(runtime.process_commands)
+
+    def test_up_rejects_restart_marker_loss_and_stops(self) -> None:
+        runtime = FakeRuntime()
+        runtime.restart_changes_marker = True
+
+        with self.assertRaisesRegex(module.DevnetError, "durable app-data marker"):
+            module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertFalse(runtime.process_commands)
+
+    def test_up_rejects_restart_without_guest_boot_transition_and_stops(self) -> None:
+        runtime = FakeRuntime()
+        runtime.restart_keeps_boot_sequence = True
+
+        with self.assertRaisesRegex(module.DevnetError, "boot sequence did not advance"):
+            module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertFalse(runtime.process_commands)
+
+    def test_up_rejects_nonselected_replica_transition_and_stops(self) -> None:
+        runtime = FakeRuntime()
+        runtime.restart_changes_other_replica = True
+
+        with self.assertRaisesRegex(module.DevnetError, "non-selected Inrou replica"):
+            module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertFalse(runtime.process_commands)
+
+    def test_failed_selected_start_cleans_exact_partial_cohort(self) -> None:
+        runtime = FakeRuntime()
+        runtime.fail_targeted_start = True
+
+        with self.assertRaisesRegex(module.DevnetError, "selected peer restart failure"):
+            module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertFalse(runtime.process_commands)
+        target = self.root / "state" / "network"
+        targeted_stop = (
+            "/bin/bash",
+            str(target / "stop.sh"),
+            "--peer-index",
+            "0",
+        )
+        targeted_start = (
+            "/bin/bash",
+            str(target / "start.sh"),
+            "--peer-index",
+            "0",
+        )
+        whole_stop = ("/bin/bash", str(target / "stop.sh"))
+        self.assertIn(targeted_stop, runtime.commands)
+        self.assertIn(targeted_start, runtime.commands)
+        self.assertIn(whole_stop, runtime.commands)
+        self.assertLess(runtime.commands.index(targeted_stop), runtime.commands.index(targeted_start))
+        self.assertLess(runtime.commands.index(targeted_start), runtime.commands.index(whole_stop))
+        self.assertFalse(target.exists())
 
     def test_generated_faucet_policy_rejects_cross_peer_drift(self) -> None:
         _, target = self.generated_network("generated-faucet-policy-drift")
@@ -2640,87 +3626,77 @@ class TairaDevnetTests(unittest.TestCase):
                 config.parent, self.trusted_guest_artifact()
             )
 
-    def test_trusted_guest_injection_prevalidates_all_peers_before_rewriting(self) -> None:
-        runtime, target = self.generated_network("generated-trust-prevalidation")
-        stage = target / module.INROU_STAGE_DIRECTORY
-        runtime.run(["iroha", "taira", "inrou-stage", "--stage-dir", str(stage)])
-        peer0 = target / "peer0.toml"
-        peer3 = target / "peer3.toml"
-        peer0_before = peer0.read_text(encoding="utf-8")
-        peer3.write_text(
-            peer3.read_text(encoding="utf-8").replace(
-                f"rate_per_minute = {module.TAIRA_INROU_EGRESS_RATE_PER_MINUTE}",
-                f"rate_per_minute = {module.TAIRA_INROU_EGRESS_RATE_PER_MINUTE + 1}",
+    def test_prepare_inrou_stage_requires_compiled_config_binding(self) -> None:
+        runtime, target = self.generated_network("compiled-inrou-config-binding")
+        workspace = module.require_inrou_canary_workspace(
+            self.inrou_canary_workspace(name="compiled-binding-input")
+        )
+
+        stage = module.prepare_inrou_stage(
+            target,
+            self.bin_dir / "iroha",
+            workspace,
+            1,
+            runtime.run,
+        )
+
+        command = next(
+            command
+            for command in runtime.commands
+            if "inrou-stage" in command and "--help" not in command
+        )
+        option = command.index("--bind-validator-config-dir")
+        self.assertEqual(command[option + 1], str(target))
+        trusted_guest = module.require_inrou_stage_guest_artifact(stage)
+        module.require_canonical_taira_profiles(target, trusted_guest)
+
+    def test_prepare_inrou_stage_has_no_python_config_writer_fallback(self) -> None:
+        runtime, target = self.generated_network("missing-compiled-inrou-binding")
+        workspace = module.require_inrou_canary_workspace(
+            self.inrou_canary_workspace(name="missing-binding-input")
+        )
+
+        def simulate_unbound_stager(command, **kwargs):
+            values = [str(value) for value in command]
+            if "inrou-stage" in values and "--bind-validator-config-dir" in values:
+                option = values.index("--bind-validator-config-dir")
+                del values[option : option + 2]
+            return runtime.run(values, **kwargs)
+
+        with self.assertRaisesRegex(
+            module.DevnetError,
+            r"must contain one \[soracloud_runtime\.inrou\] table",
+        ):
+            module.prepare_inrou_stage(
+                target,
+                self.bin_dir / "iroha",
+                workspace,
                 1,
-            ),
-            encoding="utf-8",
-        )
+                simulate_unbound_stager,
+            )
+        for config in sorted(target.glob("peer*.toml")):
+            self.assertNotIn("trusted_guest_", config.read_text(encoding="utf-8"))
 
-        with self.assertRaisesRegex(module.DevnetError, "wrong egress budgets"):
-            module.inject_trusted_inrou_guest_artifact(target, stage)
-
-        self.assertEqual(peer0.read_text(encoding="utf-8"), peer0_before)
-        self.assertNotIn("trusted_guest_", peer0_before)
-
-    def test_trusted_guest_injection_reads_each_peer_once_per_validation_phase(self) -> None:
-        runtime, target = self.generated_network("generated-trust-read-count")
-        stage = target / module.INROU_STAGE_DIRECTORY
-        runtime.run(["iroha", "taira", "inrou-stage", "--stage-dir", str(stage)])
-        real_read = module.read_bounded_text
-        reads = {f"peer{index}.toml": 0 for index in range(module.PEER_COUNT)}
-
-        def count_peer_read(path: Path, **kwargs) -> str:
-            if path.name in reads:
-                reads[path.name] += 1
-            return real_read(path, **kwargs)
-
-        with mock.patch.object(module, "read_bounded_text", side_effect=count_peer_read):
-            module.inject_trusted_inrou_guest_artifact(target, stage)
-
-        self.assertEqual(set(reads.values()), {2})
-
-    def test_generated_config_replacement_preserves_mode_and_syncs_directory(self) -> None:
-        _, target = self.generated_network("generated-config-replacement")
-        config = target / "peer0.toml"
-        config.chmod(0o640)
-        replacement = config.read_text(encoding="utf-8") + "\n# replacement\n"
-
-        with mock.patch.object(module.os, "fsync", wraps=os.fsync) as fsync:
-            module._atomic_replace_generated_config(config, replacement)
-
-        self.assertEqual(config.read_text(encoding="utf-8"), replacement)
-        self.assertEqual(module.stat.S_IMODE(config.stat().st_mode), 0o640)
-        self.assertEqual(fsync.call_count, 2)
-        self.assertFalse(any(config.parent.glob(f".{config.name}.config-update-*")))
-
-    def test_trusted_guest_injection_rejects_untrusted_stage_receipt_without_rewrite(
-        self,
-    ) -> None:
-        runtime, target = self.generated_network("generated-bad-stage-receipt")
-        stage = target / module.INROU_STAGE_DIRECTORY
-        runtime.run(["iroha", "taira", "inrou-stage", "--stage-dir", str(stage)])
-        receipt = stage / module.INROU_STAGE_RECEIPT_FILE
-        forged = dict(runtime.stage_receipt)
-        forged["guest_manifest_digest_hex"] = "not-a-digest"
-        receipt.write_text(json.dumps(forged), encoding="utf-8")
-        receipt.chmod(0o600)
-        before = {
-            path: path.read_text(encoding="utf-8")
-            for path in sorted(target.glob("peer*.toml"))
-        }
-
-        with self.assertRaisesRegex(module.DevnetError, "malformed guest_manifest"):
-            module.inject_trusted_inrou_guest_artifact(target, stage)
-
-        self.assertEqual(
-            {path: path.read_text(encoding="utf-8") for path in before},
-            before,
-        )
+    def test_production_harness_contains_no_inrou_toml_mutator(self) -> None:
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("def inject_trusted_inrou_guest_artifact", source)
+        self.assertNotIn("def _trusted_inrou_text", source)
+        self.assertNotIn("def _atomic_replace_generated_config", source)
 
     def test_inrou_stage_receipt_rejects_marker_cleared_hashes(self) -> None:
         runtime, target = self.generated_network("generated-unmarked-stage-receipt")
         stage = target / module.INROU_STAGE_DIRECTORY
-        runtime.run(["iroha", "taira", "inrou-stage", "--stage-dir", str(stage)])
+        runtime.run(
+            [
+                "iroha",
+                "taira",
+                "inrou-stage",
+                "--sorafs-retention-epoch",
+                "2000000000",
+                "--stage-dir",
+                str(stage),
+            ]
+        )
         receipt_path = stage / module.INROU_STAGE_RECEIPT_FILE
         cases = (
             ("service_version", "artifact-" + "0" * 64),
@@ -2739,6 +3715,38 @@ class TairaDevnetTests(unittest.TestCase):
                 receipt_path.chmod(0o600)
                 with self.assertRaisesRegex(module.DevnetError, f"malformed .*{field}"):
                     module._read_inrou_stage_receipt(stage)
+
+    def test_inrou_stage_rejects_substituted_placement_inventory(self) -> None:
+        runtime, target = self.generated_network("generated-placement-substitution")
+        module.require_generated_taira_profiles(target)
+        stage = target / module.INROU_STAGE_DIRECTORY
+        runtime.run(
+            [
+                "iroha",
+                "taira",
+                "inrou-stage",
+                "--sorafs-retention-epoch",
+                "2000000000",
+                "--stage-dir",
+                str(stage),
+            ]
+        )
+        receipt_path = stage / module.INROU_STAGE_RECEIPT_FILE
+        forged = dict(runtime.stage_receipt)
+        forged_targets = [dict(value) for value in forged["placement_targets"]]
+        forged_targets[0]["peer_id"] = "substituted-peer"
+        forged["placement_targets"] = forged_targets
+        receipt_path.write_text(
+            json.dumps(forged, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        receipt_path.chmod(0o600)
+
+        with self.assertRaisesRegex(
+            module.DevnetError,
+            "placement targets differ from generated validators",
+        ):
+            module.require_inrou_stage_placement_targets(target, stage)
 
     def test_canonical_storage_validator_rejects_capacity_drift(self) -> None:
         runtime = FakeRuntime()
@@ -2858,6 +3866,7 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(report["configured_inrou_vm_capacity_per_peer"], 1)
         self.assertEqual(report["configured_peers"], module.PEER_COUNT)
         self.assertEqual(report["inrou_guest_workload_qualification"], "verified")
+        self.assertEqual(report["inrou_operator_preseed"]["status"], "ready")
         self.assertEqual(report["inrou_stored_deploy_receipt"]["status"], "ok")
         self.assertEqual(report["inrou_live_check"]["command"], "taira_inrou_check")
         self.assertEqual(report["inrou_live_check"]["status"], "ok")
@@ -2897,7 +3906,7 @@ class TairaDevnetTests(unittest.TestCase):
                 "inrou-check" in command and "--help" not in command
                 for command in runtime.commands
             ),
-            1,
+            2,
         )
 
         down_args = module.parser().parse_args(["--dir", str(state), "down"])
@@ -2918,6 +3927,48 @@ class TairaDevnetTests(unittest.TestCase):
 
         with self.assertRaisesRegex(module.DevnetError, "qualification record is missing"):
             module.check(args, run=runtime.run, request=runtime.request)
+
+    def test_check_rejects_durable_guest_boot_sequence_rollback(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        runtime.replica_boot_sequences[0] = 1
+        runtime.replica_boot_ids[0] = hashlib.sha256(b"boot-1-1").hexdigest()
+        args = module.parser().parse_args(
+            [
+                "--dir",
+                str(self.root / "state"),
+                "check",
+                "--timeout-seconds",
+                "1",
+            ]
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "boot sequence rolled back"):
+            module.check(args, run=runtime.run, request=runtime.request)
+
+    def test_check_accepts_forward_guest_boot_continuity(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        runtime.replica_boot_sequences[0] += 1
+        runtime.replica_boot_ids[0] = hashlib.sha256(b"boot-1-later").hexdigest()
+        args = module.parser().parse_args(
+            [
+                "--dir",
+                str(self.root / "state"),
+                "check",
+                "--timeout-seconds",
+                "1",
+            ]
+        )
+
+        report = module.check(args, run=runtime.run, request=runtime.request)
+
+        self.assertGreater(
+            report["inrou_live_check"]["replica_identities"][0]["boot_sequence"],
+            report["inrou_restart"]["inrou_check"]["replica_identities"][0][
+                "boot_sequence"
+            ],
+        )
 
     def test_check_never_relabels_stored_success_when_fresh_live_check_fails(self) -> None:
         runtime = FakeRuntime()
@@ -2943,7 +3994,7 @@ class TairaDevnetTests(unittest.TestCase):
                 "inrou-check" in command and "--help" not in command
                 for command in runtime.commands
             ),
-            1,
+            2,
         )
         self.assertEqual(sum("--no-wait" in command for command in runtime.commands), ping_count)
         self.assertEqual(
@@ -2967,6 +4018,25 @@ class TairaDevnetTests(unittest.TestCase):
         ):
             module.check(args, run=runtime.run, request=runtime.request)
 
+    def test_check_rejects_live_deployment_bundle_hash_drift_from_deploy_receipt(
+        self,
+    ) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        live_receipt = json.loads(runtime.inrou_check_stdout)
+        live_receipt["deployment_bundle_hash"] = "e" * 63 + "f"
+        runtime.inrou_check_stdout = json.dumps(live_receipt)
+        state = self.root / "state"
+        args = module.parser().parse_args(
+            ["--dir", str(state), "check", "--timeout-seconds", "1"]
+        )
+
+        with self.assertRaisesRegex(
+            module.DevnetError,
+            "differs from stored deploy field deployment_bundle_hash",
+        ):
+            module.check(args, run=runtime.run, request=runtime.request)
+
     def test_check_rejects_retained_input_snapshot_drift_before_live_probe(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
@@ -2986,11 +4056,12 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "snapshot digest changed"):
             module.check(args, run=runtime.run, request=runtime.request)
 
-        self.assertFalse(
-            any(
+        self.assertEqual(
+            sum(
                 "inrou-check" in command and "--help" not in command
                 for command in runtime.commands
-            )
+            ),
+            1,
         )
 
     def test_check_rejects_retained_stage_guest_identity_drift_before_live_probe(
@@ -3016,11 +4087,12 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "stage guest identity differs"):
             module.check(args, run=runtime.run, request=runtime.request)
 
-        self.assertFalse(
-            any(
+        self.assertEqual(
+            sum(
                 "inrou-check" in command and "--help" not in command
                 for command in runtime.commands
-            )
+            ),
+            1,
         )
 
     def test_check_rejects_any_compiled_tool_drift_before_live_probe(self) -> None:
@@ -3035,11 +4107,12 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "compiled kagami binary changed"):
             module.check(args, run=runtime.run, request=runtime.request)
 
-        self.assertFalse(
-            any(
+        self.assertEqual(
+            sum(
                 "inrou-check" in command and "--help" not in command
                 for command in runtime.commands
-            )
+            ),
+            1,
         )
 
     def test_check_rejects_source_observation_head_drift_before_live_probe(self) -> None:
@@ -3054,11 +4127,12 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "source observation differs"):
             module.check(args, run=runtime.run, request=runtime.request)
 
-        self.assertFalse(
-            any(
+        self.assertEqual(
+            sum(
                 "inrou-check" in command and "--help" not in command
                 for command in runtime.commands
-            )
+            ),
+            1,
         )
 
     def test_check_rejects_worktree_content_drift_before_live_probe(self) -> None:
@@ -3073,11 +4147,12 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "source observation differs"):
             module.check(args, run=runtime.run, request=runtime.request)
 
-        self.assertFalse(
-            any(
+        self.assertEqual(
+            sum(
                 "inrou-check" in command and "--help" not in command
                 for command in runtime.commands
-            )
+            ),
+            1,
         )
 
     def test_check_rejects_branch_drift_before_live_probe(self) -> None:
@@ -3092,11 +4167,12 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "requires branch `optimizations`"):
             module.check(args, run=runtime.run, request=runtime.request)
 
-        self.assertFalse(
-            any(
+        self.assertEqual(
+            sum(
                 "inrou-check" in command and "--help" not in command
                 for command in runtime.commands
-            )
+            ),
+            1,
         )
 
     def test_check_rejects_live_target_identity_drift_before_inrou_probe(self) -> None:
@@ -3111,11 +4187,12 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "validator build target"):
             module.check(args, run=runtime.run, request=runtime.request)
 
-        self.assertFalse(
-            any(
+        self.assertEqual(
+            sum(
                 "inrou-check" in command and "--help" not in command
                 for command in runtime.commands
-            )
+            ),
+            1,
         )
 
     def test_check_rejects_nonverified_guest_qualification_evidence(self) -> None:
@@ -3135,6 +4212,27 @@ class TairaDevnetTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(module.DevnetError, "not verified V1 evidence"):
+            module.check(args, run=runtime.run, request=runtime.request)
+
+    def test_check_rejects_cross_wired_operator_preseed_evidence(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        state = self.root / "state"
+        qualification = state / "network" / module.INROU_GUEST_QUALIFICATION_FILE
+        record = json.loads(qualification.read_text(encoding="utf-8"))
+        record["inrou_operator_preseed"]["targets"][2][
+            "validator_account_id"
+        ] = FAKE_VALIDATOR_AUTHORITIES[1]
+        qualification.write_text(
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        qualification.chmod(0o600)
+        args = module.parser().parse_args(
+            ["--dir", str(state), "check", "--timeout-seconds", "1"]
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "account\\+peer targets"):
             module.check(args, run=runtime.run, request=runtime.request)
 
     def test_check_derives_custom_ports_from_the_generated_bundle(self) -> None:
@@ -3187,7 +4285,12 @@ class TairaDevnetTests(unittest.TestCase):
 
                 self.assertEqual(runtime.process_commands, {})
                 self.assertEqual(
-                    list((self.root / "state" / "network").glob("peer*.pid")), []
+                    list(
+                        (self.root / "state" / "network").glob(
+                            "peer*.process.json"
+                        )
+                    ),
+                    [],
                 )
 
     def test_signed_smoke_receipts_reject_unknown_and_duplicate_fields(self) -> None:
@@ -3230,21 +4333,142 @@ class TairaDevnetTests(unittest.TestCase):
         state = self.root / "state"
         down_args = module.parser().parse_args(["--dir", str(state), "down"])
 
-        with self.assertRaisesRegex(module.DevnetError, "left peer PID files"):
+        with self.assertRaisesRegex(
+            module.DevnetError,
+            "(?:left peer process records|partial process-record cohort)",
+        ):
             module.down(down_args, run=runtime.run)
-        with self.assertRaisesRegex(module.DevnetError, "left peer PID files"):
+        with self.assertRaisesRegex(
+            module.DevnetError,
+            "(?:left peer process records|partial process-record cohort)",
+        ):
             module.up(self.up_args(), run=runtime.run, request=runtime.request)
 
-        self.assertTrue((state / "network" / "peer0.pid").is_file())
+        self.assertTrue((state / "network" / "peer0.process.json").is_file())
         self.assertTrue((state / "network" / "peer0.toml").is_file())
 
-    def test_down_rejects_marker_only_state(self) -> None:
-        state = self.root / "state"
-        module.managed_root(state, create=True)
+    def test_down_cleans_a_recorded_process_that_already_exited(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        exited_pid = runtime.peer_pids[0]
+        runtime.process_ops.remove(exited_pid)
+        args = module.parser().parse_args(
+            ["--dir", str(self.root / "state"), "down"]
+        )
+
+        report = module.down(args, run=runtime.run)
+
+        self.assertTrue(report["network_destroyed"])
+        self.assertFalse(runtime.process_commands)
+
+    def test_down_rejects_unrecorded_replacement_before_generated_stop(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        target = self.root / "state" / "network"
+        recorded = module.read_taira_process_identity(target, 0)
+        runtime.process_ops.remove(int(recorded["pid"]))
+        replacement_pid = 99_999
+        replacement = {
+            key: list(value) if key == "argv" else value
+            for key, value in recorded.items()
+            if key in module.TAIRA_PROCESS_RECORD_RUNTIME_KEYS_V1
+        }
+        replacement.update(
+            {
+                "pid": replacement_pid,
+                "start_time_ticks": int(recorded["start_time_ticks"]) + 1,
+                "session_id": replacement_pid,
+                "process_group_id": replacement_pid,
+            }
+        )
+        runtime.process_ops.add(replacement)
+        stop_count = sum(
+            command[0] == "/bin/bash" and command[1].endswith("/stop.sh")
+            for command in runtime.commands
+        )
+        args = module.parser().parse_args(["--dir", str(target.parent), "down"])
+
+        with self.assertRaisesRegex(module.DevnetError, "does not exclusively bind"):
+            module.down(args, run=runtime.run)
+
+        self.assertEqual(
+            sum(
+                command[0] == "/bin/bash" and command[1].endswith("/stop.sh")
+                for command in runtime.commands
+            ),
+            stop_count,
+        )
+        self.assertTrue((target / "peer0.process.json").is_file())
+
+    def test_down_retry_after_completed_delete_is_idempotent(self) -> None:
+        state = module.managed_root(self.root / "state", create=True)
+        target = state / "network"
+        target.mkdir()
+        (target / "stop.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        runtime = FakeRuntime()
         args = module.parser().parse_args(["--dir", str(state), "down"])
 
-        with self.assertRaisesRegex(module.DevnetError, "run `up` first"):
-            module.down(args, run=FakeRuntime().run)
+        first_report = module.down(args, run=runtime.run)
+        commands_after_first_down = list(runtime.commands)
+        retry_report = module.down(args, run=runtime.run)
+
+        self.assertTrue(first_report["stopped"])
+        self.assertTrue(first_report["network_destroyed"])
+        self.assertEqual(retry_report, first_report)
+        self.assertEqual(runtime.commands, commands_after_first_down)
+        self.assertFalse(target.exists())
+
+    def test_down_preserves_partial_quarantine_for_operator_recovery(self) -> None:
+        state = module.managed_root(self.root / "state", create=True)
+        target = state / "network"
+        target.mkdir()
+        stop = target / "stop.sh"
+        stop.write_text("#!/bin/sh\n", encoding="utf-8")
+        retained = target / "retained-after-partial-removal"
+        retained.write_text("retry-owned\n", encoding="utf-8")
+        runtime = FakeRuntime()
+        args = module.parser().parse_args(["--dir", str(state), "down"])
+        real_rmtree = module.shutil.rmtree
+        removal_attempts = 0
+
+        def interrupt_first_removal(cleanup_target: Path) -> None:
+            nonlocal removal_attempts
+            removal_attempts += 1
+            if removal_attempts == 1:
+                self.assertEqual(
+                    Path(cleanup_target),
+                    state / module.NETWORK_CLEANUP_QUARANTINE,
+                )
+                (Path(cleanup_target) / "stop.sh").unlink()
+                raise OSError("simulated partial recursive removal")
+            real_rmtree(cleanup_target)
+
+        with mock.patch.object(
+            module.shutil,
+            "rmtree",
+            side_effect=interrupt_first_removal,
+        ):
+            with self.assertRaisesRegex(OSError, "partial recursive removal"):
+                module.down(args, run=runtime.run)
+            quarantine = state / module.NETWORK_CLEANUP_QUARANTINE
+            self.assertFalse(target.exists())
+            self.assertFalse((quarantine / "stop.sh").exists())
+            self.assertTrue((quarantine / retained.name).is_file())
+            with self.assertRaisesRegex(
+                module.DevnetError,
+                "prior network cleanup quarantine requires recovery",
+            ):
+                module.down(args, run=runtime.run)
+
+        self.assertEqual(removal_attempts, 1)
+        self.assertFalse(target.exists())
+        self.assertFalse(runtime.process_ops.process_ids())
+        self.assertFalse(
+            any(
+                command[0] == "/bin/bash" and command[1].endswith("/stop.sh")
+                for command in runtime.commands
+            )
+        )
 
     def test_down_destroys_an_already_stopped_network(self) -> None:
         state = module.managed_root(self.root / "state", create=True)
@@ -3265,7 +4489,7 @@ class TairaDevnetTests(unittest.TestCase):
         target.mkdir()
         (target / "peer0.pid").write_text("12345\n", encoding="utf-8")
 
-        with self.assertRaisesRegex(module.DevnetError, "left peer PID files"):
+        with self.assertRaisesRegex(module.DevnetError, "retired Taira PID files"):
             module.up(self.up_args(), run=FakeRuntime().run, request=FakeRuntime().request)
 
         self.assertEqual((target / "peer0.pid").read_text(encoding="utf-8"), "12345\n")
@@ -3280,7 +4504,7 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "run `up` first"):
             module.check(args, request=FakeRuntime().request)
 
-    def test_check_rejects_healthy_listeners_not_owned_by_bundle_pids(self) -> None:
+    def test_check_rejects_healthy_listeners_not_owned_by_process_records(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
         runtime.process_commands.clear()
@@ -3288,14 +4512,14 @@ class TairaDevnetTests(unittest.TestCase):
             ["--dir", str(self.root / "state"), "check", "--timeout-seconds", "1"]
         )
 
-        with self.assertRaisesRegex(module.DevnetError, "not the sole running process"):
+        with self.assertRaisesRegex(module.DevnetError, "does not bind a live exact process"):
             module.check(args, run=runtime.run, request=runtime.request)
 
     def test_down_does_not_run_generated_stop_before_exact_process_ownership(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
         target = self.root / "state" / "network"
-        runtime.process_commands[10_000] = (
+        runtime.process_commands[runtime.peer_pids[0]] = (
             f"/fake/iroha3d_taira --sora --config {target / 'peer0.toml'}.backup"
         )
         stop_count = sum(
@@ -3306,7 +4530,7 @@ class TairaDevnetTests(unittest.TestCase):
             ["--dir", str(self.root / "state"), "down"]
         )
 
-        with self.assertRaisesRegex(module.DevnetError, "not the sole running process"):
+        with self.assertRaisesRegex(module.DevnetError, "retained its incarnation but drifted"):
             module.down(args, run=runtime.run)
 
         self.assertEqual(
@@ -3316,7 +4540,7 @@ class TairaDevnetTests(unittest.TestCase):
             ),
             stop_count,
         )
-        self.assertTrue((target / "peer0.pid").is_file())
+        self.assertTrue((target / "peer0.process.json").is_file())
 
     def test_consensus_status_accepts_exact_unauthenticated_401_contract(self) -> None:
         runtime = FakeRuntime()
@@ -3326,8 +4550,34 @@ class TairaDevnetTests(unittest.TestCase):
 
         self.assertEqual(report["terminal_status"], "Applied")
 
+    def test_initial_start_retries_transient_sumeragi_transport_unavailability(self) -> None:
+        runtime = FakeRuntime()
+        runtime.initial_sumeragi_transport_unavailable_once = True
+
+        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertEqual(report["terminal_status"], "Applied")
+        self.assertEqual(
+            runtime.initial_sumeragi_transport_unavailable_seen,
+            set(range(module.PEER_COUNT)),
+        )
+
+    def test_targeted_restart_retries_transient_sumeragi_transport_unavailability(
+        self,
+    ) -> None:
+        runtime = FakeRuntime()
+        runtime.restart_sumeragi_transport_unavailable_once = True
+
+        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertEqual(report["inrou_restart"]["peer_index"], 0)
+        self.assertEqual(
+            runtime.restart_sumeragi_transport_unavailable_seen,
+            set(range(module.PEER_COUNT)),
+        )
+
     def test_consensus_status_rejects_every_non_401_result(self) -> None:
-        for status in (0, 200, 403, 404, 503):
+        for status in (200, 403, 404, 503):
             with self.subTest(status=status):
                 runtime = FakeRuntime()
                 runtime.sumeragi_status_http = status
@@ -3428,6 +4678,23 @@ class TairaDevnetTests(unittest.TestCase):
     def test_full_public_doctor_is_opt_in(self) -> None:
         runtime = FakeRuntime()
         workspace = self.inrou_canary_workspace()
+        run_fake_preseed = self.locked_preseed_mock.side_effect
+
+        def require_prestart_preseed(*args: object, **kwargs: object) -> object:
+            self.assertEqual(
+                sum("--check-config" in command for command in runtime.commands),
+                module.PEER_COUNT,
+            )
+            self.assertFalse(
+                any(
+                    command[0] == "/bin/bash" and command[1].endswith("start.sh")
+                    for command in runtime.commands
+                )
+            )
+            assert callable(run_fake_preseed)
+            return run_fake_preseed(*args, **kwargs)
+
+        self.locked_preseed_mock.side_effect = require_prestart_preseed
         report = module.up(
             self.up_args(
                 "--inrou-canary-dir",
@@ -3447,7 +4714,7 @@ class TairaDevnetTests(unittest.TestCase):
             for command in runtime.commands
             if "inrou-canary" in command and "--help" not in command
         ]
-        ingests = [command for command in runtime.commands if "ingest" in command]
+        preseed_sessions = self.inrou_operator_preseed_commands
         doctor = [
             command
             for command in runtime.commands
@@ -3459,7 +4726,7 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertNotIn("inrou_stage", report)
         self.assertEqual(len(stages), 1)
         self.assertEqual(len(canaries), len(module.PREPARED_INROU_CHILDREN) * 2)
-        self.assertEqual(len(ingests), module.PEER_COUNT * 2)
+        self.assertEqual(len(preseed_sessions), 1)
         self.assertEqual(len(doctor), 1)
         stage = stages[0]
         canary = canaries[-1]
@@ -3483,6 +4750,24 @@ class TairaDevnetTests(unittest.TestCase):
             stage[stage.index("--bundle-file") + 1],
             str(snapshot / module.INROU_CANARY_BUNDLE_FILE),
         )
+        placement_values = [
+            stage[index + 1]
+            for index, value in enumerate(stage[:-1])
+            if value == "--placement-target"
+        ]
+        self.assertEqual(len(placement_values), module.PEER_COUNT)
+        self.assertEqual(
+            set(placement_values),
+            {
+                f"{authority},{peer_id}"
+                for authority, peer_id in zip(
+                    FAKE_VALIDATOR_AUTHORITIES,
+                    runtime.peer_public_keys,
+                    strict=True,
+                )
+            },
+        )
+        self.assertIn("--sorafs-retention-epoch", stage)
         self.assertRegex(
             report["inrou_canary_input_content_sha256"], r"^[0-9a-f]{64}$"
         )
@@ -3491,20 +4776,23 @@ class TairaDevnetTests(unittest.TestCase):
             stage[stage.index("--stage-dir") + 1],
         )
         self.assertIn("--fee-payer", canary)
-        self.assertTrue(
-            all(
-                f"--max-capacity-bytes={module.TAIRA_SORAFS_MAX_CAPACITY_BYTES}"
-                in command
-                for command in ingests
-            )
+        preseed = preseed_sessions[0]
+        self.assertEqual(preseed[1], "preseed-session")
+        self.assertNotIn("ingest", preseed)
+        self.assertIn(
+            f"--max-capacity-bytes={module.TAIRA_SORAFS_MAX_CAPACITY_BYTES}",
+            preseed,
         )
+        preseed_targets = [
+            value.removeprefix("--target=")
+            for value in preseed
+            if value.startswith("--target=")
+        ]
         self.assertEqual(
-            {
-                next(value for value in command if value.startswith("--data-dir="))
-                for command in ingests
-            },
-            {
-                "--data-dir="
+            preseed_targets,
+            [
+                f"{FAKE_VALIDATOR_AUTHORITIES[index]},"
+                f"{runtime.peer_public_keys[index]},"
                 + str(
                     (
                         self.root
@@ -3516,7 +4804,36 @@ class TairaDevnetTests(unittest.TestCase):
                     ).resolve()
                 )
                 for index in range(module.PEER_COUNT)
-            },
+            ],
+        )
+        self.assertEqual(
+            [value for value in preseed if value.startswith("--manifest=")],
+            [
+                "--manifest="
+                + str(
+                    self.root
+                    / "state"
+                    / "network"
+                    / module.INROU_STAGE_DIRECTORY
+                    / manifest
+                )
+                for manifest in (
+                    module.INROU_STAGE_BUNDLE_MANIFEST,
+                    module.INROU_STAGE_GUEST_MANIFEST,
+                    module.INROU_STAGE_DISCOVERY_MANIFEST,
+                )
+            ],
+        )
+        self.assertEqual(
+            report["inrou_operator_preseed"]["targets"],
+            fake_inrou_operator_preseed_receipt(preseed)["targets"],
+        )
+        self.assertEqual(
+            [
+                artifact["manifest_digest_blake3"]
+                for artifact in report["inrou_operator_preseed"]["artifacts"]
+            ],
+            ["1" * 64, "2" * 64, "9" * 64],
         )
         self.assertEqual(
             doctor[0][doctor[0].index("--public-root") + 1],
@@ -3528,7 +4845,6 @@ class TairaDevnetTests(unittest.TestCase):
             for index, command in enumerate(runtime.commands)
             if "--check-config" in command
         ]
-        ingest_indexes = [runtime.commands.index(command) for command in ingests]
         start_index = next(
             index
             for index, command in enumerate(runtime.commands)
@@ -3545,15 +4861,35 @@ class TairaDevnetTests(unittest.TestCase):
             if "status" in command and "--wait" in command
         )
         canary_index = max(runtime.commands.index(command) for command in canaries)
+        restart_stop_index = next(
+            index
+            for index, command in enumerate(runtime.commands)
+            if command[0] == "/bin/bash"
+            and command[1].endswith("stop.sh")
+            and "--peer-index" in command
+        )
+        restart_start_index = next(
+            index
+            for index, command in enumerate(runtime.commands)
+            if command[0] == "/bin/bash"
+            and command[1].endswith("start.sh")
+            and "--peer-index" in command
+        )
+        inrou_check_index = next(
+            index
+            for index, command in enumerate(runtime.commands)
+            if "inrou-check" in command and "--help" not in command
+        )
         doctor_index = runtime.commands.index(doctor[0])
         self.assertEqual(len(config_check_indexes), module.PEER_COUNT)
         self.assertLess(stage_index, min(config_check_indexes))
-        self.assertLess(max(config_check_indexes), min(ingest_indexes))
-        self.assertLess(max(ingest_indexes), start_index)
         self.assertLess(start_index, ping_index)
         self.assertLess(ping_index, status_index)
         self.assertLess(status_index, canary_index)
-        self.assertLess(canary_index, doctor_index)
+        self.assertLess(canary_index, restart_stop_index)
+        self.assertLess(restart_stop_index, restart_start_index)
+        self.assertLess(restart_start_index, inrou_check_index)
+        self.assertLess(inrou_check_index, doctor_index)
 
     def test_inrou_canary_does_not_enable_full_doctor(self) -> None:
         runtime = FakeRuntime()
@@ -3599,6 +4935,35 @@ class TairaDevnetTests(unittest.TestCase):
             if "doctor" in command and "--help" not in command
         ]
         self.assertEqual(len(doctors), 1)
+        deploy_index = next(
+            index
+            for index, command in enumerate(runtime.commands)
+            if "inrou-canary" in command and "--help" not in command
+        )
+        selected_stop_index = next(
+            index
+            for index, command in enumerate(runtime.commands)
+            if command[0] == "/bin/bash"
+            and command[1].endswith("/stop.sh")
+            and "--peer-index" in command
+        )
+        selected_start_index = next(
+            index
+            for index, command in enumerate(runtime.commands)
+            if command[0] == "/bin/bash"
+            and command[1].endswith("/start.sh")
+            and "--peer-index" in command
+        )
+        inrou_check_index = next(
+            index
+            for index, command in enumerate(runtime.commands)
+            if "inrou-check" in command and "--help" not in command
+        )
+        doctor_index = runtime.commands.index(doctors[0])
+        self.assertLess(deploy_index, selected_stop_index)
+        self.assertLess(selected_stop_index, selected_start_index)
+        self.assertLess(selected_start_index, inrou_check_index)
+        self.assertLess(inrou_check_index, doctor_index)
 
     def test_inrou_workspace_rejects_missing_or_permissive_inputs_before_mutation(self) -> None:
         cases = (
@@ -3828,11 +5193,38 @@ class TairaDevnetTests(unittest.TestCase):
                         "http://127.0.0.1:29080",
                     )
 
+    def test_inrou_canary_receipt_rejects_duplicate_durable_guest_evidence(self) -> None:
+        baseline = json.loads(FakeRuntime().inrou_canary_stdout)
+        cases = (
+            (
+                "app-data-marker",
+                "app_data_marker_sha256",
+                "repeats a durable app-data marker",
+            ),
+            (
+                "guest-boot-id",
+                "guest_boot_id_sha256",
+                "repeats a guest boot identity",
+            ),
+        )
+        for name, field, error in cases:
+            with self.subTest(name=name):
+                receipt = json.loads(json.dumps(baseline))
+                receipt["replica_identities"][1][field] = receipt[
+                    "replica_identities"
+                ][0][field]
+                with self.assertRaisesRegex(module.DevnetError, error):
+                    module.require_canonical_inrou_canary_receipt(
+                        receipt,
+                        "http://127.0.0.1:29080",
+                    )
+
     def test_inrou_canary_receipt_rejects_marker_cleared_hashes(self) -> None:
         baseline = json.loads(FakeRuntime().inrou_canary_stdout)
         cases = (
             ("service_version", "artifact-" + "0" * 64),
             ("bundle_hash", "a" * 64),
+            ("deployment_bundle_hash", "d" * 63 + "e"),
             ("container_manifest_hash", "3" * 63 + "2"),
             ("service_manifest_hash", "4" * 64),
             ("transaction_hash_hex", "6" * 64),
@@ -3855,6 +5247,7 @@ class TairaDevnetTests(unittest.TestCase):
         cases = (
             ("service_version", "artifact-" + "0" * 64),
             ("bundle_hash", "a" * 64),
+            ("deployment_bundle_hash", "d" * 63 + "e"),
             ("container_manifest_hash", "3" * 63 + "2"),
             ("service_manifest_hash", "4" * 64),
         )
@@ -4409,24 +5802,7 @@ class TairaDevnetTests(unittest.TestCase):
                 module.run_command(["cargo", "build"], timeout=7)
 
     def test_mcp_rejects_stale_protocol_and_nonaccepted_notification(self) -> None:
-        def stale_advertisement(
-            _url: str, payload: object | None
-        ) -> tuple[int, object]:
-            self.assertIsNone(payload)
-            return 200, {
-                "enabled": True,
-                "protocolVersion": "2024-11-05",
-            }
-
-        with self.assertRaisesRegex(module.DevnetError, "not enabled/current"):
-            module.check_mcp("http://127.0.0.1:29080/", stale_advertisement)
-
         def stale_initialize(_url: str, payload: object | None) -> tuple[int, object]:
-            if payload is None:
-                return 200, {
-                    "enabled": True,
-                    "protocolVersion": module.MCP_PROTOCOL_VERSION_V1,
-                }
             self.assertIsInstance(payload, dict)
             assert isinstance(payload, dict)
             self.assertEqual(
@@ -4444,11 +5820,6 @@ class TairaDevnetTests(unittest.TestCase):
         def rejected_notification(
             _url: str, payload: object | None
         ) -> tuple[int, object | None]:
-            if payload is None:
-                return 200, {
-                    "enabled": True,
-                    "protocolVersion": module.MCP_PROTOCOL_VERSION_V1,
-                }
             assert isinstance(payload, dict)
             if payload.get("method") == "initialize":
                 return 200, {

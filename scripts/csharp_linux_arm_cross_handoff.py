@@ -22,10 +22,10 @@ from pathlib import Path
 from typing import NoReturn
 
 if __package__:
-    from . import check_native_sdk_abi22_artifact as native_checker
+    from . import check_native_sdk_abi23_artifact as native_checker
 else:
     _checker_path = Path(__file__).resolve(strict=True).with_name(
-        "check_native_sdk_abi22_artifact.py"
+        "check_native_sdk_abi23_artifact.py"
     )
     _checker_spec = importlib.util.spec_from_file_location(
         "_iroha_native_sdk_artifact_checker",

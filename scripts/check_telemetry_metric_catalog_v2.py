@@ -19,13 +19,13 @@ from pathlib import Path
 CATALOG = Path("crates/iroha_telemetry/src/metrics/catalog_v2.tsv")
 SOURCE = Path("crates/iroha_telemetry/src/metrics.rs")
 HEADER = "# iroha-telemetry-metric-catalog-v2"
-CATALOG_BYTES = 111_005
-CATALOG_SHA256 = "2db4064de2e893bcf647003caa5d84637574d88cb6469c5a42363ad19def36ee"
-CATALOG_BLAKE3 = "4fcfbcff77a0db0a63403cd82f7bd5b221f7a7989cdd58fa4e2c0f6666569699"
-ROWS = 813
-REGISTERED = 768
-LEDGER_BYTES = 241_340
-LEDGER_SHA256 = "5e347d587d401f2495570a7caf43a7a0e52770b0976e50749471aa16dadcb785"
+CATALOG_BYTES = 109_426
+CATALOG_SHA256 = "a450755e840fe4b1a0f9356d122d63a54d5aca5816e83678e04cdfd3d529dc1a"
+CATALOG_BLAKE3 = "62cba32dfc1d08ef52d5721497a312e0c879fcf9a2e5a2e5d69e8ebb2a5a0812"
+ROWS = 801
+REGISTERED = 756
+LEDGER_BYTES = 237_771
+LEDGER_SHA256 = "681ef47ceb0a52f2c51c9ce9dae8eaf4df5925a62d72d1e69172eb9e44c90def"
 DSL_MACROS_TOKENS_SHA256 = "879271505b3c3259b930122d4e79f6b8e9eb4b725a1cc267d6397a116ab84fb9"
 FACTORY_TOKENS_SHA256 = "41a07ee3fc3e40d3c0d18b7dd9200f5a11d75f1e3fe1bf074fe36b380be8c19f"
 SUFFIX_TOKENS_SHA256 = "0344d5ecf4b99e1800a445b33b6aa5c9bcc6166d75f0cce18eb28e6cc5be032e"
@@ -38,10 +38,10 @@ METHOD_COUNTS = {
     "histogram_vec": 2,
     "histogram_vec_with_buckets": 52,
     "histogram_with_buckets": 28,
-    "int_counter": 70,
-    "int_counter_vec": 218,
+    "int_counter": 69,
+    "int_counter_vec": 209,
     "int_gauge": 12,
-    "int_gauge_vec": 24,
+    "int_gauge_vec": 22,
 }
 
 RETIRED_CONSENSUS_VRF_METRICS = (
@@ -570,9 +570,9 @@ def check_contents(catalog_raw: bytes, source: str) -> list[str]:
     if "catalog_v1.tsv" in source:
         findings.append("obsolete catalog_v1 consumer remains")
     expected_literals = (
-        "const METRIC_CATALOG_V2_ROWS: usize = 813;",
-        "const METRIC_CATALOG_V2_REGISTERED: usize = 768;",
-        "const METRIC_CATALOG_V2_BYTES: usize = 111_005;",
+        "const METRIC_CATALOG_V2_ROWS: usize = 801;",
+        "const METRIC_CATALOG_V2_REGISTERED: usize = 756;",
+        "const METRIC_CATALOG_V2_BYTES: usize = 109_426;",
         CATALOG_BLAKE3,
     )
     for literal in expected_literals:

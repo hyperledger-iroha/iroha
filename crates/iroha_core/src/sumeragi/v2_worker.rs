@@ -83,9 +83,10 @@ use crate::{
     merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
         CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarCloseAckV1,
-        CertifiedMergeSidecarClosedPrefix, CertifiedMergeSidecarMessage,
-        CertifiedMergeSidecarRequestV1, CertifiedMergeSidecarSemanticSequenceV1,
-        CertifiedMergeSidecarStreamEpochV1, MergeSidecarError, reliable_flush_topic_tag,
+        CertifiedMergeSidecarClosedPrefix, CertifiedMergeSidecarGenerationHintV1,
+        CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
+        CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarStreamEpochV1,
+        MergeSidecarError, reliable_flush_topic_tag,
     },
     native_amx::NativeAmxMessage,
 };
@@ -1613,6 +1614,25 @@ impl LifecycleIoCapacityWait {
             status
         }
     }
+    /// Consume a released observation into the exact target it retained.
+    ///
+    /// Only the owner that also retains the moved-from selector can restore
+    /// this seal. Pending and terminal observations never expose it.
+    pub(crate) fn into_released_target(
+        self,
+        services: &ProductionV2Services,
+    ) -> Result<LifecycleIngressIoTargetSeal, Self> {
+        if self.status(services) != LifecycleIoCapacityWaitStatus::Released {
+            return Err(self);
+        }
+        let Self {
+            queue: _,
+            output_guard: _,
+            target,
+            observed_generation: _,
+        } = self;
+        Ok(target)
+    }
 }
 /// Borrow-bound target reservation holding queue state and admission together.
 /// It permits only typed abort or post-preflight consumption into `target`'s
@@ -1633,6 +1653,16 @@ impl LifecycleIoCapacityReservation<'_> {
         _factory: &super::v2_lifecycle_coordinator::AuthenticatedSchedulerInputsFactory,
     ) -> u64 {
         self.predecessor_debt
+    }
+    /// Verify that this live reservation retains the exact certified-Fetch
+    /// target moved from the accompanying selector.
+    pub(crate) fn matches_captured_certified_fetch_target(
+        &self,
+        prepared: &PreparedLifecycleIngressSelector,
+    ) -> bool {
+        self.target
+            .as_ref()
+            .is_some_and(|target| prepared.matches_captured_certified_fetch_target(target))
     }
     /// Move the exact Serve target into lifecycle admission while retaining
     /// the worker queue cut and reserved auxiliary slot.

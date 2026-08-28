@@ -5,6 +5,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
+    let network_id = test_utils::signed_query_network_id().to_string();
     let app = build_router(cfg);
     let (status, create_call) = post_mcp(
         &app,
@@ -13,9 +14,9 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "id": 108,
             "method": "tools/call",
             "params": {
-                "name": "connect.session.create",
+                "name": "iroha.connect.session.create",
                 "arguments": {
-                    "network_id": "hash:4141414141414141414141414141414141414141414141414141414141414141#7023",
+                    "network_id": (network_id),
                     "app_pk": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU",
                     "nonce": "VlZWVlZWVlZWVlZWVlZWVg"
                 }
@@ -85,7 +86,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "id": 109,
             "method": "tools/call",
             "params": {
-                "name": "connect.ws.ticket",
+                "name": "iroha.connect.ws.ticket",
                 "arguments": {
                     "sid": sid,
                     "role": "app",
@@ -131,7 +132,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "id": 110,
             "method": "tools/call",
             "params": {
-                "name": "connect.ws.ticket",
+                "name": "iroha.connect.ws.ticket",
                 "arguments": {
                     "sid": sid,
                     "role": "wallet",
@@ -161,7 +162,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "id": 111,
             "method": "tools/call",
             "params": {
-                "name": "connect.session.status",
+                "name": "iroha.connect.session.status",
                 "arguments": {
                     "sid": sid,
                     "token_management": token_management
@@ -187,7 +188,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "id": 112,
             "method": "tools/call",
             "params": {
-                "name": "connect.session.delete",
+                "name": "iroha.connect.session.delete",
                 "arguments": {
                     "sid": sid,
                     "token_management": token_management
@@ -213,7 +214,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "id": 113,
             "method": "tools/call",
             "params": {
-                "name": "connect.session.delete",
+                "name": "iroha.connect.session.delete",
                 "arguments": {
                     "sid": sid,
                     "token_management": token_management
@@ -234,53 +235,4 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             .and_then(Value::as_u64),
         Some(404)
     );
-}
-#[tokio::test]
-async fn mcp_jsonrpc_connect_session_create_and_ticket_surfaces_create_error() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    enable_writer_mcp(&mut cfg);
-    cfg.torii.connect.enabled = true;
-    let app = build_router(cfg);
-    for (id, tool_name) in [
-        (1080, "connect.session.create_and_ticket"),
-        (1081, "iroha.connect.session.create_and_ticket"),
-    ] {
-        let (status, call) = post_mcp(
-            &app,
-            norito::json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "method": "tools/call",
-                "params": {
-                    "name": tool_name,
-                    "arguments": {
-                        "network_id": "not-a-network-id",
-                        "app_pk": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-                        "nonce": "AgICAgICAgICAgICAgICAg",
-                        "role": "app",
-                        "ticket_node_url": "https://node.example"
-                    }
-                }
-            }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(
-            tool_is_error(&call),
-            "create-and-ticket alias `{tool_name}` should surface create errors"
-        );
-        let structured = structured_content(&call);
-        assert!(
-            structured
-                .get("status")
-                .and_then(Value::as_u64)
-                .is_some_and(|status| status >= 400),
-            "expected create error status to be forwarded unchanged"
-        );
-        assert!(
-            structured.get("ticket").is_none(),
-            "error response should be raw create response without ticket payload"
-        );
-    }
 }

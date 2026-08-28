@@ -1125,11 +1125,19 @@ fn constant_rate_capability_rejects_strict_mode_without_silent_downgrade() {
     };
     let error = strict
         .validate()
-        .expect_err("strict mode must fail until payload uses the fixed-rate scheduler");
+        .expect_err("strict mode remains gated on bounded DATAGRAM entry accounting");
     assert!(
-        matches!(error, ConfigError::ConstantRateCapability(ref message) if message.contains("strict mode is unavailable") && message.contains("DATAGRAM failures")),
-        "unexpected error: {error:?}"
+        error
+            .to_string()
+            .contains("Quinn 0.11.9 / quinn-proto 0.11.15")
+            && error
+                .to_string()
+                .contains("payload bytes instead of entries"),
+        "unexpected strict-mode rejection: {error}"
     );
+    // Keep the requested value observable; validation must reject it rather
+    // than silently advertising the weaker best-effort mode.
+    assert_eq!(strict.capability().mode, ConstantRateMode::Strict);
 
     let best_effort = ConstantRateCapabilityConfig {
         enabled: true,

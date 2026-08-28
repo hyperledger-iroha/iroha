@@ -535,11 +535,11 @@ fn json_get_quantity_accepts_input_heap_and_literal_pointers() {
     assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
+    vm.load_program(&canonical_prog).unwrap();
     let p_json = alloc_heap_tlv(&mut vm, &json_tlv);
     let p_key = alloc_heap_tlv(&mut vm, &key_tlv);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
-    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
     assert_eq!(tlv.type_id, PointerType::Quantity);
@@ -592,9 +592,9 @@ fn schema_info_accepts_input_heap_and_literal_pointers() {
     decode_schema_info(&vm);
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
+    vm.load_program(&canonical_prog).unwrap();
     let p_schema = alloc_heap_tlv(&mut vm, &schema_tlv);
     vm.set_register(10, p_schema);
-    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_schema_info(&vm);
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
@@ -639,12 +639,12 @@ fn json_set_i64_accepts_input_heap_and_literal_pointers() {
     decode_bucket_id(&vm);
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
+    vm.load_program(&canonical_prog).unwrap();
     let p_json = alloc_heap_tlv(&mut vm, &json_tlv);
     let p_key = alloc_heap_tlv(&mut vm, &key_tlv);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.set_register(12, 2);
-    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_bucket_id(&vm);
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
@@ -698,13 +698,13 @@ fn json_set_account_id_accepts_input_heap_and_literal_pointers() {
     decode_owner(&vm);
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
+    vm.load_program(&canonical_prog).unwrap();
     let p_json = alloc_heap_tlv(&mut vm, &json_tlv);
     let p_key = alloc_heap_tlv(&mut vm, &key_tlv);
     let p_owner = alloc_heap_tlv(&mut vm, &owner_tlv);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.set_register(12, p_owner);
-    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_owner(&vm);
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
@@ -759,11 +759,11 @@ fn build_path_key_norito_accepts_input_heap_and_literal_pointers() {
     decode_path(&vm);
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
+    vm.load_program(&canonical_prog).unwrap();
     let p_base = alloc_heap_tlv(&mut vm, &base_tlv);
     let p_key = alloc_heap_tlv(&mut vm, &key_tlv);
     vm.set_register(10, p_base);
     vm.set_register(11, p_key);
-    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_path(&vm);
     let (literal_prog, literal_ptrs) = assemble_state_map_syscall_with_literals(

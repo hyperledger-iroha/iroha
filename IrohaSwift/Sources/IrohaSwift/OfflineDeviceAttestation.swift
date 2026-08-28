@@ -1226,6 +1226,7 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         }
         let decoded = try ToriiCanonicalTransactionDraft.inspectVersionedSignedTransaction(
             canonicalNorito,
+            expectedAdmissionIntent: .queuePlanSynced,
             context: "Kagemusha device-registration transaction"
         )
         let validated = try TransactionInputValidator.validate(
@@ -1404,6 +1405,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         do {
             try ToriiCanonicalTransactionDraft.validateTransactionPayload(
                 payload,
+                expectedAdmissionIntent: .queuePlanSynced,
                 context: "Kagemusha device-registration transaction"
             )
         } catch {
@@ -1491,6 +1493,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         do {
             _ = try ToriiCanonicalTransactionDraft.inspectVersionedSignedTransaction(
                 norito,
+                expectedAdmissionIntent: .queuePlanSynced,
                 context: "Kagemusha device-registration transaction"
             )
         } catch {

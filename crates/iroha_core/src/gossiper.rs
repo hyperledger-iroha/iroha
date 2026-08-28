@@ -213,20 +213,9 @@ fn tx_gossip_frame_payload_cap(
         .or_else(|| probe_gossip.encoded_len_hint())
         .unwrap_or(0);
     let payload = NetworkMessage::TransactionGossiper(Arc::new(probe_gossip));
-    let direct_len = iroha_p2p::network::data_frame_wire_len(
-        self_peer_id,
-        Some(max_peer_id),
-        network_cfg.relay_ttl,
-        Priority::Low,
-        &payload,
-    );
-    let broadcast_len = iroha_p2p::network::data_frame_wire_len(
-        self_peer_id,
-        None,
-        network_cfg.relay_ttl,
-        Priority::Low,
-        &payload,
-    );
+    let direct_len =
+        iroha_p2p::network::data_frame_wire_len(self_peer_id, Some(max_peer_id), &payload);
+    let broadcast_len = iroha_p2p::network::data_frame_wire_len(self_peer_id, None, &payload);
     let envelope_len = direct_len.max(broadcast_len).saturating_sub(gossip_len);
     plaintext_cap.saturating_sub(envelope_len)
 }
@@ -4177,6 +4166,10 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             p2p_proxy: None,
             p2p_proxy_required: false,
             p2p_no_proxy: Vec::new(),
+            outbound_dial_allow_cidrs: Vec::new(),
+            outbound_dial_deny_cidrs: Vec::new(),
+            outbound_dial_allow_dns_suffixes: Vec::new(),
+            outbound_dial_deny_dns_suffixes: Vec::new(),
             p2p_proxy_tls_verify: true,
             p2p_proxy_tls_pinned_cert_der_base64: None,
             quic_enabled: false,

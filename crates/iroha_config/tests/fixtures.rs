@@ -1514,6 +1514,31 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .join("configs/soranexus/taira/config.toml");
     let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
     let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
+    let network = doc
+        .get("network")
+        .and_then(TomlValue::as_table)
+        .expect("Taira network config");
+    let governance = doc
+        .get("gov")
+        .and_then(TomlValue::as_table)
+        .expect("Taira governance config");
+    assert_eq!(
+        network
+            .get("soranet_vpn")
+            .and_then(TomlValue::as_table)
+            .and_then(|vpn| vpn.get("operator_account_id")),
+        governance.get("bond_escrow_account"),
+        "the parsed disabled VPN profile must use the Taira-prefixed governance identity"
+    );
+    assert_eq!(
+        governance.get("sorafs_pin_fee_treasury_account"),
+        doc.get("nexus")
+            .and_then(TomlValue::as_table)
+            .and_then(|nexus| nexus.get("fees"))
+            .and_then(TomlValue::as_table)
+            .and_then(|fees| fees.get("fee_sink_account_id")),
+        "the SoraFS pin-fee treasury must use the Taira-prefixed fee-sink identity"
+    );
     assert!(
         doc.get("settlement")
             .and_then(TomlValue::as_table)

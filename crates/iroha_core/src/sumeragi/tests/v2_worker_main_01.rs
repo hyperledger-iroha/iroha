@@ -3178,10 +3178,18 @@ fn certified_fetch_cancellation_retires_backpressured_request() {
         .map(|entry| entry.validator.clone())
         .collect::<Vec<_>>();
     let task = BodyFetchTask::certified_for_test(64, tag, None, sources, request);
-    service.set_exact_output_admission_hook(|post, ticket| {
+    let ticket_fixtures = Arc::new(Mutex::new(Vec::new()));
+    let ticket_fixtures_for_hook = Arc::clone(&ticket_fixtures);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        assert!(ticket.is_none());
+        let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+        ticket_fixtures_for_hook
+            .lock()
+            .expect("retain cancellation ticket fixtures")
+            .push(fixture);
         Err(NetworkActorAdmissionError::Backpressured {
             message: post,
-            ticket,
+            ticket: Some(ticket),
             rank: 1,
         })
     });
@@ -3193,6 +3201,13 @@ fn certified_fetch_cancellation_retires_backpressured_request() {
             .has_pending_exact_output()
             .expect("inspect the retained request")
     );
+    assert!(
+        ticket_fixtures
+            .lock()
+            .expect("inspect cancellation ticket fixtures")
+            .iter()
+            .all(|fixture| fixture.waiter_count() == 1)
+    );
     service
         .cancel_body_fetch(&task)
         .expect("the exact fetch owner cancels its retained request");
@@ -3201,6 +3216,144 @@ fn certified_fetch_cancellation_retires_backpressured_request() {
             .has_pending_exact_output()
             .expect("inspect request cancellation")
     );
+    assert!(
+        ticket_fixtures
+            .lock()
+            .expect("inspect cancelled ticket fixtures")
+            .iter()
+            .all(|fixture| fixture.waiter_count() == 0)
+    );
+}
+#[test]
+fn recovered_decision_fetch_store_retirement_cancels_ranked_request_output() {
+    let (mut service, keys) = fixture();
+    allow_fixture_block_payload(&mut service.context);
+    let (canonical_wire, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let (authenticated_request, _) = production_authenticated_serve_request(
+        &service.context,
+        &keys,
+        &keys[0],
+        proposal.round,
+        proposal.subject,
+        wire::GlobalPhase::Commit,
+        &[0, 1, 2],
+    );
+    let response = certified_serve_response(
+        &authenticated_request,
+        proposal.manifest.clone(),
+        canonical_wire,
+        &keys[1],
+    );
+    let sources = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    let key =
+        RecoveredDecisionFetchDispatchKeyV1::for_height_context_test(&service.context, 66, 0xD6);
+    let owner = RecoveredDecisionFetchRequestOwnerV1::for_test(
+        key,
+        EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        ),
+        sources,
+        authenticated_request,
+    );
+    let request_hash = owner.request_hash();
+    let responder = response.responder.clone();
+    let _authenticated_response = owner
+        .authenticate_response(&service.context, response, &responder)
+        .expect("one healthy archive authenticates the recovered Fetch response");
+    let fanout = service
+        .recovered_decision_fetch_fanout(&owner)
+        .expect("construct the exact recovered Fetch request fanout")
+        .expect("the four-validator fixture has remote archives");
+    {
+        let mut pending = service
+            .lock_pending_exact_output()
+            .expect("lock the recovered Fetch exact-output corridor");
+        assert_eq!(pending.enqueue(fanout), Ok(ExactFanoutOwnership::Owned));
+    }
+
+    let ticket_fixtures = Arc::new(Mutex::new(Vec::new()));
+    let ticket_fixtures_for_hook = Arc::clone(&ticket_fixtures);
+    let admitted_healthy_responder = Arc::new(Mutex::new(false));
+    let admitted_healthy_responder_for_hook = Arc::clone(&admitted_healthy_responder);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        if post.peer_id == responder {
+            *admitted_healthy_responder_for_hook
+                .lock()
+                .expect("record healthy recovered Fetch admission") = true;
+            return Ok(());
+        }
+        let ticket = ticket.unwrap_or_else(|| {
+            let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+            ticket_fixtures_for_hook
+                .lock()
+                .expect("retain recovered Fetch ticket fixtures")
+                .push(fixture);
+            ticket
+        });
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket: Some(ticket),
+            rank: 1,
+        })
+    });
+    assert!(
+        service
+            .retry_pending_exact_output()
+            .expect("drive the partly admitted recovered Fetch request")
+    );
+    assert!(
+        *admitted_healthy_responder
+            .lock()
+            .expect("inspect healthy recovered Fetch admission")
+    );
+    assert!(
+        service
+            .has_pending_exact_output()
+            .expect("ranked sibling request targets remain pending")
+    );
+    {
+        let tickets = ticket_fixtures
+            .lock()
+            .expect("inspect ranked recovered Fetch tickets");
+        assert!(!tickets.is_empty());
+        assert!(tickets.iter().all(|fixture| fixture.waiter_count() == 1));
+    }
+
+    let output_guard = service.lifecycle_output_guard();
+    let retirement = service
+        .prepare_recovered_decision_fetch_request_output_retirement(request_hash)
+        .expect("preflight recovered Fetch request retirement before Store publication");
+    let operation = output_guard
+        .begin_fail_stop_operation()
+        .expect("model the successful durable Store publication tail");
+    retirement.commit_after_publication(operation.permit());
+    operation.complete();
+
+    assert!(
+        !service
+            .has_pending_exact_output()
+            .expect("successful recovered Store retires obsolete request output")
+    );
+    assert!(
+        !service
+            .retry_pending_exact_output()
+            .expect("terminal exact-output gate is clear for successor activation")
+    );
+    assert!(
+        ticket_fixtures
+            .lock()
+            .expect("inspect retired recovered Fetch tickets")
+            .iter()
+            .all(|fixture| fixture.waiter_count() == 0)
+    );
+    assert!(!output_guard.restart_required());
 }
 #[test]
 fn certified_fetch_success_commit_retires_backpressured_request() {
@@ -3223,10 +3376,18 @@ fn certified_fetch_success_commit_retires_backpressured_request() {
         .map(|entry| entry.validator.clone())
         .collect::<Vec<_>>();
     let task = BodyFetchTask::certified_for_test(65, tag, None, sources, request);
-    service.set_exact_output_admission_hook(|post, ticket| {
+    let ticket_fixtures = Arc::new(Mutex::new(Vec::new()));
+    let ticket_fixtures_for_hook = Arc::clone(&ticket_fixtures);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        assert!(ticket.is_none());
+        let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+        ticket_fixtures_for_hook
+            .lock()
+            .expect("retain successful-response ticket fixtures")
+            .push(fixture);
         Err(NetworkActorAdmissionError::Backpressured {
             message: post,
-            ticket,
+            ticket: Some(ticket),
             rank: 1,
         })
     });
@@ -3252,6 +3413,13 @@ fn certified_fetch_success_commit_retires_backpressured_request() {
         !service
             .has_pending_exact_output()
             .expect("successful response cancels its retained request")
+    );
+    assert!(
+        ticket_fixtures
+            .lock()
+            .expect("inspect successful-response ticket fixtures")
+            .iter()
+            .all(|fixture| fixture.waiter_count() == 0)
     );
 }
 #[test]
@@ -3525,7 +3693,7 @@ fn commit_certificate_rotation_releases_unranked_peer_but_preserves_ranked_ticke
 }
 #[test]
 fn rotated_certified_fetch_waits_for_ranked_incumbent_then_reaches_later_peer() {
-    let (service, keys) = fixture();
+    let (service, keys) = fixture_with_block_payload();
     service
         .set_exact_output_shared_unit_capacity_for_test(1)
         .expect("install a one-target shared output corridor");
@@ -3558,22 +3726,60 @@ fn rotated_certified_fetch_waits_for_ranked_incumbent_then_reaches_later_peer() 
             .clone(),
     );
     let claim = ExactOutputRolloverClaim::GlobalV2(service.exact_output_scope());
-    let old =
-        PendingExactFanout::claimed(vec![message.clone()], vec![old_peer.clone()], claim.clone())
+    let fanout = |peer: PeerId| {
+        PendingExactFanout::claimed(vec![message.clone()], vec![peer], claim.clone())
             .expect("validate incumbent acquisition fanout")
-            .expect("incumbent acquisition fanout has one target");
-    let rotated_while_blocked =
-        PendingExactFanout::claimed(vec![message.clone()], vec![new_peer.clone()], claim.clone())
-            .expect("validate rotated acquisition fanout")
-            .expect("rotated acquisition fanout has one target");
-    let rotated_after_drain =
-        PendingExactFanout::claimed(vec![message.clone()], vec![new_peer.clone()], claim.clone())
-            .expect("validate retried rotated acquisition fanout")
-            .expect("retried rotated acquisition fanout has one target");
+            .expect("acquisition fanout has one target")
+    };
     let mut pending = service
         .lock_pending_exact_output()
         .expect("open exact-output corridor");
-    assert_eq!(pending.enqueue(old), Ok(ExactFanoutOwnership::Owned));
+
+    assert_eq!(
+        pending.enqueue(fanout(old_peer.clone())),
+        Ok(ExactFanoutOwnership::Owned)
+    );
+    assert_eq!(
+        pending
+            .drive_with_budget(1, |post, ticket, route| {
+                assert_eq!(post.peer_id, old_peer);
+                assert!(ticket.is_none());
+                assert!(matches!(route, ExactTargetRoute::Topology));
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket: None,
+                    rank: 1,
+                })
+            })
+            .expect("release a body acquisition which acquired no actor rank"),
+        ExactOutputDriveOutcome::Drained
+    );
+    assert!(pending.fanouts.is_empty());
+    assert!(pending.source_fifo_owners.is_empty());
+    assert!(pending.reservation_owner_counts.is_empty());
+    assert_eq!(pending.ownership_units, 0);
+    assert_eq!(pending.shared_ownership_units, 0);
+
+    assert_eq!(
+        pending.enqueue(fanout(new_peer.clone())),
+        Ok(ExactFanoutOwnership::Owned),
+        "the fetch source can install its rotated archive batch"
+    );
+    assert_eq!(
+        pending
+            .drive_with_budget(1, |post, ticket, _route| {
+                assert_eq!(post.peer_id, new_peer);
+                assert!(ticket.is_none());
+                Ok(())
+            })
+            .expect("the first rotated archive request crosses actor admission"),
+        ExactOutputDriveOutcome::Drained
+    );
+
+    assert_eq!(
+        pending.enqueue(fanout(old_peer.clone())),
+        Ok(ExactFanoutOwnership::Owned)
+    );
     let mut ticket_fixture = None;
     assert!(matches!(
         pending
@@ -3605,7 +3811,7 @@ fn rotated_certified_fetch_waits_for_ranked_incumbent_then_reaches_later_peer() 
     );
 
     assert_eq!(
-        pending.enqueue(rotated_while_blocked),
+        pending.enqueue(fanout(new_peer.clone())),
         Ok(ExactFanoutOwnership::SourceRetained),
         "the rotating discovery source keeps the next batch while actor rank is owned"
     );
@@ -3654,7 +3860,7 @@ fn rotated_certified_fetch_waits_for_ranked_incumbent_then_reaches_later_peer() 
     );
 
     assert_eq!(
-        pending.enqueue(rotated_after_drain),
+        pending.enqueue(fanout(new_peer.clone())),
         Ok(ExactFanoutOwnership::Owned),
         "the retained source may install the later archive after capacity returns"
     );
@@ -3678,15 +3884,506 @@ fn rotated_certified_fetch_waits_for_ranked_incumbent_then_reaches_later_peer() 
     assert_eq!(pending.ownership_units, 0);
     assert_eq!(pending.shared_ownership_units, 0);
 
-    let cancellable = PendingExactFanout::claimed(vec![message], vec![old_peer], claim)
-        .expect("validate cancellable acquisition fanout")
-        .expect("cancellable acquisition fanout has one target");
+    let cancellable = fanout(old_peer);
     assert_eq!(
         pending.enqueue(cancellable),
         Ok(ExactFanoutOwnership::Owned)
     );
     assert_eq!(pending.cancel_certified_body_request(request_hash), Ok(1));
     assert!(pending.fanouts.is_empty());
+}
+#[test]
+fn historical_lane_recovery_releases_ticketless_old_signer_but_keeps_ranked_owner() {
+    let (service, _) = fixture();
+    service
+        .set_exact_output_shared_unit_capacity_for_test(1)
+        .expect("install a one-target shared output corridor");
+    // Exact-output ownership needs the immutable request wire and its typed
+    // claim only; the lane owner performs certificate validation before this
+    // handoff boundary.
+    let request = LaneHistoricalRecoveryRequestV1 {
+        version: super::super::message::LANE_HISTORICAL_RECOVERY_VERSION_V1,
+        requester: service.local_peer.clone(),
+        certificate: None,
+        signer_pops: BTreeMap::new(),
+        kind: super::super::message::LaneHistoricalRecoveryKindV1::CanonicalBlock {
+            finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"historical lane recovery finality",
+            )),
+        },
+    };
+    let request_hash = HashOf::new(&request);
+    let wire = BlockMessageWire::try_preencoded(Arc::new(
+        BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request)),
+    ))
+    .expect("encode historical lane recovery request");
+    let message = NetworkMessage::SumeragiBlock(Arc::new(wire));
+    let old_signer = PeerId::new(
+        KeyPair::try_from_seed(vec![0xD5; 32], Algorithm::Ed25519)
+            .expect("deterministic departed historical signer")
+            .public_key()
+            .clone(),
+    );
+    let responsive_signer = PeerId::new(
+        KeyPair::try_from_seed(vec![0xD6; 32], Algorithm::Ed25519)
+            .expect("deterministic responsive historical signer")
+            .public_key()
+            .clone(),
+    );
+    assert!(
+        service
+            .context
+            .roster
+            .iter()
+            .all(|entry| entry.validator != old_signer && entry.validator != responsive_signer),
+        "both predecessor signers must use the shared non-roster corridor"
+    );
+    let fanout = |peer: PeerId| {
+        PendingExactFanout::claimed(
+            vec![message.clone()],
+            vec![peer.clone()],
+            ExactOutputRolloverClaim::HistoricalLaneRecoveryRequest {
+                scope: service.exact_output_scope(),
+                target: peer,
+                request_hash,
+            },
+        )
+        .expect("validate historical recovery fanout")
+        .expect("historical recovery fanout has one target")
+    };
+    let mut pending = service
+        .lock_pending_exact_output()
+        .expect("open exact-output corridor");
+
+    assert_eq!(
+        pending.enqueue(fanout(old_signer.clone())),
+        Ok(ExactFanoutOwnership::Owned)
+    );
+    assert_eq!(
+        pending
+            .drive_with_budget(1, |post, ticket, route| {
+                assert_eq!(post.peer_id, old_signer);
+                assert!(ticket.is_none());
+                assert!(matches!(route, ExactTargetRoute::Topology));
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket: None,
+                    rank: 1,
+                })
+            })
+            .expect("release a departed signer which acquired no actor rank"),
+        ExactOutputDriveOutcome::Drained
+    );
+    assert!(pending.fanouts.is_empty());
+    assert_eq!(pending.ownership_units, 0);
+    assert_eq!(pending.shared_ownership_units, 0);
+    assert_eq!(
+        pending.enqueue(fanout(responsive_signer.clone())),
+        Ok(ExactFanoutOwnership::Owned),
+        "ticketless retirement must release capacity for another predecessor signer"
+    );
+    assert_eq!(
+        pending
+            .drive_with_budget(1, |post, ticket, _route| {
+                assert_eq!(post.peer_id, responsive_signer);
+                assert!(ticket.is_none());
+                Ok(())
+            })
+            .expect("responsive historical signer crosses actor admission"),
+        ExactOutputDriveOutcome::Drained
+    );
+
+    assert_eq!(
+        pending.enqueue(fanout(old_signer.clone())),
+        Ok(ExactFanoutOwnership::Owned)
+    );
+    let mut ticket_fixture = None;
+    assert!(matches!(
+        pending
+            .drive_with_budget(1, |post, ticket, _route| {
+                assert!(ticket.is_none());
+                let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+                ticket_fixture = Some(fixture);
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket: Some(ticket),
+                    rank: 1,
+                })
+            })
+            .expect("retain a ranked historical signer attempt"),
+        ExactOutputDriveOutcome::BudgetExhausted { .. }
+            | ExactOutputDriveOutcome::Backpressured { .. }
+    ));
+    assert_eq!(pending.shared_ownership_units, 1);
+    assert_eq!(
+        pending.enqueue(fanout(responsive_signer.clone())),
+        Ok(ExactFanoutOwnership::SourceRetained),
+        "another non-roster signer cannot displace a live actor rank"
+    );
+    assert_eq!(
+        ticket_fixture
+            .as_ref()
+            .expect("ranked attempt minted a ticket")
+            .waiter_count(),
+        1
+    );
+    assert_eq!(
+        pending
+            .drive_with_budget(1, |post, ticket, _route| {
+                assert_eq!(post.peer_id, old_signer);
+                assert_eq!(
+                    ticket.as_ref().and_then(NetworkActorAdmissionTicket::rank),
+                    Some(1)
+                );
+                Ok(())
+            })
+            .expect("actor recovery drains the ranked predecessor signer"),
+        ExactOutputDriveOutcome::Drained
+    );
+    assert_eq!(
+        pending.enqueue(fanout(responsive_signer)),
+        Ok(ExactFanoutOwnership::Owned),
+        "the historical source can retry the next signer after rank drains"
+    );
+    assert_eq!(
+        pending.cancel_historical_lane_recovery_requests(&BTreeSet::from([request_hash])),
+        Ok(1)
+    );
+    assert!(pending.fanouts.is_empty());
+    assert!(pending.source_fifo_owners.is_empty());
+    assert!(pending.reservation_owner_counts.is_empty());
+    assert_eq!(pending.ownership_units, 0);
+    assert_eq!(pending.shared_ownership_units, 0);
+}
+#[test]
+fn historical_lane_response_to_departed_requester_releases_shared_slot() {
+    let (service, _) = fixture();
+    service
+        .set_exact_output_shared_unit_capacity_for_test(1)
+        .expect("install a one-target shared output corridor");
+    let history = durable_history_fixture();
+    let source_height = NonZeroUsize::new(
+        usize::try_from(history.artifact.height).expect("historical height fits usize"),
+    )
+    .expect("historical height is non-zero");
+    let block = history
+        .kura
+        .get_block(source_height)
+        .expect("durable history retains the canonical block");
+    let request_hash: HashOf<LaneHistoricalRecoveryRequestV1> =
+        HashOf::from_untyped_unchecked(Hash::new(b"historical response request"));
+    let response = LaneHistoricalRecoveryResponseV1 {
+        version: super::super::message::LANE_HISTORICAL_RECOVERY_VERSION_V1,
+        request_hash,
+        payload: LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
+            block: block.as_ref().clone(),
+            finality_artifact: history.artifact,
+        },
+    };
+    let response_hash = HashOf::new(&response);
+    let wire = BlockMessageWire::try_preencoded(Arc::new(
+        BlockMessage::LaneHistoricalRecoveryResponse(Box::new(response)),
+    ))
+    .expect("encode historical lane recovery response");
+    let message = NetworkMessage::SumeragiBlock(Arc::new(wire));
+    let departed_requester = PeerId::new(
+        KeyPair::try_from_seed(vec![0xD7; 32], Algorithm::Ed25519)
+            .expect("deterministic departed historical requester")
+            .public_key()
+            .clone(),
+    );
+    let live_requester = PeerId::new(
+        KeyPair::try_from_seed(vec![0xD8; 32], Algorithm::Ed25519)
+            .expect("deterministic live historical requester")
+            .public_key()
+            .clone(),
+    );
+    let fanout = |peer: PeerId| {
+        PendingExactFanout::claimed(
+            vec![message.clone()],
+            vec![peer.clone()],
+            ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse {
+                scope: service.exact_output_scope(),
+                target: peer,
+                request_hash,
+                response_hash,
+            },
+        )
+        .expect("validate historical response fanout")
+        .expect("historical response fanout has one target")
+    };
+    let mut pending = service
+        .lock_pending_exact_output()
+        .expect("open exact-output corridor");
+    assert_eq!(
+        pending.enqueue(fanout(departed_requester.clone())),
+        Ok(ExactFanoutOwnership::Owned)
+    );
+    assert_eq!(
+        pending
+            .drive_with_budget(1, |post, ticket, route| {
+                assert_eq!(post.peer_id, departed_requester);
+                assert!(ticket.is_none());
+                assert!(matches!(route, ExactTargetRoute::Topology));
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket: None,
+                    rank: 1,
+                })
+            })
+            .expect("release reconstructible response with no actor rank"),
+        ExactOutputDriveOutcome::Drained
+    );
+    assert!(pending.fanouts.is_empty());
+    assert_eq!(pending.ownership_units, 0);
+    assert_eq!(pending.shared_ownership_units, 0);
+    assert_eq!(
+        pending.enqueue(fanout(live_requester.clone())),
+        Ok(ExactFanoutOwnership::Owned),
+        "a departed requester cannot pin the only shared recovery slot"
+    );
+    assert_eq!(
+        pending
+            .drive_with_budget(1, |post, ticket, _route| {
+                assert_eq!(post.peer_id, live_requester);
+                assert!(ticket.is_none());
+                Ok(())
+            })
+            .expect("live requester response crosses actor admission"),
+        ExactOutputDriveOutcome::Drained
+    );
+    assert!(pending.fanouts.is_empty());
+    assert!(pending.source_fifo_owners.is_empty());
+    assert!(pending.reservation_owner_counts.is_empty());
+    assert_eq!(pending.ownership_units, 0);
+    assert_eq!(pending.shared_ownership_units, 0);
+}
+#[test]
+fn autonomous_new_view_and_historical_certificate_release_departed_membership_slot() {
+    let (service, _) = fixture();
+    let scope = service.exact_output_scope();
+    let departed = PeerId::new(
+        KeyPair::try_from_seed(vec![0xDB; 32], Algorithm::Ed25519)
+            .expect("deterministic departed lane validator")
+            .public_key()
+            .clone(),
+    );
+    let live = PeerId::new(
+        KeyPair::try_from_seed(vec![0xDC; 32], Algorithm::Ed25519)
+            .expect("deterministic live predecessor lane validator")
+            .public_key()
+            .clone(),
+    );
+    assert!(
+        service
+            .context
+            .roster
+            .iter()
+            .all(|entry| entry.validator != departed && entry.validator != live),
+        "predecessor lane validators must share the non-roster corridor"
+    );
+    let new_view = non_retireable_lane_transport_messages(service.local_peer.clone())
+        .into_iter()
+        .find(|message| matches!(message, BlockMessage::LaneBlockNewViewVote(_)))
+        .expect("autonomous transport fixture includes a NewView vote");
+    let autonomous_fanout = |target: PeerId| {
+        let wire = BlockMessageWire::try_preencoded(Arc::new(new_view.clone()))
+            .expect("encode autonomous NewView vote");
+        PendingExactFanout::claimed(
+            vec![NetworkMessage::SumeragiBlock(Arc::new(wire))],
+            vec![target],
+            ExactOutputRolloverClaim::AutonomousLane {
+                scope,
+                local_peer: service.local_peer.clone(),
+                proposal_height: 1,
+            },
+        )
+        .expect("validate autonomous NewView fanout")
+        .expect("autonomous NewView fanout has one target")
+    };
+    let historical = BlockMessage::LaneBlockQc(lane_commit_qc(service.local_peer.clone()));
+    let BlockMessage::LaneBlockQc(historical_qc) = &historical else {
+        unreachable!("historical fixture is a lane QC")
+    };
+    let historical_fanout = |target: PeerId| {
+        let wire = BlockMessageWire::try_preencoded(Arc::new(historical.clone()))
+            .expect("encode historical lane certificate");
+        PendingExactFanout::claimed(
+            vec![NetworkMessage::SumeragiBlock(Arc::new(wire))],
+            vec![target.clone()],
+            ExactOutputRolloverClaim::HistoricalLaneCertification {
+                scope,
+                target,
+                source_height: historical_qc.body.proposal_height,
+                lane_id: historical_qc.body.lane_id,
+                lane_block_height: historical_qc.body.lane_block_height,
+                proposal_hash: historical_qc.body.proposal_hash,
+                message_hash: HashOf::new(&historical),
+            },
+        )
+        .expect("validate historical lane certification fanout")
+        .expect("historical lane certification fanout has one target")
+    };
+    let assert_releases =
+        |kind: &str, departed_fanout: PendingExactFanout, live_fanout: PendingExactFanout| {
+            let mut pending =
+                PendingExactOutput::new(1, 1, 1, &[]).expect("one shared predecessor-lane slot");
+            assert_eq!(
+                pending.enqueue(departed_fanout),
+                Ok(ExactFanoutOwnership::Owned)
+            );
+            assert_eq!(
+                pending
+                    .drive_with_budget(1, |post, ticket, route| {
+                        assert_eq!(post.peer_id, departed, "wrong {kind} target");
+                        assert!(ticket.is_none());
+                        assert!(matches!(route, ExactTargetRoute::Topology));
+                        Err(NetworkActorAdmissionError::Backpressured {
+                            message: post,
+                            ticket: None,
+                            rank: 1,
+                        })
+                    })
+                    .expect("release a ticketless departed lane validator"),
+                ExactOutputDriveOutcome::Drained,
+                "ticketless {kind} must return to its durable lane source"
+            );
+            assert_eq!(pending.ownership_units, 0);
+            assert_eq!(pending.shared_ownership_units, 0);
+            assert_eq!(
+                pending.enqueue(live_fanout),
+                Ok(ExactFanoutOwnership::Owned),
+                "departed {kind} cannot pin the only predecessor-lane slot"
+            );
+        };
+
+    assert_releases(
+        "autonomous NewView vote",
+        autonomous_fanout(departed.clone()),
+        autonomous_fanout(live.clone()),
+    );
+    assert_releases(
+        "historical lane certification",
+        historical_fanout(departed.clone()),
+        historical_fanout(live.clone()),
+    );
+}
+#[test]
+fn sidecar_request_and_close_release_ticketless_departed_predecessor() {
+    let (service, _) = fixture();
+    let scope = service.exact_output_scope();
+    let departed = PeerId::new(
+        KeyPair::try_from_seed(vec![0xD9; 32], Algorithm::Ed25519)
+            .expect("deterministic departed sidecar peer")
+            .public_key()
+            .clone(),
+    );
+    let live = PeerId::new(
+        KeyPair::try_from_seed(vec![0xDA; 32], Algorithm::Ed25519)
+            .expect("deterministic live sidecar peer")
+            .public_key()
+            .clone(),
+    );
+    assert!(
+        service
+            .context
+            .roster
+            .iter()
+            .all(|entry| entry.validator != departed && entry.validator != live),
+        "predecessor sidecar peers must use the shared non-roster corridor"
+    );
+    let request = certified_sidecar_request_fanout(scope, &service.local_peer, &departed);
+    let (request_message, _) = certified_sidecar_outputs(&service.local_peer, &departed);
+    let CertifiedMergeSidecarMessage::Request(request_body) = request_message else {
+        unreachable!("worker sidecar fixture returns one request")
+    };
+    let mut close = crate::merge_sidecar::CertifiedMergeSidecarCloseV1 {
+        version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+        service_generation: request_body.service_generation,
+        stream_epoch: request_body.stream_epoch,
+        closed_through: request_body.semantic_sequence.get(),
+        close_id: Hash::prehashed([0; Hash::LENGTH]),
+        requester: service.local_peer.clone(),
+        responder: departed.clone(),
+    };
+    close.close_id = close.canonical_close_id();
+    let close_message = CertifiedMergeSidecarMessage::Close(close);
+    let close_fanout = || certified_sidecar_control_fanout(scope, &departed, close_message.clone());
+    let live_request = || certified_sidecar_request_fanout(scope, &service.local_peer, &live);
+    let mut pending =
+        PendingExactOutput::new(1, 1, 1, &[]).expect("one shared predecessor-sidecar slot");
+
+    for (kind, fanout) in [("request", request), ("close", close_fanout())] {
+        assert_eq!(pending.enqueue(fanout), Ok(ExactFanoutOwnership::Owned));
+        assert_eq!(
+            pending
+                .drive_with_budget(1, |post, ticket, route| {
+                    assert_eq!(post.peer_id, departed, "wrong {kind} target");
+                    assert!(ticket.is_none());
+                    assert!(matches!(route, ExactTargetRoute::Topology));
+                    Err(NetworkActorAdmissionError::Backpressured {
+                        message: post,
+                        ticket: None,
+                        rank: 1,
+                    })
+                })
+                .expect("release a ticketless departed sidecar target"),
+            ExactOutputDriveOutcome::Drained,
+            "ticketless sidecar {kind} must return to its durable source"
+        );
+        assert!(pending.fanouts.is_empty());
+        assert_eq!(pending.ownership_units, 0);
+        assert_eq!(pending.shared_ownership_units, 0);
+        assert_eq!(
+            pending.enqueue(live_request()),
+            Ok(ExactFanoutOwnership::Owned),
+            "departed sidecar {kind} cannot pin the only predecessor slot"
+        );
+        assert_eq!(
+            pending
+                .drive_with_budget(1, |post, ticket, _route| {
+                    assert_eq!(post.peer_id, live);
+                    assert!(ticket.is_none());
+                    Ok(())
+                })
+                .expect("the live predecessor crosses actor admission"),
+            ExactOutputDriveOutcome::Drained
+        );
+    }
+
+    assert_eq!(
+        pending.enqueue(close_fanout()),
+        Ok(ExactFanoutOwnership::Owned)
+    );
+    let mut ticket_fixture = None;
+    assert!(matches!(
+        pending
+            .drive_with_budget(1, |post, ticket, _route| {
+                assert!(ticket.is_none());
+                let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+                ticket_fixture = Some(fixture);
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket: Some(ticket),
+                    rank: 1,
+                })
+            })
+            .expect("retain a ranked departed-sidecar attempt"),
+        ExactOutputDriveOutcome::BudgetExhausted { .. }
+            | ExactOutputDriveOutcome::Backpressured { .. }
+    ));
+    assert_eq!(
+        pending.enqueue(live_request()),
+        Ok(ExactFanoutOwnership::SourceRetained),
+        "a live actor rank remains non-displaceable"
+    );
+    assert_eq!(
+        ticket_fixture
+            .as_ref()
+            .expect("ranked sidecar attempt minted a ticket")
+            .waiter_count(),
+        1
+    );
 }
 #[test]
 fn replayed_proposal_signature_restores_exact_durable_payload() {

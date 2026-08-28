@@ -42,6 +42,7 @@ use iroha_data_model::{
             ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
             EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
         },
+        space_directory::PublishSpaceDirectoryManifest,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         verifying_keys,
     },
@@ -823,6 +824,9 @@ fn localnet_fee_sponsor_revision(
     program_id: FeeSponsorProgramId,
     fee_asset_id: AssetDefinitionId,
 ) -> FeeSponsorProgramRevision {
+    let publish_space_directory_manifest_wire_id = iroha_data_model::isi::registry::default()
+        .wire_id(std::any::type_name::<PublishSpaceDirectoryManifest>())
+        .expect("space-directory publication must have a registered V1 wire ID");
     let native = |wire_id: &str| {
         FeeSponsorRuleSelector::NativeInstruction(FeeSponsorNativeInstructionSelector {
             wire_id: wire_id.to_owned(),
@@ -843,9 +847,7 @@ fn localnet_fee_sponsor_revision(
                 native(GrantBox::WIRE_ID),
                 native("iroha.alias.ensure"),
                 native("nexus::EnrollFeeSponsorBeneficiary"),
-                native(std::any::type_name::<
-                    iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest,
-                >()),
+                native(publish_space_directory_manifest_wire_id),
                 native("iroha.account.alias.primary.compare_and_set"),
             ],
         }],
@@ -1410,8 +1412,6 @@ fn generate_localnet_inner<T: Write>(
         &genesis_account_id,
         &client_identity.account_id,
     );
-    genesis =
-        append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
     genesis = append_peer_pop(genesis, &peers);
     if npos_bootstrap {
         let gas_account_id = gas_account_id
@@ -1452,6 +1452,8 @@ fn generate_localnet_inner<T: Write>(
         &alias_setup_request,
         append_alias_setup_to_current_transaction,
     );
+    genesis =
+        append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
     let alias_setup_intent_path =
         write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
     let genesis_json_path = out_dir.join("genesis.json");
@@ -2832,6 +2834,10 @@ fn render_peer_config(
             &iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
             Some(chain_discriminant),
         );
+        let sorafs_pin_fee_treasury_account = account_id_runtime_literal(
+            &iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id(),
+            Some(chain_discriminant),
+        );
         governance.insert(
             "citizenship_escrow_account".into(),
             Value::String(citizenship_escrow_account),
@@ -2851,6 +2857,10 @@ fn render_peer_config(
         governance.insert(
             "viral_escrow_account".into(),
             Value::String(slash_receiver_account),
+        );
+        governance.insert(
+            "sorafs_pin_fee_treasury_account".into(),
+            Value::String(sorafs_pin_fee_treasury_account),
         );
         let telemetry_submitters =
             iroha_config::parameters::defaults::governance::sorafs_telemetry::submitters()
@@ -3032,6 +3042,14 @@ fn render_peer_config(
     let mut soranet_handshake = Table::new();
     soranet_handshake.insert("pow".into(), Value::Table(soranet_pow));
     network.insert("soranet_handshake".into(), Value::Table(soranet_handshake));
+    // The disabled VPN profile still parses its operator account. Pin it to the
+    // generated localnet authority so strict V1 address parsing uses this chain's prefix.
+    let mut soranet_vpn = Table::new();
+    soranet_vpn.insert(
+        "operator_account_id".into(),
+        Value::String(localnet_operator_account.clone()),
+    );
+    network.insert("soranet_vpn".into(), Value::Table(soranet_vpn));
     if let Some(overrides) = tx_gossip_overrides {
         network.insert(
             "transaction_gossip_period_ms".into(),
@@ -3754,8 +3772,8 @@ fn append_localnet_onboarding_permissions(
             Some((grant.destination().clone(), grant.object().clone()))
         })
         .collect::<BTreeSet<_>>();
-    // The preceding contract grants and these onboarding grants all target the universal
-    // execution world, so keep them in one routing and staging boundary.
+    // Alias setup has already materialized the target domain in this transaction. Keep the
+    // dependent onboarding grants after those intents so strict domain resolution succeeds.
     let mut builder = genesis.into_builder();
     for permission in permissions {
         if existing.insert((onboarding_account_id.clone(), permission.clone())) {
@@ -4579,6 +4597,413 @@ fn default_irohad_bin_paths(taira: bool) -> (PathBuf, PathBuf) {
         target_dir.join("release").join(binary),
     )
 }
+
+fn write_taira_pidfd_preflight(output: &mut impl Write) -> Result<()> {
+    writeln!(
+        output,
+        "command -v python3 >/dev/null 2>&1 || {{ echo \"python3 is required for Taira pidfd process control\" >&2; exit 1; }}"
+    )?;
+    output.write_all(
+        br#"python3 - <<'PY'
+import os
+import platform
+import select
+import signal
+import sys
+
+if platform.system() != "Linux":
+    raise SystemExit("Taira process control requires Linux pidfds and procfs")
+if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+    raise SystemExit("Taira process control requires pidfd_open and pidfd_send_signal")
+if not hasattr(os, "O_CLOEXEC") or not hasattr(os, "O_NOFOLLOW"):
+    raise SystemExit("Taira process control requires safe Linux procfs open flags")
+if not hasattr(select, "poll"):
+    raise SystemExit("Taira process control requires pollable pidfds")
+for required in ("/proc", "/proc/self/stat", "/proc/self/status", "/proc/sys/kernel/random/boot_id"):
+    if not os.path.exists(required):
+        raise SystemExit("Taira process control requires Linux procfs")
+try:
+    descriptor = os.pidfd_open(os.getpid(), 0)
+    try:
+        signal.pidfd_send_signal(descriptor, 0, None, 0)
+        poller = select.poll()
+        poller.register(descriptor, select.POLLIN | select.POLLHUP)
+        poller.poll(0)
+    finally:
+        os.close(descriptor)
+except OSError as error:
+    raise SystemExit("Taira process control cannot exercise native Linux pidfds: {}".format(error))
+PY
+for legacy_pidfile in "$DIR"/peer*.pid; do
+  if [ -e "$legacy_pidfile" ] || [ -L "$legacy_pidfile" ]; then
+    echo "retired Taira PID file is unsupported: $legacy_pidfile" >&2
+    exit 1
+  fi
+done
+"#,
+    )?;
+    Ok(())
+}
+
+const TAIRA_PROCESS_IDENTITY_PY: &str = r#"
+import errno
+import json
+import re
+import select
+import signal
+import time
+
+_PROCESS_KEYS = {
+    "schema_version", "peer_index", "pid", "boot_id", "start_time_ticks",
+    "executable_path", "executable_device", "executable_inode", "argv",
+    "uid", "gid", "session_id", "process_group_id",
+}
+_RUNTIME_KEYS = _PROCESS_KEYS - {"schema_version", "peer_index"}
+_BOOT_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+def _proc_read(path, limit):
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        payload = bytearray()
+        while len(payload) <= limit:
+            chunk = os.read(descriptor, min(16384, limit + 1 - len(payload)))
+            if not chunk:
+                break
+            payload.extend(chunk)
+    finally:
+        os.close(descriptor)
+    if len(payload) > limit:
+        raise RuntimeError("Linux procfs record exceeds its Taira safety bound: " + path)
+    return bytes(payload)
+
+def _parse_stat(payload, pid):
+    try:
+        fields = payload.decode("ascii").rstrip("\n").rsplit(") ", 1)[1].split()
+        result = (fields[0], int(fields[2]), int(fields[3]), int(fields[19]))
+    except (IndexError, UnicodeDecodeError, ValueError):
+        raise RuntimeError("malformed Linux procfs stat for Taira process {}".format(pid))
+    if len(result[0]) != 1 or result[3] <= 0:
+        raise RuntimeError("malformed Linux procfs stat for Taira process {}".format(pid))
+    return result
+
+def _status_ids(payload, pid):
+    try:
+        text = payload.decode("ascii")
+    except UnicodeDecodeError:
+        raise RuntimeError("malformed Linux procfs status for Taira process {}".format(pid))
+    result = []
+    for label in ("Uid:", "Gid:"):
+        rows = [line for line in text.splitlines() if line.startswith(label)]
+        if len(rows) != 1:
+            raise RuntimeError("malformed Linux procfs status for Taira process {}".format(pid))
+        try:
+            values = tuple(int(value) for value in rows[0][len(label):].split())
+        except ValueError:
+            raise RuntimeError("malformed Linux procfs status for Taira process {}".format(pid))
+        if len(values) != 4:
+            raise RuntimeError("malformed Linux procfs status for Taira process {}".format(pid))
+        result.append(values[1])
+    return tuple(result)
+
+def _open_pidfd(pid):
+    try:
+        return os.pidfd_open(pid, 0)
+    except ProcessLookupError:
+        return None
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return None
+        raise RuntimeError("cannot open pidfd for Taira process {}: {}".format(pid, error))
+
+def _pidfd_signal(descriptor, signal_number):
+    try:
+        signal.pidfd_send_signal(descriptor, signal_number, None, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return False
+        raise RuntimeError("cannot signal exact Taira process through pidfd: {}".format(error))
+
+def _pidfd_wait(descriptor, timeout_seconds):
+    poller = select.poll()
+    poller.register(descriptor, select.POLLIN | select.POLLHUP)
+    return bool(poller.poll(min(int(timeout_seconds * 1000), 2147483647)))
+
+def _observe(pid):
+    root = "/proc/{}".format(pid)
+    try:
+        before = _parse_stat(_proc_read(root + "/stat", 16384), pid)
+        if before[0] == "Z":
+            return None
+        cmdline = _proc_read(root + "/cmdline", 65536)
+        if not cmdline or not cmdline.endswith(b"\0"):
+            return None
+        raw_argv = cmdline[:-1].split(b"\0")
+        if not raw_argv or any(not argument for argument in raw_argv):
+            return None
+        argv = [os.fsdecode(argument) for argument in raw_argv]
+        executable_path = os.readlink(root + "/exe")
+        executable = os.stat(root + "/exe")
+        uid, gid = _status_ids(_proc_read(root + "/status", 131072), pid)
+        after = _parse_stat(_proc_read(root + "/stat", 16384), pid)
+        cmdline_after = _proc_read(root + "/cmdline", 65536)
+        executable_path_after = os.readlink(root + "/exe")
+        executable_after = os.stat(root + "/exe")
+        uid_after, gid_after = _status_ids(_proc_read(root + "/status", 131072), pid)
+        if (after != before or cmdline_after != cmdline or executable_path_after != executable_path
+                or (executable_after.st_dev, executable_after.st_ino) != (executable.st_dev, executable.st_ino)
+                or (uid_after, gid_after) != (uid, gid)):
+            raise RuntimeError("Taira process changed while observing procfs")
+        boot_id = _proc_read("/proc/sys/kernel/random/boot_id", 128).decode("ascii").strip()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except UnicodeDecodeError:
+        raise RuntimeError("malformed Linux boot identity for Taira process {}".format(pid))
+    return {
+        "pid": pid,
+        "boot_id": boot_id,
+        "start_time_ticks": before[3],
+        "executable_path": executable_path,
+        "executable_device": executable.st_dev,
+        "executable_inode": executable.st_ino,
+        "argv": argv,
+        "uid": uid,
+        "gid": gid,
+        "session_id": before[2],
+        "process_group_id": before[1],
+    }
+
+def _bound_observation(descriptor, pid):
+    if not _pidfd_signal(descriptor, 0):
+        return None
+    observed = _observe(pid)
+    if not _pidfd_signal(descriptor, 0):
+        return None
+    return observed
+
+def _runtime_identity(record):
+    return {key: record[key] for key in _RUNTIME_KEYS}
+
+def _validate_record(record, peer_index, config_path, executable_path=None):
+    if type(record) is not dict or set(record) != _PROCESS_KEYS:
+        raise RuntimeError("Taira process record violates the exact V1 schema")
+    if type(record["schema_version"]) is not int or record["schema_version"] != 1:
+        raise RuntimeError("Taira process record has the wrong schema version")
+    if type(record["peer_index"]) is not int or record["peer_index"] != peer_index:
+        raise RuntimeError("Taira process record has the wrong peer index")
+    integer_fields = (
+        "pid", "start_time_ticks", "executable_device", "executable_inode",
+        "uid", "gid", "session_id", "process_group_id",
+    )
+    if any(type(record[field]) is not int for field in integer_fields):
+        raise RuntimeError("Taira process record contains a non-integer identity field")
+    pid = record["pid"]
+    if not (1 < pid <= 2147483647 and 0 < record["start_time_ticks"] <= 18446744073709551615
+            and 0 <= record["executable_device"] <= 18446744073709551615
+            and 0 < record["executable_inode"] <= 18446744073709551615
+            and 0 <= record["uid"] <= 4294967295 and 0 <= record["gid"] <= 4294967295
+            and record["session_id"] == pid and record["process_group_id"] == pid):
+        raise RuntimeError("Taira process record contains a malformed identity")
+    if type(record["boot_id"]) is not str or _BOOT_ID.fullmatch(record["boot_id"]) is None:
+        raise RuntimeError("Taira process record contains a malformed Linux boot identity")
+    executable = record["executable_path"]
+    if (type(executable) is not str or not os.path.isabs(executable)
+            or os.path.normpath(executable) != executable
+            or os.path.basename(executable) != "iroha3d_taira" or "\0" in executable):
+        raise RuntimeError("Taira process record contains a malformed executable path")
+    if executable_path is not None and executable != executable_path:
+        raise RuntimeError("Taira process record names a substituted executable")
+    if record["argv"] != [executable, "--sora", "--config", config_path]:
+        raise RuntimeError("Taira process record does not bind the exact daemon argv/config")
+    return record
+
+def _no_duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise RuntimeError("duplicate Taira process record key: " + key)
+        result[key] = value
+    return result
+
+def _read_record(path, peer_index, config_path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+                or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
+                or before.st_size <= 0 or before.st_size > 4096):
+            raise RuntimeError("Taira process record lacks exact owner-only custody")
+        payload = bytearray()
+        while len(payload) <= 4096:
+            chunk = os.read(descriptor, min(4097 - len(payload), 4096))
+            if not chunk:
+                break
+            payload.extend(chunk)
+        after = os.fstat(descriptor)
+        fields = ("st_dev", "st_ino", "st_uid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if any(getattr(before, field) != getattr(after, field) for field in fields):
+            raise RuntimeError("Taira process record changed while reading")
+    finally:
+        os.close(descriptor)
+    if len(payload) > 4096:
+        raise RuntimeError("Taira process record exceeds its safety bound")
+    try:
+        record = json.loads(bytes(payload).decode("utf-8"), object_pairs_hook=_no_duplicates)
+    except (UnicodeDecodeError, ValueError) as error:
+        raise RuntimeError("Taira process record is not JSON: {}".format(error))
+    canonical = (json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if canonical != bytes(payload):
+        raise RuntimeError("Taira process record is not canonical JSON")
+    return _validate_record(record, peer_index, config_path), before
+
+def _atomic_publish_record(path, record):
+    payload = (json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(payload) > 4096 or os.path.lexists(path):
+        raise RuntimeError("refusing to replace an existing Taira process record")
+    temporary = os.path.join(os.path.dirname(path), ".peer{}.process.json.{}.tmp".format(record["peer_index"], record["pid"]))
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+    linked = False
+    try:
+        offset = 0
+        while offset < len(payload):
+            count = os.write(descriptor, payload[offset:])
+            if count <= 0:
+                raise RuntimeError("short Taira process-record write")
+            offset += count
+        os.fsync(descriptor)
+        metadata = os.fstat(descriptor)
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_nlink != 1
+                or metadata.st_size != len(payload)):
+            raise RuntimeError("new Taira process record lacks owner-only custody")
+        os.link(temporary, path, follow_symlinks=False)
+        linked = True
+    finally:
+        os.close(descriptor)
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+    if not linked:
+        raise RuntimeError("Taira process record was not published")
+    directory = os.open(os.path.dirname(path), os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+def _unlink_record(path, expected):
+    current = os.lstat(path)
+    stable = ("st_dev", "st_ino", "st_uid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if (any(getattr(current, field) != getattr(expected, field) for field in stable)
+            or not stat.S_ISREG(current.st_mode) or current.st_uid != os.geteuid()
+            or stat.S_IMODE(current.st_mode) != 0o600 or current.st_nlink != 1):
+        raise RuntimeError("Taira process record changed before removal")
+    os.unlink(path)
+    directory = os.open(os.path.dirname(path), os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+def _terminate_pidfd(descriptor):
+    if not _pidfd_signal(descriptor, signal.SIGTERM):
+        return
+    if _pidfd_wait(descriptor, 10.0):
+        return
+    if not _pidfd_signal(descriptor, signal.SIGKILL):
+        return
+    if not _pidfd_wait(descriptor, 5.0):
+        raise RuntimeError("exact Taira process did not exit after pidfd SIGKILL")
+
+def preflight_taira_start(record_path, peer_index, expected_argv):
+    config_path = expected_argv[3]
+    if os.path.lexists(record_path):
+        record, _metadata = _read_record(record_path, peer_index, config_path)
+        descriptor = _open_pidfd(record["pid"])
+        if descriptor is None:
+            raise RuntimeError("stale Taira process record must be cleared by stop.sh")
+        try:
+            observed = _bound_observation(descriptor, record["pid"])
+            if observed is None or (observed["boot_id"], observed["start_time_ticks"]) != (record["boot_id"], record["start_time_ticks"]):
+                raise RuntimeError("stale or PID-reused Taira process record must be cleared by stop.sh")
+            if observed != _runtime_identity(record):
+                raise RuntimeError("live Taira process drifted from its persisted identity")
+            raise RuntimeError("Taira peer is already running with its exact process identity")
+        finally:
+            os.close(descriptor)
+    for name in os.listdir("/proc"):
+        if not name.isdigit() or int(name) <= 1:
+            continue
+        pid = int(name)
+        descriptor = _open_pidfd(pid)
+        if descriptor is None:
+            continue
+        try:
+            observed = _bound_observation(descriptor, pid)
+            argv = None if observed is None else observed["argv"]
+            if (type(argv) is list and len(argv) == 4
+                    and os.path.basename(argv[0]) == "iroha3d_taira"
+                    and argv[1:] == ["--sora", "--config", config_path]):
+                raise RuntimeError("unrecorded Taira process already owns the exact peer config")
+        finally:
+            os.close(descriptor)
+
+def capture_taira_start(pid, record_path, peer_index, expected_argv):
+    descriptor = _open_pidfd(pid)
+    if descriptor is None:
+        raise RuntimeError("new Taira process exited before pidfd capture")
+    try:
+        deadline = time.monotonic() + 5.0
+        while True:
+            observed = _bound_observation(descriptor, pid)
+            if observed is None:
+                raise RuntimeError("new Taira process exited before identity capture")
+            ready = (
+                observed["executable_path"] == expected_argv[0]
+                and observed["argv"] == expected_argv
+                and observed["uid"] == os.geteuid()
+                and observed["gid"] == os.getegid()
+                and observed["session_id"] == pid
+                and observed["process_group_id"] == pid
+                and _BOOT_ID.fullmatch(observed["boot_id"]) is not None
+            )
+            if ready:
+                break
+            if time.monotonic() >= deadline or _pidfd_wait(descriptor, 0.01):
+                raise RuntimeError("new Taira process never reached its exact executable/argv identity")
+        record = {"schema_version": 1, "peer_index": peer_index, **observed}
+        _validate_record(record, peer_index, expected_argv[3], expected_argv[0])
+        _atomic_publish_record(record_path, record)
+    except BaseException:
+        _terminate_pidfd(descriptor)
+        raise
+    finally:
+        os.close(descriptor)
+
+def stop_taira_process(record_path, peer_index, config_path):
+    record, metadata = _read_record(record_path, peer_index, config_path)
+    descriptor = _open_pidfd(record["pid"])
+    if descriptor is None:
+        _unlink_record(record_path, metadata)
+        return
+    try:
+        observed = _bound_observation(descriptor, record["pid"])
+        if observed is None or (observed["boot_id"], observed["start_time_ticks"]) != (record["boot_id"], record["start_time_ticks"]):
+            _unlink_record(record_path, metadata)
+            return
+        if observed != _runtime_identity(record):
+            raise RuntimeError("refusing to signal a Taira process whose identity drifted")
+        _terminate_pidfd(descriptor)
+        if not _pidfd_wait(descriptor, 0.0):
+            raise RuntimeError("exact Taira process remains live after pidfd termination")
+        _unlink_record(record_path, metadata)
+    finally:
+        os.close(descriptor)
+"#;
+
 fn write_scripts(
     out_dir: &Path,
     peers: u16,
@@ -4597,7 +5022,7 @@ fn write_scripts(
         client_account_literal,
         fee_asset_definition_id,
     )?;
-    write_stop_script(&stop)?;
+    write_stop_script(&stop, peers, taira)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -4635,15 +5060,49 @@ fn write_start_script(
     writeln!(start_file, "umask 077")?;
     writeln!(start_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
     writeln!(start_file, "cd \"$DIR\"")?;
-    writeln!(start_file, "pid_is_running() {{")?;
-    writeln!(start_file, "  pid=\"$1\"")?;
+    writeln!(start_file, "PEER_COUNT={peers}")?;
     writeln!(
         start_file,
-        "  case \"$pid\" in ''|*[!0-9]*) return 1 ;; esac"
+        "SELECTED_PEERS=\"$(seq 0 \"$((PEER_COUNT - 1))\")\""
     )?;
-    writeln!(start_file, "  command -v ps >/dev/null 2>&1 || return 0")?;
-    writeln!(start_file, "  ps -p \"$pid\" -o pid= >/dev/null 2>&1")?;
-    writeln!(start_file, "}}")?;
+    writeln!(start_file, "if [ \"$#\" -ne 0 ]; then")?;
+    writeln!(
+        start_file,
+        "  if [ \"$#\" -ne 2 ] || [ \"$1\" != \"--peer-index\" ]; then"
+    )?;
+    writeln!(
+        start_file,
+        "    echo \"usage: $0 [--peer-index INDEX]\" >&2"
+    )?;
+    writeln!(start_file, "    exit 2")?;
+    writeln!(start_file, "  fi")?;
+    writeln!(
+        start_file,
+        "  if [[ ! $2 =~ ^(0|[1-9][0-9]{{0,4}})$ ]]; then"
+    )?;
+    writeln!(start_file, "    echo \"invalid peer index: $2\" >&2")?;
+    writeln!(start_file, "    exit 2")?;
+    writeln!(start_file, "  fi")?;
+    writeln!(start_file, "  peer_index=$((10#$2))")?;
+    writeln!(start_file, "  if (( peer_index >= PEER_COUNT )); then")?;
+    writeln!(start_file, "    echo \"invalid peer index: $2\" >&2")?;
+    writeln!(start_file, "    exit 2")?;
+    writeln!(start_file, "  fi")?;
+    writeln!(start_file, "  SELECTED_PEERS=\"$peer_index\"")?;
+    writeln!(start_file, "fi")?;
+    if !taira {
+        writeln!(start_file, "pid_is_running() {{")?;
+        writeln!(start_file, "  pid=\"$1\"")?;
+        writeln!(
+            start_file,
+            "  case \"$pid\" in ''|*[!0-9]*) return 1 ;; esac"
+        )?;
+        writeln!(start_file, "  command -v ps >/dev/null 2>&1 || return 0")?;
+        writeln!(start_file, "  ps -p \"$pid\" -o pid= >/dev/null 2>&1")?;
+        writeln!(start_file, "}}")?;
+    } else {
+        write_taira_pidfd_preflight(&mut start_file)?;
+    }
     writeln!(
         start_file,
         "DEFAULT_IROHAD_BIN_DEBUG={default_irohad_debug}"
@@ -4722,40 +5181,56 @@ fn write_start_script(
         start_file,
         "FAUCET_RESERVE_RETRIES=\"${{IROHA_LOCALNET_FAUCET_RESERVE_RETRIES:-30}}\""
     )?;
-    writeln!(start_file, "for i in $(seq 0 {}); do", peers - 1)?;
+    writeln!(start_file, "for i in $SELECTED_PEERS; do")?;
     writeln!(
         start_file,
         "  SNAPSHOT_STORE_DIR=\"$DIR/state/peer${{i}}/snapshot\""
     )?;
-    writeln!(start_file, "  PIDFILE=\"$DIR/peer${{i}}.pid\"")?;
-    writeln!(start_file, "  if [ -f \"$PIDFILE\" ]; then")?;
-    writeln!(
-        start_file,
-        "    existing_pid=\"$(cat \"$PIDFILE\" 2>/dev/null || true)\""
-    )?;
-    writeln!(
-        start_file,
-        "    if [ -n \"$existing_pid\" ] && pid_is_running \"$existing_pid\"; then"
-    )?;
-    writeln!(
-        start_file,
-        "      echo \"peer$i already running with pid $existing_pid\" >&2"
-    )?;
-    writeln!(start_file, "      exit 1")?;
-    writeln!(start_file, "    fi")?;
-    writeln!(start_file, "    rm -f \"$PIDFILE\"")?;
-    writeln!(start_file, "  fi")?;
+    if taira {
+        writeln!(
+            start_file,
+            "  PROCESS_RECORD=\"$DIR/peer${{i}}.process.json\""
+        )?;
+    } else {
+        writeln!(start_file, "  PIDFILE=\"$DIR/peer${{i}}.pid\"")?;
+        writeln!(start_file, "  if [ -f \"$PIDFILE\" ]; then")?;
+        writeln!(
+            start_file,
+            "    existing_pid=\"$(cat \"$PIDFILE\" 2>/dev/null || true)\""
+        )?;
+        writeln!(
+            start_file,
+            "    if [ -n \"$existing_pid\" ] && pid_is_running \"$existing_pid\"; then"
+        )?;
+        writeln!(
+            start_file,
+            "      echo \"peer$i already running with pid $existing_pid\" >&2"
+        )?;
+        writeln!(start_file, "      exit 1")?;
+        writeln!(start_file, "    fi")?;
+        writeln!(start_file, "    rm -f \"$PIDFILE\"")?;
+        writeln!(start_file, "  fi")?;
+    }
     writeln!(start_file, "  mkdir -p \"$SNAPSHOT_STORE_DIR/generations\"")?;
     writeln!(start_file, "  if command -v python3 >/dev/null 2>&1; then")?;
     writeln!(
         start_file,
-        "    peer_pid=$(SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=\"${{LOG_LEVEL:-info}}\" LOG_FILTER=\"${{LOG_FILTER:-}}\" IROHAD_BIN=\"$IROHAD_BIN\" IROHA_NETWORK_DIR=\"$DIR\" IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_LOG=\"$DIR/peer${{i}}.log\" IROHA_SORA_MODE=\"{sora_mode_env}\" IROHA_TAIRA_MODE=\"{taira_mode_env}\" python3 - <<'PY'"
+        "    peer_pid=$(SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=\"${{LOG_LEVEL:-info}}\" LOG_FILTER=\"${{LOG_FILTER:-}}\" IROHAD_BIN=\"$IROHAD_BIN\" IROHA_NETWORK_DIR=\"$DIR\" IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_LOG=\"$DIR/peer${{i}}.log\" IROHA_PEER_PROCESS_RECORD=\"${{PROCESS_RECORD:-}}\" IROHA_SORA_MODE=\"{sora_mode_env}\" IROHA_TAIRA_MODE=\"{taira_mode_env}\" python3 - <<'PY'"
     )?;
     writeln!(start_file, "import os")?;
     writeln!(start_file, "import stat")?;
     writeln!(start_file, "import subprocess")?;
+    if taira {
+        start_file.write_all(TAIRA_PROCESS_IDENTITY_PY.as_bytes())?;
+    }
     writeln!(start_file)?;
     writeln!(start_file, "env = os.environ.copy()")?;
+    if taira {
+        writeln!(
+            start_file,
+            "env[\"IROHAD_BIN\"] = os.path.realpath(env[\"IROHAD_BIN\"])"
+        )?;
+    }
     writeln!(start_file, "cmd = [env[\"IROHAD_BIN\"]]")?;
     writeln!(start_file, "if env.get(\"IROHA_SORA_MODE\") == \"1\":")?;
     writeln!(start_file, "    cmd.append(\"--sora\")")?;
@@ -4763,6 +5238,12 @@ fn write_start_script(
         start_file,
         "cmd.extend([\"--config\", env[\"IROHA_PEER_CONFIG\"]])"
     )?;
+    if taira {
+        writeln!(
+            start_file,
+            "preflight_taira_start(env[\"IROHA_PEER_PROCESS_RECORD\"], int(env[\"IROHA_PEER_INDEX\"]), cmd)"
+        )?;
+    }
     writeln!(start_file, "pass_fds = ()")?;
     writeln!(start_file, "if env.get(\"IROHA_TAIRA_MODE\") == \"1\":")?;
     writeln!(
@@ -4869,6 +5350,12 @@ fn write_start_script(
         "process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, close_fds=True, pass_fds=pass_fds, start_new_session=True)"
     )?;
     writeln!(start_file, "if pass_fds: os.close(198)")?;
+    if taira {
+        writeln!(
+            start_file,
+            "capture_taira_start(process.pid, env[\"IROHA_PEER_PROCESS_RECORD\"], int(env[\"IROHA_PEER_INDEX\"]), cmd)"
+        )?;
+    }
     writeln!(start_file, "print(process.pid)")?;
     writeln!(start_file, "PY")?;
     writeln!(start_file, "    )")?;
@@ -4888,8 +5375,15 @@ fn write_start_script(
         writeln!(start_file, "    disown \"$peer_pid\" 2>/dev/null || true")?;
     }
     writeln!(start_file, "  fi")?;
-    writeln!(start_file, "  echo \"$peer_pid\" > \"$PIDFILE\"")?;
-    writeln!(start_file, "  echo \"peer$i pid $(cat \"$PIDFILE\")\"")?;
+    if taira {
+        writeln!(
+            start_file,
+            "  echo \"peer$i exact process identity captured in $PROCESS_RECORD\""
+        )?;
+    } else {
+        writeln!(start_file, "  echo \"$peer_pid\" > \"$PIDFILE\"")?;
+        writeln!(start_file, "  echo \"peer$i pid $(cat \"$PIDFILE\")\"")?;
+    }
     writeln!(start_file, "done")?;
     writeln!(start_file, "ensure_faucet_reserve() {{")?;
     writeln!(
@@ -4943,12 +5437,66 @@ fn write_start_script(
     writeln!(start_file, "ensure_faucet_reserve")?;
     Ok(start_file.flush()?)
 }
-fn write_stop_script(stop: &Path) -> Result<()> {
+fn write_stop_script(stop: &Path, peers: u16, taira: bool) -> Result<()> {
     let mut stop_file = BufWriter::new(File::create(stop)?);
     writeln!(stop_file, "#!/usr/bin/env bash")?;
     writeln!(stop_file, "set -euo pipefail")?;
     writeln!(stop_file, "umask 077")?;
     writeln!(stop_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
+    writeln!(stop_file, "PEER_COUNT={peers}")?;
+    writeln!(
+        stop_file,
+        "SELECTED_PEERS=\"$(seq 0 \"$((PEER_COUNT - 1))\")\""
+    )?;
+    writeln!(stop_file, "if [ \"$#\" -ne 0 ]; then")?;
+    writeln!(
+        stop_file,
+        "  if [ \"$#\" -ne 2 ] || [ \"$1\" != \"--peer-index\" ]; then"
+    )?;
+    writeln!(stop_file, "    echo \"usage: $0 [--peer-index INDEX]\" >&2")?;
+    writeln!(stop_file, "    exit 2")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(
+        stop_file,
+        "  if [[ ! $2 =~ ^(0|[1-9][0-9]{{0,4}})$ ]]; then"
+    )?;
+    writeln!(stop_file, "    echo \"invalid peer index: $2\" >&2")?;
+    writeln!(stop_file, "    exit 2")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(stop_file, "  peer_index=$((10#$2))")?;
+    writeln!(stop_file, "  if (( peer_index >= PEER_COUNT )); then")?;
+    writeln!(stop_file, "    echo \"invalid peer index: $2\" >&2")?;
+    writeln!(stop_file, "    exit 2")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(stop_file, "  SELECTED_PEERS=\"$peer_index\"")?;
+    writeln!(stop_file, "fi")?;
+    if taira {
+        write_taira_pidfd_preflight(&mut stop_file)?;
+        writeln!(stop_file, "for i in $SELECTED_PEERS; do")?;
+        writeln!(
+            stop_file,
+            "  PROCESS_RECORD=\"$DIR/peer${{i}}.process.json\""
+        )?;
+        writeln!(
+            stop_file,
+            "  if [ ! -e \"$PROCESS_RECORD\" ] && [ ! -L \"$PROCESS_RECORD\" ]; then continue; fi"
+        )?;
+        writeln!(
+            stop_file,
+            "  IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_PROCESS_RECORD=\"$PROCESS_RECORD\" python3 - <<'PY'"
+        )?;
+        writeln!(stop_file, "import os")?;
+        writeln!(stop_file, "import stat")?;
+        stop_file.write_all(TAIRA_PROCESS_IDENTITY_PY.as_bytes())?;
+        writeln!(stop_file, "env = os.environ")?;
+        writeln!(
+            stop_file,
+            "stop_taira_process(env[\"IROHA_PEER_PROCESS_RECORD\"], int(env[\"IROHA_PEER_INDEX\"]), env[\"IROHA_PEER_CONFIG\"])"
+        )?;
+        writeln!(stop_file, "PY")?;
+        writeln!(stop_file, "done")?;
+        return Ok(stop_file.flush()?);
+    }
     writeln!(stop_file, "pid_matches_peer() {{")?;
     writeln!(stop_file, "  pid=\"$1\"")?;
     writeln!(stop_file, "  config=\"$2\"")?;
@@ -4980,7 +5528,8 @@ fn write_stop_script(stop: &Path) -> Result<()> {
     writeln!(stop_file, "  command -v ps >/dev/null 2>&1 || return 1")?;
     writeln!(stop_file, "  ps -p \"$pid\" -o pid= >/dev/null 2>&1")?;
     writeln!(stop_file, "}}")?;
-    writeln!(stop_file, "for pidfile in \"$DIR\"/peer*.pid; do")?;
+    writeln!(stop_file, "for i in $SELECTED_PEERS; do")?;
+    writeln!(stop_file, "  pidfile=\"$DIR/peer${{i}}.pid\"")?;
     writeln!(stop_file, "  [ -f \"$pidfile\" ] || continue")?;
     writeln!(
         stop_file,
@@ -5420,6 +5969,9 @@ mod tests {
             opts.base_p2p_port,
         )
         .expect("rebuild deterministic peer identities");
+        let operator_identity =
+            localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
+                .expect("rebuild deterministic operator identity");
         let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
             .expect("parse generated Taira genesis");
         let peer_config_text = fs::read_to_string(temp.path().join("peer0.toml"))
@@ -5510,6 +6062,15 @@ mod tests {
             let source = TomlSource::from_file(temp.path().join(format!("peer{peer_index}.toml")))
                 .expect("read Taira peer config");
             let parsed = actual::Root::from_toml_source(source).expect("parse Taira peer config");
+            assert_eq!(
+                parsed.network.soranet_vpn.operator_account_id,
+                operator_identity.account_id
+            );
+            assert_eq!(
+                parsed.gov.sorafs_pin_fee_treasury_account,
+                iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id(
+                )
+            );
             let binding = parsed
                 .soracloud_runtime
                 .submission
@@ -6307,13 +6868,7 @@ mod tests {
         let setup_instructions = setup_transaction
             .instructions()
             .iter()
-            .map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<EnsureAlias>()
-                    .cloned()
-                    .expect("final transaction contains only EnsureAlias instructions")
-            })
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<EnsureAlias>().cloned())
             .collect::<Vec<_>>();
         assert_eq!(setup_instructions.len(), 3);
         assert!(matches!(
@@ -6328,6 +6883,26 @@ mod tests {
             &setup_instructions[2].intent,
             AliasIntentV1::AccountAlias(_)
         ));
+        let final_instructions = setup_transaction.instructions();
+        let last_alias_setup_index = final_instructions
+            .iter()
+            .rposition(|instruction| instruction.as_any().is::<EnsureAlias>())
+            .expect("final transaction contains alias setup");
+        assert!(
+            final_instructions[last_alias_setup_index + 1..]
+                .iter()
+                .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
+                .filter_map(|grant| match grant {
+                    GrantBox::Permission(grant)
+                        if grant.destination() == &onboarding_identity.account_id =>
+                    {
+                        Some(grant)
+                    }
+                    _ => None,
+                })
+                .count()
+                >= 3
+        );
         let setup_intent_json =
             fs::read_to_string(temp.path().join(LOCALNET_ALIAS_SETUP_INTENT_FILE))
                 .expect("read secret-free setup intent");
@@ -8870,6 +9445,18 @@ mod tests {
             .revision()
             .validate()
             .expect("localnet sponsor revision must validate");
+        let publish_manifest_wire_id = iroha_data_model::isi::registry::default()
+            .wire_id(std::any::type_name::<PublishSpaceDirectoryManifest>())
+            .expect("space-directory publication must be registered");
+        assert!(staged[0].revision().rules.iter().any(|rule| {
+            rule.selectors.iter().any(|selector| {
+                matches!(
+                    selector,
+                    FeeSponsorRuleSelector::NativeInstruction(selector)
+                        if selector.wire_id == publish_manifest_wire_id
+                )
+            })
+        }));
         let enrollment = manifest
             .instructions()
             .filter_map(|instruction| {

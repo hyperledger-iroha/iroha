@@ -34,6 +34,7 @@ fn tron_deployment_fixture() -> SccpTronDestinationDeploymentV1 {
         route_address: deployment.route_address,
         route_code_hash: deployment.route_code_hash,
         taira_to_token_multiplier: deployment.taira_to_token_multiplier,
+        max_wrapped_supply: deployment.max_wrapped_supply,
     }
 }
 

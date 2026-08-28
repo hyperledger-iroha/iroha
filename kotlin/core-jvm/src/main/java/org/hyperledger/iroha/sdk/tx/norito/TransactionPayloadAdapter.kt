@@ -564,6 +564,57 @@ internal class TransactionPayloadAdapter private constructor(
         }
     }
 
+    private class EncodedInstructionAdapter : TypeAdapter<ByteArray> {
+        override fun encode(encoder: NoritoEncoder, value: ByteArray) {
+            require(value.isNotEmpty()) { "instruction bytes must not be empty" }
+            INSTRUCTION_ADAPTER.encode(encoder, decodeInstructionBox(value))
+        }
+
+        override fun decode(decoder: NoritoDecoder): ByteArray =
+            throw UnsupportedOperationException("Multisig instruction byte decoding is not supported")
+    }
+
+    private class CustomInstructionAdapter : TypeAdapter<String> {
+        private val payloadFieldAdapter = object : TypeAdapter<String> {
+            override fun encode(encoder: NoritoEncoder, value: String) {
+                encodeSizedField(encoder, JSON_VALUE_ADAPTER, value)
+            }
+
+            override fun decode(decoder: NoritoDecoder): String =
+                decodeSizedField(decoder, JSON_VALUE_ADAPTER)
+        }
+
+        override fun encode(encoder: NoritoEncoder, value: String) {
+            // CustomInstruction's derived field and Json's wire field are independently sized.
+            encodeSizedField(encoder, payloadFieldAdapter, value)
+        }
+
+        override fun decode(decoder: NoritoDecoder): String =
+            decodeSizedField(decoder, payloadFieldAdapter)
+    }
+
+    internal class LogInstructionValue(
+        val level: Long,
+        val message: String,
+    )
+
+    private class LogInstructionAdapter : TypeAdapter<LogInstructionValue> {
+        override fun encode(encoder: NoritoEncoder, value: LogInstructionValue) {
+            require(value.level in 0L..4L) { "log level must be a canonical Level tag" }
+            encodeSizedField(encoder, UINT8_ADAPTER, value.level)
+            encodeSizedField(encoder, STRING_ADAPTER, value.message)
+        }
+
+        override fun decode(decoder: NoritoDecoder): LogInstructionValue {
+            val level = decodeSizedField(decoder, UINT8_ADAPTER)
+            require(level in 0L..4L) { "log level must be a canonical Level tag" }
+            return LogInstructionValue(
+                level = level,
+                message = decodeSizedField(decoder, STRING_ADAPTER),
+            )
+        }
+    }
+
     private class ContractArgumentRecordAdapter : TypeAdapter<ByteArray> {
         override fun encode(encoder: NoritoEncoder, value: ByteArray) {
             require(value.size <= ContractInvocation.MAX_ARGUMENT_BYTES) {
@@ -1032,6 +1083,10 @@ internal class TransactionPayloadAdapter private constructor(
         private val INSTRUCTION_ADAPTER: TypeAdapter<InstructionBox> = InstructionAdapter()
         private val INSTRUCTION_LIST_ADAPTER: TypeAdapter<List<InstructionBox>> =
             NoritoAdapters.sequence(INSTRUCTION_ADAPTER)
+        private val ENCODED_INSTRUCTION_LIST_ADAPTER: TypeAdapter<List<ByteArray>> =
+            NoritoAdapters.sequence(EncodedInstructionAdapter())
+        private val CUSTOM_INSTRUCTION_ADAPTER: TypeAdapter<String> = CustomInstructionAdapter()
+        private val LOG_INSTRUCTION_ADAPTER: TypeAdapter<LogInstructionValue> = LogInstructionAdapter()
         private val CONTRACT_ARGUMENT_RECORD_ADAPTER: TypeAdapter<ByteArray> =
             ContractArgumentRecordAdapter()
         private val CONTRACT_ARGUMENTS_ADAPTER: TypeAdapter<Optional<ByteArray>> =
@@ -1086,6 +1141,10 @@ internal class TransactionPayloadAdapter private constructor(
             NoritoAdapters.option(PROOF_ATTACHMENT_LIST_ADAPTER)
         private const val INSTRUCTION_BOX_SCHEMA =
             "(alloc::string::String, alloc::vec::Vec<u8>)"
+        private const val CUSTOM_INSTRUCTION_SCHEMA =
+            "iroha_data_model::isi::transparent::CustomInstruction"
+        private const val LOG_INSTRUCTION_SCHEMA =
+            "iroha_data_model::isi::transparent::Log"
         private const val FEE_PAYER_AUTHORITY_TAG = 0L
         private const val FEE_PAYER_SPONSOR_TAG = 1L
         private const val FEE_CHARGE_NEXUS_TAG = 0L
@@ -1093,6 +1152,94 @@ internal class TransactionPayloadAdapter private constructor(
 
         internal fun encodeInstructionBox(value: InstructionBox): ByteArray =
             NoritoCodec.encode(value, INSTRUCTION_BOX_SCHEMA, InstructionAdapter())
+
+        internal fun decodeInstructionBox(encoded: ByteArray): InstructionBox =
+            NoritoCodec.decode(encoded, InstructionAdapter(), INSTRUCTION_BOX_SCHEMA)
+
+        /** Encodes the bare Norito vector preimage hashed by `HashOf<Vec<InstructionBox>>`. */
+        internal fun encodeCanonicalInstructionBoxes(encodedInstructions: List<ByteArray>): ByteArray {
+            require(encodedInstructions.isNotEmpty()) { "encodedInstructions must not be empty" }
+            encodedInstructions.forEachIndexed { index, encoded ->
+                require(encoded.isNotEmpty()) { "encodedInstructions[$index] must not be empty" }
+                val canonical = encodeInstructionBox(decodeInstructionBox(encoded))
+                require(encoded.contentEquals(canonical)) {
+                    "encodedInstructions[$index] is not canonical"
+                }
+            }
+            val encoder = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
+            ENCODED_INSTRUCTION_LIST_ADAPTER.encode(encoder, encodedInstructions)
+            return encoder.toByteArray()
+        }
+
+        /** Decodes one exact canonical `iroha.custom` instruction JSON payload. */
+        internal fun decodeCanonicalCustomInstructionJson(instruction: InstructionBox): String {
+            val wire = instruction.payload as? WirePayload
+                ?: throw IllegalArgumentException("instruction must contain a wire payload")
+            require(wire.wireName == "iroha.custom") {
+                "instruction wire name must be iroha.custom"
+            }
+            val framed = wire.payloadBytes
+            val json = NoritoCodec.decode(
+                framed,
+                CUSTOM_INSTRUCTION_ADAPTER,
+                CUSTOM_INSTRUCTION_SCHEMA,
+            )
+            val canonical = NoritoCodec.encode(
+                json,
+                CUSTOM_INSTRUCTION_SCHEMA,
+                CUSTOM_INSTRUCTION_ADAPTER,
+            )
+            require(framed.contentEquals(canonical)) {
+                "custom instruction payload is not the exact canonical encoding"
+            }
+            JsonValue.fromCanonicalWire(json)
+            return json
+        }
+
+        /** Test and fixture support for the canonical custom-instruction envelope. */
+        internal fun encodeCanonicalCustomInstructionJson(json: String): ByteArray {
+            val canonical = JsonValue.parse(json).canonicalJson
+            return NoritoCodec.encode(
+                canonical,
+                CUSTOM_INSTRUCTION_SCHEMA,
+                CUSTOM_INSTRUCTION_ADAPTER,
+            )
+        }
+
+        internal fun encodeCanonicalLogInstruction(level: Long, message: String): ByteArray {
+            val framed = NoritoCodec.encode(
+                LogInstructionValue(level, message),
+                LOG_INSTRUCTION_SCHEMA,
+                LOG_INSTRUCTION_ADAPTER,
+            )
+            return encodeInstructionBox(InstructionBox.fromWirePayload("iroha.log", framed))
+        }
+
+        internal fun decodeCanonicalLogInstruction(encoded: ByteArray): LogInstructionValue {
+            val instruction = decodeInstructionBox(encoded)
+            val canonicalInstruction = encodeInstructionBox(instruction)
+            require(encoded.contentEquals(canonicalInstruction)) {
+                "log instruction box is not the exact canonical encoding"
+            }
+            val wire = instruction.payload as? WirePayload
+                ?: throw IllegalArgumentException("instruction must contain a wire payload")
+            require(wire.wireName == "iroha.log") { "instruction wire name must be iroha.log" }
+            val framed = wire.payloadBytes
+            val value = NoritoCodec.decode(
+                framed,
+                LOG_INSTRUCTION_ADAPTER,
+                LOG_INSTRUCTION_SCHEMA,
+            )
+            val canonical = NoritoCodec.encode(
+                value,
+                LOG_INSTRUCTION_SCHEMA,
+                LOG_INSTRUCTION_ADAPTER,
+            )
+            require(framed.contentEquals(canonical)) {
+                "log instruction payload is not the exact canonical encoding"
+            }
+            return value
+        }
 
         internal fun encodeProofAttachmentPayload(value: ProofAttachment, flags: Int = 0): ByteArray {
             val encoder = NoritoEncoder(flags)

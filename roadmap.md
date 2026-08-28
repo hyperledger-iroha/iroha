@@ -151,16 +151,26 @@ Completed history lives in [`status.md`](./status.md).
 
 ## P2P first-release closure
 
-- Carry application, exit, measurement, and VPN payload through the fixed-rate
-  scheduler before enabling strict SoraNet constant-rate negotiation. Make
-  DATAGRAM unavailability and send failure circuit-fatal in that mode, then add
-  mixed-hop, loss, and traffic-shape regressions proving payload and cover share
-  one schedule. Until those invariants are complete, the relay must continue to
-  reject strict mode instead of downgrading it.
-- Carry the already-signed broadcast envelope in reliable-progress retry
-  ownership so retries across actor turns also avoid repeated BLS signing. Add
-  deterministic signing, allocation, and retained-byte benchmarks for direct,
-  hub-fallback, broadcast, and reliable-retry paths.
+- Upgrade the lockfile from quinn-proto 0.11.15 to released 0.11.17 or later,
+  which fixes unauthenticated remote-memory exhaustion in stream reassembly,
+  connection-ID retirement, and zero-length DATAGRAM accounting. Shipping P2P,
+  streaming, SoraNet relay, and VPN-helper QUIC reject endpoint creation while
+  the vulnerable resolution remains locked. After the dependency fix lands,
+  reactivate the QUIC and DATAGRAM-on abuse suites before removing those
+  fail-closed gates. Strict SoraNet configuration and live preflight remain
+  rejected without downgrade.
+- Expose the documented deterministic Norito streaming media fallback over
+  bounded unidirectional streams. The current QUIC helper exposes its control
+  streams but no stream-based media payload API; until both that fallback and
+  fixed Quinn DATAGRAM accounting are qualified, DATAGRAM media remains
+  dormant.
+- Requalify the dormant strict SoraNet mux after per-entry DATAGRAM accounting
+  lands. Application/exit, measurement, and VPN payload are wired through the
+  authenticated fixed-rate scheduler; unavailability, missed deadlines, bounded
+  queue exhaustion, send failure, sequence loss, and unscheduled streams are
+  circuit-fatal, with direct mixed-channel and loss regressions. Final activation
+  still requires dependency-level zero-length-DATAGRAM abuse coverage and full
+  relay/helper end-to-end traffic-shape qualification.
 - Split the large peer and network actors along their existing transport,
   handshake, admission, queueing, and relay ownership boundaries after adding a
   production-source reachability guard. Keep the single TLS/optional-QUIC wire
@@ -240,8 +250,10 @@ Completed history lives in [`status.md`](./status.md).
   regenerate the OpenAPI provenance bundle and update the SoraFS operator
   runbooks in the same change.
 - Collapse permanent operator bearer-token modes to one bootstrap-before-first-
-  credential flow, remove duplicate MCP Connect tool aliases and response
-  fields, and retain only `/openapi.json` as the OpenAPI discovery endpoint.
+  credential flow, remove duplicate response fields, and retain only
+  `/openapi.json` as the OpenAPI discovery endpoint. Duplicate MCP Connect tool
+  aliases are already removed; preserve the four canonical `iroha.connect.*`
+  tools without reintroducing composite credential-minting helpers.
 - Audit wildcard diagnostic and configuration-alias surfaces (`/status/{*tail}`
   and one-way parser spellings) against first-release callers, deleting each
   surface that has no production owner instead of carrying compatibility
@@ -272,15 +284,26 @@ Completed history lives in [`status.md`](./status.md).
 - Extend the CAR output prepare/commit boundary to the optional summary output,
   then rerun the focused Torii, CLI, xtask, viewer, CAR, integration, and
   full-workspace matrices from a settled candidate.
+- Remediate and verify the mutable-path TOCTOU in the Taikai evidence collector
+  reported as the sole Medium-severity collateral finding by sealed Codex
+  Security scan `6ab84cf2-4c1f-47e4-9cb0-92d126eb333e`. Receipt validation,
+  digesting, copying, and optional signing must consume one immutable artifact
+  snapshot rather than reopening attacker-replaceable pathnames.
 
 ## Data-model first-release closure
 
-- Qualify the signed native-Norito Hijiri fee-quote route, global-policy and
-  per-account-risk governance, transaction and nested multisig bindings,
-  missing-record defaults, and aggregate rounding in a real four-peer network
-  before calling the path release-qualified. Add typed quote convenience
-  wrappers to non-Rust SDKs as their native Norito transports expose the shared
-  request/response layouts; do not introduce a JSON fallback.
+- Enact an enabled exact-network base validation-fee policy through SORA
+  Parliament, wait the mandatory 120,960-block activation delay, and then
+  qualify the signed native-Norito Hijiri quote and fee-bearing transaction
+  path in a real four-peer network before calling it release-qualified. Cover
+  global and per-account governance updates, missing-record defaults, direct
+  live-multisig-signatory quote authorization, the selected nested fee-context
+  binding, stale quotes, aggregate rounding, private failure envelopes, and
+  behavior under message loss.
+- From a clean committed candidate, rerun the canonical OpenAPI generation and
+  signing workflow so its manifest and version-index provenance names the
+  release source and all three Torii schema snapshots come from that one
+  settled authority. A dirty-tree development pass is not release provenance.
 - Keep observer and evidence ingestion, peer reputation, registry credits,
   Hijiri checkpoints, and dedicated events or telemetry deferred until each has
   authenticated bounded ingress and one deterministic state owner. Define the
@@ -333,7 +356,30 @@ Completed history lives in [`status.md`](./status.md).
   missed-deadline classification, objective release failure,
   opening-deadline expiry, fresh-TLE retry, restart/restore replay,
   narrow-result fresh Confirmation Jury, stale-head supersession, exact-height
-  enactment, and rollback-isolated execution failure.
+  enactment, and rollback-isolated execution failure. The reservation-bound
+  carrier attestation, manifest-less certified-Fetch Phase-B completion, and
+  ordinary/recovered exact-retransmission ownership-history refresh are
+  implemented and covered by focused source/regression checks, but fresh strict
+  four-validator evidence for their resulting source is still required.
+- Carry the completed zero/singleton hidden-electorate capacity path, bounded
+  generation-16 exhaustion, live-candidate bond retention, atomic narrow-Policy
+  Confirmation capacity decision, account-rekey containment, and protected
+  validation-fee restore checks through that four-peer matrix. Preserve the
+  fail-closed terminal shapes and prove that retries, restore, and exact-height
+  execution cannot strand a bond, an unfillable body requirement, an account
+  identity, or fee admission behind missing provenance. The isolated target now
+  contains source-budgeted four-validator tests for bond retention/release,
+  Confirmation-capacity abort, exact stale-head supersession, fail-fast
+  execution-failure unchanged-state isolation, state equality, and restart;
+  run them from the settled candidate before treating the matrix as evidence.
+- Candidate-qualify the exact Ready-Proposal-Sign producer-point preemption and
+  the certified-response queue-refresh retry. The first patched four-validator
+  rerun showed no recurrence of the former queue-cut fail-stop, but its
+  threshold-key installation transaction timed out after 600 seconds under
+  severe unrelated host contention, so it is diagnostic evidence rather than a
+  liveness receipt. Repeat below-threshold install, epoch-boundary activation,
+  and the full Policy-to-enactment corridor on an uncontended same-source
+  four-validator candidate.
 - Qualify the implemented live threshold-beacon partial-share transport,
   per-session runtime custody, threshold aggregation, candidate-effect
   assembly, and authoritative finalized-pulse persistence on at least four
@@ -359,13 +405,22 @@ Completed history lives in [`status.md`](./status.md).
   the refreshed finalized height immediately before normal signed submission.
   Qualify the implemented certified
   public-session install, atomic active-pointer cutover/retirement, new-ballot
-  selection guard, and local-custody retirement guard against every committed
-  ballot/retry deadline. Complete the authenticated broker transport and HSM
-  provisioning path; then demonstrate old-share retention/zeroization, restart
-  recovery, peer authentication/rate limits, freshness expiry, canonical
-  collection, and operator submission on at least four peers. Do not describe
-  aggregate opening as operationally automatic or claim secure erasure from the
-  software adapter.
+  selection guard, immutable session-to-ordered-roster binding, and
+  local-custody retirement guard against every committed ballot/retry deadline.
+  Startup now derives the local seat separately for the active and every
+  deadline-retained historical session and requires an exact non-signing
+  key-session/transcript/seat lookup through the same signer. The authenticated
+  broker operation and software custody implementation are complete, including
+  independent result matching, surrounding requalification, mismatch poisoning,
+  and fail-closed defaults. Source tests now exercise exact active-plus-retained
+  daemon call sets, historical expiry, all three independent result-binding
+  substitutions, and truncated replies. Qualify that source against a genuine
+  HSM provider;
+  then demonstrate old-share retention/zeroization, restart recovery, peer
+  authentication/rate limits, freshness expiry, canonical collection, and
+  operator submission on at least four peers. Do not describe a point-in-time
+  custody attestation as future availability, aggregate opening as operationally
+  automatic, or the software adapter as secure erasure.
 - Qualify the implemented Core-authorized pre-seal timed-OVN casting-context
   archive read and its maximum-4,194,304-byte canonical header-framed Norito
   `ParliamentTimedOvnCastingContextArchiveV1`. The archive is public diagnostic
@@ -401,18 +456,35 @@ Completed history lives in [`status.md`](./status.md).
   the source and pinned Cargo input are sealed, then publish the exact
   proposal-kind/body/route inventory. Keep the retired equal Parliament ballot
   route and proposal-backed referendum/finalize/enact surfaces absent from the
-  served OpenAPI as they already are from source and SDKs. Standalone referenda
-  must remain explicitly separate from Parliament attempts, and automatic
-  execution must remain only its non-submit-able audit outcome.
-- Add reviewed operator dashboards and alarms for stuck attempts and deadline
-  misses using the implemented aggregate-only Parliament counters/gauges;
-  qualify their restart and four-peer behavior without adding identifiers,
-  free-form labels, or private ballot material.
-- Run the bounded Parliament model and deterministic source/model contract from
-  the immutable candidate, then pass focused data-model/Core/Torii tests, the
-  legacy-codec guard, workspace tests, strict all-target Clippy, formatting, and
-  a clean signed release corridor. Bounded model checking is regression
-  evidence only and does not replace cryptographic review or multi-peer tests.
+  served OpenAPI as they already are from source and SDKs. The three current
+  mirrors are byte-identical at 3,078,501 bytes and SHA-256
+  `6f1d88fe8503d56e8fb1bb1b0115d5a1cef8228b41c953bab4fc565be706e8bd`,
+  with the retired `GovernanceFinalizeRequestV1` and
+  `GovernanceEnactRequestV1` schemas removed, and the focused Python Parliament
+  API gate is green at 36/36. Their deliberately unchanged provenance manifests
+  remain unsigned dirty-tree output and cannot be promoted. Standalone
+  referenda must remain explicitly separate from Parliament attempts, and
+  automatic execution must remain only its non-submit-able audit outcome.
+- Review and candidate-qualify the implemented aggregate-only Parliament alert
+  rules for stuck attempts and deadline misses. Their five-rule `promtool` suite
+  is green locally; restart and four-peer behavior still require evidence
+  without identifiers, free-form labels, or private ballot material.
+- Freeze and rerun the implemented 23-case threshold-BLS/timed-OVN Criterion
+  and logical-allocation matrix from the same immutable candidate. The local
+  evidence checker passes all 18 collected cases across 15 test functions, and
+  byte-identical pre-merge allocation runs establish the harness contract, but
+  do not replace fresh candidate measurements and an archived sealed report.
+- Re-run the bounded Parliament model and deterministic source/model contract
+  from the immutable candidate, then pass focused data-model/Core/Torii tests,
+  the legacy-codec guard, workspace tests, strict all-target Clippy, formatting,
+  strict TLAPS, pinned Verus, chaos/soak qualification, and a clean externally
+  signed release corridor. The local TLC run now covers the typed zero/singleton
+  pre-request capacity path, bounded exhaustion, and atomic Confirmation-capacity
+  decision in addition to the original lifecycle, while the deterministic
+  source/model gate and all 14 lifecycle corridor source checks with 113
+  adversarial subtests are green.
+  Bounded model checking remains regression evidence and does not replace
+  cryptographic review, real-HSM custody, or multi-peer tests.
 
 ## ZK algorithm release qualification
 
@@ -487,18 +559,12 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Inrou V1 release qualification
 
-- Clear the concurrent merge's unrelated Core, data-model-test, Swift, and
-  Kotlin `NexusAppClient` compilation blockers. Then run the new single-revision
-  daemon/Core/Torii/CLI regressions, including durable stale-snapshot scrubbing
-  and restart after an atomic Inrou revision switch; finish maintained
-  SDK/native parity against the regenerated canonical corpus, and freeze one
-  immutable candidate.
-- From that frozen candidate, run the remaining focused onboarding/Torii
-  integration tests, strict workspace test and all-target
-  Clippy matrices, stale retired-symbol/domain scans, and deterministic release
-  build. Regenerate the byte-identical OpenAPI mirrors from that candidate and
-  attach clean authorized signed provenance; dirty-tree development artifacts
-  are not release evidence.
+- From a clean committed candidate, run the remaining full workspace test and
+  strict all-target Clippy matrices, finish maintained SDK/native parity, and
+  attach authorized signed provenance. The focused first-release regressions,
+  retired-surface scan, deterministic local daemon/CLI builds, and three-pass
+  byte-identical OpenAPI replay are complete; the current dirty-tree unsigned
+  manifest is development evidence, not a signed release record.
 - On a same-revision Linux/AArch64/KVM host, run the privileged real-guest smoke
   and adversarially qualify the private mount/network/IPC/UTS/PID/cgroup
   launcher and authenticated bounded bridge. Archive kernel-observed CPU,
@@ -520,7 +586,7 @@ Completed history lives in [`status.md`](./status.md).
 - With those gates satisfied, build the same-revision `iroha` evidence binary
   using `--profile release`, run only `iroha taira public-reset preflight` and
   `iroha taira public-reset apply`, and archive cleanup and reset evidence. Then
-  require four-peer convergence, all six exact child outcomes, same-revision
+  require four-peer convergence, all seven exact child outcomes, same-revision
   doctor evidence, four distinct Inrou receipts, bounded restart proof, guest
   workload qualification, and controlled edge cutover before calling public
   Taira ready.
@@ -623,8 +689,14 @@ Public Taira remains the deployment gate rather than a source-code toggle:
   digest.
 - Use the existing Taira Kagami bootstrap generator to register and fund the
   command authority with `CanManageOfflineEscrow`, install the verifier records
-  and Convertible XOR definition, complete governed Stage/Enable activation,
+  and register Digital Shekel (`ds#boi.is`) as the Kagemusha ZK asset while
+  retaining XOR for command fees, complete governed Stage/Enable activation,
   activate the device policy, and enroll qualified hardware-backed users.
+- Supply the authenticated external privacy-SDK Cargo lock with frozen digest
+  `cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79`,
+  or explicitly requalify the freshly generated lock for the
+  immutable release candidate. Keep the exact digest gate; do not infer release
+  authority from the tracked workspace lock alone.
 - Publish the protected `privacy-production-enabled` SDK artifacts, then run a
   same-revision `iroha taira doctor` and every SDK's credential-free live probe.
   Perform top-up/redemption canaries only under a separate explicit live-write
@@ -640,10 +712,10 @@ failed attempt. Client POST/acknowledgement ambiguity, CLI post-acknowledgement
 publication/output ambiguity, fresh compatibility-probe recovery, and redacted
 client debug output are explicit. Core's reusable-host ZK hydration validates
 election selectors before any snapshot mutation, and `SealedReveal` cannot gain
-direct lifecycle provenance. The three checked-in OpenAPI mirrors are
-byte-identical and contain the route. Their manifests and version index match
-the current artifact bytes, but their source digest is stale and their
-provenance remains dirty, unsigned, and backed by no allowed signer. The hostile
+direct lifecycle provenance. The three checked-in OpenAPI specification mirrors
+are byte-identical and contain the route. Their manifests and version index
+still bind the preceding artifact bytes, so both artifact metadata and source
+provenance remain stale, unsigned, and backed by no allowed signer. The hostile
 Python 3.12 `candidate --self-test` passes with
 139,025 bytes of production-readiness source support under the unchanged
 139,264-byte cap and a 65,504-byte lifecycle source contract under the unchanged
@@ -798,12 +870,6 @@ close the internal blockers below:
   path; add bounded multi-page shard retrieval before permitting a larger
   offset window, and make every remaining fanout list prove the same property
   with cross-shard fixtures.
-- Add a configured MCP in-flight dispatch budget before exposing expensive
-  operator tool sets on an untrusted ingress. Request bytes, nested response
-  bytes, body deadlines, and the shared 64-dispatch batch ceiling are bounded;
-  long-running handler execution intentionally remains outside the body-read
-  deadline and therefore needs independent concurrency admission.
-
 - TODO: add an authenticated cancellation/rebind protocol for an exact pending
   QueuePlan whose fresh dataspace/role topology changes (for example after an
   SNS lease transition). Candidate assembly now defers such work without
@@ -2064,18 +2130,23 @@ green at that checkpoint. That historical checkpoint did not include a Cargo
 result against its split source; newer receipts above supersede it, without
 replacing the complete release gates.
 
-The static release inventory contract now enumerates `864/864` production tests
-across 43 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
+The static release inventory contract now enumerates `863/863` production tests
+across 44 modules and `518/518` focused `G-UNIT` entries. Its canonical 519-line
 TSV has
 SHA-256
-`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
+`b3bcc3655b1362819c0a01ea7a9acab3eaa303b58ec28866cc4d42315c4240b7`.
 The separate canonical production module/test TSV has SHA-256
-`9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a`;
-the newest rows bind the proposal-height namespace for exact retired attempts,
-canonical successor acceptance while local sidecars lag, two-link raw
+`2c27cdd44bc6b62d5e7798c0ed2694f5caaf86546dbb9daf30abf920381da444`;
+the newest inventoried rows bind stale exact `TimeoutVote` retransmission
+coalescing without reply-route regression, Ready local Proposal Sign plus
+its exact output taking precedence over a pending Timeout Certificate, the
+eligible-only authority for that ordinary-head preemption, and replica
+disposition observing the exact FIFO beneath the global-selection overlay. The
+broader current inventory binds the proposal-height namespace for exact retired
+attempts, canonical successor acceptance while local sidecars lag, two-link raw
 lane-chain hydration on receipt-free cold restart, and exact noncanonical
 autonomous-output retirement at applied-height handoff, plus ordinary and
-record-backed autonomous historical predecessor durability. They also bind
+record-backed autonomous historical predecessor durability. It also binds
 crash-safe autonomous lifecycle terminal completion,
 startup reconciliation before lane-work activation, and the exact pre-mutation
 terminal-sweep partition. The duplicate inline V2 core network simulations
@@ -2098,10 +2169,10 @@ source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending structural
-source check. The reviewed Rust include topology contains 66 parents and 398
+source check. The reviewed Rust include topology contains 70 parents and 425
 direct entries; its canonical payload SHA-256 is
-`6830478f0523f8e320378200b67894bf9a6a3c09574a99741a3a04b76a457990`.
-The release-inventory contract is statically reconciled at 84/864/522, and the
+`0e92b92181eb915d6b70f2ec963fb721ebdd6c0519446a1c5bc7ef1d5013635f`.
+The release-inventory contract is statically reconciled at 85/863/518, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker discharges its current Rust/model/mutation/source obligations except
 for the separately recorded task-start `Cargo.lock` mismatch; the static
@@ -2135,7 +2206,7 @@ source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
 receipt-required unsupported-version-before-signing regression preserves the exact
-864-production-test and 522-G-UNIT-test counts. Rust's separated client test
+863-production-test and 518-G-UNIT-test counts. Rust's separated client test
 module covers both complete endpoint-payload swaps while retaining its
 14-test count, so the API-separation source gap is closed. This is
 mutable-source inventory consistency, not deterministic regeneration, SDK
@@ -2193,13 +2264,13 @@ The remaining work is evidence-driven and must stay in order:
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
   mutations before release evidence is accepted, then finish the remaining
-  864-test,
-  43-module production inventory legs and archived G-UNIT execution.
+  863-test,
+  44-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product assigns all 54 structural TLAPS
   projection rows; that is source inventory only. Its V2 inductive-safety,
   successor-isolation, and temporal-product obligations remain in the formal
   dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 522 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 518 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
@@ -3489,15 +3560,16 @@ scan limited to repository policy text plus intentional guard-test fixtures.
 **Status:** exact V1 implementation and local release-fixture validation
 complete; audited live deployment evidence pending.
 
-The canonical production release-evidence corridor has exactly three remote
-profiles: Ethereum mainnet, BNB Smart Chain mainnet, and TRON mainnet, each
-paired with SORA Taira Sumeragi-v2 chain id
+The canonical production release-evidence corridor has exactly four remote
+profiles: Ethereum mainnet, BNB Smart Chain mainnet, TRON mainnet, and TON
+mainnet, each paired with SORA Taira Sumeragi-v2 chain id
 `fc56984b-2be7-431d-840e-21514d1883f0` and I105 discriminant `369`
 (`0x0171`). The archived pre-v2 Taira chain is not a settlement target.
 Sepolia, BSC testnet, Nile, and Shasta remain exact test profiles. Solana
 testnet remains an implemented SCCP V1 runtime and SDK profile outside this
-production evidence corridor. TON, generic proof backends, arbitrary assets,
-Nexus settlement, and compatibility manifests are not part of SCCP V1.
+production evidence corridor. TON testnet is schema/conformance-only and can
+never satisfy a production evidence row. Generic proof backends, arbitrary
+assets, Nexus settlement, and compatibility manifests are not part of SCCP V1.
 
 The live node admits only Sumeragi-v2 wire revision 4 and dispatches the worker
 to the serialized v2 height runner; the legacy actor is never selected under a
@@ -3526,31 +3598,50 @@ the escrow.
 
 Each governed route binds the exact transfer-only XOR settlement, source
 emitter, native inbound verifier and trust anchor, immutable token/verifier/
-route deployments, nonzero revision, full BN254 key, and a mandatory typed
-outbound proof policy containing the semantic proof profile and Taira finality
-anchor. Both derived policy hashes participate in destination-binding and route-
-configuration hashes. The destination verifier has exactly eleven public
-signals, twelve IC points including the constant, and a canonical 38-ABI-word
-verifying-key preimage; ten-signal, eleven-IC-point, 36-word, and policy-less
-representations are invalid. A production circuit must prove canonical transfer
-encoding, message-leaf derivation, Merkle inclusion, Taira block commitment,
-the complete Sumeragi-v2 finality artifact and dual quorum, and continuity from
-the governed checkpoint. Registered TRON revisions remain permanently retained
-and must use distinct immutable route addresses within a lane, so one finalized
-transaction cannot be relabeled under a successor revision. The checked-in
-labeled-signal circuit is explicitly
-non-production and cannot be promoted by metadata.
+route deployments, nonzero revision, a full curve-specific verifying key, and
+a mandatory typed outbound proof policy containing the semantic proof profile
+and Taira finality anchor. Ethereum, BSC, and TRON use the exact BN254 backend;
+TON uses the exact BLS12-381 backend. Both derived policy hashes participate in
+destination-binding and route-configuration hashes. The BN254 destination
+verifier has exactly eleven public signals, twelve IC points including the
+constant, and a canonical 38-ABI-word verifying-key preimage; ten-signal,
+eleven-IC-point, 36-word, and policy-less representations are invalid. TON
+destination evidence instead binds the canonical BLS12-381 key and semantic
+profile, Jetton master and wallet code, route code, embedded-verifier code, and
+each canonical single-root code and initial-data BOC to the governed
+deployment. Canonical StateInit representation hashing derives both governed
+basechain account ids from their exact code/data cells. The same bidirectional
+route contract is the native source emitter and destination executor; a
+different source address, code hash, or route configuration is invalid. A
+production circuit must prove canonical transfer encoding, message-leaf
+derivation, Merkle inclusion, Taira block commitment, the complete Sumeragi-v2
+finality artifact and dual quorum, and continuity from the governed checkpoint.
+Registered TRON revisions remain permanently retained and must use distinct
+immutable route addresses within a lane, so one finalized transaction cannot
+be relabeled under a successor revision. The checked-in labeled-signal circuit
+is explicitly non-production and cannot be promoted by metadata.
 
 The production evidence gate is implemented and fail closed. Each profile must
 provide the closed seven-role semantic artifact set, two independently signed
-canonical audit reports over identical metadata and an exact eleven-signal
+canonical audit reports over identical metadata and an exact curve-tagged
 honest-proof claim, and one distinct canonical proof. The authenticated Rust
 validator re-verifies the signed policy/evidence, derives the governed claim,
-and verifies the BN254 pairing; metadata-only, fixture, smoke, placeholder, or
-self-asserted evidence cannot make a lane ready.
+and dispatches only the exact BN254 or BLS12-381 pairing selected for that
+profile; metadata-only, fixture, smoke, placeholder, or self-asserted evidence
+cannot make a lane ready.
+
+The complete production inventory is exactly four lane-evidence artifacts,
+four lane-validation receipts, four semantic-proof artifacts and receipts, and
+eight independent audit reports in canonical Ethereum/BSC/TRON/TON-mainnet
+order.
 
 SCCP proof bindings are payload-owned and role preserving. Closed native and
-destination variants carry the exact historical route-configuration hash;
+destination variants carry the exact historical route-configuration hash. TON
+native admission authenticates the governed zero state and masterchain
+checkpoint, ordinary-catchain or Simplex Ed25519 finality, the selected shard,
+transaction pre-state route identity, and exact outbound message. The only
+destination submit envelope is `BridgeSccpDestinationProofV1`, whose closed
+backend selects EVM/TVM/Solana BN254 or TON BLS12-381 material;
 generic ICS and transparent-ZK variants carry only a verifier-manifest hash and
 are rejected by bridge submission until a real generic on-chain verifier is
 implemented. Cryptographic finality is mandatory in every SCCP build; the crate
@@ -3565,6 +3656,17 @@ and creation time, then verifies a bounded generic single-key signature.
 Multisig authorities use preparation followed by the multisig workflow, never
 the direct detached-signature shortcut. The unified response uses
 `route_configuration_hash_hex`; the retired manifest alias is not accepted.
+The proof-request endpoint returns the governed concrete BN254 request for
+EVM/BSC/TRON/Solana or concrete BLS12-381 request for TON, rather than an opaque
+generic job or an extra enum wrapper on the wire. Consensus meters TON native
+Ed25519 signature/key work and the destination BLS12-381 pairing with explicit
+transaction/block quotas before dispatching proof-controlled cryptography.
+
+The TON destination message is an exact typed 14-cell BOC shared by Rust and
+Tolk: four linked public-signal cells split `3/3/3/2`, fixed compressed
+`48/96/48` proof cells, and fixed `50/100/100/remainder` payload cells. The
+generic snake encoding is outside the contract ABI. The pinned Acton
+1.1.0/Tolk 1.4.1 contract suite currently passes 20/20 locally.
 
 Successful outbound messages use one dense, zero-based `commitment_index` in
 block execution order, with a fixed maximum of 512 messages per block and 4,096
@@ -3599,13 +3701,18 @@ The remaining SCCP release work is external, independently verifiable evidence:
 
 - obtain independently audited, reproducible semantic circuit, witness
   generator, proving key, verifying key, toolchain, and audit-report artifacts
-  for all three production profiles;
+  for all four production profiles;
 - deploy the exact contracts and native source-verifier material, obtain
   authenticated finalized verifier/runtime readbacks, and confirm every
   governed runtime/key/policy hash;
 - execute the locked TRON artifact on a real TVM/TRE runtime and retain
   identity-checked included success and negative receipts; EVM compatibility
   execution is not TVM evidence;
+- build the exact TON contracts with the pinned Acton/Tolk toolchain, deploy
+  the Jetton, bidirectional route, and embedded-verifier code with the governed
+  initial data on TON mainnet, verify both exact StateInit-derived addresses,
+  and retain authenticated masterchain readbacks plus included success and
+  negative receipts;
 - apply the typed governance actions, run successful value-moving canaries in
   both directions, and confirm replay, stale-revision, wrong-route, and
   unavailable-ingress failures remain closed;
@@ -3616,10 +3723,10 @@ No fixture key, signal-binding circuit, synthetic receipt, unavailable lane,
 or self-consistent proof-controlled roster counts as production evidence.
 
 The signed SCCP V1 production evidence corridor is only Taira↔Ethereum,
-Taira↔BSC, and Taira↔TRON. Solana testnet remains implemented outside that
-fixture and must not appear in its lane inventory, blockers, or evidence rows.
-TON, generic proof jobs/artifacts, and retired route-manifest workflows remain
-excluded from the first release.
+Taira↔BSC, Taira↔TRON, and Taira↔TON mainnet. Solana testnet and TON
+testnet remain outside that inventory and cannot satisfy its blockers or
+evidence rows. Generic proof jobs/artifacts and retired route-manifest
+workflows remain excluded from the first release.
 
 ## Release and Stabilization
 
@@ -10105,10 +10212,11 @@ excluded from the first release.
   This does not close the live deployment gaps above; it prevents
   production promotion from being claimed until those lane gates all pass
   together for the same deployment.
-- SCCP V1 production launch scope is limited to Ethereum, BSC, and TRON. Proof
-  policies, checked encoders, verifier dispatch, Torii public discovery, SDK
-  helpers, and production readiness surfaces must stay limited to those lanes;
-  Solana and TON are rejected first-release profiles, not deferred launch work.
+- SCCP V1 production launch scope is limited to Ethereum, BSC, TRON, and TON
+  mainnet. Proof policies, checked encoders, verifier dispatch, Torii public
+  discovery, SDK helpers, and production readiness surfaces must stay limited
+  to those lanes; Solana and TON testnet remain non-production profiles and
+  cannot substitute for the required TON mainnet evidence.
   Retired runtime-network families outside that launch scope are explicitly
   unsupported for now.
   SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
@@ -10790,9 +10898,10 @@ excluded from the first release.
   witness and total-weight overflow details, including witness indexes and raw
   overflow weights, cannot appear in public summaries, and the release
   public-scalar inventory pins those regressions.
-- The current SCCP release-evidence matrix enumerates only Ethereum, BSC, and
-  TRON. Solana/TON clauses retained in the pre-release implementation history
-  below are non-normative and cannot satisfy or block SCCP V1 readiness.
+- The current SCCP release-evidence matrix enumerates exactly Ethereum, BSC,
+  TRON, and TON mainnet. Solana and TON testnet clauses retained in the
+  pre-release implementation history below are non-normative and cannot
+  satisfy SCCP V1 production readiness.
 - SCCP source-material evidence must reject built-in template verifier hashes as
   a release gate, not only as local script behavior. The
   `source_material_template_rejection_gate` source inventory pins ETH, BSC,
@@ -11205,13 +11314,13 @@ excluded from the first release.
   that reject stripped source proofs, mismatched finality proof bytes,
   public-input drift, payload-body tampering, commitment-root tampering,
   malformed builder bundles, and BSC builder source-domain drift.
-- SCCP network scope for the current release remains Ethereum, BSC, and TRON
-  only. Solana, TON, Sub&#115;trate/Pol&#107;adot, and every other network family are
-  intentionally outside the release corridor; do not add public evidence rows,
-  route manifests, deployment checklists, or SDK readiness tasks for them until
-  a future governed network-support plan is accepted. Historical Solana/TON
-  hardening notes below describe research-only negative coverage, not supported
-  launch lanes.
+- SCCP network scope for the current release remains Ethereum, BSC, TRON, and
+  TON mainnet only. Solana, TON testnet, Sub&#115;trate/Pol&#107;adot, and every other
+  network family are intentionally outside the production release corridor;
+  do not let their public evidence rows, route manifests, deployment
+  checklists, or SDK readiness tasks satisfy the four mandatory mainnet lanes.
+  Historical Solana and TON-testnet hardening notes below describe
+  non-production coverage, not additional launch lanes.
 - SCCP client SDK route-canary helper parity must stay pinned: Python Torii
   client, JavaScript source/dist, Swift, Kotlin/JVM, and Java Android helpers
   reject reused route-allowlist, destination-binding, source-material, and
@@ -12840,11 +12949,11 @@ excluded from the first release.
   prerequisites or generated source-material output can mask malformed copied
   evidence.
 - The canonical SCCP first-release release corridor is limited to Ethereum,
-  BSC, and TRON. Solana, TON, SORA-return, and other lane descriptions retained
-  in older roadmap/status history are non-normative research history: they must
-  not add registry fixtures, release-evidence rows, readiness blockers, SDK
-  launch obligations, or production-corridor phases. Do not add any additional
-  network family until the launch scope is explicitly expanded.
+  BSC, TRON, and TON mainnet. Solana, TON testnet, SORA-return, and other lane
+  descriptions retained in older roadmap/status history are non-normative
+  research history: they must not replace a required mainnet row or add release
+  obligations beyond the exact four-profile inventory. Do not add any
+  additional network family until the launch scope is explicitly expanded.
 - SCCP .NET Windows recertification contract (the current-release run is
   complete): on a real Windows host with
   stable `.NET 8`, restore `csharp/Hyperledger.Iroha.Sdk.sln`, build the native
@@ -16922,10 +17031,12 @@ excluded from the first release.
   led by a consensus-owned permanent economic idempotency claim keyed by the
   rail/profile, ISO message id, payload digest, business message id, UETR, and
   exact signed transaction hash, committed atomically with the transfer. The
-  local admission lock, durable exact-hash reservation, and pinned ambiguous
-  queue records remain tactical protections; bounded node-local TTL/count state
-  must not be treated as a network-wide replay boundary. Further work is
-  tracked in the engineering backlog for deeper XMLDSig/XAdES path-policy processing
+  local admission lock, durable exact-hash reservation, refusal to dispatch a
+  payment without durable transaction-identity storage, and pinning of pending
+  or queued-unsettled records remain tactical protections; bounded node-local
+  TTL/count state must not be treated as a network-wide replay boundary.
+  Further work is tracked in the engineering backlog for deeper XMLDSig/XAdES
+  path-policy processing
   beyond the implemented trust-anchor, signer-admission, key-identifier, and
   revocation corridor; official XMLDSig/XAdES trust-anchor packages; CRL/OCSP
   or rail revocation-feed fixtures; complete canonical XML coverage; and
@@ -23418,9 +23529,10 @@ operator-provided rollout bundles.
   generation and wallet/liteserver packaging. Because SCCP launch support
   excludes retired runtime-network families for now, the SDKs ship no builders,
   prover facades, or retired codec runtime-call submission helpers for them.
-  The surrounding Solana/TON SDK notes are retained pre-release history and do
-  not describe exported SCCP V1 APIs. Torii and the SDK release checks keep the
-  production SCCP surface limited to ETH, BSC, and TRON explicitly.
+  The surrounding Solana SDK notes are retained pre-release history and do not
+  describe a production SCCP V1 lane. TON is an exported SCCP V1 API and Torii
+  plus the SDK release checks keep the production surface exact over ETH, BSC,
+  TRON, and TON mainnet.
   The package root also re-exports the SCCP source-adapter OpenVerify circuit id, FastPQ
   parameter-set id, and verifier VK hash helper used by portal evidence
   checks, keeping declared TypeScript imports runtime-available.
@@ -24465,9 +24577,10 @@ operator-provided rollout bundles.
   per-validator deployment bundles rather than hand-edited production configs.
 
 **Next checkpoints:** obtain independently audited deployment and source-chain
-evidence for Ethereum, BSC, and TRON, then complete bidirectional live canaries
-against the exact governed hashes. Solana/TON verifier work in the pre-release
-history below is not SCCP V1 work. Rust SCCP adversarial coverage now starts
+evidence for Ethereum, BSC, TRON, and TON mainnet, then complete bidirectional
+live canaries against the exact governed hashes. Solana verifier work in the
+pre-release history below does not establish a production SCCP V1 lane. Rust
+SCCP adversarial coverage now starts
 from production-ready source-verifier material for every active launch lane and
 replays each built-in
 placeholder role field one at a time, proving the placeholder detector itself
@@ -25826,25 +25939,26 @@ signed ancestor-linked solid-block header proof,
   until TRON exposes a
   consensus-authenticated contract-state root; future state-derived claims need
   a new source proof plan and material prefix instead of reusing
-  `TronDposReceiptProof`. For the first release, complete only the
-  Ethereum/BSC/TRON external evidence corridor described in **SCCP Launch
-  Scope**: independently audit the exact artifacts, deploy and authenticate the
-  governed source and destination verifier material, run bidirectional live
-  canaries, capture the Windows .NET evidence, and publish the independently
-  reproduced signed release bundle. Solana and TON are excluded profiles, not
-  deferred production integrations; no SDK, deployment, evidence, or runbook
-  task for them belongs to SCCP V1.
+  `TronDposReceiptProof`. For the first release, complete the exact
+  Ethereum/BSC/TRON/TON-mainnet external evidence corridor described in
+  **SCCP Launch Scope**: independently audit the curve-specific artifacts,
+  deploy and authenticate the governed source and destination verifier
+  material, run bidirectional live canaries, capture the Windows .NET evidence,
+  and publish the independently reproduced signed release bundle. TON mainnet
+  remains mandatory outstanding production work; Solana and TON testnet are
+  excluded profiles and cannot satisfy that work.
 
 ## IVM, Kotodama, and Norito
 
 **Status:** external release evidence remains.
 
-- If development overlay persistence must support attacker-writable ancestor
-  directories, replace path-relative staging with parent-handle-relative
-  creation and rename on Unix and Windows. Define a fail-stop host outcome for
-  rollback persistence failure so callers cannot ignore `IVMHost::restore ==
-  false`; the current hardening safely restores in-memory state and avoids a
-  panic but cannot promise restart durability after an underlying I/O failure.
+- If a future development-overlay profile must support an arbitrary non-sticky
+  attacker-writable lookup directory or a hostile direct final parent, add a
+  protected private anchor or a stronger directory-identity protocol. V1 now
+  retains directory handles, performs handle-relative creation and publication,
+  rejects unsupported parents, and fails stop after ambiguous persistence or
+  host rollback failure; same-UID, privileged, and ACL-authorized writers remain
+  explicit operator trust boundaries rather than supported adversaries.
 - Keep strict SSA as Kotodama's single optimization authority. The dormant analysis/fuzz
   interpreter, duplicate transport optimizer, manual-access storage, and wide-encoding facade are
   removed; do not restore them as compatibility or comparison paths. Remaining compiler
@@ -28194,8 +28308,8 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 84 pre-network legs and their exact
-864-test inventory plus the separate exact 522-test G-UNIT inventory, the
+original HEAD/tree/`Cargo.lock`, all 85 pre-network legs and their exact
+863-test inventory plus the separate exact 518-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the

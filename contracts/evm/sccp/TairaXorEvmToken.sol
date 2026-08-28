@@ -19,6 +19,7 @@ abstract contract TairaXorEvmToken {
 
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
+    mapping(address => mapping(address => bool)) private allowanceRequiresClear;
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
@@ -39,7 +40,14 @@ abstract contract TairaXorEvmToken {
 
     function approve(address spender, uint256 value) external returns (bool) {
         require(spender != address(0), "Spender address is required");
-        allowance[msg.sender][spender] = value;
+        if (value == 0) {
+            allowance[msg.sender][spender] = 0;
+            allowanceRequiresClear[msg.sender][spender] = false;
+        } else {
+            require(!allowanceRequiresClear[msg.sender][spender], "Clear allowance first");
+            allowance[msg.sender][spender] = value;
+            allowanceRequiresClear[msg.sender][spender] = true;
+        }
         emit Approval(msg.sender, spender, value);
         return true;
     }

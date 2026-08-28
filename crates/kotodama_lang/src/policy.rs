@@ -16,6 +16,15 @@ pub struct PolicyError {
 }
 /// Run the on-chain profile enforcement against a typed Kotodama program.
 pub fn enforce_on_chain_profile(program: &TypedProgram) -> Result<(), Vec<PolicyError>> {
+    crate::session::run_with_compiler_stack(move || enforce_on_chain_profile_inline(program))
+        .unwrap_or_else(|_| {
+            Err(vec![PolicyError {
+                message: "compiler could not allocate the bounded stack required to enforce the on-chain profile"
+                    .into(),
+            }])
+        })
+}
+fn enforce_on_chain_profile_inline(program: &TypedProgram) -> Result<(), Vec<PolicyError>> {
     let mut checker = Checker::default();
     checker.check_states(program);
     for item in &program.items {
@@ -329,6 +338,31 @@ mod tests {
         *,
     };
     use crate::parser::parse_test_fragment as parse;
+
+    #[test]
+    fn public_policy_check_handoffs_from_a_small_caller() {
+        let depth = crate::source::MAX_NESTING_DEPTH - 2;
+        let expression = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
+        let source =
+            format!("module StackMargin {{ fn value() {{ let nested = {expression}; }} }}");
+        std::thread::Builder::new()
+            .name("kotodama-small-policy-caller".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                let program = crate::parser::parse(&source)
+                    .expect("boundary-depth policy fixture must parse");
+                let typed = semantic::analyze(&program)
+                    .expect("boundary-depth policy fixture must type-check");
+                enforce_on_chain_profile(&typed)
+                    .expect("on-chain policy must use the bounded compiler worker");
+                drop(typed);
+                drop(program);
+            })
+            .expect("spawn small policy caller")
+            .join()
+            .expect("public policy checking must not consume the caller stack");
+    }
+
     #[test]
     fn map_key_violation_reports_origin() {
         let mut checker = Checker::default();

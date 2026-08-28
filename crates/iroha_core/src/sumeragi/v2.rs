@@ -11832,8 +11832,25 @@ impl SumeragiV2Adapter {
                     ));
                 }
             }
-            wire::ConsensusMessageV2Payload::QuorumCertificate(_)
-            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                if certificate.phase == wire::GlobalPhase::Prepare
+                    && certificate.round.view > current_view
+                {
+                    // A PrepareQC can outrun the TimeoutCertificate which
+                    // installs its view. Keep the authenticated runtime
+                    // carrier at its exact FIFO position, just like a future
+                    // Proposal above. Terminally classifying it as irrelevant
+                    // would leave the durable leader-wire gate coalescing the
+                    // exact retransmission after that view becomes current,
+                    // preventing this validator from supplying a Commit vote.
+                    return Ok((
+                        Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
+                        None,
+                    ));
+                }
+                return Ok((None, None));
+            }
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
             | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)

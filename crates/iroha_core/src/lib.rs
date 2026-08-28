@@ -1467,13 +1467,7 @@ mod tests {
         .expect("sign maximum-committee drain vote");
         let message = NetworkMessage::LaneDrainVote(Box::new(vote));
         let encoded = norito::to_bytes(&message).expect("encode maximum-committee lane-drain vote");
-        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(
-            &origin,
-            None,
-            1,
-            iroha_p2p::Priority::High,
-            &message,
-        );
+        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(&origin, None, &message);
         assert!(
             p2p_wire_len <= MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
             "largest valid lane-drain vote P2P frame encoded to {p2p_wire_len} bytes, above the {}-byte ingress cap",
@@ -1543,13 +1537,7 @@ mod tests {
         };
         let message = NetworkMessage::LaneDrainVote(Box::new(vote));
         let encoded = norito::to_bytes(&message).expect("encode adversarial lane-drain vote");
-        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(
-            &origin,
-            None,
-            1,
-            iroha_p2p::Priority::High,
-            &message,
-        );
+        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(&origin, None, &message);
         assert!(
             p2p_wire_len <= MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
             "fixture must exercise the nested limit instead of the frame cap"
@@ -1632,13 +1620,7 @@ mod tests {
         };
         let message = NetworkMessage::LaneDrainVote(Box::new(vote));
         let encoded = norito::to_bytes(&message).expect("encode oversized lane-drain vote");
-        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(
-            &origin,
-            None,
-            1,
-            iroha_p2p::Priority::High,
-            &message,
-        );
+        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(&origin, None, &message);
         assert!(p2p_wire_len > MAX_LANE_DRAIN_VOTE_WIRE_BYTES);
         let view = ncore::from_bytes_view(&encoded).expect("inspect oversized network message");
         let error = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
@@ -2017,13 +1999,7 @@ mod tests {
         let origin = PeerId::new(origin_key.public_key().clone());
         let live = ncore::decode_from_bytes::<NetworkMessage>(&shared)
             .expect("decode live Arc proxy carrier");
-        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(
-            &origin,
-            None,
-            1,
-            iroha_p2p::Priority::High,
-            &live,
-        );
+        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(&origin, None, &live);
         let view = ncore::from_bytes_view(&shared).expect("inspect proxy carrier frame");
         assert!(
             <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
@@ -2058,13 +2034,7 @@ mod tests {
             },
         }));
         let response_bytes = ncore::to_bytes(&response).expect("encode proxy response carrier");
-        let response_wire_len = iroha_p2p::network::data_frame_wire_len(
-            &origin,
-            None,
-            2,
-            iroha_p2p::Priority::High,
-            &response,
-        );
+        let response_wire_len = iroha_p2p::network::data_frame_wire_len(&origin, None, &response);
         let response_view =
             ncore::from_bytes_view(&response_bytes).expect("inspect proxy response frame");
         assert!(

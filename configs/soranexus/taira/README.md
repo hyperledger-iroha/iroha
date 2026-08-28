@@ -25,8 +25,10 @@ binaries, replaces
 the previous script-owned bundle under `/var/lib/iroha-taira-devnet/` by
 default, generates exactly four fresh-key NPoS validators for the canonical
 Taira chain, with Kagami directly owning the exact storage and closed egress
-profile. It validates every base configuration, stages the trusted guest, and
-atomically binds each peer to the complete first-release Inrou backend: one
+profile. It validates every base configuration, then the compiled
+`iroha taira inrou-stage` command stages the trusted guest and, through the
+required `--bind-validator-config-dir`, atomically binds each peer to the
+complete first-release Inrou backend: one
 PortableVM with exact CPU, memory, writable-storage, and egress budgets plus a
 separate 10 GiB immutable guest-image materialization bound. It
 starts the peers and waits for all four nodes to become ready, which also proves
@@ -174,13 +176,17 @@ compiled stager consume only that snapshot. The final JSON reports the
 aggregate `inrou_canary_input_content_sha256` without exposing input paths.
 
 The mandatory path builds `sorafs-node`, invokes the compiled
-`iroha taira inrou-stage --mode deploy`, and verifies its exact owner-only
-stage. Before starting a validator, it preseeds both the service bundle and
-guest directory commitments into each of the four disjoint generated SoraFS
-roots. After signed finality and the four MCP checks, the coordinator executes
-three prepared Inrou children in order: `bundle-pin` (`inrou_bundle_pin`),
-`guest-pin` (`inrou_guest_pin`), then `service-mutation` (`inrou_canary`). Each
-invocation selects exactly one child and one of
+`iroha taira inrou-stage --mode deploy --bind-validator-config-dir ...`, and
+verifies both its exact owner-only stage and the four typed daemon configs it
+rewrote. The command rejects any pre-existing Inrou table; there is no Python
+TOML writer, idempotent reuse, or compatibility binding path. Before starting
+a validator, it preseeds the service bundle, guest
+directory, and public discovery commitments into each of the four disjoint
+generated SoraFS roots. After signed finality and the four
+MCP checks, the coordinator executes four prepared Inrou children in order:
+`bundle-pin` (`inrou_bundle_pin`), `guest-pin` (`inrou_guest_pin`),
+`discovery-pin` (`inrou_discovery_pin`), then `service-mutation`
+(`inrou_canary`). Each invocation selects exactly one child and one of
 prepare, retained-envelope submit, or read-only recovery. The coordinator
 atomically persists the canonical authorization-bound envelope before one
 submit, never replaces first-wins bytes, and requires exact Applied predecessor
@@ -219,8 +225,10 @@ python3 scripts/taira_devnet.py check
 ```
 
 `check` binds the listeners to the generated Taira chain, genesis hash,
-loopback ports, and the four exact PID/config pairs; unrelated services on the
-same ports cannot satisfy it. It reads the Torii base port from the generated
+loopback ports, and four exact owner-only `peerN.process.json` V1 identities.
+Each identity pins the Linux boot, process start time, executable path/device/inode,
+exact argv/config, UID/GID, session, and process group; unrelated services or a
+reused numeric PID cannot satisfy it. It reads the Torii base port from the generated
 `client.toml`, so an `up` started with a custom `--base-api-port` needs no
 repeated port argument. It also requires and strictly validates the owner-only
 V1 guest qualification record, including the canonical four-replica canary
@@ -243,8 +251,13 @@ python3 scripts/taira_devnet.py down
 ```
 
 Every `up`, `check`, and `down` holds one exclusive lock on the managed marker.
-Teardown returns success only after every managed PID file and matching peer
-process is gone and the pinned cleanup-directory identity is unchanged. It
+Taira lifecycle control is Linux-only and requires native `pidfd_open`,
+`pidfd_send_signal`, pollable pidfds, and procfs. Startup, restart, inspection,
+and teardown reopen and hold a pidfd before observing or signaling a process;
+signals and exit waits use only that pidfd. There is no `ps`, PID signal, or
+shell-kill fallback. Bare `peerN.pid` files are retired and rejected without
+migration. Teardown returns success only after every exact process record and
+matching process is gone and the pinned cleanup-directory identity is unchanged. It
 atomically moves that exact inode to a private cleanup name, proves the identity
 again, then removes configs, logs, state, runtime signers, and onboarding
 material together. If either proof fails, the bundle (or quarantined racing
@@ -360,7 +373,7 @@ IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 python3 -m pytest python/iroha_torii_client/te
 (cd kotlin && IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.TairaKagemushaReadOnlyPublicTest --console=plain)
 (cd java/iroha_android && IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 ./gradlew :core:test --tests org.hyperledger.iroha.android.offline.TairaKagemushaReadOnlyPublicTests --console=plain)
 (cd IrohaSwift && IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 swift test --filter TairaKagemushaReadOnlyPublicTests)
-IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 dotnet test csharp/tests/Hyperledger.Iroha.Sdk.IntegrationTests -- --method '*LiveTairaKagemushaCapabilityIsExactAndReadOnly'
+IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 dotnet test csharp/tests/Hyperledger.Iroha.Sdk.IntegrationTests -- --filter-method '*LiveTairaKagemushaCapabilityIsExactAndReadOnly'
 ```
 
 `ready=true` describes the universal peer-cash protocol surface; it does not
@@ -368,13 +381,27 @@ assert that a particular asset has a promoted proof release or operational
 command authority. Use the signed Kagemusha rollout evidence before attempting
 top-up or redemption. Override the probe origin only with the credential-free
 HTTPS origin in `IROHA_TAIRA_PUBLIC_ROOT`.
+The Taira rollout asset is Digital Shekel `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`
+(`ds#boi.is`, scale 2); XOR `6TEAJqbb8oEPmLncoNiMRbLEK6tw` (scale 9) remains
+the transaction-fee asset.
 
 The offline `taira inrou-stage` command assigns the canary an immutable
 `artifact-<digest>` service version derived from the complete canonical bundle
 with only the version field cleared. Final guest publication references are
 therefore part of the revision identity. A staged directory and receipt bind
 the service manifest, container manifest, materialized bundle, and both SoraFS
-manifests; changing any input produces a different revision.
+manifests; changing any input produces a different revision. Its required
+`--bind-validator-config-dir` must name the owner-only directory containing
+exactly `peer0.toml` through `peer3.toml`; all four base configs must be fresh,
+must match the staged placement set, and must not already contain an Inrou
+table.
+`--sorafs-retention-epoch` is a required nonzero absolute Unix-second boundary;
+the receipt and both manifests bind it exactly, and a retry must reuse the same
+value to reproduce the original manifest digests. Every manifest carries that
+same value in both the pin policy and its sole metadata entry,
+`soracloud.retention_epoch=<epoch>`; extra metadata is rejected. A retry reuses
+an exact `Approved` record, waits for an exact `Pending` record, and registers
+only a `Missing` record.
 
 The signed `taira inrou-canary` mutation path checks authoritative SoraCloud
 state before publishing either staged SoraFS manifest. `deploy` requires the

@@ -971,6 +971,49 @@ def test_mldsa_account_address_uses_extended_protocol_key_encoding() -> None:
         assert AccountAddress.from_i105(literal, 0).canonical_bytes() == canonical
 
 
+def test_account_address_rejects_reserved_headers_and_class_mismatches() -> None:
+    compact_single = AccountAddress.from_account(
+        public_key=bytes.fromhex(
+            "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+        )
+    ).canonical_bytes()
+    for version in range(1, 8):
+        reserved = bytes([(version << 5) | 0x02]) + compact_single[1:]
+        with pytest.raises(AccountAddressError, match="unsupported address header version"):
+            AccountAddress.from_canonical_bytes(reserved)
+    for norm_version in (0, 2, 3):
+        reserved = bytes([norm_version << 1]) + compact_single[1:]
+        with pytest.raises(AccountAddressError, match="unsupported normalization version"):
+            AccountAddress.from_canonical_bytes(reserved)
+
+    wrong_compact_class = b"\x0a" + compact_single[1:]
+    with pytest.raises(AccountAddressError, match="class does not match controller tag"):
+        AccountAddress.from_canonical_bytes(wrong_compact_class)
+
+    mldsa = AccountAddress.from_account(
+        public_key=bytes([0xA5]) * 1_952,
+        algorithm="ML-DSA-65",
+    ).canonical_bytes()
+    with pytest.raises(AccountAddressError, match="class does not match controller tag"):
+        AccountAddress.from_canonical_bytes(b"\x0a" + mldsa[1:])
+
+    wrong_class_i105 = "sora3uｵﾔDﾗﾎmXヱ5uxbｻAｸiRB1vﾚｾｿvSHﾅﾕgﾚｼUFPPﾜinｳﾆﾓRSJS4M"
+    with pytest.raises(AccountAddressError, match="class does not match controller tag"):
+        AccountAddress.from_i105(wrong_class_i105, 753)
+
+    with pytest.raises(AccountAddressError, match="unsupported account address header"):
+        AccountAddress(
+            header=address_module.AddressHeader(
+                version=1,
+                class_=address_module.AddressClass.SINGLE_KEY,
+                norm_version=1,
+            ),
+            controller=AccountAddress.from_account(
+                public_key=bytes([0x11]) * 32
+            ).controller,
+        )
+
+
 @pytest.mark.parametrize(
     "public_key",
     [

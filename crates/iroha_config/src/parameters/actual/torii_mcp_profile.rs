@@ -38,6 +38,8 @@ pub struct ToriiMcp {
     pub max_request_bytes: usize,
     /// Maximum number of tools emitted in one `tools/list` response page.
     pub max_tools_per_list: usize,
+    /// Maximum number of MCP tool dispatches executing concurrently.
+    pub max_inflight_dispatches: NonZeroUsize,
     /// MCP tool profile.
     pub profile: ToriiMcpProfile,
     /// Expose operator-only routes in the MCP tool registry.

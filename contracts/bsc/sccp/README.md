@@ -15,7 +15,9 @@ emitted by the value-moving route after wrapped XOR is burned.
 The route constructor pins the token code hash, verifier address/runtime code
 hash/verifying-key hash, semantic-proof-profile hash, Taira-finality-anchor
 hash, BSC profile and chain id, lane hashes, destination binding, nonzero route
-revision, and route-config hash. The revision is encoded after the Transfer
+revision, positive u128-sized maximum wrapped supply, and route-config hash. The
+immutable cap is committed as the final asset-route word and every mint rejects
+`totalSupply + amount` above it. The revision is encoded after the Transfer
 nonce and prevents message-id reuse when a replacement route restarts its local
 nonce. The destination binding includes both policy hashes and both verifier
 and route identities, so a proof for one deployment cannot be replayed through
@@ -28,7 +30,7 @@ payload, burns wrapped XOR, and emits the exact six-field `SccpTransfer` event.
 `finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)` parses the canonical payload,
 checks the fixed asset/route/domains/address codec and lane-derived message id,
 verifies the route-bound Groth16 statement, records replay state, and mints the
-scaled wrapped amount. All checks and replay writes precede external token
+scaled wrapped amount subject to the immutable supply cap. All checks and replay writes precede external token
 state changes, and both paths are non-reentrant.
 
 The burn recipient must be the exact discriminant-`369` `test...` I105 spelling

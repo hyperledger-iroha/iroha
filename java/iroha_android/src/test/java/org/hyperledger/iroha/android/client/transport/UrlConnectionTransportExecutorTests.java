@@ -123,6 +123,10 @@ public final class UrlConnectionTransportExecutorTests {
           new UrlConnectionTransportExecutor().execute(request).get();
 
       assertEquals(status, response.statusCode());
+      assertEquals(request.uri(), response.finalUri());
+      assertTrue(
+          "the URLConnection executor must not report a followed redirect",
+          !response.redirected());
       serverThread.join(3_000);
       assertEquals(
           "redirect target must not receive a second request", null, redirectedRequest.get());

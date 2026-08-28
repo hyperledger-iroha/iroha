@@ -417,6 +417,22 @@ fn reconcile_pending_lane_startup(
     Ok((pending, PendingCanonicalRecoveryControlV1::Complete))
 }
 
+/// Reconcile only already-owned lane/output handoffs in the no-clock terminal corridor.
+///
+/// The activated PendingKura owner seals ordinary reducer, ingress-selection,
+/// producer, and clock authority around this borrow. Finalized preflight and
+/// the finite closed-prefix drain may still publish cancellation/admission
+/// handoffs, so those must settle before exact-output ownership is sampled.
+fn reconcile_pending_kura_terminal_lane_output_handoffs(
+    activated: &mut PendingKuraActivatedProductionLifecycleV1,
+    active_runner: &mut ProductionLifecycleActiveRunnerBorrowV1,
+    control_queue_capacity: usize,
+) -> Result<bool, V2RunnerError> {
+    activated.with_runner_runtime(active_runner, |_executor, services, lane_work| {
+        retry_exact_output_and_apply_sidecar_admissions(lane_work, services, control_queue_capacity)
+    })
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn run_pending_active_height(
     mut activated: PendingKuraActivatedProductionLifecycleV1,
@@ -439,9 +455,10 @@ fn run_pending_active_height(
     round_timeout: Duration,
     retransmit_interval: Duration,
 ) -> Result<Option<(PreparedPendingKuraSuccessorV1, RetainedMergeSidecars)>, V2RunnerError> {
+    let mut next_recovered_decision_fetch_retransmit =
+        deadline_after(Instant::now(), retransmit_interval);
     let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);
     let mut canonical_lane_body_recovered = false;
-    let mut finalized_ingress_closed = false;
     loop {
         cleanup_supervisor.reap_finished();
         if output_guard.restart_required() {
@@ -458,6 +475,40 @@ fn run_pending_active_height(
             output_guard.close_admission_for_restart();
             return Err(V2RunnerError::Service(error));
         }
+        activated.with_runner_runtime(
+            &mut active_runner,
+            |executor, _services, lane_work| -> Result<_, V2RunnerError> {
+                drain_lane_relay_ingress(
+                    lane_relay_rx,
+                    lane_work,
+                    executor.current_tag().view(),
+                    control_queue_capacity,
+                )
+                .map_err(V2RunnerError::LaneWork)
+            },
+        )?;
+        let terminal_exact_output_pending = reconcile_pending_kura_terminal_lane_output_handoffs(
+            &mut activated,
+            &mut active_runner,
+            control_queue_capacity,
+        )?;
+        if terminal_exact_output_pending {
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            continue;
+        }
+        match activated
+            .settle_recovered_lifecycle_output_for_no_clock_recovery(&mut active_runner)?
+        {
+            super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
+                let _ = wake_rx.recv_timeout(IDLE_POLL);
+                continue;
+            }
+            super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
+                continue;
+            }
+            super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
+            | super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred => {}
+        }
         let producer_turn =
             match activated.claim_producer_turn_for_no_clock_recovery(&mut active_runner) {
                 Ok(claimed) => claimed,
@@ -467,9 +518,16 @@ fn run_pending_active_height(
                 }
             };
 
-        let ready = match activated.with_runner_runtime(
+        let (ready_to_finish, terminal_exact_output_pending) = match activated.with_runner_runtime(
             &mut active_runner,
             |executor, services, lane_work| -> Result<_, V2RunnerError> {
+                retry_recovered_decision_fetch_if_due(
+                    Instant::now(),
+                    &mut next_recovered_decision_fetch_retransmit,
+                    retransmit_interval,
+                    executor,
+                    services,
+                )?;
                 let _ = retry_exact_output_and_apply_sidecar_admissions(
                     lane_work,
                     services,
@@ -479,11 +537,6 @@ fn run_pending_active_height(
                     .service_kura_replica_advert_refresh_turn(Instant::now())
                     .map_err(V2RunnerError::Service)?;
                 services.drain_completions(executor)?;
-                let _ = retry_exact_output_and_apply_sidecar_admissions(
-                    lane_work,
-                    services,
-                    control_queue_capacity,
-                )?;
                 let directive = reconcile_executor_locked_body(executor, services)?;
                 lane_work.retain_merge_sidecars_for_global_view(
                     directive.tag().view(),
@@ -521,16 +574,23 @@ fn run_pending_active_height(
                     next_lane_retransmit = deadline_after(now, retransmit_interval);
                 }
                 dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
-                Ok(executor.ready_to_finish())
+                let terminal_exact_output_pending =
+                    retry_exact_output_and_apply_sidecar_admissions(
+                        lane_work,
+                        services,
+                        control_queue_capacity,
+                    )?;
+                Ok((executor.ready_to_finish(), terminal_exact_output_pending))
             },
         ) {
-            Ok(ready) => ready,
+            Ok(readiness) => readiness,
             Err(error) => {
                 output_guard.close_admission_for_restart();
                 drop(producer_turn);
                 return Err(error);
             }
         };
+        let ready = ready_to_finish && !terminal_exact_output_pending;
         if let Some(claimed) = producer_turn {
             let attempted =
                 claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner));
@@ -552,7 +612,7 @@ fn run_pending_active_height(
 
         let finalization_ready = activated.ready_for_finalized_rollover(&mut active_runner)?;
         let rollover_ready = if finalization_ready {
-            activated.with_runner_runtime(
+            let rollover_ready = activated.with_runner_runtime(
                 &mut active_runner,
                 |executor, _services, lane_work| {
                     super::preflight_finalized_lane_rollover(
@@ -561,7 +621,13 @@ fn run_pending_active_height(
                         &mut canonical_lane_body_recovered,
                     )
                 },
-            )?
+            )?;
+            let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
+                &mut activated,
+                &mut active_runner,
+                control_queue_capacity,
+            )?;
+            rollover_ready
         } else {
             false
         };
@@ -570,31 +636,53 @@ fn run_pending_active_height(
             continue;
         }
 
-        if !finalized_ingress_closed {
-            activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?;
-            finalized_ingress_closed = true;
-        }
-        let drained_terminal_ingress = activated.with_runner_runtime(
-            &mut active_runner,
-            |executor, services, lane_work| {
-                let drained = drain_decided_lane_recovery_ingress(
-                    receiver,
-                    executor,
-                    services,
-                    lane_work,
-                    executor.current_tag().view(),
-                    output_guard.as_ref(),
-                    kura.as_ref(),
-                    &common_config.key_pair,
-                    block_sync_server,
-                    DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
+        activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?;
+        loop {
+            cleanup_supervisor.reap_finished();
+            if output_guard.restart_required() {
+                return Err(V2RunnerError::RestartRequired);
+            }
+            if shutdown_signal.is_sent() {
+                activated.into_clean_shutdown(&mut active_runner)?;
+                return Ok(None);
+            }
+            liveness_watchdog.poll(Instant::now());
+            let (drained_terminal_ingress, drained_terminal_relay) = activated
+                .with_runner_runtime(&mut active_runner, |executor, services, lane_work| {
+                    let drained = drain_decided_lane_recovery_ingress(
+                        receiver,
+                        executor,
+                        services,
+                        lane_work,
+                        executor.current_tag().view(),
+                        output_guard.as_ref(),
+                        kura.as_ref(),
+                        &common_config.key_pair,
+                        block_sync_server,
+                        DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
+                    )?;
+                    let drained_relay = drain_finalized_lane_relay_prefix(
+                        lane_relay_rx,
+                        lane_work,
+                        executor.current_tag().view(),
+                        control_queue_capacity,
+                    );
+                    dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
+                    Ok::<_, V2RunnerError>((drained.is_some(), drained_relay))
+                })?;
+            let terminal_exact_output_pending =
+                reconcile_pending_kura_terminal_lane_output_handoffs(
+                    &mut activated,
+                    &mut active_runner,
+                    control_queue_capacity,
                 )?;
-                dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
-                Ok::<_, V2RunnerError>(drained.is_some())
-            },
-        )?;
-        if drained_terminal_ingress {
-            continue;
+            if terminal_exact_output_pending {
+                let _ = wake_rx.recv_timeout(IDLE_POLL);
+                continue;
+            }
+            if !drained_terminal_ingress && !drained_terminal_relay {
+                break;
+            }
         }
         receiver
             .ensure_closed_drained_cut()

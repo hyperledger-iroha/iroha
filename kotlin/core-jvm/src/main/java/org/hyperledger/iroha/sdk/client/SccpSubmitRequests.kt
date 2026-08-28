@@ -107,14 +107,21 @@ class SccpNativeMessageSubmitRequest(
     fun toJsonBytes(): ByteArray = JsonEncoder.encode(toJsonMap()).toByteArray(Charsets.UTF_8)
 }
 
-private const val SCCP_MAX_DESTINATION_ARTIFACT_BYTES = 16 * 1024 * 1024 + 64 * 1024
+internal const val SCCP_MAX_GROTH16_ARTIFACT_BYTES = 16 * 1024 * 1024 + 64 * 1024
+internal const val SCCP_MAX_DESTINATION_ARTIFACT_BYTES =
+    SCCP_MAX_GROTH16_ARTIFACT_BYTES + 64 * 1024
+internal const val SCCP_MAX_DESTINATION_ARTIFACT_BASE64_BYTES = 22_544_384
 private const val SCCP_MAX_NATIVE_PROOF_BYTES = 16 * 1024 * 1024
 internal const val SCCP_MAX_TRANSACTION_PAYLOAD_BYTES = 16 * 1024 * 1024
 private const val SCCP_MAX_DETACHED_SIGNATURE_BYTES = 16 * 1024
 internal const val SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME =
-    "iroha_sccp::SccpGroth16Bn254ProofArtifactV1"
+    "iroha_data_model::bridge::BridgeSccpDestinationProofV1"
 internal const val SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME =
     "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
+internal val SCCP_PROOF_REQUEST_SCHEMA_NAMES = setOf(
+    "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
+    "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1",
+)
 private val SCCP_TRANSACTION_CODEC =
     NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
 
@@ -141,12 +148,42 @@ internal fun validateCanonicalSccpNoritoBase64(
     require(Base64.getEncoder().encodeToString(decoded) == value) {
         "$field must be canonical padded base64"
     }
+    return validateCanonicalSccpNoritoBytes(
+        decoded,
+        field,
+        maximum,
+        setOf(expectedSchemaName),
+    )
+}
+
+internal fun validateCanonicalSccpProofRequestNorito(
+    value: ByteArray,
+    field: String,
+): ByteArray = validateCanonicalSccpNoritoBytes(
+    value,
+    field,
+    SCCP_MAX_GROTH16_ARTIFACT_BYTES,
+    SCCP_PROOF_REQUEST_SCHEMA_NAMES,
+)
+
+private fun validateCanonicalSccpNoritoBytes(
+    decoded: ByteArray,
+    field: String,
+    maximum: Int,
+    expectedSchemaNames: Set<String>,
+): ByteArray {
+    require(decoded.isNotEmpty() && decoded.size <= maximum) {
+        "$field exceeds its canonical size bound"
+    }
     val result = try {
-        NoritoHeader.decode(decoded, SchemaHash.hash16(expectedSchemaName))
+        NoritoHeader.decode(decoded, null)
     } catch (ex: IllegalArgumentException) {
         throw IllegalArgumentException("$field must contain a canonical Norito envelope", ex)
     }
     val header = result.header
+    require(expectedSchemaNames.any { SchemaHash.hash16(it).contentEquals(header.schemaHash) }) {
+        "$field schema hash does not match the closed SCCP type set"
+    }
     require(header.compression == NoritoHeader.COMPRESSION_NONE) {
         "$field must use uncompressed canonical Norito"
     }
@@ -158,7 +195,7 @@ internal fun validateCanonicalSccpNoritoBase64(
         "$field contains a non-canonical Norito header"
     }
     header.validateChecksum(result.payload)
-    return decoded
+    return decoded.copyOf()
 }
 
 internal fun requireCanonicalSccpAuthority(value: String): String {

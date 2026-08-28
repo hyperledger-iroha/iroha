@@ -1878,6 +1878,11 @@ impl TieredStateBackend {
             world.account_roles
         );
         collect_map!(
+            TieredSegment::SccpRouteLiabilities,
+            SccpRouteLiability,
+            world.sccp_route_liabilities
+        );
+        collect_map!(
             TieredSegment::SccpOutboundPendingMessages,
             SccpOutboundMessage,
             world.sccp_outbound_pending_messages
@@ -2056,6 +2061,11 @@ impl TieredStateBackend {
             TieredSegment::TleKeySessions,
             TleKeySession,
             world.tle_key_sessions
+        );
+        collect_map!(
+            TieredSegment::TleKeySessionRosters,
+            TleKeySessionRoster,
+            world.tle_key_session_rosters
         );
         collect_map!(
             TieredSegment::TleActiveKeySession,
@@ -2635,7 +2645,7 @@ mod measured_bytes_impls {
             BridgeNativeProtocolProofV1, BridgeProof, BridgeProofPayload, BridgeProofRange,
             BridgeProofRecord, BridgeSccpDestinationProofBackendV1, BridgeSccpDestinationProofV1,
             BridgeTransparentProof, SccpNativeTrustAnchorV1, SccpOutboundMessageKeyV1,
-            SccpOutboundPendingMessageRecordV1, SccpOutboundProofRecordV1,
+            SccpOutboundPendingMessageRecordV1, SccpOutboundProofRecordV1, SccpRouteLiabilityV1,
             sccp::SccpInboundMessageRecordV1,
         },
         common::Owned,
@@ -3412,6 +3422,11 @@ mod measured_bytes_impls {
             size_of::<SccpOutboundProofRecordV1>()
         }
     }
+    impl MeasuredBytes for SccpRouteLiabilityV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<SccpRouteLiabilityV1>()
+        }
+    }
     impl MeasuredBytes for SccpInboundMessageRecordV1 {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<SccpInboundMessageRecordV1>();
@@ -4090,6 +4105,7 @@ enum TieredSegment {
     Roles,
     AccountPermissions,
     AccountRoles,
+    SccpRouteLiabilities,
     SccpOutboundPendingMessages,
     SccpOutboundMessageLocators,
     SccpOutboundMessageIndex,
@@ -4128,6 +4144,7 @@ enum TieredSegment {
     ParliamentBodies,
     ParliamentAttempts,
     TleKeySessions,
+    TleKeySessionRosters,
     TleActiveKeySession,
     TimedOvnEvidence,
     GlobalBeaconDkg,
@@ -4160,6 +4177,7 @@ impl TieredSegment {
             TieredSegment::Roles => "roles",
             TieredSegment::AccountPermissions => "account_permissions",
             TieredSegment::AccountRoles => "account_roles",
+            TieredSegment::SccpRouteLiabilities => "sccp_route_liabilities",
             TieredSegment::SccpOutboundPendingMessages => "sccp_outbound_pending_messages",
             TieredSegment::SccpOutboundMessageLocators => "sccp_outbound_message_locator",
             TieredSegment::SccpOutboundMessageIndex => "sccp_outbound_message_index",
@@ -4198,6 +4216,7 @@ impl TieredSegment {
             TieredSegment::ParliamentBodies => "parliament_bodies",
             TieredSegment::ParliamentAttempts => "parliament_attempts",
             TieredSegment::TleKeySessions => "tle_key_sessions",
+            TieredSegment::TleKeySessionRosters => "tle_key_session_rosters",
             TieredSegment::TleActiveKeySession => "tle_active_key_session",
             TieredSegment::TimedOvnEvidence => "timed_ovn_evidence",
             TieredSegment::GlobalBeaconDkg => "global_beacon_dkg",
@@ -4241,6 +4260,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "rwas" => TieredSegment::Rwas,
             "roles" => TieredSegment::Roles,
             "account_permissions" => TieredSegment::AccountPermissions,
+            "sccp_route_liabilities" => TieredSegment::SccpRouteLiabilities,
             "sccp_outbound_pending_messages" => TieredSegment::SccpOutboundPendingMessages,
             "sccp_outbound_message_locator" => TieredSegment::SccpOutboundMessageLocators,
             "sccp_outbound_message_index" => TieredSegment::SccpOutboundMessageIndex,
@@ -4280,6 +4300,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "parliament_bodies" => TieredSegment::ParliamentBodies,
             "parliament_attempts" => TieredSegment::ParliamentAttempts,
             "tle_key_sessions" => TieredSegment::TleKeySessions,
+            "tle_key_session_rosters" => TieredSegment::TleKeySessionRosters,
             "tle_active_key_session" => TieredSegment::TleActiveKeySession,
             "timed_ovn_evidence" => TieredSegment::TimedOvnEvidence,
             "global_beacon_dkg" => TieredSegment::GlobalBeaconDkg,
@@ -4453,6 +4474,7 @@ pub(crate) enum TieredKeyHandle {
     Role(iroha_data_model::role::RoleId),
     AccountPermission(iroha_data_model::account::AccountId),
     AccountRole(crate::role::RoleIdWithOwner),
+    SccpRouteLiability(iroha_data_model::bridge::SccpRouteKeyV1),
     SccpOutboundMessage(iroha_data_model::bridge::SccpOutboundMessageKeyV1),
     SccpOutboundMessageLocator([u8; 32]),
     SccpOutboundMessageIndex(iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1),
@@ -4491,6 +4513,7 @@ pub(crate) enum TieredKeyHandle {
     ParliamentBodies(u64),
     ParliamentAttempt(iroha_data_model::governance::types::GovernanceAttemptId),
     TleKeySession(iroha_data_model::governance::types::TleKeySessionId),
+    TleKeySessionRoster(iroha_data_model::governance::types::TleKeySessionId),
     TleActiveKeySession(u64),
     TimedOvnEvidence(iroha_data_model::governance::types::BallotAttemptId),
     GlobalBeaconDkg([u8; 32]),
@@ -4525,6 +4548,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(_) => TieredSegment::Roles,
             TieredKeyHandle::AccountPermission(_) => TieredSegment::AccountPermissions,
             TieredKeyHandle::AccountRole(_) => TieredSegment::AccountRoles,
+            TieredKeyHandle::SccpRouteLiability(_) => TieredSegment::SccpRouteLiabilities,
             TieredKeyHandle::SccpOutboundMessage(_) => TieredSegment::SccpOutboundPendingMessages,
             TieredKeyHandle::SccpOutboundMessageLocator(_) => {
                 TieredSegment::SccpOutboundMessageLocators
@@ -4567,6 +4591,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::ParliamentBodies(_) => TieredSegment::ParliamentBodies,
             TieredKeyHandle::ParliamentAttempt(_) => TieredSegment::ParliamentAttempts,
             TieredKeyHandle::TleKeySession(_) => TieredSegment::TleKeySessions,
+            TieredKeyHandle::TleKeySessionRoster(_) => TieredSegment::TleKeySessionRosters,
             TieredKeyHandle::TleActiveKeySession(_) => TieredSegment::TleActiveKeySession,
             TieredKeyHandle::TimedOvnEvidence(_) => TieredSegment::TimedOvnEvidence,
             TieredKeyHandle::GlobalBeaconDkg(_) => TieredSegment::GlobalBeaconDkg,
@@ -4608,6 +4633,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountPermission(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRole(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::SccpRouteLiability(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::SccpOutboundMessage(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::SccpOutboundMessageLocator(key) => {
                 Ok(norito::codec::Encode::encode(key))
@@ -4649,6 +4675,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::ParliamentBodies(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ParliamentAttempt(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleKeySession(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::TleKeySessionRoster(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleActiveKeySession(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TimedOvnEvidence(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GlobalBeaconDkg(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4713,6 +4740,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
+            TieredKeyHandle::SccpRouteLiability(id) => {
+                fetch!(world.sccp_route_liabilities, id)
+            }
             TieredKeyHandle::SccpOutboundMessage(id) => {
                 fetch!(world.sccp_outbound_pending_messages, id)
             }
@@ -4771,6 +4801,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
             TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
             TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
+            TieredKeyHandle::TleKeySessionRoster(id) => {
+                fetch!(world.tle_key_session_rosters, id)
+            }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 fetch!(world.tle_active_key_session, id)
             }
@@ -4837,6 +4870,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
+            TieredKeyHandle::SccpRouteLiability(id) => {
+                fetch!(world.sccp_route_liabilities, id)
+            }
             TieredKeyHandle::SccpOutboundMessage(id) => {
                 fetch!(world.sccp_outbound_pending_messages, id)
             }
@@ -4895,6 +4931,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
             TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
             TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
+            TieredKeyHandle::TleKeySessionRoster(id) => {
+                fetch!(world.tle_key_session_rosters, id)
+            }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 fetch!(world.tle_active_key_session, id)
             }
@@ -4959,6 +4998,14 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::Role(id) => write!(f, "role:{id}"),
             TieredKeyHandle::AccountPermission(id) => write!(f, "account_permission:{id}"),
             TieredKeyHandle::AccountRole(id) => write!(f, "account_role:{id}"),
+            TieredKeyHandle::SccpRouteLiability(id) => write!(
+                f,
+                "sccp_route_liability:{}:{}:{}:{}",
+                id.lane_id.source.profile_key(),
+                id.lane_id.target.profile_key(),
+                id.route_id,
+                id.revision
+            ),
             TieredKeyHandle::SccpOutboundMessage(id) => {
                 write!(
                     f,
@@ -5065,6 +5112,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::ParliamentBodies(id) => write!(f, "parliament_bodies:{id}"),
             TieredKeyHandle::ParliamentAttempt(id) => write!(f, "parliament_attempt:{id}"),
             TieredKeyHandle::TleKeySession(id) => write!(f, "tle_key_session:{id}"),
+            TieredKeyHandle::TleKeySessionRoster(id) => {
+                write!(f, "tle_key_session_roster:{id}")
+            }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 write!(f, "tle_active_key_session:{id}")
             }

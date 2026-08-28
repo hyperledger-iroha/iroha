@@ -137,6 +137,7 @@ from .client_status_models import (
 )
 from .governance_ballot_client import create_governance_ballot_client_mixin
 from .governance_proposals import GovernanceProposalResult
+from .governance_proposals import _contract_address as _canonical_contract_address
 from .kaigi_relay_client import create_kaigi_relay_client_mixin
 from .native_amx import (
     _hash_bytes as _iroha_hash_bytes,
@@ -148,7 +149,7 @@ from .native_amx import (
     compute_native_amx_validator_set_hash,
     validate_bls_normal_validator_set,
 )
-from .norito_frame import validate_norito_frame
+from .norito_frame import schema_hash_for_type_name, validate_norito_frame
 from .offline_models import (
     KagemushaArtifactBindingV4Json,
     OfflineAssetScale,
@@ -251,8 +252,9 @@ _SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES = (
 )
 _KAIGI_RELAY_RESPONSE_MAX_BYTES = _SCCP_JSON_RESPONSE_MAX_BYTES
 _SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME = "iroha_sccp::TairaSccpMessageProofV1"
-_SCCP_PROOF_REQUEST_NORITO_TYPE_NAME = (
-    "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
+_SCCP_PROOF_REQUEST_NORITO_TYPE_NAMES = (
+    "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
+    "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1",
 )
 
 BASE58_ALPHABET = _account_id_codec.BASE58_ALPHABET
@@ -268,6 +270,24 @@ I105_NUMERIC_SENTINEL_PREFIX = _account_id_codec.I105_NUMERIC_SENTINEL_PREFIX
 I105_DISCRIMINANT_MAX = _account_id_codec.I105_DISCRIMINANT_MAX
 I105_SENTINEL_DISCRIMINANTS = _account_id_codec.I105_SENTINEL_DISCRIMINANTS
 I105_PROFILE_NAMES = {0x02F1: "minamoto", 0x0171: "taira", 0: "dev"}
+
+
+@dataclass(frozen=True)
+class TairaTestnetProfile:
+    """Stable, non-secret public metadata for the SORA Taira testnet."""
+
+    torii_base_url: str = "https://taira.sora.org"
+    chain_id: str = "fc56984b-2be7-431d-840e-21514d1883f0"
+    i105_discriminant: int = 369
+    kagemusha_asset_definition_id: str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+    kagemusha_asset_alias: str = "ds#boi.is"
+    kagemusha_asset_scale: int = 2
+    xor_asset_definition_id: str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+    xor_asset_alias: str = "xor#universal"
+    xor_asset_scale: int = 9
+
+
+TAIRA_TESTNET_PROFILE = TairaTestnetProfile()
 _SORAFS_ORDERBOOK_QUERY_MAX_ITEMS = 500
 _SORAFS_ORDERBOOK_ORDER_STATUS_VALUES = {
     "open",
@@ -721,6 +741,10 @@ def inspect_i105_network_prefix(
 
 __all__ = [
     "ToriiClient",
+    "TairaTestnetProfile",
+    "TAIRA_TESTNET_PROFILE",
+    "taira_local_signing_context",
+    "contract_payload_digest_hex",
     "validate_fee_quote_response_for_draft",
     "SorafsOrderbookSubmissionAmbiguousError", "SorafsOrderbookSubmissionIdentity", "SorafsOrderbookSubmissionReceipt", "SorafsOrderbookSubmissionReceiptPayload",
     "decode_pdp_commitment_header",
@@ -737,10 +761,12 @@ __all__ = [
     "TransactionInstruction",
     "GovernanceProposalDraft",
     "ContractOperationReceipt",
+    "ContractCallDraftIntent",
     "ContractCallResponse",
     "PipelineTransactionStatus",
     "PipelineTransactionStatusResponse",
     "MultisigResponse",
+    "MultisigDraftIntent",
     "GovernanceContractResponse",
     "BallotSubmitResult",
     "ProtectedNamespacesApplyResult",
@@ -1463,6 +1489,131 @@ def _require_exact_non_empty_string(value: Any, context: str) -> str:
     return value
 
 
+_CONTRACT_PAYLOAD_MAX_CANONICAL_BYTES = 1_048_576
+_CONTRACT_PAYLOAD_MAX_DEPTH = 128
+_CONTRACT_PAYLOAD_MAX_NODES = 1_000_000
+_CONTRACT_PAYLOAD_MAX_SAFE_INTEGER = (1 << 53) - 1
+
+
+def _canonical_contract_payload_json(payload: Any) -> Optional[str]:
+    """Return Torii's compact canonical JSON payload preimage.
+
+    Python floats and integers outside the cross-SDK safe range are rejected so
+    callers cannot accidentally authorize a different numeric token on another
+    platform. Contract schemas should carry decimals and wider integers as
+    canonical strings.
+    """
+
+    if payload is None:
+        return None
+
+    ancestors: set[int] = set()
+    node_count = 0
+
+    def validate(value: Any, *, depth: int, path: str) -> None:
+        nonlocal node_count
+        node_count += 1
+        if node_count > _CONTRACT_PAYLOAD_MAX_NODES:
+            raise ValueError(
+                f"contract payload {path} exceeds the "
+                f"{_CONTRACT_PAYLOAD_MAX_NODES}-node client limit"
+            )
+        if depth > _CONTRACT_PAYLOAD_MAX_DEPTH:
+            raise ValueError(
+                f"contract payload {path} exceeds the "
+                f"{_CONTRACT_PAYLOAD_MAX_DEPTH}-level client limit"
+            )
+        if value is None or type(value) is bool:
+            return
+        if type(value) is str:
+            if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+                raise ValueError(
+                    f"contract payload {path} must contain only Unicode scalar values"
+                )
+            return
+        if type(value) is int:
+            if abs(value) > _CONTRACT_PAYLOAD_MAX_SAFE_INTEGER:
+                raise ValueError(
+                    f"contract payload {path} integers must be within the "
+                    "cross-SDK safe range; encode wider integers as strings"
+                )
+            return
+        if type(value) is float:
+            raise TypeError(
+                f"contract payload {path} floats are ambiguous; encode decimals as strings"
+            )
+        if type(value) not in (list, dict):
+            raise TypeError(
+                f"contract payload {path} contains unsupported "
+                f"{type(value).__name__} values"
+            )
+
+        identity = id(value)
+        if identity in ancestors:
+            raise ValueError(f"contract payload {path} must not contain cycles")
+        ancestors.add(identity)
+        try:
+            if type(value) is list:
+                for index, item in enumerate(value):
+                    validate(item, depth=depth + 1, path=f"{path}[{index}]")
+                return
+            for key, item in value.items():
+                if type(key) is not str:
+                    raise TypeError(
+                        f"contract payload {path} object keys must be strings"
+                    )
+                if any(0xD800 <= ord(character) <= 0xDFFF for character in key):
+                    raise ValueError(
+                        f"contract payload {path} keys must contain only Unicode scalar values"
+                    )
+                validate(item, depth=depth + 1, path=f"{path}.{key}")
+        finally:
+            ancestors.remove(identity)
+
+    validate(payload, depth=0, path="root")
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    encoded = canonical.encode("utf-8")
+    if len(encoded) > _CONTRACT_PAYLOAD_MAX_CANONICAL_BYTES:
+        raise ValueError(
+            "canonical contract payload exceeds "
+            f"{_CONTRACT_PAYLOAD_MAX_CANONICAL_BYTES} UTF-8 bytes"
+        )
+    return canonical
+
+
+def contract_payload_digest_hex(payload: Any = None) -> str:
+    """Compute Torii's lowercase BLAKE3 contract-payload receipt digest."""
+
+    canonical = _canonical_contract_payload_json(payload)
+    return blake3((canonical or "").encode("utf-8")).hexdigest()
+
+
+def _contract_alias_dataspace(value: Any, context: str) -> str:
+    literal = _require_exact_non_empty_string(value, context)
+    if literal.count("::") != 1:
+        raise ValueError(
+            f"{context} must use `<name>::<domain>.<dataspace>` or "
+            "`<name>::<dataspace>` format"
+        )
+    name, scope = literal.split("::", 1)
+    scope_parts = scope.split(".")
+    if (
+        not name
+        or len(scope_parts) not in (1, 2)
+        or any(not part for part in scope_parts)
+        or "@" in scope
+        or any(unicodedata.category(character) == "Cc" for character in literal)
+    ):
+        raise ValueError(f"{context} is not a canonical contract alias")
+    return scope_parts[-1]
+
+
 def _require_u64(value: Any, context: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{context} must be an unsigned 64-bit integer")
@@ -2068,6 +2219,17 @@ def _offline_hash_literal(value: Any, context: str) -> str:
     if int(body[-2:], 16) & 1 == 0:
         raise RuntimeError(f"{context} must set the Iroha hash marker bit")
     return value
+
+
+def taira_local_signing_context(deployed_network_id: str) -> ToriiLocalSigningContext:
+    """Bind Taira metadata to the caller-supplied genesis-derived NetworkId."""
+
+    return ToriiLocalSigningContext(
+        network_id=_offline_hash_literal(
+            deployed_network_id,
+            "taira_local_signing_context.deployed_network_id",
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -4020,6 +4182,331 @@ def _offline_operation_status(
     )
 
 
+def _multisig_norito_compact_length(value: int) -> bytes:
+    encoded = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            byte |= 0x80
+        encoded.append(byte)
+        if not value:
+            return bytes(encoded)
+
+
+def _multisig_norito_field(value: bytes) -> bytes:
+    return _multisig_norito_compact_length(len(value)) + value
+
+
+def _multisig_norito_struct(fields: Iterable[bytes]) -> bytes:
+    return b"".join(_multisig_norito_field(field) for field in fields)
+
+
+def _multisig_norito_const_vec_bytes(value: bytes) -> bytes:
+    return len(value).to_bytes(8, "little") + b"".join(
+        _multisig_norito_field(bytes((byte,))) for byte in value
+    )
+
+
+_MULTISIG_CURVE_ALGORITHM_TAG = {
+    1: 0,
+    4: 1,
+    3: 2,
+    5: 3,
+    2: 4,
+    10: 5,
+    11: 6,
+    12: 7,
+    13: 8,
+    14: 9,
+    15: 10,
+}
+
+
+def _multisig_account_id_archive(account_id: str) -> bytes:
+    canonical = _account_id_codec.decode_canonical_i105_account_id(account_id)
+    controller_tag = canonical[1]
+    cursor = 2
+
+    def public_key_archive(curve: int, public_key: bytes) -> bytes:
+        try:
+            algorithm_tag = _MULTISIG_CURVE_ALGORITHM_TAG[curve]
+        except KeyError as exc:
+            raise RuntimeError("unsupported account controller curve") from exc
+        return _multisig_norito_const_vec_bytes(
+            bytes((algorithm_tag,)) + public_key
+        )
+
+    if controller_tag in (0, 2):
+        curve = canonical[cursor]
+        cursor += 1
+        if controller_tag == 0:
+            key_length = canonical[cursor]
+            cursor += 1
+        else:
+            key_length = int.from_bytes(canonical[cursor : cursor + 2], "big")
+            cursor += 2
+        public_key = canonical[cursor : cursor + key_length]
+        if cursor + key_length != len(canonical):
+            raise RuntimeError("invalid canonical account controller width")
+        return (0).to_bytes(4, "little") + _multisig_norito_field(
+            public_key_archive(curve, public_key)
+        )
+
+    if controller_tag != 1:
+        raise RuntimeError("unsupported account controller tag")
+    version = canonical[cursor]
+    threshold = int.from_bytes(canonical[cursor + 1 : cursor + 3], "big")
+    member_count = int.from_bytes(canonical[cursor + 3 : cursor + 5], "big")
+    cursor += 5
+    members = []
+    for _ in range(member_count):
+        curve = canonical[cursor]
+        weight = int.from_bytes(canonical[cursor + 1 : cursor + 3], "big")
+        key_length = int.from_bytes(canonical[cursor + 3 : cursor + 5], "big")
+        cursor += 5
+        public_key = canonical[cursor : cursor + key_length]
+        cursor += key_length
+        members.append(
+            _multisig_norito_struct(
+                (
+                    public_key_archive(curve, public_key),
+                    weight.to_bytes(2, "little"),
+                )
+            )
+        )
+    if cursor != len(canonical):
+        raise RuntimeError("invalid canonical multisig account width")
+    members_archive = member_count.to_bytes(8, "little") + b"".join(
+        _multisig_norito_field(member) for member in members
+    )
+    policy = _multisig_norito_struct(
+        (bytes((version,)), threshold.to_bytes(2, "little"), members_archive)
+    )
+    return (1).to_bytes(4, "little") + _multisig_norito_field(policy)
+
+
+def _multisig_fee_payment_archive(intent: Mapping[str, Any]) -> bytes:
+    def quantity_archive(literal: str) -> bytes:
+        whole, separator, fraction = literal.partition(".")
+        scale = len(fraction) if separator else 0
+        mantissa = int(whole + fraction)
+        if mantissa == 0:
+            mantissa_bytes = b""
+        else:
+            length = max(1, (mantissa.bit_length() + 7) // 8)
+            mantissa_bytes = mantissa.to_bytes(length, "little")
+            if mantissa_bytes[-1] & 0x80:
+                mantissa_bytes += b"\x00"
+        return _multisig_norito_struct(
+            (
+                len(mantissa_bytes).to_bytes(4, "little") + mantissa_bytes,
+                scale.to_bytes(4, "little"),
+            )
+        )
+
+    def asset_definition_archive(literal: str) -> bytes:
+        address = _decode_base_n(
+            [BASE58_INDEX[symbol] for symbol in literal],
+            len(BASE58_ALPHABET),
+        )
+        return b"".join(
+            _multisig_norito_field(bytes((byte,))) for byte in address[1:17]
+        )
+
+    value = intent["value"]
+    limits = []
+    for limit in value["charge_limits"]:
+        kind = 0 if limit["kind"]["kind"] == "nexus" else 1
+        limits.append(
+            _multisig_norito_struct(
+                (
+                    kind.to_bytes(4, "little"),
+                    asset_definition_archive(limit["asset_definition_id"]),
+                    quantity_archive(limit["max_amount"]),
+                )
+            )
+        )
+    limits_archive = len(limits).to_bytes(8, "little") + b"".join(
+        _multisig_norito_field(limit) for limit in limits
+    )
+    gas_limit = value["gas_limit"]
+    gas_archive = (
+        b"\x00"
+        if gas_limit is None
+        else b"\x01" + _multisig_norito_field(gas_limit.to_bytes(8, "little"))
+    )
+    if intent["payer"] == "authority":
+        body = _multisig_norito_struct((limits_archive, gas_archive))
+        return (0).to_bytes(4, "little") + _multisig_norito_field(body)
+
+    program_id = value["program_id"]
+    name = program_id["name"].encode("utf-8")
+    program_archive = _multisig_norito_struct(
+        (
+            _multisig_account_id_archive(program_id["sponsor"]),
+            _multisig_norito_compact_length(len(name)) + name,
+        )
+    )
+    body = _multisig_norito_struct(
+        (
+            program_archive,
+            value["program_revision"].to_bytes(8, "little"),
+            limits_archive,
+            gas_archive,
+        )
+    )
+    return (1).to_bytes(4, "little") + _multisig_norito_field(body)
+
+
+class _MultisigTransactionPayloadReader:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+        self.offset = 0
+
+    def field(self, context: str) -> bytes:
+        start = self.offset
+        length = 0
+        shift = 0
+        for _ in range(10):
+            if self.offset >= len(self.payload):
+                raise RuntimeError(f"{context} is truncated")
+            byte = self.payload[self.offset]
+            self.offset += 1
+            length |= (byte & 0x7F) << shift
+            if byte & 0x80 == 0:
+                if (
+                    self.payload[start : self.offset]
+                    != _multisig_norito_compact_length(length)
+                ):
+                    raise RuntimeError(f"{context} uses a non-canonical length")
+                end = self.offset + length
+                if end > len(self.payload):
+                    raise RuntimeError(f"{context} is truncated")
+                value = self.payload[self.offset : end]
+                self.offset = end
+                return value
+            shift += 7
+        raise RuntimeError(f"{context} has an invalid compact length")
+
+
+@dataclass(frozen=True)
+class _TransactionPayloadBindings:
+    domain: bytes
+    authority: bytes
+    creation_time_ms: int
+    executable: bytes
+    ttl: bytes
+    nonce: bytes
+    fee_payment: bytes
+    admission_intent: bytes
+    metadata: bytes
+    attachments: bytes
+
+
+def _transaction_payload_bindings(
+    payload: bytes,
+) -> _TransactionPayloadBindings:
+    reader = _MultisigTransactionPayloadReader(payload)
+    domain = reader.field("transaction payload.domain")
+    authority = reader.field("transaction payload.authority")
+    creation_time = reader.field("transaction payload.creation_time_ms")
+    if len(creation_time) != 8:
+        raise RuntimeError("transaction payload.creation_time_ms must be a u64")
+    executable = reader.field("transaction payload.executable")
+    ttl = reader.field("transaction payload.ttl_ms")
+    nonce = reader.field("transaction payload.nonce")
+    fee_payment = reader.field("transaction payload.fee_payment")
+    admission_intent = reader.field("transaction payload.admission_intent")
+    metadata = reader.field("transaction payload.metadata")
+    attachments = reader.field("transaction payload.attachments")
+    if reader.offset != len(payload):
+        raise RuntimeError("transaction payload contains trailing bytes")
+    return _TransactionPayloadBindings(
+        domain=domain,
+        authority=authority,
+        creation_time_ms=int.from_bytes(creation_time, "little"),
+        executable=executable,
+        ttl=ttl,
+        nonce=nonce,
+        fee_payment=fee_payment,
+        admission_intent=admission_intent,
+        metadata=metadata,
+        attachments=attachments,
+    )
+
+
+def _trusted_intent_archive(value: str, context: str) -> bytes:
+    if not isinstance(value, str) or not value or any(char.isspace() for char in value):
+        raise ValueError(f"{context} must be exact standard-base64")
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"{context} must be exact standard-base64") from exc
+    if not decoded or base64.b64encode(decoded).decode("ascii") != value:
+        raise ValueError(f"{context} must be exact standard-base64")
+    return decoded
+
+
+def _network_transaction_domain_archive(
+    signing_context: ToriiLocalSigningContext,
+    context: str,
+) -> bytes:
+    if not isinstance(signing_context, ToriiLocalSigningContext):
+        raise ValueError(f"{context} requires an immutable local_signing_context")
+    network_id = _offline_hash_literal(
+        signing_context.network_id,
+        f"{context}.local_signing_context.network_id",
+    )
+    return (0).to_bytes(4, "little") + _multisig_norito_field(
+        bytes.fromhex(network_id[5:69])
+    )
+
+
+def _validate_exact_unsigned_transaction_intent(
+    bindings: _TransactionPayloadBindings,
+    *,
+    signing_context: Optional[ToriiLocalSigningContext],
+    authority: str,
+    creation_time_ms: int,
+    fee_payment: Mapping[str, Any],
+    executable_b64: str,
+    metadata_b64: str,
+    expected_ttl_ms: int = 100_000,
+    context: str,
+) -> None:
+    if signing_context is None:
+        raise ValueError(f"{context} requires an immutable local_signing_context")
+    expected = {
+        "domain": _network_transaction_domain_archive(signing_context, context),
+        "authority": _multisig_account_id_archive(authority),
+        "executable": _trusted_intent_archive(
+            executable_b64,
+            f"{context}.intent.executable_b64",
+        ),
+        "ttl": b"\x01"
+        + _multisig_norito_field(expected_ttl_ms.to_bytes(8, "little")),
+        "nonce": b"\x00",
+        "fee_payment": _multisig_fee_payment_archive(fee_payment),
+        "admission_intent": (0).to_bytes(4, "little"),
+        "metadata": _trusted_intent_archive(
+            metadata_b64,
+            f"{context}.intent.metadata_b64",
+        ),
+        "attachments": b"\x00",
+    }
+    for field, expected_value in expected.items():
+        actual_value = getattr(bindings, field)
+        if not secrets.compare_digest(actual_value, expected_value):
+            raise RuntimeError(
+                f"{context} transaction payload changed caller-trusted {field}"
+            )
+    if bindings.creation_time_ms != creation_time_ms:
+        raise RuntimeError(
+            f"{context} creation_time_ms does not match the exact transaction payload"
+        )
+
+
 def _parse_app_api_transaction_draft_fields(
     payload: Mapping[str, Any],
     *,
@@ -4811,6 +5298,17 @@ class ContractOperationReceipt:
 
 
 @dataclass(frozen=True)
+class ContractCallDraftIntent:
+    """Caller-trusted bindings for one unsigned contract call."""
+
+    executable_b64: str
+    metadata_b64: str
+    contract_address: str
+    code_hash_hex: str
+    payload_digest_hex: str
+
+
+@dataclass(frozen=True)
 class ContractCallResponse:
     """Result returned by ``POST /v1/contracts/call``."""
 
@@ -4843,8 +5341,17 @@ class MultisigResponse:
     tx_hash_hex: Optional[str]
     executed_tx_hash_hex: Optional[str]
     creation_time_ms: Optional[int]
+    fee_payment: Dict[str, Any]
     transaction_payload_b64: Optional[str]
     signing_message_b64: Optional[str]
+
+
+@dataclass(frozen=True)
+class MultisigDraftIntent:
+    """Caller-trusted exact executable and metadata archives for an unsigned proposal."""
+
+    executable_b64: str
+    metadata_b64: str
 
 
 @dataclass(frozen=True)
@@ -9537,7 +10044,7 @@ class ToriiClient(
             context="sccp message bundle",
             normalize=normalize_sccp_message_bundle,
             maximum_norito_body_bytes=_SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES,
-            expected_norito_type_name=_SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME,
+            expected_norito_type_names=(_SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME,),
         )
 
     def get_sccp_proof_request(
@@ -9545,9 +10052,10 @@ class ToriiClient(
     ) -> Union[Mapping[str, Any], bytes]:
         """Fetch one query-free state-derived Groth16 request by canonical message id.
 
-        Native responses are preflighted as canonical uncompressed Norito frames bound to
-        ``SccpGroth16Bn254ProofRequestV1``. The frame remains opaque, so this lightweight client
-        does not independently bind the embedded message id to the request path.
+        Native responses are preflighted as canonical uncompressed concrete Norito frames bound
+        to either ``SccpGroth16Bn254ProofRequestV1`` or
+        ``SccpTonGroth16Bls12381ProofRequestV1``. The frame remains opaque, so this lightweight
+        client does not independently bind the embedded message id to the request path.
         """
 
         return self._get_sccp_typed_object(
@@ -9556,7 +10064,7 @@ class ToriiClient(
             context="sccp proof request",
             normalize=normalize_sccp_proof_request,
             maximum_norito_body_bytes=_SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES,
-            expected_norito_type_name=_SCCP_PROOF_REQUEST_NORITO_TYPE_NAME,
+            expected_norito_type_names=_SCCP_PROOF_REQUEST_NORITO_TYPE_NAMES,
         )
 
     def get_sccp_recent_messages(
@@ -9791,7 +10299,7 @@ class ToriiClient(
         context: str,
         normalize: Callable[[Any], Mapping[str, Any]],
         maximum_norito_body_bytes: int,
-        expected_norito_type_name: str,
+        expected_norito_type_names: tuple[str, ...],
     ) -> Union[Mapping[str, Any], bytes]:
         if format not in {"json", "norito"}:
             raise ValueError("SCCP response format must be exactly `json` or `norito`")
@@ -9816,10 +10324,22 @@ class ToriiClient(
             body = _read_bounded_sccp_response_body(
                 response, maximum_body_bytes, context
             )
+            matched_type_name = next(
+                (
+                    type_name
+                    for type_name in expected_norito_type_names
+                    if body[6:22] == schema_hash_for_type_name(type_name)
+                ),
+                None,
+            )
+            if matched_type_name is None:
+                raise ValueError(
+                    f"{context} response schema hash did not match the closed type set"
+                )
             validate_norito_frame(
                 body,
                 context=f"{context} response",
-                expected_type_name=expected_norito_type_name,
+                expected_type_name=matched_type_name,
                 expected_padding_length=0,
             )
             return body
@@ -11586,15 +12106,75 @@ class ToriiClient(
                     ) from exc
         return response
 
+    def _preflight_contract_call_draft_intent(
+        self,
+        draft_intent: Optional[ContractCallDraftIntent],
+        *,
+        request_payload: Mapping[str, Any],
+        requested_payload_digest: str,
+    ) -> None:
+        """Validate caller-owned contract bindings before contacting Torii."""
+
+        if not isinstance(draft_intent, ContractCallDraftIntent):
+            raise ValueError(
+                "unsigned contract calls require a caller-trusted ContractCallDraftIntent"
+            )
+        _trusted_intent_archive(
+            draft_intent.executable_b64,
+            "contract call draft.intent.executable_b64",
+        )
+        _trusted_intent_archive(
+            draft_intent.metadata_b64,
+            "contract call draft.intent.metadata_b64",
+        )
+        _network_transaction_domain_archive(
+            self._local_signing_context,
+            "contract call draft",
+        )
+        try:
+            trusted_address = _canonical_contract_address(
+                draft_intent.contract_address,
+                "contract call draft.intent.contract_address",
+            )
+        except TypeError as exc:
+            raise ValueError(str(exc)) from exc
+        for field in ("code_hash_hex", "payload_digest_hex"):
+            try:
+                self._require_exact_lower_hex_string(
+                    getattr(draft_intent, field),
+                    context=f"contract call draft.intent.{field}",
+                    expected_length=64,
+                )
+            except RuntimeError as exc:
+                raise ValueError(str(exc)) from exc
+        requested_address = request_payload.get("contract_address")
+        if requested_address is not None and requested_address != trusted_address:
+            raise ValueError(
+                "contract call draft intent resolved address does not match the "
+                "requested contract address"
+            )
+        if not secrets.compare_digest(
+            draft_intent.payload_digest_hex,
+            requested_payload_digest,
+        ):
+            raise ValueError(
+                "contract call draft intent payload digest does not match the exact "
+                "request payload"
+            )
+
     def prepare_contract_call(
         self,
         *,
         authority: str,
         fee_payment: Mapping[str, Any],
         entrypoint: str,
+        draft_intent: Optional[ContractCallDraftIntent] = None,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
         payload: Any = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+        creation_time_ms: Optional[int] = None,
+        transaction_ttl_ms: Optional[int] = None,
     ) -> ContractCallResponse:
         """Prepare a contract-call scaffold for local detached signing."""
 
@@ -11615,17 +12195,44 @@ class ToriiClient(
             entrypoint,
             "prepare_contract_call.entrypoint",
         )
+        requested_payload_digest = contract_payload_digest_hex(payload)
         if payload is not None:
             request_payload["payload"] = self._clone_json_value(
                 payload,
                 context="prepare_contract_call.payload",
             )
+        if metadata is not None:
+            normalized_metadata = self._clone_json_value(
+                metadata,
+                context="prepare_contract_call.metadata",
+            )
+            if not isinstance(normalized_metadata, Mapping):
+                raise TypeError("prepare_contract_call.metadata must be a JSON object")
+            request_payload["metadata"] = normalized_metadata
+        normalized_creation_time = self._normalize_optional_int(
+            creation_time_ms,
+            "prepare_contract_call.creation_time_ms",
+            allow_zero=True,
+        )
+        if normalized_creation_time is not None:
+            request_payload["creation_time_ms"] = normalized_creation_time
+        normalized_transaction_ttl = self._normalize_optional_int(
+            transaction_ttl_ms,
+            "prepare_contract_call.transaction_ttl_ms",
+        )
+        if normalized_transaction_ttl is not None:
+            request_payload["transaction_ttl_ms"] = normalized_transaction_ttl
         normalized_fee_payment = self._normalize_fee_payment_intent(
             fee_payment,
             context="prepare_contract_call.fee_payment",
             require_gas_limit=True,
         )
         request_payload["fee_payment"] = normalized_fee_payment
+        self._preflight_contract_call_draft_intent(
+            draft_intent,
+            request_payload=request_payload,
+            requested_payload_digest=requested_payload_digest,
+        )
         response = self._request(
             "POST",
             "/v1/contracts/call",
@@ -11646,9 +12253,15 @@ class ToriiClient(
         )
         self._validate_contract_call_draft(
             result,
+            authority=request_payload["authority"],
+            fee_payment=normalized_fee_payment,
+            draft_intent=draft_intent,
             entrypoint=request_payload["entrypoint"],
             contract_address=request_payload.get("contract_address"),
             contract_alias=request_payload.get("contract_alias"),
+            payload=request_payload.get("payload"),
+            creation_time_ms=normalized_creation_time,
+            transaction_ttl_ms=normalized_transaction_ttl,
         )
         return result
 
@@ -11668,6 +12281,7 @@ class ToriiClient(
         validation_fee_hijiri_fee_quote_hash: Optional[str] = None,
         validation_fee_instruction_index: Optional[int] = None,
         validation_fee_transfer_entry_index: Optional[int] = None,
+        draft_intent: Optional[MultisigDraftIntent] = None,
     ) -> MultisigResponse:
         """Propose a generic multisig instruction batch via ``POST /v1/multisig/propose``.
 
@@ -11692,11 +12306,12 @@ class ToriiClient(
         if not instruction_values:
             raise ValueError("propose_multisig.instructions must not be empty")
 
+        normalized_signer = self._normalize_canonical_account_id(
+            signer_account_id,
+            "propose_multisig.signer_account_id",
+        )
         request_payload: Dict[str, Any] = {
-            "signer_account_id": self._normalize_canonical_account_id(
-                signer_account_id,
-                "propose_multisig.signer_account_id",
-            ),
+            "signer_account_id": normalized_signer,
             "instructions": [
                 self.multisig_instruction_b64(
                     value,
@@ -11807,10 +12422,60 @@ class ToriiClient(
             request_payload,
             context="multisig propose response",
         )
-        return self._parse_multisig_response(
+        result = self._parse_multisig_response(
             body,
             context="multisig propose response",
         )
+        if not self._fee_payment_selections_match(
+            result.fee_payment,
+            normalized_fee_payment,
+        ):
+            raise RuntimeError(
+                "multisig propose response fee_payment changed the requested payer, "
+                "sponsor revision, or gas bound"
+            )
+        if (
+            normalized_creation_time is not None
+            and result.creation_time_ms != normalized_creation_time
+        ):
+            raise RuntimeError(
+                "multisig propose response creation_time_ms is not bound to the request"
+            )
+        if not result.submitted:
+            if not isinstance(draft_intent, MultisigDraftIntent):
+                raise ValueError(
+                    "unsigned multisig proposals require a caller-trusted MultisigDraftIntent"
+                )
+            if result.transaction_payload_b64 is None:
+                raise RuntimeError(
+                    "multisig propose response is missing its transaction payload"
+                )
+            transaction_payload = base64.b64decode(
+                result.transaction_payload_b64,
+                validate=True,
+            )
+            try:
+                bindings = _transaction_payload_bindings(transaction_payload)
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    "multisig propose response transaction_payload_b64 must contain "
+                    "one canonical transaction payload"
+                ) from exc
+            if result.creation_time_ms is None:
+                raise RuntimeError(
+                    "multisig propose response omitted creation_time_ms for an unsigned draft"
+                )
+            _validate_exact_unsigned_transaction_intent(
+                bindings,
+                signing_context=self._local_signing_context,
+                authority=normalized_signer,
+                creation_time_ms=result.creation_time_ms,
+                fee_payment=result.fee_payment,
+                executable_b64=draft_intent.executable_b64,
+                metadata_b64=draft_intent.metadata_b64,
+                context="multisig propose response",
+            )
+        return result
 
     def get_governance_contract(
         self,
@@ -14171,17 +14836,27 @@ class ToriiClient(
                 f"{context} requires exactly one of contract_address or contract_alias"
             )
         if has_contract_address:
-            return {
-                "contract_address": _require_exact_non_empty_string(
-                    contract_address,
+            address = _require_exact_non_empty_string(
+                contract_address,
+                f"{context}.contract_address",
+            )
+            try:
+                canonical = _canonical_contract_address(
+                    address,
                     f"{context}.contract_address",
                 )
+            except TypeError as exc:
+                raise ValueError(str(exc)) from exc
+            return {
+                "contract_address": canonical
             }
+        alias = _require_exact_non_empty_string(
+            contract_alias,
+            f"{context}.contract_alias",
+        )
+        _contract_alias_dataspace(alias, f"{context}.contract_alias")
         return {
-            "contract_alias": _require_exact_non_empty_string(
-                contract_alias,
-                f"{context}.contract_alias",
-            )
+            "contract_alias": alias
         }
 
     @staticmethod
@@ -14344,6 +15019,29 @@ class ToriiClient(
                 }
             )
         return {"payer": payer, "value": normalized_value}
+
+    @staticmethod
+    def _fee_payment_selections_match(
+        left: Mapping[str, Any],
+        right: Mapping[str, Any],
+    ) -> bool:
+        if left["payer"] != right["payer"]:
+            return False
+        left_value = left["value"]
+        right_value = right["value"]
+        if left_value["gas_limit"] != right_value["gas_limit"]:
+            return False
+        if left["payer"] == "authority":
+            return True
+        return (
+            left_value["program_revision"] == right_value["program_revision"]
+            and left_value["program_id"]["name"]
+            == right_value["program_id"]["name"]
+            and _fee_quote_account_ids_have_same_identity(
+                left_value["program_id"]["sponsor"],
+                right_value["program_id"]["sponsor"],
+            )
+        )
 
     @staticmethod
     def _normalize_required_base64_payload(value: Any, context: str) -> str:
@@ -17556,47 +18254,52 @@ class ToriiClient(
             ),
             context=f"{context}.operation_receipt",
         )
+
+        def optional_contract_address(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            try:
+                return _canonical_contract_address(
+                    value,
+                    f"{context}.contract_address",
+                )
+            except TypeError as exc:
+                raise RuntimeError(str(exc)) from exc
+
         return ContractCallResponse(
             ok=ok_value,
             submitted=submitted_value,
-            dataspace=ToriiClient._require_string(
+            dataspace=_require_exact_non_empty_string(
                 record.get("dataspace"),
                 f"{context}.dataspace",
             ),
-            code_hash_hex=ToriiClient._normalize_hex_string(
-                ToriiClient._require_hex_input(
-                    record.get("code_hash_hex"), f"{context}.code_hash_hex"
-                ),
+            code_hash_hex=ToriiClient._require_exact_lower_hex_string(
+                record.get("code_hash_hex"),
                 context=f"{context}.code_hash_hex",
                 expected_length=64,
             ),
-            abi_hash_hex=ToriiClient._normalize_hex_string(
-                ToriiClient._require_hex_input(
-                    record.get("abi_hash_hex"), f"{context}.abi_hash_hex"
-                ),
+            abi_hash_hex=ToriiClient._require_exact_lower_hex_string(
+                record.get("abi_hash_hex"),
                 context=f"{context}.abi_hash_hex",
                 expected_length=64,
             ),
-            creation_time_ms=ToriiClient._coerce_unsigned(
+            creation_time_ms=_require_u64(
                 record.get("creation_time_ms"),
                 f"{context}.creation_time_ms",
             ),
-            contract_address=ToriiClient._coerce_optional_string(
-                record.get("contract_address"),
-                context=f"{context}.contract_address",
-            ),
+            contract_address=optional_contract_address(record.get("contract_address")),
             tx_hash_hex=tx_hash_hex,
             pipeline_status=ToriiClient._parse_optional_pipeline_status_response(
                 record.get("pipeline_status"),
                 context=f"{context}.pipeline_status",
             ),
-            entrypoint=ToriiClient._coerce_optional_string(
+            entrypoint=_require_optional_exact_string(
                 record.get("entrypoint"),
-                context=f"{context}.entrypoint",
+                f"{context}.entrypoint",
             ),
-            transaction_ttl_ms=ToriiClient._coerce_optional_unsigned(
+            transaction_ttl_ms=_require_optional_u64(
                 record.get("transaction_ttl_ms"),
-                context=f"{context}.transaction_ttl_ms",
+                f"{context}.transaction_ttl_ms",
             ),
             entrypoint_hash_hex=entrypoint_hash_hex,
             transaction_payload_b64=ToriiClient._normalize_optional_exact_base64_payload(
@@ -17608,13 +18311,19 @@ class ToriiClient(
             operation_receipt=operation_receipt,
         )
 
-    @staticmethod
     def _validate_contract_call_draft(
+        self,
         response: ContractCallResponse,
         *,
+        authority: str,
+        fee_payment: Mapping[str, Any],
+        draft_intent: Optional[ContractCallDraftIntent],
         entrypoint: str,
         contract_address: Optional[str],
         contract_alias: Optional[str],
+        payload: Any,
+        creation_time_ms: Optional[int],
+        transaction_ttl_ms: Optional[int],
     ) -> None:
         """Fail closed unless a contract response is the requested unsigned draft."""
 
@@ -17627,6 +18336,32 @@ class ToriiClient(
             raise RuntimeError(
                 "contract call draft must not contain transaction submission state"
             )
+        if not isinstance(draft_intent, ContractCallDraftIntent):
+            raise ValueError(
+                "unsigned contract calls require a caller-trusted ContractCallDraftIntent"
+            )
+        trusted_address = draft_intent.contract_address
+        trusted_code_hash = draft_intent.code_hash_hex
+        trusted_payload_digest = draft_intent.payload_digest_hex
+        if contract_address is not None and contract_address != trusted_address:
+            raise RuntimeError(
+                "contract call draft intent resolved address does not match the request"
+            )
+        if contract_alias is not None and response.dataspace != _contract_alias_dataspace(
+            contract_alias,
+            "contract call draft contract_alias",
+        ):
+            raise RuntimeError(
+                "contract call draft dataspace does not match the requested alias"
+            )
+        if response.transaction_ttl_ms != transaction_ttl_ms:
+            raise RuntimeError(
+                "contract call draft transaction_ttl_ms is not bound to the request"
+            )
+        if creation_time_ms is not None and response.creation_time_ms != creation_time_ms:
+            raise RuntimeError(
+                "contract call draft creation_time_ms is not bound to the request"
+            )
         ToriiClient._normalize_transaction_response_pair(
             response.transaction_payload_b64,
             response.signing_message_b64,
@@ -17634,30 +18369,67 @@ class ToriiClient(
             transaction_hash=response.tx_hash_hex,
             context="contract call draft",
         )
+        if response.transaction_payload_b64 is None:
+            raise RuntimeError("contract call draft omitted transaction_payload_b64")
+        if receipt.fee_payment is None or not self._fee_payment_selections_match(
+            receipt.fee_payment,
+            fee_payment,
+        ):
+            raise RuntimeError(
+                "contract call draft fee_payment changed the requested payer, "
+                "sponsor revision, or gas bound"
+            )
+        if receipt.gas_limit != receipt.fee_payment["value"]["gas_limit"]:
+            raise RuntimeError(
+                "contract call operation_receipt gas_limit does not match its fee_payment"
+            )
+        try:
+            bindings = _transaction_payload_bindings(
+                base64.b64decode(response.transaction_payload_b64, validate=True)
+            )
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "contract call draft must contain one canonical transaction payload"
+            ) from exc
+        _validate_exact_unsigned_transaction_intent(
+            bindings,
+            signing_context=self._local_signing_context,
+            authority=authority,
+            creation_time_ms=response.creation_time_ms,
+            fee_payment=receipt.fee_payment,
+            executable_b64=draft_intent.executable_b64,
+            metadata_b64=draft_intent.metadata_b64,
+            expected_ttl_ms=transaction_ttl_ms or 100_000,
+            context="contract call draft",
+        )
         if (
             response.entrypoint != entrypoint
             or receipt.operation_kind != "contract_call"
             or receipt.status != "pending_signature"
+            or receipt.transport != "torii"
+            or receipt.dataspace != response.dataspace
+            or receipt.contract_alias != contract_alias
+            or response.contract_address != trusted_address
+            or receipt.contract_address != trusted_address
+            or response.code_hash_hex != trusted_code_hash
+            or receipt.code_hash_hex != trusted_code_hash
+            or receipt.abi_hash_hex != response.abi_hash_hex
             or receipt.entrypoint != entrypoint
             or receipt.tx_hash_hex is not None
             or receipt.entrypoint_hash_hex is not None
+            or receipt.gas_used is not None
         ):
             raise RuntimeError(
-                "contract call draft is not bound to the requested entrypoint"
+                "contract call operation_receipt does not match the exact pending draft binding"
             )
-        if contract_address is not None and (
-            response.contract_address != contract_address
-            or receipt.contract_address != contract_address
-        ):
-            raise RuntimeError(
-                "contract call draft is not bound to the requested contract address"
-            )
+        requested_payload_digest = contract_payload_digest_hex(payload)
         if (
-            contract_alias is not None
-            and receipt.contract_alias != contract_alias
+            trusted_payload_digest != requested_payload_digest
+            or receipt.payload_digest_hex != trusted_payload_digest
         ):
             raise RuntimeError(
-                "contract call draft is not bound to the requested contract alias"
+                "contract call operation_receipt payload digest does not match the "
+                "exact request payload"
             )
 
     @staticmethod
@@ -17667,6 +18439,27 @@ class ToriiClient(
         context: str,
     ) -> ContractOperationReceipt:
         record = ToriiClient._ensure_mapping(payload, context)
+        ToriiClient._reject_unknown_fields(
+            record,
+            {
+                "operation_kind",
+                "status",
+                "transport",
+                "dataspace",
+                "contract_alias",
+                "contract_address",
+                "code_hash_hex",
+                "abi_hash_hex",
+                "tx_hash_hex",
+                "entrypoint",
+                "entrypoint_hash_hex",
+                "gas_limit",
+                "gas_used",
+                "fee_payment",
+                "payload_digest_hex",
+            },
+            context,
+        )
 
         def optional_hash(field: str) -> Optional[str]:
             value = record.get(field)
@@ -17677,56 +18470,66 @@ class ToriiClient(
                     value,
                     context=f"{context}.{field}",
                 )
-            return ToriiClient._normalize_hex_string(
+            return ToriiClient._require_exact_lower_hex_string(
                 value,
                 context=f"{context}.{field}",
                 expected_length=64,
             )
 
-        gas_limit = ToriiClient._coerce_optional_unsigned(
+        def optional_contract_address(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            try:
+                return _canonical_contract_address(
+                    value,
+                    f"{context}.contract_address",
+                )
+            except TypeError as exc:
+                raise RuntimeError(str(exc)) from exc
+
+        gas_limit = _require_optional_u64(
             record.get("gas_limit"),
-            context=f"{context}.gas_limit",
+            f"{context}.gas_limit",
         )
         if gas_limit is not None and gas_limit == 0:
             raise RuntimeError(f"{context}.gas_limit must be positive")
 
         return ContractOperationReceipt(
-            operation_kind=ToriiClient._require_non_empty_string(
+            operation_kind=_require_exact_non_empty_string(
                 record.get("operation_kind"),
                 f"{context}.operation_kind",
             ),
-            status=ToriiClient._require_non_empty_string(
+            status=_require_exact_non_empty_string(
                 record.get("status"),
                 f"{context}.status",
             ),
-            transport=ToriiClient._require_non_empty_string(
+            transport=_require_exact_non_empty_string(
                 record.get("transport"),
                 f"{context}.transport",
             ),
-            dataspace=ToriiClient._require_non_empty_string(
+            dataspace=_require_exact_non_empty_string(
                 record.get("dataspace"),
                 f"{context}.dataspace",
             ),
-            contract_alias=ToriiClient._coerce_optional_string(
+            contract_alias=_require_optional_exact_string(
                 record.get("contract_alias"),
-                context=f"{context}.contract_alias",
+                f"{context}.contract_alias",
             ),
-            contract_address=ToriiClient._coerce_optional_string(
-                record.get("contract_address"),
-                context=f"{context}.contract_address",
+            contract_address=optional_contract_address(
+                record.get("contract_address")
             ),
             code_hash_hex=optional_hash("code_hash_hex"),
             abi_hash_hex=optional_hash("abi_hash_hex"),
             tx_hash_hex=optional_hash("tx_hash_hex"),
-            entrypoint=ToriiClient._coerce_optional_string(
+            entrypoint=_require_optional_exact_string(
                 record.get("entrypoint"),
-                context=f"{context}.entrypoint",
+                f"{context}.entrypoint",
             ),
             entrypoint_hash_hex=optional_hash("entrypoint_hash_hex"),
             gas_limit=gas_limit,
-            gas_used=ToriiClient._coerce_optional_unsigned(
+            gas_used=_require_optional_u64(
                 record.get("gas_used"),
-                context=f"{context}.gas_used",
+                f"{context}.gas_used",
             ),
             fee_payment=(
                 ToriiClient._normalize_fee_payment_intent(
@@ -17739,11 +18542,8 @@ class ToriiClient(
                 if record.get("fee_payment") is not None
                 else None
             ),
-            payload_digest_hex=ToriiClient._normalize_hex_string(
-                ToriiClient._require_hex_input(
-                    record.get("payload_digest_hex"),
-                    f"{context}.payload_digest_hex",
-                ),
+            payload_digest_hex=ToriiClient._require_exact_lower_hex_string(
+                record.get("payload_digest_hex"),
                 context=f"{context}.payload_digest_hex",
                 expected_length=64,
             ),
@@ -17787,7 +18587,25 @@ class ToriiClient(
         creation_time_ms = None if creation_raw is None else ToriiClient._coerce_unsigned(
             creation_raw, f"{context}.creation_time_ms"
         )
+        proposal_id_raw = record.get("proposal_id")
+        proposal_id = (
+            None
+            if proposal_id_raw is None
+            else ToriiClient._normalize_hex_string(
+                proposal_id_raw,
+                context=f"{context}.proposal_id",
+                expected_length=64,
+            )
+        )
         instructions_hash = optional_hash("instructions_hash")
+        if (
+            proposal_id is not None
+            and instructions_hash is not None
+            and proposal_id != instructions_hash
+        ):
+            raise RuntimeError(
+                f"{context}.proposal_id and instructions_hash must identify the same proposal"
+            )
         tx_hash_hex = optional_transaction_hash("tx_hash_hex")
         executed_tx_hash_hex = optional_transaction_hash("executed_tx_hash_hex")
         submitted = record.get("submitted")
@@ -17800,18 +18618,23 @@ class ToriiClient(
             transaction_hash=tx_hash_hex,
             context=context,
         )
+        fee_payment = ToriiClient._normalize_fee_payment_intent(
+            ToriiClient._ensure_mapping(
+                record.get("fee_payment"),
+                f"{context}.fee_payment",
+            ),
+            context=f"{context}.fee_payment",
+        )
         return MultisigResponse(
             ok=True,
             resolved_multisig_account_id=resolved_multisig_account_id,
             submitted=submitted,
-            proposal_id=ToriiClient._coerce_optional_string(
-                record.get("proposal_id"),
-                context=f"{context}.proposal_id",
-            ),
+            proposal_id=proposal_id,
             instructions_hash=instructions_hash,
             tx_hash_hex=tx_hash_hex,
             executed_tx_hash_hex=executed_tx_hash_hex,
             creation_time_ms=creation_time_ms,
+            fee_payment=fee_payment,
             transaction_payload_b64=transaction_payload_b64,
             signing_message_b64=signing_message_b64,
         )

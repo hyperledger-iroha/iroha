@@ -26,6 +26,7 @@ pub mod hosts;
 #[cfg(feature = "pqc")]
 pub mod hybrid_envelope;
 pub mod manifest_capabilities;
+pub mod operator_preseed;
 pub mod orderbook;
 pub mod pdp;
 pub mod pin_registry;

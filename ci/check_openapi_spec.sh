@@ -199,6 +199,7 @@ run_xtask_in_repo() {
   (
     cd "${source_root}"
     GIT_OPTIONAL_LOCKS=0 \
+    IROHA_INTEGRATION_TESTS_SKIP_PREBUILT_STAGE=1 \
     NORITO_SKIP_BINDINGS_SYNC=1 \
       CARGO_TARGET_DIR="${target_root}" \
       run_cargo run \

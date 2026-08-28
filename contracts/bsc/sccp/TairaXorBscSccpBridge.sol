@@ -9,13 +9,15 @@ contract TairaXorBscSccpBridge is TairaXorExactEvmSccpBridge {
         address tokenAddress,
         VerifierPolicyV1 memory configuredVerifierPolicy,
         uint8 configuredBscProfile,
-        uint32 configuredRouteRevision
+        uint32 configuredRouteRevision,
+        uint256 configuredMaxWrappedSupply
     ) TairaXorExactEvmSccpBridge(
         tokenAddress,
         configuredVerifierPolicy,
         2,
         configuredBscProfile,
-        configuredRouteRevision
+        configuredRouteRevision,
+        configuredMaxWrappedSupply
     ) {}
 
     /** Return the exact SCCP BSC profile tag (`4` mainnet or `5` testnet). */

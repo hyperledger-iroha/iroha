@@ -18,6 +18,8 @@ public final class AccountAddress {
   private static final int I105_DISCRIMINANT_MAX = 0xFFFF;
   private static final int I105_CHECKSUM_LEN = 6;
   private static final int BECH32M_CONST = 0x2bc830a3;
+  private static final int HEADER_VERSION_V1 = 0;
+  private static final int HEADER_NORM_VERSION_V1 = 1;
   private static final int CONTROLLER_SINGLE_KEY_TAG = 0x00;
   private static final int CONTROLLER_MULTISIG_TAG = 0x01;
   private static final int CONTROLLER_SINGLE_KEY_EXTENDED_TAG = 0x02;
@@ -769,8 +771,20 @@ public final class AccountAddress {
   }
 
   private static int decodeHeader(final byte header) throws AccountAddressException {
+    final int version = (header >> 5) & 0b111;
     final int classBits = (header >> 3) & 0b11;
+    final int normVersion = (header >> 1) & 0b11;
     final int extFlag = header & 0x01;
+    if (version != HEADER_VERSION_V1) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.INVALID_HEADER_VERSION,
+          "unsupported address header version: " + version);
+    }
+    if (normVersion != HEADER_NORM_VERSION_V1) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.INVALID_NORM_VERSION,
+          "unsupported normalization version: " + normVersion);
+    }
     if (extFlag != 0) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNEXPECTED_EXTENSION_FLAG, "address header reserves extension flag but it was set");

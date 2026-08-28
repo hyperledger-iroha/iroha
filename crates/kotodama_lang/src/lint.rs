@@ -161,6 +161,10 @@ impl LintMessage {
 }
 /// Run the Kotodama lint suite against an AST [`Program`].
 pub fn lint_program(program: &Program) -> Vec<LintWarning> {
+    crate::session::run_with_compiler_stack(move || lint_program_inline(program))
+        .expect("compiler must allocate the bounded stack required to lint source nesting")
+}
+fn lint_program_inline(program: &Program) -> Vec<LintWarning> {
     let mut warnings = Vec::new();
     lint_unused_state(program, &mut warnings);
     lint_state_shadowing(program, &mut warnings);
@@ -2129,6 +2133,28 @@ mod tests {
     use super::*;
     use crate::{i18n::Language, parser::parse_test_fragment as parse};
     use iroha_data_model::DomainId;
+
+    #[test]
+    fn public_lint_handoffs_from_a_small_caller() {
+        let depth = crate::source::MAX_NESTING_DEPTH - 2;
+        let expression = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
+        let source =
+            format!("module StackMargin {{ fn value() {{ let nested = {expression}; }} }}");
+        std::thread::Builder::new()
+            .name("kotodama-small-lint-caller".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                let program =
+                    crate::parser::parse(&source).expect("boundary-depth lint fixture must parse");
+                let warnings = lint_program(&program);
+                assert!(warnings.is_empty());
+                drop(program);
+            })
+            .expect("spawn small lint caller")
+            .join()
+            .expect("public linting must not consume the caller stack");
+    }
+
     #[test]
     fn record_expr_idents_collects_only_states() {
         let expr = Expr::Binary {

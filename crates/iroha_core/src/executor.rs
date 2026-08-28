@@ -9262,7 +9262,9 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // CBDC account control, native multisig/consensus-key rotation, and alias lifecycle.
+    // CBDC account control, native multisig/consensus-key lifecycle, and alias lifecycle.
+    // Threshold-key lifecycle certificates carry their own exact-roster quorum
+    // authorization, which Core verifies before changing either key family.
     if is_any!(
         iroha_data_model::isi::AddSignatory,
         iroha_data_model::isi::RemoveSignatory,
@@ -9282,6 +9284,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::consensus_keys::RegisterConsensusKey,
         iroha_data_model::isi::consensus_keys::RotateConsensusKey,
         iroha_data_model::isi::consensus_keys::DisableConsensusKey,
+        iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1,
     ) {
         return true;
     }
@@ -9374,8 +9377,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::bridge::SubmitBridgeProof,
         iroha_data_model::isi::bridge::RecordBridgeReceipt,
         iroha_data_model::isi::bridge::ApplySccpRouteGovernance,
-        iroha_data_model::isi::bridge::FundSccpRouteEscrow,
-        iroha_data_model::isi::bridge::RefundSccpRouteEscrow,
         iroha_data_model::isi::bridge::RecordSccpMessage,
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
@@ -10575,8 +10576,8 @@ impl ExecutorRuntimeKey {
     }
 }
 struct ExecutorRuntimeVariant {
-    baseline: Arc<RuntimeTemplate>,
-    available: Option<IVM>,
+    identity: Arc<()>,
+    available: Option<(Arc<RuntimeTemplate>, IVM)>,
 }
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -10616,8 +10617,8 @@ impl ExecutorRuntimePool {
         variants.insert(
             key,
             ExecutorRuntimeVariant {
-                baseline,
-                available: Some(vm),
+                identity: Arc::new(()),
+                available: Some((baseline, vm)),
             },
         );
         Self {
@@ -10663,7 +10664,7 @@ impl ExecutorRuntimePool {
         }
         self.order.push_back(key);
     }
-    fn insert_variant(&mut self, key: ExecutorRuntimeKey, baseline: Arc<RuntimeTemplate>) {
+    fn insert_variant(&mut self, key: ExecutorRuntimeKey) -> Arc<()> {
         while self.variants.len() >= self.capacity {
             let Some(evicted) = self.order.pop_front() else {
                 break;
@@ -10672,19 +10673,22 @@ impl ExecutorRuntimePool {
                 self.record(ExecutorRuntimePoolEvent::Eviction);
             }
         }
+        let identity = Arc::new(());
         self.variants.insert(
             key,
             ExecutorRuntimeVariant {
-                baseline,
+                identity: Arc::clone(&identity),
                 available: None,
             },
         );
         self.touch(key);
+        identity
     }
 }
 struct ExecutorRuntimeLease {
     pool: Arc<Mutex<ExecutorRuntimePool>>,
     key: ExecutorRuntimeKey,
+    variant_identity: Arc<()>,
     baseline: Arc<RuntimeTemplate>,
     vm: Option<IVM>,
 }
@@ -10711,7 +10715,8 @@ impl Drop for ExecutorRuntimeLease {
         let can_return = {
             let pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
             pool.variants.get(&self.key).is_some_and(|variant| {
-                Arc::ptr_eq(&variant.baseline, &self.baseline) && variant.available.is_none()
+                Arc::ptr_eq(&variant.identity, &self.variant_identity)
+                    && variant.available.is_none()
             })
         };
         if !can_return {
@@ -10722,10 +10727,12 @@ impl Drop for ExecutorRuntimeLease {
         }
         let mut pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
         let stored = pool.variants.get_mut(&self.key).is_some_and(|variant| {
-            if !Arc::ptr_eq(&variant.baseline, &self.baseline) || variant.available.is_some() {
+            if !Arc::ptr_eq(&variant.identity, &self.variant_identity)
+                || variant.available.is_some()
+            {
                 return false;
             }
-            variant.available = Some(vm);
+            variant.available = Some((Arc::clone(&self.baseline), vm));
             true
         });
         if stored {
@@ -10773,51 +10780,54 @@ impl LoadedExecutor {
         heap_limit: u64,
     ) -> Result<ExecutorRuntimeLease, VMError> {
         let key = ExecutorRuntimeKey::for_limits(gas_limit, heap_limit);
-        let (baseline, vm) = {
+        let (variant_identity, runtime) = {
             let mut pool = self
                 .runtime_pool
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             if pool.variants.contains_key(&key) {
-                let (baseline, vm) = {
+                let (variant_identity, runtime) = {
                     let variant = pool
                         .variants
                         .get_mut(&key)
                         .expect("checked executor runtime variant exists");
-                    (Arc::clone(&variant.baseline), variant.available.take())
+                    (Arc::clone(&variant.identity), variant.available.take())
                 };
-                if vm.is_some() {
+                if runtime.is_some() {
                     pool.record(ExecutorRuntimePoolEvent::Hit);
                 } else {
                     pool.record(ExecutorRuntimePoolEvent::Miss);
                 }
                 pool.touch(key);
-                (baseline, vm)
+                (variant_identity, runtime)
             } else {
                 pool.record(ExecutorRuntimePoolEvent::Miss);
                 let vm = Self::load_runtime(self.raw_executor.as_ref(), gas_limit, heap_limit)?;
                 let baseline = Arc::new(vm.runtime_template());
                 pool.record(ExecutorRuntimePoolEvent::ProgramLoad);
                 pool.record(ExecutorRuntimePoolEvent::TemplateBuild);
-                pool.insert_variant(key, Arc::clone(&baseline));
-                (baseline, Some(vm))
+                let variant_identity = pool.insert_variant(key);
+                (variant_identity, Some((baseline, vm)))
             }
         };
-        let mut vm = if let Some(vm) = vm {
-            vm
+        let (baseline, mut vm) = if let Some(runtime) = runtime {
+            runtime
         } else {
             let vm = Self::load_runtime(self.raw_executor.as_ref(), gas_limit, heap_limit)?;
+            let baseline = Arc::new(vm.runtime_template());
             let mut pool = self
                 .runtime_pool
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             pool.record(ExecutorRuntimePoolEvent::ProgramLoad);
-            vm
+            pool.record(ExecutorRuntimePoolEvent::TemplateBuild);
+            (baseline, vm)
         };
         vm.set_gas_limit(gas_limit);
         Ok(ExecutorRuntimeLease {
             pool: Arc::clone(&self.runtime_pool),
             key,
+            variant_identity,
             baseline,
             vm: Some(vm),
         })
@@ -11688,6 +11698,49 @@ mod tests {
                 instruction.id()
             );
         }
+    }
+    #[test]
+    fn initial_executor_routes_threshold_key_lifecycle_to_core_qc_authentication() {
+        use iroha_data_model::isi::consensus_keys::{
+            ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
+            ThresholdKeyLifecycleCertificateV1,
+        };
+
+        let authority = checked_account_id();
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+        let instruction: InstructionBox = ApplyThresholdKeyLifecycleCertificateV1 {
+            certificate: ThresholdKeyLifecycleCertificateV1 {
+                version: crate::state::THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
+                action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+                expected_active_session_id: Some([0x31; 32]),
+                effective_height: 2,
+                network_id: executor_test_network_id(b"initial threshold lifecycle admission"),
+                roster_hash: [0x32; 32],
+                committee_size: 4,
+                quorum: 3,
+                session_id: [0x31; 32],
+                transcript_hash: [0x33; 32],
+                public_state: Vec::new(),
+                signatures: Vec::new(),
+            },
+        }
+        .into();
+        assert!(
+            initial_native_instruction_is_explicitly_admitted(&instruction),
+            "the proof-carrying lifecycle instruction must reach Core"
+        );
+
+        let error = super::Executor::Initial
+            .execute_instruction(&mut state_transaction, &authority, instruction)
+            .expect_err("an empty validator QC must fail in Core");
+        assert!(
+            format!("{error:?}")
+                .contains("threshold-key lifecycle certificate authentication failed"),
+            "the Initial executor must route the instruction to exact Core QC verification: {error:?}"
+        );
     }
     #[test]
     fn initial_executor_keeps_the_complete_vpn_lifecycle_allowlisted() {
@@ -17492,7 +17545,14 @@ mod tests {
             registration(),
         );
         assert!(
-            matches!(attacker_result, Err(ValidationFail::NotPermitted(_))),
+            matches!(
+                &attacker_result,
+                Err(ValidationFail::InstructionFailed(
+                    InstructionExecutionError::InvalidParameter(
+                        iroha_data_model::isi::error::InvalidParameterError::SmartContract(message)
+                    )
+                )) if message.contains("Missing CanRegisterTrigger")
+            ),
             "alias-domain owner must not install code for the canonical account: {attacker_result:?}",
         );
         super::Executor::Initial
@@ -18557,6 +18617,63 @@ mod tests {
             .copy_from_slice(&declared_len.to_le_bytes());
         let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(program));
         LoadedExecutor::load(raw).expect("load executor test program")
+    }
+    #[test]
+    fn overlapping_executor_runtimes_return_with_their_own_baselines() {
+        let verdict: Result<(), ValidationFail> = Ok(());
+        let encoded = verdict.encode();
+        let loaded = loaded_executor_with_result_prefix(
+            EXECUTOR_LENGTH_PREFIX_BYTES_U64
+                + u64::try_from(encoded.len()).expect("bounded verdict"),
+            &encoded,
+        );
+        let parameters = iroha_data_model::parameter::SmartContractParameters::default();
+        let gas_limit = parameters.fuel().get();
+        let heap_limit = parameters.memory().get();
+        let first = loaded
+            .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
+            .expect("first pooled executor runtime");
+        let second_allocation = {
+            let mut second = loaded
+                .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
+                .expect("overlapping cold executor runtime");
+            let allocation = second
+                .memory
+                .load_region(0, 1)
+                .expect("second code memory")
+                .as_ptr();
+            second
+                .memory
+                .preload_input(0, &[0xA5])
+                .expect("dirty second input");
+            allocation
+        };
+        let third = loaded
+            .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
+            .expect("second runtime must be reusable while first remains leased");
+        assert_eq!(
+            third
+                .memory
+                .load_region(0, 1)
+                .expect("third code memory")
+                .as_ptr(),
+            second_allocation
+        );
+        assert_eq!(
+            third
+                .memory
+                .load_region(Memory::INPUT_START, 1)
+                .expect("third input memory"),
+            [0]
+        );
+        let (stats, variants) = loaded.runtime_pool_snapshot();
+        assert_eq!(variants, 1);
+        assert_eq!(stats.hits, 2);
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.program_loads, 2);
+        assert_eq!(stats.template_builds, 2);
+        assert_eq!(stats.dirty_resets, 1);
+        drop((third, first));
     }
     fn loaded_executor_returning_past_heap_result() -> LoadedExecutor {
         let metadata = ivm::ProgramMetadata {

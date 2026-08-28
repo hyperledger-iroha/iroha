@@ -1907,7 +1907,7 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
         ballot_chunk.get("maxItems").and_then(Value::as_u64),
         Some(
             u64::try_from(
-                iroha_data_model::isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+                iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
             )
             .expect("timed-OVN ballot chunk bound fits u64"),
         )
@@ -2002,15 +2002,42 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "accepted_ballot_prefix_count",
         ])
     );
+    let no_result_variants = schemas
+        .get("GovernanceParliamentNoResultKindV1")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("oneOf"))
+        .and_then(Value::as_array)
+        .expect("no-result audit variants");
     assert_eq!(
-        schemas
-            .get("GovernanceParliamentNoResultKindV1")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("oneOf"))
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(7),
+        no_result_variants.len(),
+        9,
         "no-result audit class must remain closed"
+    );
+    assert_eq!(
+        no_result_variants
+            .iter()
+            .filter_map(|variant| {
+                variant
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get("reason"))
+                    .and_then(Value::as_object)
+                    .and_then(|reason| reason.get("const"))
+                    .and_then(Value::as_str)
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            "PublicFindingQuorumUnreachable",
+            "PublicFindingDeadlineExpired",
+            "BallotRegistrationDeadlineExpired",
+            "BallotSurvivorDeadlineExpired",
+            "BallotCommitmentDeadlineExpired",
+            "BallotReleasePulseUnavailable",
+            "BallotOpeningDeadlineExpired",
+            "SortitionRetriesExhausted",
+            "ConfirmationJuryCapacityUnavailable",
+        ],
+        "no-result OpenAPI tags must match the closed codec inventory"
     );
     let read_body_states = schemas
         .get("GovernanceParliamentAttemptReadResponseV1")

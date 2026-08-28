@@ -12,7 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "integration_tests/tests/iroha_cli.rs"
 PREIMAGE_SHA256 = "aa1a2f2e6113915b33107d68d255f66194bd3813f853bd031125fe4459a57d43"
-EXPECTED_SOURCE_LINES = 4_197
+EXPECTED_SOURCE_LINES = 4_276
 
 HELPER_START = "struct SoracloudCli<'a>"
 HELPER_END = "async fn wait_for_soracloud_json_command"
@@ -28,21 +28,21 @@ FUNCTION_CONTRACTS = {
         True,
     ),
     "soracloud_mutations_use_live_torii_control_plane": (
-        "7d6b0a9c299aa6de7498285a5f0d61e9e261ecd7db830c9e6ca1d55a63a65d33",
+        "a564cbf43a111f0b12c8c7a5fe13ade36435b9ffa12d121bac5e79cb7b4ed89f",
         0,
         0,
         4,
         True,
     ),
     "soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_control_plane": (
-        "f0bdf226ed77aedbfe4821e29f32d96bc64afb848de7c7b8e19e779da0416a9e",
+        "33f5b7907033fb6f79d9ce486f9ac338cbdf7775eb00dc2165e82e2c00b8a969",
         0,
         2,
         0,
         True,
     ),
     "soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane": (
-        "7d69e1d478ed37d0e60877f5a54258a8ccada18b7689c78ace1015301a56af8e",
+        "0ead1d5245c57e1880df5c4311ef502168b90a2746eaac7942779228d1fe5614",
         17,
         0,
         0,
@@ -70,7 +70,7 @@ FUNCTION_CONTRACTS = {
         True,
     ),
     "soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback": (
-        "7b9123447ce7fd6ef9a7c928b5dd67ecad7fc3669b3e02bb624efc848aaff67d",
+        "b119d9b58f8616e290c16e0fe7b89868d5fcbebcad9558ec8912ea29090f82e4",
         8,
         0,
         0,

@@ -2968,6 +2968,39 @@ fn authenticate_recovered_lifecycle_next_vote_body_catalogs(
 }
 
 impl<R: EffectRuntime> V2EffectExecutor<R> {
+    /// Borrow the sole response-free recovered Decision Fetch owner for one
+    /// periodic retransmission.
+    ///
+    /// Network-actor admission is not a remote-delivery receipt.  The executor
+    /// therefore remains the semantic source of the exact signed request until
+    /// an authenticated response claims it.  This projection neither changes
+    /// the external lifecycle wait nor creates a second request identity.
+    pub(in crate::sumeragi) fn recovered_decision_fetch_retransmission_owner(
+        &self,
+    ) -> Result<Option<&RecoveredDecisionFetchRequestOwnerV1>, EffectExecutorError> {
+        self.ensure_open()?;
+        if self.recovered_decision_fetches.len() > 1
+            || !self.recovered_decision_fetch_request_index_is_exact()
+        {
+            return Err(EffectExecutorError::Contract(
+                "recovered Decision Fetch retransmission indexes are not exact".to_owned(),
+            ));
+        }
+        let Some(owner) = self.recovered_decision_fetches.values().next() else {
+            return Ok(None);
+        };
+        if !owner.validates_exact_executor_context(&self.context, &self.requester) {
+            return Err(EffectExecutorError::Contract(
+                "recovered Decision Fetch retransmission owner changed context".to_owned(),
+            ));
+        }
+        Ok(owner
+            .candidate_projection()
+            .response_claim
+            .is_none()
+            .then_some(owner))
+    }
+
     /// Project the sole exact recovered request indexes for lifecycle tests.
     #[cfg(test)]
     pub(in crate::sumeragi) fn recovered_decision_fetch_owner_for_test(
@@ -4313,16 +4346,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// Return the exact reducer incarnation currently owning timers and work.
     pub(crate) const fn current_tag(&self) -> EventTag {
         self.runtime.round_tag()
-    }
-    #[cfg(test)]
-    pub(crate) fn can_admit_network_message(&self, message: &wire::ConsensusMessageV2) -> bool {
-        if self.fatal_reason.is_some()
-            || self.output_guard.restart_required()
-            || !self.retained_dispatch_allows_network_ingress(&message.payload)
-        {
-            return false;
-        }
-        self.runtime.can_admit_network_message(message)
     }
     /// Whether body-store open routed one nondeferred validation marker into the runtime.
     #[cfg(test)]
@@ -10208,11 +10231,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "pending certified Fetch lost its body-pipeline owner".to_owned(),
                     )
                 })?;
-        if body_pipeline_owner.tag != pending.task.tag
-            || body_pipeline_owner.manifest_hash != Some(HashOf::new(&response.manifest))
+        // A certified-only Fetch legitimately starts without proposal manifest
+        // metadata. Its authenticated response supplies the canonical manifest at
+        // this atomic retirement-to-durable-body transition; until then the exact
+        // pipeline owner must still match the frozen pending Fetch, including None.
+        if body_pipeline_owner.tag != candidate.fetch_tag()
+            || body_pipeline_owner.manifest_hash != candidate.proposal_manifest_hash()
         {
             return Err(EffectTransportError::BodyMismatch(
-                "persisted response differs from the exact body-pipeline owner",
+                "pending certified Fetch differs from the exact body-pipeline owner",
             ));
         }
         let claim_preflight = self

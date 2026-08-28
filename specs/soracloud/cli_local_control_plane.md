@@ -34,6 +34,20 @@ aggregate or sensitive Soracloud state is not part of the public discovery
 surface. Uploaded-model registration and status require exact-network account
 authentication, and no recipient-discovery or execution route exists in V1.
 
+The current-revision object is read from
+`GET /v1/soracloud/services/{service_name}/public-discovery`; an admitted
+historical revision uses
+`GET /v1/soracloud/services/{service_name}/revisions/{service_version}/public-discovery`.
+Its canonical document is available both at
+`/sorafs/cid/{content_cid}/index.json` and the advertised CID-host
+`https://{content_cid}.sorafs.<route-suffix>/index.json`. Torii reconstructs
+those bytes from the committed registry on storage-enabled and
+storage-disabled validators and verifies the exact admitted bundle, document
+hash, CAR root CID, and `Approved` pin record. Substitution, ambiguity, pending
+or retired pins, and malformed authoritative state fail closed. Only an
+`index.json` CID with no authoritative Inrou binding may fall through to the
+generic embedded store; a storage-disabled validator returns not found.
+
 ## Runtime Scope
 
 - Use deterministic IVM services for wallet auth, confidential vault state,
@@ -195,13 +209,17 @@ fails verification.
   - without `--dry-run`, executes the root rebuild + manifest-sync entrypoint in place
 - `iroha soracloud service deploy`
   - resolves `deploy.sh` adjacent to one container/service manifest pair
-  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
+  - requires `--sorafs-retention-epoch` and forwards that exact value as
+    `SORAFS_RETENTION_EPOCH` together with `TORII_URL` and optional `API_TOKEN`
+    into the generated root script
   - `--dry-run` prints the resolved working directory, script path, and the
     same service plan that `plan` reports, including routes, counts, and
     workspace scripts
 - `iroha soracloud service upgrade`
   - resolves `upgrade.sh` adjacent to one container/service manifest pair
-  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
+  - requires `--sorafs-retention-epoch` and forwards that exact value as
+    `SORAFS_RETENTION_EPOCH` together with `TORII_URL` and optional `API_TOKEN`
+    into the generated root script
   - `--dry-run` prints the resolved working directory, script path, and the
     same service plan that `plan` reports, including routes, counts, and
     workspace scripts
@@ -211,6 +229,50 @@ fails verification.
 All service deploy, upgrade, rollback, rollout, status, config, secret, HF
 lease, training-job, model registry/status, app release, and app status
 commands are Torii-backed and require `--torii-url`.
+
+Every `HttpService + Inrou` publication has two mandatory phases. First,
+`iroha soracloud service preseed` or `iroha soracloud app preseed` runs while
+the selected validators are stopped. The offline command accepts repeated
+`--inrou-preseed-target VALIDATOR,PEER,PATH` bindings, the exact common
+`--inrou-preseed-max-capacity-bytes`, a hash-bound
+`--inrou-preseed-helper`, and an absolute owner-only `--receipt-out`. The
+target count covers both the declared replica count and the V1 three-replica
+SoraFS pin minimum. Roots must be existing canonical absolute directories,
+must not overlap, and validator and peer identities must each be distinct.
+
+The CLI executes an owner-private copy of the exact helper. One `sorafs-node
+preseed-session` child locks every target, ingests and byte-for-byte
+revalidates the bundle, every guest ISA, and the public discovery document,
+then atomically appends a content-addressed ingest qualification inside every
+store. While holding all locks, the child emits exactly one canonical ready
+receipt and waits for stdin EOF. After validating that receipt, the parent
+closes stdin and accepts completion only when the child emits the exact V1
+`released` acknowledgment after observing EOF and exits successfully. The CLI
+then writes the same canonical qualification to `--receipt-out`; every store
+lock is therefore released before any validator restart or Torii mutation.
+Historical qualifications remain immutable so still-reachable releases coexist
+across upgrades. Verify-only sessions prove an existing ingest qualification
+and never replace it or repair missing content.
+
+Each store retains at most 4096 qualifications. The offline helper rejects a
+4097th qualification on every target before ingesting any artifact. Capacity
+or peer rotation requires a new exact qualification for the current local
+validator, peer, and configured capacity. Before the retained bound is
+reached, rotate one validator at a time to a fresh canonical store root and
+offline-preseed every still-reachable release into that root; restart it and
+wait for its active-host advertisement before stopping the next validator.
+The daemon treats old-capacity and old-peer receipts as immutable history and
+never deletes qualification evidence itself.
+
+After all validators are running, online deploy, upgrade, and app release
+accept only `--inrou-preseed-receipt`; they never open a target store. The CLI
+rebuilds byte-identical artifacts with the same retention epoch and signing
+identity, requires the source placement set to be empty or exactly equal to
+the receipt targets, and re-reads the immutable receipt immediately before
+the first pin and again before the service mutation. Both gates require every
+receipt validator and peer to appear in Torii's current active Inrou-host
+snapshot. Pin registration remains idempotent, and the control-plane mutation
+is last.
 
 - `iroha soracloud service deploy`
   - validates a single `SoraDeploymentBundleV1` locally and submits it to
@@ -538,11 +600,20 @@ Validate and release the root-bound frontend plus the API service:
 
 ```bash
 cd .soracloud-docs-portal
-iroha soracloud app simulate --manifest ./app_manifest.json
+iroha soracloud app simulate --manifest ./app_manifest.json --sorafs-retention-epoch 2000000000
 iroha soracloud app doctor --manifest ./app_manifest.json
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-TORII_URL=http://127.0.0.1:8080 ./release.sh
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --sorafs-retention-epoch 2000000000 --dry-run
+SORAFS_RETENTION_EPOCH=2000000000 TORII_URL=http://127.0.0.1:8080 ./release.sh
 ```
+
+The nonzero retention epoch is an absolute Unix-second SoraFS boundary. It is
+part of every published manifest identity and must be reused unchanged when a
+release is retried. Each release manifest binds the same value twice: its pin
+policy `retention_epoch` and its sole metadata entry
+`soracloud.retention_epoch=<epoch>` must match exactly, with no additional
+metadata keys. A retry reuses an exact `Approved` pin, waits for an exact
+`Pending` pin, and registers only a `Missing` pin; it never creates a second
+artifact identity for the same release.
 
 This path keeps the frontend at `/` and the API at `/api/healthz` on the same
 hostname.

@@ -74,6 +74,24 @@ Commit intent may resume unchanged. Otherwise the retained bytes supply the
 safe value for a later same-subject re-proposal, whose manifest, PrepareQC,
 Commit intent, Vote, and CommitQC all name one new same round.
 
+The same ownership rule applies when authenticated evidence outruns local view
+installation. A future-view PrepareQC remains at its exact durable leader-wire
+FIFO position with a retryable `Busy` disposition; it is not terminally marked
+irrelevant. Although that certificate shares the Progress lane, an ordinary
+production turn detects when it is the view-blocked class minimum. If ordinary
+timer/FIFO arbitration has selected FIFO, the turn uses the ownership-sealed
+pacemaker selector for one later authenticated current-view TimeoutVote, TC,
+or CommitQC. Its scheduler receipt binds the exact blocked occurrence,
+lifecycle and FIFO position, and target view to the pre- and post-selection
+queue snapshots. This allows a TC to install the missing view without
+discarding or reordering the certificate's FIFO owner. The exact PrepareQC is
+then retried once as current-view evidence, so a lagging honest validator can
+fetch and validate the certified body and contribute its Commit vote. This
+exception is limited to future PrepareQCs: future individual votes remain
+inadmissible, current and stale certificates retain their existing reducer
+semantics, and a CommitQC is already direct quorum-authenticated decision
+evidence.
+
 A second TC for the immediately preceding timed-out round is progress only when
 its selected Prepare origin strictly exceeds both the installed highest PrepareQC
 and lock. Its durable installation upgrades that lock while leaving the lifecycle
@@ -235,6 +253,14 @@ matching acquisition after the bytes become durable. The replacement load
 retains the original consumer tag, round, and subject, so recovery cannot leave
 a later leader permanently waiting or deliver a different body to its
 re-proposal.
+
+Certified-Fetch Phase A moves its one-shot I/O target seal into the live worker
+capacity reservation before admitting and attesting the scheduler row. The
+remaining selector must therefore carry the consumed-target marker at
+attestation; the reservation and final exact-task preflight retain the target
+identity. Requiring the pre-capture marker after this move would reject every
+successful reservation as an invalid carrier and leave the response and Fetch
+row permanently owned but unserviceable.
 
 Proposal replay joins two independently fsynced authorities before startup
 effects run: the safety WAL supplies the exact proposal intent and the body
@@ -508,14 +534,56 @@ An unchanged signed body or CommitQC request retains at most one archive-batch
 fanout. An identical batch reuses the incumbent network-actor admission
 tickets and FIFO ranks. A different rotated batch stays with the durable
 task/discovery source while that incumbent owns a ranked actor ticket, so cursor
-rotation cannot fill the corridor or displace an older waiter. A CommitQC
-topology attempt returned without a ticket owns no actor rank; exact output
-releases that target back to the still-outstanding discovery source instead of
-letting a removed peer suppress every later rotated batch. Fair actor admission
-releases ranked incumbent capacity, while ticketless release and continued
-source retries rotate to later archives, including a responsive peer beyond the
-original corridor capacity. Either authoritative cancellation path removes the
-retained request fanout and drops any actor ticket it owns.
+rotation cannot fill the corridor or displace an older waiter. A certified-body,
+CommitQC, historical-lane, or certified merge-sidecar request topology attempt
+returned without a ticket owns no actor rank; neither does a Kura-reconstructible
+historical-lane response to a requester which left the topology. The
+merge-sidecar stream also durably and indefinitely retries its cumulative
+`Close`, so a ticketless Close has the same source-owned disposition. Exact
+output releases those targets back to their still-outstanding recovery source
+instead of letting a removed peer suppress every later target; a dropped
+historical response is regenerated when the requester retries its immutable
+request. Kura-backed locally authorized autonomous payload/NewView output and
+historical lane certification use the same ticketless rule: their bounded lane
+artifact scheduler revisits the exact immutable source, while retaining a
+departed predecessor validator would otherwise suppress every later member of
+that frozen committee. This is required across roster changes: a departed
+predecessor signer, requester, validator, or sidecar responder must not occupy
+the only shared non-roster output slot and prevent authenticated recovery or
+NewView progress from reaching another peer. Fair actor admission releases
+ranked incumbent capacity, while ticketless release and continued source retries
+reach later archives or predecessor members, including a responsive peer beyond
+the original corridor capacity. Either authoritative cancellation path removes
+the retained request fanout and drops any actor ticket it owns.
+
+An authenticated merge-sidecar `GenerationHint` which durably advances a
+requester stream also retains the strongest pending cancellation fence for that
+semantic responder. The table is bounded by the protocol's maximum responder
+roster, rather than the tunable number of concurrent inbound assemblies. Before
+any successor-generation sidecar dispatch or retry, the runner uses the exact
+observed-message hash and endpoint authentication to cancel every canonical
+requester `Request` or cumulative `Close` for the same endpoint pair whose
+service generation is lower than the authenticated current generation. Failure
+requeues the fence; success drops every actor ticket owned by those obsolete
+occurrences. Chunks, acknowledgements, hints, unrelated streams, and equal or
+newer generations are never covered by this cancellation.
+
+A WAL-recovered Decision whose body is absent keeps its exact signed
+`CertifiedBodyRequest` in the dedicated executor owner while its lifecycle row
+waits on the response hash. Network-actor admission retires only that physical
+fanout occurrence; it is not a remote receipt and cannot retire the executor
+source. Both the ordinary active-height loop and the PendingKura no-clock loop
+therefore recreate the same request on the configured retransmission cadence
+until an authenticated response installs the exclusive response claim. This
+does not wake, rewrite, or duplicate the durable lifecycle row, and a claimed
+response suppresses further request fanout while body persistence completes.
+The recovered Store transition preflights retirement of every retained
+physical occurrence of that exact request before publishing its LedgerV1
+successor. Only after successful durable publication does the same fail-stop
+operation commit the request-fanout cancellation and release every actor
+ticket; a pre-publication failure retains both owners for exact retry. Thus a
+ranked, backpressured target cannot survive a successful response from another
+peer and keep finalized exact output nonempty across successor activation.
 
 Certified-body request capacity is independent from the retryable general
 pending-work boundary. When that request bound alone is full, only a
@@ -935,15 +1003,14 @@ never sufficient.
 
 The chain-scoped block-sync server retains one coarse logical slot per
 requester/context request and separately fingerprints the signed request's
-complete unsigned preimage. This distinction is required for randomized
-request schemes such as ML-DSA: after a requester restart, a new valid
-signature over the same immutable request receives a freshly
-request-hash-bound and responder-signed projection of the cached canonical
-response. It does not conflict indefinitely with the pre-restart signature or
-wait for unrelated FIFO eviction. Exact same-signature retransmissions still
-return the byte-identical cached response. A change to any authenticated
-unsigned field in the same logical slot retains the conflict rejection instead
-of multiplying cached entries or canonical-history reads.
+complete unsigned preimage. After the transport boundary authenticates a
+different valid signature encoding over the same immutable request, it receives
+a freshly request-hash-bound and responder-signed projection of the cached
+canonical response. It does not conflict indefinitely with the earlier
+signature or wait for unrelated FIFO eviction. Exact same-signature
+retransmissions still return the byte-identical cached response. A change to
+any authenticated unsigned field in the same logical slot retains the conflict
+rejection instead of multiplying cached entries or canonical-history reads.
 
 For current-height output, global V2 traffic validates its protocol version and
 binds to the exact finality artifact. Winning lane output requires its exact
@@ -972,6 +1039,24 @@ recovery prefix, dispatch any work it creates, and require an authenticated
 empty closed-ingress cut before rollover. An interrupted-tip restart therefore
 cannot park and discard a response which won admission immediately before its
 durable successor was constructed.
+
+PendingKura readiness additionally requires the recovered lifecycle-output
+owner to be empty. Its no-clock corridor retries already-owned exact output,
+then services at most one authenticated cold Ready/Broadcast row through the
+sealed owner, executor, and service tuple before ProducerTurn. A retained source
+waits without losing its row; a completed output durably terminalizes and
+immediately re-enters the bounded loop. Once final preflight succeeds, the
+runner carries the exact-output pending bit through cancellation/admission
+handoff reconciliation and a dedicated finite closed-prefix loop. It never
+consumes the predecessor, and never reopens ordinary no-clock lane work, while
+actor backpressure or admitted terminal recovery still owns output.
+
+The ordinary finalized-height path has the same terminal handoff rule at every
+cut: after preflight, after Apply-only settlement, and during closed-prefix
+drain, it applies all already-owned historical-recovery and sidecar
+cancellation/admission handoffs before sampling exact output. A handoff failure
+retains or requeues its source; successful cancellation releases the matching
+actor ticket before successor activation can be considered.
 
 Only after this preflight succeeds does rollover build the complete durable
 lane authority, reject conflicting quorum evidence, prune proposal-only losers,
@@ -1391,9 +1476,15 @@ deferred-canonical-carrier completion regressions produced the historical
 rows brings the historical 856-test, 40-module checkpoint. The exact retired-
 attempt accessor, mixed-carrier successor, two-link cold-restart hydration,
 noncanonical autonomous-output retirement, and the ordinary plus record-backed
-autonomous predecessor-durability regressions bring the current
-source-bound inventory to 864 exact tests across 43 modules and 84 pre-network
-legs.
+autonomous predecessor-durability regressions brought the historical source-
+bound inventory to 865 exact tests across 43 modules and 84 pre-network legs.
+The replica-disposition regression which observes the exact FIFO beneath the
+global-selection overlay produced an intermediate 866-row array. Removing five
+retired rows already represented by stricter replacements, exact-renaming four
+surviving tests, and replacing one retired combined daemon check with its two
+real block/lane checks produced the 862-test checkpoint. The eligible-only
+Ready-Proposal-Sign preemption regression brings the current inventory to 863
+exact tests across 44 modules and 85 pre-network legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
 identical periodic rediscovery even after live tag authority is relinquished,
@@ -1401,11 +1492,11 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`331123d12b08027a9ac0ed0157ed84007eac5a8659b1995bf4c77c3eedb231c2`.
-Nine of those legs execute the separate 522-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 523 TSV lines and has SHA-256
-`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
-The 316-test core group includes grouped Native prevote-budget rejection before
+`2c27cdd44bc6b62d5e7798c0ed2694f5caaf86546dbb9daf30abf920381da444`.
+Nine of those legs execute the separate 518-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 519 TSV lines and has SHA-256
+`b3bcc3655b1362819c0a01ea7a9acab3eaa303b58ec28866cc4d42315c4240b7`.
+The 313-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
@@ -1648,7 +1739,7 @@ three-per-materialized-authenticated-non-validator owners (`5N+3H` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-84 legs, including the governance-unlock audit module, the autonomous
+85 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate exact
 status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
@@ -1661,7 +1752,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 864-test inventory is a mechanically checked
+The current 863-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1860,9 +1951,9 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 864 exact production
-liveness tests and executes all 43 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 522-test
+Before those longer scenarios, the PR gate inventories 863 exact production
+liveness tests and executes all 44 owning Rust modules serially. The release
+profile additionally records nine G-UNIT legs executing a separate 518-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -2032,13 +2123,17 @@ attempt, mixed-carrier, cold-restart, and autonomous-output-retirement
 regressions plus the ordinary and record-backed autonomous predecessor-
 durability rows and the three producer-publication-fence race rows produced the
 865-test checkpoint across 43 modules. Retiring the dormant generic persisted-
-continuation regression brings the current inventory to 864 tests across the
-same modules. The retained rows require the
+continuation regression left the historical inventory at 865 tests across the
+same modules. The replica-disposition regression then added its `queue::tests`
+module; the subsequent retired-row/source-name reconciliation produced the
+862-test checkpoint. The eligible-only Ready-Proposal-Sign preemption row
+leaves 863 current tests across 44 modules. The retained rows require the
 post-preflight fence to serialize same-wire retransmission and unrelated append
 producers through the durable publication boundary, while a dropped unpublished
 dequeue must release the fence without consuming its target.
 Removing the obsolete MKHE lifecycle G-UNIT leg and retaining the current
-source-sealed command partition leaves the corridor at 84 legs.
+source-sealed command partition, plus the queue module leg, leaves the corridor
+at 85 legs.
 The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -2070,7 +2165,7 @@ unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 84-leg, 864-production-test corridor plus 522 G-UNIT tests; execution
+audited 85-leg, 863-production-test corridor plus 518 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
@@ -2352,8 +2447,8 @@ runner and preserves the active logs and evidence directory for diagnosis;
 without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
-receipt binds the 84 pre-network corridor legs and
-their exact 864-test production inventory, the separate 522-test G-UNIT
+receipt binds the 85 pre-network corridor legs and
+their exact 863-test production inventory, the separate 518-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

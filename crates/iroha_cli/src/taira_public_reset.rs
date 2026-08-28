@@ -7,6 +7,8 @@ use iroha::{
         account::{AccountId, address::ChainDiscriminantGuard},
         asset::AssetDefinitionId,
         nexus::FeeSponsorProgramId,
+        peer::PeerId,
+        soracloud::SoraInrouPlacementTargetV1,
     },
 };
 use iroha_crypto::{
@@ -611,6 +613,7 @@ struct ValidatorClientV1 {
     slug: String,
     torii_origin: String,
     account_id: String,
+    peer_id: String,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -644,8 +647,17 @@ struct InrouCanaryV1 {
     bundle_manifest_digest_hex: String,
     guest_content_cid: String,
     guest_manifest_digest_hex: String,
+    discovery_payload_dir: String,
+    discovery_manifest_file: String,
+    discovery_document_hash: String,
+    discovery_content_cid: String,
+    discovery_manifest_digest_hex: String,
+    public_discovery_url: String,
+    public_discovery_cid_host_url: String,
+    deployment_bundle_hash: String,
     container_manifest_hash: String,
     service_manifest_hash: String,
+    placement_targets: BTreeSet<SoraInrouPlacementTargetV1>,
     stage_tree_sha256: String,
     stage_bytes: u64,
     receipt_sha256: String,
@@ -654,6 +666,8 @@ struct InrouCanaryV1 {
     bundle_payload_sha256: String,
     bundle_manifest_sha256: String,
     guest_manifest_sha256: String,
+    discovery_document_sha256: String,
+    discovery_manifest_sha256: String,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -830,7 +844,6 @@ fn admit_signed_inputs(
     let (inventory, inventory_bytes) = read_json::<InventoryV1>(inventory_path, "inventory")?;
     let chain_guard = enter_inventory_chain_discriminant(&inventory)?;
     validate_inventory(&inventory)?;
-    host::validate_first_release_physical_host(&inventory)?;
     validate_shared_validator_closure(&inventory)?;
     let known_hosts = validate_known_hosts(&inventory, known_hosts)?;
 
@@ -1105,22 +1118,44 @@ fn verify_authorization_window(
 
 fn execution_lifetime_ms(inventory: &InventoryV1) -> Result<u64> {
     let timeouts = &inventory.timeouts;
+    let physical_validator_hosts = inventory
+        .validators
+        .iter()
+        .map(|validator| validator.endpoint.host_identity_sha256.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
+    let physical_validator_hosts = u64::try_from(physical_validator_hosts)
+        .map_err(|_| eyre!("physical validator host count does not fit u64"))?;
     // This is the exact first-release action ledger. Keep the coefficients tied
     // to the closed four-validator/one-edge plan rather than relying on one
     // timeout class to compensate for another independently configurable class.
     let seconds = timeouts
         .install_secs
-        // Five preflights, twenty-eight validator stage actions, four installs.
-        .checked_mul(37)
+        // Five preflights, twenty-eight validator stage actions, four installs,
+        // and one canonical Inrou stage upload per physical validator host.
+        .checked_mul(
+            37_u64
+                .checked_add(physical_validator_hosts)
+                .ok_or_else(|| eyre!("install action count overflow"))?,
+        )
         .and_then(|value| value.checked_add(timeouts.stop_secs.checked_mul(4)?))
-        .and_then(|value| value.checked_add(timeouts.reset_secs.checked_mul(4)?))
+        // Four state resets plus one all-store Inrou preseed barrier per host.
+        .and_then(|value| {
+            value.checked_add(
+                timeouts
+                    .reset_secs
+                    .checked_mul(4_u64.checked_add(physical_validator_hosts)?)?,
+            )
+        })
         .and_then(|value| value.checked_add(timeouts.start_secs.checked_mul(4)?))
         // Three edge-stage actions, cutover, verify, and five seal dispatches.
         .and_then(|value| value.checked_add(timeouts.edge_secs.checked_mul(10)?))
         // Initial doctor+convergence and four restart-wave convergences.
         .and_then(|value| value.checked_add(timeouts.convergence_secs.checked_mul(6)?))
-        // Two initial, eight restart-wave, one final doctor, three post-edge.
-        .and_then(|value| value.checked_add(timeouts.canary_secs.checked_mul(14)?))
+        // Seven initial Canary children; RestartProof's four baselines, twelve
+        // write children, four wave checks, four final-validator sweeps, and
+        // final doctor; then EdgeVerify's doctor, three writes, and Inrou check.
+        .and_then(|value| value.checked_add(timeouts.canary_secs.checked_mul(37)?))
         .and_then(|value| value.checked_add(timeouts.restart_secs.checked_mul(4)?))
         .and_then(|value| value.checked_add(timeouts.cleanup_secs.checked_mul(5)?))
         .and_then(|value| value.checked_add(timeouts.rollback_secs.checked_mul(5)?))
@@ -1235,15 +1270,19 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
         }
     }
     let mut client_accounts = BTreeSet::new();
+    let mut client_peers = BTreeSet::new();
+    let mut client_placement_targets = BTreeSet::new();
     for (client, expected_slug) in inventory.validator_clients.iter().zip(VALIDATOR_SLUGS) {
         let expected_origin = format!("https://{expected_slug}.sora.org/");
         if client.slug != expected_slug
             || client.torii_origin != expected_origin
             || client.account_id.is_empty()
+            || client.peer_id.is_empty()
             || !client_accounts.insert(client.account_id.clone())
+            || !client_peers.insert(client.peer_id.clone())
         {
             return Err(eyre!(
-                "validator client identities must bind four distinct ordered accounts and Torii origins"
+                "validator client identities must bind four distinct ordered account/peer pairs and Torii origins"
             ));
         }
         let account = AccountId::parse_encoded(&client.account_id)
@@ -1253,6 +1292,24 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
                 "validator client account identity is not canonical I105"
             ));
         }
+        let peer = client
+            .peer_id
+            .parse::<PeerId>()
+            .wrap_err("validator client peer identity is not canonical")?;
+        if peer.to_string() != client.peer_id {
+            return Err(eyre!("validator client peer identity is not canonical"));
+        }
+        let target = SoraInrouPlacementTargetV1 {
+            peer_id: client.peer_id.clone(),
+            validator_account_id: account,
+        };
+        target.validate()?;
+        client_placement_targets.insert(target);
+    }
+    if inventory.inrou_canary.placement_targets != client_placement_targets {
+        return Err(eyre!(
+            "Inrou canary placement targets must equal the exact four validator client identities"
+        ));
     }
     validate_edge(&inventory.edge, &inventory.revision)?;
     if !hostnames.insert(inventory.edge.endpoint.hostname.clone()) {
@@ -1803,15 +1860,25 @@ fn validate_inrou(canary: &InrouCanaryV1) -> Result<()> {
     if canary.public_root != PUBLIC_ROOT
         || canary.service_name != "taira_inrou_canary"
         || canary.replicas != 4
-        || canary.route_host != "taira-inrou-canary.sora"
-        || canary.route_path_prefix != "/api/v1"
+        || canary.route_host != "taira.sora.org"
+        || canary.route_path_prefix != "/api/v1/inrou-canary"
         || canary.healthcheck_path != "/health"
+        || canary.discovery_payload_dir != "payloads/discovery"
+        || canary.discovery_manifest_file != "manifests/discovery.to"
         || canary.stage_bytes == 0
         || canary.stage_bytes > MAX_INROU_STAGE_BYTES
     {
         return Err(eyre!(
             "Inrou canary must use the exact first-release four-replica identity"
         ));
+    }
+    if canary.placement_targets.len() != 4 {
+        return Err(eyre!(
+            "Inrou canary must bind exactly four distinct placement targets"
+        ));
+    }
+    for target in &canary.placement_targets {
+        target.validate()?;
     }
     let service_revision = canary
         .service_version
@@ -1835,6 +1902,10 @@ fn validate_inrou(canary: &InrouCanaryV1) -> Result<()> {
             "Inrou guest manifest digest",
             canary.guest_manifest_digest_hex.as_str(),
         ),
+        (
+            "Inrou discovery manifest digest",
+            canary.discovery_manifest_digest_hex.as_str(),
+        ),
     ] {
         validate_lower_hex(label, value, 64)?;
     }
@@ -1844,6 +1915,10 @@ fn validate_inrou(canary: &InrouCanaryV1) -> Result<()> {
             canary.bundle_content_cid.as_str(),
         ),
         ("Inrou guest content CID", canary.guest_content_cid.as_str()),
+        (
+            "Inrou discovery content CID",
+            canary.discovery_content_cid.as_str(),
+        ),
     ] {
         if value.is_empty()
             || value.len() > 256
@@ -1855,6 +1930,14 @@ fn validate_inrou(canary: &InrouCanaryV1) -> Result<()> {
     for (label, value) in [
         ("Inrou bundle hash", canary.bundle_hash.as_str()),
         (
+            "Inrou discovery document hash",
+            canary.discovery_document_hash.as_str(),
+        ),
+        (
+            "Inrou deployment bundle hash",
+            canary.deployment_bundle_hash.as_str(),
+        ),
+        (
             "Inrou container manifest hash",
             canary.container_manifest_hash.as_str(),
         ),
@@ -1864,6 +1947,21 @@ fn validate_inrou(canary: &InrouCanaryV1) -> Result<()> {
         ),
     ] {
         validate_canonical_iroha_hash(label, value)?;
+    }
+    let expected_public_discovery_url = format!(
+        "https://taira.sora.org/sorafs/cid/{}/index.json",
+        canary.discovery_content_cid
+    );
+    let expected_public_discovery_cid_host_url = format!(
+        "https://{}.sorafs.taira.sora.org/index.json",
+        canary.discovery_content_cid
+    );
+    if canary.public_discovery_url != expected_public_discovery_url
+        || canary.public_discovery_cid_host_url != expected_public_discovery_cid_host_url
+    {
+        return Err(eyre!(
+            "Inrou public discovery URLs must be the exact path and CID-host V1 projections"
+        ));
     }
     validate_lower_hex("Inrou receipt SHA-256", &canary.receipt_sha256, 64)?;
     for (label, value) in [
@@ -1880,6 +1978,14 @@ fn validate_inrou(canary: &InrouCanaryV1) -> Result<()> {
         (
             "Inrou guest manifest SHA-256",
             canary.guest_manifest_sha256.as_str(),
+        ),
+        (
+            "Inrou discovery document SHA-256",
+            canary.discovery_document_sha256.as_str(),
+        ),
+        (
+            "Inrou discovery manifest SHA-256",
+            canary.discovery_manifest_sha256.as_str(),
         ),
     ] {
         validate_lower_hex(label, value, 64)?;
@@ -3935,6 +4041,7 @@ mod executor_model {
         Stop,
         Install,
         Reset,
+        Preseed,
         Start,
         Convergence,
         Canary,
@@ -3946,12 +4053,13 @@ mod executor_model {
         Cleanup,
     }
 
-    const EXECUTION_STEPS: [ExecutionStep; 14] = [
+    const EXECUTION_STEPS: [ExecutionStep; 15] = [
         ExecutionStep::Preflight,
         ExecutionStep::Stage,
         ExecutionStep::Stop,
         ExecutionStep::Install,
         ExecutionStep::Reset,
+        ExecutionStep::Preseed,
         ExecutionStep::Start,
         ExecutionStep::Convergence,
         ExecutionStep::Canary,
@@ -3971,6 +4079,7 @@ mod executor_model {
                 Self::Stop => "stop",
                 Self::Install => "install",
                 Self::Reset => "reset",
+                Self::Preseed => "preseed",
                 Self::Start => "start",
                 Self::Convergence => "convergence",
                 Self::Canary => "canary",
@@ -3990,6 +4099,7 @@ mod executor_model {
                 Self::Stop => timeouts.stop_secs,
                 Self::Install => timeouts.install_secs,
                 Self::Reset => timeouts.reset_secs,
+                Self::Preseed => timeouts.reset_secs,
                 Self::Start => timeouts.start_secs,
                 Self::Convergence => timeouts.convergence_secs,
                 Self::Canary => timeouts.canary_secs,
@@ -5304,6 +5414,9 @@ mod executor_model {
                 |canary: &mut InrouCanaryV1| {
                     canary.service_manifest_hash = "service".to_owned();
                 },
+                |canary: &mut InrouCanaryV1| {
+                    canary.discovery_document_hash = "discovery".to_owned();
+                },
             ] {
                 let mut malformed = canonical.clone();
                 mutate(&mut malformed);
@@ -5316,7 +5429,13 @@ mod executor_model {
         fn inrou_hash_fields_require_the_iroha_marker_bit() {
             let canonical = sample_inventory().inrou_canary;
             let unmarked = unmarked_iroha_hash(b"unmarked Inrou hash fixture");
-            for field in ["service_revision", "bundle", "container", "service"] {
+            for field in [
+                "service_revision",
+                "bundle",
+                "container",
+                "service",
+                "discovery",
+            ] {
                 let mut malformed = canonical.clone();
                 let expected_label = match field {
                     "service_revision" => {
@@ -5334,6 +5453,10 @@ mod executor_model {
                     "service" => {
                         malformed.service_manifest_hash = unmarked.clone();
                         "Inrou service manifest hash"
+                    }
+                    "discovery" => {
+                        malformed.discovery_document_hash = unmarked.clone();
+                        "Inrou discovery document hash"
                     }
                     _ => unreachable!("closed Inrou hash fixture field"),
                 };
@@ -5525,13 +5648,13 @@ mod executor_model {
             let inventory = sample_inventory();
             let base = execution_lifetime_ms(&inventory).expect("base lifetime");
             let timeouts = &inventory.timeouts;
-            let action_seconds = 37 * timeouts.install_secs
+            let action_seconds = 38 * timeouts.install_secs
                 + 4 * timeouts.stop_secs
-                + 4 * timeouts.reset_secs
+                + 5 * timeouts.reset_secs
                 + 4 * timeouts.start_secs
                 + 10 * timeouts.edge_secs
                 + 6 * timeouts.convergence_secs
-                + 14 * timeouts.canary_secs
+                + 37 * timeouts.canary_secs
                 + 4 * timeouts.restart_secs
                 + 5 * timeouts.cleanup_secs
                 + 5 * timeouts.rollback_secs;
@@ -5551,21 +5674,22 @@ mod executor_model {
                     );
                 }};
             }
-            assert_delta!(install_secs, 37);
+            assert_delta!(install_secs, 38);
             assert_delta!(stop_secs, 4);
-            assert_delta!(reset_secs, 4);
+            assert_delta!(reset_secs, 5);
             assert_delta!(start_secs, 4);
             assert_delta!(edge_secs, 10);
             assert_delta!(convergence_secs, 6);
-            assert_delta!(canary_secs, 14);
+            assert_delta!(canary_secs, 37);
             assert_delta!(restart_secs, 4);
             assert_delta!(cleanup_secs, 5);
             assert_delta!(rollback_secs, 5);
+            let additional_host_seconds = timeouts.install_secs + timeouts.reset_secs;
 
-            let mut boundary = inventory;
+            let mut boundary = inventory.clone();
             boundary.timeouts = TimeoutsV1 {
                 stop_secs: 1,
-                install_secs: 355,
+                install_secs: 345,
                 reset_secs: 1,
                 start_secs: 1,
                 convergence_secs: 1,
@@ -5577,11 +5701,28 @@ mod executor_model {
             };
             assert_eq!(
                 execution_lifetime_ms(&boundary).expect("last bounded lifetime"),
-                14_391_000
+                14_390_000
             );
-            boundary.timeouts.install_secs = 356;
+            boundary.timeouts.install_secs = 346;
             let _ = execution_lifetime_ms(&boundary)
                 .expect_err("next exact action quantum exceeds four hours");
+
+            let mut multi_host = sample_inventory();
+            for (index, validator) in multi_host.validators.iter_mut().enumerate() {
+                validator.endpoint.host_identity_sha256 = hex::encode([index as u8 + 1; 32]);
+            }
+            let multi_host_lifetime =
+                execution_lifetime_ms(&multi_host).expect("four-host lifetime");
+            assert_eq!(
+                multi_host_lifetime - base,
+                3 * additional_host_seconds * 1_000
+            );
+            multi_host.timeouts.install_secs += 1;
+            assert_eq!(
+                execution_lifetime_ms(&multi_host).expect("four-host install delta")
+                    - multi_host_lifetime,
+                41_000
+            );
         }
 
         #[test]
@@ -6486,6 +6627,36 @@ mod executor_model {
                     }
                 })
                 .collect();
+            let validator_clients = VALIDATOR_SLUGS
+                .iter()
+                .enumerate()
+                .map(|(index, slug)| {
+                    let account_key = iroha_crypto::KeyPair::try_from_seed(
+                        vec![u8::try_from(index + 1).expect("four fixture validators"); 32],
+                        Algorithm::Ed25519,
+                    )
+                    .expect("deterministic validator client key");
+                    let peer_key = iroha_crypto::KeyPair::try_from_seed(
+                        vec![u8::try_from(index + 17).expect("four fixture peers"); 32],
+                        Algorithm::BlsNormal,
+                    )
+                    .expect("deterministic validator peer key");
+                    ValidatorClientV1 {
+                        slug: (*slug).to_owned(),
+                        torii_origin: format!("https://taira-validator-{}.sora.org/", index + 1),
+                        account_id: AccountId::new(account_key.public_key().clone()).to_string(),
+                        peer_id: PeerId::from(peer_key.public_key().clone()).to_string(),
+                    }
+                })
+                .collect::<Vec<_>>();
+            let placement_targets = validator_clients
+                .iter()
+                .map(|client| SoraInrouPlacementTargetV1 {
+                    validator_account_id: AccountId::parse_encoded(&client.account_id)
+                        .expect("canonical fixture validator account"),
+                    peer_id: client.peer_id.clone(),
+                })
+                .collect();
             let edge_root = "/srv/taira/edge";
             let mut inventory = InventoryV1 {
                 schema: INVENTORY_SCHEMA_V1.to_owned(),
@@ -6497,24 +6668,7 @@ mod executor_model {
                 authorization_nonce: "abcdefghijklmnopqrstuvwx12345678".to_owned(),
                 revision: revision.clone(),
                 validators,
-                validator_clients: VALIDATOR_SLUGS
-                    .iter()
-                    .enumerate()
-                    .map(|(index, slug)| ValidatorClientV1 {
-                        slug: (*slug).to_owned(),
-                        torii_origin: format!("https://taira-validator-{}.sora.org/", index + 1),
-                        account_id: AccountId::new(
-                            iroha_crypto::KeyPair::try_from_seed(
-                                vec![u8::try_from(index + 1).expect("four fixture validators"); 32],
-                                Algorithm::Ed25519,
-                            )
-                            .expect("deterministic validator client key")
-                            .public_key()
-                            .clone(),
-                        )
-                        .to_string(),
-                    })
-                    .collect(),
+                validator_clients,
                 edge: EdgeV1 {
                     slug: "taira-edge".to_owned(),
                     endpoint: endpoint(5, edge_root, &revision),
@@ -6540,14 +6694,30 @@ mod executor_model {
                         Hash::new(b"fixture Inrou service revision")
                     ),
                     replicas: 4,
-                    route_host: "taira-inrou-canary.sora".to_owned(),
-                    route_path_prefix: "/api/v1".to_owned(),
+                    route_host: "taira.sora.org".to_owned(),
+                    route_path_prefix: "/api/v1/inrou-canary".to_owned(),
                     healthcheck_path: "/health".to_owned(),
                     bundle_hash: iroha_crypto::Hash::new(b"fixture Inrou bundle").to_string(),
                     bundle_content_cid: "sora1bundle".to_owned(),
                     bundle_manifest_digest_hex: "8".repeat(64),
                     guest_content_cid: "sora1guest".to_owned(),
                     guest_manifest_digest_hex: "9".repeat(64),
+                    discovery_payload_dir: "payloads/discovery".to_owned(),
+                    discovery_manifest_file: "manifests/discovery.to".to_owned(),
+                    discovery_document_hash: iroha_crypto::Hash::new(
+                        b"fixture Inrou discovery document",
+                    )
+                    .to_string(),
+                    discovery_content_cid: "sora1discovery".to_owned(),
+                    discovery_manifest_digest_hex: "7".repeat(64),
+                    public_discovery_url:
+                        "https://taira.sora.org/sorafs/cid/sora1discovery/index.json".to_owned(),
+                    public_discovery_cid_host_url:
+                        "https://sora1discovery.sorafs.taira.sora.org/index.json".to_owned(),
+                    deployment_bundle_hash: iroha_crypto::Hash::new(
+                        b"fixture Inrou deployment bundle",
+                    )
+                    .to_string(),
                     container_manifest_hash: iroha_crypto::Hash::new(
                         b"fixture Inrou container manifest",
                     )
@@ -6556,6 +6726,7 @@ mod executor_model {
                         b"fixture Inrou service manifest",
                     )
                     .to_string(),
+                    placement_targets,
                     stage_tree_sha256: "a".repeat(64),
                     stage_bytes: 6,
                     receipt_sha256: "b".repeat(64),
@@ -6564,6 +6735,8 @@ mod executor_model {
                     bundle_payload_sha256: "e".repeat(64),
                     bundle_manifest_sha256: "f".repeat(64),
                     guest_manifest_sha256: "0".repeat(64),
+                    discovery_document_sha256: "1".repeat(64),
+                    discovery_manifest_sha256: "2".repeat(64),
                 },
                 canary_onboarding_request,
                 faucet_policy: FaucetPolicyV1 {

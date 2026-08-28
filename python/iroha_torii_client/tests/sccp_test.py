@@ -25,7 +25,9 @@ from iroha_torii_client import (  # noqa: E402
     SCCP_CODEC_CANONICAL_TEXT,
     SCCP_CODEC_EVM_ADDRESS20,
     SCCP_CODEC_KEYS,
+    SCCP_CODEC_TON_ACCOUNT36,
     SCCP_CODEC_TRON_ADDRESS21,
+    SCCP_DOMAIN_TON,
     SCCP_NETWORK_PROFILES,
     SCCP_PAYLOAD_KINDS,
     ToriiClient,
@@ -56,10 +58,17 @@ def PREFIX_HASH(byte: int) -> str:
 def UPPER(byte: int, length: int) -> str:
     return f"{byte:02x}".upper() * length
 AUTHORITY = "sorauﾛ1Nヱﾐﾚﾗﾗﾁ9SHyｾｼF2ﾚbヱAｦiﾇｺﾂpﾆWyｿﾛWﾍ7ｾA7ﾋヰｿUJEKNX"
+TEST_MAX_OUTSTANDING_LIABILITY = 1_000_000_000_000
+TEST_EVM_MAX_WRAPPED_SUPPLY = TEST_MAX_OUTSTANDING_LIABILITY * 1_000_000_000
 MESSAGE_ID = HASH(0x11)
 MESSAGE_BUNDLE_NORITO_TYPE = "iroha_sccp::TairaSccpMessageProofV1"
 PROOF_REQUEST_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
-DESTINATION_ARTIFACT_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofArtifactV1"
+TON_PROOF_REQUEST_NORITO_TYPE = (
+    "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1"
+)
+DESTINATION_ARTIFACT_NORITO_TYPE = (
+    "iroha_data_model::bridge::BridgeSccpDestinationProofV1"
+)
 NATIVE_INBOUND_PROOF_NORITO_TYPE = (
     "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
 )
@@ -133,6 +142,8 @@ def _native_trust_anchor(source: str = "bsc-mainnet") -> Dict[str, Any]:
         backend = "ethereum_beacon_v1"
     elif source.startswith("bsc-"):
         backend = "bsc_parlia_v1"
+    elif source.startswith("ton-"):
+        backend = "ton_masterchain_v1"
     else:
         backend = "tron_dpos_v1"
     return {
@@ -191,6 +202,39 @@ def _key_hash(key: Mapping[str, Any]) -> str:
     return sccp._keccak_256(_key_bytes(key)).hex()  # noqa: SLF001 - parity oracle
 
 
+def _bls12381_verifying_key() -> Dict[str, Any]:
+    g1 = "80" + "00" * 47
+    g2 = g1 + "00" * 48
+    ic = {"constant": g1}
+    ic.update({f"signal_{index}": g1 for index in range(11)})
+    return {
+        "version": 1,
+        "alpha1": g1,
+        "beta2": g2,
+        "gamma2": g2,
+        "delta2": g2,
+        "ic": ic,
+    }
+
+
+def _bls12381_key_bytes(key: Mapping[str, Any]) -> bytes:
+    return b"".join(
+        (
+            b"\x01",
+            bytes.fromhex(key["alpha1"]),
+            bytes.fromhex(key["beta2"]),
+            bytes.fromhex(key["gamma2"]),
+            bytes.fromhex(key["delta2"]),
+            bytes.fromhex(key["ic"]["constant"]),
+            *(bytes.fromhex(key["ic"][f"signal_{index}"]) for index in range(11)),
+        )
+    )
+
+
+def _bls12381_key_hash(key: Mapping[str, Any]) -> str:
+    return hashlib.sha256(_bls12381_key_bytes(key)).hexdigest()
+
+
 def _semantic_profile() -> Dict[str, Any]:
     return {
         "profile": "sora_taira_finality_inclusion_groth16_bn254",
@@ -199,6 +243,18 @@ def _semantic_profile() -> Dict[str, Any]:
             "circuit_commitment": UPPER(0xC1, 32),
             "witness_generator_commitment": UPPER(0xC2, 32),
             "public_signal_schema_hash": sccp._PUBLIC_SIGNAL_SCHEMA_HASH.hex().upper(),  # noqa: SLF001
+        },
+    }
+
+
+def _ton_semantic_profile() -> Dict[str, Any]:
+    return {
+        "profile": "sora_taira_finality_inclusion_groth16_bls12381",
+        "commitments": {
+            "version": 1,
+            "circuit_commitment": UPPER(0x95, 32),
+            "witness_generator_commitment": UPPER(0x96, 32),
+            "public_signal_schema_hash": sccp._BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH.hex().upper(),  # noqa: SLF001
         },
     }
 
@@ -236,6 +292,14 @@ def _outbound_policy() -> Dict[str, Any]:
     return {
         "version": 1,
         "semantic_profile": _semantic_profile(),
+        "sora_finality_anchor": _finality_anchor(),
+    }
+
+
+def _ton_outbound_policy() -> Dict[str, Any]:
+    return {
+        "version": 1,
+        "semantic_profile": _ton_semantic_profile(),
         "sora_finality_anchor": _finality_anchor(),
     }
 
@@ -368,12 +432,65 @@ def _route(
                 "route_address": route_address,
                 "route_code_hash": route_code_hash,
                 "taira_to_token_multiplier": 1_000_000_000,
+                "max_wrapped_supply": TEST_EVM_MAX_WRAPPED_SUPPLY,
             },
         },
         "settlement": {
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
             "custody_owner": AUTHORITY,
             "payload_amount_scale": 9,
+            "max_outstanding_liability": TEST_MAX_OUTSTANDING_LIABILITY,
+        },
+    }
+    _refresh_route_config_hash(route)
+    return route
+
+
+def _ton_route(
+    *, source: str = "ton-mainnet", activation: str = "staged"
+) -> Dict[str, Any]:
+    key = _bls12381_verifying_key()
+    deployment = {
+        "jetton_master_address": {"workchain": 0, "account": UPPER(0x81, 32)},
+        "jetton_master_code_hash": UPPER(0x91, 32),
+        "jetton_master_initial_data_hash": UPPER(0x89, 32),
+        "jetton_wallet_code_hash": UPPER(0x92, 32),
+        "route_address": {"workchain": 0, "account": UPPER(0x82, 32)},
+        "route_code_hash": UPPER(0x93, 32),
+        "route_initial_data_hash": UPPER(0x8A, 32),
+        "embedded_verifier_code_hash": UPPER(0x94, 32),
+        "verifier_circuit_hash": UPPER(0x95, 32),
+        "verifying_key": key,
+        "verifier_key_hash": _bls12381_key_hash(key).upper(),
+        "proof_profile_commitment": sccp._ton_proof_profile_commitment().hex().upper(),  # noqa: SLF001
+        "outbound_proof_policy": _ton_outbound_policy(),
+        "taira_to_token_multiplier": 1,
+        "max_wrapped_supply": TEST_MAX_OUTSTANDING_LIABILITY,
+    }
+    route = {
+        "lane_id": _lane(source),
+        "route_id": "taira_ton_xor",
+        "asset_key": "xor",
+        "revision": 1,
+        "activation": {"activation": activation, "direction": None},
+        "inbound_finality_cutoff": None,
+        "source_identity": {
+            "lane": _lane(source),
+            "emitter": {
+                "emitter": "ton",
+                "identity": {
+                    "address": copy.deepcopy(deployment["route_address"]),
+                    "code_hash": deployment["route_code_hash"],
+                    "route_config_hash": UPPER(0x99, 32),
+                },
+            },
+        },
+        "destination": {"family": "ton", "deployment": deployment},
+        "settlement": {
+            "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+            "custody_owner": AUTHORITY,
+            "payload_amount_scale": 9,
+            "max_outstanding_liability": TEST_MAX_OUTSTANDING_LIABILITY,
         },
     }
     _refresh_route_config_hash(route)
@@ -478,6 +595,64 @@ def _proof_request() -> Dict[str, Any]:
         "route_configuration_hash": PREFIX_HASH(0x63),
         "request_hash": PREFIX_HASH(0x64),
     }
+
+
+def _ton_proof_request() -> Dict[str, Any]:
+    key = _bls12381_verifying_key()
+    policy = _ton_outbound_policy()
+    semantic_hash, anchor_hash = _policy_hashes(policy)
+    request = {
+        "version": 1,
+        "backend": {"backend": "ton_groth16_bls12381_v1", "family": None},
+        "source_network": _network("sora-taira"),
+        "target_network": _network("ton-mainnet"),
+        "public_inputs": {
+            "version": 1,
+            "message_id": PREFIX_HASH(0x11),
+            "payload_hash": PREFIX_HASH(0x12),
+            "target_domain": 4,
+            "commitment_root": PREFIX_HASH(0x13),
+            "finality_height": "9",
+            "finality_block_hash": PREFIX_HASH(0x14),
+        },
+        "public_signals": {},
+        "verifying_key": key,
+        "verifier_key_hash": "0x" + _bls12381_key_hash(key),
+        "verifier_circuit_hash": "0x" + UPPER(0x95, 32).lower(),
+        "proof_profile_commitment": "0x"
+        + sccp._ton_proof_profile_commitment().hex(),  # noqa: SLF001
+        "semantic_proof_profile": policy["semantic_profile"],
+        "semantic_proof_profile_hash": "0x" + semantic_hash,
+        "sora_finality_anchor": policy["sora_finality_anchor"],
+        "sora_finality_anchor_hash": "0x" + anchor_hash,
+        "bundle_bytes": "0x0102",
+        "statement_hash": PREFIX_HASH(0x61),
+        "destination_binding_hash": PREFIX_HASH(0x62),
+        "route_configuration_hash": PREFIX_HASH(0x63),
+        "request_hash": PREFIX_HASH(0x64),
+    }
+    inputs = (
+        bytes.fromhex(request["public_inputs"]["message_id"][2:]),
+        bytes.fromhex(request["public_inputs"]["payload_hash"][2:]),
+        (4).to_bytes(32, "big"),
+        bytes.fromhex(request["public_inputs"]["commitment_root"][2:]),
+        (9).to_bytes(32, "big"),
+        bytes.fromhex(request["public_inputs"]["finality_block_hash"][2:]),
+        bytes(32),
+        bytes.fromhex(request["statement_hash"][2:]),
+        bytes.fromhex(request["destination_binding_hash"][2:]),
+        bytes.fromhex(request["route_configuration_hash"][2:]),
+        bytes.fromhex(request["sora_finality_anchor_hash"][2:]),
+    )
+    request["public_signals"] = {
+        field: "0x" + sccp._ton_public_signal_word(label, value).hex()  # noqa: SLF001
+        for field, label, value in zip(
+            sccp._BLS12381_PUBLIC_SIGNAL_FIELDS,  # noqa: SLF001
+            sccp._BLS12381_PUBLIC_SIGNAL_LABELS,  # noqa: SLF001
+            inputs,
+        )
+    }
+    return request
 
 
 def _recent(
@@ -594,7 +769,7 @@ class RecordingSession(requests.Session):
         return self.responses.pop(0)
 
 
-def test_closed_inventory_removes_solana_ton_and_nontransfer_payloads() -> None:
+def test_closed_inventory_exposes_ton_and_removes_solana_and_nontransfer_payloads() -> None:
     assert tuple(SCCP_NETWORK_PROFILES) == (
         "sora-taira",
         "ethereum-mainnet",
@@ -604,15 +779,21 @@ def test_closed_inventory_removes_solana_ton_and_nontransfer_payloads() -> None:
         "tron-mainnet",
         "tron-nile",
         "tron-shasta",
+        "ton-mainnet",
+        "ton-testnet",
     )
     assert all(profile["tag"] != 0 for profile in SCCP_NETWORK_PROFILES.values())
-    assert tuple(SCCP_CODEC_KEYS) == (1, 2, 5)
+    assert tuple(SCCP_CODEC_KEYS) == (1, 2, 5, 7)
+    assert SCCP_NETWORK_PROFILES["ton-mainnet"] == {
+        "profile": "ton-mainnet",
+        "tag": 14,
+        "domain": SCCP_DOMAIN_TON,
+        "sora": False,
+    }
     assert SCCP_PAYLOAD_KINDS == ("transfer",)
     for retired in (
         "SCCP_DOMAIN_SOL",
-        "SCCP_DOMAIN_TON",
         "SCCP_CODEC_SOLANA_PUBKEY32",
-        "SCCP_CODEC_TON_ACCOUNT36",
         "SCCP_CODEC_SORA_ASSET_ID",
         "normalize_sccp_proof_manifests",
         "normalize_sccp_source_adapter_engine_deployment",
@@ -628,10 +809,14 @@ def test_closed_codecs_accept_exact_bytes_and_reject_retired_or_textual_aliases(
     assert normalize_sccp_codec_value(SCCP_CODEC_CANONICAL_TEXT, AUTHORITY) == AUTHORITY.encode()
     assert normalize_sccp_codec_value(SCCP_CODEC_EVM_ADDRESS20, b"\x01" * 20) == b"\x01" * 20
     assert normalize_sccp_codec_value(SCCP_CODEC_TRON_ADDRESS21, b"\x41" + b"\x02" * 20)
+    assert normalize_sccp_codec_value(SCCP_CODEC_TON_ACCOUNT36, bytes(4) + b"\x03" * 32)
     for codec, value in (
         (3, b"\x01" * 32),
         (4, b"\x01" * 36),
         (6, b"\x01"),
+        (7, bytes(36)),
+        (7, b"\x00\x00\x00\x01" + b"\x01" * 32),
+        (7, b"\x01" * 35),
         (2, "0x" + "11" * 20),
         (2, b"\x00" * 20),
         (5, b"\x42" + b"\x01" * 20),
@@ -876,7 +1061,7 @@ def test_registry_validates_full_key_and_rejects_retired_or_aliased_routes() -> 
     with pytest.raises(ValueError, match="verifier_key_hash"):
         normalize_sccp_registry(wrong_key)
     retired = _registry()
-    retired["lanes"][0]["lane_id"]["source"] = {"network": "ton_mainnet", "profile": None}
+    retired["lanes"][0]["lane_id"]["source"] = {"network": "ton_devnet", "profile": None}
     with pytest.raises(ValueError, match="retired"):
         normalize_sccp_registry(retired)
     browser = _registry()
@@ -910,6 +1095,52 @@ def test_registry_validates_full_key_and_rejects_retired_or_aliased_routes() -> 
     ] = "n753" + AUTHORITY.removeprefix("sora")
     with pytest.raises(ValueError, match="exact canonical rendering"):
         normalize_sccp_registry(noncanonical_custody)
+
+
+def test_registry_requires_exact_positive_supply_and_liability_caps() -> None:
+    for route, source in (
+        (_route(), "bsc-mainnet"),
+        (_route(source="tron-mainnet"), "tron-mainnet"),
+        (_ton_route(), "ton-mainnet"),
+    ):
+        missing_supply = copy.deepcopy(route)
+        del missing_supply["destination"]["deployment"]["max_wrapped_supply"]
+        with pytest.raises(ValueError, match="max_wrapped_supply"):
+            normalize_sccp_registry(_registry([missing_supply], source=source))
+
+    missing_liability = _registry()
+    del missing_liability["lanes"][0]["routes"][0]["settlement"][
+        "max_outstanding_liability"
+    ]
+    with pytest.raises(ValueError, match="max_outstanding_liability"):
+        normalize_sccp_registry(missing_liability)
+
+    mismatched = _registry()
+    mismatched["lanes"][0]["routes"][0]["destination"]["deployment"][
+        "max_wrapped_supply"
+    ] += 1
+    with pytest.raises(ValueError, match="must equal settlement.max_outstanding_liability"):
+        normalize_sccp_registry(mismatched)
+
+    unsafe_liability = (1 << 64) + 1
+    lossless_route = _route()
+    lossless_route["settlement"]["max_outstanding_liability"] = unsafe_liability
+    lossless_route["destination"]["deployment"]["max_wrapped_supply"] = (
+        unsafe_liability
+        * lossless_route["destination"]["deployment"]["taira_to_token_multiplier"]
+    )
+    _refresh_route_config_hash(lossless_route)
+    parsed = parse_sccp_json_object(
+        json.dumps(_registry([lossless_route]), separators=(",", ":")),
+        "SCCP registry",
+    )
+    assert (
+        parsed["lanes"][0]["routes"][0]["settlement"][
+            "max_outstanding_liability"
+        ]
+        == unsafe_liability
+    )
+    assert len(normalize_sccp_registry(parsed).lanes) == 1
 
 
 @pytest.mark.parametrize(
@@ -947,13 +1178,13 @@ def test_registry_rejects_legacy_or_ambiguous_v2_finality_anchor(
             "bsc-mainnet",
             "0d3f2789f19af900584d24bab4148ac32ac1532e85748845646ca032e43c0757",
             "c96a33a74f1e4134a7d6d63cb2ee4eaffe7d2007d4189bddce6d39f5aa97bc5c",
-            "ddf6b59ee7dae1f134455eaa19b166f951af30188e1adc2cf9d68dd8734789c1",
+            "3dbb23c4f6659308b48114e68049674e5cfc0f1aa2a517ff6b64bf448834dc28",
         ),
         (
             "tron-nile",
             "929040304688aed6529341a8060ca669d6ace688eec98036e4c1d4a8f28eb564",
             "376a54dfc0288fd43fe696a5be9a898196fb2195bd33c21eca6cbedd022e17c4",
-            "8b5a7d81f6a8f4d25601d8bc34ab0237e666c8216d06feb4ec05bb00ac9ee255",
+            "c60b8fefb1e6a64da218b2cf30c0017ce97a57c6cdb09303030d38be1af6c29c",
         ),
     ),
 )
@@ -1044,6 +1275,42 @@ def test_registry_recomputes_binding_and_deployment_intermediaries(source: str) 
     assert verifier_route_hash != baseline_route_hash
     with pytest.raises(ValueError, match="source route_config_hash"):
         normalize_sccp_registry(_registry([changed_verifier], source=source))
+
+
+def test_ton_registry_binds_storage_roles_without_stateinit_fixed_points() -> None:
+    route = _ton_route()
+    assert len(normalize_sccp_registry(_registry([route], source="ton-mainnet")).lanes) == 1
+    baseline, baseline_route_hash = _parsed_destination_and_route_hash(route)
+
+    for field, byte in (
+        ("jetton_master_initial_data_hash", 0x87),
+        ("route_initial_data_hash", 0x88),
+    ):
+        changed = copy.deepcopy(route)
+        changed["destination"]["deployment"][field] = UPPER(byte, 32)
+        parsed, route_hash = _parsed_destination_and_route_hash(changed)
+        assert parsed.destination_binding_hash == baseline.destination_binding_hash
+        assert route_hash == baseline_route_hash
+
+    changed_code = copy.deepcopy(route)
+    changed_code["destination"]["deployment"]["jetton_master_code_hash"] = UPPER(0x86, 32)
+    parsed, route_hash = _parsed_destination_and_route_hash(changed_code)
+    assert parsed.destination_binding_hash != baseline.destination_binding_hash
+    assert route_hash != baseline_route_hash
+
+    aliased = copy.deepcopy(route)
+    aliased["destination"]["deployment"]["route_initial_data_hash"] = aliased[
+        "destination"
+    ]["deployment"]["jetton_master_initial_data_hash"]
+    with pytest.raises(ValueError, match="reuses"):
+        normalize_sccp_registry(_registry([aliased], source="ton-mainnet"))
+
+    source_alias = copy.deepcopy(route)
+    source_alias["source_identity"]["emitter"]["identity"]["address"] = copy.deepcopy(
+        source_alias["destination"]["deployment"]["jetton_master_address"]
+    )
+    with pytest.raises(ValueError, match="source emitter"):
+        normalize_sccp_registry(_registry([source_alias], source="ton-mainnet"))
 
 
 def test_registry_rejects_duplicate_lanes_revision_gaps_and_two_live_revisions() -> None:
@@ -1278,6 +1545,54 @@ def test_recent_links_are_exact_and_route_configuration_is_independent() -> None
             normalize_sccp_recent_messages({"items": [invalid_projection]})
 
 
+def test_recent_messages_accept_only_canonical_ton_account36_projection() -> None:
+    item = _recent()
+    item["target_profile"] = "ton-mainnet"
+    item["target_domain"] = 4
+    item["route_id"] = "taira_ton_xor"
+    transfer = item["payload_projection"]["Transfer"]
+    transfer["dest_domain"] = 4
+    transfer["route_id"]["CanonicalText"]["value"] = "taira_ton_xor"
+    transfer["recipient"] = {
+        "TonAccount36": {"workchain": 0, "account": "0x" + "93" * 32}
+    }
+    parsed = normalize_sccp_recent_messages({"items": [item]})
+    assert parsed.items[0]["payload_projection"]["Transfer"]["recipient"][
+        "TonAccount36"
+    ]["workchain"] == 0
+
+    transfer["recipient"]["TonAccount36"]["workchain"] = -1
+    with pytest.raises(ValueError, match="workchain"):
+        normalize_sccp_recent_messages({"items": [item]})
+    transfer["recipient"]["TonAccount36"]["workchain"] = 0
+    transfer["recipient"]["TonAccount36"]["account"] = "0x" + "00" * 32
+    with pytest.raises(ValueError, match="nonzero"):
+        normalize_sccp_recent_messages({"items": [item]})
+
+
+def test_ton_proof_request_authenticates_bls12381_profile_and_signals() -> None:
+    parsed = normalize_sccp_proof_request(_ton_proof_request())
+    assert parsed["backend"]["backend"] == "ton_groth16_bls12381_v1"
+    assert parsed["public_inputs"]["target_domain"] == SCCP_DOMAIN_TON
+
+    wrong_signal = _ton_proof_request()
+    wrong_signal["public_signals"]["message_id"] = PREFIX_HASH(0x99)
+    with pytest.raises(ValueError, match="exact request role"):
+        normalize_sccp_proof_request(wrong_signal)
+    uncompressed = _ton_proof_request()
+    uncompressed["verifying_key"]["alpha1"] = "00" * 48
+    with pytest.raises(ValueError, match="compressed BLS12-381"):
+        normalize_sccp_proof_request(uncompressed)
+    wrong_profile = _ton_proof_request()
+    wrong_profile["semantic_proof_profile"] = _semantic_profile()
+    with pytest.raises(ValueError, match="destination backend"):
+        normalize_sccp_proof_request(wrong_profile)
+    bn_with_ton_field = _proof_request()
+    bn_with_ton_field["public_signals"] = {}
+    with pytest.raises(ValueError, match="retired"):
+        normalize_sccp_proof_request(bn_with_ton_field)
+
+
 def test_bundle_and_proof_request_are_closed_and_query_free() -> None:
     assert normalize_sccp_message_bundle(_bundle())["version"] == 1
     assert normalize_sccp_proof_request(_proof_request())["public_inputs"]["target_domain"] == 2
@@ -1348,6 +1663,8 @@ def test_bundle_and_proof_request_are_closed_and_query_free() -> None:
 
 
 def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> None:
+    assert sccp._MAX_DESTINATION_ARTIFACT_BYTES == 16 * 1024 * 1024 + 128 * 1024  # noqa: SLF001
+    assert sccp._MAX_DESTINATION_ARTIFACT_BASE64_BYTES == 22_544_384  # noqa: SLF001
     transaction_payload_b64 = _b64(b"\x01\x02\x03\x04")
     proof = normalize_bridge_proof_submit_payload(
         {
@@ -1475,6 +1792,18 @@ def test_submit_artifacts_require_exact_schema_and_zero_alignment_padding() -> N
                 "authority": AUTHORITY,
                 "fee_payment": _fee_payment(),
                 "destination_proof_b64": _native_inbound_proof_b64(),
+            }
+        )
+    with pytest.raises(ValueError, match="schema hash"):
+        normalize_bridge_proof_submit_payload(
+            {
+                "authority": AUTHORITY,
+                "fee_payment": _fee_payment(),
+                "destination_proof_b64": _b64(
+                    _sccp_norito_frame(
+                        "iroha_sccp::SccpGroth16Bn254ProofArtifactV1"
+                    )
+                ),
             }
         )
     with pytest.raises(ValueError, match="schema hash"):
@@ -1666,8 +1995,13 @@ def test_torii_exact_endpoints_and_content_negotiation() -> None:
     assert all(call["stream"] is True for call in session.calls)
 
 
-def test_torii_sccp_norito_preflight_accepts_exact_type_padding() -> None:
-    frame = _sccp_norito_frame(PROOF_REQUEST_NORITO_TYPE)
+@pytest.mark.parametrize(
+    "type_name", [PROOF_REQUEST_NORITO_TYPE, TON_PROOF_REQUEST_NORITO_TYPE]
+)
+def test_torii_sccp_norito_preflight_accepts_closed_concrete_types(
+    type_name: str,
+) -> None:
+    frame = _sccp_norito_frame(type_name)
     response = StubResponse(raw=frame, content_type="application/x-norito")
     client = ToriiClient(
         "https://example.invalid", session=RecordingSession([response])
@@ -1696,6 +2030,7 @@ def test_torii_sccp_norito_preflight_rejects_malformed_and_cross_type_frames() -
         ("minor version", mutate(5, 1)),
         ("zero schema", canonical[:6] + b"\0" * 16 + canonical[22:]),
         ("wrong response type", _sccp_norito_frame(MESSAGE_BUNDLE_NORITO_TYPE)),
+        ("unknown response type", _sccp_norito_frame("example::UnknownProofRequestV1")),
         ("compressed payload", mutate(22, 1)),
         ("reserved flag", mutate(39, 0x08)),
         ("invalid bitset flags", mutate(39, 0x20)),

@@ -36,6 +36,8 @@ public sealed partial class ToriiClient : IDisposable
         CreateExactFeeResponseSerializerOptions();
     private static readonly byte[] FaucetClaimHashDomainV1 =
         "iroha:accounts:faucet:claim:v1\0"u8.ToArray();
+    private static readonly byte[] MultisigInstructionBoxSchemaHash =
+        Convert.FromHexString("862a7d77075d4d23ff6c1261db027811");
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
     private readonly bool ownsHttpClient;
@@ -1493,7 +1495,7 @@ public sealed partial class ToriiClient : IDisposable
             "/v1/contracts/call",
             normalizedRequest,
             cancellationToken: cancellationToken);
-        ValidateContractCallResponse(response, "contract call response");
+        ValidateContractCallResponse(response, normalizedRequest, "contract call response");
         return response;
     }
 
@@ -1601,7 +1603,10 @@ public sealed partial class ToriiClient : IDisposable
             "/v1/contracts/call/multisig/propose",
             normalizedRequest,
             cancellationToken: cancellationToken);
-        ValidateMultisigContractCallResponse(response, "multisig contract-call response");
+        ValidateMultisigContractCallProposeResponse(
+            response,
+            normalizedRequest,
+            "multisig contract-call response");
         return response;
     }
 
@@ -1616,7 +1621,10 @@ public sealed partial class ToriiClient : IDisposable
             "/v1/multisig/propose",
             normalizedRequest,
             cancellationToken: cancellationToken);
-        ValidateMultisigResponse(response, "multisig response");
+        ValidateMultisigProposeResponse(
+            response,
+            normalizedRequest,
+            "multisig response");
         return response;
     }
 
@@ -1630,7 +1638,10 @@ public sealed partial class ToriiClient : IDisposable
             "/v1/multisig/approve",
             normalizedRequest,
             cancellationToken: cancellationToken);
-        ValidateMultisigResponse(response, "multisig approval response");
+        ValidateMultisigApproveResponse(
+            response,
+            normalizedRequest,
+            "multisig approval response");
         return response;
     }
 
@@ -1640,10 +1651,15 @@ public sealed partial class ToriiClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(request);
         var normalizedRequest = NormalizeMultisigCancelRequest(request);
-        return await PostAsync<ToriiMultisigCancelRequest, ToriiMultisigCancelResponse>(
+        var response = await PostAsync<ToriiMultisigCancelRequest, ToriiMultisigCancelResponse>(
             "/v1/multisig/cancel",
             normalizedRequest,
             cancellationToken: cancellationToken);
+        ValidateMultisigCancelResponse(
+            response,
+            normalizedRequest,
+            "multisig cancel response");
+        return response;
     }
 
     public async Task<ToriiMultisigContractCallResponse> ApproveMultisigContractCallAsync(
@@ -1657,7 +1673,10 @@ public sealed partial class ToriiClient : IDisposable
             "/v1/contracts/call/multisig/approve",
             normalizedRequest,
             cancellationToken: cancellationToken);
-        ValidateMultisigContractCallResponse(response, "multisig contract-call response");
+        ValidateMultisigContractCallApproveResponse(
+            response,
+            normalizedRequest,
+            "multisig contract-call response");
         return response;
     }
 
@@ -3233,16 +3252,1196 @@ public sealed partial class ToriiClient : IDisposable
             : exception;
     }
 
-    private static void ValidateMultisigResponse(ToriiMultisigResponse response, string context)
+    private void ValidateMultisigProposeResponse(
+        ToriiMultisigResponse response,
+        ToriiMultisigProposeRequest request,
+        string context)
     {
         ToriiMultisigJson.ValidateMultisigResponse(response, context);
+        ValidateMultisigFeePayment(response.FeePayment, request.FeePayment, context);
+        ValidateResolvedMultisigAccount(
+            response.ResolvedMultisigAccountId,
+            request.MultisigAccountId,
+            context);
+
+        var proposalInstructions = request.Instructions!.ToList();
+        if (request.ValidationFeeInstructionIndex.HasValue)
+        {
+            proposalInstructions.Add(BuildValidationFeeMarkerInstruction(request));
+        }
+        var proposalHash = HashMultisigInstructions(proposalInstructions, context);
+        RequireMultisigProposalResponseHash(
+            response.ProposalId,
+            response.InstructionsHash,
+            proposalHash,
+            context);
+
+        var encoding = new TransactionEncodingContext(request.SignerAccountId);
+        var propose = BuildMultisigProposeInstruction(
+            response.ResolvedMultisigAccountId,
+            proposalInstructions);
+        var approve = BuildMultisigApproveInstruction(
+            response.ResolvedMultisigAccountId,
+            proposalHash);
+        var binding = new MultisigPayloadBinding(
+            [
+                encoding.EncodeInstructionsExecutable([propose]),
+                encoding.EncodeInstructionsExecutable([propose, approve]),
+            ],
+            encoding.EncodeMetadata(BuildMultisigProposeMetadata(request)),
+            null,
+            null,
+            response.ResolvedMultisigAccountId);
+        ValidateMultisigUnsignedPayloadBindings(
+            response.Submitted,
+            response.TransactionPayloadBase64,
+            response.SigningMessageBase64,
+            response.FeePayment,
+            response.CreationTimeMilliseconds,
+            request.SignerAccountId,
+            request.CreationTimeMilliseconds,
+            binding,
+            context);
     }
 
-    private static void ValidateMultisigContractCallResponse(
+    private void ValidateMultisigApproveResponse(
+        ToriiMultisigResponse response,
+        ToriiMultisigApproveRequest request,
+        string context)
+    {
+        ToriiMultisigJson.ValidateMultisigResponse(response, context);
+        ValidateMultisigFeePayment(response.FeePayment, request.FeePayment, context);
+        ValidateResolvedMultisigAccount(
+            response.ResolvedMultisigAccountId,
+            request.MultisigAccountId,
+            context);
+        var proposalHash = RequireSelectedMultisigProposalHash(
+            request.ProposalId,
+            request.InstructionsHash,
+            context);
+        RequireMultisigApprovalResponseHash(
+            response.ProposalId,
+            response.InstructionsHash,
+            proposalHash,
+            context);
+
+        var encoding = new TransactionEncodingContext(request.SignerAccountId);
+        var binding = ExactMultisigPayloadBinding(
+            encoding,
+            [BuildMultisigApproveInstruction(response.ResolvedMultisigAccountId, proposalHash)]);
+        ValidateMultisigUnsignedPayloadBindings(
+            response.Submitted,
+            response.TransactionPayloadBase64,
+            response.SigningMessageBase64,
+            response.FeePayment,
+            response.CreationTimeMilliseconds,
+            request.SignerAccountId,
+            request.CreationTimeMilliseconds,
+            binding,
+            context);
+    }
+
+    private void ValidateMultisigContractCallProposeResponse(
         ToriiMultisigContractCallResponse response,
+        ToriiMultisigContractCallProposeRequest request,
         string context)
     {
         ToriiMultisigJson.ValidateMultisigContractCallResponse(response, context);
+        ValidateMultisigFeePayment(response.FeePayment, request.FeePayment, context);
+        ValidateResolvedMultisigAccount(
+            response.ResolvedMultisigAccountId,
+            request.MultisigAccountId,
+            context);
+        var proposalHash = RequireMatchingMultisigResponseHashes(
+            response.ProposalId,
+            response.InstructionsHash,
+            context);
+        var binding = new MultisigPayloadBinding(
+            [],
+            null,
+            request,
+            proposalHash,
+            response.ResolvedMultisigAccountId);
+        ValidateMultisigUnsignedPayloadBindings(
+            response.Submitted,
+            response.TransactionPayloadBase64,
+            response.SigningMessageBase64,
+            response.FeePayment,
+            response.CreationTimeMilliseconds,
+            request.SignerAccountId,
+            request.CreationTimeMilliseconds,
+            binding,
+            context);
+    }
+
+    private void ValidateMultisigContractCallApproveResponse(
+        ToriiMultisigContractCallResponse response,
+        ToriiMultisigContractCallApproveRequest request,
+        string context)
+    {
+        ToriiMultisigJson.ValidateMultisigContractCallResponse(response, context);
+        ValidateMultisigFeePayment(response.FeePayment, request.FeePayment, context);
+        ValidateResolvedMultisigAccount(
+            response.ResolvedMultisigAccountId,
+            request.MultisigAccountId,
+            context);
+        var proposalHash = RequireSelectedMultisigProposalHash(
+            request.ProposalId,
+            request.InstructionsHash,
+            context);
+        RequireMultisigApprovalResponseHash(
+            response.ProposalId,
+            response.InstructionsHash,
+            proposalHash,
+            context);
+
+        var encoding = new TransactionEncodingContext(request.SignerAccountId);
+        var binding = ExactMultisigPayloadBinding(
+            encoding,
+            [BuildMultisigApproveInstruction(response.ResolvedMultisigAccountId, proposalHash)]);
+        ValidateMultisigUnsignedPayloadBindings(
+            response.Submitted,
+            response.TransactionPayloadBase64,
+            response.SigningMessageBase64,
+            response.FeePayment,
+            response.CreationTimeMilliseconds,
+            request.SignerAccountId,
+            request.CreationTimeMilliseconds,
+            binding,
+            context);
+    }
+
+    private void ValidateMultisigCancelResponse(
+        ToriiMultisigCancelResponse response,
+        ToriiMultisigCancelRequest request,
+        string context)
+    {
+        ValidateMultisigFeePayment(response.FeePayment, request.FeePayment, context);
+        ValidateResolvedMultisigAccount(
+            response.ResolvedMultisigAccountId,
+            request.MultisigAccountId,
+            context);
+        var targetHash = RequireSelectedMultisigProposalHash(
+            request.ProposalId,
+            request.InstructionsHash,
+            context);
+        if (!string.Equals(response.TargetProposalId, targetHash, StringComparison.Ordinal)
+            || !string.Equals(response.TargetInstructionsHash, targetHash, StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} target hashes do not match the exact requested proposal.");
+        }
+
+        var encoding = new TransactionEncodingContext(request.SignerAccountId);
+        var cancel = BuildMultisigCancelInstruction(
+            response.ResolvedMultisigAccountId,
+            targetHash);
+        var cancelInstructionBase64 = cancel.EncodeInstructionBoxBase64(request.SignerAccountId);
+        var cancelHash = HashMultisigInstructions([cancelInstructionBase64], context);
+        if (!string.Equals(response.CancelProposalId, cancelHash, StringComparison.Ordinal)
+            || !string.Equals(response.CancelInstructionsHash, cancelHash, StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} cancel hashes do not match the canonical cancel instruction.");
+        }
+
+        TransactionInstruction outerInstruction = response.Action switch
+        {
+            "PROPOSE" => BuildMultisigProposeInstruction(
+                response.ResolvedMultisigAccountId,
+                [cancelInstructionBase64]),
+            "APPROVE" => BuildMultisigApproveInstruction(
+                response.ResolvedMultisigAccountId,
+                cancelHash),
+            _ => throw new JsonException(
+                $"{context}.action must be exactly `PROPOSE` or `APPROVE`."),
+        };
+        var binding = ExactMultisigPayloadBinding(encoding, [outerInstruction]);
+        ValidateMultisigUnsignedPayloadBindings(
+            response.Submitted,
+            response.TransactionPayloadBase64,
+            response.SigningMessageBase64,
+            response.FeePayment,
+            response.CreationTimeMilliseconds,
+            request.SignerAccountId,
+            request.CreationTimeMilliseconds,
+            binding,
+            context);
+    }
+
+    private static void ValidateMultisigFeePayment(
+        FeePaymentIntent? feePayment,
+        FeePaymentIntent expectedFeePayment,
+        string context)
+    {
+        if (feePayment is null)
+        {
+            throw new JsonException($"{context}.fee_payment must not be null.");
+        }
+        if (!expectedFeePayment.HasSamePayerAndGasBound(feePayment))
+        {
+            throw new JsonException(
+                $"{context}.fee_payment changed the requested payer, sponsor revision, or gas bound.");
+        }
+    }
+
+    private void ValidateMultisigUnsignedPayloadBindings(
+        bool submitted,
+        string? transactionPayloadBase64,
+        string? signingMessageBase64,
+        FeePaymentIntent responseFeePayment,
+        ulong? responseCreationTimeMilliseconds,
+        string expectedSignerAccountId,
+        ulong? expectedCreationTimeMilliseconds,
+        MultisigPayloadBinding payloadBinding,
+        string context)
+    {
+        if (expectedCreationTimeMilliseconds.HasValue
+            && responseCreationTimeMilliseconds != expectedCreationTimeMilliseconds)
+        {
+            throw new JsonException(
+                $"{context}.creation_time_ms is not bound to the request.");
+        }
+        if (submitted)
+        {
+            return;
+        }
+        var expectedNetworkId = Options.LocalSigningContext?.NetworkId
+            ?? throw new JsonException(
+                $"{context} cannot trust an unsigned transaction without ToriiClientOptions.LocalSigningContext.");
+        if (responseCreationTimeMilliseconds is null or 0)
+        {
+            throw new JsonException(
+                $"{context}.creation_time_ms must be positive for an unsigned response.");
+        }
+
+        try
+        {
+            var payload = Convert.FromBase64String(
+                transactionPayloadBase64
+                    ?? throw new JsonException(
+                        $"{context}.transaction_payload_b64 must not be null for an unsigned response."));
+            if (!string.Equals(
+                    Convert.ToBase64String(payload),
+                    transactionPayloadBase64,
+                    StringComparison.Ordinal))
+            {
+                throw new JsonException(
+                    $"{context}.transaction_payload_b64 must be canonical base64 text.");
+            }
+            var signingMessage = Convert.FromBase64String(
+                signingMessageBase64
+                    ?? throw new JsonException(
+                        $"{context}.signing_message_b64 must not be null for an unsigned response."));
+            if (!string.Equals(
+                    Convert.ToBase64String(signingMessage),
+                    signingMessageBase64,
+                    StringComparison.Ordinal)
+                || signingMessage.Length != IrohaHash.Length
+                || !signingMessage.AsSpan().SequenceEqual(IrohaHash.Hash(payload)))
+            {
+                throw new JsonException(
+                    $"{context}.signing_message_b64 must be the exact TransactionPayload hash.");
+            }
+            var reader = new CanonicalNoritoReader(
+                payload,
+                $"{context} transaction payload",
+                nameof(transactionPayloadBase64));
+            var networkDomain = reader.ReadField("domain");
+            var authority = reader.ReadField("authority");
+            var creationTime = reader.ReadField("creation_time_ms");
+            var executable = reader.ReadField("executable");
+            var timeToLive = reader.ReadField("time_to_live_ms");
+            var nonce = reader.ReadField("nonce");
+            var feePayment = reader.ReadField("fee_payment");
+            var admissionIntent = reader.ReadField("admission_intent");
+            var metadata = reader.ReadField("metadata");
+            var attachments = reader.ReadField("attachments");
+            reader.RequireEnd();
+
+            var encoding = new TransactionEncodingContext(expectedSignerAccountId);
+            ValidateTransactionEnvelopeFields(
+                networkDomain,
+                timeToLive,
+                nonce,
+                admissionIntent,
+                attachments,
+                expectedNetworkId,
+                TransactionBuilder.DefaultTimeToLiveMilliseconds,
+                encoding,
+                context);
+            if (!authority.SequenceEqual(encoding.EncodeAccountId(expectedSignerAccountId)))
+            {
+                throw new JsonException(
+                    $"{context} transaction authority does not match the requested signer.");
+            }
+            if (!feePayment.SequenceEqual(encoding.EncodeFeePaymentIntent(responseFeePayment)))
+            {
+                throw new JsonException(
+                    $"{context}.fee_payment does not match the exact transaction payload.");
+            }
+            if (creationTime.Length != sizeof(ulong)
+                || responseCreationTimeMilliseconds
+                    != BinaryPrimitives.ReadUInt64LittleEndian(creationTime))
+            {
+                throw new JsonException(
+                    $"{context}.creation_time_ms does not match the exact transaction payload.");
+            }
+            ValidateMultisigPayloadIntent(
+                executable,
+                metadata,
+                payloadBinding,
+                context);
+        }
+        catch (Exception error) when (error is ArgumentException or FormatException)
+        {
+            throw new JsonException(
+                $"{context}.transaction_payload_b64 must contain exactly one canonical ten-field TransactionPayload.",
+                error);
+        }
+    }
+
+    private static MultisigPayloadBinding ExactMultisigPayloadBinding(
+        TransactionEncodingContext encoding,
+        IReadOnlyList<TransactionInstruction> instructions)
+    {
+        return new MultisigPayloadBinding(
+            [encoding.EncodeInstructionsExecutable(instructions)],
+            encoding.EncodeEmptyMetadata(),
+            null,
+            null,
+            null);
+    }
+
+    private static void ValidateTransactionEnvelopeFields(
+        ReadOnlySpan<byte> networkDomain,
+        ReadOnlySpan<byte> timeToLive,
+        ReadOnlySpan<byte> nonce,
+        ReadOnlySpan<byte> admissionIntent,
+        ReadOnlySpan<byte> attachments,
+        NetworkId expectedNetworkId,
+        ulong expectedTimeToLiveMilliseconds,
+        TransactionEncodingContext encoding,
+        string context)
+    {
+        var network = new CanonicalNoritoReader(
+            networkDomain,
+            $"{context} network domain",
+            nameof(networkDomain));
+        if (network.ReadUInt32LittleEndian("variant") != 0)
+        {
+            throw new JsonException($"{context} transaction network domain is not canonical.");
+        }
+        var networkHash = network.ReadField("network_hash");
+        network.RequireEnd();
+        if (networkHash.Length != NetworkId.ByteLength
+            || (networkHash[^1] & 1) == 0)
+        {
+            throw new JsonException($"{context} transaction network hash is not canonical.");
+        }
+        if (!networkDomain.SequenceEqual(encoding.EncodeNetworkDomain(expectedNetworkId)))
+        {
+            throw new JsonException($"{context} transaction targets another network.");
+        }
+
+        var ttl = new CanonicalNoritoReader(
+            timeToLive,
+            $"{context} transaction TTL",
+            nameof(timeToLive));
+        if (ttl.ReadByte("tag") != 1)
+        {
+            throw new JsonException($"{context} transaction TTL must be present.");
+        }
+        var ttlValue = ttl.ReadField("value");
+        ttl.RequireEnd();
+        if (ttlValue.Length != sizeof(ulong)
+            || BinaryPrimitives.ReadUInt64LittleEndian(ttlValue)
+                != expectedTimeToLiveMilliseconds)
+        {
+            throw new JsonException($"{context} transaction TTL differs from the exact request.");
+        }
+        if (!nonce.SequenceEqual(new byte[] { 0 })
+            || admissionIntent.Length != sizeof(uint)
+            || BinaryPrimitives.ReadUInt32LittleEndian(admissionIntent)
+                != (uint)TransactionAdmissionIntent.Ordinary
+            || !attachments.SequenceEqual(new byte[] { 0 }))
+        {
+            throw new JsonException(
+                $"{context} transaction nonce, admission intent, or attachments were substituted.");
+        }
+    }
+
+    private static void ValidateResolvedMultisigAccount(
+        string resolvedAccountId,
+        string? requestedAccountId,
+        string context)
+    {
+        if (requestedAccountId is not null
+            && !string.Equals(resolvedAccountId, requestedAccountId, StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context}.resolved_multisig_account_id does not match the requested account.");
+        }
+    }
+
+    private static string RequireSelectedMultisigProposalHash(
+        string? proposalId,
+        string? instructionsHash,
+        string context)
+    {
+        if (proposalId is not null
+            && instructionsHash is not null
+            && !string.Equals(proposalId, instructionsHash, StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} request proposal_id and instructions_hash select different proposals.");
+        }
+        return proposalId
+            ?? instructionsHash
+            ?? throw new JsonException($"{context} request does not select a proposal.");
+    }
+
+    private static void RequireMultisigProposalResponseHash(
+        string? proposalId,
+        string? instructionsHash,
+        string expectedHash,
+        string context)
+    {
+        if (!string.Equals(proposalId, expectedHash, StringComparison.Ordinal)
+            || !string.Equals(instructionsHash, expectedHash, StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} proposal hash does not match the exact requested instructions and validation-fee marker.");
+        }
+    }
+
+    private static void RequireMultisigApprovalResponseHash(
+        string? proposalId,
+        string? instructionsHash,
+        string expectedHash,
+        string context)
+    {
+        if (!string.Equals(instructionsHash, expectedHash, StringComparison.Ordinal)
+            || proposalId is not null
+                && !string.Equals(proposalId, expectedHash, StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} proposal hash does not match the exact requested proposal.");
+        }
+    }
+
+    private static string RequireMatchingMultisigResponseHashes(
+        string? proposalId,
+        string? instructionsHash,
+        string context)
+    {
+        if (proposalId is null
+            || !string.Equals(proposalId, instructionsHash, StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context}.proposal_id and instructions_hash must identify the same proposal.");
+        }
+        return proposalId;
+    }
+
+    private static IReadOnlyDictionary<string, JsonNode?> BuildMultisigProposeMetadata(
+        ToriiMultisigProposeRequest request)
+    {
+        var metadata = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
+        if (request.ValidationFeePolicyVersion.HasValue)
+        {
+            metadata["validation_fee_policy_version"] = JsonValue.Create(
+                request.ValidationFeePolicyVersion.Value);
+            metadata["validation_fee_policy_hash"] = JsonValue.Create(
+                request.ValidationFeePolicyHash!);
+            if (request.ValidationFeeHijiriFeeQuoteHash is not null)
+            {
+                metadata["validation_fee_hijiri_fee_quote_hash"] = JsonValue.Create(
+                    request.ValidationFeeHijiriFeeQuoteHash);
+            }
+            if (request.ValidationFeeInstructionIndex.HasValue)
+            {
+                metadata["validation_fee_instruction_index"] = JsonValue.Create(
+                    request.ValidationFeeInstructionIndex.Value);
+            }
+            if (request.ValidationFeeTransferEntryIndex.HasValue)
+            {
+                metadata["validation_fee_transfer_entry_index"] = JsonValue.Create(
+                    request.ValidationFeeTransferEntryIndex.Value);
+            }
+        }
+        return metadata;
+    }
+
+    private static string BuildValidationFeeMarkerInstruction(
+        ToriiMultisigProposeRequest request)
+    {
+        var message = string.Create(
+            CultureInfo.InvariantCulture,
+            $"iroha:validation_fee:multisig:v1:{request.ValidationFeePolicyVersion!.Value}:{request.ValidationFeePolicyHash}:{request.ValidationFeeHijiriFeeQuoteHash ?? "-"}:{request.ValidationFeeInstructionIndex!.Value}:{request.ValidationFeeTransferEntryIndex?.ToString(CultureInfo.InvariantCulture) ?? "-"}");
+        return new MultisigValidationFeeMarkerInstruction(message)
+            .EncodeInstructionBoxBase64(request.SignerAccountId);
+    }
+
+    private static TransactionInstruction BuildMultisigProposeInstruction(
+        string accountId,
+        IReadOnlyList<string> instructions)
+    {
+        var encodedInstructions = new JsonArray();
+        foreach (var instruction in instructions)
+        {
+            encodedInstructions.Add(instruction);
+        }
+        return new MultisigCustomInstruction(new JsonObject
+        {
+            ["Propose"] = new JsonObject
+            {
+                ["account"] = accountId,
+                ["instructions"] = encodedInstructions,
+                ["transaction_ttl_ms"] = null,
+            },
+        });
+    }
+
+    private static TransactionInstruction BuildMultisigApproveInstruction(
+        string accountId,
+        string instructionsHash)
+    {
+        return new MultisigCustomInstruction(new JsonObject
+        {
+            ["Approve"] = new JsonObject
+            {
+                ["account"] = accountId,
+                ["instructions_hash"] = FormatNoritoHashLiteral(instructionsHash),
+            },
+        });
+    }
+
+    private static TransactionInstruction BuildMultisigCancelInstruction(
+        string accountId,
+        string instructionsHash)
+    {
+        return new MultisigCustomInstruction(new JsonObject
+        {
+            ["Cancel"] = new JsonObject
+            {
+                ["account"] = accountId,
+                ["instructions_hash"] = FormatNoritoHashLiteral(instructionsHash),
+            },
+        });
+    }
+
+    private static string HashMultisigInstructions(
+        IReadOnlyList<string> instructions,
+        string context)
+    {
+        var sequence = new CanonicalNoritoWriter();
+        sequence.WriteSequenceLength(checked((ulong)instructions.Count));
+        for (var index = 0; index < instructions.Count; index++)
+        {
+            var archive = Convert.FromBase64String(instructions[index]);
+            var (payload, flags) = NoritoCodec.DecodeWithSchemaHash(
+                MultisigInstructionBoxSchemaHash,
+                archive);
+            if (flags != NoritoCodec.CanonicalLayoutFlags
+                || !archive.AsSpan().SequenceEqual(NoritoCodec.EncodeWithSchemaHash(
+                    MultisigInstructionBoxSchemaHash,
+                    payload,
+                    flags)))
+            {
+                throw new JsonException(
+                    $"{context} request instruction {index} is not one canonical InstructionBox archive.");
+            }
+            sequence.WriteField(payload);
+        }
+        return Convert.ToHexString(IrohaHash.Hash(sequence.ToArray())).ToLowerInvariant();
+    }
+
+    private static string FormatNoritoHashLiteral(string lowercaseHashHex)
+    {
+        var body = lowercaseHashHex.ToUpperInvariant();
+        ushort checksum = 0xffff;
+        foreach (var value in Encoding.ASCII.GetBytes($"hash:{body}"))
+        {
+            checksum ^= (ushort)(value << 8);
+            for (var bit = 0; bit < 8; bit++)
+            {
+                checksum = (ushort)((checksum & 0x8000) != 0
+                    ? (checksum << 1) ^ 0x1021
+                    : checksum << 1);
+            }
+        }
+        return $"hash:{body}#{checksum:X4}";
+    }
+
+    private static void ValidateMultisigPayloadIntent(
+        ReadOnlySpan<byte> executable,
+        ReadOnlySpan<byte> metadata,
+        MultisigPayloadBinding binding,
+        string context)
+    {
+        if (binding.ContractCallRequest is not null)
+        {
+            ValidateMultisigContractCallPayloadIntent(
+                executable,
+                metadata,
+                binding,
+                context);
+            return;
+        }
+        var executableMatches = false;
+        foreach (var expected in binding.AllowedExecutables)
+        {
+            if (executable.SequenceEqual(expected))
+            {
+                executableMatches = true;
+                break;
+            }
+        }
+        if (!executableMatches)
+        {
+            throw new JsonException(
+                $"{context} transaction executable does not match the exact requested multisig action.");
+        }
+        if (binding.ExactMetadata is null
+            || !metadata.SequenceEqual(binding.ExactMetadata))
+        {
+            throw new JsonException(
+                $"{context} transaction metadata does not match the exact request binding.");
+        }
+    }
+
+    private static void ValidateMultisigContractCallPayloadIntent(
+        ReadOnlySpan<byte> executable,
+        ReadOnlySpan<byte> metadata,
+        MultisigPayloadBinding binding,
+        string context)
+    {
+        var request = binding.ContractCallRequest!;
+        var draftIntent = request.DraftIntent
+            ?? throw new JsonException(
+                $"{context} requires an exact caller-trusted DraftIntent before its unsigned draft can be trusted.");
+        var outerInstructions = DecodeExecutableInstructions(executable, context);
+        if (outerInstructions.Count is < 1 or > 2)
+        {
+            throw new JsonException(
+                $"{context} contract-call proposal executable must contain only propose and optional approve instructions.");
+        }
+
+        var proposePayload = DecodeMultisigCustomInstruction(
+            outerInstructions[0],
+            request.SignerAccountId,
+            context);
+        var propose = RequireExactJsonObject(
+            RequireExactJsonObject(proposePayload, ["Propose"], context)["Propose"],
+            ["account", "instructions", "transaction_ttl_ms"],
+            context);
+        if (!string.Equals(
+                propose["account"]?.GetValue<string>(),
+                binding.ResolvedMultisigAccountId,
+                StringComparison.Ordinal)
+            || propose["transaction_ttl_ms"] is not null)
+        {
+            throw new JsonException(
+                $"{context} contract-call proposal changed the resolved account or transaction TTL.");
+        }
+        if (propose["instructions"] is not JsonArray nestedArray || nestedArray.Count != 2)
+        {
+            throw new JsonException(
+                $"{context} contract-call proposal must contain its exact register/execute instruction pair.");
+        }
+        var nestedInstructions = nestedArray
+            .Select((value, index) => value?.GetValue<string>()
+                ?? throw new JsonException(
+                    $"{context} contract-call proposal instruction {index} must be base64 text."))
+            .ToArray();
+        var proposalHash = HashMultisigInstructions(nestedInstructions, context);
+        if (!string.Equals(
+                proposalHash,
+                binding.ContractProposalHash,
+                StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} proposal hash does not match the exact contract-call instruction pair.");
+        }
+
+        var register = DecodeInstructionArchive(nestedInstructions[0], context);
+        var execute = DecodeInstructionArchive(nestedInstructions[1], context);
+        if (!string.Equals(register.WireId, "iroha.register", StringComparison.Ordinal)
+            || !string.Equals(execute.WireId, "iroha.execute_trigger", StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} contract-call proposal substituted its register/execute instruction pair.");
+        }
+        var (triggerId, arguments) = DecodeExecuteTrigger(execute, context);
+        var expectedArguments = request.Payload ?? new JsonObject();
+        if (!JsonNode.DeepEquals(arguments, expectedArguments))
+        {
+            throw new JsonException(
+                $"{context} contract-call proposal arguments do not match the exact request payload.");
+        }
+
+        var encoding = new TransactionEncodingContext(request.SignerAccountId);
+        if (!metadata.SequenceEqual(encoding.EncodeMetadata(draftIntent.Metadata)))
+        {
+            throw new JsonException(
+                $"{context} transaction metadata differs from the exact caller-trusted DraftIntent.");
+        }
+        ValidateContractCallTriggerRegistration(
+            register,
+            triggerId,
+            metadata,
+            binding,
+            draftIntent.Invocation,
+            context);
+
+        if (outerInstructions.Count == 2)
+        {
+            var expectedApprove = (MultisigCustomInstruction)BuildMultisigApproveInstruction(
+                binding.ResolvedMultisigAccountId!,
+                proposalHash);
+            var approvePayload = DecodeMultisigCustomInstruction(
+                outerInstructions[1],
+                request.SignerAccountId,
+                context);
+            if (!JsonNode.DeepEquals(approvePayload, expectedApprove.Payload))
+            {
+                throw new JsonException(
+                    $"{context} contract-call proposal appended an approval for another proposal.");
+            }
+        }
+    }
+
+    private static IReadOnlyList<EncodedInstruction> DecodeExecutableInstructions(
+        ReadOnlySpan<byte> executable,
+        string context)
+    {
+        var executableReader = new CanonicalNoritoReader(
+            executable,
+            $"{context} executable",
+            nameof(executable));
+        if (executableReader.ReadUInt32LittleEndian("variant") != 0)
+        {
+            throw new JsonException(
+                $"{context} multisig transaction executable must be an instruction list.");
+        }
+        var sequenceBytes = executableReader.ReadField("instructions");
+        executableReader.RequireEnd();
+        var sequence = new CanonicalNoritoReader(
+            sequenceBytes,
+            $"{context} executable instructions",
+            nameof(executable));
+        var count = sequence.ReadSequenceLength("count");
+        if (count > 16)
+        {
+            throw new JsonException($"{context} executable instruction count is invalid.");
+        }
+        var instructions = new List<EncodedInstruction>(checked((int)count));
+        for (var index = 0; index < checked((int)count); index++)
+        {
+            instructions.Add(DecodeInstructionPair(
+                sequence.ReadField($"instruction[{index}]"),
+                context));
+        }
+        sequence.RequireEnd();
+        return instructions;
+    }
+
+    private static EncodedInstruction DecodeInstructionArchive(
+        string encoded,
+        string context)
+    {
+        var archive = Convert.FromBase64String(encoded);
+        if (!string.Equals(Convert.ToBase64String(archive), encoded, StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} nested instruction must use canonical base64 text.");
+        }
+        var (payload, flags) = NoritoCodec.DecodeWithSchemaHash(
+            MultisigInstructionBoxSchemaHash,
+            archive);
+        if (flags != NoritoCodec.CanonicalLayoutFlags
+            || !archive.AsSpan().SequenceEqual(NoritoCodec.EncodeWithSchemaHash(
+                MultisigInstructionBoxSchemaHash,
+                payload,
+                flags)))
+        {
+            throw new JsonException(
+                $"{context} nested instruction is not a canonical InstructionBox archive.");
+        }
+        return DecodeInstructionPair(payload, context);
+    }
+
+    private static EncodedInstruction DecodeInstructionPair(
+        ReadOnlySpan<byte> pair,
+        string context)
+    {
+        var pairReader = new CanonicalNoritoReader(
+            pair,
+            $"{context} instruction",
+            nameof(pair));
+        var wireId = DecodeCanonicalNoritoString(
+            pairReader.ReadField("wire_id"),
+            context);
+        var payloadVector = pairReader.ReadField("framed_payload");
+        pairReader.RequireEnd();
+        var vectorReader = new CanonicalNoritoReader(
+            payloadVector,
+            $"{context} instruction payload",
+            nameof(pair));
+        var length = vectorReader.ReadSequenceLength("length");
+        if (length > int.MaxValue || length != checked((ulong)vectorReader.Remaining))
+        {
+            throw new JsonException($"{context} instruction payload length is invalid.");
+        }
+        var framedPayload = vectorReader.ReadExact(checked((int)length), "bytes").ToArray();
+        vectorReader.RequireEnd();
+        return new EncodedInstruction(wireId, framedPayload);
+    }
+
+    private static JsonNode DecodeMultisigCustomInstruction(
+        EncodedInstruction instruction,
+        string encodingAccountId,
+        string context)
+    {
+        if (!string.Equals(instruction.WireId, "iroha.custom", StringComparison.Ordinal))
+        {
+            throw new JsonException($"{context} expected a canonical multisig custom instruction.");
+        }
+        var payload = DecodeCanonicalNoritoFrame(
+            "iroha_data_model::isi::transparent::CustomInstruction",
+            instruction.FramedPayload,
+            context);
+        var reader = new CanonicalNoritoReader(
+            payload,
+            $"{context} custom instruction",
+            nameof(instruction));
+        var jsonBytes = reader.ReadField("payload");
+        reader.RequireEnd();
+        var jsonText = DecodeCanonicalNoritoString(jsonBytes, context);
+        var value = JsonNode.Parse(jsonText)
+            ?? throw new JsonException($"{context} custom instruction JSON must not be null.");
+        var canonical = new MultisigCustomInstruction(value)
+            .EncodeFramedPayload(new TransactionEncodingContext(encodingAccountId));
+        if (!instruction.FramedPayload.AsSpan().SequenceEqual(canonical))
+        {
+            throw new JsonException(
+                $"{context} custom instruction payload is not canonical JSON.");
+        }
+        return value;
+    }
+
+    private static byte[] DecodeCanonicalNoritoFrame(
+        string typeName,
+        ReadOnlySpan<byte> frame,
+        string context)
+    {
+        var (payload, flags) = NoritoCodec.Decode(typeName, frame);
+        if (flags != NoritoCodec.CanonicalLayoutFlags
+            || !frame.SequenceEqual(NoritoCodec.Encode(typeName, payload, flags)))
+        {
+            throw new JsonException($"{context} contains a noncanonical Norito frame.");
+        }
+        return payload;
+    }
+
+    private static string DecodeCanonicalNoritoString(
+        ReadOnlySpan<byte> encoded,
+        string context)
+    {
+        var reader = new CanonicalNoritoReader(
+            encoded,
+            $"{context} string",
+            nameof(encoded));
+        var length = reader.ReadCompactLength("length");
+        if (length > int.MaxValue || length != checked((ulong)reader.Remaining))
+        {
+            throw new JsonException($"{context} contains an invalid Norito string length.");
+        }
+        var bytes = reader.ReadExact(checked((int)length), "text");
+        reader.RequireEnd();
+        return StrictUtf8.GetString(bytes);
+    }
+
+    private static JsonObject RequireExactJsonObject(
+        JsonNode? value,
+        IReadOnlyCollection<string> expectedKeys,
+        string context)
+    {
+        if (value is not JsonObject obj
+            || obj.Count != expectedKeys.Count
+            || obj.Any(pair => !expectedKeys.Contains(pair.Key, StringComparer.Ordinal)))
+        {
+            throw new JsonException($"{context} multisig custom instruction has an unexpected shape.");
+        }
+        return obj;
+    }
+
+    private static (string TriggerId, JsonNode? Arguments) DecodeExecuteTrigger(
+        EncodedInstruction instruction,
+        string context)
+    {
+        var payload = DecodeCanonicalNoritoFrame(
+            "iroha_data_model::isi::transparent::ExecuteTrigger",
+            instruction.FramedPayload,
+            context);
+        var reader = new CanonicalNoritoReader(
+            payload,
+            $"{context} execute-trigger instruction",
+            nameof(instruction));
+        var triggerId = DecodeCanonicalNoritoString(
+            reader.ReadField("trigger"),
+            context);
+        var argumentsText = DecodeCanonicalNoritoString(
+            reader.ReadField("args"),
+            context);
+        reader.RequireEnd();
+        return (triggerId, JsonNode.Parse(argumentsText));
+    }
+
+    private static void ValidateContractCallTriggerRegistration(
+        EncodedInstruction instruction,
+        string expectedTriggerId,
+        ReadOnlySpan<byte> expectedMetadata,
+        MultisigPayloadBinding binding,
+        TransactionContractInvocation expectedInvocation,
+        string context)
+    {
+        var payload = DecodeCanonicalNoritoFrame(
+            "iroha_data_model::isi::register::RegisterBox",
+            instruction.FramedPayload,
+            context);
+        var registerBox = new CanonicalNoritoReader(
+            payload,
+            $"{context} register instruction",
+            nameof(instruction));
+        if (registerBox.ReadUInt32LittleEndian("variant") != 6)
+        {
+            throw new JsonException($"{context} contract-call proposal did not register a trigger.");
+        }
+        var registerPayload = registerBox.ReadField("trigger");
+        registerBox.RequireEnd();
+        var register = new CanonicalNoritoReader(
+            registerPayload,
+            $"{context} trigger registration",
+            nameof(instruction));
+        var triggerPayload = register.ReadField("object");
+        register.RequireEnd();
+        var trigger = new CanonicalNoritoReader(
+            triggerPayload,
+            $"{context} trigger",
+            nameof(instruction));
+        var triggerId = DecodeCanonicalNoritoString(trigger.ReadField("id"), context);
+        var actionPayload = trigger.ReadField("action");
+        trigger.RequireEnd();
+        if (!string.Equals(triggerId, expectedTriggerId, StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} registered and executed different contract-call triggers.");
+        }
+
+        var action = new CanonicalNoritoReader(
+            actionPayload,
+            $"{context} trigger action",
+            nameof(instruction));
+        var executable = action.ReadField("executable");
+        var repeats = action.ReadField("repeats");
+        var authority = action.ReadField("authority");
+        var filter = action.ReadField("filter");
+        var retryPolicy = action.ReadField("retry_policy");
+        var metadata = action.ReadField("metadata");
+        action.RequireEnd();
+
+        var encoding = new TransactionEncodingContext(binding.ContractCallRequest!.SignerAccountId);
+        if (!authority.SequenceEqual(encoding.EncodeAccountId(binding.ResolvedMultisigAccountId!))
+            || !metadata.SequenceEqual(expectedMetadata)
+            || !retryPolicy.SequenceEqual(new byte[] { 0 }))
+        {
+            throw new JsonException(
+                $"{context} contract-call trigger authority, metadata, or retry policy was substituted.");
+        }
+        ValidateExactlyOnceRepeats(repeats, context);
+        ValidateExecuteTriggerFilter(
+            filter,
+            expectedTriggerId,
+            encoding.EncodeAccountId(binding.ResolvedMultisigAccountId!),
+            context);
+        ValidateContractInvocation(
+            executable,
+            expectedInvocation,
+            context);
+    }
+
+    private static void ValidateExactlyOnceRepeats(ReadOnlySpan<byte> repeats, string context)
+    {
+        var reader = new CanonicalNoritoReader(repeats, $"{context} repeats", nameof(repeats));
+        if (reader.ReadUInt32LittleEndian("variant") != 1)
+        {
+            throw new JsonException($"{context} contract-call trigger must execute exactly once.");
+        }
+        var count = reader.ReadField("count");
+        reader.RequireEnd();
+        if (count.Length != sizeof(uint)
+            || BinaryPrimitives.ReadUInt32LittleEndian(count) != 1)
+        {
+            throw new JsonException($"{context} contract-call trigger must execute exactly once.");
+        }
+    }
+
+    private static void ValidateExecuteTriggerFilter(
+        ReadOnlySpan<byte> filter,
+        string expectedTriggerId,
+        ReadOnlySpan<byte> expectedAuthority,
+        string context)
+    {
+        var box = new CanonicalNoritoReader(filter, $"{context} trigger filter", nameof(filter));
+        if (box.ReadUInt32LittleEndian("variant") != 3)
+        {
+            throw new JsonException($"{context} contract-call trigger uses the wrong event filter.");
+        }
+        var payload = box.ReadField("execute_trigger");
+        box.RequireEnd();
+        var reader = new CanonicalNoritoReader(
+            payload,
+            $"{context} execute-trigger filter",
+            nameof(filter));
+        var triggerId = ReadRequiredNoritoOption(reader.ReadField("trigger_id"), context);
+        var authority = ReadRequiredNoritoOption(reader.ReadField("authority"), context);
+        reader.RequireEnd();
+        if (!string.Equals(
+                DecodeCanonicalNoritoString(triggerId, context),
+                expectedTriggerId,
+                StringComparison.Ordinal)
+            || !authority.AsSpan().SequenceEqual(expectedAuthority))
+        {
+            throw new JsonException(
+                $"{context} contract-call trigger filter was substituted.");
+        }
+    }
+
+    private static byte[] ReadRequiredNoritoOption(ReadOnlySpan<byte> option, string context)
+    {
+        var reader = new CanonicalNoritoReader(option, $"{context} option", nameof(option));
+        if (reader.ReadByte("tag") != 1)
+        {
+            throw new JsonException($"{context} required option is absent.");
+        }
+        var value = reader.ReadField("value").ToArray();
+        reader.RequireEnd();
+        return value;
+    }
+
+    private static void ValidateContractInvocation(
+        ReadOnlySpan<byte> executable,
+        TransactionContractInvocation expectedInvocation,
+        string context)
+    {
+        var executableReader = new CanonicalNoritoReader(
+            executable,
+            $"{context} trigger executable",
+            nameof(executable));
+        if (executableReader.ReadUInt32LittleEndian("variant") != 1)
+        {
+            throw new JsonException($"{context} trigger executable is not a contract call.");
+        }
+        var invocationPayload = executableReader.ReadField("contract_call");
+        executableReader.RequireEnd();
+        var invocation = new CanonicalNoritoReader(
+            invocationPayload,
+            $"{context} contract invocation",
+            nameof(executable));
+        var address = DecodeCanonicalNoritoString(invocation.ReadField("contract_address"), context);
+        var codeHash = invocation.ReadField("expected_code_hash");
+        var entrypoint = DecodeCanonicalNoritoString(invocation.ReadField("entrypoint"), context);
+        var arguments = invocation.ReadField("arguments");
+        invocation.RequireEnd();
+        if (!string.Equals(
+                address,
+                expectedInvocation.ContractAddress,
+                StringComparison.Ordinal)
+            || !codeHash.SequenceEqual(expectedInvocation.ExpectedCodeHash)
+            || !string.Equals(
+                entrypoint,
+                expectedInvocation.Entrypoint,
+                StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} contract invocation changed the requested target, code hash, or entrypoint.");
+        }
+        var argumentsReader = new CanonicalNoritoReader(
+            arguments,
+            $"{context} contract arguments",
+            nameof(executable));
+        var tag = argumentsReader.ReadByte("tag");
+        var expectedArgumentRecord = expectedInvocation.Arguments;
+        if (tag != (expectedArgumentRecord is null ? 0 : 1))
+        {
+            throw new JsonException(
+                $"{context} contract invocation changed whether arguments are present.");
+        }
+        if (tag == 1)
+        {
+            var encodedRecord = new CanonicalNoritoReader(
+                argumentsReader.ReadField("value"),
+                $"{context} contract argument record",
+                nameof(executable));
+            var recordLength = encodedRecord.ReadSequenceLength("length");
+            if (recordLength > TransactionContractInvocation.MaximumArgumentsBytes)
+            {
+                throw new JsonException(
+                    $"{context} contract argument record exceeds the wire limit.");
+            }
+            var record = encodedRecord.ReadExact(checked((int)recordLength), "bytes");
+            encodedRecord.RequireEnd();
+            if (expectedArgumentRecord is null
+                || !record.SequenceEqual(expectedArgumentRecord))
+            {
+                throw new JsonException(
+                    $"{context} contract argument record differs from the trusted expected bytes.");
+            }
+        }
+        argumentsReader.RequireEnd();
+    }
+
+    private sealed record class EncodedInstruction(string WireId, byte[] FramedPayload);
+
+    private sealed record class MultisigPayloadBinding(
+        IReadOnlyList<byte[]> AllowedExecutables,
+        byte[]? ExactMetadata,
+        ToriiMultisigContractCallProposeRequest? ContractCallRequest,
+        string? ContractProposalHash,
+        string? ResolvedMultisigAccountId);
+
+    private sealed record class MultisigCustomInstruction(JsonNode Payload)
+        : TransactionInstruction
+    {
+        internal override string WireId => "iroha.custom";
+
+        internal override string TypeName =>
+            "iroha_data_model::isi::transparent::CustomInstruction";
+
+        internal override byte[] EncodePayload(TransactionEncodingContext context)
+        {
+            var writer = new CanonicalNoritoWriter();
+            writer.WriteField(context.EncodeJson(Payload));
+            return writer.ToArray();
+        }
+    }
+
+    private sealed record class MultisigValidationFeeMarkerInstruction(string Message)
+        : TransactionInstruction
+    {
+        internal override string WireId => "iroha.log";
+
+        internal override string TypeName => "iroha_data_model::isi::transparent::Log";
+
+        internal override byte[] EncodePayload(TransactionEncodingContext context)
+        {
+            var writer = new CanonicalNoritoWriter();
+            writer.WriteField(context.EncodeUInt32(0));
+            writer.WriteField(context.EncodeString(Message));
+            return writer.ToArray();
+        }
     }
 
     private static string RequirePreparedResponseSchema(JsonElement response, string context)
@@ -4554,9 +5753,198 @@ public sealed partial class ToriiClient : IDisposable
         ToriiContractStateJson.ValidateContractStateResponse(response, context);
     }
 
-    private static void ValidateContractCallResponse(ToriiContractCallResponse response, string context)
+    private void ValidateContractCallResponse(
+        ToriiContractCallResponse response,
+        ToriiContractCallRequest request,
+        string context)
     {
         ToriiContractCallJson.ValidateContractCallResponse(response, context);
+        var receipt = response.OperationReceipt;
+        var expectedReceiptStatus = response.Submitted ? "submitted" : "pending_signature";
+        if (!string.Equals(receipt.OperationKind, "contract_call", StringComparison.Ordinal)
+            || !string.Equals(receipt.Status, expectedReceiptStatus, StringComparison.Ordinal)
+            || !string.Equals(receipt.Transport, "torii", StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context}.operation_receipt has an invalid operation kind, status, or transport.");
+        }
+        var responseFeePayment = receipt.FeePayment
+            ?? throw new JsonException($"{context}.operation_receipt.fee_payment is required.");
+        if (!request.FeePayment.HasSamePayerAndGasBound(responseFeePayment))
+        {
+            throw new JsonException(
+                $"{context}.operation_receipt.fee_payment changed the requested payer, sponsor revision, or gas bound.");
+        }
+        if (receipt.GasLimit != request.FeePayment.GasLimit)
+        {
+            throw new JsonException(
+                $"{context}.operation_receipt.gas_limit differs from the exact request.");
+        }
+        var canonicalPayload = request.Payload is null
+            ? Array.Empty<byte>()
+            : StrictUtf8.GetBytes(TransactionEncodingContext.CanonicalJson(request.Payload));
+        var expectedPayloadDigestHex = Convert
+            .ToHexString(Blake3.Hash(canonicalPayload))
+            .ToLowerInvariant();
+        if (!string.Equals(
+                receipt.PayloadDigestHex,
+                expectedPayloadDigestHex,
+                StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context}.operation_receipt.payload_digest_hex differs from the exact request payload.");
+        }
+        if (request.CreationTimeMilliseconds.HasValue
+            && response.CreationTimeMilliseconds != request.CreationTimeMilliseconds)
+        {
+            throw new JsonException(
+                $"{context}.creation_time_ms is not bound to the exact request.");
+        }
+        if (response.TransactionTimeToLiveMilliseconds
+                != request.TransactionTimeToLiveMilliseconds)
+        {
+            throw new JsonException(
+                $"{context}.transaction_ttl_ms is not bound to the exact request.");
+        }
+        if (response.ContractAddress is null
+            || !string.Equals(response.Entrypoint, request.Entrypoint, StringComparison.Ordinal)
+            || !string.Equals(receipt.ContractAddress, response.ContractAddress, StringComparison.Ordinal)
+            || !string.Equals(receipt.CodeHashHex, response.CodeHashHex, StringComparison.Ordinal)
+            || !string.Equals(receipt.AbiHashHex, response.AbiHashHex, StringComparison.Ordinal)
+            || !string.Equals(receipt.Entrypoint, response.Entrypoint, StringComparison.Ordinal)
+            || !string.Equals(receipt.Dataspace, response.Dataspace, StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} response and receipt disagree on the exact resolved contract binding.");
+        }
+        if (!string.Equals(
+                receipt.TransactionHashHex,
+                response.TransactionHashHex,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                receipt.EntrypointHashHex,
+                response.EntrypointHashHex,
+                StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} response and receipt disagree on the exact transaction hashes.");
+        }
+        if (request.ContractAddress is not null)
+        {
+            if (!string.Equals(
+                    response.ContractAddress,
+                    request.ContractAddress,
+                    StringComparison.Ordinal)
+                || receipt.ContractAlias is not null)
+            {
+                throw new JsonException(
+                    $"{context} is not bound to the exact requested contract address.");
+            }
+        }
+        else if (!string.Equals(
+            receipt.ContractAlias,
+            request.ContractAlias,
+            StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} is not bound to the exact requested contract alias.");
+        }
+
+        if (response.Submitted)
+        {
+            return;
+        }
+        var draftIntent = request.DraftIntent
+            ?? throw new JsonException(
+                $"{context} requires an exact caller-trusted DraftIntent before its unsigned draft can be trusted.");
+        var expectedNetworkId = Options.LocalSigningContext?.NetworkId
+            ?? throw new JsonException(
+                $"{context} cannot trust an unsigned transaction without ToriiClientOptions.LocalSigningContext.");
+        var expectedCodeHashHex = Convert
+            .ToHexString(draftIntent.Invocation.ExpectedCodeHash)
+            .ToLowerInvariant();
+        if (!string.Equals(
+                response.ContractAddress,
+                draftIntent.Invocation.ContractAddress,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                response.CodeHashHex,
+                expectedCodeHashHex,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                response.Entrypoint,
+                draftIntent.Invocation.Entrypoint,
+                StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} resolved contract binding differs from the exact caller-trusted DraftIntent.");
+        }
+
+        try
+        {
+            var payload = Convert.FromBase64String(response.TransactionPayloadBase64!);
+            var reader = new CanonicalNoritoReader(
+                payload,
+                $"{context} transaction payload",
+                nameof(response.TransactionPayloadBase64));
+            var networkDomain = reader.ReadField("domain");
+            var authority = reader.ReadField("authority");
+            var creationTime = reader.ReadField("creation_time_ms");
+            var executable = reader.ReadField("executable");
+            var timeToLive = reader.ReadField("time_to_live_ms");
+            var nonce = reader.ReadField("nonce");
+            var feePayment = reader.ReadField("fee_payment");
+            var admissionIntent = reader.ReadField("admission_intent");
+            var metadata = reader.ReadField("metadata");
+            var attachments = reader.ReadField("attachments");
+            reader.RequireEnd();
+
+            var encoding = new TransactionEncodingContext(request.Authority);
+            ValidateTransactionEnvelopeFields(
+                networkDomain,
+                timeToLive,
+                nonce,
+                admissionIntent,
+                attachments,
+                expectedNetworkId,
+                request.TransactionTimeToLiveMilliseconds
+                    ?? TransactionBuilder.DefaultTimeToLiveMilliseconds,
+                encoding,
+                context);
+            if (!authority.SequenceEqual(encoding.EncodeAccountId(request.Authority)))
+            {
+                throw new JsonException(
+                    $"{context} transaction authority differs from the exact request.");
+            }
+            if (creationTime.Length != sizeof(ulong)
+                || BinaryPrimitives.ReadUInt64LittleEndian(creationTime)
+                    != response.CreationTimeMilliseconds)
+            {
+                throw new JsonException(
+                    $"{context}.creation_time_ms differs from the exact transaction payload.");
+            }
+            if (!feePayment.SequenceEqual(
+                encoding.EncodeFeePaymentIntent(responseFeePayment)))
+            {
+                throw new JsonException(
+                    $"{context}.operation_receipt.fee_payment differs from the exact transaction payload.");
+            }
+            if (!metadata.SequenceEqual(encoding.EncodeMetadata(draftIntent.Metadata)))
+            {
+                throw new JsonException(
+                    $"{context} transaction metadata differs from the exact caller-trusted DraftIntent.");
+            }
+            ValidateContractInvocation(
+                executable,
+                draftIntent.Invocation,
+                context);
+        }
+        catch (Exception error) when (error is ArgumentException or FormatException)
+        {
+            throw new JsonException(
+                $"{context}.transaction_payload_b64 must contain exactly one canonical ten-field TransactionPayload.",
+                error);
+        }
     }
 
     private static void ValidateFeeSponsorProgramResponse(
@@ -7209,16 +8597,31 @@ public sealed partial class ToriiClient : IDisposable
                 nameof(request.TransactionTimeToLiveMilliseconds),
                 "Transaction TTL must be positive when provided.");
         }
+        var authority = ToriiAccountFaucetPow.RequireExactAccountId(
+            request.Authority,
+            nameof(request.Authority));
+        var entrypoint = NormalizeOptionalExactValue(
+            request.Entrypoint,
+            nameof(request.Entrypoint));
+        ValidateContractCallDraftIntent(
+            request.DraftIntent,
+            authority,
+            contractAddress,
+            contractAlias,
+            entrypoint,
+            request.Payload,
+            nameof(request.DraftIntent));
 
         return request with
         {
-            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
+            Authority = authority,
             PrivateKey = privateKey,
             PublicKeyHex = publicKeyHex,
             SignatureBase64 = signatureBase64,
             ContractAddress = contractAddress,
             ContractAlias = contractAlias,
-            Entrypoint = NormalizeOptionalExactValue(request.Entrypoint, nameof(request.Entrypoint)),
+            Entrypoint = entrypoint,
+            DraftIntent = request.DraftIntent,
             FeePayment = NormalizeFeePaymentIntent(
                 request.FeePayment,
                 nameof(request.FeePayment),
@@ -7248,6 +8651,95 @@ public sealed partial class ToriiClient : IDisposable
         };
     }
 
+    private static void ValidateContractCallDraftIntent(
+        ToriiContractCallDraftIntent? draftIntent,
+        string authority,
+        string? contractAddress,
+        string? contractAlias,
+        string? entrypoint,
+        JsonNode? payload,
+        string parameterName)
+    {
+        if (draftIntent is null)
+        {
+            return;
+        }
+
+        var invocation = draftIntent.Invocation;
+        var metadata = draftIntent.Metadata;
+        var expectedCodeHashHex = Convert
+            .ToHexString(invocation.ExpectedCodeHash)
+            .ToLowerInvariant();
+
+        static bool HasExactString(
+            IReadOnlyDictionary<string, JsonNode?> values,
+            string key,
+            string expected) =>
+            values.TryGetValue(key, out var value)
+            && value is JsonValue jsonValue
+            && jsonValue.TryGetValue<string>(out var text)
+            && string.Equals(text, expected, StringComparison.Ordinal);
+
+        if (!string.Equals(invocation.Entrypoint, entrypoint, StringComparison.Ordinal)
+            || contractAddress is not null
+                && !string.Equals(
+                    invocation.ContractAddress,
+                    contractAddress,
+                    StringComparison.Ordinal)
+            || (payload is null) != (invocation.Arguments is null)
+            || !HasExactString(metadata, "contract_address", invocation.ContractAddress)
+            || !HasExactString(metadata, "contract_code_hash", expectedCodeHashHex)
+            || !HasExactString(metadata, "contract_entrypoint", invocation.Entrypoint))
+        {
+            throw new ArgumentException(
+                "DraftIntent invocation or system metadata does not match the contract-call request.",
+                parameterName);
+        }
+        if (contractAlias is null)
+        {
+            if (metadata.ContainsKey("contract_alias"))
+            {
+                throw new ArgumentException(
+                    "DraftIntent metadata added an unrequested contract alias.",
+                    parameterName);
+            }
+        }
+        else if (!HasExactString(metadata, "contract_alias", contractAlias))
+        {
+            throw new ArgumentException(
+                "DraftIntent metadata does not match the requested contract alias.",
+                parameterName);
+        }
+        if (payload is null)
+        {
+            if (metadata.ContainsKey("contract_payload"))
+            {
+                throw new ArgumentException(
+                    "DraftIntent metadata added an unrequested contract payload.",
+                    parameterName);
+            }
+        }
+        else if (!metadata.TryGetValue("contract_payload", out var expectedPayload)
+            || !JsonNode.DeepEquals(expectedPayload, payload))
+        {
+            throw new ArgumentException(
+                "DraftIntent metadata does not match the exact request payload.",
+                parameterName);
+        }
+
+        try
+        {
+            _ = new TransactionEncodingContext(authority).EncodeMetadata(metadata);
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException)
+        {
+            throw new ArgumentException(
+                "DraftIntent metadata is not canonically encodable.",
+                parameterName,
+                error);
+        }
+    }
+
     private static FeePaymentIntent NormalizeFeePaymentIntent(
         FeePaymentIntent? feePayment,
         string paramName,
@@ -7274,8 +8766,7 @@ public sealed partial class ToriiClient : IDisposable
             request.MultisigAccountAlias);
         var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
         var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
-        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
-        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        ValidateDetachedSigningPair(publicKeyHex, signatureBase64);
         var hasValidationFeePolicyVersion = request.ValidationFeePolicyVersion.HasValue;
         var hasValidationFeePolicyHash = request.ValidationFeePolicyHash is not null;
         var hasValidationFeeHijiriFeeQuoteHash = request.ValidationFeeHijiriFeeQuoteHash is not null;
@@ -7335,7 +8826,6 @@ public sealed partial class ToriiClient : IDisposable
             SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
                 request.SignerAccountId,
                 nameof(request.SignerAccountId)),
-            PrivateKey = privateKey,
             PublicKeyHex = publicKeyHex,
             SignatureBase64 = signatureBase64,
             ValidationFeePolicyHash = validationFeePolicyHash,
@@ -7357,10 +8847,9 @@ public sealed partial class ToriiClient : IDisposable
         var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
             request.MultisigAccountId,
             request.MultisigAccountAlias);
-        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
         var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
         var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
-        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        ValidateDetachedSigningPair(publicKeyHex, signatureBase64);
         var (contractAddress, contractAlias) = NormalizeContractTarget(
             request.ContractAddress,
             request.ContractAlias,
@@ -7373,20 +8862,32 @@ public sealed partial class ToriiClient : IDisposable
                 nameof(request.CreationTimeMilliseconds),
                 "Creation time must be positive when provided.");
         }
+        var signerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
+            request.SignerAccountId,
+            nameof(request.SignerAccountId));
+        var entrypoint = NormalizeExactValue(
+            request.Entrypoint,
+            nameof(request.Entrypoint));
+        ValidateContractCallDraftIntent(
+            request.DraftIntent,
+            signerAccountId,
+            contractAddress,
+            contractAlias,
+            entrypoint,
+            request.Payload,
+            nameof(request.DraftIntent));
 
         return request with
         {
             MultisigAccountId = multisigAccountId,
             MultisigAccountAlias = multisigAccountAlias,
-            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
-                request.SignerAccountId,
-                nameof(request.SignerAccountId)),
-            PrivateKey = privateKey,
+            SignerAccountId = signerAccountId,
             PublicKeyHex = publicKeyHex,
             SignatureBase64 = signatureBase64,
             ContractAddress = contractAddress,
             ContractAlias = contractAlias,
-            Entrypoint = NormalizeExactValue(request.Entrypoint, nameof(request.Entrypoint)),
+            Entrypoint = entrypoint,
+            DraftIntent = request.DraftIntent,
             FeePayment = NormalizeFeePaymentIntent(
                 request.FeePayment,
                 nameof(request.FeePayment),
@@ -7400,10 +8901,9 @@ public sealed partial class ToriiClient : IDisposable
         var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
             request.MultisigAccountId,
             request.MultisigAccountAlias);
-        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
         var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
         var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
-        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        ValidateDetachedSigningPair(publicKeyHex, signatureBase64);
         ValidateMultisigProposalSelector(request.ProposalId, request.InstructionsHash);
         if (request.CreationTimeMilliseconds == 0)
         {
@@ -7419,7 +8919,6 @@ public sealed partial class ToriiClient : IDisposable
             SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
                 request.SignerAccountId,
                 nameof(request.SignerAccountId)),
-            PrivateKey = privateKey,
             PublicKeyHex = publicKeyHex,
             SignatureBase64 = signatureBase64,
             FeePayment = NormalizeFeePaymentIntent(
@@ -7441,10 +8940,9 @@ public sealed partial class ToriiClient : IDisposable
         var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
             request.MultisigAccountId,
             request.MultisigAccountAlias);
-        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
         var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
         var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
-        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        ValidateDetachedSigningPair(publicKeyHex, signatureBase64);
         ValidateMultisigProposalSelector(request.ProposalId, request.InstructionsHash);
         if (request.CreationTimeMilliseconds == 0)
         {
@@ -7460,7 +8958,6 @@ public sealed partial class ToriiClient : IDisposable
             SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
                 request.SignerAccountId,
                 nameof(request.SignerAccountId)),
-            PrivateKey = privateKey,
             PublicKeyHex = publicKeyHex,
             SignatureBase64 = signatureBase64,
             FeePayment = NormalizeFeePaymentIntent(
@@ -7492,10 +8989,9 @@ public sealed partial class ToriiClient : IDisposable
         var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
             request.MultisigAccountId,
             request.MultisigAccountAlias);
-        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
         var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
         var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
-        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        ValidateDetachedSigningPair(publicKeyHex, signatureBase64);
         if (request.ProposalId is null && request.InstructionsHash is null)
         {
             throw new ArgumentException(
@@ -7516,7 +9012,6 @@ public sealed partial class ToriiClient : IDisposable
             SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
                 request.SignerAccountId,
                 nameof(request.SignerAccountId)),
-            PrivateKey = privateKey,
             PublicKeyHex = publicKeyHex,
             SignatureBase64 = signatureBase64,
             FeePayment = NormalizeFeePaymentIntent(

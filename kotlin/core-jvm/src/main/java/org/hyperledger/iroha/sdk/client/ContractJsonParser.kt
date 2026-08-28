@@ -90,11 +90,19 @@ object ContractJsonParser {
             gasLimit = gasLimit,
             gasUsed = asOptionalNonNegativeLong(receipt["gas_used"], "$path.gas_used"),
             feePayment = receipt["fee_payment"]?.let { FeePaymentJson.parse(it, "$path.fee_payment") },
-            payloadDigestHex = HttpClientTransport.normalizeHex32(
-                requiredString(receipt["payload_digest_hex"], "$path.payload_digest_hex"),
-                "payloadDigestHex",
+            payloadDigestHex = exactLowerHex32(
+                receipt["payload_digest_hex"],
+                "$path.payload_digest_hex",
             ),
         )
+    }
+
+    private fun exactLowerHex32(value: Any?, path: String): String {
+        val literal = requiredString(value, path)
+        check(literal.length == 64 && literal.all { it in '0'..'9' || it in 'a'..'f' }) {
+            "$path must be canonical lowercase 32-byte hex"
+        }
+        return literal
     }
 
     @JvmStatic

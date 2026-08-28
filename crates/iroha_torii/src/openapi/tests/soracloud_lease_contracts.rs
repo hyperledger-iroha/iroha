@@ -48,11 +48,13 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
             "SoraInrouReplicaPlacementV1",
             &[
                 "replica_slot",
+                "economic_clock",
+                "lease_started_height",
+                "placement_incarnation",
+                "host_availability",
                 "validator_account_id",
                 "peer_id",
                 "selected_guest_isa",
-                "selected_geography_tag",
-                "selection_latency_ms",
             ],
         ),
         (
@@ -174,6 +176,8 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
         reporter_assignment["placement_reconciled_at_ms"]["minimum"].as_u64(),
         Some(1)
     );
+    let lease_usage = component_properties(schemas, "SoraServiceLeaseUsageAuditV1");
+    assert_eq!(lease_usage["reporting_epoch"]["minimum"].as_u64(), Some(1));
     assert_eq!(
         nullable_property_ref(schemas, "ControlPlaneServiceSnapshot", "service_lease"),
         "#/components/schemas/ControlPlaneServiceLeaseSnapshot"

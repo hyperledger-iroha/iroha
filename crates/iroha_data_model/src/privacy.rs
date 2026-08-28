@@ -483,6 +483,142 @@ pub enum PrivacyEngineIdV1 {
     #[cfg_attr(feature = "json", norito(rename = "native-lantern-lnp22"))]
     NativeLanternLnp22,
 }
+/// Canonical 384-bit native-STARK digest encoded as six little-endian
+/// Goldilocks field elements.
+///
+/// Construction and every decoder reject words greater than or equal to the
+/// Goldilocks modulus. Keeping the words private prevents callers from
+/// manufacturing a non-canonical wire value after validation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+#[repr(transparent)]
+pub struct GoldilocksDigest384V1([u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1]);
+
+impl GoldilocksDigest384V1 {
+    /// Canonical encoded byte length.
+    pub const BYTES: usize = fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1;
+
+    /// Construct from six canonical Goldilocks field elements.
+    #[must_use]
+    pub fn new(words: [u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1]) -> Option<Self> {
+        fastpq_isi::GoldilocksDigest384V1::new(words).map(|digest| Self(digest.words()))
+    }
+
+    /// Decode six canonical little-endian Goldilocks field elements.
+    #[must_use]
+    pub fn from_le_bytes(bytes: [u8; Self::BYTES]) -> Option<Self> {
+        fastpq_isi::GoldilocksDigest384V1::from_le_bytes(bytes).map(|digest| Self(digest.words()))
+    }
+
+    /// Borrow the six canonical field elements in lane order.
+    #[must_use]
+    pub const fn words(&self) -> &[u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] {
+        &self.0
+    }
+
+    /// Consume the digest and return its canonical field elements.
+    #[must_use]
+    pub const fn into_words(self) -> [u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] {
+        self.0
+    }
+
+    /// Encode the six words in canonical little-endian lane order.
+    #[must_use]
+    pub fn to_le_bytes(self) -> [u8; Self::BYTES] {
+        fastpq_isi::GoldilocksDigest384V1::new(self.0)
+            .expect("GoldilocksDigest384V1 preserves canonical construction")
+            .to_le_bytes()
+    }
+
+    /// Convert to the shared scalar digest representation.
+    #[must_use]
+    pub fn as_fastpq(self) -> fastpq_isi::GoldilocksDigest384V1 {
+        fastpq_isi::GoldilocksDigest384V1::new(self.0)
+            .expect("GoldilocksDigest384V1 preserves canonical construction")
+    }
+}
+
+impl From<fastpq_isi::GoldilocksDigest384V1> for GoldilocksDigest384V1 {
+    fn from(digest: fastpq_isi::GoldilocksDigest384V1) -> Self {
+        Self(digest.words())
+    }
+}
+
+impl AsRef<[u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1]> for GoldilocksDigest384V1 {
+    fn as_ref(&self) -> &[u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] {
+        self.words()
+    }
+}
+
+impl norito::core::NoritoSerialize for GoldilocksDigest384V1 {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        norito::core::NoritoSerialize::serialize(&self.0, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(Self::BYTES)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(Self::BYTES)
+    }
+}
+
+impl<'de> norito::core::NoritoDeserialize<'de> for GoldilocksDigest384V1 {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("canonical GoldilocksDigest384V1 decode")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let words = <[u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
+        Self::new(words).ok_or_else(|| {
+            norito::core::Error::Message("non-canonical GoldilocksDigest384V1 field element".into())
+        })
+    }
+}
+
+impl<'de> norito::core::DecodeFromSlice<'de> for GoldilocksDigest384V1 {
+    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let (words, used) = <[u64; fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        Self::new(words)
+            .map(|digest| (digest, used))
+            .ok_or_else(|| {
+                norito::core::Error::Message(
+                    "non-canonical GoldilocksDigest384V1 field element".into(),
+                )
+            })
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for GoldilocksDigest384V1 {
+    fn write_json(&self, out: &mut String) {
+        crate::json_helpers::fixed_bytes::serialize(&self.to_le_bytes(), out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        crate::json_helpers::fixed_bytes::serialize_bounded(&self.to_le_bytes(), out)
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for GoldilocksDigest384V1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let bytes = crate::json_helpers::fixed_bytes::deserialize(parser)?;
+        Self::from_le_bytes(bytes).ok_or_else(|| {
+            norito::json::Error::Message(
+                "non-canonical GoldilocksDigest384V1 field element".to_owned(),
+            )
+        })
+    }
+}
+
 macro_rules! define_privacy_digest {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*

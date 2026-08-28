@@ -5,6 +5,7 @@ import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKeyAdmission
+import org.hyperledger.iroha.sdk.crypto.SignatureAdmission
 
 class MultisigSignature private constructor(
     @JvmField val curveId: Int,
@@ -27,7 +28,15 @@ class MultisigSignature private constructor(
         require(curveId != 0x02 || MlDsaPublicKeyAdmission.isValid(_publicKey)) {
             "invalid ML-DSA-65 public key: expected ${MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH} nonzero bytes"
         }
-        require(_signature.isNotEmpty()) { "signature must not be empty" }
+        require(SignatureAdmission.isValidForCurveId(curveId, _signature)) {
+            when (curveId) {
+                0x01 ->
+                    "invalid Ed25519 signature: expected ${SignatureAdmission.ED25519_SIGNATURE_LENGTH} nonzero bytes"
+                0x02 ->
+                    "invalid ML-DSA-65 signature: expected ${SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH} nonzero bytes"
+                else -> "signature must not be empty"
+            }
+        }
     }
 
     fun publicKey(): ByteArray = _publicKey.copyOf()

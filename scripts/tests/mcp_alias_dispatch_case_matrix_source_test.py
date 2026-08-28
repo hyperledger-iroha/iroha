@@ -15,18 +15,18 @@ EXTENDED_PATH = (
     REPO_ROOT
     / "crates/iroha_torii/tests/mcp_endpoints/extended_tool_dispatch_tests.rs"
 )
-MAIN_MAX_LINES = 4_189
-EXTENDED_MAX_LINES = 721
+MAIN_MAX_LINES = 4_790
+EXTENDED_MAX_LINES = 672
 
 HELPER_START = "#[derive(Clone, Copy)]\nenum McpAliasDispatchArguments"
 HELPER_END = "fn enable_writer_mcp"
-HELPER_HASH = "8d9728ba23c408afd1d6d9f7bf1564ae2e0b0ed4cec6bc307178390ad4ec58ed"
+HELPER_HASH = "b165170fd4e3e07ca4277f091208a65edd1a3b958b62bcd336ef0261a9653071"
 
 # file, name, expectation, request id, tool name, argument row, assertion messages
 CASES = (
     (
         "main",
-        "mcp_jsonrpc_tools_call_agent_alias_accounts_get_accepts_flat_account_id",
+        "mcp_jsonrpc_tools_call_agent_alias_accounts_get_accepts_canonical_path",
         "error",
         1051,
         "iroha.accounts.get",
@@ -36,7 +36,7 @@ CASES = (
     ),
     (
         "main",
-        "mcp_jsonrpc_tools_call_agent_alias_accounts_qr_accepts_flat_account_id",
+        "mcp_jsonrpc_tools_call_agent_alias_accounts_qr_accepts_canonical_path",
         "error",
         1052,
         "iroha.accounts.qr",
@@ -46,37 +46,26 @@ CASES = (
     ),
     (
         "main",
-        "mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_flat_hash",
-        "error",
+        "mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_canonical_query_hash",
+        "schema_error",
         1061,
         "iroha.transactions.status",
-        "InvalidHash",
-        "invalid flat hash should be marked as MCP tool error",
-        "tool_execution_error",
+        "InvalidStatusHash",
+        "invalid query hash must fail advertised-schema validation",
     ),
     (
         "main",
-        "mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_transaction_hash_alias",
-        "error",
-        10616,
-        "iroha.transactions.status",
-        "InvalidTransactionHash",
-        "invalid transaction_hash alias should be marked as MCP tool error",
-        "tool_execution_error",
-    ),
-    (
-        "main",
-        "mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_flat_hash",
+        "mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_canonical_path",
         "error",
         10612,
         "iroha.transactions.get",
-        "InvalidHash",
+        "InvalidPathHash",
         "invalid hash should be marked as MCP tool error for transaction detail alias",
         "expected invalid transaction hash to be rejected by explorer detail alias",
     ),
     (
         "main",
-        "mcp_jsonrpc_tools_call_agent_alias_assets_get_accepts_flat_asset_id",
+        "mcp_jsonrpc_tools_call_agent_alias_assets_get_accepts_canonical_path",
         "error",
         106152,
         "iroha.assets.get",
@@ -86,7 +75,7 @@ CASES = (
     ),
     (
         "main",
-        "mcp_jsonrpc_tools_call_agent_alias_nfts_get_accepts_flat_nft_id",
+        "mcp_jsonrpc_tools_call_agent_alias_nfts_get_accepts_canonical_path",
         "error",
         106154,
         "iroha.nfts.get",
@@ -96,7 +85,7 @@ CASES = (
     ),
     (
         "main",
-        "mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_flat_rwa_id",
+        "mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_canonical_path",
         "error",
         106158,
         "iroha.rwas.get",
@@ -106,7 +95,7 @@ CASES = (
     ),
     (
         "main",
-        "mcp_jsonrpc_tools_call_agent_alias_domains_get_accepts_flat_domain_id",
+        "mcp_jsonrpc_tools_call_agent_alias_domains_get_accepts_canonical_path",
         "error",
         1062221,
         "iroha.domains.get",
@@ -116,7 +105,7 @@ CASES = (
     ),
     (
         "extended",
-        "mcp_jsonrpc_tools_call_agent_alias_subscriptions_get_accepts_flat_subscription_id",
+        "mcp_jsonrpc_tools_call_agent_alias_subscriptions_get_accepts_canonical_path",
         "error",
         1062233,
         "iroha.subscriptions.get",
@@ -126,7 +115,16 @@ CASES = (
     ),
     (
         "extended",
-        "mcp_jsonrpc_tools_call_agent_alias_asset_definitions_get_accepts_flat_definition_id",
+        "mcp_jsonrpc_tools_call_agent_alias_subscription_usage_accepts_canonical_path",
+        "schema_error",
+        10622344,
+        "iroha.subscriptions.usage",
+        "InvalidSubscriptionId",
+        "invalid canonical subscription path must fail advertised-schema validation",
+    ),
+    (
+        "extended",
+        "mcp_jsonrpc_tools_call_agent_alias_asset_definitions_get_accepts_canonical_path",
         "error",
         1062241,
         "iroha.assets.definitions.get",
@@ -218,25 +216,25 @@ CASES = (
 )
 
 EXCLUDED_DIRECT_TESTS = (
-    "mcp_jsonrpc_tools_call_agent_alias_contracts_code_get_accepts_hash_shortcut",
-    "mcp_jsonrpc_tools_call_agent_alias_contracts_code_bytes_get_accepts_hash_shortcut",
-    "mcp_jsonrpc_tools_call_agent_alias_iso20022_status_accepts_message_id_shortcut",
+    "mcp_jsonrpc_tools_call_contracts_code_get_accepts_canonical_code_hash_path",
+    "mcp_jsonrpc_tools_call_contracts_code_bytes_get_accepts_canonical_code_hash_path",
+    "mcp_jsonrpc_tools_call_iso20022_status_rejects_retired_message_id",
     "mcp_jsonrpc_tools_call_agent_alias_asset_definitions_query_accepts_flat_envelope_fields",
 )
 
 HELPER_TOKENS = (
-    'norito::json!({"account_id": "not-an-account-id"})',
-    'norito::json!({"hash": "not-a-hash"})',
-    'norito::json!({"transaction_hash": "not-a-hash"})',
-    'norito::json!({"asset_id": "not-an-asset-id"})',
-    'norito::json!({"nft_id": "not-an-nft-id"})',
-    'norito::json!({"rwa_id": "not-a-rwa-id"})',
-    'norito::json!({"domain_id": "not-a-domain-id"})',
-    'norito::json!({"subscription_id": "not-a-subscription-id"})',
-    'norito::json!({"definition_id": "not-a-definition-id"})',
+    'norito::json!({"path": {"account_id": "not-an-account-id"}})',
+    'norito::json!({"path": {"hash": "not-a-hash"}})',
+    'norito::json!({"query": {"hash": "not-a-hash"}})',
+    'norito::json!({"path": {"asset_id": "not-an-asset-id"}})',
+    'norito::json!({"path": {"nft_id": "not-an-nft-id"}})',
+    'norito::json!({"path": {"rwa_id": "not-a-rwa-id"}})',
+    'norito::json!({"path": {"domain_id": "not-a-domain-id"}})',
+    'norito::json!({"path": {"subscription_id": "not-a-subscription-id"}})',
+    'norito::json!({"path": {"definition_id": "not-a-definition-id"}})',
     'norito::json!({"limit": 2})',
     'norito::json!({"page": 1})',
-    "cfg.torii.mcp.enabled = true",
+    "enable_writer_mcp(&mut cfg)",
     '"method": "tools/call"',
     '"arguments": { case.arguments.into_json() }',
     "assert_eq!(status, StatusCode::OK)",
@@ -352,9 +350,12 @@ def validate_source(main: str, extended: str) -> None:
     if len(invocations) != len(CASES):
         raise GuardError(f"expected {len(CASES)} alias rows, found {len(invocations)}")
     error_rows = sum(case[2] == "error" for case in CASES)
+    schema_error_rows = sum(case[2] == "schema_error" for case in CASES)
     success_rows = sum(case[2] == "success" for case in CASES)
-    if (error_rows, success_rows) != (11, 9):
-        raise GuardError("the protected matrix must retain 11 error and 9 success rows")
+    if (error_rows, schema_error_rows, success_rows) != (9, 2, 9):
+        raise GuardError(
+            "the protected matrix must retain 9 error, 2 schema-error, and 9 success rows"
+        )
     for case in CASES:
         file_name, name, *_ = case
         source = main if file_name == "main" else extended
@@ -427,7 +428,7 @@ class McpAliasDispatchCaseMatrixSourceTests(unittest.TestCase):
             validate_source(mutated, self.extended)
 
     def test_argument_row_mutation_is_rejected(self) -> None:
-        name = "mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_flat_rwa_id"
+        name = "mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_canonical_path"
         old = f"async fn {name} => error(\n        106158,\n        \"iroha.rwas.get\",\n        InvalidRwaId"
         mutated = _replace_once(self.main, old, old.replace("InvalidRwaId", "InvalidNftId"))
         with self.assertRaises(GuardError):
@@ -436,8 +437,8 @@ class McpAliasDispatchCaseMatrixSourceTests(unittest.TestCase):
     def test_adversarial_literal_mutation_is_rejected(self) -> None:
         mutated = _replace_helper_once(
             self.main,
-            'norito::json!({"asset_id": "not-an-asset-id"})',
-            'norito::json!({"asset_id": "different-invalid-asset-id"})',
+            'norito::json!({"path": {"asset_id": "not-an-asset-id"}})',
+            'norito::json!({"path": {"asset_id": "different-invalid-asset-id"}})',
         )
         with self.assertRaises(GuardError):
             validate_source(mutated, self.extended)
@@ -446,6 +447,13 @@ class McpAliasDispatchCaseMatrixSourceTests(unittest.TestCase):
         name = str(CASES[0][1])
         old = f"async fn {name} => error("
         mutated = _replace_once(self.main, old, old.replace("error", "success"))
+        with self.assertRaises(GuardError):
+            validate_source(mutated, self.extended)
+
+    def test_schema_error_category_mutation_is_rejected(self) -> None:
+        name = str(CASES[2][1])
+        old = f"async fn {name} => schema_error("
+        mutated = _replace_once(self.main, old, old.replace("schema_error", "success"))
         with self.assertRaises(GuardError):
             validate_source(mutated, self.extended)
 
@@ -458,8 +466,8 @@ class McpAliasDispatchCaseMatrixSourceTests(unittest.TestCase):
     def test_mcp_enablement_mutation_is_rejected(self) -> None:
         mutated = _replace_helper_once(
             self.main,
-            "cfg.torii.mcp.enabled = true",
-            "cfg.torii.mcp.enabled = false",
+            "enable_writer_mcp(&mut cfg)",
+            "enable_writer_mcp(&mut test_utils::mk_minimal_root_cfg())",
         )
         with self.assertRaises(GuardError):
             validate_source(mutated, self.extended)

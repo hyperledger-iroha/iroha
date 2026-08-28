@@ -83,6 +83,13 @@ administrative data-loss escape hatch.
 
 ## Authoritative Inrou placement
 
+Every admitted Inrou HTTP bundle signs a non-empty `placement_targets`
+allowlist. Each target is one exact canonical validator-account/active-peer
+pair; validator accounts and peer IDs are independently distinct. The list
+contains at least one target per desired replica and at most four first-release
+targets. Source manifests may leave the list empty only before release
+preparation, and non-Inrou services must leave it empty.
+
 An Inrou V1 replica placement is sticky for one economic lease. Reconciliation
 retains the exact validator account, peer ID, guest ISA, and
 `placement_incarnation`; it never reassigns a stateful replica to another host
@@ -97,6 +104,11 @@ no assignment. Runtime reconciliation removes state for unavailable or
 identity/incarnation-mismatched placements. Serving health and Torii routing
 require `Available`, the exact placement incarnation and host identity, and
 authoritative `Healthy` state.
+
+An upgrade within the same economic lease cannot change the replica count,
+placement-target allowlist, or guest-platform manifest. Admission rekeys the
+existing placements to the new revision without selecting a different host,
+peer, ISA, or placement incarnation.
 
 ## Agent-apartment runtime status
 
@@ -230,6 +242,11 @@ Validation rejects unsupported versions with
   - every Inrou lease-volume declaration is materialized separately for each
     replica, including non-root service and confidential volumes; V1 never
     treats one disk image as shared or safe to multi-attach.
+  - `placement_targets` is empty outside the Inrou HTTP execution plane. An
+    admitted Inrou HTTP bundle requires at least one exact, identity-bound
+    validator-account/peer target per desired replica and no more than four;
+    validator accounts and peer IDs must each be distinct. Only an unpublished
+    source manifest may temporarily leave the list empty.
   - `service_version` must be non-empty.
   - `container.expected_schema_version` must match container schema v1.
   - `rollout.canary_percent` must be `0..=100`. Deterministic IVM services may
