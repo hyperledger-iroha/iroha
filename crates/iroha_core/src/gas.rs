@@ -704,7 +704,9 @@ mod tests {
         zk::test_utils::halo2_fixture_envelope,
     };
     use iroha_config::parameters::actual as cfg;
-    use iroha_data_model::governance::types::{BallotAttemptId, GovernanceAttemptId};
+    use iroha_data_model::governance::types::{
+        BallotAttemptId, GovernanceAttemptId, PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+    };
     use iroha_data_model::prelude::*;
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
@@ -984,19 +986,16 @@ mod tests {
     }
     #[test]
     fn maximum_timed_ovn_chunk_fits_standard_default_genesis_block_gas_limit() {
-        let transition = parliament_corpus_instruction(
-            dm_isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
-        );
+        let transition =
+            parliament_corpus_instruction(PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1);
         let encoded = transition.encode().len();
         let expected = parliament_encoded_input_gas(encoded)
             .saturating_add(PARLIAMENT_PROOF_UNIT)
             .saturating_add(PARLIAMENT_BALLOT_OR_VERIFY)
             .saturating_add(
                 PER_PARLIAMENT_CACHED_RECORD.saturating_mul(
-                    u64::try_from(
-                        dm_isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
-                    )
-                    .expect("chunk bound fits u64"),
+                    u64::try_from(PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1)
+                        .expect("chunk bound fits u64"),
                 ),
             );
         let instruction = InstructionBox::from(transition);
@@ -1014,7 +1013,7 @@ mod tests {
     fn timed_ovn_chunk_gas_is_monotonic_in_record_count() {
         let one = InstructionBox::from(parliament_corpus_instruction(1));
         let maximum = InstructionBox::from(parliament_corpus_instruction(
-            dm_isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+            PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
         ));
         assert!(meter_instruction(&maximum) > meter_instruction(&one));
     }

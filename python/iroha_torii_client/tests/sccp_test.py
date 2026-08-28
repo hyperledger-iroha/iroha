@@ -58,6 +58,8 @@ def PREFIX_HASH(byte: int) -> str:
 def UPPER(byte: int, length: int) -> str:
     return f"{byte:02x}".upper() * length
 AUTHORITY = "sorauﾛ1Nヱﾐﾚﾗﾗﾁ9SHyｾｼF2ﾚbヱAｦiﾇｺﾂpﾆWyｿﾛWﾍ7ｾA7ﾋヰｿUJEKNX"
+TEST_MAX_OUTSTANDING_LIABILITY = 1_000_000_000_000
+TEST_EVM_MAX_WRAPPED_SUPPLY = TEST_MAX_OUTSTANDING_LIABILITY * 1_000_000_000
 MESSAGE_ID = HASH(0x11)
 MESSAGE_BUNDLE_NORITO_TYPE = "iroha_sccp::TairaSccpMessageProofV1"
 PROOF_REQUEST_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
@@ -430,12 +432,14 @@ def _route(
                 "route_address": route_address,
                 "route_code_hash": route_code_hash,
                 "taira_to_token_multiplier": 1_000_000_000,
+                "max_wrapped_supply": TEST_EVM_MAX_WRAPPED_SUPPLY,
             },
         },
         "settlement": {
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
             "custody_owner": AUTHORITY,
             "payload_amount_scale": 9,
+            "max_outstanding_liability": TEST_MAX_OUTSTANDING_LIABILITY,
         },
     }
     _refresh_route_config_hash(route)
@@ -461,6 +465,7 @@ def _ton_route(
         "proof_profile_commitment": sccp._ton_proof_profile_commitment().hex().upper(),  # noqa: SLF001
         "outbound_proof_policy": _ton_outbound_policy(),
         "taira_to_token_multiplier": 1,
+        "max_wrapped_supply": TEST_MAX_OUTSTANDING_LIABILITY,
     }
     route = {
         "lane_id": _lane(source),
@@ -485,6 +490,7 @@ def _ton_route(
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
             "custody_owner": AUTHORITY,
             "payload_amount_scale": 9,
+            "max_outstanding_liability": TEST_MAX_OUTSTANDING_LIABILITY,
         },
     }
     _refresh_route_config_hash(route)
@@ -1091,6 +1097,52 @@ def test_registry_validates_full_key_and_rejects_retired_or_aliased_routes() -> 
         normalize_sccp_registry(noncanonical_custody)
 
 
+def test_registry_requires_exact_positive_supply_and_liability_caps() -> None:
+    for route, source in (
+        (_route(), "bsc-mainnet"),
+        (_route(source="tron-mainnet"), "tron-mainnet"),
+        (_ton_route(), "ton-mainnet"),
+    ):
+        missing_supply = copy.deepcopy(route)
+        del missing_supply["destination"]["deployment"]["max_wrapped_supply"]
+        with pytest.raises(ValueError, match="max_wrapped_supply"):
+            normalize_sccp_registry(_registry([missing_supply], source=source))
+
+    missing_liability = _registry()
+    del missing_liability["lanes"][0]["routes"][0]["settlement"][
+        "max_outstanding_liability"
+    ]
+    with pytest.raises(ValueError, match="max_outstanding_liability"):
+        normalize_sccp_registry(missing_liability)
+
+    mismatched = _registry()
+    mismatched["lanes"][0]["routes"][0]["destination"]["deployment"][
+        "max_wrapped_supply"
+    ] += 1
+    with pytest.raises(ValueError, match="must equal settlement.max_outstanding_liability"):
+        normalize_sccp_registry(mismatched)
+
+    unsafe_liability = (1 << 64) + 1
+    lossless_route = _route()
+    lossless_route["settlement"]["max_outstanding_liability"] = unsafe_liability
+    lossless_route["destination"]["deployment"]["max_wrapped_supply"] = (
+        unsafe_liability
+        * lossless_route["destination"]["deployment"]["taira_to_token_multiplier"]
+    )
+    _refresh_route_config_hash(lossless_route)
+    parsed = parse_sccp_json_object(
+        json.dumps(_registry([lossless_route]), separators=(",", ":")),
+        "SCCP registry",
+    )
+    assert (
+        parsed["lanes"][0]["routes"][0]["settlement"][
+            "max_outstanding_liability"
+        ]
+        == unsafe_liability
+    )
+    assert len(normalize_sccp_registry(parsed).lanes) == 1
+
+
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     (
@@ -1126,13 +1178,13 @@ def test_registry_rejects_legacy_or_ambiguous_v2_finality_anchor(
             "bsc-mainnet",
             "0d3f2789f19af900584d24bab4148ac32ac1532e85748845646ca032e43c0757",
             "c96a33a74f1e4134a7d6d63cb2ee4eaffe7d2007d4189bddce6d39f5aa97bc5c",
-            "ddf6b59ee7dae1f134455eaa19b166f951af30188e1adc2cf9d68dd8734789c1",
+            "3dbb23c4f6659308b48114e68049674e5cfc0f1aa2a517ff6b64bf448834dc28",
         ),
         (
             "tron-nile",
             "929040304688aed6529341a8060ca669d6ace688eec98036e4c1d4a8f28eb564",
             "376a54dfc0288fd43fe696a5be9a898196fb2195bd33c21eca6cbedd022e17c4",
-            "8b5a7d81f6a8f4d25601d8bc34ab0237e666c8216d06feb4ec05bb00ac9ee255",
+            "c60b8fefb1e6a64da218b2cf30c0017ce97a57c6cdb09303030d38be1af6c29c",
         ),
     ),
 )

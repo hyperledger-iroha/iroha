@@ -39712,6 +39712,74 @@ fn parliament_timed_ovn_resource_index_rebuild_is_deterministic_and_fail_atomic(
 }
 
 #[test]
+fn tle_runtime_custody_projection_is_inclusive_and_retains_unbounded_history() {
+    let active_key_session_id = TleKeySessionId::new([0x53; 32]);
+    let retained_key_session_id = TleKeySessionId::new([0x54; 32]);
+    let retaining_attempt =
+        crate::governance::parliament::tests::tle_key_session_retention_attempt_fixture_v1(
+            retained_key_session_id,
+        );
+    let mut world = World::new();
+    world
+        .tle_active_key_session
+        .insert(TLE_KEY_SESSION_SINGLETON_KEY, active_key_session_id);
+    world
+        .parliament_attempts
+        .insert(retaining_attempt.attempt().id, retaining_attempt);
+    let world = world.block();
+    assert_eq!(
+        world
+            .tle_key_sessions_required_for_runtime_custody_v1(62)
+            .expect("validate the committed Parliament attempt once"),
+        BTreeSet::from([active_key_session_id, retained_key_session_id]),
+        "the greatest opening deadline is inclusive"
+    );
+    assert_eq!(
+        world
+            .tle_key_sessions_required_for_runtime_custody_v1(63)
+            .expect("validate the committed Parliament attempt once"),
+        BTreeSet::from([active_key_session_id]),
+        "the active session remains required after historical custody expires"
+    );
+
+    let no_active_world = {
+        let retaining_attempt =
+            crate::governance::parliament::tests::tle_key_session_retention_attempt_fixture_v1(
+                retained_key_session_id,
+            );
+        let mut world = World::new();
+        world
+            .parliament_attempts
+            .insert(retaining_attempt.attempt().id, retaining_attempt);
+        world
+    };
+    let no_active_world = no_active_world.block();
+    assert_eq!(
+        no_active_world
+            .tle_key_sessions_required_for_runtime_custody_v1(62)
+            .expect("validate retained history without an active pointer"),
+        BTreeSet::from([retained_key_session_id]),
+        "retained historical custody does not depend on an active session"
+    );
+
+    let unbounded_key_session_id = TleKeySessionId::new([0x55; 32]);
+    let unbounded_attempt = crate::governance::parliament::tests::
+        tle_key_session_unbounded_retention_attempt_fixture_v1(unbounded_key_session_id);
+    let mut unbounded_world = World::new();
+    unbounded_world
+        .parliament_attempts
+        .insert(unbounded_attempt.attempt().id, unbounded_attempt);
+    let unbounded_world = unbounded_world.block();
+    assert_eq!(
+        unbounded_world
+            .tle_key_sessions_required_for_runtime_custody_v1(u64::MAX)
+            .expect("validate an unbounded committed opening deadline"),
+        BTreeSet::from([unbounded_key_session_id]),
+        "u64::MAX custody remains required even at the maximum committed height"
+    );
+}
+
+#[test]
 fn parliament_timed_ovn_resource_index_tracks_only_the_active_retry() {
     let key_session_id = TleKeySessionId::new([0x56; 32]);
     let attempt =
@@ -39784,6 +39852,30 @@ fn parliament_timed_ovn_resource_index_is_snapshot_skipped_and_rebuilt() {
             .iter()
             .next()
             .is_none()
+    );
+}
+
+#[test]
+fn world_block_snapshot_schema_matches_committed_world() {
+    let world = World::new();
+    let committed = norito::json::to_value(&world).expect("serialize committed world snapshot");
+    let block = world.block();
+    let staged = norito::json::to_value(&block).expect("serialize staged world snapshot");
+
+    let norito::json::Value::Object(mut committed) = committed else {
+        panic!("committed World snapshot must be an object");
+    };
+    let norito::json::Value::Object(staged) = staged else {
+        panic!("staged World snapshot must be an object");
+    };
+    assert!(
+        committed.remove("external_event_buf").is_some(),
+        "the committed-only event buffer must remain explicit"
+    );
+
+    assert_eq!(
+        staged, committed,
+        "staged and committed World serializers must expose the same canonical state"
     );
 }
 

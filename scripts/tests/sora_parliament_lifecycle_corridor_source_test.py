@@ -13,11 +13,16 @@ RUNNER = ROOT / "ci/check_sora_parliament_lifecycle.sh"
 WORKFLOW = ROOT / ".github/workflows/pr.yml"
 MANIFEST = ROOT / "integration_tests/Cargo.toml"
 CORRIDOR = ROOT / "integration_tests/tests/sora_parliament_lifecycle_smoke.rs"
+NO_RESULT_PATHS = ROOT / "integration_tests/tests/sora_parliament_no_result_paths.rs"
+FAILURE_PATHS = ROOT / "integration_tests/tests/sora_parliament_failure_paths.rs"
 USER_CONFIG = ROOT / "crates/iroha_config/src/parameters/user.rs"
 ACTUAL_CONFIG = ROOT / "crates/iroha_config/src/parameters/actual.rs"
 TEST_NETWORK = ROOT / "crates/iroha_test_network/src/lib.rs"
 DAEMON = ROOT / "crates/irohad/src/main.rs"
 BEACON = ROOT / "crates/iroha_core/src/beacon.rs"
+BEACON_TEST_SIGNER = (
+    ROOT / "crates/iroha_core/src/beacon/parliament_test_network_signer.rs"
+)
 BEACON_LIFECYCLE = ROOT / "crates/iroha_core/src/sumeragi/v2_beacon.rs"
 MANDATORY_NPOS_TEST_NAME = (
     "four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate"
@@ -28,7 +33,234 @@ FAIL_CLOSED_NPOS_TEST_NAME = (
 PARLIAMENT_LIFECYCLE_TEST_NAME = (
     "four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn"
 )
+EXACT_SUPERSEDING_HEAD_ASSERTION = '''assert_eq!(
+        superseded.superseding_head(),
+        Some(GovernanceExpectedHeadV1::Present(
+            GovernanceExpectedHeadPresentV1 {
+                subject_id: deploy_subject_id,
+                version: 1,
+                head_root: competing_code_hash.into(),
+            },
+        )),
+        "supersession must bind the exact authoritative contract head",
+    );'''
+DISTINCT_SUPERSEDING_ARTIFACT = '''let (competing_contract_code_hash, competing_abi_hash) = stage_contract_artifact(
+        &client,
+        &minimal_contract_artifact_with_identity(
+            "ParliamentSupersessionCompetitor",
+            "integration-tests-supersession-competitor",
+        ),
+    )?;'''
+DISTINCT_SUPERSEDING_ARTIFACT_ASSERTION = '''assert_ne!(
+        competing_contract_code_hash, code_hash,
+        "the supersession fixture must install a genuinely distinct artifact head",
+    );'''
+NO_RESULT_RESTART_CONTRACT_ABSENCE = '''assert_governed_contract_absent(
+        &restart_peer.client(),
+        contract_address,
+        "public-finding restart effect isolation",
+    )?;'''
+EXACT_INACTIVE_CONTRACT_PROJECTION = '''if object.len() != 3
+        || object.get("found").and_then(norito::json::Value::as_bool) != Some(false)
+        || object
+            .get("contract_address")
+            .and_then(norito::json::Value::as_str)
+            != Some(contract_address.as_ref())
+        || object
+            .get("dataspace")
+            .and_then(norito::json::Value::as_str)
+            != Some("universal")'''
+EXACT_ACTIVE_CONTRACT_ENTRYPOINTS = '''let has_exact_entrypoints = object
+        .get("public_entrypoints")
+        .and_then(norito::json::Value::as_array)
+        .is_some_and(|entrypoints| {
+            entrypoints.len() == 1 && entrypoints[0].as_str() == Some("main")
+        });'''
+EXACT_ACTIVE_CONTRACT_PROJECTION = '''if object.len() != 7
+        || object.get("found").and_then(norito::json::Value::as_bool) != Some(true)
+        || object
+            .get("contract_address")
+            .and_then(norito::json::Value::as_str)
+            != Some(contract_address.as_ref())
+        || object
+            .get("contract_subject_account")
+            .and_then(norito::json::Value::as_str)
+            != Some(expected_subject.as_str())
+        || object
+            .get("dataspace")
+            .and_then(norito::json::Value::as_str)
+            != Some("universal")
+        || object
+            .get("code_hash_hex")
+            .and_then(norito::json::Value::as_str)
+            != Some(expected_code_hash.as_str())
+        || object
+            .get("abi_hash_hex")
+            .and_then(norito::json::Value::as_str)
+            != Some(expected_abi_hash.as_str())
+        || !has_exact_entrypoints'''
+EXACT_GOVERNED_CONTRACT_BINDING_CALLS = (
+    '''assert_governed_contract_binding(
+        &client,
+        &contract_address,
+        code_hash,
+        abi_hash,
+        "consensus-owned certificate enactment must bind the staged contract",
+    )?;''',
+    '''assert_governed_contract_binding(
+            &peer_client,
+            &contract_address,
+            code_hash,
+            abi_hash,
+            "every validator must expose the consensus-enacted contract",
+        )?;''',
+    '''assert_governed_contract_binding(
+        &restart_peer.client(),
+        &contract_address,
+        code_hash,
+        abi_hash,
+        "normal restart must restore the consensus-enacted contract",
+    )?;''',
+    '''assert_governed_contract_binding(
+        &client,
+        &contract_address,
+        competing_contract_code_hash,
+        competing_abi_hash,
+        "the competing direct binding must be authoritative before enactment",
+    )?;''',
+    '''assert_governed_contract_binding(
+            &peer_client,
+            &contract_address,
+            competing_contract_code_hash,
+            competing_abi_hash,
+            "all validators must retain the competing contract binding",
+        )?;''',
+    '''assert_governed_contract_binding(
+        &restored_client,
+        &contract_address,
+        competing_contract_code_hash,
+        competing_abi_hash,
+        "restart must retain the competing contract binding",
+    )?;''',
+)
+EXACT_NON_BOUNDARY_PULSE_ABSENCE = '''assert_no_global_beacon_pulse_at(
+        &client,
+        pulse_height - 1,
+        "an unrequested non-boundary height must not emit a global pulse",
+    )?;'''
+EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
+    "fn assert_governed_contract_absent(",
+    ".get_gov_contract_response(contract_address)",
+    '.wrap_err_with(|| format!("{label}: inactive governed-contract lookup failed"))?;',
+    "response.status() != iroha::http::StatusCode::OK",
+    "expected governed-contract HTTP 200",
+    '''let projection: norito::json::Value = norito::json::from_slice(response.body())
+        .wrap_err_with(|| format!("{label}: inactive governed-contract response is not JSON"))?;''',
+    EXACT_INACTIVE_CONTRACT_PROJECTION,
+    "expected the exact inactive governed-contract projection",
+    "fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str)",
+    "FindError::Asset(missing),",
+    "if missing.as_ref() == asset_id => Ok(())",
+    "expected a typed asset-not-found result",
+    "fn assert_timed_ovn_casting_context_not_castable(",
+    '.expect_err("a sealed timed-OVN corpus must not return a casting context");',
+    'rendered.contains("400 Bad Request")',
+    "timed-OVN lifecycle is no longer in a casting phase",
+    '''assert_timed_ovn_casting_context_not_castable(
+        &client,
+        ballot_attempt_id,
+        "a sealed corpus is no longer a cast-capable context",
+    )?;''',
+    "fn assert_no_global_beacon_pulse_at(client: &Client, height: u64, label: &str)",
+    "let block = exact_block(client, height)",
+    '''if block
+        .npos_consensus_effects()
+        .and_then(|effects| effects.finalized_global_beacon_pulse)
+        .is_some()''',
+    EXACT_NON_BOUNDARY_PULSE_ABSENCE,
+)
+EXACT_ACTIVE_BINDING_MARKERS = (
+    "fn assert_governed_contract_binding(",
+    "expected_code_hash: ContractCodeHash",
+    "expected_abi_hash: ContractAbiHash",
+    '.wrap_err_with(|| format!("{label}: active governed-contract lookup failed"))?;',
+    "let expected_subject = contract_address.subject_id().to_string();",
+    "let expected_code_hash = expected_code_hash.to_hex();",
+    "let expected_abi_hash = expected_abi_hash.to_hex();",
+    EXACT_ACTIVE_CONTRACT_ENTRYPOINTS,
+    EXACT_ACTIVE_CONTRACT_PROJECTION,
+    "expected the exact active governed-contract projection",
+    *EXACT_GOVERNED_CONTRACT_BINDING_CALLS,
+)
+CAPACITY_DOMAIN_REGISTRATION = (
+    ".with_genesis_instruction(Register::domain(Domain::new(citizenship_domain.clone())))"
+)
+CAPACITY_ASSET_REGISTRATION = (
+    ".with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric("
+)
+CAPACITY_EXACT_ASSET = '''citizenship_asset_definition.clone(),
+            "Citizenship Bond".to_owned(),
+            AssetBalancePolicy::Global,
+            None,'''
+CAPACITY_ACCOUNT_REGISTRATION = (
+    ".with_genesis_instruction(Register::account(Account::new(citizen.clone())))"
+)
+CAPACITY_BOND_MINT = ".with_genesis_instruction(Mint::asset_quantity("
+CAPACITY_CITIZEN_REGISTRATION = ".with_genesis_instruction(RegisterCitizen {"
+PARLIAMENT_FAILURE_PATH_MARKERS = {
+    "four_validator_certified_effects_record_supersession_and_execution_failure": (
+        DISTINCT_SUPERSEDING_ARTIFACT,
+        DISTINCT_SUPERSEDING_ARTIFACT_ASSERTION,
+        "Hash::prehashed(competing_contract_code_hash.into_bytes())",
+        "GovernanceAttemptStatusV1::Superseded",
+        "superseded.certificate(), Some(&deploy_certificate)",
+        EXACT_SUPERSEDING_HEAD_ASSERTION,
+        "GovernanceAttemptStatusV1::ExecutionFailed",
+        "parliament_execution_failure_root_v1(",
+        "execution_failed.certificate(), Some(&runtime_certificate)",
+        "assert_runtime_upgrade_registry_empty(&restored_client)?;",
+    ),
+    "four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one": (
+        "GovernanceAttemptStatusV1::Rejected",
+        "required.body != ParliamentBody::ConfirmationJury",
+        "rejected.certificate().is_none()",
+        "ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable",
+        "Confirmation-capacity rejection effect isolation",
+        "Confirmation-capacity peer effect isolation",
+        "Confirmation-capacity restart effect isolation",
+        "restart must retain the complete Confirmation-capacity transcript",
+    ),
+    "four_validator_hidden_capacity_retains_then_releases_citizenship_bond": (
+        'DomainId::try_new("parliament-bond", "universal")?',
+        'AssetDefinitionId::derive_from_components(citizenship_domain.clone(), "xor".parse()?)',
+        "&citizenship_domain,\n        &citizenship_asset_definition,",
+        "retryable hidden-capacity evidence must retain the bond",
+        "GovernanceAttemptStatusV1::Rejected",
+        "assert_asset_not_found(",
+        "genesis citizenship escrow custody",
+        "pre-request capacity evidence must not consume or demand a beacon pulse",
+        "assert_no_global_beacon_pulse_at(",
+        "returned_bond.value(),\n        &Quantity::from(CAPACITY_BOND_AMOUNT)",
+        "terminal rejection must release the exact citizenship collateral",
+        "restored_bond.value(),\n        &Quantity::from(CAPACITY_BOND_AMOUNT)",
+        "restart must retain the released owner balance",
+    ),
+}
 PARLIAMENT_NETWORK_TEST_ATTRIBUTE = "#[test]"
+
+
+def read_corridor_source() -> str:
+    """Read the lifecycle target together with its source-budget support module."""
+
+    return "\n".join(
+        (
+            CORRIDOR.read_text(encoding="utf-8"),
+            NO_RESULT_PATHS.read_text(encoding="utf-8"),
+            FAILURE_PATHS.read_text(encoding="utf-8"),
+        )
+    )
+
+
 PARLIAMENT_LIFECYCLE_TEST = re.compile(
     rf"(?ms)^{re.escape(PARLIAMENT_NETWORK_TEST_ATTRIBUTE)}\n"
     rf"fn {PARLIAMENT_LIFECYCLE_TEST_NAME}\(\) -> Result<\(\)> \{{\n"
@@ -75,15 +307,10 @@ AUTONOMOUS_PULSE_PROGRESSION = '''network.ensure_blocks(pulse_height).await?;
         pulse_height,
         "the mandatory threshold-beacon effect must autonomously finalize its exact pre-boundary height",
     );'''
-BOUNDARY_PROGRESSION = '''assert_eq!(
-        tick(&client, "commit mandatory NPoS boundary")?,
-        boundary_height
-    );'''
-SUCCESSOR_PROGRESSION = '''assert_eq!(
-        tick(&client, "prove successor epoch can finalize")?,
-        boundary_height + 1
-    );
-    network.ensure_blocks(boundary_height + 1).await?;'''
+BOUNDARY_PROGRESSION = '''network.ensure_blocks(boundary_height).await?;
+    assert_eq!(current_height(&client)?, boundary_height);'''
+SUCCESSOR_PROGRESSION = '''network.ensure_blocks(boundary_height + 1).await?;
+    assert_eq!(current_height(&client)?, boundary_height + 1);'''
 SUCCESSOR_SEED_EQUALITY = (
     "assert_eq!(status.height_context.epoch_seed, successor_seed);"
 )
@@ -97,6 +324,20 @@ SORANET_POW_CORRIDOR_MARKERS = (
 )
 SORANET_POW_REQUIRED_OVERRIDE = (
     '["network","soranet_handshake","pow","required"]'
+)
+PARLIAMENT_CRYPTO_WORKFLOW_MARKERS = (
+    "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: target/sora-parliament-crypto-evidence-",
+    "pytest==9.0.3",
+    "scripts/tests/check_sora_parliament_crypto_bench_test.py",
+    "IROHA_PARLIAMENT_CRYPTO_ALLOCATION_EVIDENCE_V1",
+    "cargo bench --locked -p iroha_crypto --bench parliament_crypto",
+    "parliament_crypto_allocation_budgets.json",
+    "--write-report",
+    "--verify-report",
+    "SHA256SUMS",
+    "name: sora-parliament-crypto-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+    "if-no-files-found: error",
+    "retention-days: 90",
 )
 
 
@@ -153,9 +394,37 @@ def validate_workflow(source: str) -> None:
         "CARGO_TARGET_DIR: target/sora-parliament-lifecycle",
         "python3 -I -S scripts/tests/sora_parliament_lifecycle_corridor_source_test.py",
         "bash ci/check_sora_parliament_lifecycle.sh",
+        *PARLIAMENT_CRYPTO_WORKFLOW_MARKERS,
     ):
         require(marker in body, f"Parliament PR job lost `{marker}`")
+    require(
+        body.count("cargo bench --locked -p iroha_crypto --bench parliament_crypto") == 2,
+        "Parliament crypto evidence needs one allocation and one Criterion invocation",
+    )
+    for marker, count in (
+        ("parliament_crypto_allocation_budgets.json", 3),
+        ("SHA256SUMS", 3),
+        ("if-no-files-found: error", 2),
+    ):
+        require(
+            body.count(marker) == count,
+            f"Parliament PR job needs exactly {count} `{marker}` occurrences",
+        )
     require("--release" not in body, "Parliament PR job must not consume release binaries")
+
+
+def mutate_parliament_workflow(source: str, marker: str) -> str:
+    """Remove one marker only from the dedicated Parliament workflow job."""
+
+    job = re.search(
+        r"(?ms)^  sora_parliament_lifecycle:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        source,
+    )
+    require(job is not None, "PR workflow does not schedule the Parliament corridor")
+    body = job.group("body")
+    require(marker in body, f"Parliament PR job does not contain `{marker}`")
+    mutated = body.replace(marker, "", 1)
+    return source[: job.start("body")] + mutated + source[job.end("body") :]
 
 
 def parliament_lifecycle_test(source: str) -> tuple[re.Match[str], str]:
@@ -210,21 +479,20 @@ def validate_optional_parliament_pulse_progression(source: str) -> None:
         )
 
 
-def validate_public_finding_impossible_quorum_retry(source: str) -> None:
-    """Require the real four-peer early-NoResult and governance-retry corridor."""
+def validate_public_finding_no_result_retries_and_restore(source: str) -> None:
+    """Require both public-finding NoResult classes, retries, and restore."""
 
     _, test = parliament_lifecycle_test(source)
     require(
-        "exercise_public_finding_impossible_quorum_retry(" in test,
-        "Parliament lifecycle test lost the impossible-quorum retry invocation",
+        "exercise_public_finding_no_result_retries_and_restore(" in test,
+        "Parliament lifecycle test lost the public-finding closure invocation",
     )
     helper = re.search(
-        r"(?ms)^async fn exercise_public_finding_impossible_quorum_retry\(.*?^\}\n"
-        rf"(?=\n{re.escape(PARLIAMENT_NETWORK_TEST_ATTRIBUTE)}\n"
-        rf"fn {PARLIAMENT_LIFECYCLE_TEST_NAME}\(\))",
+        r"(?ms)^pub\(super\) async fn "
+        r"exercise_public_finding_no_result_retries_and_restore\(.*?^\}\n",
         source,
     )
-    require(helper is not None, "impossible-quorum retry helper is absent")
+    require(helper is not None, "public-finding closure helper is absent")
     helper_source = helper.group(0)
     for marker in (
         "network.ensure_blocks(sortition_pulse_height).await?;",
@@ -232,13 +500,157 @@ def validate_public_finding_impossible_quorum_retry(source: str) -> None:
         "failed_height < public_finding_deadline",
         "BodyInstanceStatusV1::NoResult",
         "ParliamentNoResultKindV1::PublicFindingQuorumUnreachable",
-        "client.get_gov_contract_json(contract_address).is_err()",
+        "public-finding quorum-unreachable effect isolation",
+        "public-finding peer effect isolation",
         "attempt_sequence: 1",
         "GovernanceStageV1::Qualification",
+        "iroha.integration.parliament.competing-public-finding.v1",
+        "deadline retry has no nonmember permissionless relayer",
+        "public-finding endorsement after the inclusive frozen deadline",
+        "ParliamentLifecycleTransitionV1::FailPublicFindingNoResult(",
+        "ParliamentNoResultKindV1::PublicFindingDeadlineExpired",
+        "attempt_sequence: 2",
         "peer_rejected.state_payload_hex",
         "peer_retry.state_payload_hex",
+        "peer_second_retry.state_payload_hex",
+        "restart_peer.start_checked(config_layers.iter(), None)",
+        "restored_retry.state_payload_hex",
+        "restored_second_retry.state_payload_hex",
+        NO_RESULT_RESTART_CONTRACT_ABSENCE,
     ):
-        require(marker in helper_source, f"impossible-quorum retry corridor lost `{marker}`")
+        require(marker in helper_source, f"public-finding closure corridor lost `{marker}`")
+
+
+def validate_exact_absence_classification(source: str) -> None:
+    """Require exact positive and negative state projections, not transport success."""
+
+    for marker in (
+        *EXACT_ABSENCE_CLASSIFICATION_MARKERS,
+        *EXACT_ACTIVE_BINDING_MARKERS,
+    ):
+        require(
+            marker in source,
+            f"Parliament state coverage lost exact classifier `{marker}`",
+        )
+    require(
+        source.count(".get_gov_contract_json(") == 1
+        and source.count(".get_gov_contract_response(") == 1,
+        "governed-contract reads must remain centralized in the exact projection helpers",
+    )
+    require(
+        source.count("assert_governed_contract_absent(") == 7,
+        "all six inactive-contract checks must use the exact projection helper",
+    )
+    require(
+        source.count("assert_governed_contract_binding(") == 7,
+        "all six active-contract checks must use the exact projection helper",
+    )
+    require(
+        "QueryExecutionFail::NotFound" not in source,
+        "asset absence must not accept a generic query-store NotFound result",
+    )
+
+    broad_absence_patterns = {
+        "governed-contract lookup": (
+            r"\.get_gov_contract_json\((?:&)?contract_address\)\s*\.is_err\(\)"
+        ),
+        "citizenship asset lookup": (
+            r"\.query_single\(FindAssetById::new\(citizen_asset_id\.clone\(\)\)\)"
+            r"\s*\.is_err\(\)"
+        ),
+        "global beacon pulse lookup": (
+            r"pulse_at\(\s*&client,\s*pulse_height\s*-\s*1\s*\)\s*\.is_err\(\)"
+        ),
+        "sealed timed-OVN casting-context lookup": (
+            r"\.get_parliament_timed_ovn_casting_context\([^)]*\)\s*\.is_err\(\)"
+        ),
+    }
+    for label, pattern in broad_absence_patterns.items():
+        require(
+            re.search(pattern, source) is None,
+            f"Parliament {label} regained a broad `is_err()` absence assertion",
+        )
+
+
+def parliament_failure_path_test(source: str, name: str) -> tuple[re.Match[str], str]:
+    """Return one exact executable Parliament failure-path test and its async body."""
+
+    pattern = re.compile(
+        rf"(?ms)^#\[test\]\nfn {re.escape(name)}\(\) -> Result<\(\)> \{{\n"
+        r".*?^\}\n"
+        rf"\nasync fn {re.escape(name)}_impl\(\)\s*-> Result<\(\)>\s*\{{\n"
+        r".*?^\}\n(?=\n#\[test\]|\Z)"
+    )
+    matches = list(pattern.finditer(source))
+    require(len(matches) == 1, f"Parliament failure path `{name}` is not one exact test item")
+    match = matches[0]
+    return match, match.group(0)
+
+
+def validate_parliament_failure_paths(source: str) -> None:
+    """Pin terminal-state, rollback, capacity-abort, and bond-release coverage."""
+
+    for name, markers in PARLIAMENT_FAILURE_PATH_MARKERS.items():
+        _, test = parliament_failure_path_test(source, name)
+        for marker in markers:
+            require(marker in test, f"Parliament failure path `{name}` lost `{marker}`")
+
+
+def capacity_failure_builder(source: str) -> tuple[re.Match[str], str]:
+    """Return the exact hidden-capacity network builder."""
+
+    pattern = re.compile(
+        r"(?ms)^fn capacity_failure_builder\(.*?^\}\n"
+        r"(?=\nfn confirmation_capacity_builder\()"
+    )
+    matches = list(pattern.finditer(source))
+    require(len(matches) == 1, "hidden-capacity network builder is not one exact item")
+    match = matches[0]
+    return match, match.group(0)
+
+
+def validate_capacity_failure_genesis(source: str) -> None:
+    """Require the exact citizenship asset hierarchy before bond mint/custody."""
+
+    _, builder = capacity_failure_builder(source)
+    ordered = (
+        CAPACITY_DOMAIN_REGISTRATION,
+        CAPACITY_ASSET_REGISTRATION,
+        CAPACITY_ACCOUNT_REGISTRATION,
+        CAPACITY_BOND_MINT,
+        CAPACITY_CITIZEN_REGISTRATION,
+    )
+    positions = []
+    for marker in (*ordered, CAPACITY_EXACT_ASSET):
+        require(marker in builder, f"hidden-capacity genesis lost `{marker}`")
+        if marker in ordered:
+            positions.append(builder.index(marker))
+    require(
+        positions == sorted(positions),
+        "hidden-capacity genesis must register domain, asset, and account before mint/custody",
+    )
+
+
+def mutate_capacity_failure_builder(
+    source: str, old: str, new: str = ""
+) -> str:
+    """Apply one exact mutation only inside the hidden-capacity builder."""
+
+    match, builder = capacity_failure_builder(source)
+    require(old in builder, f"hidden-capacity mutation target is absent: `{old}`")
+    mutated = builder.replace(old, new, 1)
+    return source[: match.start()] + mutated + source[match.end() :]
+
+
+def mutate_parliament_failure_path_test(
+    source: str, name: str, old: str, new: str = ""
+) -> str:
+    """Apply one exact mutation only inside a Parliament failure-path test item."""
+
+    match, test = parliament_failure_path_test(source, name)
+    require(old in test, f"Parliament failure-path mutation target is absent: `{old}`")
+    mutated = test.replace(old, new, 1)
+    return source[: match.start()] + mutated + source[match.end() :]
 
 
 def mandatory_npos_test(source: str) -> tuple[re.Match[str], str]:
@@ -306,6 +718,7 @@ def validate_required_bounded_soranet_pow(source: str) -> None:
         ("fail-closed NPoS", fail_closed_npos_test(source)[1]),
     )
     compacted_source = compact(source)
+    compacted_tests = "".join(compact(test) for _, test in tests)
     require(
         SORANET_POW_REQUIRED_OVERRIDE not in compacted_source,
         "corridor must not override the hard-required SoraNet PoW admission field",
@@ -324,7 +737,7 @@ def validate_required_bounded_soranet_pow(source: str) -> None:
     )
     for marker in SORANET_POW_CORRIDOR_MARKERS:
         require(
-            compacted_source.count(marker) == len(tests),
+            compacted_tests.count(marker) == len(tests),
             f"SoraNet corridor marker is not present exactly once per builder: `{marker}`",
         )
     for label, test in tests:
@@ -372,7 +785,7 @@ def validate_consensus_sized_test_stacks(source: str) -> None:
 
 
 def validate_mandatory_npos_boundary(source: str) -> None:
-    """Require the exact executable four-validator pre-boundary beacon corridor."""
+    """Require old-session boundary safety and a genuine successor pulse."""
 
     _, test = mandatory_npos_test(source)
     require(
@@ -391,8 +804,13 @@ def validate_mandatory_npos_boundary(source: str) -> None:
         "assert_eq!(network.peers().len(), VALIDATOR_COUNT);",
         "assert_eq!(beacon_record.session.committee_size, 4);",
         "assert_eq!(beacon_record.session.threshold, 2);",
+        "deterministic_parliament_beacon_successor_key_record_v1(",
+        "assert_ne!(\n        successor_beacon_record.session.session_id,",
         "let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;",
         "pulse_height = boundary_height - 1",
+        "lifecycle_certificate_replacing(",
+        "Some(beacon_record.session.session_id)",
+        "successor_beacon_record.session.session_id",
         AUTONOMOUS_PULSE_PROGRESSION,
         "verify_finalized_global_threshold_beacon_pulse_v1(",
         "let successor_epoch = 1;",
@@ -401,10 +819,24 @@ def validate_mandatory_npos_boundary(source: str) -> None:
         SUCCESSOR_PROGRESSION,
         "assert_eq!(status.height_context.epoch, successor_epoch);",
         SUCCESSOR_SEED_EQUALITY,
+        "let successor_pulse_height = boundary_height",
+        "assert_eq!(\n        successor_pulse.session_id,",
+        "&validated_successor_beacon_session",
+        "let second_successor_epoch = 2;",
+        "assert_eq!(status.height_context.epoch, second_successor_epoch);",
+        "assert_eq!(status.height_context.epoch_seed, second_successor_seed);",
         "!status.restart_required",
     )
     for marker in required:
         require(marker in test, f"mandatory NPoS beacon test lost `{marker}`")
+    require(
+        test.count("verify_finalized_global_threshold_beacon_pulse_v1(") == 2,
+        "mandatory NPoS beacon test must independently verify predecessor and successor pulses",
+    )
+    require(
+        test.count("!status.restart_required") == 2,
+        "mandatory NPoS beacon test must prove both successor epochs remain live",
+    )
     require(
         ".with_permissioned_consensus()" not in test,
         "mandatory NPoS beacon test selected permissioned consensus",
@@ -413,6 +845,28 @@ def validate_mandatory_npos_boundary(source: str) -> None:
         'tick(&client, "commit mandatory pre-boundary pulse")' not in test,
         "mandatory pre-boundary pulse must not race a user transaction",
     )
+
+
+def validate_beacon_rotation_fixture(source: str) -> None:
+    """Require two complete feature-only DKG fixtures and exact-session dispatch."""
+
+    require(
+        source.count("TEST_SUCCESSOR_SESSION_ID_DOMAIN_V1") == 2,
+        "rotatable beacon fixture lost the unique successor domain binding",
+    )
+    for marker in (
+        "deterministic_parliament_beacon_successor_key_record_v1",
+        "deterministic_fixture_v1(network_id, ordered_roster, true)",
+        "let initial_fixture =",
+        "deterministic_fixture_v1(self.network_id, &self.ordered_roster, false)",
+        "let successor_fixture =",
+        "deterministic_fixture_v1(self.network_id, &self.ordered_roster, true)",
+        "if successor_fixture.session.record() != session.record()",
+        "exact_seat_signer_supports_one_domain_separated_successor_session",
+        "assert_ne!(initial.session.session_id, successor.session.session_id);",
+        "verify_partial_signature(payload, &partial)",
+    ):
+        require(marker in source, f"rotatable beacon test fixture lost `{marker}`")
 
 
 def validate_beacon_mode_profiles(source: str) -> None:
@@ -537,6 +991,12 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             with self.subTest(marker=marker), self.assertRaises(ContractError):
                 validate_runner(source.replace(marker, "", 1))
 
+    def test_workflow_contract_rejects_each_removed_crypto_evidence_marker(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        for marker in PARLIAMENT_CRYPTO_WORKFLOW_MARKERS:
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                validate_workflow(mutate_parliament_workflow(source, marker))
+
     def test_target_and_boundary_guards_remain_feature_isolated(self) -> None:
         manifest = MANIFEST.read_text(encoding="utf-8")
         target = re.search(
@@ -547,11 +1007,21 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         )
         require(target is not None, "Parliament test target lost its opt-in feature")
 
-        corridor = CORRIDOR.read_text(encoding="utf-8")
+        corridor = read_corridor_source()
+        require(
+            '#[path = "sora_parliament_no_result_paths.rs"]\nmod no_result_paths;'
+            in corridor,
+            "Parliament lifecycle target lost its NoResult support module",
+        )
+        require(
+            '#[path = "sora_parliament_failure_paths.rs"]\nmod failure_paths;'
+            in corridor,
+            "Parliament lifecycle target lost its failure-path module",
+        )
         helper_calls = corridor.count("assert_transition_rejected_without_state_change(")
         require(
-            helper_calls == 10,
-            "corridor must retain the helper plus nine boundary/replay checks",
+            helper_calls == 12,
+            "corridor must retain the helper plus eleven boundary/replay checks",
         )
         for retired in (
             "CastPlainBallot",
@@ -564,9 +1034,15 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         validate_required_bounded_soranet_pow(corridor)
         validate_consensus_sized_test_stacks(corridor)
         validate_optional_parliament_pulse_progression(corridor)
-        validate_public_finding_impossible_quorum_retry(corridor)
+        validate_public_finding_no_result_retries_and_restore(corridor)
+        validate_exact_absence_classification(corridor)
+        validate_parliament_failure_paths(corridor)
+        validate_capacity_failure_genesis(corridor)
         validate_beacon_mode_profiles(corridor)
         validate_mandatory_npos_boundary(corridor)
+        validate_beacon_rotation_fixture(
+            BEACON_TEST_SIGNER.read_text(encoding="utf-8")
+        )
         validate_fail_closed_npos_boundary(corridor)
         validate_feature_only_fault_wiring(
             TEST_NETWORK.read_text(encoding="utf-8"),
@@ -576,7 +1052,7 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         )
 
     def test_required_bounded_soranet_pow_rejects_adversarial_mutations(self) -> None:
-        corridor = CORRIDOR.read_text(encoding="utf-8")
+        corridor = read_corridor_source()
         mutations = {
             "lifecycle PoW override introduced": mutate_parliament_lifecycle_test(
                 corridor,
@@ -604,7 +1080,7 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 validate_required_bounded_soranet_pow(mutated)
 
     def test_consensus_sized_test_stacks_reject_adversarial_mutations(self) -> None:
-        corridor = CORRIDOR.read_text(encoding="utf-8")
+        corridor = read_corridor_source()
         mutations = {
             "lifecycle caller stack removed": mutate_parliament_lifecycle_test(
                 corridor, ".stack_size(PARLIAMENT_NETWORK_STACK_BYTES)"
@@ -623,7 +1099,7 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 validate_consensus_sized_test_stacks(mutated)
 
     def test_optional_pulse_progression_rejects_adversarial_mutations(self) -> None:
-        corridor = CORRIDOR.read_text(encoding="utf-8")
+        corridor = read_corridor_source()
         mutations = {
             "missing sortition autonomous progression": mutate_parliament_lifecycle_test(
                 corridor, AUTONOMOUS_SORTITION_PULSE_PROGRESSION
@@ -660,22 +1136,132 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             with self.subTest(label=label), self.assertRaises(ContractError):
                 validate_optional_parliament_pulse_progression(mutated)
 
-    def test_public_finding_impossible_quorum_retry_rejects_mutations(self) -> None:
-        corridor = CORRIDOR.read_text(encoding="utf-8")
+    def test_public_finding_no_result_retries_and_restore_reject_mutations(self) -> None:
+        corridor = read_corridor_source()
         for marker in (
-            "exercise_public_finding_impossible_quorum_retry(",
+            "exercise_public_finding_no_result_retries_and_restore(",
             "failed_height < public_finding_deadline",
             "ParliamentNoResultKindV1::PublicFindingQuorumUnreachable",
+            "public-finding quorum-unreachable effect isolation",
+            "public-finding peer effect isolation",
             "attempt_sequence: 1",
+            "iroha.integration.parliament.competing-public-finding.v1",
+            "ParliamentNoResultKindV1::PublicFindingDeadlineExpired",
+            "attempt_sequence: 2",
             "peer_retry.state_payload_hex",
+            "restored_second_retry.state_payload_hex",
+            NO_RESULT_RESTART_CONTRACT_ABSENCE,
         ):
             with self.subTest(marker=marker), self.assertRaises(ContractError):
-                validate_public_finding_impossible_quorum_retry(
+                validate_public_finding_no_result_retries_and_restore(
                     corridor.replace(marker, "", 1)
                 )
 
+    def test_exact_absence_classification_rejects_adversarial_mutations(self) -> None:
+        corridor = read_corridor_source()
+        for marker in (
+            *EXACT_ABSENCE_CLASSIFICATION_MARKERS,
+            *EXACT_ACTIVE_BINDING_MARKERS,
+        ):
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                validate_exact_absence_classification(corridor.replace(marker, "", 1))
+
+        broad_mutations = {
+            "governed-contract lookup": corridor
+            + "\nclient.get_gov_contract_json(contract_address).is_err();\n",
+            "citizenship asset lookup": corridor
+            + "\nclient.query_single(FindAssetById::new("
+            "citizen_asset_id.clone())).is_err();\n",
+            "global beacon pulse lookup": corridor
+            + "\npulse_at(&client, pulse_height - 1).is_err();\n",
+            "sealed timed-OVN casting-context lookup": corridor
+            + "\nclient.get_parliament_timed_ovn_casting_context(ballot_attempt_id)"
+            ".is_err();\n",
+            "generic asset not-found fallback": corridor
+            + "\nQueryExecutionFail::NotFound;\n",
+            "bare active-contract transport success": corridor
+            + "\nclient.get_gov_contract_json(&contract_address)?;\n",
+            "inactive route still expects HTTP 404": corridor.replace(
+                "response.status() != iroha::http::StatusCode::OK",
+                "response.status() != iroha::http::StatusCode::NOT_FOUND",
+                1,
+            ),
+            "inactive found=true projection": corridor.replace(
+                "Some(false)", "Some(true)", 1
+            ),
+            "inactive response permits extra fields": corridor.replace(
+                "object.len() != 3", "object.len() < 3", 1
+            ),
+            "active response permits extra fields": corridor.replace(
+                "object.len() != 7", "object.len() < 7", 1
+            ),
+            "active response accepts any entrypoint": corridor.replace(
+                'entrypoints.len() == 1 && entrypoints[0].as_str() == Some("main")',
+                "!entrypoints.is_empty()",
+                1,
+            ),
+        }
+        for label, mutated in broad_mutations.items():
+            with self.subTest(label=label), self.assertRaises(ContractError):
+                validate_exact_absence_classification(mutated)
+
+    def test_parliament_failure_paths_reject_adversarial_mutations(self) -> None:
+        corridor = read_corridor_source()
+        for name, markers in PARLIAMENT_FAILURE_PATH_MARKERS.items():
+            with self.subTest(name=name, marker="test name"), self.assertRaises(
+                ContractError
+            ):
+                validate_parliament_failure_paths(
+                    corridor.replace(f"fn {name}()", f"fn {name}_disabled()", 1)
+                )
+            for marker in markers:
+                with self.subTest(name=name, marker=marker), self.assertRaises(
+                    ContractError
+                ):
+                    validate_parliament_failure_paths(
+                        mutate_parliament_failure_path_test(corridor, name, marker)
+                    )
+
+    def test_capacity_failure_genesis_rejects_adversarial_mutations(self) -> None:
+        corridor = read_corridor_source()
+        for marker in (
+            CAPACITY_DOMAIN_REGISTRATION,
+            CAPACITY_ASSET_REGISTRATION,
+            CAPACITY_EXACT_ASSET,
+            CAPACITY_ACCOUNT_REGISTRATION,
+            CAPACITY_BOND_MINT,
+            CAPACITY_CITIZEN_REGISTRATION,
+        ):
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                validate_capacity_failure_genesis(
+                    mutate_capacity_failure_builder(corridor, marker)
+                )
+
+        reordered = mutate_capacity_failure_builder(
+            corridor, CAPACITY_DOMAIN_REGISTRATION, "__CAPACITY_DOMAIN_REGISTRATION__"
+        )
+        reordered = mutate_capacity_failure_builder(
+            reordered, CAPACITY_ASSET_REGISTRATION, CAPACITY_DOMAIN_REGISTRATION
+        )
+        reordered = mutate_capacity_failure_builder(
+            reordered, "__CAPACITY_DOMAIN_REGISTRATION__", CAPACITY_ASSET_REGISTRATION
+        )
+        with self.subTest(marker="domain/asset order"), self.assertRaises(ContractError):
+            validate_capacity_failure_genesis(reordered)
+
+    def test_beacon_rotation_fixture_rejects_adversarial_mutations(self) -> None:
+        source = BEACON_TEST_SIGNER.read_text(encoding="utf-8")
+        for marker in (
+            "TEST_SUCCESSOR_SESSION_ID_DOMAIN_V1",
+            "deterministic_fixture_v1(network_id, ordered_roster, true)",
+            "deterministic_fixture_v1(self.network_id, &self.ordered_roster, true)",
+            "exact_seat_signer_supports_one_domain_separated_successor_session",
+        ):
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                validate_beacon_rotation_fixture(source.replace(marker, "", 1))
+
     def test_mandatory_npos_boundary_rejects_adversarial_mutations(self) -> None:
-        corridor = CORRIDOR.read_text(encoding="utf-8")
+        corridor = read_corridor_source()
         mutations = {
             "renamed test": mutate_mandatory_npos_test(
                 corridor, MANDATORY_NPOS_TEST_NAME, f"{MANDATORY_NPOS_TEST_NAME}_disabled"
@@ -727,6 +1313,26 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "missing threshold assertion": mutate_mandatory_npos_test(
                 corridor, "assert_eq!(beacon_record.session.threshold, 2);"
             ),
+            "missing successor transcript": mutate_mandatory_npos_test(
+                corridor,
+                "deterministic_parliament_beacon_successor_key_record_v1(",
+            ),
+            "missing compare-and-set predecessor": mutate_mandatory_npos_test(
+                corridor, "Some(beacon_record.session.session_id)"
+            ),
+            "successor pulse not bound to successor session": mutate_mandatory_npos_test(
+                corridor,
+                "assert_eq!(\n        successor_pulse.session_id,",
+                "assert_ne!(\n        successor_pulse.session_id,",
+            ),
+            "rotated pulse not independently verified": mutate_mandatory_npos_test(
+                corridor, "&validated_successor_beacon_session"
+            ),
+            "second epoch seed equality omitted": mutate_mandatory_npos_test(
+                corridor,
+                "assert_eq!(status.height_context.epoch_seed, second_successor_seed);",
+                "let _ = (status.height_context.epoch_seed, second_successor_seed);",
+            ),
             "successor fail-stop status omitted": mutate_mandatory_npos_test(
                 corridor, "!status.restart_required", "true"
             ),
@@ -736,7 +1342,7 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 validate_mandatory_npos_boundary(mutated)
 
     def test_beacon_mode_profiles_reject_adversarial_mutations(self) -> None:
-        corridor = CORRIDOR.read_text(encoding="utf-8")
+        corridor = read_corridor_source()
         mutations = {
             "positive invalid becomes valid": corridor.replace(
                 "const POSITIVE_BEACON_SIGNER_MODES",
@@ -759,7 +1365,7 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 validate_beacon_mode_profiles(mutated)
 
     def test_fail_closed_npos_boundary_rejects_adversarial_mutations(self) -> None:
-        corridor = CORRIDOR.read_text(encoding="utf-8")
+        corridor = read_corridor_source()
         mutations = {
             "renamed test": mutate_fail_closed_npos_test(
                 corridor,

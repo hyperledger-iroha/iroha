@@ -1034,6 +1034,156 @@ fn state_committed_live_reservation_replays_quarantined_until_explicit_proof_com
     );
 }
 #[test]
+fn state_committed_forgotten_release_is_tombstoned_before_restart_replay_publication() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let dir = tempdir().expect("tempdir");
+    let plan_path = dir.path().join("queue-plans-complete-release-cut.norito");
+    let reservation_path = dir
+        .path()
+        .join("lane-reservations-complete-release-cut.norito");
+    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let hash = transaction.hash_as_entrypoint();
+    {
+        let queue = Queue::test(config_factory(), &time_source);
+        queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("install Complete-release plan journal");
+        queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("install Complete-release reservation journal");
+        push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+        let key = *queue
+            .reserve_transactions_for_lane(
+                &state,
+                lane_reservation_scope(
+                    &state,
+                    b"complete-release-crash-owner",
+                    b"complete-release-crash-proposal",
+                ),
+                nonzero!(1_usize),
+            )
+            .expect("reserve the later retired transaction")[0]
+            .key();
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(hash, nonzero!(1_usize));
+            transactions
+                .commit()
+                .expect("publish the ordinary canonical transaction");
+        }
+        assert_eq!(
+            queue.remove_committed_hashes_preserving_globally_bound_owners([hash], None),
+            0,
+            "ordinary post-commit cleanup must retain the autonomous Queue owner",
+        );
+        let barrier =
+            lane_reservation_release_barrier(vec![key], b"complete-release-crash-retirement");
+        assert_eq!(
+            queue
+                .prepare_lane_reservation_release_barrier(&barrier)
+                .expect("durably prepare the losing reservation release"),
+            LaneQueueReservationOutcome::Finalized,
+        );
+        assert_eq!(
+            queue
+                .finalize_lane_reservation_release_barrier(&barrier)
+                .expect("durably complete and forget the losing release owner"),
+            1,
+        );
+        assert!(queue.live_lane_reservations().is_empty());
+        assert!(queue.lane_reservation_release_barriers().is_empty());
+        assert_eq!(queue.fifo_snapshot_for_test(), vec![hash]);
+        assert!(queue.txs.contains_key(&hash));
+        assert!(queue.has_durable_plan_claim_for_test(hash));
+        assert_eq!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed Complete-release plan journal")
+                .live_record_count()
+                .expect("count retained QueuePlan owner"),
+            1,
+        );
+        // Kura can persist Complete only after Queue has durably forgotten the
+        // release owner. Complete does not mutate either Queue journal, so this
+        // is the exact persistent Queue image at the post-Complete crash cut.
+    }
+
+    let queue = Queue::test(config_factory(), &time_source);
+    assert_eq!(
+        queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("reopen the durably forgotten release owner"),
+        LaneQueueReservationReplaySummary::default(),
+    );
+    assert_eq!(
+        queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("reopen the retained QueuePlan owner"),
+        1,
+    );
+    assert_eq!(
+        queue
+            .replay_plan_journal(&state)
+            .expect("tombstone committed owner before replay publication"),
+        QueuePlanJournalReplaySummary {
+            records: 1,
+            replayed: 0,
+            tombstoned_committed: 1,
+            tombstoned_expired: 0,
+            tombstoned_conflicting_global_admission: 0,
+        },
+    );
+    assert_eq!(queue.active_len(), 0);
+    assert_eq!(queue.queued_len(), 0);
+    assert!(queue.fifo_snapshot_for_test().is_empty());
+    assert!(!queue.txs.contains_key(&hash));
+    assert!(!queue.routing_plans.contains_key(&hash));
+    assert!(!queue.has_durable_plan_claim_for_test(hash));
+    assert!(
+        !queue
+            .fee_admission_reservations
+            .lock()
+            .live_by_entrypoint
+            .contains_key(&hash),
+        "startup must not publish fee capacity for a committed terminal owner",
+    );
+    assert_eq!(
+        queue
+            .plan_journal
+            .lock()
+            .as_ref()
+            .expect("installed replay plan journal")
+            .live_record_count()
+            .expect("count post-replay QueuePlan owners"),
+        0,
+        "committed terminal QueuePlan removal must be durable before publication",
+    );
+    drop(queue);
+
+    let reopened = Queue::test(config_factory(), &time_source);
+    assert_eq!(
+        reopened
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("reopen the empty reservation journal again"),
+        LaneQueueReservationReplaySummary::default(),
+    );
+    assert_eq!(
+        reopened
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("reopen the durably tombstoned QueuePlan journal"),
+        0,
+    );
+    assert_eq!(
+        reopened
+            .replay_plan_journal(&state)
+            .expect("replay the durable empty terminal image"),
+        QueuePlanJournalReplaySummary::default(),
+    );
+}
+#[test]
 fn expired_live_reservation_replays_payload_without_fifo_or_tombstone() {
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
@@ -3066,30 +3216,7 @@ fn publish_startup_replica_disposition_cursor(
 #[test]
 fn startup_replica_queue_disposition_requires_exact_replay_cut_for_fifo_and_absence() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let kura_dir = tempdir().expect("authenticated startup replica Kura root");
-    let kura_config = KuraConfig {
-        init_mode: iroha_config::kura::InitMode::Strict,
-        store_dir: WithOrigin::inline(kura_dir.path().join("kura")),
-        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-        blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-        debug_output_new_blocks: false,
-        merge_ledger_cache_capacity:
-            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-        fsync_mode: iroha_config::kura::FsyncMode::Batched,
-        fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
-        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-    };
-    let lane_config = iroha_config::parameters::actual::LaneConfig::default();
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
-        .expect("open authenticated startup replica Kura");
-    let mut state = State::new(
-        world_with_test_domains(),
-        kura,
-        LiveQueryStore::start_test(),
-    );
-    install_single_validator_topology_for_queue_test(&mut state, 0xD5);
-    let state = Arc::new(state);
+    let (state, _kura_dir) = owned_lane_reservation_test_state();
     let journal_dir = tempdir().expect("startup replica Queue journal directory");
     let plan_path = journal_dir
         .path()
@@ -3233,6 +3360,30 @@ fn startup_replica_queue_disposition_requires_exact_replay_cut_for_fifo_and_abse
         queue.fifo_snapshot_for_test(),
         vec![fifo_keys[0].entrypoint_hash]
     );
+    let (fee_beneficiary, _) = gen_account_in("startup_replica_fee_reservation");
+    let fee_asset_definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("fees", "universal").expect("valid fee domain"),
+        "xor".parse().expect("valid fee asset name"),
+    );
+    let fee_source = FeeReservationAssetSource::Authority(AssetId::new(
+        fee_asset_definition,
+        fee_beneficiary.clone(),
+    ));
+    let fee_reservation = || FeeAdmissionReservation {
+        program_revision: None,
+        beneficiary: fee_beneficiary.clone(),
+        asset_charges: BTreeMap::from([(fee_source.clone(), Quantity::from(1_u32))]),
+        window_charges: BTreeMap::new(),
+        relay_lease_charges: BTreeMap::new(),
+        asset_remaining: BTreeMap::from([(fee_source.clone(), Quantity::from(2_u32))]),
+        window_remaining: BTreeMap::new(),
+        relay_lease_remaining: BTreeMap::new(),
+    };
+    queue
+        .fee_admission_reservations
+        .lock()
+        .reserve(fifo_keys[0].entrypoint_hash, fee_reservation())
+        .expect("reserve the ordinary FIFO replica's fee capacity");
 
     let mut mismatched_snapshot = snapshot.clone();
     mismatched_snapshot.ordered_owner_phases.clear();
@@ -3261,8 +3412,35 @@ fn startup_replica_queue_disposition_requires_exact_replay_cut_for_fifo_and_abse
         fifo_disposition,
         AutonomousLaneReplicaQueueDisposition::ExactOrdinaryFifo(_)
     ));
+    assert!(
+        queue
+            .fee_admission_reservations
+            .lock()
+            .live_by_entrypoint
+            .contains_key(&fifo_keys[0].entrypoint_hash),
+        "replica retirement must preserve ordinary FIFO fee capacity with its transaction"
+    );
 
     let absent_keys = &absent_payload.payload.reservation_keys;
+    queue
+        .fee_admission_reservations
+        .lock()
+        .reserve(absent_keys[0].entrypoint_hash, fee_reservation())
+        .expect("reserve a dangling fee-only owner for the absent replica");
+    assert!(matches!(
+        queue.authorize_autonomous_lane_replica_queue_disposition_during_startup(
+            &absent_cursor,
+            absent_keys,
+            &receipt,
+            &snapshot,
+        ),
+        Err(LaneQueueReservationError::TerminalConflict { ref owners, .. })
+            if owners.contains("fee_reservation")
+    ));
+    queue
+        .fee_admission_reservations
+        .lock()
+        .release(&absent_keys[0].entrypoint_hash);
     let absent_disposition = queue
         .authorize_autonomous_lane_replica_queue_disposition_during_startup(
             &absent_cursor,

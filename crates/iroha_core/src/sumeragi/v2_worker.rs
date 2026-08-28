@@ -1614,17 +1614,24 @@ impl LifecycleIoCapacityWait {
             status
         }
     }
-
-    /// Rejoin the retained one-shot target to the exact selector which minted
-    /// this released capacity wait.
-    pub(crate) fn restore_into_prepared(
+    /// Consume a released observation into the exact target it retained.
+    ///
+    /// Only the owner that also retains the moved-from selector can restore
+    /// this seal. Pending and terminal observations never expose it.
+    pub(crate) fn into_released_target(
         self,
-        mut prepared: PreparedLifecycleIngressSelector,
-    ) -> PreparedLifecycleIngressSelector {
-        prepared
-            .restore_lifecycle_io_target(self.target)
-            .expect("released capacity target must restore only into its source selector");
-        prepared
+        services: &ProductionV2Services,
+    ) -> Result<LifecycleIngressIoTargetSeal, Self> {
+        if self.status(services) != LifecycleIoCapacityWaitStatus::Released {
+            return Err(self);
+        }
+        let Self {
+            queue: _,
+            output_guard: _,
+            target,
+            observed_generation: _,
+        } = self;
+        Ok(target)
     }
 }
 /// Borrow-bound target reservation holding queue state and admission together.
@@ -1647,15 +1654,15 @@ impl LifecycleIoCapacityReservation<'_> {
     ) -> u64 {
         self.predecessor_debt
     }
-    /// Borrow the exact selected ordinary-Fetch target only through the sealed
-    /// scheduler factory while the capacity reservation remains live.
-    pub(crate) fn authenticated_certified_fetch_target(
+    /// Verify that this live reservation retains the exact certified-Fetch
+    /// target moved from the accompanying selector.
+    pub(crate) fn matches_captured_certified_fetch_target(
         &self,
-        _factory: &super::v2_lifecycle_coordinator::AuthenticatedSchedulerInputsFactory,
-    ) -> Option<&LifecycleIngressIoTargetSeal> {
-        self.target.as_ref().filter(|target| {
-            target.kind() == LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence
-        })
+        prepared: &PreparedLifecycleIngressSelector,
+    ) -> bool {
+        self.target
+            .as_ref()
+            .is_some_and(|target| prepared.matches_captured_certified_fetch_target(target))
     }
     /// Move the exact Serve target into lifecycle admission while retaining
     /// the worker queue cut and reserved auxiliary slot.

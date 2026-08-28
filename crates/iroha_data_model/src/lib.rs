@@ -93,8 +93,7 @@ pub mod fastpq;
 pub mod fraud;
 // Certificate-bearing Parliament data must remain available to the always-on
 // validation-fee registry without enabling governance instructions or events.
-/// Governance-related data types (feature-gated)
-#[cfg(feature = "governance")]
+/// Governance protocol types and feature-gated governance events.
 pub mod governance;
 mod governance_fingerprint;
 /// Hijiri reputation system data types.

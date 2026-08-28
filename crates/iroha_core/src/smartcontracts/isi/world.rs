@@ -19,8 +19,8 @@ use iroha_telemetry::metrics;
 pub mod isi {
     use crate::governance::draw::body_committee_size;
     use crate::governance::parliament::{
-        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentBodyStateV1,
-        parliament_attempt_policy_v1,
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentAttemptStateV1, ParliamentBodyStateV1,
+        ParliamentDecisionModeV1, parliament_attempt_policy_v1,
     };
     use base64::engine::Engine as _;
     use core::{
@@ -104,13 +104,14 @@ pub mod isi {
             },
         },
         governance::types::{
-            AbiVersion, DeployContractProposal, GovernanceAttemptStatusV1, GovernanceCertificateV1,
-            GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadPresentV1,
-            GovernanceExpectedHeadV1, GovernanceStageV1,
-            MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentAggregateTallyV1,
-            ParliamentBody, ProposalKind, RuntimeUpgradeProposal, SccpRouteGovernanceProposal,
-            SorafsProviderGovernanceProposal, ValidationFeePayoutLifecycleProposal,
-            ValidationFeePolicyProposal, parliament_ballot_participant_hash_v1,
+            AbiVersion, BodyElectionAttemptId, DeployContractProposal, GovernanceAttemptStatusV1,
+            GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
+            GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
+            MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentAggregateOutcomeV1,
+            ParliamentAggregateTallyV1, ParliamentBody, ProposalKind, RuntimeUpgradeProposal,
+            SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal, SortitionRequestV1,
+            ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+            parliament_ballot_participant_hash_v1, parliament_candidate_root_v1,
         },
         isi::{
             bridge, consensus_keys, endorsement,
@@ -2930,7 +2931,7 @@ pub mod isi {
         Ok(())
     }
 
-    // ---------------- Governance (stubs) ----------------
+    // ---------------- Governance proposals ----------------
     impl Execute for gov::ProposeDeployContract {
         #[allow(clippy::too_many_lines)]
         fn execute(
@@ -7727,7 +7728,11 @@ pub mod isi {
     ) -> bool {
         !matches!(
             kind,
-            gov::ParliamentLifecycleTransitionKindV1::RecordInvitationResponse
+            gov::ParliamentLifecycleTransitionKindV1::ConsumeSortitionPulseBatch
+                | gov::ParliamentLifecycleTransitionKindV1::BeginInvitationAcceptance
+                | gov::ParliamentLifecycleTransitionKindV1::FailBodyElectionNoRoster
+                | gov::ParliamentLifecycleTransitionKindV1::SealBodyRoster
+                | gov::ParliamentLifecycleTransitionKindV1::RecordInvitationResponse
                 | gov::ParliamentLifecycleTransitionKindV1::RecordAttemptAbsence
                 | gov::ParliamentLifecycleTransitionKindV1::EndorsePublicFinding
                 | gov::ParliamentLifecycleTransitionKindV1::RegisterBallotParticipant
@@ -7910,25 +7915,18 @@ pub mod isi {
     fn confirmation_candidate_snapshot_v1(
         mut candidates: Vec<AccountId>,
         policy_assignments: &[iroha_data_model::governance::types::ParliamentSeatAssignmentV1],
-    ) -> Result<Vec<AccountId>, Error> {
+    ) -> Vec<AccountId> {
         let policy_members = policy_assignments
             .iter()
             .map(|assignment| assignment.member.clone())
             .collect::<BTreeSet<_>>();
         candidates.retain(|candidate| !policy_members.contains(candidate));
-        if candidates.is_empty() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "Confirmation Jury has no candidate outside the sealed Policy Jury".into(),
-            ));
-        }
-        Ok(candidates)
+        candidates
     }
 
-    fn canonical_parliament_candidate_snapshot_v1(
-        body: ParliamentBody,
-        attempt: &crate::governance::parliament::ParliamentAttemptStateV1,
+    fn canonical_parliament_eligible_candidates_v1(
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<Vec<AccountId>, Error> {
+    ) -> Vec<AccountId> {
         let current_height = state_transaction.block_height();
         let required_bond =
             required_citizenship_bond_for_role(&state_transaction.gov, "parliament").max(
@@ -7944,6 +7942,15 @@ pub mod isi {
             })
             .collect::<Vec<_>>();
         candidates.sort_unstable();
+        candidates
+    }
+
+    fn canonical_parliament_candidate_snapshot_v1(
+        body: ParliamentBody,
+        attempt: &crate::governance::parliament::ParliamentAttemptStateV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Vec<AccountId>, Error> {
+        let mut candidates = canonical_parliament_eligible_candidates_v1(state_transaction);
         if body == ParliamentBody::ConfirmationJury {
             let policy_jury = attempt
                 .sealed_body_for_role(ParliamentBody::PolicyJury)
@@ -7952,14 +7959,85 @@ pub mod isi {
                         "Confirmation Jury sortition requires a sealed Policy Jury".into(),
                     )
                 })?;
-            candidates = confirmation_candidate_snapshot_v1(candidates, policy_jury.assignments())?;
+            candidates = confirmation_candidate_snapshot_v1(candidates, policy_jury.assignments());
         }
-        if candidates.is_empty() {
+        if !attempt
+            .required_bodies()
+            .iter()
+            .any(|required| required.body == body)
+        {
             return Err(InstructionExecutionError::InvariantViolation(
-                "Parliament sortition has no eligible body-specific candidates".into(),
-            ));
+                "Parliament sortition names a body outside the required pipeline".into(),
+            )
+            .into());
         }
         Ok(candidates)
+    }
+
+    fn canonical_confirmation_sortition_request_v1(
+        attempt: &ParliamentAttemptStateV1,
+        candidates: &[AccountId],
+        request_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<SortitionRequestV1, Error> {
+        let governance_attempt_id = attempt.attempt().id;
+        if candidates.len() < 2 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "atomic Confirmation Jury sortition requires at least two candidates".into(),
+            )
+            .into());
+        }
+        let candidate_count = u32::try_from(candidates.len()).map_err(|_| {
+            InstructionExecutionError::InvariantViolation(
+                "eligible Confirmation Jury population exceeds the V1 count domain".into(),
+            )
+        })?;
+        let target_seats = u32::try_from(body_committee_size(
+            &state_transaction.gov,
+            ParliamentBody::ConfirmationJury,
+        ))
+        .map_err(|_| {
+            InstructionExecutionError::InvariantViolation(
+                "configured Confirmation Jury size exceeds the V1 request domain".into(),
+            )
+        })?;
+        let pulse_height = request_height
+            .checked_add(attempt.sortition_pulse_delay_blocks())
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "Confirmation Jury sortition pulse height overflow".into(),
+                )
+            })?;
+        let election_attempt_id = BodyElectionAttemptId::derive_v1(
+            governance_attempt_id,
+            ParliamentBody::ConfirmationJury,
+            0,
+        );
+        SortitionRequestV1::try_new_canonical(
+            governance_attempt_id,
+            election_attempt_id,
+            ParliamentBody::ConfirmationJury,
+            parliament_candidate_root_v1(
+                governance_attempt_id,
+                ParliamentBody::ConfirmationJury,
+                candidates,
+            ),
+            candidate_count,
+            target_seats,
+            request_height,
+            pulse_height,
+            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
+                &state_transaction.network_id,
+            ),
+            None,
+        )
+        .map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to derive the atomic Confirmation Jury sortition request: {error}")
+                    .into(),
+            )
+            .into()
+        })
     }
 
     fn ensure_parliament_logical_beacon_v1(
@@ -8093,7 +8171,30 @@ pub mod isi {
                 "Parliament ballot must use the exact active TLE key session".into(),
             ));
         }
-        validated_parliament_tle_key_session_v1(key_session_id, state_transaction)
+        let key_session =
+            validated_parliament_tle_key_session_v1(key_session_id, state_transaction)?;
+        let public_state = key_session.public_state();
+        if public_state.network_id != *state_transaction.network_id.as_bytes() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Parliament TLE key session belongs to a different exact NetworkId".into(),
+            ));
+        }
+        let ordered_roster = state_transaction.commit_topology().get();
+        let frozen_ordered_roster = state_transaction
+            .world
+            .tle_key_session_rosters()
+            .get(&key_session_id);
+        if frozen_ordered_roster != Some(ordered_roster)
+            || public_state.roster_hash
+                != crate::beacon::global_threshold_beacon_roster_hash_v1(ordered_roster)
+            || usize::from(public_state.committee_size) != ordered_roster.len()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "active Parliament TLE key session is not bound to the current commit topology"
+                    .into(),
+            ));
+        }
+        Ok(key_session)
     }
 
     fn parliament_timed_ovn_lifecycle_v1(
@@ -8145,7 +8246,7 @@ pub mod isi {
             gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(payload) => {
                 parliament_timed_ovn_corpus_count_v1(payload.ballot_records.len())?;
                 if payload.ballot_records.len()
-                    > iroha_data_model::isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
+                    > iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
                     || payload
                     .ballot_records
                     .iter()
@@ -8169,10 +8270,11 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let transition_kind = self.transition.kind();
-            // A manager may only trigger management transitions; member actions are bound to
-            // the signed transaction authority. The containing finalized block supplies
-            // consensus height/order, while Core independently replays every pulse, deadline,
-            // roster, corpus, release, certificate, and compare-and-set binding below.
+            // Intent-setting transitions require a manager; member actions remain bound to the
+            // signed transaction authority, and state-derived progress transitions are
+            // permissionless. The containing finalized block supplies consensus height/order,
+            // while Core independently replays every pulse, deadline, roster, corpus, release,
+            // certificate, and compare-and-set binding below.
             if parliament_transition_requires_manager_v1(transition_kind) {
                 require_parliament_manager(authority, state_transaction)?;
             }
@@ -8242,13 +8344,37 @@ pub mod isi {
                             ));
                         }
                     }
-                    attempt
-                        .register_sortition_request_batch(
-                            governance_attempt_id,
-                            payload.requests,
-                            expected_candidates,
-                        )
-                        .map_err(parliament_reducer_error)?;
+                    let hidden_body_requested = payload.requests.iter().any(|entry| {
+                        attempt.required_bodies().iter().any(|required| {
+                            required.body == entry.request.body
+                                && required.decision_mode
+                                    == ParliamentDecisionModeV1::HiddenBindingBallot
+                        })
+                    });
+                    if expected_candidates.len() < 2 && hidden_body_requested {
+                        attempt
+                            .record_hidden_sortition_capacity_failure_batch(
+                                governance_attempt_id,
+                                payload.requests,
+                                expected_candidates,
+                            )
+                            .map_err(parliament_reducer_error)?;
+                        if attempt.attempt().status
+                            == iroha_data_model::governance::types::GovernanceAttemptStatusV1::Rejected
+                        {
+                            no_result_kind = Some(
+                                iroha_data_model::governance::types::ParliamentNoResultKindV1::SortitionRetriesExhausted,
+                            );
+                        }
+                    } else {
+                        attempt
+                            .register_sortition_request_batch(
+                                governance_attempt_id,
+                                payload.requests,
+                                expected_candidates,
+                            )
+                            .map_err(parliament_reducer_error)?;
+                    }
                 }
                 gov::ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(payload) => {
                     let pulse_output = parliament_finalized_pulse_seed_v1(
@@ -8380,14 +8506,6 @@ pub mod isi {
                             payload.tle_key_session_id,
                             state_transaction,
                         )?;
-                    if tle_key_session.public_state().network_id
-                        != *state_transaction.network_id.as_bytes()
-                    {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "Parliament TLE key session belongs to a different exact NetworkId"
-                                .into(),
-                        ));
-                    }
                     let tle_master_public_key = tle_key_session.master_public_key();
                     let session = TimedOvnSessionPublicV1 {
                         network_id: *state_transaction.network_id.as_bytes(),
@@ -8647,7 +8765,41 @@ pub mod isi {
                         nay: u32::from(released.tally.nay),
                         abstain: u32::from(released.tally.abstain),
                     };
-                    attempt
+                    let body_role = attempt
+                        .body(&ballot.attempt().body_instance_id)
+                        .map(|body| body.instance().body)
+                        .ok_or_else(|| {
+                            InstructionExecutionError::InvariantViolation(
+                                "Parliament ballot has no sealed body at aggregate opening".into(),
+                            )
+                        })?;
+                    let confirmation_candidates = if body_role == ParliamentBody::PolicyJury {
+                        let candidates =
+                            canonical_parliament_eligible_candidates_v1(state_transaction);
+                        let policy_jury = attempt
+                            .sealed_body_for_role(ParliamentBody::PolicyJury)
+                            .ok_or_else(|| {
+                                InstructionExecutionError::InvariantViolation(
+                                    "Policy Jury aggregate has no sealed Policy Jury".into(),
+                                )
+                            })?;
+                        Some(confirmation_candidate_snapshot_v1(
+                            candidates,
+                            policy_jury.assignments(),
+                        ))
+                    } else {
+                        None
+                    };
+                    let eligible_confirmation_candidates = match &confirmation_candidates {
+                        Some(candidates) => u32::try_from(candidates.len()).map_err(|_| {
+                            InstructionExecutionError::InvariantViolation(
+                                "eligible Confirmation Jury population exceeds the V1 count domain"
+                                    .into(),
+                            )
+                        })?,
+                        None => 2,
+                    };
+                    let outcome = attempt
                         .finalize_opened_ballot(
                             governance_attempt_id,
                             payload.ballot_attempt_id,
@@ -8657,9 +8809,40 @@ pub mod isi {
                             *released.opening_root(),
                             opened_survivors,
                             tally,
+                            eligible_confirmation_candidates,
                             current_height,
                         )
                         .map_err(parliament_reducer_error)?;
+                    if outcome == ParliamentAggregateOutcomeV1::Approved
+                        && attempt.attempt().stage == GovernanceStageV1::ConfirmationJury
+                    {
+                        // Freeze the exact disjoint electorate before this transaction commits the
+                        // narrow Policy result. A later eligibility change therefore cannot strand
+                        // the active attempt before its first Confirmation sortition request.
+                        let candidates = confirmation_candidates.ok_or_else(|| {
+                            InstructionExecutionError::InvariantViolation(
+                                "Confirmation stage was derived from a non-Policy body".into(),
+                            )
+                        })?;
+                        let request = canonical_confirmation_sortition_request_v1(
+                            &attempt,
+                            &candidates,
+                            current_height,
+                            state_transaction,
+                        )?;
+                        attempt
+                            .register_sortition_request(
+                                governance_attempt_id,
+                                0,
+                                request,
+                                candidates,
+                            )
+                            .map_err(parliament_reducer_error)?;
+                    }
+                    no_result_kind = attempt
+                        .ballot(&payload.ballot_attempt_id)
+                        .and_then(|ballot| ballot.failure_kind())
+                        .map(Into::into);
                     if attempt.attempt().status == GovernanceAttemptStatusV1::Active
                         && attempt.attempt().stage == GovernanceStageV1::Certification
                     {
@@ -10118,7 +10301,7 @@ pub mod isi {
                     let key_session_id = public_state.key_session_id;
                     state_transaction
                         .world
-                        .put_tle_key_session(public_state)
+                        .put_tle_key_session(public_state, ordered_roster.clone())
                         .map_err(|_| {
                             threshold_key_lifecycle_error_v1(
                                 "Parliament TLE public key session cannot be persisted",
@@ -19083,11 +19266,12 @@ pub mod isi {
             events::data::{DataEvent, prelude::BridgeEvent},
             governance::types::{
                 BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
-                ContractAbiHash, ContractCodeHash, GovernanceAttemptId, GovernanceAttemptStatusV1,
-                GovernanceAttemptV1, GovernanceCertificateId, GovernanceCertificateV1,
-                GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentAggregateOutcomeV1,
-                ParliamentAggregateTallyV1, ParliamentBody, ProposalContentId, ProposalKind,
-                SortitionRequestV1, TleKeySessionId, TleSessionId, parliament_candidate_root_v1,
+                BodyElectionAttemptStatusV1, ContractAbiHash, ContractCodeHash,
+                GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceAttemptV1,
+                GovernanceCertificateId, GovernanceCertificateV1, GovernanceExpectedHeadV1,
+                GovernanceStageV1, ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
+                ParliamentBody, ProposalContentId, ProposalKind, SortitionRequestV1,
+                TleKeySessionId, TleSessionId, parliament_candidate_root_v1,
                 parliament_execution_failure_root_v1,
             },
             isi::{
@@ -19179,20 +19363,26 @@ pub mod isi {
         }
 
         #[test]
-        fn parliament_management_transition_requires_manager_but_reaches_state_validation() {
+        fn parliament_intent_transition_requires_manager_but_reaches_state_validation() {
             let state = blank_test_state();
             let header = first_test_block_header();
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
+            let create = gov::CreateParliamentGovernanceAttemptV1 {
+                proposal: parliament_permissionless_progress_proposal(),
+                attempt_sequence: 0,
+            };
+            let unauthorized_create = create
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("an ordinary account must not create a Parliament attempt");
+            assert!(format!("{unauthorized_create:?}").contains("CanManageParliament"));
+
             let instruction = gov::SubmitParliamentLifecycleTransitionV1 {
                 governance_attempt_id:
                     iroha_data_model::governance::types::GovernanceAttemptId::new([0x91; 32]),
-                transition: gov::ParliamentLifecycleTransitionV1::FailBodyElectionNoRoster(
-                    gov::ParliamentFailBodyElectionNoRosterV1 {
-                        election_attempt_id:
-                            iroha_data_model::governance::types::BodyElectionAttemptId::new(
-                                [0x92; 32],
-                            ),
+                transition: gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+                    gov::ParliamentRegisterSortitionRequestV1 {
+                        requests: Vec::new(),
                     },
                 ),
             };
@@ -19200,7 +19390,7 @@ pub mod isi {
             let unauthorized = instruction
                 .clone()
                 .execute(&ALICE_ID, &mut state_transaction)
-                .expect_err("an ordinary account must not trigger a Parliament transition");
+                .expect_err("an ordinary account must not set Parliament lifecycle intent");
             assert!(format!("{unauthorized:?}").contains("CanManageParliament"));
 
             state_transaction.world.account_permissions.insert(
@@ -19214,6 +19404,193 @@ pub mod isi {
                 format!("{validation_error:?}").contains("unknown Parliament governance attempt"),
                 "a permitted manager must reach deterministic state validation: {validation_error:?}"
             );
+        }
+
+        #[test]
+        fn parliament_hidden_sortition_capacity_is_objective_for_zero_and_one_candidate() {
+            for candidate_count in [0_u32, 1] {
+                let state = blank_test_state();
+                let header = first_test_block_header();
+                let mut block = state.block(header);
+                let mut state_transaction = block.transaction();
+                let proposal = parliament_permissionless_progress_proposal();
+                let proposal_id = proposal.fingerprint();
+                let proposal_content_id = ProposalContentId::new(proposal_id);
+                let governance_attempt_id = GovernanceAttemptId::derive_v1(proposal_content_id, 0);
+                let (risk_tier, requirements) = parliament_attempt_policy_v1(&proposal);
+                let mut governance = parliament_test_governance(&requirements);
+                governance.citizenship_bond_amount = Quantity::zero();
+                governance.parliament_sortition_pulse_delay_blocks = 5;
+                state_transaction.gov = governance;
+                state_transaction.world.account_permissions.insert(
+                    ALICE_ID.clone(),
+                    BTreeSet::from([Permission::from(CanManageParliament)]),
+                );
+                if candidate_count == 1 {
+                    let candidate = parliament_test_account(200);
+                    state_transaction.world.citizens.insert(
+                        candidate.clone(),
+                        crate::state::CitizenshipRecord {
+                            owner: candidate,
+                            amount: Quantity::zero(),
+                            bonded_height: 0,
+                            seats_in_epoch: 0,
+                            last_epoch_seen: 0,
+                            cooldown_until: 0,
+                            declines_used: 0,
+                            no_show_strikes: 0,
+                            misconduct_strikes: 0,
+                        },
+                    );
+                }
+                let expected_head = parliament_expected_head_v1(&proposal, &state_transaction)
+                    .expect("capacity fixture has a deterministic head");
+                let mut attempt = crate::governance::parliament::ParliamentAttemptStateV1::try_new(
+                    GovernanceAttemptV1 {
+                        id: governance_attempt_id,
+                        proposal_content_id,
+                        sequence: 0,
+                        risk_tier,
+                        stage: GovernanceStageV1::Qualification,
+                        status: GovernanceAttemptStatusV1::Active,
+                    },
+                    PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+                    state_transaction
+                        .gov
+                        .parliament_sortition_pulse_delay_blocks,
+                    proposal.effect_preimage_hash_v1(),
+                    expected_head,
+                    requirements.clone(),
+                )
+                .expect("create capacity fixture attempt");
+                attempt
+                    .complete_qualification(governance_attempt_id)
+                    .expect("complete qualification");
+                state_transaction
+                    .world
+                    .put_governance_proposal(
+                        proposal_id,
+                        crate::state::GovernanceProposalRecord {
+                            proposer: ALICE_ID.clone(),
+                            kind: proposal,
+                            created_height: 1,
+                            status: crate::state::GovernanceProposalStatus::Proposed,
+                        },
+                    )
+                    .expect("store capacity fixture proposal");
+                state_transaction
+                    .world
+                    .put_parliament_attempt(attempt)
+                    .expect("store capacity fixture attempt");
+
+                let candidates = canonical_parliament_eligible_candidates_v1(&state_transaction);
+                assert_eq!(
+                    u32::try_from(candidates.len()).expect("candidate count fits u32"),
+                    candidate_count
+                );
+                let request_height = state_transaction.block_height();
+                let pulse_height = request_height
+                    + state_transaction
+                        .gov
+                        .parliament_sortition_pulse_delay_blocks;
+                let beacon_session_id =
+                    BeaconSessionId::for_network_v1(&state_transaction.network_id);
+                let requests = requirements
+                    .iter()
+                    .map(|required| {
+                        let election_attempt_id = BodyElectionAttemptId::derive_v1(
+                            governance_attempt_id,
+                            required.body,
+                            0,
+                        );
+                        let mut request = SortitionRequestV1 {
+                            id: iroha_data_model::governance::types::SortitionRequestId::new(
+                                [0; 32],
+                            ),
+                            governance_attempt_id,
+                            body_election_attempt_id: election_attempt_id,
+                            body: required.body,
+                            candidate_root: parliament_candidate_root_v1(
+                                governance_attempt_id,
+                                required.body,
+                                &candidates,
+                            ),
+                            candidate_count,
+                            target_seats: u32::try_from(body_committee_size(
+                                &state_transaction.gov,
+                                required.body,
+                            ))
+                            .expect("configured body size fits u32"),
+                            request_height,
+                            pulse_height,
+                            beacon_session_id,
+                        };
+                        request.id = request.canonical_id();
+                        gov::ParliamentSortitionRequestRegistrationV1 {
+                            sequence: 0,
+                            request,
+                        }
+                    })
+                    .collect();
+                gov::SubmitParliamentLifecycleTransitionV1 {
+                    governance_attempt_id,
+                    transition: gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+                        gov::ParliamentRegisterSortitionRequestV1 { requests },
+                    ),
+                }
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect("undersized hidden electorate becomes typed capacity evidence");
+
+                let attempt = state_transaction
+                    .world
+                    .parliament_attempts
+                    .get(&governance_attempt_id)
+                    .expect("updated capacity attempt");
+                for required in &requirements {
+                    let election_attempt_id =
+                        BodyElectionAttemptId::derive_v1(governance_attempt_id, required.body, 0);
+                    let failure = attempt
+                        .sortition_capacity_failure(&election_attempt_id)
+                        .expect("typed capacity failure for the atomic initial generation");
+                    assert_eq!(failure.candidate_count(), candidates.len());
+                    assert_eq!(failure.status(), BodyElectionAttemptStatusV1::NoRoster);
+                    assert!(attempt.election(&election_attempt_id).is_none());
+                }
+                assert!(!attempt.requires_beacon_pulse_at(beacon_session_id, pulse_height));
+                attempt
+                    .validate()
+                    .expect("capacity evidence must pass restore validation");
+            }
+        }
+
+        #[test]
+        fn parliament_progress_authority_partition_is_exact() {
+            use gov::ParliamentLifecycleTransitionKindV1 as Kind;
+
+            for kind in [
+                Kind::ConsumeSortitionPulseBatch,
+                Kind::BeginInvitationAcceptance,
+                Kind::FailBodyElectionNoRoster,
+                Kind::SealBodyRoster,
+            ] {
+                assert!(
+                    !parliament_transition_requires_manager_v1(kind),
+                    "objective election progress must not depend on manager liveness: {kind:?}"
+                );
+            }
+            for kind in [
+                Kind::EscalateRisk,
+                Kind::CompleteQualification,
+                Kind::RegisterSortitionRequest,
+                Kind::AdvanceBodyPhase,
+                Kind::RegisterBallotAttempt,
+                Kind::FreezeTimedOvnCorpus,
+            ] {
+                assert!(
+                    parliament_transition_requires_manager_v1(kind),
+                    "intent-setting Parliament transition must retain manager authority: {kind:?}"
+                );
+            }
         }
 
         #[test]
@@ -19356,7 +19733,7 @@ pub mod isi {
                             iroha_data_model::governance::types::BallotAttemptId::new([0x97; 32]),
                         ballot_records: vec![
                             vec![0x98; TIMED_OVN_BALLOT_RECORD_BYTES_V1];
-                            iroha_data_model::isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
+                            iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
                                 + 1
                         ],
                     },
@@ -19548,12 +19925,96 @@ pub mod isi {
             expected.sort_unstable();
 
             assert_eq!(
-                confirmation_candidate_snapshot_v1(candidates, &policy_assignments)
-                    .expect("disjoint Confirmation Jury candidates must remain eligible"),
+                confirmation_candidate_snapshot_v1(candidates, &policy_assignments),
                 expected
             );
-            confirmation_candidate_snapshot_v1(vec![policy_member], &policy_assignments)
-                .expect_err("a Confirmation Jury may not reuse its Policy Jury membership");
+            assert!(
+                confirmation_candidate_snapshot_v1(
+                    vec![policy_member.clone()],
+                    &policy_assignments
+                )
+                .is_empty(),
+                "Policy Jury members must not contribute Confirmation capacity"
+            );
+            assert_eq!(
+                confirmation_candidate_snapshot_v1(
+                    vec![policy_member, expected[0].clone()],
+                    &policy_assignments,
+                ),
+                vec![expected[0].clone()],
+                "one disjoint candidate remains observable so narrow finalization can classify capacity objectively"
+            );
+        }
+
+        #[test]
+        fn narrow_confirmation_request_freezes_exact_current_snapshot_and_schedule() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(NonZeroU64::new(7).expect("nonzero height"));
+            let mut state_block = state.block(block.as_ref().header());
+            let mut state_transaction = state_block.transaction();
+            let fixture = seed_parliament_permissionless_progress_fixture(
+                &mut state_transaction,
+                ParliamentPermissionlessProgressPhase::AwaitingPulse,
+            );
+            let attempt = state_transaction
+                .world
+                .parliament_attempts
+                .get(&fixture.governance_attempt_id)
+                .expect("retained Parliament attempt");
+            let mut candidates = vec![parliament_test_account(0xE1), parliament_test_account(0xE2)];
+            candidates.sort_unstable();
+            let request_height = state_transaction.block_height();
+            let request = canonical_confirmation_sortition_request_v1(
+                attempt,
+                &candidates,
+                request_height,
+                &state_transaction,
+            )
+            .expect("derive atomic Confirmation Jury request");
+
+            assert_eq!(
+                request.body_election_attempt_id,
+                BodyElectionAttemptId::derive_v1(
+                    fixture.governance_attempt_id,
+                    ParliamentBody::ConfirmationJury,
+                    0,
+                )
+            );
+            assert_eq!(request.body, ParliamentBody::ConfirmationJury);
+            assert_eq!(request.candidate_count, 2);
+            assert_eq!(
+                request.candidate_root,
+                parliament_candidate_root_v1(
+                    fixture.governance_attempt_id,
+                    ParliamentBody::ConfirmationJury,
+                    &candidates,
+                )
+            );
+            assert_eq!(
+                request.target_seats,
+                u32::try_from(state_transaction.gov.confirmation_jury_size)
+                    .expect("configured target fits u32")
+            );
+            assert_eq!(request.request_height, request_height);
+            assert_eq!(
+                request.pulse_height,
+                request_height + attempt.sortition_pulse_delay_blocks()
+            );
+            assert_eq!(
+                request.beacon_session_id,
+                BeaconSessionId::for_network_v1(&state_transaction.network_id)
+            );
+            assert_eq!(request.id, request.canonical_id());
+            assert!(
+                canonical_confirmation_sortition_request_v1(
+                    attempt,
+                    &candidates[..1],
+                    request_height,
+                    &state_transaction,
+                )
+                .is_err(),
+                "an atomic Confirmation request must never freeze an identity-mask electorate"
+            );
         }
 
         #[test]
@@ -19742,6 +20203,523 @@ pub mod isi {
             governance
         }
 
+        fn parliament_permissionless_progress_proposal() -> ProposalKind {
+            ProposalKind::DeployContract(
+                iroha_data_model::governance::types::DeployContractProposal {
+                    contract_address:
+                        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                            .parse()
+                            .expect("permissionless-progress contract address"),
+                    code_hash: ContractCodeHash::new([0x31; 32]),
+                    abi_hash: ContractAbiHash::new([0x41; 32]),
+                    abi_version: iroha_data_model::governance::types::AbiVersion::new(1),
+                    manifest_provenance: None,
+                },
+            )
+        }
+
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum ParliamentPermissionlessProgressPhase {
+            AwaitingPulse,
+            Drawing,
+            InvitationsOpen,
+            InvitationsAccepted,
+        }
+
+        struct ParliamentPermissionlessProgressFixture {
+            governance_attempt_id: GovernanceAttemptId,
+            election_attempt_id: BodyElectionAttemptId,
+            request_ids: Vec<iroha_data_model::governance::types::SortitionRequestId>,
+            beacon_session_id: BeaconSessionId,
+            pulse_height: u64,
+            pulse_id: BeaconPulseId,
+        }
+
+        fn seed_parliament_permissionless_progress_fixture(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            phase: ParliamentPermissionlessProgressPhase,
+        ) -> ParliamentPermissionlessProgressFixture {
+            const REQUEST_HEIGHT: u64 = 1;
+            const PULSE_HEIGHT: u64 = 6;
+
+            let proposal = parliament_permissionless_progress_proposal();
+            let proposal_id = proposal.fingerprint();
+            let proposal_content_id = ProposalContentId::new(proposal_id);
+            let governance_attempt_id = GovernanceAttemptId::derive_v1(proposal_content_id, 0);
+            let (risk_tier, requirements) = parliament_attempt_policy_v1(&proposal);
+            let mut governance = parliament_test_governance(&requirements);
+            governance.parliament_sortition_pulse_delay_blocks = PULSE_HEIGHT - REQUEST_HEIGHT;
+            governance.parliament_invitation_phase_blocks = 1;
+            state_transaction.gov = governance;
+            let expected_head = parliament_expected_head_v1(&proposal, state_transaction)
+                .expect("permissionless-progress proposal has a deterministic head");
+            let mut attempt = crate::governance::parliament::ParliamentAttemptStateV1::try_new(
+                GovernanceAttemptV1 {
+                    id: governance_attempt_id,
+                    proposal_content_id,
+                    sequence: 0,
+                    risk_tier,
+                    stage: GovernanceStageV1::Qualification,
+                    status: GovernanceAttemptStatusV1::Active,
+                },
+                PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+                PULSE_HEIGHT - REQUEST_HEIGHT,
+                proposal.effect_preimage_hash_v1(),
+                expected_head,
+                requirements.clone(),
+            )
+            .expect("create permissionless-progress Parliament attempt");
+            attempt
+                .complete_qualification(governance_attempt_id)
+                .expect("complete permissionless-progress qualification");
+
+            let candidates = parliament_test_candidates();
+            let candidate_count =
+                u32::try_from(candidates.len()).expect("fixture candidate count fits u32");
+            let beacon_session_id = BeaconSessionId::for_network_v1(&state_transaction.network_id);
+            let mut request_ids = Vec::with_capacity(requirements.len());
+            for requirement in &requirements {
+                let election_attempt_id =
+                    BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0);
+                let request = SortitionRequestV1::try_new_canonical(
+                    governance_attempt_id,
+                    election_attempt_id,
+                    requirement.body,
+                    parliament_candidate_root_v1(
+                        governance_attempt_id,
+                        requirement.body,
+                        &candidates,
+                    ),
+                    candidate_count,
+                    3,
+                    REQUEST_HEIGHT,
+                    PULSE_HEIGHT,
+                    beacon_session_id,
+                    None,
+                )
+                .expect("construct permissionless-progress sortition request");
+                request_ids.push(request.id);
+                attempt
+                    .register_sortition_request(
+                        governance_attempt_id,
+                        0,
+                        request,
+                        candidates.clone(),
+                    )
+                    .expect("register permissionless-progress sortition request");
+            }
+            request_ids.sort_unstable();
+
+            let pulse_id = if phase == ParliamentPermissionlessProgressPhase::AwaitingPulse {
+                let (key_record, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
+                    state_transaction.network_id,
+                    PULSE_HEIGHT,
+                );
+                state_transaction
+                    .world
+                    .global_beacon_key_sessions
+                    .insert(key_record.session.session_id, key_record);
+                state_transaction
+                    .world
+                    .global_beacon_pulses
+                    .insert(pulse.pulse_id, pulse);
+                state_transaction
+                    .world
+                    .global_beacon_pulse_slots
+                    .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+                BeaconPulseId::new(pulse.pulse_id)
+            } else {
+                let pulse_id = BeaconPulseId::new(parliament_test_root(0xB1));
+                attempt
+                    .consume_sortition_pulse_batch(
+                        governance_attempt_id,
+                        request_ids.clone(),
+                        beacon_session_id,
+                        PULSE_HEIGHT,
+                        pulse_id,
+                        parliament_test_root(0xB2),
+                        &state_transaction.network_id,
+                        &state_transaction.gov,
+                    )
+                    .expect("consume permissionless-progress sortition pulse");
+                pulse_id
+            };
+
+            let election_attempt_id = BodyElectionAttemptId::derive_v1(
+                governance_attempt_id,
+                ParliamentBody::RulesCommittee,
+                0,
+            );
+            if matches!(
+                phase,
+                ParliamentPermissionlessProgressPhase::InvitationsOpen
+                    | ParliamentPermissionlessProgressPhase::InvitationsAccepted
+            ) {
+                attempt
+                    .begin_invitation_acceptance(
+                        governance_attempt_id,
+                        election_attempt_id,
+                        PULSE_HEIGHT,
+                        state_transaction.gov.parliament_invitation_phase_blocks,
+                    )
+                    .expect("open permissionless-progress invitation window");
+            }
+            if phase == ParliamentPermissionlessProgressPhase::InvitationsAccepted {
+                let members = attempt
+                    .election(&election_attempt_id)
+                    .expect("drawn permissionless-progress election")
+                    .primary_assignments()
+                    .iter()
+                    .map(|assignment| assignment.member.clone())
+                    .collect::<Vec<_>>();
+                for member in members {
+                    attempt
+                        .record_invitation_response(
+                            governance_attempt_id,
+                            election_attempt_id,
+                            &member,
+                            true,
+                            PULSE_HEIGHT,
+                        )
+                        .expect("accept permissionless-progress invitation");
+                }
+            }
+
+            state_transaction
+                .world
+                .put_governance_proposal(
+                    proposal_id,
+                    crate::state::GovernanceProposalRecord {
+                        proposer: ALICE_ID.clone(),
+                        kind: proposal,
+                        created_height: REQUEST_HEIGHT,
+                        status: crate::state::GovernanceProposalStatus::Proposed,
+                    },
+                )
+                .expect("store permissionless-progress proposal");
+            state_transaction
+                .world
+                .put_parliament_attempt(attempt)
+                .expect("store permissionless-progress Parliament attempt");
+            let manager_permission: Permission = CanManageParliament.into();
+            assert!(
+                !has_exact_permission(&state_transaction.world, &ALICE_ID, &manager_permission,),
+                "permissionless-progress relayer fixture must not grant manager authority"
+            );
+
+            ParliamentPermissionlessProgressFixture {
+                governance_attempt_id,
+                election_attempt_id,
+                request_ids,
+                beacon_session_id,
+                pulse_height: PULSE_HEIGHT,
+                pulse_id,
+            }
+        }
+
+        #[test]
+        fn parliament_sortition_pulse_consumption_is_permissionless_and_exactly_bound() {
+            use iroha_data_model::governance::types::BodyElectionAttemptStatusV1;
+
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(NonZeroU64::new(6).expect("nonzero height"));
+            let mut state_block = state.block(block.as_ref().header());
+            let mut state_transaction = state_block.transaction();
+            let fixture = seed_parliament_permissionless_progress_fixture(
+                &mut state_transaction,
+                ParliamentPermissionlessProgressPhase::AwaitingPulse,
+            );
+
+            let mut incomplete_request_ids = fixture.request_ids.clone();
+            incomplete_request_ids.pop();
+            let error = gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: fixture.governance_attempt_id,
+                transition: gov::ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(
+                    gov::ParliamentConsumeSortitionPulseBatchV1 {
+                        request_ids: incomplete_request_ids,
+                        beacon_session_id: fixture.beacon_session_id,
+                        pulse_height: fixture.pulse_height,
+                        pulse_id: fixture.pulse_id,
+                    },
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a relayer cannot select an incomplete initial request batch");
+            let rendered = format!("{error:?}");
+            assert!(
+                rendered.contains("future beacon pulse binding mismatch"),
+                "unexpected incomplete pulse-batch rejection: {rendered}"
+            );
+            assert!(
+                !rendered.contains("CanManageParliament"),
+                "pulse binding must be reducer-owned rather than manager-gated: {rendered}"
+            );
+            assert_eq!(
+                state_transaction
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .expect("retained permissionless-progress attempt")
+                    .election(&fixture.election_attempt_id)
+                    .expect("retained permissionless-progress election")
+                    .attempt()
+                    .status,
+                BodyElectionAttemptStatusV1::AwaitingPulse,
+                "a rejected relayer-selected request subset must not mutate the draw"
+            );
+
+            gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: fixture.governance_attempt_id,
+                transition: gov::ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(
+                    gov::ParliamentConsumeSortitionPulseBatchV1 {
+                        request_ids: fixture.request_ids,
+                        beacon_session_id: fixture.beacon_session_id,
+                        pulse_height: fixture.pulse_height,
+                        pulse_id: fixture.pulse_id,
+                    },
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect("a non-manager may relay the exact finalized sortition pulse");
+            let election = state_transaction
+                .world
+                .parliament_attempts
+                .get(&fixture.governance_attempt_id)
+                .expect("updated permissionless-progress attempt")
+                .election(&fixture.election_attempt_id)
+                .expect("updated permissionless-progress election");
+            assert_eq!(
+                election.attempt().status,
+                BodyElectionAttemptStatusV1::Drawing
+            );
+            assert_eq!(election.pulse_id(), Some(fixture.pulse_id));
+            assert!(election.pulse_output().is_some());
+            assert!(
+                !election.primary_assignments().is_empty(),
+                "Core must derive the roster candidates from the verified pulse"
+            );
+        }
+
+        #[test]
+        fn parliament_invitation_start_is_permissionless_and_election_bound() {
+            use iroha_data_model::governance::types::BodyElectionAttemptStatusV1;
+
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(NonZeroU64::new(6).expect("nonzero height"));
+            let mut state_block = state.block(block.as_ref().header());
+            let mut state_transaction = state_block.transaction();
+            let fixture = seed_parliament_permissionless_progress_fixture(
+                &mut state_transaction,
+                ParliamentPermissionlessProgressPhase::Drawing,
+            );
+            let wrong_election = BodyElectionAttemptId::new([0xE1; 32]);
+            let error = gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: fixture.governance_attempt_id,
+                transition: gov::ParliamentLifecycleTransitionV1::BeginInvitationAcceptance(
+                    gov::ParliamentBeginInvitationAcceptanceV1 {
+                        election_attempt_id: wrong_election,
+                    },
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a relayer cannot choose an unknown election");
+            let rendered = format!("{error:?}");
+            assert!(rendered.contains("unknown BodyElection"));
+            assert!(!rendered.contains("CanManageParliament"));
+            assert_eq!(
+                state_transaction
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .expect("retained permissionless-progress attempt")
+                    .election(&fixture.election_attempt_id)
+                    .expect("retained permissionless-progress election")
+                    .attempt()
+                    .status,
+                BodyElectionAttemptStatusV1::Drawing
+            );
+
+            gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: fixture.governance_attempt_id,
+                transition: gov::ParliamentLifecycleTransitionV1::BeginInvitationAcceptance(
+                    gov::ParliamentBeginInvitationAcceptanceV1 {
+                        election_attempt_id: fixture.election_attempt_id,
+                    },
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect("a non-manager may begin the reducer-derived invitation window");
+            let election = state_transaction
+                .world
+                .parliament_attempts
+                .get(&fixture.governance_attempt_id)
+                .expect("updated permissionless-progress attempt")
+                .election(&fixture.election_attempt_id)
+                .expect("updated permissionless-progress election");
+            assert_eq!(
+                election.attempt().status,
+                BodyElectionAttemptStatusV1::AcceptingInvitations
+            );
+            assert_eq!(
+                election.invitation_close_height(),
+                Some(fixture.pulse_height),
+                "the relayer cannot supply or extend the configured invitation window"
+            );
+        }
+
+        #[test]
+        fn parliament_no_roster_failure_is_permissionless_and_reducer_derived() {
+            use iroha_data_model::governance::types::BodyElectionAttemptStatusV1;
+
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(NonZeroU64::new(7).expect("nonzero height"));
+            let mut state_block = state.block(block.as_ref().header());
+            let mut state_transaction = state_block.transaction();
+            let fixture = seed_parliament_permissionless_progress_fixture(
+                &mut state_transaction,
+                ParliamentPermissionlessProgressPhase::InvitationsOpen,
+            );
+            let error = gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: fixture.governance_attempt_id,
+                transition: gov::ParliamentLifecycleTransitionV1::FailBodyElectionNoRoster(
+                    gov::ParliamentFailBodyElectionNoRosterV1 {
+                        election_attempt_id: BodyElectionAttemptId::new([0xE2; 32]),
+                    },
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a relayer cannot choose an unknown election failure");
+            let rendered = format!("{error:?}");
+            assert!(rendered.contains("unknown Parliament election attempt"));
+            assert!(!rendered.contains("CanManageParliament"));
+            assert_eq!(
+                state_transaction
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .expect("retained permissionless-progress attempt")
+                    .election(&fixture.election_attempt_id)
+                    .expect("retained permissionless-progress election")
+                    .attempt()
+                    .status,
+                BodyElectionAttemptStatusV1::AcceptingInvitations
+            );
+
+            gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: fixture.governance_attempt_id,
+                transition: gov::ParliamentLifecycleTransitionV1::FailBodyElectionNoRoster(
+                    gov::ParliamentFailBodyElectionNoRosterV1 {
+                        election_attempt_id: fixture.election_attempt_id,
+                    },
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect("a non-manager may record an objectively empty expired roster");
+            assert_eq!(
+                state_transaction
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .expect("updated permissionless-progress attempt")
+                    .election(&fixture.election_attempt_id)
+                    .expect("updated permissionless-progress election")
+                    .attempt()
+                    .status,
+                BodyElectionAttemptStatusV1::NoRoster
+            );
+        }
+
+        #[test]
+        fn parliament_roster_sealing_is_permissionless_and_transcript_derived() {
+            use iroha_data_model::governance::types::{
+                BodyElectionAttemptStatusV1, parliament_roster_root_v1,
+            };
+
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(NonZeroU64::new(7).expect("nonzero height"));
+            let mut state_block = state.block(block.as_ref().header());
+            let mut state_transaction = state_block.transaction();
+            let fixture = seed_parliament_permissionless_progress_fixture(
+                &mut state_transaction,
+                ParliamentPermissionlessProgressPhase::InvitationsAccepted,
+            );
+            let mut assignments = state_transaction
+                .world
+                .parliament_attempts
+                .get(&fixture.governance_attempt_id)
+                .expect("retained permissionless-progress attempt")
+                .election(&fixture.election_attempt_id)
+                .expect("retained permissionless-progress election")
+                .primary_assignments()
+                .to_vec();
+            assignments.sort_unstable_by_key(|assignment| assignment.assignment_id);
+            let expected_roster_root =
+                parliament_roster_root_v1(fixture.election_attempt_id, &assignments);
+            let expected_body_id = iroha_data_model::governance::types::BodyInstanceId::derive_v1(
+                fixture.election_attempt_id,
+                expected_roster_root,
+            );
+
+            let error = gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: fixture.governance_attempt_id,
+                transition: gov::ParliamentLifecycleTransitionV1::SealBodyRoster(
+                    gov::ParliamentSealBodyRosterV1 {
+                        election_attempt_id: BodyElectionAttemptId::new([0xE3; 32]),
+                    },
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a relayer cannot choose an unknown election roster");
+            let rendered = format!("{error:?}");
+            assert!(rendered.contains("unknown BodyElection"));
+            assert!(!rendered.contains("CanManageParliament"));
+            assert_eq!(
+                state_transaction
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .expect("retained permissionless-progress attempt")
+                    .election(&fixture.election_attempt_id)
+                    .expect("retained permissionless-progress election")
+                    .attempt()
+                    .status,
+                BodyElectionAttemptStatusV1::AcceptingInvitations
+            );
+
+            gov::SubmitParliamentLifecycleTransitionV1 {
+                governance_attempt_id: fixture.governance_attempt_id,
+                transition: gov::ParliamentLifecycleTransitionV1::SealBodyRoster(
+                    gov::ParliamentSealBodyRosterV1 {
+                        election_attempt_id: fixture.election_attempt_id,
+                    },
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect("a non-manager may seal the exact accepted invitation transcript");
+            let attempt = state_transaction
+                .world
+                .parliament_attempts
+                .get(&fixture.governance_attempt_id)
+                .expect("updated permissionless-progress attempt");
+            assert_eq!(
+                attempt
+                    .election(&fixture.election_attempt_id)
+                    .expect("sealed permissionless-progress election")
+                    .attempt()
+                    .status,
+                BodyElectionAttemptStatusV1::Sealed
+            );
+            assert_eq!(
+                attempt
+                    .sealed_body_for_role(ParliamentBody::RulesCommittee)
+                    .expect("Core-derived Rules Committee roster")
+                    .instance()
+                    .id,
+                expected_body_id,
+                "the relayer cannot choose the roster root or body-instance identifier"
+            );
+        }
+
         fn complete_parliament_body_for_due_certificate(
             attempt: &mut crate::governance::parliament::ParliamentAttemptStateV1,
             requirement: RequiredParliamentBodyV1,
@@ -19910,6 +20888,7 @@ pub mod isi {
                                 nay: 1,
                                 abstain: 0,
                             },
+                            2,
                             43,
                         )
                         .expect("finalize deterministic aggregate ballot");
@@ -20812,6 +21791,13 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect("current-roster QC installs TLE key A without manager authority");
             assert_eq!(state_transaction.world.active_tle_key_session(), Some(key_a_id));
+            assert_eq!(
+                state_transaction
+                    .world
+                    .tle_key_session_rosters()
+                    .get(&key_a_id),
+                Some(&ordered_roster)
+            );
             let replay = install_a
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect_err("an installed threshold-key certificate must not replay");
@@ -20849,6 +21835,21 @@ pub mod isi {
             .expect("current-roster QC atomically rotates new ballots to TLE key B");
             assert_eq!(state_transaction.world.active_tle_key_session(), Some(key_b_id));
             assert!(state_transaction.world.tle_key_sessions.get(&key_a_id).is_some());
+            assert_eq!(
+                state_transaction
+                    .world
+                    .tle_key_session_rosters()
+                    .get(&key_a_id),
+                Some(&ordered_roster),
+                "rotation retains the predecessor's exact seat binding"
+            );
+            assert_eq!(
+                state_transaction
+                    .world
+                    .tle_key_session_rosters()
+                    .get(&key_b_id),
+                Some(&ordered_roster)
+            );
             let stale_replacement = stale_install_c
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect_err("a certificate signed against predecessor A must not replace B");
@@ -20964,14 +21965,30 @@ pub mod isi {
 
         world_test!(parliament_tle_rotation_rejects_old_key_for_new_ballots_but_retains_it_for_bound_openings {
             blank_state_transaction!(state, block, state_block, state_transaction);
-            let key_a = crate::tle_release::tests::public_key_session_fixture_v1(0xA1);
-            let key_b = crate::tle_release::tests::public_key_session_fixture_v1(0xB1);
+            let validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
+            let ordered_roster = validator_keys
+                .iter()
+                .map(|key| crate::PeerId::new(key.public_key().clone()))
+                .collect::<Vec<_>>();
+            *state_transaction.commit_topology.get_mut() = ordered_roster.clone();
+            let roster_hash =
+                crate::beacon::global_threshold_beacon_roster_hash_v1(&ordered_roster);
+            let key_a = crate::tle_release::tests::public_key_session_fixture_for_context_v1(
+                *state_transaction.network_id.as_bytes(),
+                0xA1,
+                roster_hash,
+            );
+            let key_b = crate::tle_release::tests::public_key_session_fixture_for_context_v1(
+                *state_transaction.network_id.as_bytes(),
+                0xB1,
+                roster_hash,
+            );
             let key_a_id = key_a.key_session_id;
             let key_b_id = key_b.key_session_id;
 
             state_transaction
                 .world
-                .put_tle_key_session(key_a)
+                .put_tle_key_session(key_a, ordered_roster.clone())
                 .expect("persist proof-valid TLE key A");
             state_transaction
                 .world
@@ -20985,7 +22002,7 @@ pub mod isi {
 
             state_transaction
                 .world
-                .put_tle_key_session(key_b)
+                .put_tle_key_session(key_b, ordered_roster.clone())
                 .expect("persist proof-valid TLE key B");
             state_transaction
                 .world
@@ -21008,8 +22025,62 @@ pub mod isi {
             )
             .expect("active key B must be selectable by a new ballot");
 
+            let successor_roster = (0..4)
+                .map(|_| crate::PeerId::new(checked_keypair().public_key().clone()))
+                .collect::<Vec<_>>();
+            *state_transaction.commit_topology.get_mut() = successor_roster;
+            let stale_roster_error =
+                super::validated_active_parliament_tle_key_session_for_new_ballot_v1(
+                    key_b_id,
+                    &state_transaction,
+                )
+                .expect_err("a topology change must make active key B ineligible for new ballots");
+            assert!(
+                format!("{stale_roster_error:?}")
+                    .contains("not bound to the current commit topology"),
+                "unexpected stale-roster rejection: {stale_roster_error:?}"
+            );
+
+            let seven_peer_roster = (0..7)
+                .map(|_| crate::PeerId::new(checked_keypair().public_key().clone()))
+                .collect::<Vec<_>>();
+            let seven_peer_roster_hash =
+                crate::beacon::global_threshold_beacon_roster_hash_v1(&seven_peer_roster);
+            let key_c = crate::tle_release::tests::public_key_session_fixture_for_context_v1(
+                *state_transaction.network_id.as_bytes(),
+                0xC1,
+                seven_peer_roster_hash,
+            );
+            let key_c_id = key_c.key_session_id;
+            let mismatched_roster_error = state_transaction
+                .world
+                .put_tle_key_session(key_c, seven_peer_roster)
+                .expect_err("a committee-size mismatch must reject the frozen roster binding");
+            assert_eq!(
+                mismatched_roster_error,
+                crate::tle_release::TleReleaseAdapterError::TranscriptMismatch
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .tle_key_sessions()
+                    .get(&key_c_id)
+                    .is_none(),
+                "a rejected pair must not leave a partial public session"
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .tle_key_session_rosters()
+                    .get(&key_c_id)
+                    .is_none(),
+                "a rejected pair must not leave a partial roster binding"
+            );
+
             super::validated_parliament_tle_key_session_v1(key_a_id, &state_transaction)
                 .expect("already-bound openings must retain proof-valid access to key A");
+            super::validated_parliament_tle_key_session_v1(key_b_id, &state_transaction)
+                .expect("already-bound openings must retain proof-valid access to stale key B");
             assert!(state_transaction.world.tle_key_sessions.get(&key_a_id).is_some());
         });
 
@@ -21034,6 +22105,7 @@ pub mod isi {
             )
         }
         include!("world_validation_fee_tests.rs");
+        include!("world_parliament_due_effect_tests.rs");
         world_test!(set_parameter_rejects_malformed_governed_gas_rates_but_accepts_zero_rate {
             use iroha_data_model::parameter::{CustomParameter, CustomParameterId};
             blank_test_state_transaction!(checked state, block, stx);

@@ -4180,9 +4180,9 @@ pub mod governance {
     pub const PARLIAMENT_REVIEW_PANEL_SIZE: usize = 150;
     /// Default Coordination Council size.
     pub const PARLIAMENT_COORDINATION_COUNCIL_SIZE: usize = 150;
-    /// Default Policy Jury size (larger to cover high-impact items).
+    /// Default Policy Jury size (hidden timed-OVN bodies require at least two seats).
     pub const PARLIAMENT_POLICY_JURY_SIZE: usize = 500;
-    /// Maximum Confirmation Jury size. The actual target is twice the first Jury size.
+    /// Configured Confirmation Jury target/cap (hidden timed-OVN bodies require at least two).
     pub const PARLIAMENT_CONFIRMATION_JURY_SIZE: usize = 1_000;
     /// Default Oversight Committee size.
     pub const PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE: usize = 50;

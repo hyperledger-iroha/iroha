@@ -44,9 +44,15 @@ public final class SccpClientExactTests {
       FeePaymentIntent.authority(Collections.emptyList());
   // These authenticate this fixture's semantic commitments and deployment code hashes.
   private static final String BSC_ROUTE_CONFIG_HASH =
-      "65ABF3081D137062860FD712B5414A17C3664FD42C7567373FF3302BA331EFDD";
+      "E2FBA818710881B2294D45EB6494A0F2961C752EADC2D55089C3966F0CC8124D";
   private static final String TRON_ROUTE_CONFIG_HASH =
-      "1BB8C081AA96766CF63FFE063E5B506FF17005E033C7B47E9760214C4C8D5519";
+      "83D698E3F098A15523BD456ED7BB73957DDC46C48DC6B2701BC73AEBEDA99F3B";
+  private static final BigInteger MAX_OUTSTANDING_LIABILITY =
+      new BigInteger("1000000000000");
+  private static final BigInteger MAX_WRAPPED_SUPPLY =
+      new BigInteger("1000000000000000000000");
+  private static final BigInteger MAX_U128 =
+      BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE);
 
   private SccpClientExactTests() {}
 
@@ -59,6 +65,7 @@ public final class SccpClientExactTests {
     artifactValidationRejectsAliasesCorruptionAndZeroSchema();
     capabilitiesAreExactAndContainNoRetiredDiscoverySurface();
     registryValidatesSemanticPolicyAndExactFamilies();
+    registryRequiresExactU128SupplyCapAndOutstandingLiability();
     registryValidatesExactTonDeploymentAndRoleSeparation();
     registryRejectsMalformedAnchorHistories();
     registryRequiresExactRetiredRouteInboundFinalityCutoff();
@@ -924,6 +931,50 @@ public final class SccpClientExactTests {
     expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(wrongSchema)));
   }
 
+  private static void registryRequiresExactU128SupplyCapAndOutstandingLiability() {
+    final SccpModels.RegistryV1 parsed =
+        SccpJsonParser.parseRegistry(jsonBytes(registry()));
+    final Map<String, Object> parsedRoute =
+        object(list(parsed.lanes.get(0), "routes").get(0));
+    final Map<String, Object> parsedDeployment =
+        object(object(parsedRoute.get("destination")).get("deployment"));
+    final Map<String, Object> parsedSettlement = object(parsedRoute.get("settlement"));
+    assert MAX_WRAPPED_SUPPLY.equals(parsedDeployment.get("max_wrapped_supply"));
+    assert MAX_OUTSTANDING_LIABILITY.equals(
+        new BigInteger(parsedSettlement.get("max_outstanding_liability").toString()));
+
+    final Map<String, Object> missingCap = registry();
+    deployment(missingCap).remove("max_wrapped_supply");
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(missingCap)));
+
+    final Map<String, Object> missingLiability = registry();
+    object(firstRoute(missingLiability).get("settlement"))
+        .remove("max_outstanding_liability");
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(missingLiability)));
+
+    final Map<String, Object> oversizedCap = registry();
+    deployment(oversizedCap).put("max_wrapped_supply", MAX_U128.add(BigInteger.ONE));
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(oversizedCap)));
+
+    final Map<String, Object> zeroLiability = registry();
+    object(firstRoute(zeroLiability).get("settlement"))
+        .put("max_outstanding_liability", BigInteger.ZERO);
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(zeroLiability)));
+
+    final Map<String, Object> mismatchedCap = registry();
+    deployment(mismatchedCap)
+        .put("max_wrapped_supply", MAX_WRAPPED_SUPPLY.add(BigInteger.ONE));
+    refreshRouteConfiguration(firstRoute(mismatchedCap));
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(mismatchedCap)));
+
+    final Map<String, Object> overflowingLiability = registry();
+    deployment(overflowingLiability).put("max_wrapped_supply", MAX_U128);
+    object(firstRoute(overflowingLiability).get("settlement"))
+        .put("max_outstanding_liability", MAX_U128);
+    refreshRouteConfiguration(firstRoute(overflowingLiability));
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(overflowingLiability)));
+  }
+
   private static void registryRejectsMalformedAnchorHistories() {
     final Map<String, Object> canonical = registry();
     final Map<String, Object> canonicalLane = firstLane(canonical);
@@ -1097,6 +1148,17 @@ public final class SccpClientExactTests {
     assert "ton_mainnet"
         .equals(object(object(parsedLane.get("lane_id")).get("source")).get("network"));
     assert list(parsedLane, "routes").size() == 1;
+
+    final Map<String, Object> missingCap = tonRegistry();
+    tonDeployment(missingCap).remove("max_wrapped_supply");
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(missingCap)));
+
+    final Map<String, Object> mismatchedLiability = tonRegistry();
+    object(firstRoute(mismatchedLiability).get("settlement"))
+        .put(
+            "max_outstanding_liability",
+            MAX_OUTSTANDING_LIABILITY.subtract(BigInteger.ONE));
+    expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(mismatchedLiability)));
 
     final Map<String, Object> changedInitialData = tonRegistry();
     tonDeployment(changedInitialData).put("jetton_master_initial_data_hash", upper(0x38, 32));
@@ -1889,7 +1951,8 @@ public final class SccpClientExactTests {
             semanticHash,
             anchorHash,
             binding,
-            1);
+            1,
+            MAX_OUTSTANDING_LIABILITY);
 
     final Map<String, Object> identity = map();
     identity.put("address", routeAddress);
@@ -1917,6 +1980,7 @@ public final class SccpClientExactTests {
     deployment.put("proof_profile_commitment", upperHex(proofProfile));
     deployment.put("outbound_proof_policy", policy);
     deployment.put("taira_to_token_multiplier", 1);
+    deployment.put("max_wrapped_supply", MAX_OUTSTANDING_LIABILITY);
     final Map<String, Object> destination = map();
     destination.put("family", "ton");
     destination.put("deployment", deployment);
@@ -1925,6 +1989,7 @@ public final class SccpClientExactTests {
     settlement.put("asset_definition_id", "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
     settlement.put("custody_owner", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
     settlement.put("payload_amount_scale", 9);
+    settlement.put("max_outstanding_liability", MAX_OUTSTANDING_LIABILITY);
     final Map<String, Object> activation = map();
     activation.put("activation", "staged");
     activation.put("direction", null);
@@ -1994,7 +2059,8 @@ public final class SccpClientExactTests {
       final byte[] semanticHash,
       final byte[] anchorHash,
       final byte[] binding,
-      final int revision) {
+      final int revision,
+      final BigInteger maxWrappedSupply) {
     final ByteArrayOutputStream deployment = new ByteArrayOutputStream();
     for (final byte[] role : List.of(masterCode, walletCode)) writeRaw(deployment, role);
     for (final byte[] role :
@@ -2014,6 +2080,7 @@ public final class SccpClientExactTests {
     writeVector(assetRoute, "taira_ton_xor".getBytes(StandardCharsets.US_ASCII));
     writeU32(assetRoute, revision);
     writeU64(assetRoute, 1);
+    writeU128(assetRoute, maxWrappedSupply);
     final SccpLaneIdV1 inbound =
         new SccpLaneIdV1(SccpNetworkV1.TON_MAINNET, SccpNetworkV1.SORA_TAIRA);
     final SccpLaneIdV1 outbound =
@@ -2183,6 +2250,7 @@ public final class SccpClientExactTests {
     deployment.put("route_address", routeAddress);
     deployment.put("route_code_hash", routeCodeHash);
     deployment.put("taira_to_token_multiplier", 1_000_000_000);
+    deployment.put("max_wrapped_supply", MAX_WRAPPED_SUPPLY);
     final Map<String, Object> destination = map();
     destination.put("family", "evm");
     destination.put("deployment", deployment);
@@ -2190,6 +2258,7 @@ public final class SccpClientExactTests {
     settlement.put("asset_definition_id", "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
     settlement.put("custody_owner", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
     settlement.put("payload_amount_scale", 9);
+    settlement.put("max_outstanding_liability", MAX_OUTSTANDING_LIABILITY);
     final Map<String, Object> route = map();
     route.put("lane_id", lane());
     route.put("route_id", "taira_bsc_xor");
@@ -2373,7 +2442,8 @@ public final class SccpClientExactTests {
                 keccak("xor".getBytes(StandardCharsets.UTF_8)),
                 keccak(((String) route.get("route_id")).getBytes(StandardCharsets.UTF_8)),
                 abiWord(((Number) route.get("revision")).longValue()),
-                abiWord(((Number) deployment.get("taira_to_token_multiplier")).longValue())));
+                abiWord(((Number) deployment.get("taira_to_token_multiplier")).longValue()),
+                abiWord(new BigInteger(deployment.get("max_wrapped_supply").toString()))));
     return upperHex(
         keccak(
             concatenate(
@@ -2407,10 +2477,15 @@ public final class SccpClientExactTests {
   }
 
   private static byte[] abiWord(final long value) {
-    if (value < 0) throw new IllegalArgumentException("expected unsigned ABI integer");
+    return abiWord(BigInteger.valueOf(value));
+  }
+
+  private static byte[] abiWord(final BigInteger value) {
+    if (value.signum() < 0) throw new IllegalArgumentException("expected unsigned ABI integer");
     final byte[] result = new byte[32];
-    for (int index = 0; index < 8; index++) {
-      result[result.length - 1 - index] = (byte) ((value >>> (index * 8)) & 0xff);
+    for (int index = 0; index < 32; index++) {
+      result[result.length - 1 - index] =
+          value.shiftRight(index * 8).and(BigInteger.valueOf(0xff)).byteValue();
     }
     return result;
   }
@@ -2709,6 +2784,12 @@ public final class SccpClientExactTests {
 
   private static void writeU64(final ByteArrayOutputStream out, final long value) {
     for (int shift = 0; shift < 8; shift++) out.write((int) ((value >>> (shift * 8)) & 0xff));
+  }
+
+  private static void writeU128(final ByteArrayOutputStream out, final BigInteger value) {
+    for (int shift = 0; shift < 16; shift++) {
+      out.write(value.shiftRight(shift * 8).and(BigInteger.valueOf(0xff)).intValue());
+    }
   }
 
   private static void writeU16(final ByteArrayOutputStream out, final int value) {

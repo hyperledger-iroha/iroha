@@ -325,7 +325,7 @@ jobs:
         run: |
           release_lock="$RUNNER_TEMP/privacy-jvm-native-abi23/Cargo.lock"
           [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" ]]
           ! cmp -s "$release_lock" Cargo.lock
           source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
           [[ "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]
@@ -369,7 +369,7 @@ jobs:
       - name: Revalidate frozen Swift inputs and ABI23 artifacts
         if: always()
         run: |
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" ]]
           [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
           scripts/check_mobile_sdk_artifacts.sh --apple-only
 
@@ -458,7 +458,7 @@ jobs:
         run: |
           input="$RUNNER_TEMP/privacy-jvm-native-abi23"
           [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$input/Cargo.lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7" ]]
+          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" ]]
           "$PRIVACY_CSHARP_PYTHON" -I -S scripts/check_native_sdk_abi23_artifact.py verify \
             --artifact "$input/libconnect_norito_bridge.so" \
             --manifest "$input/native-sdk-abi23-csharp.json" \
@@ -518,7 +518,7 @@ jobs:
         run: |
           release_lock="$RUNNER_TEMP/privacy-jvm-native-abi23/Cargo.lock"
           [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7" ]]
+          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" ]]
           ! cmp -s "$release_lock" Cargo.lock
           echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
       - name: Prime privacy N-API dependencies from the frozen lock

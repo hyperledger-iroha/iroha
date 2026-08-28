@@ -110,7 +110,8 @@ public final class SccpJsonParser {
           "outbound_proof_policy",
           "route_address",
           "route_code_hash",
-          "taira_to_token_multiplier");
+          "taira_to_token_multiplier",
+          "max_wrapped_supply");
   private static final Set<String> TON_DESTINATION_FIELDS =
       Set.of(
           "jetton_master_address",
@@ -126,7 +127,8 @@ public final class SccpJsonParser {
           "verifier_key_hash",
           "proof_profile_commitment",
           "outbound_proof_policy",
-          "taira_to_token_multiplier");
+          "taira_to_token_multiplier",
+          "max_wrapped_supply");
   private static final Set<String> VERIFYING_KEY_FIELDS =
       Set.of("version", "alpha1", "beta2", "gamma2", "delta2", "ic");
   private static final List<String> IC_FIELD_ORDER =
@@ -1163,13 +1165,29 @@ public final class SccpJsonParser {
     final Map<String, Object> settlement = requiredObject(value, "settlement");
     exactFields(
         settlement,
-        Set.of("asset_definition_id", "custody_owner", "payload_amount_scale"),
+        Set.of(
+            "asset_definition_id",
+            "custody_owner",
+            "payload_amount_scale",
+            "max_outstanding_liability"),
         label + ".settlement");
     if (!TAIRA_XOR_ASSET_ID.equals(requiredText(settlement, "asset_definition_id"))) {
       throw new IllegalArgumentException(label + " settlement must use canonical Taira XOR");
     }
     requiredText(settlement, "custody_owner");
     requiredInt(settlement, "payload_amount_scale", 9, 9);
+    final BigInteger maxOutstandingLiability =
+        requiredUnsignedInteger(settlement, "max_outstanding_liability", MAX_U128, true);
+    final BigInteger expectedMaxWrappedSupply =
+        checkedU128Product(
+            maxOutstandingLiability,
+            BigInteger.valueOf(destination.multiplier()),
+            label + " settlement liability cap");
+    if (!destination.maxWrappedSupply().equals(expectedMaxWrappedSupply)) {
+      throw new IllegalArgumentException(
+          label
+              + " max_wrapped_supply must equal max_outstanding_liability multiplied by taira_to_token_multiplier");
+    }
     final String lineage = routeId + '\0' + assetKey;
     return new ParsedRoute(
         lineage,
@@ -1331,6 +1349,8 @@ public final class SccpJsonParser {
             "taira_to_token_multiplier",
             1_000_000_000L,
             1_000_000_000L);
+    final BigInteger maxWrappedSupply =
+        requiredUnsignedInteger(deployment, "max_wrapped_supply", MAX_U128, true);
     final DestinationHashes derived =
         deriveDestinationHashes(
             family,
@@ -1339,11 +1359,14 @@ public final class SccpJsonParser {
             hashes,
             policyHashes,
             routeRevision,
-            multiplier);
+            multiplier,
+            maxWrappedSupply);
     return new DestinationRoles(
         family,
         addresses.get(2),
         hashes.get(3),
+        multiplier,
+        maxWrappedSupply,
         derived.destinationBindingHash(),
         derived.routeConfigurationHash(),
         addresses,
@@ -1402,7 +1425,9 @@ public final class SccpJsonParser {
             policy.profileHash(),
             policy.anchorHash());
     requireDistinctRawHashes(governedHashes, label + " TON deployment");
-    requiredLong(deployment, "taira_to_token_multiplier", 1, 1);
+    final long multiplier = requiredLong(deployment, "taira_to_token_multiplier", 1, 1);
+    final BigInteger maxWrappedSupply =
+        requiredUnsignedInteger(deployment, "max_wrapped_supply", MAX_U128, true);
     final int globalId;
     if (lane.source() == SccpNetworkV1.TON_MAINNET) globalId = -239;
     else if (lane.source() == SccpNetworkV1.TON_TESTNET) globalId = -3;
@@ -1453,6 +1478,7 @@ public final class SccpJsonParser {
     writeBytes(assetRoute, "taira_ton_xor".getBytes(StandardCharsets.US_ASCII));
     writeU32(assetRoute, (int) routeRevision);
     writeU64(assetRoute, BigInteger.ONE);
+    writeU128(assetRoute, maxWrappedSupply);
 
     final byte[] sourceLaneHash = SccpV1.laneHash(lane);
     final byte[] destinationLaneHash =
@@ -1477,6 +1503,8 @@ public final class SccpJsonParser {
         "ton",
         route.identity(),
         routeCode,
+        multiplier,
+        maxWrappedSupply,
         upperHex(bindingHash),
         upperHex(sha256(routeConfiguration.toByteArray())),
         List.of(master.identity(), route.identity()),
@@ -1490,7 +1518,8 @@ public final class SccpJsonParser {
       final List<String> hashes,
       final ParsedProofPolicy policy,
       final long routeRevision,
-      final long multiplier) {
+      final long multiplier,
+      final BigInteger maxWrappedSupply) {
     final boolean tron = "tron".equals(family);
     final ExternalNetworkParameters network = externalNetworkParameters(lane.source());
     final byte[] tokenAddress = hexBytes(addresses.get(0));
@@ -1553,7 +1582,8 @@ public final class SccpJsonParser {
                 keccakText("xor"),
                 keccakText(network.routeId()),
                 abiWordUnsigned(routeRevision),
-                abiWordUnsigned(multiplier)));
+                abiWordUnsigned(multiplier),
+                abiWordUnsigned(maxWrappedSupply)));
     final byte[] routeConfiguration =
         keccak(
             concatenate(
@@ -2284,6 +2314,15 @@ public final class SccpJsonParser {
     return result;
   }
 
+  private static BigInteger checkedU128Product(
+      final BigInteger left, final BigInteger right, final String label) {
+    final BigInteger result = left.multiply(right);
+    if (result.compareTo(MAX_U128) > 0) {
+      throw new IllegalArgumentException(label + " exceeds u128");
+    }
+    return result;
+  }
+
   private static int requiredDomain(final Map<String, Object> value, final String field) {
     final int domain = requiredInt(value, field, 0, 5);
     if (domain != 0 && domain != 1 && domain != 2 && domain != 4 && domain != 5) {
@@ -2617,6 +2656,15 @@ public final class SccpJsonParser {
     }
   }
 
+  private static void writeU128(final ByteArrayOutputStream out, final BigInteger value) {
+    if (value.signum() < 0 || value.compareTo(MAX_U128) > 0) {
+      throw new IllegalArgumentException("value must fit u128");
+    }
+    for (int shift = 0; shift < 16; shift++) {
+      out.write(value.shiftRight(shift * 8).and(BigInteger.valueOf(0xff)).intValue());
+    }
+  }
+
   private static void writeU16(final ByteArrayOutputStream out, final int value) {
     for (int shift = 0; shift < 2; shift++) out.write((value >>> (shift * 8)) & 0xff);
   }
@@ -2658,6 +2706,8 @@ public final class SccpJsonParser {
       String family,
       String routeAddress,
       String routeCodeHash,
+      long multiplier,
+      BigInteger maxWrappedSupply,
       String destinationBindingHash,
       String routeConfigurationHash,
       List<String> governedAddressRoles,

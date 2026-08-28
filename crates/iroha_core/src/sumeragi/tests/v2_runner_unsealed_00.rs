@@ -532,6 +532,18 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
         .find("drain_decided_lane_recovery_ingress(")
         .map(|offset| incomplete + offset)
         .expect("the bounded corridor consumes one authenticated lane occurrence");
+    let retransmit_cadence = open_preflight[incomplete..]
+        .find("if now >= next_lane_retransmit")
+        .map(|offset| incomplete + offset)
+        .expect("incomplete finalized recovery retains its bounded retransmit cadence");
+    let retransmit = open_preflight[incomplete..]
+        .find("lane_work.schedule_retransmission()?")
+        .map(|offset| incomplete + offset)
+        .expect("incomplete finalized recovery reissues exact decided-lane artifacts");
+    let advance_retransmit_deadline = open_preflight[incomplete..]
+        .find("next_lane_retransmit = deadline_after(now, retransmit_interval)")
+        .map(|offset| incomplete + offset)
+        .expect("finalized recovery advances its retransmit deadline");
     let dispatch = open_preflight[incomplete..]
         .find("dispatch_lane_work_effects(")
         .map(|offset| incomplete + offset)
@@ -540,7 +552,15 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
         .find("continue;")
         .map(|offset| incomplete + offset)
         .expect("an incomplete boundary re-enters preflight");
-    assert!(preflight < incomplete && incomplete < drain && drain < dispatch && dispatch < retry);
+    assert!(
+        preflight < incomplete
+            && incomplete < drain
+            && drain < retransmit_cadence
+            && retransmit_cadence < retransmit
+            && retransmit < advance_retransmit_deadline
+            && advance_retransmit_deadline < dispatch
+            && dispatch < retry
+    );
     let final_output_retry = open_preflight
         .rfind("reconcile_terminal_lane_output_handoffs(")
         .expect("successful preflight rechecks exact output immediately before closure");

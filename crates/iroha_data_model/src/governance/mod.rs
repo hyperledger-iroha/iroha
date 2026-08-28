@@ -2,6 +2,7 @@
 //!
 //! The module exposes closed V1 identifiers, lifecycle states, aggregate
 //! decision arithmetic, certificate bindings, and governance-domain events.
+#[cfg(feature = "governance")]
 pub mod events;
 /// Canonical governance and Parliament wire types.
 pub mod types {

@@ -48,29 +48,29 @@ OPENING_LOC = 11_725
 OPENING_BYTES = 432_298
 OPENING_SHA256 = "cfcc8798b026b9c5a697a2c895a4df0aea6a08c565bcba5332c9733a00b3f377"
 OPENING_GIT_BLOB = "ec7f6f8a9565b6cee290769439f1c7b7fb267224"
-POST_LOC = 10_660
-POST_BYTES = 401_410
-POST_SHA256 = "3dc9157f52536b552e09cd03bc331ce8b87641b26d56e844e050c197e6e2c978"
-POST_GIT_BLOB = "b08dfda1467b244639195257c47dc4d25db9e99f"
+POST_LOC = 10_707
+POST_BYTES = 403_581
+POST_SHA256 = "17ca6648456c079cbaaa80fdc668fbce70a419e14c766ecb8567277109b4400a"
+POST_GIT_BLOB = "29dbc7b301b314a1409b578bf7f1cd4e7c16532a"
 MINIMUM_RUST_LINE_REDUCTION = 1_000
-PRODUCTION_LOC = 7_573
-TEST_SUFFIX_LOC = 3_087
-TEST_SUFFIX_SHA256 = "ce213a3672e31a7b62d241507f07ce1ece6437a4d2b5c806cee53abd33148b5e"
+PRODUCTION_LOC = 7_580
+TEST_SUFFIX_LOC = 3_127
+TEST_SUFFIX_SHA256 = "e32e6b27f19893b1a083df040bacf311041d340527bf5e828b97728b08e1397c"
 
 PUBLIC_API_COUNT = 20
 PUBLIC_API_SHA256 = "7680ab2ee86f8127d2f8b3184b4672d25497b82e1a21512438ade78d8f9cc2d1"
 INSTR_VARIANT_COUNT = 193
 INSTR_VARIANTS_SHA256 = "23584254a4bbda2d3a14c5ad5b55ab8168f70c9be9e4c4ff35c6593adcfc3b9c"
-MAIN_TEST_COUNT = 95
-MAIN_TESTS_NEWLINE_SHA256 = "7fbc4a176d3742729351a719009091235b08acc52c0987ba7d7e3d9cfb51d761"
-ALL_TEST_COUNT = 99
-ALL_TESTS_JSON_SHA256 = "86643e56fb23bd7356205c8e64e000998b89e2265d8bd8d2235d26b9e016e940"
+MAIN_TEST_COUNT = 96
+MAIN_TESTS_NEWLINE_SHA256 = "527e21bb794c3cd98755bfeafc9eb864bd850600f757c628b02d89cdfa52dc06"
+ALL_TEST_COUNT = 100
+ALL_TESTS_JSON_SHA256 = "c4bae4325e0ff9eba1cac7c80ec35cbea1994e78749d9c7f9f6a88e5de07a3db"
 PUBLIC_LEAF_SHA256 = "9e7a57eb9ac866072caee317f2b5af503c300de58729e184305ba000e511c16b"
 TAIL_LEAF_SHA256 = "57a81a87cdf5a70ea8a8235c369cb42689a508c428f182d16e0f75b909e3b801"
 ASSET_COUNT = 54
 ASSET_LEDGER_SHA256 = "f453b53114ea7df3e05cebc3e0f089664ab3e603e6debabe686b94e2073fb2bc"
-PRODUCTION_LITERAL_COUNT = 163
-PRODUCTION_LITERALS_SHA256 = "deb507057cf7ee1f47cf4c30976192455accc7395fb16ccb805b09da11491e6a"
+PRODUCTION_LITERAL_COUNT = 164
+PRODUCTION_LITERALS_SHA256 = "4186c4ae58efcf2aa63ed8e9ddef800ab46453e670f19bce53647c8b36af55d3"
 
 EXPECTED_PUBLIC_API = (
     "TEST_TRIGGER_EVENT_OVERRIDE_KEY",
@@ -588,7 +588,7 @@ def _validate_candidate(
     _require(all_tests == _manifest_ir_names(), "compiled test IDs/order changed")
     _require(len(all_tests) == ALL_TEST_COUNT, "compiled test count changed")
     _require(len(set(all_tests)) == ALL_TEST_COUNT, "duplicate compiled test ID")
-    _require(_json_digest(all_tests) == ALL_TESTS_JSON_SHA256, "99 test IDs/order changed")
+    _require(_json_digest(all_tests) == ALL_TESTS_JSON_SHA256, "100 test IDs/order changed")
     _asset_ledger(source, tail_leaf, asset_overrides)
 
     observed_helpers: list[list[object]] = []
@@ -651,6 +651,15 @@ def _validate_candidate(
     _require(
         production.count("seal_unreachable_continuation(") == 3,
         "current continuation sealing changed",
+    )
+    _require(
+        production.count("crate::session::run_with_compiler_stack(move || {") == 1,
+        "public lowering no longer uses the bounded compiler worker exactly once",
+    )
+    _require(
+        "compiler could not allocate the bounded stack required to lower source nesting"
+        in production,
+        "bounded lowering worker failure diagnostic changed",
     )
 
 

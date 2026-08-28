@@ -280,6 +280,8 @@ struct EvmDestinationStateV1 {
     destination_binding_hash: [u8; 32],
     route_configuration_hash: [u8; 32],
     governed_route_configuration_hash: [u8; 32],
+    /// Exact `maxWrappedSupply()` value authenticated at the finalized block.
+    max_wrapped_supply: u128,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 struct TronDestinationStateV1 {
@@ -305,14 +307,17 @@ struct TronDestinationStateV1 {
     destination_binding_hash: [u8; 32],
     route_configuration_hash: [u8; 32],
     governed_route_configuration_hash: [u8; 32],
+    /// Exact `maxWrappedSupply()` value authenticated at the solid block.
+    max_wrapped_supply: u128,
 }
 /// Pinned TON destination readback signed by the configured release attestor.
 ///
 /// The attestor is the semantic decoder boundary: it supplies the exact data
-/// BOCs and the decoded mutable-field cardinalities from the same finalized
-/// account states. This validator independently binds each BOC root to route
-/// governance and requires every mutable field to be in canonical deployment
-/// zero state before the route may be activated.
+/// BOCs, configuration caps, and decoded mutable-field cardinalities from the
+/// same finalized account states. This validator independently binds each BOC
+/// root to route governance, requires both embedded caps to equal governance,
+/// and requires every mutable field to be in canonical deployment zero state
+/// before the route may be activated.
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 struct TonDestinationStateV1 {
     schema: String,
@@ -371,6 +376,10 @@ struct TonDestinationStateV1 {
     destination_binding_hash: [u8; 32],
     route_configuration_hash: [u8; 32],
     governed_route_configuration_hash: [u8; 32],
+    /// Exact cap decoded from the finalized Jetton master configuration cell.
+    jetton_master_max_wrapped_supply: u128,
+    /// Exact cap decoded from the finalized route configuration cell.
+    route_max_wrapped_supply: u128,
 }
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 struct UnavailableDirectionV1 {
@@ -2250,6 +2259,7 @@ struct EvmDestinationReadback<'a> {
     destination_binding_hash: [u8; 32],
     route_configuration_hash: [u8; 32],
     governed_route_configuration_hash: [u8; 32],
+    max_wrapped_supply: u128,
     observed_at_unix_ms: u64,
     finality_height: u64,
     finality_block_hash: [u8; 32],
@@ -2304,6 +2314,7 @@ fn validate_evm_destination_state(
             destination_binding_hash: state.destination_binding_hash,
             route_configuration_hash: state.route_configuration_hash,
             governed_route_configuration_hash: state.governed_route_configuration_hash,
+            max_wrapped_supply: state.max_wrapped_supply,
             observed_at_unix_ms: state.observed_at_unix_ms,
             finality_height: state.finalized_block_height,
             finality_block_hash: state.finalized_block_hash,
@@ -2374,6 +2385,7 @@ fn validate_destination_readback(
         || readback.destination_binding_hash != expected_binding
         || readback.route_configuration_hash != expected_route_configuration
         || readback.governed_route_configuration_hash != expected_governed_configuration
+        || readback.max_wrapped_supply != readback.deployment.max_wrapped_supply
     {
         return Err("authenticated EVM destination state differs from governed route".to_owned());
     }
@@ -2489,6 +2501,7 @@ fn validate_tron_destination_readback(
         || state.destination_binding_hash != expected_binding
         || state.route_configuration_hash != expected_route_configuration
         || state.governed_route_configuration_hash != expected_governed_configuration
+        || state.max_wrapped_supply != deployment.max_wrapped_supply
     {
         return Err("authenticated TRON destination state differs from governed route".to_owned());
     }
@@ -2687,6 +2700,8 @@ fn validate_ton_destination_readback(
         || state.destination_binding_hash != expected_binding
         || state.route_configuration_hash != expected_route_configuration
         || state.governed_route_configuration_hash != expected_governed_configuration
+        || state.jetton_master_max_wrapped_supply != deployment.max_wrapped_supply
+        || state.route_max_wrapped_supply != deployment.max_wrapped_supply
     {
         return Err("authenticated TON destination state differs from governed route".to_owned());
     }
@@ -3460,6 +3475,27 @@ fn writeln_bounded_stderr(error: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "test-fixtures")]
+    fn invalid_u128_field_encodings(canonical_json: &str, field: &str, value: u128) -> [String; 3] {
+        let fragment = format!(",\"{field}\":{value}");
+        let start = canonical_json
+            .rfind(&fragment)
+            .unwrap_or_else(|| panic!("canonical JSON must contain numeric `{field}` readback"));
+        let end = start + fragment.len();
+
+        let mut missing = canonical_json.to_owned();
+        missing.replace_range(start..end, "");
+        let mut overflowing = canonical_json.to_owned();
+        overflowing.replace_range(
+            start..end,
+            &format!(",\"{field}\":340282366920938463463374607431768211456"),
+        );
+        let mut stringified = canonical_json.to_owned();
+        stringified.replace_range(start..end, &format!(",\"{field}\":\"{value}\""));
+        [missing, overflowing, stringified]
+    }
+
     #[test]
     fn validator_identity_is_stable_and_nonzero() {
         let first = validator_identity().unwrap();
@@ -3855,11 +3891,12 @@ mod tests {
         }
     }
     #[cfg(feature = "test-fixtures")]
-    fn exact_evm_destination_readback_route()
-    -> (SccpGovernedRouteV1, SccpEvmDestinationDeploymentV1) {
+    fn exact_evm_destination_readback_route(
+        profile: SccpNetworkV1,
+    ) -> (SccpGovernedRouteV1, SccpEvmDestinationDeploymentV1) {
         use iroha_data_model::bridge::{SccpRouteActivationV1, SccpSourceEmitterV1};
         let mut route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
-            SccpNetworkV1::EthereumMainnet,
+            profile,
             SccpRouteActivationV1::Bidirectional,
         );
         let SccpDestinationDeploymentV1::Evm(mut deployment) = route.destination else {
@@ -3889,10 +3926,99 @@ mod tests {
             .expect("exact EVM readback route must remain governed and valid");
         (route, deployment)
     }
+
+    #[cfg(feature = "test-fixtures")]
+    fn exact_evm_destination_state(
+        route: &SccpGovernedRouteV1,
+        deployment: SccpEvmDestinationDeploymentV1,
+    ) -> EvmDestinationStateV1 {
+        let profile = route.lane_id.source;
+        let rpc_chain_id = match profile {
+            SccpNetworkV1::EthereumMainnet => 1,
+            SccpNetworkV1::BscMainnet => 56,
+            _ => panic!("exact EVM state fixture requires an EVM profile"),
+        };
+        EvmDestinationStateV1 {
+            schema: "sccp-evm-destination-state-v1".to_owned(),
+            profile,
+            observed_at_unix_ms: 1,
+            finalized_block_height: 1,
+            finalized_block_hash: [0x91; 32],
+            rpc_chain_id,
+            network_identity_hash: sccp_network_identity_hash_v1(profile),
+            governed_route: route.clone(),
+            route_revision: route.revision,
+            token_bridge_address: deployment.route_address,
+            route_token_address: deployment.token_address,
+            route_verifier_address: deployment.verifier_address,
+            token_runtime_code_hex: "6000".to_owned(),
+            verifier_runtime_code_hex: "6001".to_owned(),
+            route_runtime_code_hex: "6002".to_owned(),
+            verifier_key_hash: deployment.verifier_key_hash,
+            semantic_proof_profile_hash: deployment
+                .outbound_proof_policy
+                .semantic_profile_hash()
+                .expect("exact EVM semantic profile must hash"),
+            sora_finality_anchor_hash: deployment
+                .outbound_proof_policy
+                .sora_finality_anchor_hash()
+                .expect("exact EVM finality anchor must hash"),
+            verifying_key: deployment.verifying_key,
+            destination_binding_hash: route
+                .destination_binding_hash()
+                .expect("exact EVM destination binding must hash"),
+            route_configuration_hash: route
+                .destination
+                .route_configuration_hash(
+                    route.lane_id,
+                    &route.route_id,
+                    &route.asset_key,
+                    route.revision,
+                    route.settlement.payload_amount_scale,
+                )
+                .expect("exact EVM destination route configuration must hash"),
+            governed_route_configuration_hash: route
+                .route_configuration_hash()
+                .expect("exact governed EVM route configuration must hash"),
+            max_wrapped_supply: deployment.max_wrapped_supply,
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "test-fixtures")]
+    fn evm_destination_state_cap_is_required_bounded_and_governed_for_both_profiles() {
+        for profile in [SccpNetworkV1::EthereumMainnet, SccpNetworkV1::BscMainnet] {
+            let (route, deployment) = exact_evm_destination_readback_route(profile);
+            let state = exact_evm_destination_state(&route, deployment);
+            validate_evm_destination_state(profile, &state)
+                .expect("exact EVM cap readback must validate");
+
+            let canonical = norito::json::to_json(&state)
+                .expect("exact EVM destination state must encode canonically");
+            let decoded: EvmDestinationStateV1 = norito::json::from_str(&canonical)
+                .expect("exact EVM u128 cap must roundtrip canonically");
+            assert_eq!(decoded.max_wrapped_supply, deployment.max_wrapped_supply);
+            for invalid in invalid_u128_field_encodings(
+                &canonical,
+                "max_wrapped_supply",
+                deployment.max_wrapped_supply,
+            ) {
+                assert!(
+                    norito::json::from_str::<EvmDestinationStateV1>(&invalid).is_err(),
+                    "EVM cap readback parser accepted a non-u128 cap"
+                );
+            }
+
+            let mut mismatched = state;
+            mismatched.max_wrapped_supply -= 1;
+            assert!(validate_evm_destination_state(profile, &mismatched).is_err());
+        }
+    }
     #[test]
     #[cfg(feature = "test-fixtures")]
     fn evm_destination_readback_rejects_each_outbound_policy_hash_independently() {
-        let (route, deployment) = exact_evm_destination_readback_route();
+        let (route, deployment) =
+            exact_evm_destination_readback_route(SccpNetworkV1::EthereumMainnet);
         let semantic_profile_hash = deployment
             .outbound_proof_policy
             .semantic_profile_hash()
@@ -3934,6 +4060,7 @@ mod tests {
                 destination_binding_hash,
                 route_configuration_hash,
                 governed_route_configuration_hash,
+                max_wrapped_supply: deployment.max_wrapped_supply,
                 observed_at_unix_ms: 1,
                 finality_height: 1,
                 finality_block_hash: [0x91; 32],
@@ -3966,9 +4093,11 @@ mod tests {
     fn exact_tron_destination_readback_route()
     -> (SccpGovernedRouteV1, SccpTronDestinationDeploymentV1) {
         use iroha_data_model::bridge::{
-            SccpLaneIdV1, SccpSourceEmitterV1, SccpTronSourceEmitterV1,
+            SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SccpLaneIdV1, SccpSourceEmitterV1,
+            SccpTronSourceEmitterV1,
         };
-        let (mut route, evm_deployment) = exact_evm_destination_readback_route();
+        let (mut route, evm_deployment) =
+            exact_evm_destination_readback_route(SccpNetworkV1::EthereumMainnet);
         let deployment = SccpTronDestinationDeploymentV1 {
             token_address: evm_deployment.token_address,
             token_code_hash: evm_deployment.token_code_hash,
@@ -3979,7 +4108,12 @@ mod tests {
             outbound_proof_policy: evm_deployment.outbound_proof_policy,
             route_address: evm_deployment.route_address,
             route_code_hash: evm_deployment.route_code_hash,
-            taira_to_token_multiplier: evm_deployment.taira_to_token_multiplier,
+            taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
+            max_wrapped_supply: route
+                .settlement
+                .max_outstanding_liability
+                .checked_mul(u128::from(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER))
+                .expect("exact TRON readback fixture supply cap must fit u128"),
         };
         let lane = SccpLaneIdV1 {
             source: SccpNetworkV1::TronMainnet,
@@ -4060,9 +4194,28 @@ mod tests {
             governed_route_configuration_hash: route
                 .route_configuration_hash()
                 .expect("exact governed TRON route configuration must hash"),
+            max_wrapped_supply: deployment.max_wrapped_supply,
         };
         validate_tron_destination_readback(&state, &route, &deployment)
             .expect("exact TRON destination readback must validate");
+        let canonical = norito::json::to_json(&state)
+            .expect("exact TRON destination state must encode canonically");
+        let decoded: TronDestinationStateV1 = norito::json::from_str(&canonical)
+            .expect("exact TRON u128 cap must roundtrip canonically");
+        assert_eq!(decoded.max_wrapped_supply, deployment.max_wrapped_supply);
+        for invalid in invalid_u128_field_encodings(
+            &canonical,
+            "max_wrapped_supply",
+            deployment.max_wrapped_supply,
+        ) {
+            assert!(
+                norito::json::from_str::<TronDestinationStateV1>(&invalid).is_err(),
+                "TRON cap readback parser accepted a non-u128 cap"
+            );
+        }
+        let mut mismatched_cap = state.clone();
+        mismatched_cap.max_wrapped_supply -= 1;
+        assert!(validate_tron_destination_readback(&mismatched_cap, &route, &deployment).is_err());
         state.semantic_proof_profile_hash[0] ^= 1;
         assert!(validate_tron_destination_readback(&state, &route, &deployment).is_err());
         state.semantic_proof_profile_hash = semantic_proof_profile_hash;
@@ -4117,7 +4270,8 @@ mod tests {
             SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER, SccpLaneIdV1, SccpOutboundProofPolicyV1,
             SccpSourceEmitterV1, SccpTonSourceEmitterV1,
         };
-        let (mut route, evm_deployment) = exact_evm_destination_readback_route();
+        let (mut route, evm_deployment) =
+            exact_evm_destination_readback_route(SccpNetworkV1::EthereumMainnet);
         let code_hash = |byte| {
             ton_boc_single_ordinary_root_hash_v1(&single_cell_code_boc(byte))
                 .expect("single-cell TON code BOC must hash")
@@ -4167,6 +4321,11 @@ mod tests {
             proof_profile_commitment: sccp_ton_groth16_bls12381_proof_profile_commitment_v1(),
             outbound_proof_policy,
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER,
+            max_wrapped_supply: route
+                .settlement
+                .max_outstanding_liability
+                .checked_mul(u128::from(SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER))
+                .expect("exact TON readback fixture supply cap must fit u128"),
         };
         let lane = SccpLaneIdV1 {
             source: SccpNetworkV1::TonMainnet,
@@ -4263,9 +4422,24 @@ mod tests {
             governed_route_configuration_hash: route
                 .route_configuration_hash()
                 .expect("exact governed TON route configuration must hash"),
+            jetton_master_max_wrapped_supply: deployment.max_wrapped_supply,
+            route_max_wrapped_supply: deployment.max_wrapped_supply,
         };
         let encoded_state = norito::json::to_json(&state)
             .expect("TON canonical-zero destination state must encode");
+        for field in [
+            "jetton_master_max_wrapped_supply",
+            "route_max_wrapped_supply",
+        ] {
+            for invalid in
+                invalid_u128_field_encodings(&encoded_state, field, deployment.max_wrapped_supply)
+            {
+                assert!(
+                    norito::json::from_str::<TonDestinationStateV1>(&invalid).is_err(),
+                    "TON cap readback parser accepted a non-u128 `{field}`"
+                );
+            }
+        }
         state = norito::json::from_str(&encoded_state)
             .expect("TON canonical-zero destination state must roundtrip");
         let validated = validate_ton_destination_state(SccpNetworkV1::TonMainnet, &state)
@@ -4274,6 +4448,18 @@ mod tests {
         assert_eq!(
             validated.token_runtime_hash,
             deployment.jetton_master_code_hash
+        );
+        let mut mismatched_master_cap = state.clone();
+        mismatched_master_cap.jetton_master_max_wrapped_supply -= 1;
+        assert!(
+            validate_ton_destination_state(SccpNetworkV1::TonMainnet, &mismatched_master_cap)
+                .is_err()
+        );
+        let mut mismatched_route_cap = state.clone();
+        mismatched_route_cap.route_max_wrapped_supply -= 1;
+        assert!(
+            validate_ton_destination_state(SccpNetworkV1::TonMainnet, &mismatched_route_cap)
+                .is_err()
         );
         let mut substituted_route_address = state.clone();
         substituted_route_address.route_address = SccpTonAddressV1 {

@@ -295,7 +295,7 @@ public sealed class NoritoRpcFixtureParityTests
         ValidateFeePayment(boundaryFeePayment, "torii_boundary.fee_payment");
         var feePayment = JsonSerializer.Deserialize<FeePaymentIntent>(boundaryFeePayment.GetRawText())
             ?? throw new InvalidDataException("torii_boundary.fee_payment decoded to null");
-        var gasLimit = feePayment.GasLimit
+        _ = feePayment.GasLimit
             ?? throw new InvalidDataException("torii_boundary.fee_payment is missing gas_limit");
 
         JsonDocument? submittedBody = null;
@@ -303,60 +303,29 @@ public sealed class NoritoRpcFixtureParityTests
         {
             submittedBody = JsonDocument.Parse(
                 request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
-            var transactionPayload = Encoding.UTF8.GetBytes("payload");
-            var response = new JsonObject
-            {
-                ["ok"] = true,
-                ["submitted"] = false,
-                ["dataspace"] = "universal",
-                ["contract_address"] = null,
-                ["code_hash_hex"] = new string('a', 64),
-                ["abi_hash_hex"] = new string('b', 64),
-                ["creation_time_ms"] = 1,
-                ["tx_hash_hex"] = null,
-                ["transaction_payload_b64"] = Convert.ToBase64String(transactionPayload),
-                ["signing_message_b64"] = Convert.ToBase64String(IrohaHash.Hash(transactionPayload)),
-                ["entrypoint"] = RequireString(boundary, "entrypoint", "torii_boundary"),
-                ["operation_receipt"] = new JsonObject
-                {
-                    ["operation_kind"] = "contract_call",
-                    ["status"] = "pending_signature",
-                    ["transport"] = "torii",
-                    ["dataspace"] = "universal",
-                    ["contract_alias"] = RequireString(boundary, "contract_alias", "torii_boundary"),
-                    ["contract_address"] = null,
-                    ["code_hash_hex"] = new string('a', 64),
-                    ["abi_hash_hex"] = new string('b', 64),
-                    ["tx_hash_hex"] = null,
-                    ["entrypoint"] = RequireString(boundary, "entrypoint", "torii_boundary"),
-                    ["gas_limit"] = gasLimit,
-                    ["gas_used"] = null,
-                    ["fee_payment"] = JsonNode.Parse(boundaryFeePayment.GetRawText()),
-                    ["payload_digest_hex"] = new string('d', 64),
-                },
-            };
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
             {
                 Content = new StringContent(
-                    response.ToJsonString(),
+                    "fixture boundary reached",
                     Encoding.UTF8,
-                    "application/json"),
+                    "text/plain"),
             };
         });
         using var client = new ToriiClient(
             new Uri("https://fixture.invalid"),
             new HttpClient(handler));
 
-        await client.CallContractAsync(
-            new ToriiContractCallRequest
-            {
-                Authority = RequireString(boundary, "authority", "torii_boundary"),
-                ContractAlias = RequireString(boundary, "contract_alias", "torii_boundary"),
-                Entrypoint = RequireString(boundary, "entrypoint", "torii_boundary"),
-                Payload = JsonNode.Parse(boundaryPayload.GetRawText()),
-                FeePayment = feePayment,
-            },
-            TestContext.Current.CancellationToken);
+        await Assert.ThrowsAnyAsync<Exception>(async () =>
+            await client.CallContractAsync(
+                new ToriiContractCallRequest
+                {
+                    Authority = RequireString(boundary, "authority", "torii_boundary"),
+                    ContractAlias = RequireString(boundary, "contract_alias", "torii_boundary"),
+                    Entrypoint = RequireString(boundary, "entrypoint", "torii_boundary"),
+                    Payload = JsonNode.Parse(boundaryPayload.GetRawText()),
+                    FeePayment = feePayment,
+                },
+                TestContext.Current.CancellationToken));
 
         Assert.Equal("/v1/contracts/call", handler.LastRequest!.RequestUri!.AbsolutePath);
         using var capturedBody = submittedBody

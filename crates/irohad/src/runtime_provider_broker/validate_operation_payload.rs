@@ -151,6 +151,14 @@ fn validate_operation_payload(
                 session_network_id,
             )?;
         }
+        (slot, OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1)
+            if slot == parliament_tle_partial_release_signer_slot =>
+        {
+            let _ = decode_parliament_tle_capability_attest_request(
+                &request.payload,
+                session_network_id,
+            )?;
+        }
         (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1)
             if slot == bootle_lantern_issuance_slot =>
         {

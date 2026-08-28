@@ -557,6 +557,7 @@ fn parliament_no_result_label(
         Kind::BallotReleasePulseUnavailable => "ballot_release_pulse_unavailable",
         Kind::BallotOpeningDeadlineExpired => "ballot_opening_deadline_expired",
         Kind::SortitionRetriesExhausted => "sortition_retries_exhausted",
+        Kind::ConfirmationJuryCapacityUnavailable => "confirmation_jury_capacity_unavailable",
     }
 }
 #[cfg(feature = "telemetry")]
@@ -582,6 +583,9 @@ fn parliament_no_result_matches_transition(
         | NoResult::BallotReleasePulseUnavailable
         | NoResult::BallotOpeningDeadlineExpired => transition == Transition::FailBallotNoResult,
         NoResult::SortitionRetriesExhausted => transition == Transition::FailBodyElectionNoRoster,
+        NoResult::ConfirmationJuryCapacityUnavailable => {
+            transition == Transition::FinalizeOpenedBallot
+        }
     }
 }
 #[cfg(feature = "telemetry")]
@@ -10932,6 +10936,10 @@ mod tests {
             Some(NoResult::SortitionRetriesExhausted),
         );
         telemetry.record_committed_parliament_transition(
+            Transition::FinalizeOpenedBallot,
+            Some(NoResult::ConfirmationJuryCapacityUnavailable),
+        );
+        telemetry.record_committed_parliament_transition(
             Transition::CompleteQualification,
             Some(NoResult::PublicFindingDeadlineExpired),
         );
@@ -10976,6 +10984,13 @@ mod tests {
             metrics
                 .governance_parliament_no_result_total
                 .with_label_values(&["sortition_retries_exhausted"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_no_result_total
+                .with_label_values(&["confirmation_jury_capacity_unavailable"])
                 .get(),
             1
         );

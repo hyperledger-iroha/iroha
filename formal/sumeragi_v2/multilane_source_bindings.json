@@ -2326,6 +2326,22 @@
         ]
       },
       {
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "kind": "method",
+        "symbol": "V2LaneWorkAdapter::retire_autonomous_payload_batch",
+        "required_tokens": [
+          "for payload in payloads",
+          "retire_autonomous_lane_slot_and_release_reservations(",
+          "retire_autonomous_lane_replica_with_queue_disposition(",
+          "let terminal_authorizations = self",
+          ".authorize_completed_autonomous_queue_cleanup_for_entrypoints(",
+          "&payload.entrypoint_hashes",
+          ".remove_state_committed_hashes_with_kura_terminal_authorizations(",
+          "self.state.as_ref()",
+          "terminal_authorizations,"
+        ]
+      },
+      {
         "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "kind": "fn",
         "symbol": "schedule_local_proposal",
@@ -4411,6 +4427,22 @@
           "let losing_pending = self",
           ".retire_autonomous_payload_batch(&losing_pending)",
           "self.pending_autonomous_anchor_payloads.clear()"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "kind": "method",
+        "symbol": "V2LaneWorkAdapter::retire_autonomous_payload_batch",
+        "tokens": [
+          "for payload in payloads",
+          "retire_autonomous_lane_slot_and_release_reservations(",
+          "retire_autonomous_lane_replica_with_queue_disposition(",
+          "let terminal_authorizations = self",
+          ".authorize_completed_autonomous_queue_cleanup_for_entrypoints(",
+          "&payload.entrypoint_hashes",
+          ".remove_state_committed_hashes_with_kura_terminal_authorizations(",
+          "self.state.as_ref()",
+          "terminal_authorizations,"
         ]
       },
       {
@@ -12344,6 +12376,21 @@
         {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
+          "symbol": "validate_queue_plan_admissions_for_carrier_in_view",
+          "required_tokens": [
+            "state_view: &impl StateReadOnly",
+            "decode_and_validate_queue_plan_admission_certificate_v1(",
+            "state_view.network_id()",
+            "state_view.block_hashes().get(index).copied()",
+            "exact_predecessor != context.predecessor_block_hash",
+            "queue_plan_authoritative_peers_in_view_at_height(",
+            "state_view,",
+            "authority.as_ref().ok() != Some(&route.validator_set)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
           "symbol": "stage_queue_plan_admissions_for_carrier",
           "required_tokens": [
             "ensure_pristine_execution_control_stage",
@@ -12357,7 +12404,7 @@
           "kind": "fn",
           "symbol": "stage_queue_plan_admissions",
           "required_tokens": [
-            "validate_queue_plan_admissions_for_carrier",
+            "validate_queue_plan_admissions_for_carrier_in_view",
             "queue_plan_pending_obligation_from_admission",
             "queue_plan_pending_obligation_matches_active_lifecycle",
             ".collect::<Result<Vec<_>, MergeLedgerCommitError>>()?",

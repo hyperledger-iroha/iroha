@@ -2888,9 +2888,6 @@ fn queue_plan_validation_waiting_for_state_generation_does_not_pin_block_hashes(
         authority_height,
         0x65,
     );
-    let active_lanes = state
-        .queue_plan_active_lane_bindings()
-        .expect("resolve QueuePlan lane bindings before the writer begins");
     let state = Arc::new(state);
     let start = Arc::new(Barrier::new(2));
     let (entered_tx, entered_rx) = std::sync::mpsc::channel();
@@ -2903,12 +2900,7 @@ fn queue_plan_validation_waiting_for_state_generation_does_not_pin_block_hashes(
             .send(())
             .expect("announce QueuePlan validation attempt");
         let result = worker_state
-            .validate_queue_plan_admissions_for_carrier(
-                &[certificate],
-                &active_lanes,
-                proposal_height,
-                true,
-            )
+            .validate_queue_plan_admissions_for_carrier(&[certificate], proposal_height)
             .map(|_| ())
             .map_err(|error| error.to_string());
         completion_tx
@@ -2921,8 +2913,7 @@ fn queue_plan_validation_waiting_for_state_generation_does_not_pin_block_hashes(
     entered_rx
         .recv_timeout(Duration::from_secs(1))
         .expect("QueuePlan validation worker starts");
-    let observation_deadline =
-        std::time::Instant::now() + Duration::from_millis(250);
+    let observation_deadline = std::time::Instant::now() + Duration::from_millis(250);
     let mut block_hashes_pinned = false;
     while std::time::Instant::now() < observation_deadline {
         if state.block_hashes.inner.try_write().is_none() {

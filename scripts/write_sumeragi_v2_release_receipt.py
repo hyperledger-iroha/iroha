@@ -61,7 +61,7 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
     ),
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "eebc8bdce0fbcd7cda07be4632917812f3bac27d6899d19b7da3c1a4b77f5b9c"
+        "5de112cad5f1eef2ebeb0225c854e69183aab977262733c226000179861728d7"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
         "0d89b39300b4d1b83e28623a75bcabdf31574451dfe68d8f1b67a49afd1dc440"
@@ -241,7 +241,7 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "eebc8bdce0fbcd7cda07be4632917812f3bac27d6899d19b7da3c1a4b77f5b9c"
+        "5de112cad5f1eef2ebeb0225c854e69183aab977262733c226000179861728d7"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
@@ -590,6 +590,7 @@ _PRODUCTION_MODULES = (
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-state-governance-unlock-audit", "state::tests", 1),
+    ("production-queue-replica-disposition", "queue::tests", 1),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 17),
     (
@@ -612,7 +613,7 @@ _PRODUCTION_MODULES = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 48),
+    ("production-v2-adapter", "sumeragi::v2::tests", 49),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     (
         "production-v2-certified-serve-payload-store",
@@ -621,7 +622,7 @@ _PRODUCTION_MODULES = (
     ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 70),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 65),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
@@ -640,7 +641,7 @@ _PRODUCTION_MODULES = (
     (
         "production-v2-lifecycle-height-driver",
         "sumeragi::v2_runner::lifecycle_height_driver::tests",
-        1,
+        2,
     ),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 90),
     (
@@ -706,7 +707,7 @@ _PRODUCTION_MODULES = (
     (
         "production-irohad-network-relay",
         "network_relay_tests",
-        4,
+        5,
     ),
     (
         "production-irohad-authenticated-via",

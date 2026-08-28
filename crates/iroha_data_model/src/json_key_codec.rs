@@ -415,12 +415,10 @@ impl JsonKeyCodec for crate::bridge::SccpRouteKeyV1 {
             })?;
         let route_id = parts
             .next()
-            .ok_or_else(|| json::Error::Message("missing SCCP route id".into()))?
-            .to_owned();
+            .ok_or_else(|| json::Error::Message("missing SCCP route id".into()))?;
         let asset_key = parts
             .next()
-            .ok_or_else(|| json::Error::Message("missing SCCP route asset key".into()))?
-            .to_owned();
+            .ok_or_else(|| json::Error::Message("missing SCCP route asset key".into()))?;
         let revision_text = parts
             .next()
             .ok_or_else(|| json::Error::Message("missing SCCP route revision".into()))?;
@@ -440,8 +438,8 @@ impl JsonKeyCodec for crate::bridge::SccpRouteKeyV1 {
             .map_err(|err| json::Error::Message(err.to_string()))?;
         crate::bridge::SccpRouteKeyV1::new(
             crate::bridge::SccpLaneIdV1 { source, target },
-            route_id,
-            asset_key,
+            route_id.to_owned(),
+            asset_key.to_owned(),
             revision,
         )
         .map_err(|err| json::Error::Message(err.to_string()))
@@ -736,12 +734,14 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpInboundAnchorHighWaterKeyV1 {
 #[cfg(test)]
 mod tests {
     use crate::account::AccountId;
-    use crate::bridge::sccp::{
-        SccpInboundAnchorHighWaterKeyV1, SccpInboundMessageKeyV1, SccpLaneIdV1, SccpNetworkV1,
-        SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
+    use crate::bridge::{
+        SccpRouteKeyV1, SccpRouteLiabilityV1,
+        sccp::{
+            SccpInboundAnchorHighWaterKeyV1, SccpInboundMessageKeyV1, SccpLaneIdV1, SccpNetworkV1,
+            SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
+        },
     };
     use crate::{
-        bridge::SccpRouteKeyV1,
         governance::types::{BallotAttemptId, GovernanceAttemptId, TleKeySessionId},
         musubi::{
             ArchiveId, MusubiInviteIdV1, MusubiMaintainerDirectoryKeyV1, MusubiPackageIdV1,
@@ -751,8 +751,11 @@ mod tests {
         sorafs::{capacity::ProviderId, pin_registry::ReplicationOrderId},
     };
     use iroha_crypto::KeyPair;
-    use mv::json::JsonKeyCodec;
-    use norito::json::Parser;
+    use mv::{
+        json::JsonKeyCodec,
+        storage::{Storage, StorageReadOnly},
+    };
+    use norito::json::{Parser, from_json, to_json};
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")
     }
@@ -849,7 +852,7 @@ mod tests {
             "xor".to_owned(),
             7,
         )
-        .expect("valid route key");
+        .expect("valid SCCP route key");
         let mut encoded = String::new();
         key.encode_json_key(&mut encoded);
         assert_eq!(
@@ -902,6 +905,27 @@ mod tests {
                 "accepted non-canonical or invalid route key {encoded:?}"
             );
         }
+    }
+    #[test]
+    fn sccp_route_liability_storage_json_roundtrip_uses_route_key_codec() {
+        let key = SccpRouteKeyV1::new(
+            SccpLaneIdV1 {
+                source: SccpNetworkV1::BscMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            "taira_bsc_xor".to_owned(),
+            "xor".to_owned(),
+            3,
+        )
+        .expect("valid SCCP route key");
+        let liability = SccpRouteLiabilityV1::new(42).expect("nonzero SCCP liability");
+        let storage = Storage::from_iter([(key.clone(), liability)]);
+
+        let encoded = to_json(&storage).expect("serialize SCCP route liability storage");
+        let decoded: Storage<SccpRouteKeyV1, SccpRouteLiabilityV1> =
+            from_json(&encoded).expect("deserialize SCCP route liability storage");
+
+        assert_eq!(decoded.view().get(&key), Some(&liability));
     }
     #[test]
     fn sccp_outbound_message_key_json_key_codec_is_canonical() {

@@ -4242,6 +4242,9 @@
       "fixture_directory": "crates/kotodama_lang/src/semantic/fixtures/v1",
       "path": "crates/kotodama_lang/src/semantic.rs",
       "test_names": [
+        "typed_aggregate_traits_are_spawn_free_for_flat_width",
+        "semantic_type_and_expression_traits_are_iterative_at_the_depth_boundary",
+        "public_semantic_apis_handoff_from_a_small_caller",
         "large_shared_struct_references_and_expression_checks_reuse_one_canonical_dag",
         "runtime_word_count_stops_at_the_fixed_register_window_for_shared_dags",
         "modest_shared_struct_references_preserve_ordinary_semantics",
@@ -4454,12 +4457,13 @@
         "wholly_divergent_expression_without_a_type_context_fails_closed",
         "sum_and_expression_control_flow_fail_closed"
       ],
-      "test_names_sha256": "74bb6a59323e82e7f5b9b74f8831d6d4b72c764956bbc207197bc5699e1872f9"
+      "test_names_sha256": "406e7383c898758f9d016f739a26dad77bfa0bd1561a6d374ef4e1b1b35bc5ba"
     },
     {
       "fixture_directory": "crates/kotodama_lang/src/ir/fixtures/v1",
       "path": "crates/kotodama_lang/src/ir.rs",
       "test_names": [
+        "public_lowering_apis_handoff_from_a_small_caller",
         "malformed_typed_member_access_fails_closed_during_lowering",
         "source_int_and_internal_scalar_have_an_explicit_ir_boundary",
         "contextually_typed_integer_quantity_literal_lowers_as_quantity_data",
@@ -4560,8 +4564,8 @@
         "rounded_numeric_division_is_constant_folded_or_one_numeric_round_instruction",
         "wrapping_builtins_have_distinct_ir"
       ],
-      "test_names_sha256": "7fbc4a176d3742729351a719009091235b08acc52c0987ba7d7e3d9cfb51d761"
+      "test_names_sha256": "527e21bb794c3cd98755bfeafc9eb864bd850600f757c628b02d89cdfa52dc06"
     }
   ],
-  "test_inventory_sha256": "1e7e52cfc752c6dd26b9ae0c0b527f93188ec3ec1f0f1a1531174e8df9cacdfd"
+  "test_inventory_sha256": "a79f5678a363d1e72f9a1a6f765e0c4e32a7233f947595396d38ac5b738b69ac"
 }

@@ -165,6 +165,42 @@ fn losing_autonomous_carrier_is_durably_retired_before_cache_drop() {
             .is_none(),
         "the exact losing carrier remains live until a higher lock supersedes it"
     );
+    let retired_descriptor = &anchored_payload.origin_proposal.descriptor;
+    let ordinary_winner = proposal_for_route(
+        &adapter,
+        &keys,
+        lane_id,
+        dataspace_id,
+        retired_descriptor.lane_incarnation,
+        retired_descriptor.proposal_height,
+        retired_descriptor.lane_block_height,
+    );
+    assert_ne!(
+        ordinary_winner, anchored_payload.origin_proposal,
+        "the ordinary winner must not alias the autonomous attempt",
+    );
+    let ordinary_session = committed_lane_session(&ordinary_winner, &keys);
+    let ordinary_pops = adapter.pops_for_lane_session(&ordinary_session);
+    let ordinary_authority = crate::state::CertifiedLaneBlockPersistenceAuthority::for_test(
+        lane_id,
+        dataspace_id,
+        retired_descriptor.lane_incarnation,
+        None,
+    );
+    let live_conflict = adapter
+        .kura
+        .persist_committed_lane_block_session_with_authority(
+            &ordinary_session,
+            &ordinary_pops,
+            &ordinary_authority,
+        )
+        .expect_err("a live autonomous attempt must exclude an ordinary winner");
+    assert!(
+        live_conflict
+            .to_string()
+            .contains("ordinary certification conflicts with a live durable autonomous lane slot"),
+        "unexpected live autonomous collision error: {live_conflict}",
+    );
     let _ = adapter.drain_effects(usize::MAX);
     let winning_view = losing_round.view.saturating_add(1);
     let winning_leader_index = usize::try_from(adapter.context.leader(winning_view))
@@ -201,6 +237,32 @@ fn losing_autonomous_carrier_is_durably_retired_before_cache_drop() {
     assert!(queue.live_lane_reservations().is_empty());
     assert_eq!(queue.fifo_snapshot_for_test(), original_fifo);
     assert!(!adapter.output_guard.restart_required());
+    let unauthenticated = adapter
+        .kura
+        .persist_committed_lane_block_session(&ordinary_session, &ordinary_pops)
+        .expect_err("retirement alone must not authorize ordinary slot replacement");
+    assert!(
+        unauthenticated
+            .to_string()
+            .contains("lacks State lifecycle authority"),
+        "unexpected unauthenticated replacement error: {unauthenticated}",
+    );
+    adapter
+        .kura
+        .persist_committed_lane_block_session_with_authority(
+            &ordinary_session,
+            &ordinary_pops,
+            &ordinary_authority,
+        )
+        .expect("a different State-authorized ordinary winner may follow Complete retirement");
+    assert_eq!(
+        adapter
+            .kura
+            .read_certified_lane_block_artifact(lane_id, retired_descriptor.lane_block_height)
+            .expect("read the ordinary winner after autonomous terminalization")
+            .proposal,
+        ordinary_winner,
+    );
     assert_eq!(
         accept_lane_message_from(
             &mut adapter,
@@ -414,6 +476,42 @@ fn losing_pending_autonomous_payload_is_retired_by_fifo_only_replica() {
         "the live retirement must consume its Pending terminal outcome",
     );
     assert!(!adapter.output_guard.restart_required());
+    let ordinary_winner = proposal_for_route(
+        &adapter,
+        &replica_keys,
+        lane_id,
+        dataspace_id,
+        descriptor.lane_incarnation,
+        proposal_height,
+        lane_block_height,
+    );
+    assert_ne!(ordinary_winner, payload.origin_proposal);
+    let ordinary_session = committed_lane_session(&ordinary_winner, &replica_keys);
+    let ordinary_pops = adapter.pops_for_lane_session(&ordinary_session);
+    let ordinary_authority = crate::state::CertifiedLaneBlockPersistenceAuthority::for_test(
+        lane_id,
+        dataspace_id,
+        descriptor.lane_incarnation,
+        None,
+    );
+    adapter
+        .kura
+        .persist_committed_lane_block_session_with_authority(
+            &ordinary_session,
+            &ordinary_pops,
+            &ordinary_authority,
+        )
+        .expect(
+            "a State-authorized ordinary winner may follow a Complete replica Queue disposition",
+        );
+    assert_eq!(
+        adapter
+            .kura
+            .read_certified_lane_block_artifact(lane_id, lane_block_height)
+            .expect("read ordinary winner after replica terminalization")
+            .proposal,
+        ordinary_winner,
+    );
     assert_eq!(
         accept_lane_message_from(
             &mut adapter,

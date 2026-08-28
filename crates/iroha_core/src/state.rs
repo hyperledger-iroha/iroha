@@ -467,6 +467,23 @@ const DEFAULT_TRIGGER_GAS_LIMIT: u64 = 50_000_000;
 pub(crate) const GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY: u64 = 0;
 pub(crate) const TLE_KEY_SESSION_SINGLETON_KEY: u64 = 0;
 
+/// Validate the exact frozen ordered validator roster for a public TLE session.
+pub(crate) fn validate_tle_key_session_roster_binding_v1(
+    public_state: &TleKeySessionPublicStateV1,
+    ordered_roster: &[PeerId],
+) -> Result<(), TleReleaseAdapterError> {
+    let unique_peers = ordered_roster.iter().collect::<BTreeSet<_>>();
+    if ordered_roster.is_empty()
+        || unique_peers.len() != ordered_roster.len()
+        || usize::from(public_state.committee_size) != ordered_roster.len()
+        || public_state.roster_hash
+            != crate::beacon::global_threshold_beacon_roster_hash_v1(ordered_roster)
+    {
+        return Err(TleReleaseAdapterError::TranscriptMismatch);
+    }
+    Ok(())
+}
+
 /// Closed failures for the committed Parliament TLE key-session lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum TleKeySessionLifecycleErrorV1 {
@@ -1115,6 +1132,7 @@ macro_rules! with_world_overlay_fields {
             parliament_bodies,
             parliament_attempts,
             tle_key_sessions,
+            tle_key_session_rosters,
             tle_active_key_session,
             timed_ovn_evidence,
             global_beacon_dkg,
@@ -4525,6 +4543,8 @@ pub struct World {
         Storage<BallotAttemptId, ParliamentTimedOvnResourceReservationV1>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions: Storage<TleKeySessionId, TleKeySessionPublicStateV1>,
+    /// Frozen ordered validator roster bound to each finalized TLE key session.
+    pub(crate) tle_key_session_rosters: Storage<TleKeySessionId, Vec<PeerId>>,
     /// Singleton pointer to the TLE key session eligible for new ballots.
     pub(crate) tle_active_key_session: Storage<u64, TleKeySessionId>,
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
@@ -5256,6 +5276,8 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, BallotAttemptId, ParliamentTimedOvnResourceReservationV1>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions: StorageBlock<'world, TleKeySessionId, TleKeySessionPublicStateV1>,
+    /// Frozen ordered validator roster bound to each finalized TLE key session.
+    pub(crate) tle_key_session_rosters: StorageBlock<'world, TleKeySessionId, Vec<PeerId>>,
     /// Singleton TLE key session eligible for new ballots.
     pub(crate) tle_active_key_session: StorageBlock<'world, u64, TleKeySessionId>,
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
@@ -5434,6 +5456,7 @@ impl WorldBlock<'_> {
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
         collect_reverts!(self.parliament_attempts, ParliamentAttempt);
         collect_reverts!(self.tle_key_sessions, TleKeySession);
+        collect_reverts!(self.tle_key_session_rosters, TleKeySessionRoster);
         collect_reverts!(self.tle_active_key_session, TleActiveKeySession);
         collect_reverts!(self.timed_ovn_evidence, TimedOvnEvidence);
         collect_reverts!(self.global_beacon_dkg, GlobalBeaconDkg);
@@ -5525,6 +5548,7 @@ impl WorldBlock<'_> {
         collect_payload!(self.parliament_bodies, ParliamentBodies);
         collect_payload!(self.parliament_attempts, ParliamentAttempt);
         collect_payload!(self.tle_key_sessions, TleKeySession);
+        collect_payload!(self.tle_key_session_rosters, TleKeySessionRoster);
         collect_payload!(self.tle_active_key_session, TleActiveKeySession);
         collect_payload!(self.timed_ovn_evidence, TimedOvnEvidence);
         collect_payload!(self.global_beacon_dkg, GlobalBeaconDkg);
@@ -5797,6 +5821,7 @@ impl WorldBlock<'_> {
             parliament_bodies,
             parliament_attempts,
             tle_key_sessions,
+            tle_key_session_rosters,
             tle_active_key_session,
             timed_ovn_evidence,
             global_beacon_dkg,
@@ -6579,6 +6604,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions:
         StorageTransaction<'block, 'world, TleKeySessionId, TleKeySessionPublicStateV1>,
+    /// Frozen ordered validator roster bound to each finalized TLE key session.
+    pub(crate) tle_key_session_rosters:
+        StorageTransaction<'block, 'world, TleKeySessionId, Vec<PeerId>>,
     /// Singleton TLE key session eligible for new ballots.
     pub(crate) tle_active_key_session: StorageTransaction<'block, 'world, u64, TleKeySessionId>,
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
@@ -8650,6 +8678,8 @@ pub struct WorldView<'world> {
     >,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions: StorageView<'world, TleKeySessionId, TleKeySessionPublicStateV1>,
+    /// Frozen ordered validator roster bound to each finalized TLE key session.
+    pub(crate) tle_key_session_rosters: StorageView<'world, TleKeySessionId, Vec<PeerId>>,
     /// Singleton TLE key session eligible for new ballots.
     pub(crate) tle_active_key_session: StorageView<'world, u64, TleKeySessionId>,
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
@@ -18957,6 +18987,9 @@ macro_rules! world_ro_accessors {
             /// Finalized public-only adaptive TLE key sessions.
             storage tle_key_sessions:
                 TleKeySessionId => TleKeySessionPublicStateV1;
+            /// Frozen ordered validator roster bound to each finalized TLE key session.
+            storage tle_key_session_rosters:
+                TleKeySessionId => Vec<PeerId>;
             /// Singleton TLE key session eligible for new Parliament ballots.
             storage tle_active_key_session: u64 => TleKeySessionId;
             /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
@@ -19239,6 +19272,49 @@ pub trait WorldReadOnly {
             }
         }
         Ok(retain_through)
+    }
+    /// Return every TLE key session whose runtime custody is still required.
+    ///
+    /// The active session is included unconditionally. Historical ballot
+    /// bindings are retained through their greatest committed opening
+    /// deadline, inclusively; `u64::MAX` therefore remains unretirable.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first reducer validation error from committed Parliament
+    /// state. Each attempt is validated exactly once during this projection.
+    fn tle_key_sessions_required_for_runtime_custody_v1(
+        &self,
+        committed_height: u64,
+    ) -> core::result::Result<
+        BTreeSet<TleKeySessionId>,
+        crate::governance::parliament::ParliamentReducerErrorV1,
+    > {
+        let mut required = BTreeSet::new();
+        if let Some(active_key_session_id) = self.active_tle_key_session() {
+            required.insert(active_key_session_id);
+        }
+
+        let mut retention_deadlines = BTreeMap::<TleKeySessionId, u64>::new();
+        for (_, attempt) in self.parliament_attempts().iter() {
+            attempt.validate()?;
+            for (_, ballot) in attempt.ballot_attempts() {
+                let Some(key_session_id) = ballot.tle_key_session_id() else {
+                    continue;
+                };
+                let opening_deadline = ballot.opening_deadline_height();
+                retention_deadlines
+                    .entry(key_session_id)
+                    .and_modify(|deadline| {
+                        *deadline = (*deadline).max(opening_deadline);
+                    })
+                    .or_insert(opening_deadline);
+            }
+        }
+        required.extend(retention_deadlines.into_iter().filter_map(
+            |(key_session_id, deadline)| (committed_height <= deadline).then_some(key_session_id),
+        ));
+        Ok(required)
     }
     /// Return the single ABI version accepted by the first release runtime.
     fn abi_version(&self) -> u16 {
@@ -20458,6 +20534,7 @@ impl<'world> WorldBlock<'world> {
             parliament_attempts,
             parliament_timed_ovn_resource_reservations,
             tle_key_sessions,
+            tle_key_session_rosters,
             tle_active_key_session,
             timed_ovn_evidence,
             global_beacon_dkg,
@@ -20617,6 +20694,7 @@ impl<'world> WorldBlock<'world> {
         parliament_attempts.commit();
         parliament_timed_ovn_resource_reservations.commit();
         tle_key_sessions.commit();
+        tle_key_session_rosters.commit();
         tle_active_key_session.commit();
         timed_ovn_evidence.commit();
         global_beacon_dkg.commit();
@@ -21899,21 +21977,33 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         Ok(())
     }
     /// Validate and persist one immutable public-only adaptive TLE key session.
+    ///
+    /// The session and its exact frozen seat roster are admitted as one pair.
     pub(crate) fn put_tle_key_session(
         &mut self,
         state: TleKeySessionPublicStateV1,
+        ordered_roster: Vec<PeerId>,
     ) -> Result<(), TleReleaseAdapterError> {
         let key_session_id = state.key_session_id;
         state.clone().validate()?;
-        if self
-            .tle_key_sessions
-            .get(&key_session_id)
-            .is_some_and(|previous| previous != &state)
-        {
-            return Err(TleReleaseAdapterError::TranscriptMismatch);
+        validate_tle_key_session_roster_binding_v1(&state, &ordered_roster)?;
+        match (
+            self.tle_key_sessions.get(&key_session_id),
+            self.tle_key_session_rosters.get(&key_session_id),
+        ) {
+            (None, None) => {
+                self.tle_key_sessions.insert(key_session_id, state);
+                self.tle_key_session_rosters
+                    .insert(key_session_id, ordered_roster);
+                Ok(())
+            }
+            (Some(previous_state), Some(previous_roster))
+                if previous_state == &state && previous_roster == &ordered_roster =>
+            {
+                Ok(())
+            }
+            _ => Err(TleReleaseAdapterError::TranscriptMismatch),
         }
-        self.tle_key_sessions.insert(key_session_id, state);
-        Ok(())
     }
     /// Make one committed public TLE key session eligible for new ballots.
     ///
@@ -21924,11 +22014,20 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
         key_session_id: TleKeySessionId,
     ) -> Result<(), TleKeySessionLifecycleErrorV1> {
-        self.tle_key_sessions
+        let public_state = self
+            .tle_key_sessions
             .get(&key_session_id)
             .cloned()
-            .ok_or(TleKeySessionLifecycleErrorV1::UnknownSession)?
+            .ok_or(TleKeySessionLifecycleErrorV1::UnknownSession)?;
+        public_state
+            .clone()
             .validate()
+            .map_err(|_| TleKeySessionLifecycleErrorV1::UnknownSession)?;
+        let ordered_roster = self
+            .tle_key_session_rosters
+            .get(&key_session_id)
+            .ok_or(TleKeySessionLifecycleErrorV1::UnknownSession)?;
+        validate_tle_key_session_roster_binding_v1(&public_state, ordered_roster)
             .map_err(|_| TleKeySessionLifecycleErrorV1::UnknownSession)?;
         self.tle_active_key_session
             .insert(TLE_KEY_SESSION_SINGLETON_KEY, key_session_id);
@@ -22588,6 +22687,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             parliament_attempts,
             parliament_timed_ovn_resource_reservations,
             tle_key_sessions,
+            tle_key_session_rosters,
             tle_active_key_session,
             timed_ovn_evidence,
             global_beacon_dkg,
@@ -22797,6 +22897,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         parliament_attempts.apply();
         parliament_timed_ovn_resource_reservations.apply();
         tle_key_sessions.apply();
+        tle_key_session_rosters.apply();
         tle_active_key_session.apply();
         timed_ovn_evidence.apply();
         global_beacon_dkg.apply();
@@ -31779,12 +31880,23 @@ impl State {
         )?;
         Ok(candidate)
     }
+    #[cfg(test)]
     fn queue_plan_active_lane_bindings(
         &self,
     ) -> Result<Vec<MergeLaneBinding>, MergeLedgerCommitError> {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
-        lifecycle
-            .nexus
+        Self::queue_plan_active_lane_bindings_from_snapshot(
+            &lifecycle.nexus,
+            &lifecycle.incarnations,
+            &lifecycle.activation_heights,
+        )
+    }
+    fn queue_plan_active_lane_bindings_from_snapshot(
+        nexus: &iroha_config::parameters::actual::Nexus,
+        incarnations: &BTreeMap<LaneId, Hash>,
+        activation_heights: &BTreeMap<LaneId, u64>,
+    ) -> Result<Vec<MergeLaneBinding>, MergeLedgerCommitError> {
+        nexus
             .lane_catalog
             .lanes()
             .iter()
@@ -31793,12 +31905,10 @@ impl State {
                     lane_id: lane.id,
                     dataspace_id: lane.dataspace_id,
                     lane_config_hash: merge_lane_config_hash(lane),
-                    incarnation: *lifecycle
-                        .incarnations
+                    incarnation: *incarnations
                         .get(&lane.id)
                         .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?,
-                    activation_height: lifecycle
-                        .activation_heights
+                    activation_height: activation_heights
                         .get(&lane.id)
                         .and_then(|height| height.checked_add(1))
                         .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?,
@@ -31809,40 +31919,33 @@ impl State {
     fn validate_queue_plan_admissions_for_carrier(
         &self,
         admissions: &[Vec<u8>],
-        active_lanes: &[MergeLaneBinding],
         carrier_height: u64,
-        validate_live_authority: bool,
     ) -> Result<
         Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1>,
         MergeLedgerCommitError,
     > {
-        // Keep canonical history and live lane authority on one coherent State
-        // snapshot. In particular, never retain a standalone BlockHashesView
-        // while acquiring `State::view()`: a concurrent block commit marks the
-        // State generation odd before publishing block hashes, so that lock
-        // order would make the reader wait for the writer while the writer
-        // waits for the reader's block-hash guard.
+        // One immutable view owns both predecessor history and route authority.
+        // Holding a raw block-hash read guard and then opening `State::view()`
+        // can deadlock a State commit that has already raised the write
+        // generation and is waiting to publish that same block-hash journal.
         let state_view = self.view();
-        self.validate_queue_plan_admissions_with_canonical_history(
+        let active_lanes = Self::queue_plan_active_lane_bindings_from_snapshot(
+            state_view.nexus(),
+            &state_view.lane_incarnations,
+            &state_view.lane_incarnation_activation_heights,
+        )?;
+        Self::validate_queue_plan_admissions_for_carrier_in_view(
+            &state_view,
             admissions,
-            active_lanes,
+            &active_lanes,
             carrier_height,
-            validate_live_authority.then_some(&state_view),
-            |authority_height| {
-                usize::try_from(authority_height)
-                    .ok()
-                    .and_then(|height| height.checked_sub(1))
-                    .and_then(|index| state_view.block_hashes.get(index).copied())
-            },
         )
     }
-    fn validate_queue_plan_admissions_with_canonical_history(
-        &self,
+    fn validate_queue_plan_admissions_for_carrier_in_view(
+        state_view: &impl StateReadOnly,
         admissions: &[Vec<u8>],
         active_lanes: &[MergeLaneBinding],
         carrier_height: u64,
-        live_authority_view: Option<&StateView<'_>>,
-        canonical_block_hash_at_height: impl Fn(u64) -> Option<HashOf<BlockHeader>>,
     ) -> Result<
         Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1>,
         MergeLedgerCommitError,
@@ -31857,7 +31960,7 @@ impl State {
         for bytes in admissions {
             let admission =
                 crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-                    &self.network_id,
+                    state_view.network_id(),
                     bytes,
                 )
                 .map_err(|error| {
@@ -31884,7 +31987,10 @@ impl State {
             let exact_predecessor = if context.authority_height == 0 {
                 None
             } else {
-                canonical_block_hash_at_height(context.authority_height)
+                usize::try_from(context.authority_height)
+                    .ok()
+                    .and_then(|height| height.checked_sub(1))
+                    .and_then(|index| state_view.block_hashes().get(index).copied())
             };
             if exact_predecessor != context.predecessor_block_hash {
                 return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -31911,18 +32017,16 @@ impl State {
                             .to_owned(),
                     ));
                 }
-                if let Some(state_view) = live_authority_view {
-                    let authority = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
-                        state_view,
-                        route.leg.route,
-                        context.proposal_height,
-                    );
-                    if authority.as_ref().ok() != Some(&route.validator_set) {
-                        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                            "queue-plan admission validator set is not authoritative at its proposal height"
-                                .to_owned(),
-                        ));
-                    }
+                let authority = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+                    state_view,
+                    route.leg.route,
+                    context.proposal_height,
+                );
+                if authority.as_ref().ok() != Some(&route.validator_set) {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "queue-plan admission validator set is not authoritative at its proposal height"
+                            .to_owned(),
+                    ));
                 }
             }
             validated.push(admission);
@@ -32013,38 +32117,9 @@ impl State {
                 {
                     PendingQueuePlanAdmissionDisposition::Future
                 } else {
-                    let lifecycle = self.lane_consensus_lifecycle_snapshot();
-                    let active_lanes = lifecycle
-                        .nexus
-                        .lane_catalog
-                        .lanes()
-                        .iter()
-                        .map(|lane| {
-                            Ok(MergeLaneBinding {
-                                lane_id: lane.id,
-                                dataspace_id: lane.dataspace_id,
-                                lane_config_hash: merge_lane_config_hash(lane),
-                                incarnation: *lifecycle.incarnations.get(&lane.id).ok_or(
-                                    MergeLedgerCommitError::UnknownLane { lane_id: lane.id },
-                                )?,
-                                activation_height: lifecycle
-                                    .activation_heights
-                                    .get(&lane.id)
-                                    .and_then(|height| height.checked_add(1))
-                                    .ok_or(MergeLedgerCommitError::UnknownLane {
-                                        lane_id: lane.id,
-                                    })?,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
                     let encoded = vec![bytes.to_vec()];
                     if self
-                        .validate_queue_plan_admissions_for_carrier(
-                            &encoded,
-                            &active_lanes,
-                            carrier_height,
-                            true,
-                        )
+                        .validate_queue_plan_admissions_for_carrier(&encoded, carrier_height)
                         .is_ok()
                     {
                         PendingQueuePlanAdmissionDisposition::EligibleAbsent
@@ -39182,6 +39257,17 @@ impl State {
             warn!("emergency Fast startup deferred merge settlement replay until a Strict restart");
             Ok(())
         } else {
+            // Kura opens an authenticated configured catalog on its primary lane only.  The
+            // configured secondary lanes become authoritative in the geometry transition above,
+            // so seal their already-Complete replica claims before any later startup replay can
+            // consume the capacity required to make those claims archive-independent.
+            self.kura
+                .seal_completed_autonomous_lifecycle_replica_claims_on_startup()
+                .map_err(|err| {
+                    LaneLifecycleError::Storage(format!(
+                        "configured-lane replica claim startup seal: {err}"
+                    ))
+                })?;
             self.replay_persisted_merge_settlements().map_err(|err| {
                 LaneLifecycleError::Storage(format!("merge side-effect replay: {err}"))
             })
@@ -47064,7 +47150,11 @@ impl<'state> StateBlock<'state> {
         if admission_bytes.is_empty() {
             return Ok(());
         }
-        let active_lanes = self.state_ref.queue_plan_active_lane_bindings()?;
+        let active_lanes = State::queue_plan_active_lane_bindings_from_snapshot(
+            &self.nexus,
+            &self.lane_incarnations,
+            &self.lane_incarnation_activation_heights,
+        )?;
         self.stage_queue_plan_admissions(
             admission_bytes,
             &active_lanes,
@@ -47354,11 +47444,11 @@ impl<'state> StateBlock<'state> {
         active_lanes: &[MergeLaneBinding],
         carrier_height: u64,
     ) -> Result<(), MergeLedgerCommitError> {
-        let admissions = self.state_ref.validate_queue_plan_admissions_for_carrier(
+        let admissions = State::validate_queue_plan_admissions_for_carrier_in_view(
+            self,
             admission_bytes,
             active_lanes,
             carrier_height,
-            true,
         )?;
         let admissions = admissions
             .into_iter()

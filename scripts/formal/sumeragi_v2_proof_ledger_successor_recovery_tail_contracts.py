@@ -120,6 +120,10 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(repo_root: Pa
             "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
         ),
         (
+            "dispatch_test",
+            "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs",
+        ),
+        (
             "ledger_recovery_test",
             "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests_durable_recovery_02.rs",
         ),
@@ -902,8 +906,8 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         return target
 
     completion_pre_gate = launched_completion_item(
-        "drive_completion_pre_gate",
-        "lifecycle Completion parked/physical pre-gate",
+        "drive_completion_pre_gate_inner",
+        "lifecycle Completion parked/physical pre-gate implementation",
     )
     ready_completion = launched_completion_item(
         "drive_ready_completion_turn_with_required_ordinal",
@@ -958,12 +962,13 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             rust_code_tokens(completion_pre_gate.source),
             rust_code_tokens("ProductionLifecycleCompletionPreGateV1::Ordinary(runner)"),
         )
-        if ordinary_returns != 3:
+        if ordinary_returns != 4:
             errors.append(
                 f"{paths['driver']}:{completion_pre_gate.line}: lifecycle Completion "
                 "pre-gate must return the exact ordinary cursor for a foreign runner "
-                "rank, the unchanged-Validate-fence ordinary bypass, and an ordinary "
-                f"physical head; found {ordinary_returns} sites"
+                "rank, the unchanged-Validate-fence bypass, an unpermitted ordinary "
+                "head, and an ordinary head whose Ready Proposal Sign is not exact; "
+                f"found {ordinary_returns} sites"
             )
     require_order(
         "driver",
@@ -2617,16 +2622,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "blocked ordinary lane-local ingress permit mint",
         errors,
     )
-    require_order(
-        "height_driver",
-        blocked_lane_local_permit_mint,
-        "only a non-Apply ordinary-ingress blocker may mint lane-local authority",
-        (
-            "self.blocks_ingress()",
-            "!self.permits_decided_lane_recovery_ingress()",
-            "Some(LifecycleBlockedOrdinaryLaneLocalIngressPermitV1",
-            "None",
-        ),
+    _successor_recovery_ready_proposal_sign_source_fidelity_errors(
+        paths, sources, errors, item, require_order, blocked_lane_local_permit_mint
     )
     expected_apply_terminal_ready_broadcast_items = {
         "height::LifecycleApplyTerminalReadyBroadcastPermitV1",
@@ -4105,8 +4102,9 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             if observed != 3:
                 errors.append(
                     f"{paths['height_driver']}:{lifecycle_height_driver.line}: "
-                    "the terminal-finalization, post-Apply, and ordinary Ready "
-                    "branches must each retain "
+                    "the terminal-finalization and settled post-Apply authority "
+                    "paths, plus the ordinary Ready branch, "
+                    "must each retain "
                     f"{token!r}; found {observed} total occurrence(s)"
                 )
     if lifecycle_height_driver is not None:

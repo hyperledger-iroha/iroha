@@ -1912,8 +1912,15 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
         "pub(crate) fn complete_certified_fetch_body_persistence(",
-        "exact_dequeue.commit(ingress)",
-        "exact_dequeue.commit_without_runtime_receipt(ingress)",
+        "exact_dequeue.lock(ingress)",
+        "exact_dequeue.lock_without_retained_ownership(ingress)",
+        "complete_certified_fetch_body_persistence must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn complete_certified_fetch_body_persistence(",
+        "exact_dequeue.commit()",
+        "exact_dequeue.commit_without_locked_ingress()",
         "complete_certified_fetch_body_persistence must preserve exact production order",
     ),
     (
@@ -3614,7 +3621,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 430
+) == 431
 
 
 @pytest.mark.parametrize(

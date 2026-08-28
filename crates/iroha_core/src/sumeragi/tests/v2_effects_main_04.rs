@@ -1277,10 +1277,19 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
         Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
     ));
     let ordinary_ordinal = ingress.state.lock().last_admission_ordinal;
+    let first_recovered_response = recovered_response(0);
+    let second_recovered_response = recovered_response(1);
+    assert_ne!(
+        HashOf::new(&first_recovered_response),
+        HashOf::new(&second_recovered_response),
+    );
     let mut recovered_ordinals = Vec::new();
-    for responder in [0, 1] {
+    for (responder, response) in [
+        (0, first_recovered_response.clone()),
+        (1, second_recovered_response.clone()),
+    ] {
         let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(recovered_response(responder)),
+            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
         ));
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::from_authenticated_peer(
@@ -1433,7 +1442,118 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
         crate::sumeragi::v2_lifecycle_coordinator::LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence
     );
     assert!(target.matches_recovered_decision_fetch_key(key));
+    let phase_a_identity = target.ingress_identity();
+    let authenticated = match executor
+        .probe_certified_response_priority(
+            &first_recovered_response,
+            &fixture.context.roster[0].validator,
+        )
+        .expect("reauthenticate the selected recovered response for persistence")
+    {
+        CertifiedResponsePriorityProbe::RecoveredPreflightRequired(candidate) => {
+            candidate.into_authenticated_response()
+        }
+        _ => panic!("the selected recovered response must retain its dedicated request owner"),
+    };
+    let wrong_authenticated = match executor
+        .probe_certified_response_priority(
+            &second_recovered_response,
+            &fixture.context.roster[1].validator,
+        )
+        .expect("authenticate the same-family wrong recovered response")
+    {
+        CertifiedResponsePriorityProbe::RecoveredPreflightRequired(candidate) => {
+            candidate.into_authenticated_response()
+        }
+        _ => panic!("the alternate response must retain the recovered request family"),
+    };
+    let persistence = crate::sumeragi::v2_lifecycle_coordinator::RecoveredDecisionFetchBodyPersistenceTaskV1::for_test(
+        &target,
+        key,
+        authenticated,
+    );
+    let mut completion = persistence.assume_persisted_for_test();
     drop(selected);
+    drop(target);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(first_recovered_response,),
+            )),
+            fixture.context.roster[0].validator.clone(),
+        )),
+        Ok(crate::sumeragi::FairV2IngressPushDisposition::Coalesced)
+    ));
+    let mut refreshed_probe = executor
+        .prepare_next_recovered_decision_fetch_ingress_selector(&ingress)
+        .expect("recapture the coalesced recovered response")
+        .expect("the recovered response remains the selected physical family winner");
+    let refreshed_target = refreshed_probe
+        .take_lifecycle_io_target()
+        .expect("the refreshed recovered response retains its persistence target");
+    assert_eq!(
+        refreshed_probe.selected_cut_for_test().2,
+        first_recovered_ordinal,
+        "coalescence must retain the original physical row",
+    );
+    assert_ne!(
+        phase_a_identity,
+        refreshed_target.ingress_identity(),
+        "coalescence must refresh recovered ownership history without replacing its row",
+    );
+    drop(refreshed_probe);
+    drop(refreshed_target);
+    let wrong_dispatch = crate::sumeragi::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1::for_height_context_test(
+        &fixture.context,
+        42,
+        0xD2,
+    );
+    assert_ne!(wrong_dispatch, key);
+    let exact_dispatch = completion.replace_dispatch_key_for_test(wrong_dispatch);
+    let wrong_dispatch_selector = executor
+        .prepare_next_recovered_decision_fetch_ingress_selector(&ingress)
+        .expect("capture the same-coordinate wrong-dispatch Phase-B witness")
+        .expect("the recovered family remains selectable after ownership refresh");
+    assert!(matches!(
+        wrong_dispatch_selector.into_locked_recovered_decision_fetch_dequeue(
+            &executor,
+            &ingress,
+            &completion,
+        ),
+        Err(crate::sumeragi::v2_lifecycle_coordinator::RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity)
+    ));
+    assert_eq!(
+        completion.replace_dispatch_key_for_test(exact_dispatch),
+        wrong_dispatch,
+    );
+    let exact_authenticated =
+        completion.replace_authenticated_response_for_test(wrong_authenticated);
+    let wrong_response_selector = executor
+        .prepare_next_recovered_decision_fetch_ingress_selector(&ingress)
+        .expect("capture the same-coordinate wrong-response Phase-B witness")
+        .expect("the recovered family remains selectable after dispatch rejection");
+    assert!(matches!(
+        wrong_response_selector.into_locked_recovered_decision_fetch_dequeue(
+            &executor,
+            &ingress,
+            &completion,
+        ),
+        Err(crate::sumeragi::v2_lifecycle_coordinator::RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity)
+    ));
+    drop(completion.replace_authenticated_response_for_test(exact_authenticated));
+    assert_eq!(
+        completion.physical_admission_ordinal(),
+        first_recovered_ordinal,
+        "wrong semantic owners must not disturb the refreshed physical coordinate",
+    );
+    let settlement_selector = executor
+        .prepare_next_recovered_decision_fetch_ingress_selector(&ingress)
+        .expect("capture the recovered Phase-B queue witness")
+        .expect("the recovered Phase-B family remains selectable");
+    let locked = settlement_selector
+        .into_locked_recovered_decision_fetch_dequeue(&executor, &ingress, &completion)
+        .expect("Phase B must join refreshed ownership to the exact persisted response");
+    drop(locked);
     assert_eq!(ingress.len(), queue_depth_before_selector - 1);
     assert_eq!(
         ingress.next_physical_admission_ordinal(),
@@ -2007,7 +2127,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         tag: tag(0),
         round: fixture.manifest.round,
         subject: fixture.manifest.subject,
-        manifest: Some(fixture.manifest.clone()),
+        manifest: None,
         certified_sources: fixture.certified_sources(&prepare),
         certificate: Some(prepare),
     }];
@@ -2021,6 +2141,20 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         .consume_effects(effects, &mut services)
         .expect("hybrid fetch establishes one exact response family");
     let task = services.fetch_tasks[0].clone();
+    assert!(
+        task.manifest().is_none(),
+        "the certified-only Fetch must retain its absent proposal manifest until Phase B"
+    );
+    let body_key = (fixture.manifest.round, fixture.manifest.subject);
+    assert_eq!(
+        fixture
+            .executor
+            .body_pipeline_owners
+            .get(&body_key)
+            .expect("the manifest-less Fetch retains one exact pipeline owner")
+            .manifest_hash,
+        None,
+    );
     let response = |responder_index: wire::ValidatorIndex| {
         let responder_index = usize::try_from(responder_index).expect("small responder index");
         let mut response = wire::CertifiedBodyResponse {
@@ -2045,13 +2179,22 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     let second_response = response(1);
     assert_eq!(first_response.request_hash, second_response.request_hash);
     assert_ne!(HashOf::new(&first_response), HashOf::new(&second_response));
+    let wrong_authenticated_response = fixture
+        .executor
+        .outstanding_requests
+        .authenticate_response(
+            &fixture.context,
+            second_response.clone(),
+            &fixture.context.roster[1].validator,
+        )
+        .expect("authenticate the same-family wrong Phase-B response");
     let (_ingress_directory, ingress, ingress_gate) = fixture.bound_certified_response_ingress();
     let first_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(first_response.clone()),
     ));
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::from_authenticated_peer(
-            first_message,
+            first_message.clone(),
             fixture.context.roster[0].validator.clone(),
         )),
         Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
@@ -2350,10 +2493,18 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         capacity_wait.capacity_status(&production_services),
         ProductionIngressCapacityStatus::Pending
     );
+    let (foreign_services, _foreign_io) = crate::sumeragi::v2_worker::tests::fixture();
+    assert_eq!(
+        capacity_wait.capacity_status(&foreign_services),
+        ProductionIngressCapacityStatus::RestartRequired,
+        "a foreign service cannot release the wait-held target back into its moved-from selector",
+    );
     let capacity_wait = match capacity_wait.retry(&production_services, &fixture.executor) {
         ProductionIngressCapacityRetry::Pending(wait) => wait,
         ProductionIngressCapacityRetry::Released(_) => {
-            panic!("the unchanged saturated generation cannot release capacity")
+            panic!(
+                "the unchanged saturated generation cannot restore or release the captured target"
+            )
         }
         ProductionIngressCapacityRetry::RestartRequired => {
             panic!("the exact unchanged service/executor owners cannot require restart")
@@ -2400,8 +2551,8 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
             panic!("available exact capacity must not produce a capacity wait")
         }
         Err(error) => panic!(
-            "the exact locked Fetch transaction must publish its command: {}",
-            error.reason()
+            "the released target must restore into the exact selector and publish its command: {}",
+            error.reason(),
         ),
     };
     assert_eq!(queued.ordinal(), lifecycle_ordinal);
@@ -2463,6 +2614,142 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         }
         _ => panic!("the persisted ordinary Fetch must classify as CertifiedFetch"),
     };
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            first_message.clone(),
+            fixture.context.roster[0].validator.clone(),
+        )),
+        Ok(crate::sumeragi::FairV2IngressPushDisposition::Coalesced)
+    ));
+    assert_eq!(
+        ingress.len(),
+        queue_depth_before_completion,
+        "an exact retransmission refreshes ownership without appending a physical row",
+    );
+    let refreshed = fixture
+        .executor
+        .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
+        .expect("recapture the coalesced Phase-B winner");
+    let (_, refreshed_ordinal, refreshed_digest, ..) = refreshed
+        .certified_fetch_ready_authority_for_test()
+        .expect("the refreshed physical row retains the exact certified-Fetch family");
+    assert_eq!(refreshed_ordinal, first_ordinal);
+    assert_ne!(
+        refreshed_digest, wake_physical_digest,
+        "coalesced ownership history must invalidate the stale Phase-A identity digest",
+    );
+    drop(refreshed);
+    let (mut persisted, work_ack) = completion.into_parts();
+    let exact_work_id = persisted.work_id();
+    let wrong_work_id = EffectWorkId::for_test(exact_work_id.get() ^ 1);
+    assert_ne!(wrong_work_id, exact_work_id);
+    assert_eq!(
+        persisted.replace_work_id_for_test(wrong_work_id),
+        exact_work_id,
+    );
+    let completion =
+        crate::sumeragi::v2_worker::PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
+            persisted, work_ack,
+        );
+    let completion = match owner.complete_certified_fetch_for_test(
+        &mut fixture.executor,
+        &mut production_services,
+        &ingress,
+        completion,
+    ) {
+        Err(crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::Retry(error)) => {
+            assert_eq!(error.reason(), "persistence completion identity");
+            assert!(error.detail().contains("work, response, or responder"));
+            error.into_completion()
+        }
+        Ok(()) => panic!("same-coordinate Phase B accepted a foreign work owner"),
+        Err(_) => panic!("wrong work ownership must be a retryable pre-LedgerV1 rejection"),
+    };
+    assert_eq!(ingress.len(), queue_depth_before_completion);
+    assert!(!fixture.executor.output_guard.restart_required());
+    let (mut persisted, work_ack) = completion.into_parts();
+    assert_eq!(
+        persisted.replace_work_id_for_test(exact_work_id),
+        wrong_work_id,
+    );
+    let exact_authenticated =
+        persisted.replace_authenticated_response_for_test(wrong_authenticated_response);
+    let completion =
+        crate::sumeragi::v2_worker::PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
+            persisted, work_ack,
+        );
+    let completion = match owner.complete_certified_fetch_for_test(
+        &mut fixture.executor,
+        &mut production_services,
+        &ingress,
+        completion,
+    ) {
+        Err(crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::Retry(error)) => {
+            assert_eq!(error.reason(), "persistence completion identity");
+            assert!(error.detail().contains("work, response, or responder"));
+            error.into_completion()
+        }
+        Ok(()) => panic!("same-coordinate Phase B accepted a foreign signed response"),
+        Err(_) => panic!("wrong response identity must be a retryable pre-LedgerV1 rejection"),
+    };
+    assert_eq!(ingress.len(), queue_depth_before_completion);
+    assert!(!fixture.executor.output_guard.restart_required());
+    let (mut persisted, work_ack) = completion.into_parts();
+    drop(persisted.replace_authenticated_response_for_test(exact_authenticated));
+    let phase_b_selector = fixture
+        .executor
+        .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
+        .expect("capture the exact ordinary Phase-B publication cut");
+    let locked = phase_b_selector
+        .lock_certified_fetch_exact_dequeue_for_test(&fixture.executor, &ingress, &persisted)
+        .expect("ordinary Phase B must acquire its final queue lock before LedgerV1");
+    assert_eq!(locked.physical_admission_ordinal(), first_ordinal);
+    assert!(
+        ingress.producer_publication_lock.try_lock().is_none(),
+        "ordinary Phase B must retain the producer fence across LedgerV1 publication",
+    );
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let ingress = &ingress;
+        let responder = fixture.context.roster[0].validator.clone();
+        scope.spawn(move || {
+            started_tx
+                .send(())
+                .expect("Phase-B retransmit start receiver remains live");
+            let result = ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                first_message,
+                responder,
+            ));
+            result_tx
+                .send(result)
+                .expect("Phase-B retransmit result receiver remains live");
+        });
+        started_rx
+            .recv()
+            .expect("exact retransmit reaches the producer fence");
+        std::thread::yield_now();
+        assert!(matches!(
+            result_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        locked.release_without_dequeue();
+        assert!(matches!(
+            result_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("exact retransmit resumes after restart-authority release"),
+            Ok(crate::sumeragi::FairV2IngressPushDisposition::Coalesced)
+        ));
+    });
+    assert_eq!(
+        ingress.len(),
+        queue_depth_before_completion,
+        "a serialized retransmit refreshes the retained row without appending",
+    );
+    let completion =
+        crate::sumeragi::v2_worker::PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
+            persisted, work_ack,
+        );
     owner
         .complete_certified_fetch_for_test(
             &mut fixture.executor,
@@ -2515,7 +2802,6 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
             .expect("the completion FIFO remains valid after exact acknowledgement"),
         crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::None
     ));
-    let body_key = (fixture.manifest.round, fixture.manifest.subject);
     let durable = fixture
         .executor
         .durable_bodies

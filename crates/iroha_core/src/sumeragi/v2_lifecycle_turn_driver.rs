@@ -214,7 +214,9 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionTurnV1<'cursor> {
 ///
 /// Only the lifecycle Ready dispatcher may consume this cursor. Separating it
 /// from physical-head classification prevents an existing lease from reaching
-/// a second Ready-work claim.
+/// a second Ready-work claim. One sealed exception may retain an ordinary
+/// physical head while an exact durable local Proposal Sign crosses Completion;
+/// that exception is available only while no non-Producer claim exists.
 #[must_use = "a physically empty Completion turn must be dispatched or returned"]
 pub(in crate::sumeragi) struct ProductionLifecycleReadyCompletionTurnV1<'cursor> {
     runner: LifecycleCurrentRunnerTurn<'cursor>,
@@ -269,7 +271,7 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionPreGateV1<'cursor> {
     Selected(ProductionLifecycleCompletionSelectionV1),
     /// The physical head belongs to the ordinary one-item completion drain.
     Ordinary(LifecycleCurrentRunnerTurn<'cursor>),
-    /// No parked or physical completion exists; Ready dispatch remains gated.
+    /// No parked or physical lifecycle completion exists; Ready dispatch remains gated.
     Ready(ProductionLifecycleReadyCompletionTurnV1<'cursor>),
 }
 
@@ -1292,6 +1294,30 @@ impl LaunchedProductionLifecycleV1 {
         runner: LifecycleCurrentRunnerTurn<'cursor>,
         lane_work: &mut V2LaneWorkAdapter,
     ) -> ProductionLifecycleCompletionPreGateV1<'cursor> {
+        self.drive_completion_pre_gate_inner(runner, lane_work, None)
+    }
+
+    /// Classify Completion while allowing one exact durable local Proposal Sign
+    /// to retain rank ahead of an ordinary physical completion.
+    pub(in crate::sumeragi) fn drive_completion_pre_gate_with_ready_proposal_sign_preemption<
+        'cursor,
+    >(
+        &mut self,
+        runner: LifecycleCurrentRunnerTurn<'cursor>,
+        lane_work: &mut V2LaneWorkAdapter,
+        permit: &crate::sumeragi::v2_runner::LifecycleReadyProposalSignPreemptionPermitV1,
+    ) -> ProductionLifecycleCompletionPreGateV1<'cursor> {
+        self.drive_completion_pre_gate_inner(runner, lane_work, Some(permit))
+    }
+
+    fn drive_completion_pre_gate_inner<'cursor>(
+        &mut self,
+        runner: LifecycleCurrentRunnerTurn<'cursor>,
+        lane_work: &mut V2LaneWorkAdapter,
+        proposal_sign_preemption: Option<
+            &crate::sumeragi::v2_runner::LifecycleReadyProposalSignPreemptionPermitV1,
+        >,
+    ) -> ProductionLifecycleCompletionPreGateV1<'cursor> {
         if !self.runner_turn_matches(
             &runner,
             crate::sumeragi::v2_runner::LifecycleRunnerRankTarget::Completion,
@@ -1393,7 +1419,29 @@ impl LaunchedProductionLifecycleV1 {
 
         match self.services.take_next_lifecycle_completion() {
             Ok(LifecycleCompletionTakeV1::PassThrough) => {
-                return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
+                if proposal_sign_preemption.is_none() {
+                    return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
+                }
+                let fence = self.executor.lifecycle_reducer_fence_observation();
+                match self
+                    .owner
+                    .ready_proposal_sign_preempts_bounded_producer_point(fence)
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
+                    }
+                    Err(error) => {
+                        iroha_logger::error!(
+                            ?error,
+                            "ordinary-head Ready proposal Sign authentication failed closed"
+                        );
+                        self.close_output_for_restart();
+                        return ProductionLifecycleCompletionPreGateV1::Selected(
+                            ProductionLifecycleCompletionSelectionV1::RestartRequired,
+                        );
+                    }
+                }
             }
             Ok(LifecycleCompletionTakeV1::CertifiedFetch(completion)) => {
                 assert!(self.pending_lifecycle_completion.is_none());
@@ -2059,11 +2107,11 @@ impl LaunchedProductionLifecycleV1 {
                             Ok(selector) => selector,
                             Err(LifecycleIngressSelectorError::QueueCutChanged) => {
                                 iroha_logger::debug!(
-                                    "recovered certified-Fetch fair-ingress census changed during selector capture; retrying"
+                                    "recovered Fetch fair-ingress census changed during selector preparation; retrying"
                                 );
                                 drop(runner);
                                 return ProductionLifecycleIngressTurnV1::Selected(
-                                    ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry,
+                                    ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry,
                                 );
                             }
                             Err(error) => {
@@ -2546,6 +2594,21 @@ impl ActivatedProductionLifecycleV1 {
         lane_work: &mut V2LaneWorkAdapter,
     ) -> ProductionLifecycleCompletionPreGateV1<'cursor> {
         self.launched.drive_completion_pre_gate(runner, lane_work)
+    }
+
+    /// Classify Completion with the sealed exact local-Proposal Sign exception.
+    pub(in crate::sumeragi) fn drive_completion_pre_gate_with_ready_proposal_sign_preemption<
+        'cursor,
+    >(
+        &mut self,
+        runner: LifecycleCurrentRunnerTurn<'cursor>,
+        lane_work: &mut V2LaneWorkAdapter,
+        permit: &crate::sumeragi::v2_runner::LifecycleReadyProposalSignPreemptionPermitV1,
+    ) -> ProductionLifecycleCompletionPreGateV1<'cursor> {
+        self.launched
+            .drive_completion_pre_gate_with_ready_proposal_sign_preemption(
+                runner, lane_work, permit,
+            )
     }
 
     /// Consume a physically empty Completion cursor through fresh Ready dispatch.

@@ -25064,11 +25064,19 @@ seiyaku DurableOwner {
             crate::validation_fee::encode_validation_fee_credit_state_value(&credit)
                 .expect("encode schema-bound native consensus credit"),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
+        let kura = Kura::blank_kura_for_testing();
+        let authenticated_block = iroha_data_model::block::builder::BlockBuilder::new(
+            BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_000_000, 0),
+        )
+        .build_with_signature(0, ALICE_KEYPAIR.private_key());
+        kura.store_block(Arc::new(authenticated_block.clone()))
+            .expect("store authenticated ledger-time fixture block");
+        let state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(authenticated_block.hash());
+            block_hashes.commit_for_tests();
+        }
         let source = r#"
             seiyaku ValidationFeeCreditReader {
                 state quantity AvailableValidationFeeCredit;

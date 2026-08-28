@@ -886,7 +886,7 @@ pub(crate) struct PreparedProductionIngressCapacityWait {
 pub(crate) enum ProductionIngressCapacityRetry {
     /// No release occurred; the complete wait remains owned.
     Pending(PreparedProductionIngressCapacityWait),
-    /// A real release occurred and yielded the unchanged prepared selector.
+    /// A real release restored its retained target into the exact prepared selector.
     Released(PreparedLifecycleIngressSelector),
     /// The mode or exact service generation changed incompatibly.
     RestartRequired,
@@ -914,8 +914,9 @@ impl PreparedProductionIngressCapacityWait {
     /// Consume this wait only after checking the exact executor and service.
     ///
     /// The retained selector has no getter. A real release is the sole branch
-    /// which yields it for another Phase-A attempt; pending ownership returns
-    /// whole, while terminal/foreign generations require cold recovery.
+    /// which restores the wait-held target and yields the selector for another
+    /// Phase-A attempt; pending ownership returns whole, while terminal/foreign
+    /// generations require cold recovery.
     pub(crate) fn retry(
         self,
         services: &ProductionV2Services,
@@ -932,9 +933,15 @@ impl PreparedProductionIngressCapacityWait {
                 let Self {
                     mode: _,
                     wait,
-                    selector,
+                    mut selector,
                 } = self;
-                ProductionIngressCapacityRetry::Released(wait.restore_into_prepared(selector))
+                let Ok(target) = wait.into_released_target(services) else {
+                    return ProductionIngressCapacityRetry::RestartRequired;
+                };
+                if selector.restore_lifecycle_io_target(target).is_err() {
+                    return ProductionIngressCapacityRetry::RestartRequired;
+                }
+                ProductionIngressCapacityRetry::Released(selector)
             }
             LifecycleIoCapacityWaitStatus::GenerationExhausted
             | LifecycleIoCapacityWaitStatus::ForeignOrDisconnected => {
@@ -1363,6 +1370,97 @@ impl ProductionLifecycleOwnerV1 {
                 }),
         );
         self.classify_schedulable_completion_work(&schedulable, Some(fence))
+    }
+
+    /// Authenticate whether an exact Ready proposal Sign must regain Completion rank.
+    ///
+    /// A reducer macrostep can make the local ProposalIntent Sign Ready at the
+    /// bounded Producer point. Returning to rank selection for that exact
+    /// carrier prevents later timeout/new-view leader-wire work from making the
+    /// just-validated proposal stale before its Sign and Broadcast successors
+    /// run. Other Completion-I/O classes do not alter Producer-point fairness.
+    pub(in crate::sumeragi) fn ready_proposal_sign_preempts_bounded_producer_point(
+        &self,
+        fence: crate::sumeragi::v2::LifecycleReducerFenceObservationV1,
+    ) -> Result<bool, ProductionCompletionDispatchErrorV1> {
+        match self.classify_completion_ready_work(fence) {
+            ProductionCompletionReadyWorkV1::CompletionIo => {}
+            ProductionCompletionReadyWorkV1::Invalid => {
+                return Err(ProductionCompletionDispatchErrorV1::InvalidReadyCensus);
+            }
+            ProductionCompletionReadyWorkV1::None
+            | ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast
+            | ProductionCompletionReadyWorkV1::RetainedDirectOutput
+            | ProductionCompletionReadyWorkV1::PassThrough => return Ok(false),
+        }
+
+        let exact_ready = self
+            .coordinator
+            .records
+            .iter()
+            .filter_map(|(ordinal, record)| {
+                matches!(record.state, LifecycleState::Ready).then_some(*ordinal)
+            })
+            .collect::<BTreeSet<_>>();
+        if exact_ready != self.coordinator.ready_index {
+            return Err(ProductionCompletionDispatchErrorV1::InvalidReadyCensus);
+        }
+
+        let proposal_signs = exact_ready
+            .into_iter()
+            .filter(|ordinal| {
+                self.coordinator
+                    .records
+                    .get(ordinal)
+                    .is_some_and(|record| record.work_class == LifecycleWorkClass::SignProposal)
+            })
+            .collect::<Vec<_>>();
+        if proposal_signs.is_empty() {
+            return Ok(false);
+        }
+        for ordinal in proposal_signs {
+            let attestation = self
+                .registry
+                .attest_ready_recovered_lifecycle_sign(&self.coordinator, ordinal)
+                .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+            if attestation.demand()
+                != super::work_registry::ReadyRecoveredLifecycleSignDemandV1::BoundedIo
+                || !attestation
+                    .dispatch_key()
+                    .matches_height_context(self.verified.context())
+            {
+                return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Remove the sole exact Ready proposal-Sign carrier for a fail-closed test.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn remove_ready_proposal_sign_carrier_for_boundary_test(
+        &mut self,
+    ) -> bool {
+        let mut proposal_signs = self.coordinator.records.values().filter(|record| {
+            record.state == LifecycleState::Ready
+                && record.work_class == LifecycleWorkClass::SignProposal
+        });
+        let Some(record) = proposal_signs.next() else {
+            return false;
+        };
+        if proposal_signs.next().is_some() {
+            return false;
+        }
+        let Some((&slot, _)) = record.physical_slots.first_key_value() else {
+            return false;
+        };
+        let Some(address) =
+            super::work_registry::ConcreteWorkAddress::new(record.owner, record.ordinal, slot)
+        else {
+            return false;
+        };
+        self.registry
+            .registry_for_test_mut()
+            .remove_exact_for_test(address)
     }
 
     /// Project a bounded, payload-free terminal scheduler census for operators.
@@ -3866,14 +3964,17 @@ impl ProductionLifecycleOwnerV1 {
                 );
             }
         }
-        let reserved_target = reservation.authenticated_certified_fetch_target(&factory);
-        let fetch = match reserved_target.and_then(|target| {
-            prepared
-                .attest_scheduler_fetch_carrier(target, &self.coordinator, &mut self.registry)
-                .ok()
-        }) {
-            Some(fetch) => fetch,
-            None => {
+        let fetch = match prepared.attest_scheduler_fetch_carrier(
+            &reservation,
+            &self.coordinator,
+            &mut self.registry,
+        ) {
+            Ok(fetch) => fetch,
+            Err(error) => {
+                iroha_logger::error!(
+                    error = ?error,
+                    "selected certified Fetch failed scheduler-carrier attestation"
+                );
                 drop(reservation);
                 drop(prepared);
                 return Err(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier);
@@ -3889,13 +3990,23 @@ impl ProductionLifecycleOwnerV1 {
             runner_debt,
         ];
         let ordinal = fetch.ordinal();
-        let record = self
-            .coordinator
-            .records
-            .get(&ordinal)
-            .ok_or(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier)?;
+        let record = self.coordinator.records.get(&ordinal).ok_or_else(|| {
+            iroha_logger::error!(
+                ordinal,
+                "attested certified Fetch ordinal was absent from the coordinator"
+            );
+            ProductionIngressSchedulerInputsError::InvalidSelectedCarrier
+        })?;
         let row = authenticated_waiting_fetch_ready_row(&factory, record, fetch, live_debts)
-            .ok_or(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier)?;
+            .ok_or_else(|| {
+                iroha_logger::error!(
+                    ordinal,
+                    work_class = ?record.work_class,
+                    state = ?record.state,
+                    "attested certified Fetch failed scheduler-row sealing"
+                );
+                ProductionIngressSchedulerInputsError::InvalidSelectedCarrier
+            })?;
         let (source, generation) = fetch.wake_generation();
         let inputs = authenticated_scheduler_inputs(
             factory,

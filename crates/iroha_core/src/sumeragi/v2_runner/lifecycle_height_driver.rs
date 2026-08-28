@@ -24,6 +24,14 @@ fn completion_selection_retries_before_runtime(
             | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWoken { .. }
             | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::ApplyTerminalDirectBroadcastCompleted
             | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::ApplyTerminalDirectBroadcastDeferred
+            | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::RecoveredLifecycleSignCompletion(
+                super::super::v2_lifecycle_coordinator::ProductionRecoveredLifecycleSignCompletionSelectionV1::ProposalPrepareWal(
+                    super::super::v2_lifecycle_coordinator::ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied,
+                )
+                | super::super::v2_lifecycle_coordinator::ProductionRecoveredLifecycleSignCompletionSelectionV1::ProposalBroadcastAndSign(
+                    super::super::v2_lifecycle_coordinator::ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied,
+                ),
+            )
     )
 }
 
@@ -91,6 +99,19 @@ pub(in crate::sumeragi) enum LifecycleProducerClaimDispositionV1 {
     /// A no-lease terminal replay worker must finish before finalization.
     AwaitingReplayCompletion,
 }
+
+/// Sealed authority to let an already-durable local Proposal Sign outrank one
+/// retained ordinary Completion head.
+///
+/// Only an otherwise eligible height can mint this authority. The ordinary
+/// completion remains in its exact physical slot; the exception merely lets
+/// the local proposal cross Sign and acquire its typed Completion target before
+/// another runtime step can reproduce the same ProposalIntent.
+pub(in crate::sumeragi) struct LifecycleReadyProposalSignPreemptionPermitV1 {
+    _seal: LifecycleReadyProposalSignPreemptionPermitSealV1,
+}
+
+struct LifecycleReadyProposalSignPreemptionPermitSealV1;
 
 /// Sealed authority to service only decided-lane recovery after Decision.
 ///
@@ -206,6 +227,20 @@ impl LifecycleProducerClaimDispositionV1 {
     /// Return whether this state may consume the Ready scheduler branch.
     const fn permits_ready_completion(self) -> bool {
         matches!(self, Self::Eligible | Self::AwaitingLiveApplyQueue { .. })
+    }
+
+    /// Mint the narrow ordinary-head preemption authority for an exact Ready
+    /// local Proposal Sign.
+    pub(in crate::sumeragi) const fn ready_proposal_sign_preemption_permit(
+        self,
+    ) -> Option<LifecycleReadyProposalSignPreemptionPermitV1> {
+        if matches!(self, Self::Eligible) {
+            Some(LifecycleReadyProposalSignPreemptionPermitV1 {
+                _seal: LifecycleReadyProposalSignPreemptionPermitSealV1,
+            })
+        } else {
+            None
+        }
     }
 
     /// Return whether an empty physical cut must still select this exact child.
@@ -930,7 +965,18 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     ProductionLifecycleCompletionPreGateV1 as PreGate,
                     ProductionLifecycleCompletionTurnV1 as CompletionTurn,
                 };
-                let selected = match activated.drive_completion_pre_gate(current_turn, lane_work) {
+                let proposal_sign_preemption =
+                    producer_claim.ready_proposal_sign_preemption_permit();
+                let pre_gate = match proposal_sign_preemption.as_ref() {
+                    Some(permit) => activated
+                        .drive_completion_pre_gate_with_ready_proposal_sign_preemption(
+                            current_turn,
+                            lane_work,
+                            permit,
+                        ),
+                    None => activated.drive_completion_pre_gate(current_turn, lane_work),
+                };
+                let selected = match pre_gate {
                     PreGate::Ordinary(ordinary_turn) => {
                         activated.with_runner_runtime(
                             runner,
@@ -1356,6 +1402,26 @@ mod tests {
     }
 
     #[test]
+    fn only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign() {
+        assert!(
+            LifecycleProducerClaimDispositionV1::Eligible
+                .ready_proposal_sign_preemption_permit()
+                .is_some()
+        );
+        for claim in [
+            LifecycleProducerClaimDispositionV1::AwaitingCompletion,
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar,
+            LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion,
+            LifecycleProducerClaimDispositionV1::ApplyTerminalSettled,
+        ] {
+            assert!(
+                claim.ready_proposal_sign_preemption_permit().is_none(),
+                "{claim:?} must retain its existing non-Producer owner"
+            );
+        }
+    }
+
+    #[test]
     fn terminal_ready_executor_repairs_an_eligible_decided_lane_claim() {
         let eligible = LifecycleProducerClaimDispositionV1::initial();
         assert!(eligible.permits_terminal_ready_decided_lane_recovery(true, true));
@@ -1613,6 +1679,7 @@ mod tests {
         use super::super::super::v2_lifecycle_coordinator::{
             ProductionCompletionDispatchV1 as Dispatch,
             ProductionLifecycleCompletionSelectionV1 as Completion,
+            ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1 as ProposalSettlement,
             ProductionRecoveredLifecycleSignBroadcastSettlementV1 as SignSettlement,
             ProductionRecoveredLifecycleSignCompletionSelectionV1 as SignCompletion,
         };
@@ -1640,12 +1707,35 @@ mod tests {
             ))
             .expect("durable supersession cancellation clears the Sign target");
         assert!(!superseded_claim.requires_yield());
+        let broadcast_applied = Completion::RecoveredLifecycleSignCompletion(
+            SignCompletion::Broadcast(SignSettlement::Applied),
+        );
         let applied_claim = claim
-            .observe_completion(&Completion::RecoveredLifecycleSignCompletion(
-                SignCompletion::Broadcast(SignSettlement::Applied),
-            ))
+            .observe_completion(&broadcast_applied)
             .expect("matching Sign completion clears the target");
         assert!(!applied_claim.requires_yield());
+        assert!(
+            !completion_selection_retries_before_runtime(&broadcast_applied),
+            "an ordinary signed Broadcast leaves its durable refanout to normal Completion ranking"
+        );
+
+        for proposal_applied in [
+            Completion::RecoveredLifecycleSignCompletion(SignCompletion::ProposalPrepareWal(
+                ProposalSettlement::Applied,
+            )),
+            Completion::RecoveredLifecycleSignCompletion(SignCompletion::ProposalBroadcastAndSign(
+                ProposalSettlement::Applied,
+            )),
+        ] {
+            let applied_claim = claim
+                .observe_completion(&proposal_applied)
+                .expect("matching Proposal Sign completion clears the target");
+            assert_eq!(applied_claim, LifecycleProducerClaimDispositionV1::Eligible);
+            assert!(
+                completion_selection_retries_before_runtime(&proposal_applied),
+                "an applied Proposal Sign must re-enter Completion before Runtime can mint timeout work"
+            );
+        }
     }
 
     #[test]

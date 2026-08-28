@@ -11,8 +11,10 @@ use crate::{
     state::{StateReadOnly, WorldReadOnly as _},
     tle_release::{
         AuthorizedTleReleaseContextV1, InMemoryTlePartialReleaseSignerV1,
-        TleKeySessionPublicStateV1, TlePartialReleaseShareV1, TlePartialReleaseSignerV1,
-        TleProjectedPartialReleaseSignerV1, ValidatedTleReleaseProjectionV1,
+        TleKeySessionPublicStateV1, TlePartialReleaseCapabilityAttestationV1,
+        TlePartialReleaseCapabilityErrorV1, TlePartialReleaseShareV1, TlePartialReleaseSignerV1,
+        TleProjectedPartialReleaseSignerV1, ValidatedTleKeySessionV1,
+        ValidatedTleReleaseProjectionV1,
     },
 };
 
@@ -202,6 +204,21 @@ impl Default for RuntimeTleReleaseShareCustodyV1 {
 }
 
 impl TlePartialReleaseSignerV1 for RuntimeTleReleaseShareCustodyV1 {
+    fn attest_partial_release_capability(
+        &self,
+        session: &ValidatedTleKeySessionV1,
+        expected_participant_index: u16,
+    ) -> Result<TlePartialReleaseCapabilityAttestationV1, TlePartialReleaseCapabilityErrorV1> {
+        let sessions = self
+            .sessions
+            .read()
+            .map_err(|_| TlePartialReleaseCapabilityErrorV1::Unavailable)?;
+        let signer = sessions
+            .get(&session.public_state().key_session_id)
+            .ok_or(TlePartialReleaseCapabilityErrorV1::NotOwned)?;
+        signer.attest_partial_release_capability(session, expected_participant_index)
+    }
+
     fn sign_partial_release(
         &self,
         context: &AuthorizedTleReleaseContextV1,

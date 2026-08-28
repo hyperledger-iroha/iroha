@@ -7179,6 +7179,12 @@ mod tests {
         artifact: SccpGroth16Bn254ProofArtifactV1,
         bridge_proof: BridgeSccpDestinationProofV1,
     }
+    const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
+
+    const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
+        TEST_MAX_OUTSTANDING_LIABILITY * multiplier as u128
+    }
+
     #[test]
     fn taira_finality_network_id_matches_the_governed_genesis_vector() {
         assert_eq!(
@@ -7737,6 +7743,7 @@ mod tests {
             route_address: [0x51; 20],
             route_code_hash: [0x61; 32],
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
+            max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
         }
     }
     fn solana_deployment(revision: u32) -> SccpSolanaDestinationDeploymentV1 {
@@ -7759,6 +7766,7 @@ mod tests {
                 .expect("valid repeated-generator key"),
             outbound_proof_policy: outbound_proof_policy(),
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER,
+            max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER),
         };
         deployment.native_verifier_config_hash = sccp_solana_native_verifier_config_hash_v1(
             SccpLaneIdV1 {
@@ -7798,6 +7806,7 @@ mod tests {
             proof_profile_commitment: sccp_ton_groth16_bls12381_proof_profile_commitment_v1(),
             outbound_proof_policy: ton_outbound_proof_policy(),
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER,
+            max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TON_TOKEN_MULTIPLIER),
         }
     }
     fn governed_route(
@@ -7850,6 +7859,7 @@ mod tests {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
                 custody_owner: AccountId::new(custody),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+                max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
             },
         };
         route.validate().expect("valid governed EVM fixture route");
@@ -7903,6 +7913,7 @@ mod tests {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
                 custody_owner: AccountId::new(custody),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+                max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
             },
         };
         route
@@ -7955,6 +7966,7 @@ mod tests {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
                 custody_owner: AccountId::new(custody),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+                max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
             },
         };
         route.validate().expect("valid governed TON fixture route");
@@ -9284,6 +9296,7 @@ mod tests {
             route_address: [0x51; 20],
             route_code_hash: [0x61; 32],
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
+            max_wrapped_supply: test_max_wrapped_supply(SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER),
         };
         let inbound = SccpLaneIdV1 {
             source: SccpNetworkV1::TronNile,
@@ -9303,7 +9316,7 @@ mod tests {
         .expect("TRON contract route config");
         assert_eq!(
             route_config,
-            hex32("0693ffd2ae1fb413a74672a892b28f931209795733aca8e522015431aa8e567f")
+            hex32("2c4188bc7a1fecaf6d909f713211ad1363202729f79e745f48b026da67049505")
         );
         let request = &fixture().request;
         let signals = sccp_groth16_bn254_public_signal_words(

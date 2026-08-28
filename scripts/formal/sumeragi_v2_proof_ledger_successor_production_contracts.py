@@ -2703,9 +2703,10 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 "durable_registry.abort_before_dequeue()",
                 "restart_invalid_leader_wire!(error, receipt)",
                 ".into_exact_certified_fetch_dequeue(executor, id, &authenticated)",
+                "exact_dequeue.lock(ingress)",
                 "let Some(operation) = output_guard.begin_fail_stop_operation()",
                 "persist_exact_staged_successor()",
-                "exact_dequeue.commit(ingress)",
+                "exact_dequeue.commit()",
                 "let runtime_receipt = certified_fetch_postdequeue_ingress_handoff(",
                 "dequeued.inbound()",
                 "&selected_ingress_mode",
@@ -2718,10 +2719,12 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 "if let Some(runtime_receipt) = runtime_receipt",
                 "mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)",
                 "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(",
+                "services.retry_locked_candidate_after_durable_body(subject)",
+                "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(format!(",
                 "operation.complete()",
             ),
         )
-        dequeue_marker = "let dequeued = match exact_dequeue.commit(ingress)"
+        dequeue_marker = "let dequeued = exact_dequeue.commit()"
         dequeue_offset = certified_fetch_persistence.find(dequeue_marker)
         if dequeue_offset < 0:
             errors.append(
@@ -2790,29 +2793,61 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
             "certified Fetch exact-dequeue bridge",
             exact_dequeue_bridge,
             (
-                "queue_witness.commit_exact_dequeue_retaining(",
+                "queue_witness.lock_exact_dequeue_retaining(",
                 "ingress_identity.physical_admission_ordinal()",
-                "Ok((inbound, disposition))",
+                "Ok(locked) => Ok(LockedPreparedCertifiedFetchExactDequeue",
+                "queue_witness: locked.unlock_retaining()",
+                "let (inbound, disposition) = locked.commit()",
+                "assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit)",
                 "CertifiedFetchDequeuedResponse",
             ),
         )
     if ingress_position_source:
-        exact_dequeue_commit = region(
+        exact_dequeue_lock = region(
             ingress_position_path,
             ingress_position_source,
-            "queue witness exact-dequeue commit",
-            "pub(super) fn commit_exact_dequeue_retaining(",
-            "\n    /// Atomically remove the exact selected occurrence after revalidating this",
+            "queue witness exact-dequeue prelock",
+            "pub(super) fn lock_exact_dequeue_retaining<'a>(",
+            "\n    /// Atomically remove the exact selected occurrence while retaining this",
         )
         require_order(
             ingress_position_path,
-            "queue witness exact-dequeue commit",
+            "queue witness exact-dequeue prelock",
+            exact_dequeue_lock,
+            (
+                "Arc::ptr_eq(&self.queue_identity, &queue.queue_identity)",
+                "self.selected_identity.context != expected_context",
+                "self.selected_identity.physical_admission_ordinal != expected_physical_ordinal",
+                "self.is_internally_exact()",
+                "queue.service_lock.lock()",
+                "queue.producer_publication_lock.lock()",
+                "self.revalidate_for_commit(queue)",
+                "selection.disposition == self.selected_disposition",
+                "queue.state.lock()",
+                "self.metadata_matches_locked(&state)",
+                "Ok(LockedPreparedFairIngressExactDequeue",
+            ),
+        )
+        exact_dequeue_commit = region(
+            ingress_position_path,
+            ingress_position_source,
+            "locked queue witness exact-dequeue commit",
+            "impl LockedPreparedFairIngressExactDequeue<'_> {",
+            "\nimpl FairIngressQueueCut<'_> {",
+        )
+        require_order(
+            ingress_position_path,
+            "locked queue witness exact-dequeue commit",
             exact_dequeue_commit,
             (
-                "self.revalidate_for_commit(queue)",
-                "self.metadata_matches_locked(&state)",
+                "pub(super) fn commit(self)",
+                "let mut state = queue.state.lock()",
+                "witness.metadata_matches_locked(&state)",
                 "queue.dequeue_selected_locked(",
-                "Ok(dequeued)",
+                ".expect(\"prevalidated lifecycle dequeue is infallible after publication\")",
+                "drop(_producer_publication_guard)",
+                "drop(_service_guard)",
+                "dequeued",
             ),
         )
     if fair_ingress_source:

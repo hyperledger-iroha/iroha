@@ -45,6 +45,20 @@ fun sccpPendingCapacityAvailable(count: uint16): bool {
     return count < SCCP_PENDING_OPERATION_CAP;
 }
 
+/// Admit a new master mint only when its reserved supply remains within the
+/// immutable route cap. Subtraction is evaluated only for a valid current
+/// supply, avoiding an intermediate addition beyond the `coins` domain.
+fun sccpMintFitsSupplyCap(
+    totalSupply: coins,
+    jettonAmount: coins,
+    maxWrappedSupply: coins,
+): bool {
+    if (maxWrappedSupply == 0 || totalSupply > maxWrappedSupply) {
+        return false;
+    }
+    return jettonAmount <= maxWrappedSupply - totalSupply;
+}
+
 /// Guardian keys are immutable, nonzero, distinct, and canonically ordered.
 fun mintBreakerGuardiansAreCanonical(guardians: MintBreakerGuardians): bool {
     val tail = guardians.tail.load();

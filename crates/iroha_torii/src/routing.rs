@@ -46892,6 +46892,7 @@ mod validation_fee_torii_ingress_tests {
                             nay: 1,
                             abstain: 0,
                         },
+                        2,
                         166,
                     )
                     .expect("finalize deterministic aggregate ballot");

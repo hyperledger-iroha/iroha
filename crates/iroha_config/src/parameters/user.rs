@@ -2581,13 +2581,13 @@ pub struct Governance {
         default = "crate::parameters::defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE"
     )]
     pub coordination_council_size: usize,
-    /// Policy Jury size.
+    /// Policy Jury size (at least two for non-identity timed-OVN masks).
     #[config(
         env = "GOV_POLICY_JURY_SIZE",
         default = "crate::parameters::defaults::governance::PARLIAMENT_POLICY_JURY_SIZE"
     )]
     pub policy_jury_size: usize,
-    /// Maximum Confirmation Jury size.
+    /// Maximum Confirmation Jury size (at least two for timed-OVN confirmation).
     #[config(
         default = "crate::parameters::defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE"
     )]
@@ -2737,6 +2737,15 @@ impl Governance {
             assert!(
                 (1..=1_000).contains(&size),
                 "{name} must be within 1..=1_000"
+            );
+        }
+        for (name, size) in [
+            ("policy_jury_size", self.policy_jury_size),
+            ("confirmation_jury_size", self.confirmation_jury_size),
+        ] {
+            assert!(
+                (2..=1_000).contains(&size),
+                "{name} must be within 2..=1_000 because hidden timed-OVN ballots require at least two seats"
             );
         }
         let parliament_timed_ovn = self.parliament_timed_ovn.parse();
@@ -3161,6 +3170,34 @@ max_corpus_entries = 16
             std::panic::catch_unwind(|| governance.parse()).is_err(),
             "a hidden body larger than the timed-OVN corpus must fail at startup"
         );
+    }
+
+    #[test]
+    fn parliament_hidden_body_sizes_require_two_seats() {
+        let mut one_policy_seat = Governance::default();
+        one_policy_seat.policy_jury_size = 1;
+        assert!(
+            std::panic::catch_unwind(|| one_policy_seat.parse()).is_err(),
+            "a single-seat Policy Jury would produce identity timed-OVN masks"
+        );
+
+        let mut one_confirmation_seat = Governance::default();
+        one_confirmation_seat.confirmation_jury_size = 1;
+        assert!(
+            std::panic::catch_unwind(|| one_confirmation_seat.parse()).is_err(),
+            "a single-seat Confirmation Jury would produce identity timed-OVN masks"
+        );
+
+        let mut one_public_seat = Governance::default();
+        one_public_seat.rules_committee_size = 1;
+        one_public_seat.agenda_council_size = 1;
+        one_public_seat.interest_panel_size = 1;
+        one_public_seat.review_panel_size = 1;
+        one_public_seat.coordination_council_size = 1;
+        one_public_seat.oversight_committee_size = 1;
+        one_public_seat.mpc_committee_size = 1;
+        one_public_seat.fma_committee_size = 1;
+        one_public_seat.parse();
     }
 
     #[test]

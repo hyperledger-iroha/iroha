@@ -74,9 +74,9 @@ def _valid_cli_tail(tmp_path: Path) -> list[str]:
         "--cargo-target-dir",
         str(target),
         "--cargo-lock-size",
-        "311219",
+        "311234",
         "--cargo-lock-sha256",
-        "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7",
+        "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f",
     ]
 
 
@@ -246,7 +246,7 @@ def test_post_manifest_has_only_the_dev_profile_owner() -> None:
         assert "--write" in owner["generator"]
         assert "--check" in owner["check"]
         assert "--stage-a" in owner["check"] and "--stage-b" in owner["check"]
-        assert "--cargo-lock-size 311219" in owner["generator"]
-        assert "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7" in owner["generator"]
-        assert "--cargo-lock-size 311219" in owner["check"]
-        assert "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7" in owner["check"]
+        assert "--cargo-lock-size 311234" in owner["generator"]
+        assert "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" in owner["generator"]
+        assert "--cargo-lock-size 311234" in owner["check"]
+        assert "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" in owner["check"]

@@ -976,6 +976,74 @@ class SccpClientExactTest {
     }
 
     @Test
+    fun registryRequiresExactU128SupplyCapAndOutstandingLiability() {
+        val exact = registry()
+        val parsed = SccpJsonParser.parseRegistry(jsonBytes(exact))
+        @Suppress("UNCHECKED_CAST")
+        val parsedRoute = ((parsed.lanes.single()["routes"] as List<Any?>).single()
+            as Map<String, Any?>)
+        @Suppress("UNCHECKED_CAST")
+        val parsedDeployment = ((parsedRoute["destination"] as Map<String, Any?>)["deployment"]
+            as Map<String, Any?>)
+        @Suppress("UNCHECKED_CAST")
+        val parsedSettlement = parsedRoute["settlement"] as Map<String, Any?>
+        assertEquals(MAX_WRAPPED_SUPPLY, parsedDeployment["max_wrapped_supply"])
+        assertEquals(
+            MAX_OUTSTANDING_LIABILITY,
+            BigInteger(parsedSettlement["max_outstanding_liability"].toString()),
+        )
+
+        val missingCap = registry()
+        deployment(missingCap).remove("max_wrapped_supply")
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(missingCap))
+        }
+
+        val missingLiability = registry()
+        @Suppress("UNCHECKED_CAST")
+        (route(missingLiability)["settlement"] as MutableMap<String, Any?>)
+            .remove("max_outstanding_liability")
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(missingLiability))
+        }
+
+        val oversizedCap = registry()
+        deployment(oversizedCap)["max_wrapped_supply"] = MAX_U128_TEST.add(BigInteger.ONE)
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(oversizedCap))
+        }
+
+        val zeroLiability = registry()
+        @Suppress("UNCHECKED_CAST")
+        (route(zeroLiability)["settlement"] as MutableMap<String, Any?>)[
+            "max_outstanding_liability"
+        ] = BigInteger.ZERO
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(zeroLiability))
+        }
+
+        val mismatchedCap = registry()
+        deployment(mismatchedCap)["max_wrapped_supply"] = MAX_WRAPPED_SUPPLY.add(BigInteger.ONE)
+        sourceIdentity(route(mismatchedCap))["route_config_hash"] =
+            fixtureRouteConfigurationHash(route(mismatchedCap))
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(mismatchedCap))
+        }
+
+        val overflowingLiability = registry()
+        deployment(overflowingLiability)["max_wrapped_supply"] = MAX_U128_TEST
+        @Suppress("UNCHECKED_CAST")
+        (route(overflowingLiability)["settlement"] as MutableMap<String, Any?>)[
+            "max_outstanding_liability"
+        ] = MAX_U128_TEST
+        sourceIdentity(route(overflowingLiability))["route_config_hash"] =
+            fixtureRouteConfigurationHash(route(overflowingLiability))
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(overflowingLiability))
+        }
+    }
+
+    @Test
     fun registryRequiresCanonicalTrustAnchorHistoryAndCurrentPointer() {
         val legacy = registry()
         laneRecord(legacy).also {
@@ -1212,6 +1280,20 @@ class SccpClientExactTest {
             canonicalSource["code_hash"],
         )
         SccpJsonParser.parseRegistry(jsonBytes(canonical))
+
+        val missingCap = tonRegistry()
+        routeDeployment(route(missingCap)).remove("max_wrapped_supply")
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(missingCap))
+        }
+
+        val mismatchedLiability = tonRegistry()
+        (route(mismatchedLiability)["settlement"] as MutableMap<String, Any?>)[
+            "max_outstanding_liability"
+        ] = MAX_OUTSTANDING_LIABILITY.subtract(BigInteger.ONE)
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseRegistry(jsonBytes(mismatchedLiability))
+        }
 
         val changedInitialData = tonRegistry()
         val changedInitialDataRoute = route(changedInitialData)
@@ -1952,12 +2034,14 @@ class SccpClientExactTest {
                     "route_address" to routeAddress,
                     "route_code_hash" to routeCodeHash,
                     "taira_to_token_multiplier" to 1_000_000_000,
+                    "max_wrapped_supply" to MAX_WRAPPED_SUPPLY,
                 ),
             ),
             "settlement" to linkedMapOf(
                 "asset_definition_id" to "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
                 "custody_owner" to "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "payload_amount_scale" to 9,
+                "max_outstanding_liability" to MAX_OUTSTANDING_LIABILITY,
             ),
         )
         assertEquals(DEFAULT_ROUTE_CONFIG_HASH, fixtureRouteConfigurationHash(route))
@@ -2038,6 +2122,7 @@ class SccpClientExactTest {
                     "proof_profile_commitment" to tonProofProfileCommitment(),
                     "outbound_proof_policy" to tonOutboundPolicy(),
                     "taira_to_token_multiplier" to 1,
+                    "max_wrapped_supply" to MAX_OUTSTANDING_LIABILITY,
                 ),
             ),
             "settlement" to linkedMapOf(
@@ -2045,6 +2130,7 @@ class SccpClientExactTest {
                 "custody_owner" to
                     "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "payload_amount_scale" to 9,
+                "max_outstanding_liability" to MAX_OUTSTANDING_LIABILITY,
             ),
         )
         sourceIdentity(route)["route_config_hash"] = fixtureTonRouteConfigurationHash(route)
@@ -2253,6 +2339,7 @@ class SccpClientExactTest {
         val routeId = route["route_id"] as String
         val revision = (route["revision"] as Number).toLong()
         val multiplier = (deployment["taira_to_token_multiplier"] as Number).toLong()
+        val maxWrappedSupply = BigInteger(deployment["max_wrapped_supply"].toString())
         val assetRouteConfigurationHash = keccak(
             concatenate(
                 listOf(
@@ -2260,6 +2347,7 @@ class SccpClientExactTest {
                     keccak(routeId.toByteArray(Charsets.US_ASCII)),
                     abiWord(revision),
                     abiWord(multiplier),
+                    abiWord(maxWrappedSupply),
                 ),
             ),
         )
@@ -2307,6 +2395,7 @@ class SccpClientExactTest {
             writeLengthPrefixed(output, (route["route_id"] as String).toByteArray(Charsets.US_ASCII))
             writeU32(output, (route["revision"] as Number).toInt())
             writeU64(output, (deployment["taira_to_token_multiplier"] as Number).toLong())
+            writeU128(output, BigInteger(deployment["max_wrapped_supply"].toString()))
         }.toByteArray()
         val payload = ByteArrayOutputStream().also { output ->
             output.write("sccp:concrete-route-config:v1".toByteArray(Charsets.UTF_8))
@@ -2727,6 +2816,12 @@ class SccpClientExactTest {
         repeat(8) { shift -> out.write(((value ushr (shift * 8)) and 0xff).toInt()) }
     }
 
+    private fun writeU128(out: ByteArrayOutputStream, value: BigInteger) {
+        repeat(16) { shift ->
+            out.write(value.shiftRight(shift * 8).and(BigInteger.valueOf(0xff)).toInt())
+        }
+    }
+
     private fun writeU16(out: ByteArrayOutputStream, value: Int) {
         repeat(2) { shift -> out.write((value ushr (shift * 8)) and 0xff) }
     }
@@ -2745,8 +2840,10 @@ class SccpClientExactTest {
             values.forEach { output.write(it) }
         }.toByteArray()
 
-    private fun abiWord(value: Long): ByteArray {
-        val encoded = BigInteger.valueOf(value).toByteArray().let {
+    private fun abiWord(value: Long): ByteArray = abiWord(BigInteger.valueOf(value))
+
+    private fun abiWord(value: BigInteger): ByteArray {
+        val encoded = value.toByteArray().let {
             if (it.size > 1 && it[0] == 0.toByte()) it.copyOfRange(1, it.size) else it
         }
         return ByteArray(32).also { encoded.copyInto(it, 32 - encoded.size) }
@@ -2780,9 +2877,12 @@ class SccpClientExactTest {
         )
         // These authenticate this fixture's semantic commitments and deployment code hashes.
         const val DEFAULT_ROUTE_CONFIG_HASH =
-            "65ABF3081D137062860FD712B5414A17C3664FD42C7567373FF3302BA331EFDD"
+            "E2FBA818710881B2294D45EB6494A0F2961C752EADC2D55089C3966F0CC8124D"
         const val TRON_ROUTE_CONFIG_HASH =
-            "1BB8C081AA96766CF63FFE063E5B506FF17005E033C7B47E9760214C4C8D5519"
+            "83D698E3F098A15523BD456ED7BB73957DDC46C48DC6B2701BC73AEBEDA99F3B"
+        val MAX_OUTSTANDING_LIABILITY = BigInteger("1000000000000")
+        val MAX_WRAPPED_SUPPLY = BigInteger("1000000000000000000000")
+        val MAX_U128_TEST = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE)
         val BLS12381_SCALAR_MODULUS = BigInteger(
             "73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001",
             16,

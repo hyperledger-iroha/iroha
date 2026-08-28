@@ -199,14 +199,15 @@ Public operator guidance and escalation procedures are maintained at
   Parliament reducer transitions and automatic execution outcomes grouped by
   the closed `ParliamentLifecycleTransitionKindV1` vocabulary.
 - `governance_parliament_no_result_total{class}` (counter): only Core-derived
-  terminal no-result outcomes, grouped by the eight closed
+  terminal no-result outcomes, grouped by the nine closed
   `ParliamentNoResultKindV1` classes. Public findings use
   `public_finding_quorum_unreachable` or `public_finding_deadline_expired`;
   private ballots use `ballot_registration_deadline_expired`,
   `ballot_survivor_deadline_expired`, `ballot_commitment_deadline_expired`,
   `ballot_release_pulse_unavailable`, or `ballot_opening_deadline_expired`.
   Exhausted deterministic body-election retries use
-  `sortition_retries_exhausted`.
+  `sortition_retries_exhausted`; a narrow Policy Jury result with fewer than two
+  eligible fresh confirmers uses `confirmation_jury_capacity_unavailable`.
   A class attached to an incompatible transition kind is ignored by telemetry.
 - `governance_parliament_attempts_by_status{status}` and
   `governance_parliament_attempts_by_stage{stage}` (gauges): aggregate committed

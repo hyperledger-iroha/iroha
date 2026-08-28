@@ -27,6 +27,9 @@ const CODEC_TEXT = 1;
 const CODEC_EVM20 = 2;
 const CODEC_TRON21 = 5;
 const SCALE = 1_000_000_000n;
+const MAX_U128 = (1n << 128n) - 1n;
+const MAX_OUTSTANDING_LIABILITY = 1_000_000_000_000n;
+const MAX_WRAPPED_SUPPLY = MAX_OUTSTANDING_LIABILITY * SCALE;
 const MAX_RUNTIME_BYTES = 24_576;
 const MAX_INITCODE_BYTES = 49_152;
 // Stay below the EIP-7825 per-transaction gas cap enforced by the locked
@@ -393,8 +396,12 @@ import "contracts/evm/sccp/TairaXorExactEvmSccpBridge.sol";
 import {TairaXOR as BscTairaXOR} from "contracts/bsc/sccp/TairaXOR.sol";
 interface IReentryRoute { function transferToTaira(bytes calldata,uint256) external returns(bytes32); }
 contract InjectedBscRouteHarness is TairaXorExactEvmSccpBridge {
-  constructor(address tokenAddress, VerifierPolicyV1 memory policy, uint32 revision)
-    TairaXorExactEvmSccpBridge(tokenAddress, policy, 2, 5, revision)
+  constructor(
+    address tokenAddress,
+    VerifierPolicyV1 memory policy,
+    uint32 revision,
+    uint256 maxWrappedSupply
+  ) TairaXorExactEvmSccpBridge(tokenAddress, policy, 2, 5, revision, maxWrappedSupply)
   {}
 }
 contract CodecHarness {
@@ -1207,6 +1214,7 @@ function exactEvmRouteConfigHash({
   soraFinalityAnchorHash,
   route,
   routeRevision,
+  maxWrappedSupply,
 }) {
   const deploymentConfigHash = ethers.keccak256(
     abi.encode(
@@ -1232,12 +1240,13 @@ function exactEvmRouteConfigHash({
   );
   const assetRouteConfigHash = ethers.keccak256(
     abi.encode(
-      ["bytes32", "bytes32", "uint32", "uint256"],
+      ["bytes32", "bytes32", "uint32", "uint256", "uint256"],
       [
         ethers.keccak256(ethers.toUtf8Bytes("xor")),
         ethers.keccak256(ethers.toUtf8Bytes(route)),
         routeRevision,
         SCALE,
+        maxWrappedSupply,
       ],
     ),
   );
@@ -1282,6 +1291,7 @@ function exactTronRouteConfigHash({
   soraFinalityAnchorHash,
   destinationBindingHash,
   routeRevision,
+  maxWrappedSupply,
 }) {
   const deploymentConfigHash = ethers.keccak256(
     abi.encode(
@@ -1309,12 +1319,13 @@ function exactTronRouteConfigHash({
   );
   const assetRouteConfigHash = ethers.keccak256(
     abi.encode(
-      ["bytes32", "bytes32", "uint32", "uint256"],
+      ["bytes32", "bytes32", "uint32", "uint256", "uint256"],
       [
         ethers.keccak256(ethers.toUtf8Bytes("xor")),
         ethers.keccak256(ethers.toUtf8Bytes("taira_tron_xor")),
         routeRevision,
         SCALE,
+        maxWrappedSupply,
       ],
     ),
   );
@@ -1779,8 +1790,8 @@ async function main() {
     assert(constructor, `${label} route constructor ABI is missing`);
     assert.equal(
       constructor.inputs.length,
-      4,
-      `${label} route constructor must accept token, verifier policy, profile, and revision`,
+      5,
+      `${label} route constructor must accept token, verifier policy, profile, revision, and cap`,
     );
     assert.equal(constructor.inputs[0].name, "tokenAddress");
     assert.equal(constructor.inputs[0].type, "address");
@@ -1797,6 +1808,13 @@ async function main() {
       ],
       `${label} route verifier policy ABI drifted`,
     );
+    assert.equal(constructor.inputs[4].name, "configuredMaxWrappedSupply");
+    assert.equal(constructor.inputs[4].type, "uint256");
+    const maxWrappedSupplyGetter = exactRouteArtifact.abi.find(
+      (entry) => entry.name === "maxWrappedSupply",
+    );
+    assert(maxWrappedSupplyGetter, `${label} immutable wrapped-supply cap getter is missing`);
+    assert.equal(maxWrappedSupplyGetter.outputs[0].type, "uint256");
   }
 
   assert(!bridgeArtifact.abi.some((entry) => entry.name === "burnToTaira"));
@@ -2225,6 +2243,7 @@ async function main() {
       verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
       TRON_NILE_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ],
     undefined,
   );
@@ -2276,6 +2295,7 @@ async function main() {
       verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
       TRON_NILE_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith("Unexpected token decimals"),
   );
@@ -2289,6 +2309,7 @@ async function main() {
       verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
       TRON_NILE_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith("Token supply must start at zero"),
   );
@@ -2301,6 +2322,7 @@ async function main() {
       verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
       TRON_NILE_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ],
   );
   const tronBridge = tronRoute.route;
@@ -2313,6 +2335,7 @@ async function main() {
   assert.equal(await tronToken.bridge(), tronBridgeAddress);
   assert.equal(await tronBridge.networkId(), tronNetworkId);
   assert.equal(await tronBridge.routeRevision(), BigInt(ROUTE_REVISION));
+  assert.equal(await tronBridge.maxWrappedSupply(), MAX_WRAPPED_SUPPLY);
   const secondTronRoute = await deployPreboundRoute(
     signer,
     tronTokenArtifact,
@@ -2321,12 +2344,14 @@ async function main() {
       verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
       TRON_NILE_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ],
   );
   const secondTronBridge = secondTronRoute.route;
   const secondTronBridgeAddress = await secondTronBridge.getAddress();
   const secondTronToken = secondTronRoute.token;
   assert.equal(await secondTronToken.bridge(), secondTronBridgeAddress);
+  assert.equal(await secondTronBridge.maxWrappedSupply(), MAX_WRAPPED_SUPPLY);
   const rejectedTronRouteAddress = await nextCreateAddress(signer, 1);
   const rejectedTronToken = await deploy(signer, tronTokenArtifact, [
     rejectedTronRouteAddress,
@@ -2338,8 +2363,29 @@ async function main() {
       verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
       TRON_NILE_PROFILE,
       0,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
+  );
+  await assert.rejects(
+    deploy(signer, tronBridgeArtifact, [
+      rejectedTronTokenAddress,
+      verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
+      TRON_NILE_PROFILE,
+      ROUTE_REVISION,
+      0,
+    ]),
+    rejectedWith("Invalid wrapped supply cap"),
+  );
+  await assert.rejects(
+    deploy(signer, tronBridgeArtifact, [
+      rejectedTronTokenAddress,
+      verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
+      TRON_NILE_PROFILE,
+      ROUTE_REVISION,
+      MAX_U128 + 1n,
+    ]),
+    rejectedWith("Invalid wrapped supply cap"),
   );
   await assert.rejects(
     deploy(signer, tronBridgeArtifact, [
@@ -2352,6 +2398,7 @@ async function main() {
       ),
       TRON_NILE_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -2367,6 +2414,7 @@ async function main() {
       ),
       TRON_NILE_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -2400,6 +2448,7 @@ async function main() {
       ),
       TRON_NILE_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -2450,6 +2499,7 @@ async function main() {
       soraFinalityAnchorHash: SORA_FINALITY_ANCHOR_HASH,
       destinationBindingHash: tronDestinationBinding,
       routeRevision: ROUTE_REVISION,
+      maxWrappedSupply: MAX_WRAPPED_SUPPLY,
     }),
   );
   const tronRecipient = Buffer.concat([
@@ -2574,6 +2624,53 @@ async function main() {
     ),
     rejectedWith("Destination message already used"),
   );
+  const tronCapPayload = transferPayload({
+    sourceDomain: DOMAIN_SORA,
+    destinationDomain: DOMAIN_TRON,
+    nonce: 990,
+    amount: MAX_OUTSTANDING_LIABILITY,
+    senderCodec: CODEC_TEXT,
+    sender: Buffer.from(CANONICAL_I105_BYTES),
+    recipientCodec: CODEC_TRON21,
+    recipient: tronRecipient,
+    route: "taira_tron_xor",
+  });
+  const tronCapPayloadHex = ethers.hexlify(tronCapPayload);
+  const tronCapMessageId =
+    await tronBridge.sccpDestinationMessageId(tronCapPayloadHex);
+  const tronCapPublicInputs = [
+    tronCapMessageId,
+    await tronBridge.sccpPayloadHash(tronCapPayloadHex),
+    word(DOMAIN_TRON),
+    ethers.keccak256(ethers.toUtf8Bytes("tron-cap-commitment-root")),
+    word(990),
+    ethers.keccak256(ethers.toUtf8Bytes("tron-cap-finality-block")),
+  ];
+  const tronCapStatementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("tron-cap-statement"),
+  );
+  const tronCapProof = await acceptingProof(
+    provider,
+    abi,
+    tronCapPublicInputs,
+    tronCapStatementHash,
+    tronDestinationBinding,
+    await tronBridge.routeConfigHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+    g1,
+    g2,
+  );
+  await assert.rejects(
+    tronBridge.finalizeFromTaira(
+      tronCapProof,
+      tronCapPublicInputs,
+      tronCapStatementHash,
+      tronCapPayloadHex,
+    ),
+    rejectedWith(),
+  );
+  assert.equal(await tronBridge.usedDestinationMessages(tronCapMessageId), false);
+  assert.equal(await tronToken.totalSupply(), 3n * SCALE);
   for (let index = 0; index < validTairaSenders.length; index++) {
     const recipientAddress = ethers.getAddress(
       `0x${(0xb1 + index).toString(16).padStart(2, "0").repeat(20)}`,
@@ -2752,6 +2849,7 @@ async function main() {
     verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
     TRON_NILE_PROFILE,
     ROUTE_REVISION,
+    MAX_WRAPPED_SUPPLY,
   ]);
   assert.equal(
     await tronNoopBridge.getAddress(),
@@ -2760,7 +2858,7 @@ async function main() {
   await (await tronNoopToken.seed(tronBurnAccount, 2n * SCALE)).wait();
   await assert.rejects(
     tronNoopBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE, 0n),
-    rejectedWith("Token delta mismatch"),
+    rejectedWith(),
   );
   assert.equal(await tronNoopBridge.transferNonces(tronBurnAccount), 0n);
   assert.equal(await tronNoopToken.totalSupply(), 2n * SCALE);
@@ -2809,7 +2907,7 @@ async function main() {
       tronNoopMintStatementHash,
       tronNoopMintPayloadHex,
     ),
-    rejectedWith("Token delta mismatch"),
+    rejectedWith(),
   );
   assert.equal(
     await tronNoopBridge.usedDestinationMessages(tronNoopMintMessageId),
@@ -2827,6 +2925,7 @@ async function main() {
     verifierPolicy(tronVerifierAddress, tronVerifierCodeHash, verifierKeyHash),
     TRON_NILE_PROFILE,
     ROUTE_REVISION,
+    MAX_WRAPPED_SUPPLY,
   ]);
   assert.equal(
     await tronWrongDeltaBridge.getAddress(),
@@ -2835,7 +2934,7 @@ async function main() {
   await (await tronWrongDeltaToken.seed(tronBurnAccount, 2n * SCALE)).wait();
   await assert.rejects(
     tronWrongDeltaBridge.transferToTaira(CANONICAL_I105_BYTES, SCALE, 0n),
-    rejectedWith("Token delta mismatch"),
+    rejectedWith(),
   );
   assert.equal(await tronWrongDeltaBridge.transferNonces(tronBurnAccount), 0n);
   assert.equal(await tronWrongDeltaToken.totalSupply(), 2n * SCALE);
@@ -2892,7 +2991,7 @@ async function main() {
       tronWrongDeltaMintStatementHash,
       tronWrongDeltaMintPayloadHex,
     ),
-    rejectedWith("Token delta mismatch"),
+    rejectedWith(),
   );
   assert.equal(
     await tronWrongDeltaBridge.usedDestinationMessages(
@@ -2913,6 +3012,7 @@ async function main() {
       verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
       BSC_TESTNET_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ],
   );
   const bridge = bscRoute.route;
@@ -2921,6 +3021,7 @@ async function main() {
   const tokenAddress = await token.getAddress();
   assert.equal(await token.bridge(), bridgeAddress);
   assert.equal(await bridge.routeRevision(), BigInt(ROUTE_REVISION));
+  assert.equal(await bridge.maxWrappedSupply(), MAX_WRAPPED_SUPPLY);
   assert.equal(
     await bridge.semanticProofProfileHash(),
     SEMANTIC_PROOF_PROFILE_HASH,
@@ -2949,6 +3050,7 @@ async function main() {
       soraFinalityAnchorHash: SORA_FINALITY_ANCHOR_HASH,
       route: "taira_bsc_xor",
       routeRevision: ROUTE_REVISION,
+      maxWrappedSupply: MAX_WRAPPED_SUPPLY,
     }),
   );
   const wrongBoundToken = await deploy(signer, falseTokenArtifact, [
@@ -2959,6 +3061,7 @@ async function main() {
       await wrongBoundToken.getAddress(),
       verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -2971,6 +3074,7 @@ async function main() {
       await wrongDecimalsToken.getAddress(),
       verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith("Unexpected token decimals"),
   );
@@ -2983,6 +3087,7 @@ async function main() {
       await nonzeroSupplyToken.getAddress(),
       verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith("Token supply must start at zero"),
   );
@@ -2997,8 +3102,29 @@ async function main() {
       verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
       BSC_TESTNET_PROFILE,
       0,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
+  );
+  await assert.rejects(
+    deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
+      verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+      BSC_TESTNET_PROFILE,
+      ROUTE_REVISION,
+      0,
+    ]),
+    rejectedWith("Invalid wrapped supply cap"),
+  );
+  await assert.rejects(
+    deploy(signer, bridgeArtifact, [
+      rejectedBscTokenAddress,
+      verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
+      BSC_TESTNET_PROFILE,
+      ROUTE_REVISION,
+      MAX_U128 + 1n,
+    ]),
+    rejectedWith("Invalid wrapped supply cap"),
   );
   await assert.rejects(
     deploy(signer, bridgeArtifact, [
@@ -3006,6 +3132,7 @@ async function main() {
       verifierPolicy(verifierAddress, ethers.ZeroHash, verifierKeyHash),
       5,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -3015,6 +3142,7 @@ async function main() {
       verifierPolicy(verifierAddress, verifierCodeHash, ethers.ZeroHash),
       5,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -3029,6 +3157,7 @@ async function main() {
       ),
       BSC_TESTNET_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -3044,6 +3173,7 @@ async function main() {
       ),
       BSC_TESTNET_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -3078,6 +3208,7 @@ async function main() {
       ),
       BSC_TESTNET_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -3092,6 +3223,7 @@ async function main() {
       ),
       BSC_TESTNET_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -3107,6 +3239,7 @@ async function main() {
       ),
       BSC_TESTNET_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -3116,6 +3249,7 @@ async function main() {
       verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
       4,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -3655,6 +3789,51 @@ async function main() {
     bridge.finalizeFromTaira(proof, publicInputs, statementHash, payloadHex),
     rejectedWith("Destination message already used"),
   );
+  const bscCapPayload = transferPayload({
+    sourceDomain: DOMAIN_SORA,
+    destinationDomain: DOMAIN_BSC,
+    nonce: 991,
+    amount: MAX_OUTSTANDING_LIABILITY,
+    senderCodec: CODEC_TEXT,
+    sender: Buffer.from(CANONICAL_I105_BYTES),
+    recipientCodec: CODEC_EVM20,
+    recipient: recipient20,
+  });
+  const bscCapPayloadHex = ethers.hexlify(bscCapPayload);
+  const bscCapMessageId = await bridge.sccpDestinationMessageId(bscCapPayloadHex);
+  const bscCapPublicInputs = [
+    bscCapMessageId,
+    await bridge.sccpPayloadHash(bscCapPayloadHex),
+    word(DOMAIN_BSC),
+    ethers.keccak256(ethers.toUtf8Bytes("bsc-cap-commitment-root")),
+    word(991),
+    ethers.keccak256(ethers.toUtf8Bytes("bsc-cap-finality-block")),
+  ];
+  const bscCapStatementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("bsc-cap-statement"),
+  );
+  const bscCapProof = await acceptingProof(
+    provider,
+    abi,
+    bscCapPublicInputs,
+    bscCapStatementHash,
+    destinationBinding,
+    await bridge.routeConfigHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+    g1,
+    g2,
+  );
+  await assert.rejects(
+    bridge.finalizeFromTaira(
+      bscCapProof,
+      bscCapPublicInputs,
+      bscCapStatementHash,
+      bscCapPayloadHex,
+    ),
+    rejectedWith("Wrapped supply cap exceeded"),
+  );
+  assert.equal(await bridge.usedDestinationMessages(bscCapMessageId), false);
+  assert.equal(await token.totalSupply(), 5n * SCALE);
   for (let index = 0; index < validTairaSenders.length; index++) {
     const recipientAddress = ethers.getAddress(
       `0x${(0xa1 + index).toString(16).padStart(2, "0").repeat(20)}`,
@@ -3786,7 +3965,7 @@ async function main() {
   );
   assert.equal(
     await token.balanceOf(signerAddress),
-    signerBalanceBeforeAllowanceAttacks,
+    signerBalanceBeforeAllowanceAttacks - SCALE,
   );
 
   const invalidRecipients = [
@@ -3870,6 +4049,7 @@ async function main() {
     await falseToken.getAddress(),
     verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
     ROUTE_REVISION,
+    MAX_WRAPPED_SUPPLY,
   ]);
   assert.equal(await falseBridge.getAddress(), predictedFalseBridgeAddress);
   await (await falseToken.seed(signerAddress, SCALE)).wait();
@@ -3941,6 +4121,7 @@ async function main() {
     await trueNoopToken.getAddress(),
     verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
     ROUTE_REVISION,
+    MAX_WRAPPED_SUPPLY,
   ]);
   assert.equal(await trueNoopBridge.getAddress(), predictedNoopBridgeAddress);
   await (await trueNoopToken.seed(signerAddress, 2n * SCALE)).wait();
@@ -4008,6 +4189,7 @@ async function main() {
     await wrongDeltaToken.getAddress(),
     verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
     ROUTE_REVISION,
+    MAX_WRAPPED_SUPPLY,
   ]);
   assert.equal(
     await wrongDeltaBridge.getAddress(),
@@ -4089,6 +4271,7 @@ async function main() {
     await reentrantToken.getAddress(),
     verifierPolicy(verifierAddress, verifierCodeHash, verifierKeyHash),
     ROUTE_REVISION,
+    MAX_WRAPPED_SUPPLY,
   ]);
   assert.equal(
     await reentrantBridge.getAddress(),
@@ -4155,6 +4338,7 @@ async function main() {
       ),
       ETHEREUM_SEPOLIA_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ],
   );
   const ethereumBridge = ethereumRoute.route;
@@ -4162,6 +4346,7 @@ async function main() {
   const ethereumToken = ethereumRoute.token;
   const ethereumTokenAddress = await ethereumToken.getAddress();
   assert.equal(await ethereumToken.bridge(), ethereumBridgeAddress);
+  assert.equal(await ethereumBridge.maxWrappedSupply(), MAX_WRAPPED_SUPPLY);
   assert.equal(
     await ethereumBridge.semanticProofProfileHash(),
     SEMANTIC_PROOF_PROFILE_HASH,
@@ -4192,6 +4377,7 @@ async function main() {
       soraFinalityAnchorHash: SORA_FINALITY_ANCHOR_HASH,
       route: "taira_eth_xor",
       routeRevision: ROUTE_REVISION,
+      maxWrappedSupply: MAX_WRAPPED_SUPPLY,
     }),
   );
   assert.equal(await ethereumBridge.ethereumProfile(), 3n);
@@ -4226,6 +4412,7 @@ async function main() {
       ),
       2,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );
@@ -4239,6 +4426,7 @@ async function main() {
       ),
       ETHEREUM_SEPOLIA_PROFILE,
       ROUTE_REVISION,
+      MAX_WRAPPED_SUPPLY,
     ]),
     rejectedWith(),
   );

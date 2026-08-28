@@ -202,6 +202,7 @@ public sealed record SccpDestinationDeploymentV1(
     byte[] RouteAddress,
     byte[] RouteCodeHash,
     ulong TairaToTokenMultiplier,
+    UInt128 MaxWrappedSupply,
     byte[] DestinationBindingHash)
 {
     /// <summary>TON Jetton master address; populated only for the TON family.</summary>
@@ -241,6 +242,7 @@ public sealed record SccpGovernedRouteV1(
     string AssetDefinitionId,
     string CustodyOwner,
     uint PayloadAmountScale,
+    UInt128 MaxOutstandingLiability,
     byte[] RouteConfigurationHash);
 
 public sealed record SccpGovernedLaneV1(
@@ -1278,7 +1280,7 @@ internal static class SccpExactParser
 
         var settlement = Object(item, "settlement");
         SccpJson.ExactFields(settlement,
-            ["asset_definition_id", "custody_owner", "payload_amount_scale"],
+            ["asset_definition_id", "custody_owner", "payload_amount_scale", "max_outstanding_liability"],
             $"{label}.settlement");
         var assetDefinition = SccpJson.Text(settlement, "asset_definition_id");
         if (assetDefinition != "6TEAJqbb8oEPmLncoNiMRbLEK6tw")
@@ -1303,6 +1305,18 @@ internal static class SccpExactParser
         }
 
         var scale = SccpJson.UInt32(settlement, "payload_amount_scale", 9, 9);
+        var maxOutstandingLiability = PositiveUInt128(
+            settlement,
+            "max_outstanding_liability",
+            $"{label}.settlement");
+        var multiplier = (UInt128)destination.TairaToTokenMultiplier;
+        if (maxOutstandingLiability > UInt128.MaxValue / multiplier
+            || maxOutstandingLiability * multiplier
+            != destination.MaxWrappedSupply)
+        {
+            throw new ArgumentException(
+                $"{label} wrapped supply cap must equal its SORA liability times the destination multiplier.");
+        }
         var configuration = RouteConfigurationHash(lane, routeId, assetKey, revision, destination);
         if (!sourceParts.Configuration.AsSpan().SequenceEqual(configuration))
         {
@@ -1317,7 +1331,7 @@ internal static class SccpExactParser
 
         return new SccpGovernedRouteV1(
             lane, routeId, assetKey, revision, activation, cutoff, source, destination,
-            assetDefinition, custody, scale, configuration);
+            assetDefinition, custody, scale, maxOutstandingLiability, configuration);
     }
 
     private static SccpDestinationDeploymentV1 ParseDestination(JsonElement item, SccpLaneIdV1 lane, string label)
@@ -1360,6 +1374,7 @@ internal static class SccpExactParser
             "route_address",
             "route_code_hash",
             "taira_to_token_multiplier",
+            "max_wrapped_supply",
         ], $"{label}.deployment");
         var addresses = new[]
         {
@@ -1396,10 +1411,14 @@ internal static class SccpExactParser
         {
             throw new ArgumentException($"{label}.deployment has the wrong Taira/token multiplier.");
         }
+        var maxWrappedSupply = PositiveUInt128(
+            deployment,
+            "max_wrapped_supply",
+            $"{label}.deployment");
 
         var partial = new SccpDestinationDeploymentV1(
             family, addresses[0], hashes[0], addresses[1], hashes[1], hashes[2], semantic, anchor,
-            addresses[2], hashes[3], 1_000_000_000, [])
+            addresses[2], hashes[3], 1_000_000_000, maxWrappedSupply, [])
         {
             VerifyingKeyBytes = key,
         };
@@ -1427,6 +1446,7 @@ internal static class SccpExactParser
             "proof_profile_commitment",
             "outbound_proof_policy",
             "taira_to_token_multiplier",
+            "max_wrapped_supply",
         ], label);
         var master = ParseTonAddress(Object(deployment, "jetton_master_address"), $"{label}.jetton_master_address");
         var route = ParseTonAddress(Object(deployment, "route_address"), $"{label}.route_address");
@@ -1483,6 +1503,7 @@ internal static class SccpExactParser
         {
             throw new ArgumentException($"{label} has the wrong Taira/Jetton multiplier.");
         }
+        var maxWrappedSupply = PositiveUInt128(deployment, "max_wrapped_supply", label);
 
         var partial = new SccpDestinationDeploymentV1(
             SccpDestinationProofBackendV1.TonGroth16Bls12381,
@@ -1496,6 +1517,7 @@ internal static class SccpExactParser
             route.RegistryBytes(),
             routeCode,
             1,
+            maxWrappedSupply,
             [])
         {
             TonJettonMasterAddress = master,
@@ -2283,7 +2305,8 @@ internal static class SccpExactParser
             SccpV1.Keccak256("xor"u8),
             SccpV1.Keccak256(Encoding.UTF8.GetBytes(routeId)),
             AbiWord(revision),
-            AbiWord(destination.TairaToTokenMultiplier)));
+            AbiWord(destination.TairaToTokenMultiplier),
+            AbiWord(destination.MaxWrappedSupply)));
         return SccpV1.Keccak256(Concat(
             SccpV1.Keccak256("sccp:concrete-route-config:v1"u8),
             AbiWord(lane.Source.DomainId()),
@@ -2390,6 +2413,7 @@ internal static class SccpExactParser
         WriteVector(assetRoute, "taira_ton_xor"u8);
         WriteUInt32LittleEndian(assetRoute, revision);
         WriteUInt64LittleEndian(assetRoute, destination.TairaToTokenMultiplier);
+        WriteUInt128LittleEndian(assetRoute, destination.MaxWrappedSupply);
         var assetRouteHash = SHA256.HashData(assetRoute.ToArray());
 
         using var payload = new MemoryStream();
@@ -2667,6 +2691,14 @@ internal static class SccpExactParser
         return result;
     }
 
+    private static byte[] AbiWord(UInt128 value)
+    {
+        var result = new byte[32];
+        BinaryPrimitives.WriteUInt64BigEndian(result.AsSpan(16), (ulong)(value >> 64));
+        BinaryPrimitives.WriteUInt64BigEndian(result.AsSpan(24), (ulong)value);
+        return result;
+    }
+
     private static void WriteUInt16LittleEndian(Stream stream, ushort value)
     {
         Span<byte> bytes = stackalloc byte[2];
@@ -2692,6 +2724,14 @@ internal static class SccpExactParser
     {
         Span<byte> bytes = stackalloc byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
+        stream.Write(bytes);
+    }
+
+    private static void WriteUInt128LittleEndian(Stream stream, UInt128 value)
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes, (ulong)value);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes[8..], (ulong)(value >> 64));
         stream.Write(bytes);
     }
 
@@ -2842,6 +2882,23 @@ internal static class SccpExactParser
         }
 
         return value;
+    }
+
+    private static UInt128 PositiveUInt128(JsonElement item, string field, string label)
+    {
+        var property = item.GetProperty(field);
+        var raw = property.GetRawText();
+        if (property.ValueKind != JsonValueKind.Number
+            || raw.Any(static character => !char.IsAsciiDigit(character))
+            || raw.Length > 1 && raw[0] == '0'
+            || !TryParseUInt128(raw, out var result)
+            || result == 0)
+        {
+            throw new ArgumentException(
+                $"{label}.{field} must be a canonical positive UInt128 JSON integer.");
+        }
+
+        return result;
     }
 
     private static bool TryParseUInt128(string value, out UInt128 result)

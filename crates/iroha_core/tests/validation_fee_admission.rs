@@ -396,6 +396,7 @@ fn validation_fee_parliament_requirements() -> Vec<RequiredParliamentBodyV1> {
         ParliamentBody::InterestPanel,
         ParliamentBody::ReviewPanel,
         ParliamentBody::CoordinationCouncil,
+        ParliamentBody::MpcCommittee,
         ParliamentBody::FmaCommittee,
         ParliamentBody::OversightCommittee,
         ParliamentBody::PolicyJury,
@@ -600,6 +601,7 @@ fn complete_parliament_body_for_authorization(
                         nay: 1,
                         abstain: 0,
                     },
+                    2,
                     43,
                 )
                 .expect("finalize deterministic aggregate ballot");

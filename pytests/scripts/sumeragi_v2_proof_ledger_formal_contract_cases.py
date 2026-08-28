@@ -77,6 +77,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('user/sorafs_moderation_query_bound_tests.rs'),
         Path('user/governance_dag_head_mode_tests.rs'),
         Path('user/zk_prover_report_retention_tests.rs'),
+        Path('user/zk_attachment_retention_tests.rs'),
         Path('user/query_fanout_memory_tests.rs'),
         Path('user/app_routed_read_body_timeout_tests.rs'),
         Path('user/operator_signature_body_timeout_tests.rs'),
@@ -325,7 +326,14 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_lifecycle_coordinator_explorer_cases.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs'): (Path('v2_lifecycle_launch_tests.rs'),),
-    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs'): (Path('v2_lifecycle_launch_recovered_fetch_source_tests.rs'), Path('v2_lifecycle_launch_recovered_fetch_settlement_source_tests.rs')),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs'): (
+        Path('v2_lifecycle_launch_ready_proposal_sign_test_fixtures.rs'),
+        Path('v2_lifecycle_launch_pending_kura_source_tests.rs'),
+        Path('v2_lifecycle_launch_recovered_sign_settlement_source_tests.rs'),
+        Path('v2_lifecycle_launch_recovered_fetch_source_tests.rs'),
+        Path('v2_lifecycle_launch_certified_response_retry_source_tests.rs'),
+        Path('v2_lifecycle_launch_recovered_fetch_settlement_source_tests.rs'),
+    ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs'): (
         Path('v2_lifecycle_ledger_operations.rs'),
         Path('v2_lifecycle_ledger_store.rs'),

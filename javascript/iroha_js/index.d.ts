@@ -940,6 +940,7 @@ export interface SccpDestinationDeploymentFieldsV1 {
   readonly route_address: string;
   readonly route_code_hash: string;
   readonly taira_to_token_multiplier: 1000000000;
+  readonly max_wrapped_supply: number | bigint;
 }
 export interface SccpEvmDestinationDeploymentV1 extends SccpDestinationDeploymentFieldsV1 {}
 export interface SccpTronDestinationDeploymentV1 extends SccpDestinationDeploymentFieldsV1 {}
@@ -960,6 +961,7 @@ export interface SccpSolanaDestinationDeploymentV1 {
   readonly verifier_key_hash: string;
   readonly outbound_proof_policy: SccpOutboundProofPolicyV1;
   readonly taira_to_token_multiplier: 1;
+  readonly max_wrapped_supply: number | bigint;
 }
 export interface SccpTonAddressV1 {
   readonly workchain: 0;
@@ -980,6 +982,7 @@ export interface SccpTonDestinationDeploymentV1 {
   readonly proof_profile_commitment: string;
   readonly outbound_proof_policy: SccpOutboundProofPolicyV1;
   readonly taira_to_token_multiplier: 1;
+  readonly max_wrapped_supply: number | bigint;
 }
 export type SccpDestinationDeploymentV1 =
   | Readonly<{ family: "evm"; deployment: SccpEvmDestinationDeploymentV1 }>
@@ -1035,7 +1038,7 @@ export interface SccpInboundFinalityCutoffV1 {
   readonly trust_anchor_hash: string;
   readonly max_anchor_interval_height: number;
 }
-export interface SccpSoraSettlementV1 { readonly asset_definition_id: string; readonly custody_owner: string; readonly payload_amount_scale: 9; }
+export interface SccpSoraSettlementV1 { readonly asset_definition_id: string; readonly custody_owner: string; readonly payload_amount_scale: 9; readonly max_outstanding_liability: number | bigint; }
 export interface SccpGovernedRouteV1 {
   readonly lane_id: SccpLaneIdV1;
   readonly route_id: string;
@@ -5330,7 +5333,8 @@ export type ParliamentNoResultKindTagV1 =
   | "BallotCommitmentDeadlineExpired"
   | "BallotReleasePulseUnavailable"
   | "BallotOpeningDeadlineExpired"
-  | "SortitionRetriesExhausted";
+  | "SortitionRetriesExhausted"
+  | "ConfirmationJuryCapacityUnavailable";
 
 export interface ParliamentNoResultKindLayoutV1 {
   readonly noritoIndex: number;

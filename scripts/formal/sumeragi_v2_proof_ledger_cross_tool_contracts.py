@@ -3045,7 +3045,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         ),
                         item="complete_certified_fetch_body_persistence",
                         item_token_sha256=(
-                            "97681979dd7f57bd52e8666099f26014c37d6ccd07c6ce2fa4b9b30359354361"
+                            "75eedb820154c955d3bcca947465defc336a10af31440eb13516464f924d8591"
                         ),
                         brace_context=(("impl", "LifecycleCoordinator"),),
                         projection="historical_trace",
@@ -3058,9 +3058,10 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             "let _authorized_historical_pipeline = checked_transition.into_projection();",
                         ),
                         mutation_boundaries=(
+                            "exact_dequeue.lock(ingress)",
                             "output_guard.begin_fail_stop_operation()",
                             "ready_mutation.persist_exact_staged_successor()",
-                            "exact_dequeue.commit(ingress)",
+                            "exact_dequeue.commit()",
                             "durable_registry.commit_after_exact_dequeue(dequeued)",
                             "ready.commit()",
                             "executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated)",

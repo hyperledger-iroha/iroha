@@ -2882,6 +2882,17 @@ mod tests {
         let _guard = DuplicateMetricsGuard(previous);
         let _metrics = Metrics::default();
     }
+
+    #[test]
+    fn confirmation_capacity_no_result_metric_is_pre_registered() {
+        let metrics = Metrics::default();
+        let dump = metrics.try_to_string().expect("metrics text");
+        let line = find_metric_line(
+            &dump,
+            "governance_parliament_no_result_total{class=\"confirmation_jury_capacity_unavailable\"}",
+        );
+        assert_eq!(parse_metric_value(line), 0.0);
+    }
 }
 #[cfg(feature = "otel-exporter")]
 fn install_otlp_metrics_exporter(
@@ -8294,6 +8305,7 @@ construct {
             "ballot_release_pulse_unavailable",
             "ballot_opening_deadline_expired",
             "sortition_retries_exhausted",
+            "confirmation_jury_capacity_unavailable",
         ] {
             let _ = governance_parliament_no_result_total.with_label_values(&[class]);
         }

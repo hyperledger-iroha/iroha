@@ -1674,6 +1674,14 @@ let action = match fair_v2_ingress_route_action(
     routes_candidate.as_ref(),
 ) {
     Ok(action) => action,
+    Err(NetworkReplyRouteError::Stale)
+        if is_timeout_vote
+            && routes_candidate
+                .as_ref()
+                .is_some_and(|routes| routes.len() == 1) =>
+    {
+        return Ok(FairV2IngressPushDisposition::Coalesced);
+    }
     Err(_) => {
         return Err(FairV2IngressPushError::rejected(
             inbound,

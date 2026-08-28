@@ -53,4 +53,63 @@ final class ToriiJSONValueTests: XCTestCase {
         XCTAssertNil(value.normalizedInt64)
     }
 
+    func testUInt128JSONIntegerRoundTripsWithoutDoubleRounding() throws {
+        let maximum = "340282366920938463463374607431768211455"
+        let data = Data("{\"maximum\":\(maximum)}".utf8)
+        let value = try JSONDecoder().decode(ToriiJSONValue.self, from: data)
+        XCTAssertEqual(value["maximum"], .integer(maximum))
+        XCTAssertEqual(
+            String(decoding: try value.encodedData(), as: UTF8.self),
+            "{\"maximum\":\(maximum)}"
+        )
+        XCTAssertEqual(
+            try CanonicalNorito.jsonString(from: value),
+            "{\"maximum\":\(maximum)}"
+        )
+    }
+
+    func testUInt128JSONIntegerRejectsNoncanonicalManualValue() {
+        XCTAssertThrowsError(try ToriiJSONValue.integer("01").encodedData())
+        XCTAssertThrowsError(
+            try ToriiJSONValue.integer("340282366920938463463374607431768211456")
+                .encodedData()
+        )
+        XCTAssertThrowsError(
+            try CanonicalNorito.jsonString(from: .integer("340282366920938463463374607431768211456"))
+        )
+    }
+
+    func testUInt128OverflowNeverBecomesAnExactIntegerValue() throws {
+        let overflow = Data("340282366920938463463374607431768211456".utf8)
+        let decoded = try JSONDecoder().decode(ToriiJSONValue.self, from: overflow)
+        if case .integer = decoded {
+            XCTFail("UInt128.max + 1 must not be represented as an exact integer")
+        }
+        XCTAssertThrowsError(
+            try governanceRequireExactJSONIntegers(
+                .object(["max_wrapped_supply": decoded]),
+                codingPath: [],
+                context: "proposal"
+            )
+        )
+    }
+
+    func testGovernanceLargeIntegersAreLimitedToSccpCaps() throws {
+        let exact = "1000000000000000000000"
+        XCTAssertNoThrow(
+            try governanceRequireExactJSONIntegers(
+                .object(["max_wrapped_supply": .integer(exact)]),
+                codingPath: [],
+                context: "proposal"
+            )
+        )
+        XCTAssertThrowsError(
+            try governanceRequireExactJSONIntegers(
+                .object(["checkpoint_height": .integer(exact)]),
+                codingPath: [],
+                context: "proposal"
+            )
+        )
+    }
+
 }

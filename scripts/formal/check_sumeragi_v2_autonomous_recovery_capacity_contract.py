@@ -49,6 +49,11 @@ MUTATIONS = (
         "MLAutonomousPredecessorGloballyApplied",
     ),
     (
+        "DirectExecutionAutonomousPredecessor",
+        "multilane_autonomous_recovery_capacity_direct_execution_predecessor_bug.cfg",
+        "MLAutonomousPredecessorGloballyApplied",
+    ),
+    (
         "StartupRepairBeforeEnvelope",
         "multilane_autonomous_recovery_capacity_startup_repair_before_envelopes_bug.cfg",
         "MLStartupRepairAfterCarrierEnvelopes",
@@ -152,6 +157,24 @@ STABLE_BINDING_IDENTITIES = {
         "crates/iroha_core/src/kura/autonomous_application_evidence.rs",
         "method",
         "Kura::autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair",
+    ),
+    "autonomous_predecessor_canonical_receipt_revalidator": (
+        "MLAutonomousPredecessorGloballyApplied",
+        "crates/iroha_core/src/kura/autonomous_application_evidence.rs",
+        "method",
+        "Kura::canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
+    ),
+    "autonomous_predecessor_canonical_receipt_regression": (
+        "MLAutonomousPredecessorGloballyApplied",
+        "crates/iroha_core/src/state/autonomous_predecessor_application_tests.rs",
+        "fn",
+        "autonomous_lane_predecessor_accepts_exact_canonical_receipt_without_merge_frontier",
+    ),
+    "autonomous_predecessor_direct_execution_rejection": (
+        "MLAutonomousPredecessorGloballyApplied",
+        "crates/iroha_core/src/state/autonomous_predecessor_application_tests.rs",
+        "fn",
+        "autonomous_lane_predecessor_rejects_direct_execution_receipt",
     ),
     "autonomous_current_merge_receipt_revalidator": (
         "MLAutonomousPredecessorGloballyApplied",
@@ -467,12 +490,36 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
     "autonomous_predecessor_global_application_gate": (
         "Self::canonical_merged_lane_frontier_from_world",
         "return frontier == (previous_height, Some(previous_descriptor_hash))",
+        "self.kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
         "self.kura.autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair",
     ),
     "autonomous_predecessor_merge_receipt_revalidator": (
         "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
         "previous.lane_incarnation == descriptor.lane_incarnation",
         "self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)",
+    ),
+    "autonomous_predecessor_canonical_receipt_revalidator": (
+        "let _prune_guard = self.prune_lock.lock()",
+        "read_active_lane_block_application_receipt_structural(",
+        "receipt.format != LaneBlockApplicationReceiptArtifactFormat::Current",
+        "previous.lane_id != descriptor.lane_id",
+        "previous.dataspace_id != descriptor.dataspace_id",
+        "previous.lane_incarnation != descriptor.lane_incarnation",
+        "previous.descriptor_hash != previous_descriptor_hash",
+        "self.read_exact_lane_block_application_receipt_under_prune_guard(&receipt.proposal)",
+        "Some(&receipt)",
+    ),
+    "autonomous_predecessor_canonical_receipt_regression": (
+        "persist_lane_block_application_receipt(&predecessor.proposal)",
+        "canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
+        "certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+        "malformed-frontier",
+    ),
+    "autonomous_predecessor_direct_execution_rejection": (
+        "persist_direct_lane_block_application_receipt(&input, &preflight)",
+        "lane_block_predecessor_application_receipt_available_without_sidecar_repair",
+        "!kura.canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
+        "!state.certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
     ),
     "autonomous_current_merge_receipt_revalidator": (
         "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
@@ -801,6 +848,10 @@ INCLUDED_BINDING_OWNERS = {
         "crates/iroha_core/src/kura.rs",
         'include!("kura/autonomous_application_evidence.rs");',
     ),
+    "crates/iroha_core/src/state/autonomous_predecessor_application_tests.rs": (
+        "crates/iroha_core/src/state/tests.rs",
+        'include!("autonomous_predecessor_application_tests.rs");',
+    ),
     "crates/iroha_core/src/kura/certified_bundle_capacity_reservation_types.rs": (
         "crates/iroha_core/src/kura.rs",
         'include!("kura/certified_bundle_capacity_reservation_types.rs");',
@@ -869,12 +920,20 @@ MODEL_OPERATOR_TOKENS = {
         'autonomousPredecessorEvidence\' = "HashOnlyOwnership"',
         "autonomousPredecessorAdmitted' = (Mode = \"HashOnlyAutonomousPredecessor\")",
     ),
+    "ObserveDirectExecutionAutonomousPredecessor": (
+        'autonomousPredecessorEvidence\' = "DirectExecutionReceipt"',
+        "autonomousPredecessorAdmitted' = (Mode = \"DirectExecutionAutonomousPredecessor\")",
+    ),
     "AdmitAutonomousPredecessorFromExactWsvFrontier": (
         'autonomousPredecessorEvidence\' = "ExactWsvFrontier"',
         "autonomousPredecessorAdmitted' = TRUE",
     ),
     "AdmitAutonomousPredecessorFromRevalidatedMergeReceipt": (
         'autonomousPredecessorEvidence\' = "MergeReceiptCarrierRevalidated"',
+        "autonomousPredecessorAdmitted' = TRUE",
+    ),
+    "AdmitAutonomousPredecessorFromRevalidatedCanonicalReceipt": (
+        'autonomousPredecessorEvidence\' = "CanonicalReceiptRevalidated"',
         "autonomousPredecessorAdmitted' = TRUE",
     ),
     "BeginStartupCapacityRepair": (
@@ -945,7 +1004,9 @@ MODEL_OPERATOR_TOKENS = {
         "autonomousPredecessorAdmitted =>",
         '"ExactWsvFrontier"',
         '"MergeReceiptCarrierRevalidated"',
+        '"CanonicalReceiptRevalidated"',
         'autonomousPredecessorEvidence = "HashOnlyOwnership"',
+        'autonomousPredecessorEvidence = "DirectExecutionReceipt"',
         "~autonomousPredecessorAdmitted",
     ),
     "MLCertifiedFrontierCapacityReconstructable": (
@@ -1098,8 +1159,10 @@ def _validate_model_source(source: str, errors: list[str]) -> None:
             "DischargeCarrierNWithTerminalProof",
             "DischargeCarrierNWithReceiptProof",
             "ObserveHashOnlyAutonomousPredecessor",
+            "ObserveDirectExecutionAutonomousPredecessor",
             "AdmitAutonomousPredecessorFromExactWsvFrontier",
             "AdmitAutonomousPredecessorFromRevalidatedMergeReceipt",
+            "AdmitAutonomousPredecessorFromRevalidatedCanonicalReceipt",
             "ReconstructCarrierEnvelopesOnStartup",
             "BeginStartupCapacityRepair",
             "CertifyFrontier",
@@ -1424,6 +1487,7 @@ def _validate_evidence_document(source: str, errors: list[str]) -> None:
         "production bindings are complete",
         "RouteLatestOnlySkip",
         "HashOnlyAutonomousPredecessor",
+        "DirectExecutionAutonomousPredecessor",
         "StartupRepairBeforeEnvelope",
         "FrontierMissingBundleEnvelope",
         "ClaimPeakAfterMutation",
@@ -1434,6 +1498,7 @@ def _validate_evidence_document(source: str, errors: list[str]) -> None:
         "DebugRestartDropsAccounting",
         "MergeLedgerLog::execution_entries_for_bounded_identities",
         "Kura::rebuild_post_wsv_lane_artifact_budget_reservations_on_startup",
+        "Kura::canonical_lane_block_predecessor_receipt_revalidates_without_sidecar_repair",
         "Kura::preflight_autonomous_lane_entrypoint_claims_locked",
         "Kura::prepare_canonical_association_stage",
         "KuraPruneCapacityAdmissionV3::required_peak_bytes",

@@ -2830,6 +2830,60 @@ fn local_proposal_intent_live_wal_sign_is_typed_dispatched_once_and_prepares_suc
 }
 
 #[cfg(feature = "bls")]
+struct ReadyLocalProposalSignLaunchedFixtureGuard {
+    launched: Option<super::super::LaunchedProductionLifecycleV1>,
+    planner: Option<crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture>,
+}
+
+#[cfg(feature = "bls")]
+impl ReadyLocalProposalSignLaunchedFixtureGuard {
+    fn new(
+        launched: super::super::LaunchedProductionLifecycleV1,
+        planner: crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture,
+    ) -> Self {
+        Self {
+            launched: Some(launched),
+            planner: Some(planner),
+        }
+    }
+}
+
+#[cfg(feature = "bls")]
+impl core::ops::Deref for ReadyLocalProposalSignLaunchedFixtureGuard {
+    type Target = super::super::LaunchedProductionLifecycleV1;
+
+    fn deref(&self) -> &Self::Target {
+        self.launched
+            .as_ref()
+            .expect("Ready Sign fixture guard retains its launched owner")
+    }
+}
+
+#[cfg(feature = "bls")]
+impl core::ops::DerefMut for ReadyLocalProposalSignLaunchedFixtureGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.launched
+            .as_mut()
+            .expect("Ready Sign fixture guard retains its launched owner")
+    }
+}
+
+#[cfg(feature = "bls")]
+impl Drop for ReadyLocalProposalSignLaunchedFixtureGuard {
+    fn drop(&mut self) {
+        match (self.launched.take(), self.planner.take()) {
+            (Some(mut launched), Some(planner)) => {
+                launched.detach_ready_sign_planner_for_test(planner);
+                drop(launched);
+            }
+            (Some(launched), None) => drop(launched),
+            (None, Some(planner)) => drop(planner),
+            (None, None) => {}
+        }
+    }
+}
+
+#[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
 fn local_proposal_intent_live_wal_sign_fixture() {
     let marker = 0xDE;
@@ -2838,7 +2892,7 @@ fn local_proposal_intent_live_wal_sign_fixture() {
         _directory,
         mut holder,
         lease,
-        durable: _,
+        durable,
     } = ready_local_durable_validate_fixture_at_view(
         marker,
         0,
@@ -3040,47 +3094,11 @@ fn local_proposal_intent_live_wal_sign_fixture() {
         .registry_for_test()
         .attest_ready_recovered_lifecycle_sign(&coordinator, ordinal)
         .expect("local Proposal Sign has one typed Ready attestation");
-
-    let sign_lease = TurnLease {
-        id: LeaseId(1),
-        ordinal,
-        owner,
-        key: record.key,
-        work_class: record.work_class,
-        stage: record.stage,
-        rank: super::super::SchedulerRank::new(0, 0, 0, 0, 0, 0, 0, 0),
-        physical_slots: record.physical_slots,
-        output_reservation: Some(super::super::schema::LeaseCapacityReservation::new(
-            CapacityClass::Consensus,
-            0,
-        )),
-    };
-    coordinator.ready_index.remove(&ordinal);
     coordinator
-        .records
-        .get_mut(&ordinal)
-        .expect("local Proposal Sign row remains installed")
-        .state = LifecycleState::Claimed(sign_lease.id());
-    coordinator.active_lease = Some(sign_lease.clone());
-    let prepared_dispatch = registry
-        .registry_for_test_mut()
-        .prepare_recovered_lifecycle_sign_dispatch(&coordinator, &sign_lease)
-        .expect("project local Proposal Sign exactly once");
-    let dispatch_key = prepared_dispatch.dispatch_key();
-    let task = prepared_dispatch.commit_for_worker();
-    assert_eq!(task.dispatch_key(), dispatch_key);
-    assert!(matches!(
-        registry
-            .registry_for_test_mut()
-            .prepare_recovered_lifecycle_sign_dispatch(&coordinator, &sign_lease),
-        Err(RecoveredLifecycleSignDispatchProjectionErrorV1::AlreadyDispatched)
-    ));
+        .bind_test_lifecycle_ordinal_authority()
+        .expect("bind the live Proposal successor ordinal authority");
 
-    let AdapterEffect::Sign {
-        tag: sign_tag,
-        request,
-    } = proposal_effect.clone()
-    else {
+    let AdapterEffect::Sign { request, .. } = proposal_effect.clone() else {
         unreachable!("local ProposalIntent retains one Proposal Sign")
     };
     let keys = durable_store_keys(marker);
@@ -3088,51 +3106,262 @@ fn local_proposal_intent_live_wal_sign_fixture() {
     let signature =
         iroha_crypto::Signature::try_new(keys[signer].private_key(), &request.signature_preimage())
             .expect("sign exact local Proposal task");
-    let payload = encode_payload(
-        fixture.verified.context(),
-        fixture.manifest.round,
-        fixture.manifest.subject,
-        &fixture.canonical_wire,
-    )
-    .expect("restore exact local Proposal payload");
-    let authority =
-        crate::sumeragi::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1::for_test(
-            ordinal,
-            sign_tag,
-            request,
-            signature.payload().to_vec(),
-            Some(payload),
-            RecoveredLifecycleSignClassV1::ControlProposal,
-        );
-    let unrelated_subject = wire::BlockSubject {
-        parent_block_hash: None,
-        block_hash: HashOf::from_untyped_unchecked(Hash::new(
-            b"unrelated queued application completion block",
-        )),
-        payload_hash: Hash::new(b"unrelated queued application completion payload"),
+    let SignRequest::Proposal(mut expected_proposal) = request else {
+        unreachable!("local ProposalIntent retains one unsigned Proposal")
     };
+    expected_proposal.signature = signature.payload().to_vec();
+    let expected_proposal =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(expected_proposal));
+
+    let timeout_round = fixture.manifest.round;
+    let timeout_signers = vec![0, 1, 2];
+    let timeout_preimage = wire::TimeoutVote {
+        round: timeout_round,
+        highest_prepare_qc: None,
+        signer: timeout_signers[0],
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let timeout_shares = timeout_signers
+        .iter()
+        .map(|index| {
+            let index = usize::try_from(*index).expect("small timeout signer index");
+            iroha_crypto::Signature::new(keys[index].private_key(), &timeout_preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let timeout_aggregate = iroha_crypto::bls_normal_aggregate_signatures(
+        &timeout_shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate the pending timeout certificate");
     runtime
-        .enqueue_application_completed(tag, unrelated_subject)
-        .expect("queue one unrelated application completion");
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(wire::TimeoutCertificate {
+                round: timeout_round,
+                groups: vec![wire::TimeoutVoteGroup {
+                    highest_prepare_qc: None,
+                    signers: timeout_signers,
+                    aggregate_signature: timeout_aggregate,
+                }],
+            }),
+        ))
+        .expect("queue one authenticated timeout certificate behind the Ready Proposal Sign");
     let queue_now = std::time::Instant::now();
     let queue_before = runtime.queue_snapshot(queue_now);
-    assert_eq!(runtime.queued_commands(), 1);
-    let preview = runtime
-        .prepare_recovered_lifecycle_sign_completion(authority)
-        .expect("preview exact signed local Proposal ahead of queued ingress");
+    assert_eq!(queue_before.progress.depth, 1);
+
+    let mut body_store = V2BodyStore::open(_directory.path(), fixture.verified.context().clone())
+        .expect("reopen the local Proposal body store");
+    let execution_commitment =
+        ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
+    body_store
+        .revalidate_recovered_markers(|_| Ok::<_, String>(execution_commitment))
+        .expect("revalidate the local Proposal body marker");
+    let payload_directory = TempDir::new().expect("temporary local Proposal payload store");
+    let (payload_store, serve_payloads) =
+        CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
+            payload_directory.path(),
+            fixture.verified.context(),
+        )
+        .expect("open the local Proposal payload owner");
+    let mut owner = super::super::ProductionLifecycleOwnerV1 {
+        verified: fixture.verified.clone(),
+        coordinator,
+        registry,
+        recovered_lifecycle_outputs: None,
+        payload_store,
+        serve_payloads,
+        body_store: Some(body_store),
+        body_store_identity: None,
+        kura_binding: None,
+        apply_service: None,
+        adapter_startup: None,
+        timeout_supersession_successor: None,
+    };
+    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+    let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    crate::sumeragi::v2_worker::tests::install_active_tag_for_test(&mut services, tag);
+    let admitted = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let admitted_for_hook = std::sync::Arc::clone(&admitted);
+    services.set_exact_output_admission_hook(move |post, _ticket| {
+        if let crate::NetworkMessage::SumeragiBlock(message) = post.data {
+            admitted_for_hook
+                .lock()
+                .expect("record admitted Proposal output")
+                .push(message.as_message().clone());
+        }
+        Ok(())
+    });
+    let (executor, planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+        &mut services,
+        runtime,
+        std::sync::Arc::clone(&output_guard),
+        local_validator,
+        4,
+    );
+    services
+        .set_exact_output_shared_unit_capacity_for_test(64)
+        .expect("bind exact output to the local Proposal roster");
+    crate::sumeragi::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[signer]);
+    let fence = executor.lifecycle_reducer_fence_observation();
     assert_eq!(
-        preview.shape(),
-        crate::sumeragi::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
+        owner.ready_proposal_sign_preempts_bounded_producer_point(fence),
+        Ok(true),
+        "the genuine Ready local Proposal Sign owns Completion ahead of timeout work"
+    );
+    let binding_directory = TempDir::new().expect("temporary Ready Sign ingress binding");
+    let validator = fixture.verified.context().roster[signer].validator.clone();
+    let ingress = super::super::LaunchedProductionLifecycleV1::prepare_ready_local_proposal_sign_ingress_for_test(
+        &executor,
+        &binding_directory,
+        &validator,
+    );
+    let mut launched =
+        super::super::LaunchedProductionLifecycleV1::ready_local_proposal_sign_fixture_for_test(
+            owner, executor, services, ingress,
+        );
+    launched.install_ordinary_completion_head_for_ready_sign_test(&planner_io);
+    let (mut lane_work, _) =
+        crate::sumeragi::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
+    let (dispatched, after_completion) =
+        super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
+            fixture.verified.context(),
+            super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
+            |runner| {
+                let permit =
+                    super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial()
+                        .ready_proposal_sign_preemption_permit()
+                        .expect("an eligible height mints the exact Proposal Sign exception");
+                let ready = match launched
+                    .drive_completion_pre_gate_with_ready_proposal_sign_preemption(
+                        runner,
+                        &mut lane_work,
+                        &permit,
+                    ) {
+                    super::super::ProductionLifecycleCompletionPreGateV1::Ready(ready) => ready,
+                    super::super::ProductionLifecycleCompletionPreGateV1::Ordinary(runner) => {
+                        drop(runner);
+                        panic!("the durable Proposal Sign must outrank the retained ordinary head")
+                    }
+                    super::super::ProductionLifecycleCompletionPreGateV1::Selected(_) => {
+                        panic!("the ordinary-head pre-gate cannot settle unrelated lifecycle work")
+                    }
+                };
+                match launched.drive_ready_completion_turn(ready) {
+                    super::super::ProductionLifecycleCompletionTurnV1::Selected(
+                        super::super::ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(
+                            result,
+                        ),
+                    ) => result.expect("dispatch the genuine Ready local Proposal Sign"),
+                    super::super::ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
+                        drop(runner);
+                        panic!("the authenticated Proposal Sign cannot pass through Completion")
+                    }
+                    super::super::ProductionLifecycleCompletionTurnV1::Selected(_) => {
+                        panic!("the Proposal Sign selected the wrong Completion class")
+                    }
+                }
+            },
+        );
+    assert_eq!(
+        after_completion,
+        super::super::v2_runner::LifecycleRunnerRankTarget::Runtime
     );
     assert_eq!(
-            preview.settlement_family(),
-            Some(
-                crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1::ProposalPrepareWal
-            )
-        );
-    drop(preview);
-    assert_eq!(runtime.queued_commands(), 1);
-    assert_eq!(runtime.queue_snapshot(queue_now), queue_before);
+        dispatched,
+        super::super::ProductionCompletionDispatchV1::SignQueued { ordinal }
+    );
+    assert!(
+        launched.ordinary_completion_head_retained_for_ready_sign_test(),
+        "Proposal Sign preemption must not acknowledge or remove the ordinary physical head"
+    );
+    launched.execute_ready_local_proposal_sign_for_test(
+        &planner_io,
+        std::sync::Arc::clone(&output_guard),
+    );
+    let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, planner_io);
+    assert_eq!(
+        launched.runtime_queue_snapshot_for_ready_sign_test(queue_now),
+        queue_before,
+        "dispatch and worker completion cannot consume the pending TC"
+    );
+    assert_eq!(
+        launched
+            .drain_ordinary_completion_head_for_ready_sign_test()
+            .expect("drain only the retained ordinary Completion head"),
+        1,
+        "the next Completion turn must retire exactly the preempted ordinary owner"
+    );
+    assert!(
+        !launched.ordinary_completion_head_retained_for_ready_sign_test(),
+        "ordinary Completion must drain before the recovered Sign result is retained"
+    );
+    assert!(
+        launched
+            .retain_recovered_lifecycle_sign_completion()
+            .expect("retain the exact recovered Sign completion")
+    );
+    assert_eq!(
+        launched.settle_recovered_lifecycle_proposal_prepare_wal(),
+        super::super::ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied
+    );
+    assert!(
+        launched
+            .has_pending_exact_output_for_ready_sign_test()
+            .expect("inspect the published Proposal output")
+    );
+    assert_eq!(
+        launched.runtime_queue_snapshot_for_ready_sign_test(queue_now),
+        queue_before,
+        "Proposal settlement must still precede the pending TC"
+    );
+    let mut output_pending = true;
+    for _ in 0..256 {
+        output_pending = launched
+            .retry_exact_output_for_ready_sign_test()
+            .expect("drain the exact Proposal control and chunk fanouts");
+        if !output_pending {
+            break;
+        }
+    }
+    assert!(
+        !output_pending,
+        "exact Proposal output must drain boundedly"
+    );
+    assert!(
+        !launched
+            .has_pending_exact_output_for_ready_sign_test()
+            .expect("inspect the drained Proposal output")
+    );
+    assert_eq!(
+        launched.runtime_queue_snapshot_for_ready_sign_test(queue_now),
+        queue_before,
+        "exact Proposal output drains before any TimeoutCertificate runtime work"
+    );
+    assert_eq!(
+        admitted
+            .lock()
+            .expect("inspect admitted Proposal output")
+            .iter()
+            .filter(|message| match *message {
+                crate::BlockMessage::V2(actual) => actual == &expected_proposal,
+                _ => false,
+            })
+            .count(),
+        fixture.verified.context().roster.len() - 1,
+        "the exact signed Proposal reaches every remote validator once"
+    );
+    drop(launched);
+    assert!(!output_guard.restart_required());
+}
+
+#[cfg(feature = "bls")]
+impl super::super::ProductionLifecycleOwnerV1 {
+    /// Run the genuine Ready local-Proposal Sign driver fixture from v2 tests.
+    pub(in crate::sumeragi) fn run_ready_local_proposal_sign_boundary_fixture_for_test() {
+        local_proposal_intent_live_wal_sign_fixture();
+    }
 }
 
 include!("v2_lifecycle_work_registry_validate_apply_cases.rs");

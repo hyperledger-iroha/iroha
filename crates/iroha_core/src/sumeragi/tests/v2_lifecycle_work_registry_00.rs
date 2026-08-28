@@ -542,8 +542,8 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             mut ready,
             store,
             coordinator,
-            successor: _successor,
-            retry_owner: _retry_owner,
+            successor: _,
+            retry_owner: _,
         } = owned;
         let context = ready.fixture.verified.context().clone();
         let committee = crate::sumeragi::v2_core::Committee::project_indices(
@@ -661,10 +661,6 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             lease,
             durable: _,
         } = ready;
-        let _retry_key = match &fixture.effect {
-            AdapterEffect::ValidateBody { round, subject, .. } => (*round, *subject),
-            _ => unreachable!("Ready fixture retains one Validate effect"),
-        };
         let wal_before = std::fs::read(&wal_path)
             .unwrap_or_else(|error| panic!("{row:?}: read pre-dispatch WAL: {error}"));
         let now = std::time::Instant::now();

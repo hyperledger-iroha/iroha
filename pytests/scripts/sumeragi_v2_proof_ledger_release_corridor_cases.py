@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 864
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "2858dd2206f1374c044fa0b3c0d3f02a02cb7b2190d65540e13ce34ee35c6470"
+        "39d0b3083847ad0ad8bcf5c67469b20b9a056148fad90679d753a9e63b07455b"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "0ea465e22581c2dacf0d59d21c161bd538cd235ca150760021fab734e43dea1a"
+        "d481a3e598bb6c9c66ca37da7e81cb56f897daeee69289f8c2aa0f427271347c"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -39,6 +39,53 @@ def test_release_inventory_constants_match_current_source_seal(
         ),
         "dropping_locked_publication_fence_releases_producer_without_dequeue": (
             "a31983eba320245b25089ebfcbc6fbd5a5c024fc76b81946329510cf9177e687"
+        ),
+    }
+    assert module._PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256 == {
+        "scheduler::ProductionLifecycleOwnerV1::ready_proposal_sign_preempts_bounded_producer_point": (
+            "98286d3d592024081c92afae2353f604ecbebf804c749c13e0c9daa26b17c016"
+        ),
+        "height::LifecycleReadyProposalSignPreemptionPermitV1": (
+            "6a1f9f015e100d2c21a2059b2b5ed299c58d4084375d80117f2ff2d9baf565e6"
+        ),
+        "height::LifecycleProducerClaimDispositionV1::ready_proposal_sign_preemption_permit": (
+            "9700af71a07b9b6e8c935f44e6e447c3d2087f89508733c6f124a3d4beedce51"
+        ),
+        "height::drain_lifecycle_v2_ingress": (
+            "bbd77022da85d8d4ae7a7b1114483f3d3437e8fdbce14de7cb702b5716f26ddd"
+        ),
+        "height_test::only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign": (
+            "dd96ca9fb8271e423099f6a019259cbfa524d73d86f07d1afdd377aa80dc8e76"
+        ),
+        "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption": (
+            "0fabc0723a3288b463bf55b2cc7a02638cb1627967ba717b169520b7bee3eaf2"
+        ),
+        "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_inner": (
+            "f10f0a6f3b6824d8f264dc9bf30538ad1563d8121c75c14d26d37bbea30c5cb4"
+        ),
+        "driver::ActivatedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption": (
+            "bb485fa1d93cd1748cd6d8f0c7152c4afb78b7bdcbdb5423aa22eb2c55129b77"
+        ),
+        "worker_test::LifecyclePlannerIoFixture::publish_auxiliary_completion_fixture": (
+            "c3b5921a9f581e7ad7bbb44e93ad42de8ec1fa6eb8bd62aaa49cdbefa70327c4"
+        ),
+        "launch_test::LaunchedProductionLifecycleV1::install_ordinary_completion_head_for_ready_sign_test": (
+            "f9f33cf99e1c38a2ebaea00d376fe5bfff7d434620dc46ce260665b7e45c2f8f"
+        ),
+        "launch_test::LaunchedProductionLifecycleV1::ordinary_completion_head_retained_for_ready_sign_test": (
+            "a5bba2319108935316c46e2402dcfce41c9e2e0ba87107dda239344b7cefe028"
+        ),
+        "launch_test::LaunchedProductionLifecycleV1::drain_ordinary_completion_head_for_ready_sign_test": (
+            "edeec434ad30fb28ddc4cb526096bafa6d6f8bd8e8df92995e5350c0f95111db"
+        ),
+        "dispatch_test::local_proposal_intent_live_wal_sign_fixture": (
+            "14ec208611139775c959d7cc44d718925d179c7d822c1cb92bea3018f6215489"
+        ),
+        "wal_test::ready_proposal_sign_boundary_predicate_authenticates_exact_control_carrier": (
+            "c4b40eb74bfcafcbe413991d85044ad6c857d1faf1a5294944705449a13f269b"
+        ),
+        "wal_test::ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate": (
+            "97b485f11895e0f3e0273d978498d16caa02850e8bf4d9fee8e7434069865b13"
         ),
     }
     assert (
@@ -208,14 +255,16 @@ def test_release_inventory_constants_match_current_source_seal(
     }
     assert receipt_module_counts["kura::tests"] == 18
     assert receipt_module_counts["sumeragi::authoritative_runtime_gate_tests"] == 42
-    assert receipt_module_counts["sumeragi::v2::tests"] == 48
-    assert receipt_module_counts["sumeragi::v2_effects::tests"] == 70
+    assert receipt_module_counts["queue::tests"] == 1
+    assert receipt_module_counts["sumeragi::v2::tests"] == 49
+    assert receipt_module_counts["sumeragi::v2_effects::tests"] == 66
     assert receipt_module_counts["sumeragi::v2_lane_work::tests"] == 63
     assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 65
     assert receipt_module_counts["sumeragi::v2_certified_serve_payload_store::tests"] == 11
     assert receipt_module_counts["sumeragi::v2_lifecycle_coordinator"] == 42
     assert receipt_module_counts["sumeragi::v2_runner::tests"] == 37
-    assert receipt_module_counts["sumeragi::v2_runner::lifecycle_height_driver::tests"] == 1
+    assert receipt_module_counts["network::tests"] == 84
+    assert receipt_module_counts["sumeragi::v2_runner::lifecycle_height_driver::tests"] == 2
     assert receipt_module_counts["sumeragi::v2_worker::tests"] == 90
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
@@ -652,17 +701,26 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     ordinary_launch_items = module.rust_items(
         ordinary_lifecycle_runner_source, "launch_non_pending_lifecycle_height"
     )
+    ordinary_owner_launch_items = module.rust_items(
+        ordinary_lifecycle_runner_source, "launch_ordinary_lifecycle_height"
+    )
     pending_loop_items = module.rust_items(
         pending_lifecycle_runner_source, "run_pending_kura_lifecycle_height"
     )
     pending_reconcile_items = module.rust_items(
         pending_lifecycle_runner_source, "reconcile_pending_lane_startup"
     )
-    assert len(ordinary_loop_items) == len(ordinary_launch_items) == 1
+    assert (
+        len(ordinary_loop_items)
+        == len(ordinary_launch_items)
+        == len(ordinary_owner_launch_items)
+        == 1
+    )
     assert len(pending_loop_items) == 1
     assert len(pending_reconcile_items) == 1
     ordinary_loop = ordinary_loop_items[0].source
     ordinary_launch = ordinary_launch_items[0].source
+    ordinary_owner_launch = ordinary_owner_launch_items[0].source
     pending_loop = pending_loop_items[0].source
     pending_reconcile = pending_reconcile_items[0].source
     runner_platform_gate = run_inner.index("    require_validator_storage_platform(")
@@ -688,7 +746,9 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "launch_non_pending_lifecycle_height(", ordinary_adapter_open
     )
     assert ordinary_adapter_open < ordinary_launch_call
-    assert "owner.launch(inputs)?" in ordinary_launch
+    assert ordinary_launch.count("launch_ordinary_lifecycle_height(") == 3
+    assert ordinary_launch.count("launch_recovered_complete_tip_lifecycle_height(") == 1
+    assert ordinary_owner_launch.count("launched: owner.launch(inputs)?") == 1
     pending_adapter_open = pending_loop.index(
         "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry("
     )
@@ -880,14 +940,20 @@ kura.claim_autonomous_lifecycle_process_generation(
         "lane_work.activate_after_lane_drain_queue_install(&queue)?;"
     )
     assert queue_install < lane_activation
-    for lifecycle_source in (ordinary_loop, pending_loop):
+    for lifecycle_source, validator_storage_expression in (
+        (ordinary_loop, "config.role == NodeRole::Validator,"),
+        (
+            pending_loop,
+            "config.role == NodeRole::Validator && !emergency_fast,",
+        ),
+    ):
         lane_constructor = lifecycle_source[
             lifecycle_source.index(
                 "V2LaneWorkAdapter::new_with_output_guard_and_transport("
             ) :
         ]
         lane_constructor = lane_constructor[: lane_constructor.index(".map_err(")]
-        assert "config.role == NodeRole::Validator," in lane_constructor
+        assert validator_storage_expression in lane_constructor
         assert "local_validator.is_some()," not in lane_constructor
     assert "(NodeRole::Observer, _) => Ok(None)" in runner_source
     assert (
@@ -1270,12 +1336,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         ),
         (
             "sumeragi::v2_effects::tests::",
-            "certified_request_pressure_retains_higher_authority_upgrade_under_one_owner",
-            effects_source,
-        ),
-        (
-            "sumeragi::v2_effects::tests::",
-            "reconstructible_new_certified_fetch_acquires_ownership_from_retained_admission",
+            "certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owner",
             effects_source,
         ),
         (
@@ -1286,11 +1347,6 @@ kura.claim_autonomous_lifecycle_process_generation(
         (
             "sumeragi::v2_effects::tests::",
             "retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity",
-            effects_source,
-        ),
-        (
-            "sumeragi::v2_effects::tests::",
-            "retained_producer_suffix_allows_exact_certified_response_to_release_fetch_capacity",
             effects_source,
         ),
         (
@@ -1314,7 +1370,7 @@ kura.claim_autonomous_lifecycle_process_generation(
             runtime_source,
         ),
     )
-    assert len(macro_step_production_inventory_additions) == 18
+    assert len(macro_step_production_inventory_additions) == 16
     latest_production_inventory_additions = (
         (
             "nexus::lane_relay::tests::",
@@ -1671,7 +1727,12 @@ kura.claim_autonomous_lifecycle_process_generation(
         ),
         (
             "network_relay_tests::",
-            "obsolete_sumeragi_relay_message_fails_closed",
+            "obsolete_block_ingress_disposition_fails_closed",
+            irohad_main_source,
+        ),
+        (
+            "network_relay_tests::",
+            "obsolete_lane_ingress_disposition_fails_closed",
             irohad_main_source,
         ),
         (
@@ -1912,7 +1973,12 @@ kura.claim_autonomous_lifecycle_process_generation(
     for module_name, test_name, source in production_inventory_additions:
         declaration_count = sum(
             source.count(marker)
-            for marker in (f"fn {test_name}(", f"state_test! {{ sync {test_name}")
+            for marker in (
+                f"fn {test_name}(",
+                f"state_test! {{ sync {test_name}",
+                f"v2_apply_test!({test_name},",
+                f"v2_apply_test!(\n    {test_name},",
+            )
         )
         assert declaration_count == 1, (
             module_name,
@@ -2067,6 +2133,7 @@ kura.claim_autonomous_lifecycle_process_generation(
                 "nexus::",
                 "merge_sidecar::",
                 "state::",
+                "queue::",
                 "zk::",
                 "block::",
                 "offline::",
@@ -2093,6 +2160,15 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert native_merge_projection_regressions <= set(production_inventory)
     assert native_merge_projection_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
+    )
+    ready_proposal_sign_eligibility_regression = (
+        "sumeragi::v2_runner::lifecycle_height_driver::tests::"
+        "only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign"
+    )
+    assert ready_proposal_sign_eligibility_regression in production_inventory
+    assert (
+        ready_proposal_sign_eligibility_regression
+        in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
     deferred_terminal_regressions = {
         "sumeragi::v2_apply::tests::deferred_canonical_carrier_owned_and_absent_groups_complete_before_gate_publication",
@@ -2216,7 +2292,13 @@ kura.claim_autonomous_lifecycle_process_generation(
             predecessor_durability_regression
             in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
         )
-    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 444
+    replica_disposition_regression = (
+        "queue::tests::"
+        "replica_disposition_observes_exact_fifo_beneath_global_selection_overlay"
+    )
+    assert replica_disposition_regression in production_inventory
+    assert replica_disposition_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
+    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 447
     assert "readonly expected_production_liveness_test_count=864" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
@@ -2249,7 +2331,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert (
         len(receipt_module._corridor_legs())
         == module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT
-        == 84
+        == 85
     )
     assert receipt_module._production_module_command(
         "parameters::actual::tests"
@@ -2390,6 +2472,7 @@ kura.claim_autonomous_lifecycle_process_generation(
                 "nexus::",
                 "merge_sidecar::",
                 "state::",
+                "queue::",
                 "zk::",
                 "block::",
                 "offline::",
@@ -2402,8 +2485,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             )
         )
     )
-    assert len(production_modules) == 43
-    assert len(set(production_modules)) == 43
+    assert len(production_modules) == 44
+    assert len(set(production_modules)) == 44
     assert "kura::tests" in production_modules
     assert "kura::lane_geometry::tests" in production_modules
     assert "sumeragi::authoritative_runtime_gate_tests" in production_modules
@@ -2417,6 +2500,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert "peer::run::tests" in production_modules
     assert "network::tests" in production_modules
     assert "merge_sidecar::tests" in production_modules
+    assert "queue::tests" in production_modules
     assert "consensus_message_control::tests" in production_modules
     assert "network_relay_tests" in production_modules
     assert "tests::relay_fairness" in production_modules
@@ -2435,7 +2519,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         in release_source
     )
     assert (
-        "cargo test --locked --offline -p irohad --bin iroha3d --features "
+        "cargo test --locked --offline -p irohad --lib --features "
         'test-network-message-control \\\n        "$module" -- --test-threads=1'
         in release_source
     )
@@ -2472,7 +2556,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         in release_source
     )
     assert (
-        "tc_body_rebind_preserves_certified_request_ownership_through_signed_response"
+        "tc_body_rebind_preserves_the_exact_fetch_until_reconstruction_completes"
         in release_source
     )
     assert "replay_does_not_resign_commit_superseded_by_higher_tc_lock" in release_source
@@ -2552,10 +2636,10 @@ kura.claim_autonomous_lifecycle_process_generation(
         '"preflight-release-receipt",\n                "pytest",\n                362,'
         in receipt_source
     )
-    assert "did not run exactly 5494 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 5494" in release_source
+    assert "did not run exactly 5507 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 5507" in release_source
     assert (
-        "^5494 passed in [0-9]+([.][0-9]+)?s( "
+        "^5507 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -2607,7 +2691,8 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert len(proof_fidelity_runner_nodes) == 18
     assert len(set(proof_fidelity_runner_nodes)) == 18
     assert proof_fidelity_runner_nodes == proof_fidelity_receipt_nodes
-    assert "Collection is source-bound as 5,373 ledger/checker cases" in release_source
+    assert "Collection is source-bound as 5,386 ledger/checker cases" in release_source
+    assert "reviewed 13-case post-merge expansion" in release_source
     for selector in (
         "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
         "test_inflight_composed_contract_rejects_legacy_layout_only_claim",
@@ -2637,7 +2722,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         assert selector in release_source
         assert selector in proof_fidelity_receipt_command
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                5494,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                5507,'
         in receipt_source
     )
     assert "did not run exactly 27 passing tests" in release_source
@@ -2674,11 +2759,11 @@ kura.claim_autonomous_lifecycle_process_generation(
             "source-sealed-workspace-tests",
             "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline --workspace",
         ),
-        (
-            "source-sealed-irohad-tests",
-            "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline -p irohad --bin irohad "
-            "--features test-network-message-control",
-        ),
+            (
+                "source-sealed-irohad-tests",
+                "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline -p irohad --lib "
+                "--features test-network-message-control",
+            ),
         (
             "source-sealed-workspace-clippy",
             "${IROHA_RELEASE_CARGO_BIN} clippy -j1 --locked --offline --workspace --all-targets "
@@ -3094,14 +3179,22 @@ kura.claim_autonomous_lifecycle_process_generation(
         ),
         (
             ".schedule_retransmission()\n"
-            "            .expect(\"schedule exact missing-certificate discovery\");",
+            "            .expect(\"schedule the first exact missing-certificate discovery round\");",
             "let _ = &adapter;",
-            "late canonical lane recovery must expose one bounded exact certificate-discovery source",
+            "late canonical lane recovery must keep one bounded exact certificate-discovery source live across a dropped round while the predecessor stays active",
         ),
         (
-            "message: BlockMessage::LaneBlockProposal(pending),",
-            "message: BlockMessage::LaneBlockVote(pending),",
-            "late canonical lane recovery must expose one bounded exact certificate-discovery source",
+            "first_round.iter().any(|effect| {\n"
+            "                matches!(\n"
+            "                    effect,\n"
+            "                    V2LaneWorkEffect::PostLaneBlock {\n"
+            "                        message: BlockMessage::LaneBlockProposal(pending),",
+            "first_round.iter().any(|effect| {\n"
+            "                matches!(\n"
+            "                    effect,\n"
+            "                    V2LaneWorkEffect::PostLaneBlock {\n"
+            "                        message: BlockMessage::LaneBlockVote(pending),",
+            "late canonical lane recovery must keep one bounded exact certificate-discovery source live across a dropped round while the predecessor stays active",
         ),
         (
             "V2LaneIngressOutcome::Inserted\n        );",
@@ -3441,7 +3534,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
     canonical = "readonly expected_production_liveness_test_count=864"
-    weakened = "readonly expected_production_liveness_test_count=859"
+    weakened = "readonly expected_production_liveness_test_count=860"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
     baseline = subprocess.run(
@@ -3491,12 +3584,12 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     guard_mutations = (
         (
             canonical_declaration,
-            "readonly canonical_production_test_count=859",
+            "readonly canonical_production_test_count=860",
             "must seal exactly 864 production tests",
         ),
         (
-            '    "sumeragi::v2_effects::tests": 70,',
-            '    "sumeragi::v2_effects::tests": 69,',
+            '    "sumeragi::v2_effects::tests": 66,',
+            '    "sumeragi::v2_effects::tests": 65,',
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
@@ -3515,7 +3608,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "2858dd2206f1374c044fa0b3c0d3f02"',
+            '    "39d0b3083847ad0ad8bcf5c67469b20"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),

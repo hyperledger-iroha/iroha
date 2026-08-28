@@ -761,8 +761,25 @@ jobs:
     env:
       CARGO_TARGET_DIR: target/sora-parliament-lifecycle
       SORA_PARLIAMENT_ALERT_EVIDENCE_DIR: target/sora-parliament-alert-evidence
+      SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: target/sora-parliament-crypto-evidence-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Install pinned Parliament benchmark checker dependency
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
+      - name: Create fresh private Parliament crypto evidence layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -e "$SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR" ]]; then
+            echo "Parliament crypto evidence path already exists" >&2
+            exit 1
+          fi
+          install -d -m 700 -- \
+            "$SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR" \
+            "$SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR/inputs"
+          install -m 600 -- \
+            crates/iroha_crypto/benches/parliament_crypto_allocation_budgets.json \
+            "$SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR/inputs/allocation-budgets.json"
       - name: Install checksum-pinned Prometheus LTS promtool
         shell: bash
         run: |
@@ -821,6 +838,205 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: sora-parliament-lifecycle
+      - name: Test Parliament crypto benchmark evidence checker
+        if: always()
+        run: python3 -m pytest -q scripts/tests/check_sora_parliament_crypto_bench_test.py
+      - name: Capture Parliament crypto allocation and Criterion evidence
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          readonly evidence_dir="$SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR"
+          readonly allocation_evidence="$evidence_dir/allocations.tsv"
+          readonly criterion_dir="$evidence_dir/criterion"
+
+          set +e
+          IROHA_PARLIAMENT_CRYPTO_ALLOCATION_EVIDENCE_V1="$allocation_evidence" \
+            cargo bench --locked -p iroha_crypto --bench parliament_crypto \
+              --no-default-features --features bls -- --noplot \
+              2>&1 | tee "$evidence_dir/allocation-benchmark.log"
+          allocation_pipeline=("${PIPESTATUS[@]}")
+          CRITERION_HOME="$criterion_dir" \
+            cargo bench --locked -p iroha_crypto --bench parliament_crypto \
+              --no-default-features --features bls -- --noplot \
+              2>&1 | tee "$evidence_dir/criterion-benchmark.log"
+          criterion_pipeline=("${PIPESTATUS[@]}")
+          set -e
+
+          printf '%s\n' "${allocation_pipeline[0]}" \
+            > "$evidence_dir/allocation-exit-status.txt"
+          printf '%s\n' "${allocation_pipeline[1]}" \
+            > "$evidence_dir/allocation-log-exit-status.txt"
+          printf '%s\n' "${criterion_pipeline[0]}" \
+            > "$evidence_dir/criterion-exit-status.txt"
+          printf '%s\n' "${criterion_pipeline[1]}" \
+            > "$evidence_dir/criterion-log-exit-status.txt"
+      - name: Build and verify Parliament crypto benchmark report
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          readonly evidence_dir="$SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR"
+          readonly checker="scripts/check_sora_parliament_crypto_bench.py"
+          readonly budget="crates/iroha_crypto/benches/parliament_crypto_allocation_budgets.json"
+          readonly report="$evidence_dir/report.json"
+          readonly common_args=(
+            --criterion-dir "$evidence_dir/criterion"
+            --allocation-evidence "$evidence_dir/allocations.tsv"
+            --allocation-budget "$budget"
+            --repository-root "$GITHUB_WORKSPACE"
+            --expected-source-commit "$GITHUB_SHA"
+          )
+
+          set +e
+          python3 -I -S "$checker" "${common_args[@]}" \
+            --write-report "$report" \
+            2>&1 | tee "$evidence_dir/report-write.log"
+          report_write_pipeline=("${PIPESTATUS[@]}")
+          python3 -I -S "$checker" "${common_args[@]}" \
+            --verify-report "$report" \
+            2>&1 | tee "$evidence_dir/report-verify.log"
+          report_verify_pipeline=("${PIPESTATUS[@]}")
+          set -e
+
+          printf '%s\n' "${report_write_pipeline[0]}" \
+            > "$evidence_dir/report-write-exit-status.txt"
+          printf '%s\n' "${report_write_pipeline[1]}" \
+            > "$evidence_dir/report-write-log-exit-status.txt"
+          printf '%s\n' "${report_verify_pipeline[0]}" \
+            > "$evidence_dir/report-verify-exit-status.txt"
+          printf '%s\n' "${report_verify_pipeline[1]}" \
+            > "$evidence_dir/report-verify-log-exit-status.txt"
+      - name: Seal Parliament crypto benchmark evidence
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          readonly evidence_dir="$SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR"
+
+          set +e
+          python3 -I -S - "$evidence_dir" <<'PY'
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          if root.is_symlink() or not root.is_dir():
+              raise SystemExit("Parliament crypto evidence root is absent or a symlink")
+          required_files = (
+              "allocation-benchmark.log",
+              "allocation-exit-status.txt",
+              "allocation-log-exit-status.txt",
+              "allocations.tsv",
+              "criterion-benchmark.log",
+              "criterion-exit-status.txt",
+              "criterion-log-exit-status.txt",
+              "inputs/allocation-budgets.json",
+              "report-write-exit-status.txt",
+              "report-write-log-exit-status.txt",
+              "report-verify-exit-status.txt",
+              "report-verify-log-exit-status.txt",
+              "report-verify.log",
+              "report-write.log",
+              "report.json",
+          )
+          for relative in required_files:
+              path = root / relative
+              if path.is_symlink() or not path.is_file():
+                  raise SystemExit(f"missing regular Parliament evidence file: {relative}")
+          policy = Path(
+              "crates/iroha_crypto/benches/"
+              "parliament_crypto_allocation_budgets.json"
+          )
+          if (root / "inputs/allocation-budgets.json").read_bytes() != policy.read_bytes():
+              raise SystemExit("Parliament allocation policy snapshot changed")
+          criterion = root / "criterion"
+          if criterion.is_symlink() or not criterion.is_dir():
+              raise SystemExit("Criterion evidence root is absent or a symlink")
+          for path in sorted(root.rglob("*")):
+              if path.is_symlink():
+                  raise SystemExit(f"symlink in Parliament crypto evidence: {path}")
+              if not path.is_dir() and not path.is_file():
+                  raise SystemExit(f"non-regular Parliament crypto evidence path: {path}")
+          PY
+          seal_status="$?"
+          set -e
+          printf '%s\n' "$seal_status" > "$evidence_dir/seal-exit-status.txt"
+
+          python3 -I -S - "$evidence_dir" <<'PY'
+          import hashlib
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          manifest = root / "SHA256SUMS"
+          entries = []
+          for path in sorted(root.rglob("*")):
+              if path == manifest:
+                  continue
+              if path.is_symlink():
+                  raise SystemExit(f"symlink in Parliament crypto evidence: {path}")
+              if path.is_dir():
+                  continue
+              if not path.is_file():
+                  raise SystemExit(f"non-regular Parliament crypto evidence path: {path}")
+              relative = path.relative_to(root).as_posix()
+              entries.append(
+                  f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {relative}"
+              )
+          if not entries:
+              raise SystemExit("Parliament crypto evidence is empty")
+          manifest.write_text("\n".join(entries) + "\n", encoding="utf-8")
+          PY
+      - name: Upload Parliament crypto benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sora-parliament-crypto-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+      - name: Enforce Parliament crypto benchmark evidence result
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          readonly evidence_dir="$SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR"
+          readonly status_files=(
+            allocation-exit-status.txt
+            allocation-log-exit-status.txt
+            criterion-exit-status.txt
+            criterion-log-exit-status.txt
+            report-write-exit-status.txt
+            report-write-log-exit-status.txt
+            report-verify-exit-status.txt
+            report-verify-log-exit-status.txt
+            seal-exit-status.txt
+          )
+          failure=0
+          for relative in "${status_files[@]}"; do
+            path="$evidence_dir/$relative"
+            if [[ ! -f "$path" || -L "$path" ]]; then
+              echo "missing regular Parliament crypto status: $relative" >&2
+              failure=1
+              continue
+            fi
+            status="$(tr -d '\n' < "$path")"
+            if [[ ! "$status" =~ ^(0|[1-9][0-9]*)$ ]]; then
+              echo "invalid Parliament crypto status in $relative: $status" >&2
+              failure=1
+            elif ((status != 0)); then
+              echo "Parliament crypto gate failed in $relative: $status" >&2
+              failure=1
+            fi
+          done
+          for relative in report.json SHA256SUMS; do
+            if [[ ! -f "$evidence_dir/$relative" || -L "$evidence_dir/$relative" ]]; then
+              echo "missing Parliament crypto evidence artifact: $relative" >&2
+              failure=1
+            fi
+          done
+          exit "$failure"
       - name: Verify isolated Parliament corridor source contract
         run: python3 -I -S scripts/tests/sora_parliament_lifecycle_corridor_source_test.py
       - name: Run exact four-validator Parliament lifecycle corridor

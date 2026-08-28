@@ -98,7 +98,8 @@
     {"norito_index": 4, "json_tag": "BallotCommitmentDeadlineExpired"},
     {"norito_index": 5, "json_tag": "BallotReleasePulseUnavailable"},
     {"norito_index": 6, "json_tag": "BallotOpeningDeadlineExpired"},
-    {"norito_index": 7, "json_tag": "SortitionRetriesExhausted"}
+    {"norito_index": 7, "json_tag": "SortitionRetriesExhausted"},
+    {"norito_index": 8, "json_tag": "ConfirmationJuryCapacityUnavailable"}
   ],
   "canonical_body_order": [
     "rules-committee",

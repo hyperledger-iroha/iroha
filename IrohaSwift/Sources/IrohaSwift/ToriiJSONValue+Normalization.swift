@@ -17,6 +17,8 @@ extension ToriiJSONValue {
                 return String(value)
             }
             return String(number)
+        case .integer(let integer):
+            return integer
         case .bool(let value):
             return value ? "true" : "false"
         case .null:
@@ -30,6 +32,8 @@ extension ToriiJSONValue {
         switch self {
         case .number(let number):
             return number.isFinite ? number : nil
+        case .integer:
+            return nil
         case .string(let string):
             return Double(string.trimmingCharacters(in: .whitespacesAndNewlines))
         default:
@@ -44,6 +48,8 @@ extension ToriiJSONValue {
                 return nil
             }
             return value
+        case .integer(let integer):
+            return UInt64(integer)
         case .string(let string):
             return UInt64(string.trimmingCharacters(in: .whitespacesAndNewlines))
         default:
@@ -56,15 +62,19 @@ extension ToriiJSONValue {
         case .array(let items):
             var bytes = Data(capacity: items.count)
             for item in items {
-                guard case let .number(number) = item,
-                      number.isFinite,
-                      number.rounded(.towardZero) == number,
-                      number >= 0,
-                      number <= 255
-                else {
+                switch item {
+                case let .number(number)
+                    where number.isFinite
+                        && number.rounded(.towardZero) == number
+                        && number >= 0
+                        && number <= 255:
+                    bytes.append(UInt8(number))
+                case let .integer(integer):
+                    guard let byte = UInt8(integer) else { return nil }
+                    bytes.append(byte)
+                default:
                     return nil
                 }
-                bytes.append(UInt8(number))
             }
             return bytes
         case .string(let string):
@@ -92,6 +102,8 @@ extension ToriiJSONValue {
                 return nil
             }
             return value
+        case .integer(let integer):
+            return Int64(integer)
         case .string(let string):
             return Int64(string.trimmingCharacters(in: .whitespacesAndNewlines))
         default:
@@ -118,6 +130,10 @@ extension ToriiJSONValue {
         case .number(let number):
             if number == 1 { return true }
             if number == 0 { return false }
+            return nil
+        case .integer(let integer):
+            if integer == "1" { return true }
+            if integer == "0" { return false }
             return nil
         default:
             return nil

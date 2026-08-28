@@ -868,7 +868,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     # Refresh after atomic-reservation work stops touching v2_runner.rs.
     "successor_retry": "a99d3aec22c01501fabb4e6b90526ae066b6728ab78043301476653432fac5fd",
     "historical_certificate": "9028b1db75d71c3ab5e72573e5c3e7b46d92c0ffe4a1cd1805ebfde379fbdbfa",
-    "historical_body": "a69b056cbd06f0c554055cd153c49fbf41efe92a2826d9794db95f49a225c2a3",
+    "historical_body": "75eedb820154c955d3bcca947465defc336a10af31440eb13516464f924d8591",
     "terminal_application": "18c9adfc440c9e4302dd5e1b78c71beec18927bc30170ad1db8b4953d40df2b2",
 }
 
@@ -1231,9 +1231,10 @@ def _total_gate_call_sites(
                 hashes["historical_body"],
                 token_consumptions=("let _authorized_historical_pipeline = checked_transition.into_projection();",),
                 mutation_boundaries=(
+                    "exact_dequeue.lock(ingress)",
                     "output_guard.begin_fail_stop_operation()",
                     "ready_mutation.persist_exact_staged_successor()",
-                    "exact_dequeue.commit(ingress)",
+                    "exact_dequeue.commit()",
                     "durable_registry.commit_after_exact_dequeue(dequeued)",
                     "ready.commit()",
                     "executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated)",
@@ -26689,6 +26690,9 @@ if let Some((key, owner_source)) = wire_key.as_ref().and_then(|key| {
         "coalesced ingress shadow-merges route capacity and attempt cursors without mutating the retained owner",
         errors,
     )
+    _transport_geometry_stale_route_retry_source_fidelity_errors(
+        core_path, push, errors
+    )
     _require_rust_token_sequence(
         core_path,
         push,
@@ -27252,56 +27256,8 @@ Some(
         "certified-fence reserve must cover direct CommitQC, TC, and CommitQC recovery response",
         errors,
     )
-    certified_fence_test_name = (
-        "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions"
-    )
-    certified_fence_test = _require_rust_item(
-        core_path,
-        core_source,
-        certified_fence_test_name,
-        errors,
-    )
-    _require_rust_item_context(
-        core_path,
-        certified_fence_test,
-        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "authoritative_runtime_gate_tests"),),
-        "canonical certified-fence byte-ceiling regression",
-        errors,
-        expected_attributes=("#[test]",),
-    )
-    _require_rust_item_token_sha256(
-        core_path,
-        certified_fence_test,
-        _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256[
-            certified_fence_test_name
-        ],
-        "canonical certified-fence byte-ceiling regression",
-        errors,
-    )
-    _require_rust_token_sequence(
-        core_path,
-        certified_fence_test,
-        """
-assert_eq!(
-    encoded_v2_len(&maximum_timeout_certificate),
-    required_certified_fence_escape,
-    "maximal-roster TC must equal the checked certified-fence ceiling",
-);
-""",
-        "maximal canonical TC must equal the certified byte requirement",
-        errors,
-    )
-    _require_rust_token_sequence(
-        core_path,
-        certified_fence_test,
-        """
-assert!(
-    required_certified_fence_escape <= super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-    "the production certified partition must contain every legal TC/CommitQC envelope",
-);
-""",
-        "default certified partition must contain the protocol maximum",
-        errors,
+    _transport_geometry_fair_ingress_test_source_fidelity_errors(
+        core_path, core_source, errors
     )
 
     configure_context = _require_rust_item(

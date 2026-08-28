@@ -15,6 +15,12 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed partial class SccpExactTests
 {
+    private static readonly UInt128 RegistryMaxOutstandingLiability = 1_000_000_000_000;
+    private static readonly UInt128 EvmRegistryMaxWrappedSupply =
+        RegistryMaxOutstandingLiability * 1_000_000_000;
+    private static readonly UInt128 TonRegistryMaxWrappedSupply =
+        RegistryMaxOutstandingLiability;
+
     private const ulong DefaultTransactionTimeToLiveMilliseconds = 100_000;
     private static readonly string MessageId = SccpV1.LowerHex(SccpV1.MessageId(BundleLane(), ExactTransfer()));
     private static readonly FeePaymentIntent BridgeFeePayment = FeePaymentIntent.Authority([]);
@@ -764,6 +770,8 @@ public sealed partial class SccpExactTests
         Assert.Equal("taira_bsc_xor", route.RouteId);
         Assert.Equal(1U, route.Revision);
         Assert.Equal(SccpRouteActivationV1.Staged, route.Activation);
+        Assert.Equal(EvmRegistryMaxWrappedSupply, route.Destination.MaxWrappedSupply);
+        Assert.Equal(RegistryMaxOutstandingLiability, route.MaxOutstandingLiability);
 
         var tron = SccpRegistryV1.Parse(Json(TronRegistryObject()));
         Assert.Equal("taira_tron_xor", Assert.Single(Assert.Single(tron.Lanes).Routes).RouteId);
@@ -786,10 +794,12 @@ public sealed partial class SccpExactTests
             value => ((Dictionary<string, object?>)((Dictionary<string, object?>)Route(value)["destination"]!)["deployment"]!)["route_code_hash"] = Upper(0x32, 32),
             value => ((Dictionary<string, object?>)((Dictionary<string, object?>)Route(value)["destination"]!)["deployment"]!)["verifier_key_hash"] = Upper(0x33, 32),
             value => ((Dictionary<string, object?>)((Dictionary<string, object?>)Route(value)["destination"]!)["deployment"]!)["taira_to_token_multiplier"] = 1_000_000_001,
+            value => ((Dictionary<string, object?>)((Dictionary<string, object?>)Route(value)["destination"]!)["deployment"]!)["max_wrapped_supply"] = EvmRegistryMaxWrappedSupply - 1,
             value => Route(value)["route_id"] = "Taira_Bsc_Xor",
             value => Route(value)["revision"] = 2,
             value => Route(value)["activation"] = new Dictionary<string, object?> { ["activation"] = "bidirectional", ["direction"] = null },
             value => ((Dictionary<string, object?>)Route(value)["settlement"]!)["payload_amount_scale"] = 8,
+            value => ((Dictionary<string, object?>)Route(value)["settlement"]!)["max_outstanding_liability"] = RegistryMaxOutstandingLiability - 1,
             value => ((Dictionary<string, object?>)Route(value)["settlement"]!)["asset_definition_id"] = "xor",
         };
         foreach (var mutation in mutations)
@@ -2449,7 +2459,8 @@ public sealed partial class SccpExactTests
             verifierCodeHash,
             verifierKeyHash,
             semanticHash,
-            anchorHash);
+            anchorHash,
+            EvmRegistryMaxWrappedSupply);
         var custody = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x29, 32).ToArray())
             .ToAccountAddress()
             .ToI105();
@@ -2495,6 +2506,7 @@ public sealed partial class SccpExactTests
                     ["route_address"] = Convert.ToHexString(routeAddress),
                     ["route_code_hash"] = Convert.ToHexString(routeCodeHash),
                     ["taira_to_token_multiplier"] = 1_000_000_000,
+                    ["max_wrapped_supply"] = EvmRegistryMaxWrappedSupply,
                 },
             },
             ["settlement"] = new Dictionary<string, object?>
@@ -2502,6 +2514,7 @@ public sealed partial class SccpExactTests
                 ["asset_definition_id"] = "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
                 ["custody_owner"] = custody,
                 ["payload_amount_scale"] = 9,
+                ["max_outstanding_liability"] = RegistryMaxOutstandingLiability,
             },
         };
         return new Dictionary<string, object?>
@@ -2570,6 +2583,7 @@ public sealed partial class SccpExactTests
             verifierKeyHash,
             semanticHash,
             anchorHash,
+            EvmRegistryMaxWrappedSupply,
             source: SccpNetworkV1.TronMainnet,
             destinationBinding: binding));
         return result;
@@ -2617,7 +2631,8 @@ public sealed partial class SccpExactTests
             semanticHash,
             anchorHash,
             binding,
-            1);
+            1,
+            TonRegistryMaxWrappedSupply);
         var custody = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x29, 32).ToArray())
             .ToAccountAddress()
             .ToI105();
@@ -2663,6 +2678,7 @@ public sealed partial class SccpExactTests
                     ["proof_profile_commitment"] = Convert.ToHexString(proofProfile),
                     ["outbound_proof_policy"] = policy,
                     ["taira_to_token_multiplier"] = 1,
+                    ["max_wrapped_supply"] = TonRegistryMaxWrappedSupply,
                 },
             },
             ["settlement"] = new Dictionary<string, object?>
@@ -2670,6 +2686,7 @@ public sealed partial class SccpExactTests
                 ["asset_definition_id"] = "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
                 ["custody_owner"] = custody,
                 ["payload_amount_scale"] = 9,
+                ["max_outstanding_liability"] = RegistryMaxOutstandingLiability,
             },
         };
         return new Dictionary<string, object?>
@@ -2765,6 +2782,7 @@ public sealed partial class SccpExactTests
             Convert.FromHexString((string)deployment["verifier_key_hash"]!),
             SemanticProfileHash(semantic),
             FinalityAnchorHash(anchor),
+            (UInt128)deployment["max_wrapped_supply"]!,
             revision);
         identity["route_config_hash"] = Convert.ToHexString(configurationHash);
         return route;
@@ -2778,6 +2796,7 @@ public sealed partial class SccpExactTests
         byte[] verifierKeyHash,
         byte[] semanticHash,
         byte[] anchorHash,
+        UInt128 maxWrappedSupply,
         uint revision = 1,
         SccpNetworkV1 source = SccpNetworkV1.BscMainnet,
         byte[]? destinationBinding = null)
@@ -2815,7 +2834,8 @@ public sealed partial class SccpExactTests
             SccpV1.Keccak256("xor"u8),
             SccpV1.Keccak256(Encoding.UTF8.GetBytes(routeId)),
             AbiWord(revision),
-            AbiWord(1_000_000_000)));
+            AbiWord(1_000_000_000),
+            AbiWord(maxWrappedSupply)));
         return SccpV1.Keccak256(Concat(
             SccpV1.Keccak256("sccp:concrete-route-config:v1"u8),
             AbiWord(source.DomainId()),
@@ -2875,6 +2895,14 @@ public sealed partial class SccpExactTests
     {
         var result = new byte[32];
         BinaryPrimitives.WriteUInt64BigEndian(result.AsSpan(24), value);
+        return result;
+    }
+
+    private static byte[] AbiWord(UInt128 value)
+    {
+        var result = new byte[32];
+        BinaryPrimitives.WriteUInt64BigEndian(result.AsSpan(16), (ulong)(value >> 64));
+        BinaryPrimitives.WriteUInt64BigEndian(result.AsSpan(24), (ulong)value);
         return result;
     }
 
@@ -3145,7 +3173,8 @@ public sealed partial class SccpExactTests
         byte[] semanticHash,
         byte[] anchorHash,
         byte[] binding,
-        uint revision)
+        uint revision,
+        UInt128 maxWrappedSupply)
     {
         using var deployment = new MemoryStream();
         deployment.Write(masterCode);
@@ -3164,6 +3193,7 @@ public sealed partial class SccpExactTests
         WriteVector(assetRoute, "taira_ton_xor"u8);
         WriteUInt32(assetRoute, revision);
         WriteUInt64(assetRoute, 1);
+        WriteUInt128(assetRoute, maxWrappedSupply);
         var assetRouteHash = SHA256.HashData(assetRoute.ToArray());
         var inbound = new SccpLaneIdV1(network, SccpNetworkV1.SoraTaira);
         var outbound = new SccpLaneIdV1(SccpNetworkV1.SoraTaira, network);
@@ -3773,6 +3803,14 @@ public sealed partial class SccpExactTests
     {
         Span<byte> bytes = stackalloc byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
+        output.Write(bytes);
+    }
+
+    private static void WriteUInt128(Stream output, UInt128 value)
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes, (ulong)value);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes[8..], (ulong)(value >> 64));
         output.Write(bytes);
     }
 

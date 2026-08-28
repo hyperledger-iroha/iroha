@@ -87,11 +87,19 @@ fun securityTestBridgeConfig(): Cell<BridgeConfig> {
         tail: routeTail.toCell(),
     };
     val verifyingKey = securityTestVerifyingKey();
+    val guardianTail: MintBreakerGuardiansTail = { guardian3: 4, guardian4: 5 };
+    val guardians: MintBreakerGuardians = {
+        guardian0: 1,
+        guardian1: 2,
+        guardian2: 3,
+        tail: guardianTail.toCell(),
+    };
     val finalityTail: FinalityHashesTail = {
         proofProfileCommitment: 9,
         embeddedVerifierCodeHash: 10,
         verifyingKeyCellHash: verifyingKey.hash(),
         verifyingKey,
+        mintBreakerGuardians: guardians.toCell(),
     };
     val finalityHashes: FinalityHashes = {
         soraFinalityAnchorHash: 6,
@@ -103,6 +111,7 @@ fun securityTestBridgeConfig(): Cell<BridgeConfig> {
         expectedGlobalId: -239,
         routeRevision: 1,
         tairaToTonMultiplier: SCCP_TAIRA_TO_TON_MULTIPLIER,
+        maxWrappedSupply: 100,
         sourceLaneBytes: sourceLane,
         destinationLaneBytes: destinationLane,
         routeHashes: routeHashes.toCell(),
@@ -150,6 +159,35 @@ fun deployBridgeForSecurityTest(
         body: TopUpTons {},
     });
     return net.send(from, deployment);
+}
+
+get fun `test master rejects recorded supply above immutable cap`() {
+    val deployer = testing.treasury("sccp-over-cap-master-deployer");
+    var masterStorage = canonicalMasterInitialStorage(
+        beginCell().storeUint(0x53434350, 32).endCell(),
+        securityTestBridgeConfig(),
+    );
+    masterStorage.totalSupply = 101;
+    val master = TairaXorJettonMaster.fromStorage(masterStorage);
+    expect(
+        deployMasterForSecurityTest(master, deployer.address, ton("3")),
+    ).toHaveSuccessfulDeploy({ to: master.address });
+
+    val trace = master.sendSccpMasterBurn(
+        deployer.address,
+        1,
+        0x1111,
+        deployer.address,
+        1,
+        { payloadHash: 0x2222, sourceEventDigest: 0x3333 },
+        { value: ton("1") },
+    );
+    expect(trace).toHaveFailedTx<SccpMasterBurn>({
+        from: deployer.address,
+        to: master.address,
+        exitCode: SccpErrors.InvalidConfiguration,
+    });
+    expect(master.getJettonData().totalSupply).toEqual(101);
 }
 
 get fun `test rich SCCP burn bounce retains the exact pending debit`() {

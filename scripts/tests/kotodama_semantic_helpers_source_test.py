@@ -13,16 +13,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = Path("crates/kotodama_lang/src/semantic.rs")
 
-BASELINE_RUST_LINES = 19_069
+# The post-merge stack-safety hardening replaces recursive typed-HIR traits and
+# public semantic entry points with explicit iterative traversals. Rebase the
+# original compacted-source baseline by that reviewed net +1,907-line delta
+# while preserving the same reduction requirement and headroom.
+BASELINE_RUST_LINES = 20_976
 MINIMUM_RUST_LINE_REDUCTION = 1_500
 MAXIMUM_RUST_LINES = BASELINE_RUST_LINES - MINIMUM_RUST_LINE_REDUCTION
 
 TEST_MARKER = "#[cfg(test)]\nmod tests {"
 TEST_SUFFIX_SHA256 = (
-    "1bbd8261954473921a1d0e392cb56b6fe08b92dac568687d5a3a111bc35aa534"
+    "84a2eed26f614c7fcc8bc8e44750b2512769ead52480bf910af4cc391b95ae3f"
 )
 TEST_RECORDS_SHA256 = (
-    "1520138cce9bf022e85aa59e9d1f057f70a88d51411894c9e4876136d2a1bf14"
+    "7c30c102cf0e5f01c9753cd05db2537bc861cdc109c62d6c8980e9776be10b09"
 )
 TEST_LEAVES = (
     (
@@ -48,10 +52,10 @@ BUILTIN_SET_SHA256 = (
     "18433d73f89518b4a8fadb0c5daf5bbdabc2886e75c8f73f4381b696a4771adf"
 )
 DIAGNOSTIC_CODE_SET_SHA256 = (
-    "4ca78c59e0c3cb6e87aafc5aa307910620e9d60bdd6fa360c20bd10f7e837466"
+    "cffaa6bf6bbf0c476a09dcce01d67aed0c4bc5b18b9fbe509d315f3df22bb351"
 )
 ORDERED_DIAGNOSTIC_CODES_SHA256 = (
-    "e07780cbaff59750556ec28e749442f598ff0e7b586b977c215d69d5d6313915"
+    "6d7bf1486233b98ca03ea7a166dfb8e10f62ffbdb4cd2d8eb970938756da67dc"
 )
 HELPER_REGION_SHA256 = (
     "7720a2615e0fd7804aa80a93aa6c53115e8aa0999dd950c1510aa06978815dad"
@@ -179,7 +183,7 @@ def validate_source(source: str) -> None:
 
     _require(_sha256(test_suffix) == TEST_SUFFIX_SHA256, "test suffix changed")
     test_records = _test_records(test_suffix)
-    _require(len(test_records) == 123, "direct test count changed")
+    _require(len(test_records) == 126, "direct test count changed")
     _require(
         _json_sha256(test_records) == TEST_RECORDS_SHA256,
         "test identifiers, attributes, or order changed",
@@ -207,12 +211,12 @@ def validate_source(source: str) -> None:
         "production Builtin variants changed",
     )
     codes = _diagnostic_codes(production)
-    _require(len(set(codes)) == 139, "diagnostic identity set changed")
+    _require(len(set(codes)) == 140, "diagnostic identity set changed")
     _require(
         _json_sha256(sorted(set(codes))) == DIAGNOSTIC_CODE_SET_SHA256,
         "diagnostic identities changed",
     )
-    _require(len(codes) == 452, "diagnostic site count changed")
+    _require(len(codes) == 453, "diagnostic site count changed")
     _require(
         _json_sha256(codes) == ORDERED_DIAGNOSTIC_CODES_SHA256,
         "diagnostic identity order changed",
@@ -325,6 +329,9 @@ def validate_source(source: str) -> None:
     ):
         _require(required in production, f"required current semantic invariant missing: {required}")
     for required_test in (
+        "fn typed_aggregate_traits_are_spawn_free_for_flat_width(",
+        "fn semantic_type_and_expression_traits_are_iterative_at_the_depth_boundary(",
+        "fn public_semantic_apis_handoff_from_a_small_caller(",
         "fn ternary_literals_inherit_the_enclosing_numeric_context(",
         "fn raw_semantic_analysis_does_not_leak_range_iterators(",
         "fn scalar_state_initialization_checks_early_returns_inside_expressions(",

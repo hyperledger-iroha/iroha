@@ -852,7 +852,8 @@ def _check_cargo_workflow(
             "rustup target add --toolchain 1.93.1-aarch64-apple-darwin "
             "aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios "
             "aarch64-apple-darwin x86_64-apple-darwin",
-            "cargo fetch --locked",
+            "RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked "
+            '--lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"',
         )
     )
     additional_cargo_policies = {
@@ -888,7 +889,10 @@ def _check_cargo_workflow(
             },
             {
                 "name": "Prime privacy N-API dependencies from the frozen lock",
-                "run": "cargo fetch --locked",
+                "run": (
+                    "RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked "
+                    '--lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"'
+                ),
             },
         ),
         "privacy_swift_sdk_parse": (
@@ -904,10 +908,10 @@ def _check_cargo_workflow(
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "7f7765d55844744f84df43017b29fe1539e42b700ce86f6e16507cec6a243ecf",
-        "privacy_jvm_sdk_tests": "1f430f2e88d3c455e8ed0a5182308627d6657099093d6c6021c308bbf12aedcb",
-        "privacy_csharp_sdk_tests": "ac4ee98cb76b98b7539d506755ec1913220b6da0a34e098a9e9979da7d181108",
-        "privacy_javascript_sdk_tests": "2a4fe6a4326a2987e8093b5a2a8919b3265364af8ec40287f6ad8d33db701112",
+        "privacy_swift_sdk_parse": "90dbb6330f5cbbf3fddd1852502eb012296bcc5f2a95445ea5a76f1ed8ef63c3",
+        "privacy_jvm_sdk_tests": "16847be930e1e9bd7dfbe3ba69677cabcce248f74eaf446ba984727bcdc468a5",
+        "privacy_csharp_sdk_tests": "caf330b5c28eccf599ad7795ef193f03cbf18ca469d75a1cb61045ccb8f6984f",
+        "privacy_javascript_sdk_tests": "190f432023c002e05b3799c533988232b1827d35b77e4a982d6eb39e68833c95",
     }
 
     require(

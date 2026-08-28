@@ -356,7 +356,30 @@ Completed history lives in [`status.md`](./status.md).
   missed-deadline classification, objective release failure,
   opening-deadline expiry, fresh-TLE retry, restart/restore replay,
   narrow-result fresh Confirmation Jury, stale-head supersession, exact-height
-  enactment, and rollback-isolated execution failure.
+  enactment, and rollback-isolated execution failure. The reservation-bound
+  carrier attestation, manifest-less certified-Fetch Phase-B completion, and
+  ordinary/recovered exact-retransmission ownership-history refresh are
+  implemented and covered by focused source/regression checks, but fresh strict
+  four-validator evidence for their resulting source is still required.
+- Carry the completed zero/singleton hidden-electorate capacity path, bounded
+  generation-16 exhaustion, live-candidate bond retention, atomic narrow-Policy
+  Confirmation capacity decision, account-rekey containment, and protected
+  validation-fee restore checks through that four-peer matrix. Preserve the
+  fail-closed terminal shapes and prove that retries, restore, and exact-height
+  execution cannot strand a bond, an unfillable body requirement, an account
+  identity, or fee admission behind missing provenance. The isolated target now
+  contains source-budgeted four-validator tests for bond retention/release,
+  Confirmation-capacity abort, exact stale-head supersession, fail-fast
+  execution-failure unchanged-state isolation, state equality, and restart;
+  run them from the settled candidate before treating the matrix as evidence.
+- Candidate-qualify the exact Ready-Proposal-Sign producer-point preemption and
+  the certified-response queue-refresh retry. The first patched four-validator
+  rerun showed no recurrence of the former queue-cut fail-stop, but its
+  threshold-key installation transaction timed out after 600 seconds under
+  severe unrelated host contention, so it is diagnostic evidence rather than a
+  liveness receipt. Repeat below-threshold install, epoch-boundary activation,
+  and the full Policy-to-enactment corridor on an uncontended same-source
+  four-validator candidate.
 - Qualify the implemented live threshold-beacon partial-share transport,
   per-session runtime custody, threshold aggregation, candidate-effect
   assembly, and authoritative finalized-pulse persistence on at least four
@@ -382,13 +405,22 @@ Completed history lives in [`status.md`](./status.md).
   the refreshed finalized height immediately before normal signed submission.
   Qualify the implemented certified
   public-session install, atomic active-pointer cutover/retirement, new-ballot
-  selection guard, and local-custody retirement guard against every committed
-  ballot/retry deadline. Complete the authenticated broker transport and HSM
-  provisioning path; then demonstrate old-share retention/zeroization, restart
-  recovery, peer authentication/rate limits, freshness expiry, canonical
-  collection, and operator submission on at least four peers. Do not describe
-  aggregate opening as operationally automatic or claim secure erasure from the
-  software adapter.
+  selection guard, immutable session-to-ordered-roster binding, and
+  local-custody retirement guard against every committed ballot/retry deadline.
+  Startup now derives the local seat separately for the active and every
+  deadline-retained historical session and requires an exact non-signing
+  key-session/transcript/seat lookup through the same signer. The authenticated
+  broker operation and software custody implementation are complete, including
+  independent result matching, surrounding requalification, mismatch poisoning,
+  and fail-closed defaults. Source tests now exercise exact active-plus-retained
+  daemon call sets, historical expiry, all three independent result-binding
+  substitutions, and truncated replies. Qualify that source against a genuine
+  HSM provider;
+  then demonstrate old-share retention/zeroization, restart recovery, peer
+  authentication/rate limits, freshness expiry, canonical collection, and
+  operator submission on at least four peers. Do not describe a point-in-time
+  custody attestation as future availability, aggregate opening as operationally
+  automatic, or the software adapter as secure erasure.
 - Qualify the implemented Core-authorized pre-seal timed-OVN casting-context
   archive read and its maximum-4,194,304-byte canonical header-framed Norito
   `ParliamentTimedOvnCastingContextArchiveV1`. The archive is public diagnostic
@@ -424,18 +456,35 @@ Completed history lives in [`status.md`](./status.md).
   the source and pinned Cargo input are sealed, then publish the exact
   proposal-kind/body/route inventory. Keep the retired equal Parliament ballot
   route and proposal-backed referendum/finalize/enact surfaces absent from the
-  served OpenAPI as they already are from source and SDKs. Standalone referenda
-  must remain explicitly separate from Parliament attempts, and automatic
-  execution must remain only its non-submit-able audit outcome.
-- Add reviewed operator dashboards and alarms for stuck attempts and deadline
-  misses using the implemented aggregate-only Parliament counters/gauges;
-  qualify their restart and four-peer behavior without adding identifiers,
-  free-form labels, or private ballot material.
-- Run the bounded Parliament model and deterministic source/model contract from
-  the immutable candidate, then pass focused data-model/Core/Torii tests, the
-  legacy-codec guard, workspace tests, strict all-target Clippy, formatting, and
-  a clean signed release corridor. Bounded model checking is regression
-  evidence only and does not replace cryptographic review or multi-peer tests.
+  served OpenAPI as they already are from source and SDKs. The three current
+  mirrors are byte-identical at 3,078,501 bytes and SHA-256
+  `6f1d88fe8503d56e8fb1bb1b0115d5a1cef8228b41c953bab4fc565be706e8bd`,
+  with the retired `GovernanceFinalizeRequestV1` and
+  `GovernanceEnactRequestV1` schemas removed, and the focused Python Parliament
+  API gate is green at 36/36. Their deliberately unchanged provenance manifests
+  remain unsigned dirty-tree output and cannot be promoted. Standalone
+  referenda must remain explicitly separate from Parliament attempts, and
+  automatic execution must remain only its non-submit-able audit outcome.
+- Review and candidate-qualify the implemented aggregate-only Parliament alert
+  rules for stuck attempts and deadline misses. Their five-rule `promtool` suite
+  is green locally; restart and four-peer behavior still require evidence
+  without identifiers, free-form labels, or private ballot material.
+- Freeze and rerun the implemented 23-case threshold-BLS/timed-OVN Criterion
+  and logical-allocation matrix from the same immutable candidate. The local
+  evidence checker passes all 18 collected cases across 15 test functions, and
+  byte-identical pre-merge allocation runs establish the harness contract, but
+  do not replace fresh candidate measurements and an archived sealed report.
+- Re-run the bounded Parliament model and deterministic source/model contract
+  from the immutable candidate, then pass focused data-model/Core/Torii tests,
+  the legacy-codec guard, workspace tests, strict all-target Clippy, formatting,
+  strict TLAPS, pinned Verus, chaos/soak qualification, and a clean externally
+  signed release corridor. The local TLC run now covers the typed zero/singleton
+  pre-request capacity path, bounded exhaustion, and atomic Confirmation-capacity
+  decision in addition to the original lifecycle, while the deterministic
+  source/model gate and all 14 lifecycle corridor source checks with 113
+  adversarial subtests are green.
+  Bounded model checking remains regression evidence and does not replace
+  cryptographic review, real-HSM custody, or multi-peer tests.
 
 ## ZK algorithm release qualification
 
@@ -2082,17 +2131,22 @@ result against its split source; newer receipts above supersede it, without
 replacing the complete release gates.
 
 The static release inventory contract now enumerates `864/864` production tests
-across 43 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
+across 44 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
 TSV has
 SHA-256
 `a19753ab7879a95094d8f1ee968e2e44d9a36453f2814acdadffaaead1ab4a97`.
 The separate canonical production module/test TSV has SHA-256
-`9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a`;
-the newest rows bind the proposal-height namespace for exact retired attempts,
-canonical successor acceptance while local sidecars lag, two-link raw
+`39d0b3083847ad0ad8bcf5c67469b20b9a056148fad90679d753a9e63b07455b`;
+the newest inventoried rows bind stale exact `TimeoutVote` retransmission
+coalescing without reply-route regression, Ready local Proposal Sign plus
+its exact output taking precedence over a pending Timeout Certificate, the
+eligible-only authority for that ordinary-head preemption, and replica
+disposition observing the exact FIFO beneath the global-selection overlay. The
+broader current inventory binds the proposal-height namespace for exact retired
+attempts, canonical successor acceptance while local sidecars lag, two-link raw
 lane-chain hydration on receipt-free cold restart, and exact noncanonical
 autonomous-output retirement at applied-height handoff, plus ordinary and
-record-backed autonomous historical predecessor durability. They also bind
+record-backed autonomous historical predecessor durability. It also binds
 crash-safe autonomous lifecycle terminal completion,
 startup reconciliation before lane-work activation, and the exact pre-mutation
 terminal-sweep partition. The duplicate inline V2 core network simulations
@@ -2115,10 +2169,10 @@ source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending structural
-source check. The reviewed Rust include topology contains 66 parents and 398
+source check. The reviewed Rust include topology contains 70 parents and 425
 direct entries; its canonical payload SHA-256 is
-`6830478f0523f8e320378200b67894bf9a6a3c09574a99741a3a04b76a457990`.
-The release-inventory contract is statically reconciled at 84/864/522, and the
+`0e92b92181eb915d6b70f2ec963fb721ebdd6c0519446a1c5bc7ef1d5013635f`.
+The release-inventory contract is statically reconciled at 85/864/522, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker discharges its current Rust/model/mutation/source obligations except
 for the separately recorded task-start `Cargo.lock` mismatch; the static
@@ -2211,7 +2265,7 @@ The remaining work is evidence-driven and must stay in order:
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
   mutations before release evidence is accepted, then finish the remaining
   864-test,
-  43-module production inventory legs and archived G-UNIT execution.
+  44-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product assigns all 54 structural TLAPS
   projection rows; that is source inventory only. Its V2 inductive-safety,
   successor-isolation, and temporal-product obligations remain in the formal
@@ -28254,7 +28308,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 84 pre-network legs and their exact
+original HEAD/tree/`Cargo.lock`, all 85 pre-network legs and their exact
 864-test inventory plus the separate exact 522-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus

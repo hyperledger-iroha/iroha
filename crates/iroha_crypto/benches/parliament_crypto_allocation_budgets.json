@@ -1,0 +1,213 @@
+{
+  "benchmarks": [
+    {
+      "benchmark_id": "parliament/threshold_bls/combine/threshold/4",
+      "ceilings": {
+        "max_allocated_bytes": 40845,
+        "max_allocation_calls": 14,
+        "max_reallocated_bytes": 2604,
+        "max_reallocation_calls": 18
+      }
+    },
+    {
+      "benchmark_id": "parliament/threshold_bls/combine/full/4",
+      "ceilings": {
+        "max_allocated_bytes": 42225,
+        "max_allocation_calls": 24,
+        "max_reallocated_bytes": 5208,
+        "max_reallocation_calls": 36
+      }
+    },
+    {
+      "benchmark_id": "parliament/threshold_bls/invalid_fast_fail/reordered/4",
+      "ceilings": {
+        "max_allocated_bytes": 688,
+        "max_allocation_calls": 5,
+        "max_reallocated_bytes": 1302,
+        "max_reallocation_calls": 9
+      }
+    },
+    {
+      "benchmark_id": "parliament/threshold_bls/combine/threshold/16",
+      "ceilings": {
+        "max_allocated_bytes": 43605,
+        "max_allocation_calls": 34,
+        "max_reallocated_bytes": 7812,
+        "max_reallocation_calls": 54
+      }
+    },
+    {
+      "benchmark_id": "parliament/threshold_bls/combine/full/16",
+      "ceilings": {
+        "max_allocated_bytes": 50505,
+        "max_allocation_calls": 84,
+        "max_reallocated_bytes": 20832,
+        "max_reallocation_calls": 144
+      }
+    },
+    {
+      "benchmark_id": "parliament/threshold_bls/invalid_fast_fail/reordered/16",
+      "ceilings": {
+        "max_allocated_bytes": 688,
+        "max_allocation_calls": 5,
+        "max_reallocated_bytes": 1302,
+        "max_reallocation_calls": 9
+      }
+    },
+    {
+      "benchmark_id": "parliament/threshold_bls/combine/threshold/31",
+      "ceilings": {
+        "max_allocated_bytes": 47055,
+        "max_allocation_calls": 59,
+        "max_reallocated_bytes": 14322,
+        "max_reallocation_calls": 99
+      }
+    },
+    {
+      "benchmark_id": "parliament/threshold_bls/combine/full/31",
+      "ceilings": {
+        "max_allocated_bytes": 60855,
+        "max_allocation_calls": 159,
+        "max_reallocated_bytes": 40362,
+        "max_reallocation_calls": 279
+      }
+    },
+    {
+      "benchmark_id": "parliament/threshold_bls/invalid_fast_fail/reordered/31",
+      "ceilings": {
+        "max_allocated_bytes": 688,
+        "max_allocation_calls": 5,
+        "max_reallocated_bytes": 1302,
+        "max_reallocation_calls": 9
+      }
+    },
+    {
+      "benchmark_id": "parliament/threshold_bls/final_verify/0",
+      "ceilings": {
+        "max_allocated_bytes": 39337,
+        "max_allocation_calls": 3,
+        "max_reallocated_bytes": 0,
+        "max_reallocation_calls": 0
+      }
+    },
+    {
+      "benchmark_id": "parliament/threshold_bls/final_verify/128",
+      "ceilings": {
+        "max_allocated_bytes": 39465,
+        "max_allocation_calls": 3,
+        "max_reallocated_bytes": 0,
+        "max_reallocation_calls": 0
+      }
+    },
+    {
+      "benchmark_id": "parliament/threshold_bls/final_verify/16384",
+      "ceilings": {
+        "max_allocated_bytes": 55721,
+        "max_allocation_calls": 3,
+        "max_reallocated_bytes": 0,
+        "max_reallocation_calls": 0
+      }
+    },
+    {
+      "benchmark_id": "parliament/timed_ovn/registration_roster_freeze/3",
+      "ceilings": {
+        "max_allocated_bytes": 26012,
+        "max_allocation_calls": 21,
+        "max_reallocated_bytes": 0,
+        "max_reallocation_calls": 0
+      }
+    },
+    {
+      "benchmark_id": "parliament/timed_ovn/survivor_freeze/3",
+      "ceilings": {
+        "max_allocated_bytes": 40753,
+        "max_allocation_calls": 18,
+        "max_reallocated_bytes": 11340,
+        "max_reallocation_calls": 2
+      }
+    },
+    {
+      "benchmark_id": "parliament/timed_ovn/registration_roster_freeze/32",
+      "ceilings": {
+        "max_allocated_bytes": 249912,
+        "max_allocation_calls": 195,
+        "max_reallocated_bytes": 0,
+        "max_reallocation_calls": 0
+      }
+    },
+    {
+      "benchmark_id": "parliament/timed_ovn/survivor_freeze/32",
+      "ceilings": {
+        "max_allocated_bytes": 306393,
+        "max_allocation_calls": 47,
+        "max_reallocated_bytes": 213948,
+        "max_reallocation_calls": 14
+      }
+    },
+    {
+      "benchmark_id": "parliament/timed_ovn/registration_roster_freeze/1000",
+      "ceilings": {
+        "max_allocated_bytes": 7855352,
+        "max_allocation_calls": 6003,
+        "max_reallocated_bytes": 0,
+        "max_reallocation_calls": 0
+      }
+    },
+    {
+      "benchmark_id": "parliament/timed_ovn/survivor_freeze/1000",
+      "ceilings": {
+        "max_allocated_bytes": 9173273,
+        "max_allocation_calls": 1015,
+        "max_reallocated_bytes": 7392060,
+        "max_reallocation_calls": 34
+      }
+    },
+    {
+      "benchmark_id": "parliament/timed_ovn/wire/registration_encode_3624_bytes",
+      "ceilings": {
+        "max_allocated_bytes": 3624,
+        "max_allocation_calls": 1,
+        "max_reallocated_bytes": 0,
+        "max_reallocation_calls": 0
+      }
+    },
+    {
+      "benchmark_id": "parliament/timed_ovn/wire/registration_decode_verify_3624_bytes",
+      "ceilings": {
+        "max_allocated_bytes": 1800,
+        "max_allocation_calls": 5,
+        "max_reallocated_bytes": 0,
+        "max_reallocation_calls": 0
+      }
+    },
+    {
+      "benchmark_id": "parliament/timed_ovn/wire/ballot_encode_2858_bytes",
+      "ceilings": {
+        "max_allocated_bytes": 2858,
+        "max_allocation_calls": 1,
+        "max_reallocated_bytes": 0,
+        "max_reallocation_calls": 0
+      }
+    },
+    {
+      "benchmark_id": "parliament/timed_ovn/wire/ballot_decode_verify_2858_bytes",
+      "ceilings": {
+        "max_allocated_bytes": 2527,
+        "max_allocation_calls": 7,
+        "max_reallocated_bytes": 0,
+        "max_reallocation_calls": 0
+      }
+    },
+    {
+      "benchmark_id": "parliament/timed_ovn/aggregate/proof_verified_3",
+      "ceilings": {
+        "max_allocated_bytes": 8313,
+        "max_allocation_calls": 20,
+        "max_reallocated_bytes": 0,
+        "max_reallocation_calls": 0
+      }
+    }
+  ],
+  "schema": "iroha.sora_parliament.crypto_allocation_budgets.v1",
+  "scope": "measured-thread-logical-heap-requests-only"
+}

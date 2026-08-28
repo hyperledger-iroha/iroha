@@ -137,6 +137,7 @@ public struct SccpEvmTronDestinationDeploymentV1: Equatable, Sendable {
     public let routeAddress: Data
     public let routeCodeHash: Data
     public let tairaToTokenMultiplier: UInt64
+    public let maxWrappedSupply: String
     public let destinationBindingHash: Data
 }
 
@@ -155,6 +156,7 @@ public struct SccpTonDestinationDeploymentV1: Equatable, Sendable {
     public let proofProfileCommitment: Data
     public let outboundProofPolicy: SccpOutboundProofPolicyV1
     public let tairaToTokenMultiplier: UInt64
+    public let maxWrappedSupply: String
     public let destinationBindingHash: Data
 }
 
@@ -199,6 +201,20 @@ public enum SccpDestinationDeploymentV1: Equatable, Sendable {
         case let .ton(value): value.destinationBindingHash
         }
     }
+
+    public var tairaToTokenMultiplier: UInt64 {
+        switch self {
+        case let .evm(value), let .tron(value): value.tairaToTokenMultiplier
+        case let .ton(value): value.tairaToTokenMultiplier
+        }
+    }
+
+    public var maxWrappedSupply: String {
+        switch self {
+        case let .evm(value), let .tron(value): value.maxWrappedSupply
+        case let .ton(value): value.maxWrappedSupply
+        }
+    }
 }
 
 /// One complete immutable route revision from the consensus registry.
@@ -214,6 +230,7 @@ public struct SccpGovernedRouteV1: Equatable, Sendable {
     public let assetDefinitionId: String
     public let custodyOwner: String
     public let payloadAmountScale: UInt32
+    public let maxOutstandingLiability: String
     public let routeConfigurationHash: Data
 }
 
@@ -1150,7 +1167,14 @@ private enum SccpExactParser {
             throw SccpV1Error.invalid("\(label) source identity does not name its destination route deployment")
         }
         let settlement = try object(item, "settlement")
-        try SccpStrictJSON.exactFields(settlement, ["asset_definition_id", "custody_owner", "payload_amount_scale"], label: "\(label).settlement")
+        try SccpStrictJSON.exactFields(
+            settlement,
+            [
+                "asset_definition_id", "custody_owner", "payload_amount_scale",
+                "max_outstanding_liability",
+            ],
+            label: "\(label).settlement"
+        )
         let assetDefinition = try SccpStrictJSON.text(settlement, "asset_definition_id")
         guard assetDefinition == "6TEAJqbb8oEPmLncoNiMRbLEK6tw" else { throw SccpV1Error.invalid("\(label) must settle canonical Taira XOR") }
         let custody = try SccpStrictJSON.text(settlement, "custody_owner")
@@ -1164,6 +1188,19 @@ private enum SccpExactParser {
             )
         }
         let scale = try SccpStrictJSON.uint32(settlement, "payload_amount_scale", minimum: 9, maximum: 9)
+        let maxOutstandingLiability = try SccpStrictJSON.uint128(
+            settlement,
+            "max_outstanding_liability"
+        )
+        guard SccpUInt128.product(
+            maxOutstandingLiability,
+            by: destination.tairaToTokenMultiplier,
+            equals: destination.maxWrappedSupply
+        ) else {
+            throw SccpV1Error.invalid(
+                "\(label) wrapped supply cap must equal its SORA liability times the destination multiplier"
+            )
+        }
         let configuration = try routeConfigurationHash(
             lane: lane,
             routeId: routeId,
@@ -1191,6 +1228,7 @@ private enum SccpExactParser {
             assetDefinitionId: assetDefinition,
             custodyOwner: custody,
             payloadAmountScale: scale,
+            maxOutstandingLiability: maxOutstandingLiability,
             routeConfigurationHash: configuration
         )
     }
@@ -1229,7 +1267,7 @@ private enum SccpExactParser {
         try SccpStrictJSON.exactFields(deployment, [
             "token_address", "token_code_hash", "verifier_address", "verifier_code_hash",
             "verifying_key", "verifier_key_hash", "outbound_proof_policy", "route_address",
-            "route_code_hash", "taira_to_token_multiplier",
+            "route_code_hash", "taira_to_token_multiplier", "max_wrapped_supply",
         ], label: "\(label).deployment")
         let addresses = try ["token_address", "verifier_address", "route_address"].map {
             try upperFixed(deployment, $0, bytes: 20)
@@ -1256,6 +1294,7 @@ private enum SccpExactParser {
         guard try SccpStrictJSON.uint64(deployment, "taira_to_token_multiplier", minimum: 1_000_000_000) == 1_000_000_000 else {
             throw SccpV1Error.invalid("\(label).deployment has the wrong Taira/token multiplier")
         }
+        let maxWrappedSupply = try SccpStrictJSON.uint128(deployment, "max_wrapped_supply")
         let partial = SccpEvmTronDestinationDeploymentV1(
             tokenAddress: addresses[0],
             tokenCodeHash: hashes[0],
@@ -1266,6 +1305,7 @@ private enum SccpExactParser {
             routeAddress: addresses[2],
             routeCodeHash: hashes[3],
             tairaToTokenMultiplier: 1_000_000_000,
+            maxWrappedSupply: maxWrappedSupply,
             destinationBindingHash: Data()
         )
         let wrapped: SccpDestinationDeploymentV1 = family == .tronGroth16Bn254 ? .tron(partial) : .evm(partial)
@@ -1280,6 +1320,7 @@ private enum SccpExactParser {
             routeAddress: partial.routeAddress,
             routeCodeHash: partial.routeCodeHash,
             tairaToTokenMultiplier: partial.tairaToTokenMultiplier,
+            maxWrappedSupply: partial.maxWrappedSupply,
             destinationBindingHash: binding
         )
         return family == .tronGroth16Bn254 ? .tron(complete) : .evm(complete)
@@ -1299,6 +1340,7 @@ private enum SccpExactParser {
             "route_initial_data_hash", "embedded_verifier_code_hash",
             "verifier_circuit_hash", "verifying_key", "verifier_key_hash",
             "proof_profile_commitment", "outbound_proof_policy", "taira_to_token_multiplier",
+            "max_wrapped_supply",
         ], label: label)
         let master = try tonAddress(object(deployment, "jetton_master_address"), label: "\(label).jetton_master_address")
         let route = try tonAddress(object(deployment, "route_address"), label: "\(label).route_address")
@@ -1334,6 +1376,7 @@ private enum SccpExactParser {
         guard try SccpStrictJSON.uint64(deployment, "taira_to_token_multiplier", minimum: 1) == 1 else {
             throw SccpV1Error.invalid("\(label) TON multiplier must be exactly 1")
         }
+        let maxWrappedSupply = try SccpStrictJSON.uint128(deployment, "max_wrapped_supply")
         let partial = SccpTonDestinationDeploymentV1(
             jettonMasterAddress: master,
             jettonMasterCodeHash: masterCode,
@@ -1348,6 +1391,7 @@ private enum SccpExactParser {
             proofProfileCommitment: profileCommitment,
             outboundProofPolicy: policy,
             tairaToTokenMultiplier: 1,
+            maxWrappedSupply: maxWrappedSupply,
             destinationBindingHash: Data()
         )
         let binding = try destinationBindingHash(lane: lane, destination: .ton(partial))
@@ -1365,6 +1409,7 @@ private enum SccpExactParser {
             proofProfileCommitment: partial.proofProfileCommitment,
             outboundProofPolicy: partial.outboundProofPolicy,
             tairaToTokenMultiplier: partial.tairaToTokenMultiplier,
+            maxWrappedSupply: partial.maxWrappedSupply,
             destinationBindingHash: binding
         ))
     }
@@ -1911,6 +1956,10 @@ private enum SccpExactParser {
             appendBytes(Data("taira_ton_xor".utf8), to: &assetRoute)
             appendUInt32LE(revision, to: &assetRoute)
             appendUInt64LE(ton.tairaToTokenMultiplier, to: &assetRoute)
+            guard let cap = SccpUInt128.littleEndianData(ton.maxWrappedSupply) else {
+                throw SccpV1Error.invalid("SCCP TON wrapped supply cap is invalid")
+            }
+            assetRoute.append(cap)
             let assetRouteHash = Data(SHA256.hash(data: assetRoute))
             var payload = Data("sccp:concrete-route-config:v1".utf8)
             payload.append(1)
@@ -1965,6 +2014,10 @@ private enum SccpExactParser {
         assetRoute.append(irohaKeccak256(Data(routeId.utf8)))
         assetRoute.append(abiWord(UInt64(revision)))
         assetRoute.append(abiWord(legacy.tairaToTokenMultiplier))
+        guard let cap = SccpUInt128.abiWord(legacy.maxWrappedSupply) else {
+            throw SccpV1Error.invalid("SCCP EVM/TRON wrapped supply cap is invalid")
+        }
+        assetRoute.append(cap)
         let assetRouteHash = irohaKeccak256(assetRoute)
         var payload = irohaKeccak256(Data("sccp:concrete-route-config:v1".utf8))
         payload.append(abiWord(UInt64(lane.source.domainId)))

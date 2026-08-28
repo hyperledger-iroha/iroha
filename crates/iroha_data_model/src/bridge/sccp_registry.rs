@@ -4231,16 +4231,33 @@ mod tests {
             destination_lane_hash,
             hex32("7e68f921bbe63831f95498b695850630818a2a09c0215f4722199a38ec5f55f2")
         );
+        let deployment = tron_deployment();
+        let route_hash = sccp_exact_tron_xor_route_config_hash_v1(
+            SccpNetworkV1::TronNile,
+            source_lane_hash,
+            destination_lane_hash,
+            &deployment,
+            7,
+        )
+        .expect("valid exact TRON route");
         assert_eq!(
+            route_hash,
+            hex32("2c4188bc7a1fecaf6d909f713211ad1363202729f79e745f48b026da67049505")
+        );
+        let changed_cap = SccpTronDestinationDeploymentV1 {
+            max_wrapped_supply: deployment.max_wrapped_supply - 1,
+            ..deployment
+        };
+        assert_ne!(
+            route_hash,
             sccp_exact_tron_xor_route_config_hash_v1(
                 SccpNetworkV1::TronNile,
                 source_lane_hash,
                 destination_lane_hash,
-                &tron_deployment(),
+                &changed_cap,
                 7,
             )
-            .expect("valid exact TRON route"),
-            hex32("0693ffd2ae1fb413a74672a892b28f931209795733aca8e522015431aa8e567f")
+            .expect("positive changed cap remains hashable")
         );
     }
     #[test]

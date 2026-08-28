@@ -2090,7 +2090,7 @@ impl ParliamentTimedOvn {
             self.max_corpus_entries
         );
         let required_chunk_blocks =
-            iroha_data_model::isi::governance::parliament_timed_ovn_required_chunk_blocks_v1(
+            iroha_data_model::governance::types::parliament_timed_ovn_required_chunk_blocks_v1(
                 self.max_corpus_entries,
             );
         assert!(
@@ -2227,9 +2227,9 @@ pub struct Governance {
     pub review_panel_size: usize,
     /// Coordination Council size.
     pub coordination_council_size: usize,
-    /// Policy Jury size.
+    /// Policy Jury size (at least two for non-identity timed-OVN masks).
     pub policy_jury_size: usize,
-    /// Maximum Confirmation Jury size.
+    /// Confirmation Jury target/cap (at least two for timed-OVN confirmation).
     pub confirmation_jury_size: usize,
     /// Oversight Committee size.
     pub oversight_committee_size: usize,

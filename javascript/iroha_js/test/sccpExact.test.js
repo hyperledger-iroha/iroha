@@ -7,6 +7,7 @@ import { keccak_256 } from "@noble/hashes/sha3";
 
 import { AccountAddress } from "../src/address.js";
 import { blake2b256 } from "../src/blake2b.js";
+import { stringifyStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
 import {
   SCCP_CODEC_CANONICAL_TEXT,
   SCCP_CODEC_EVM_ADDRESS20,
@@ -51,6 +52,9 @@ const PUBLIC_KEY = Uint8Array.from([
 ]);
 const ACCOUNT = AccountAddress.fromAccount({ publicKey: PUBLIC_KEY });
 const AUTHORITY = ACCOUNT.toI105(369);
+const TEST_MAX_OUTSTANDING_LIABILITY = 1_000_000_000_000;
+const TEST_EVM_MAX_WRAPPED_SUPPLY =
+  BigInt(TEST_MAX_OUTSTANDING_LIABILITY) * 1_000_000_000n;
 const MESSAGE_ID = HASH(0x11);
 const MESSAGE_BUNDLE_NORITO_TYPE = "iroha_sccp::TairaSccpMessageProofV1";
 const PROOF_REQUEST_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
@@ -533,6 +537,7 @@ function testDestinationHashes(route) {
         keccak_256(Buffer.from(descriptor.routeId)),
         abiWord(route.revision),
         abiWord(deployment.taira_to_token_multiplier),
+        abiWord(deployment.max_wrapped_supply),
       ),
     ),
   );
@@ -685,6 +690,7 @@ function governedRoute({
         route_address: routeAddress,
         route_code_hash: routeCodeHash,
         taira_to_token_multiplier: 1_000_000_000,
+        max_wrapped_supply: TEST_EVM_MAX_WRAPPED_SUPPLY,
       },
     },
     sora_outbound_execution_policy: soraOutboundExecutionPolicy(),
@@ -692,6 +698,7 @@ function governedRoute({
       asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
       custody_owner: AUTHORITY,
       payload_amount_scale: 9,
+      max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
     },
   };
   route.source_identity.emitter.identity.route_config_hash =
@@ -718,6 +725,7 @@ function solanaDeployment() {
     verifier_key_hash: keyHash(key).toUpperCase(),
     outbound_proof_policy: outboundPolicy(),
     taira_to_token_multiplier: 1,
+    max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY,
   };
   deployment.native_verifier_config_hash =
     deriveSccpSolanaNativeVerifierConfigHashV1(deployment, UPPER(0x31, 32), 1)
@@ -756,6 +764,7 @@ function solanaGovernedRoute({ activation = "staged" } = {}) {
       asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
       custody_owner: AUTHORITY,
       payload_amount_scale: 9,
+      max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
     },
   };
 }
@@ -777,6 +786,7 @@ function tonDeployment() {
     proof_profile_commitment: tonProofProfileCommitment().toString("hex").toUpperCase(),
     outbound_proof_policy: tonOutboundPolicy(),
     taira_to_token_multiplier: 1,
+    max_wrapped_supply: TEST_MAX_OUTSTANDING_LIABILITY,
   };
 }
 
@@ -807,6 +817,7 @@ function tonGovernedRoute({ source = "ton-mainnet", activation = "staged" } = {}
       asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
       custody_owner: AUTHORITY,
       payload_amount_scale: 9,
+      max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
     },
   };
 }
@@ -1375,19 +1386,71 @@ test("registry validates complete typed route identity and immutable key hash", 
   );
 });
 
+test("registry requires exact lossless supply and liability caps for every destination", () => {
+  const routes = [
+    governedRoute(),
+    governedRoute({ source: "tron-mainnet" }),
+    solanaGovernedRoute(),
+    tonGovernedRoute(),
+  ];
+  for (const route of routes) {
+    const missingSupply = structuredClone(route);
+    delete missingSupply.destination.deployment.max_wrapped_supply;
+    assert.throws(
+      () => normalizeSccpRegistry(registry([missingSupply])),
+      /max_wrapped_supply/u,
+    );
+  }
+
+  const missingLiability = governedRoute();
+  delete missingLiability.settlement.max_outstanding_liability;
+  assert.throws(
+    () => normalizeSccpRegistry(registry([missingLiability])),
+    /max_outstanding_liability/u,
+  );
+
+  const mismatched = governedRoute();
+  mismatched.destination.deployment.max_wrapped_supply += 1n;
+  assert.throws(
+    () => normalizeSccpRegistry(registry([mismatched])),
+    /must equal settlement\.max_outstanding_liability/u,
+  );
+
+  const unsafeLiability = BigInt(Number.MAX_SAFE_INTEGER) + 2n;
+  const lossless = governedRoute();
+  lossless.settlement.max_outstanding_liability = unsafeLiability;
+  lossless.destination.deployment.max_wrapped_supply =
+    unsafeLiability * BigInt(lossless.destination.deployment.taira_to_token_multiplier);
+  lossless.source_identity.emitter.identity.route_config_hash =
+    testDestinationHashes(lossless).routeConfigurationHash;
+  const parsed = parseSccpJsonObject(
+    stringifyStrictLosslessIntegerJson(registry([lossless]), "SCCP registry"),
+    "SCCP registry",
+  );
+  assert.equal(
+    typeof parsed.lanes[0].routes[0].settlement.max_outstanding_liability,
+    "bigint",
+  );
+  assert.equal(
+    typeof parsed.lanes[0].routes[0].destination.deployment.max_wrapped_supply,
+    "bigint",
+  );
+  assert.equal(normalizeSccpRegistry(parsed).lanes.length, 1);
+});
+
 test("registry destination hashes match the canonical Rust EVM and TRON layouts", () => {
   const vectors = [
     {
       source: "bsc-mainnet",
       destinationBindingHash: "0D3F2789F19AF900584D24BAB4148AC32AC1532E85748845646CA032E43C0757",
       deploymentConfigHash: "C96A33A74F1E4134A7D6D63CB2EE4EAFFE7D2007D4189BDDCE6D39F5AA97BC5C",
-      routeConfigurationHash: "DDF6B59EE7DAE1F134455EAA19B166F951AF30188E1ADC2CF9D68DD8734789C1",
+      routeConfigurationHash: "3DBB23C4F6659308B48114E68049674E5CFC0F1AA2A517FF6B64BF448834DC28",
     },
     {
       source: "tron-mainnet",
       destinationBindingHash: "F0D778ECB625C27DEAE6ADCFCD14167DF0E4934EB167F34BA6ADFCD9750A797F",
       deploymentConfigHash: "CF8C2A47D3F54928B688A118E49AA066577DB2A5DCAD73D1BDEE9D25A365C13C",
-      routeConfigurationHash: "EB5CB094A22C5424716A64693E35F6C21B95D654E609121E40CFE13EEEC31969",
+      routeConfigurationHash: "05EC19470E64BB89F6B5E359B553E6D83878100A590033947F1676CCF39DA383",
     },
   ];
   for (const vector of vectors) {
@@ -1409,23 +1472,23 @@ test("Solana registry hashes match Rust and bind every Loader-v3 role", () => {
   const deployment = solanaDeployment();
   assert.equal(
     deriveSccpSolanaNativeVerifierConfigHashV1(deployment, UPPER(0x31, 32), 1),
-    "0x81acbcf95363017aabb1cf1edbc0f3f85d3ddb0529666870e653894fee567d98",
+    "0x136f783ad2f6b8d5018627d1147fc79f61cd8c0cbcddaf12a79f8ccb8df509fb",
   );
   const hashes = deriveSccpSolanaDestinationHashesV1(deployment, UPPER(0x31, 32), 1);
   assert.deepEqual(hashes, {
     destination_binding_hash:
-      "0x647aa3dfb00a102f4fbbac9f00c0b5828b4851212df46aaa302d416b43feaa18",
+      "0x43a30d059f46f955884bba0dd1481e8b6a6ccd678449861454593f818bb9a8b1",
     deployment_config_hash:
-      "0x08af60c35a8f65810b1f537d0e21cf30b50c574f7a8bc80596c54bdb9c1e71df",
+      "0xa1f2fb40ffc4e150b09af9c60decd8ec5d1776371f5b6e17bdfd334a3bdef9b3",
     route_configuration_hash:
-      "0x72f9cc2bfa3bb4064777315ef6288e74052849f842fba0c84b4557d939fdc9d1",
+      "0x56604615dee63e1b55fa43cf4cd6f22cc0a0f6e7d9a1357b7b787beae05daccf",
   });
   const route = solanaGovernedRoute();
   assert.deepEqual(deriveSccpSolanaSourceIdentityHashesV1(route.source_identity), {
     source_emitter_identity_hash:
-      "0x714bd05afa96ae367e08d4daed9632b208f6c432660f106dd10a8d616d17929c",
+      "0x4310310f34ed710f75e5df59842317edb60bd0671fa7c4666162acb2d7c09c6c",
     source_identity_hash:
-      "0x8577e67ddc7f0bb8f0058e23449a811dfb04ab0808b696af66cd2d75fa714771",
+      "0x98d75aead76ba724a38b35e50e970915e28956d87c9722e940169ec71abf6120",
   });
   assert.equal(normalizeSccpRegistry(registry([route])).lanes.length, 1);
 
@@ -1482,6 +1545,7 @@ test("Solana registry hashes match Rust and bind every Loader-v3 role", () => {
     ["route_program_id", UPPER(0x48, 32)],
     ["route_state_account", UPPER(0x49, 32)],
     ["native_verifier_program_id", UPPER(0x4a, 32)],
+    ["max_wrapped_supply", TEST_MAX_OUTSTANDING_LIABILITY + 1],
   ]) {
     const changed = structuredClone(deployment);
     changed[field] = value;
@@ -1569,6 +1633,12 @@ test("TON registry enforces account, storage, BLS12-381, and fixed-point-safe ha
   changedCode.jetton_master_code_hash = UPPER(0x86, 32);
   assert.notDeepEqual(
     deriveSccpTonDestinationHashesV1(changedCode, "ton-mainnet", 1),
+    hashes,
+  );
+  const changedSupply = structuredClone(deployment);
+  changedSupply.max_wrapped_supply += 1;
+  assert.notDeepEqual(
+    deriveSccpTonDestinationHashesV1(changedSupply, "ton-mainnet", 1),
     hashes,
   );
   const aliasedStorage = structuredClone(deployment);

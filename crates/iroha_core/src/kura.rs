@@ -25072,41 +25072,64 @@ impl Kura {
                 Some(pending_canonical_bytes),
             )?
         {
-            let autonomous_payload = &autonomous.artifact.executable_payload;
-            let same_full_proposal = autonomous_payload.origin_proposal == artifact.proposal;
-            if !same_full_proposal {
-                let role_disjoint_ordinary = authority.is_some()
-                    && autonomous.retirement.is_some()
-                    && !autonomous_certificate
-                    && self.active_certified_ordinary_is_canonical_hint_promotion_locked(
+            let same_proposal =
+                autonomous.artifact.executable_payload.origin_proposal == artifact.proposal;
+            if autonomous_certificate && !same_proposal {
+                return Err(Self::invalid_lane_artifact_error(
+                    Self::autonomous_lane_block_latest_attempt_path_for_entry(
                         &entry,
-                        &autonomous_payload.origin_proposal,
-                        artifact,
-                    );
-                if !role_disjoint_ordinary {
+                        &self.store_root,
+                        lane_block_height,
+                    ),
+                    "autonomous certification proposal conflicts with the durable autonomous lane slot",
+                ));
+            }
+            if same_proposal && autonomous.retirement.is_some() {
+                return Err(Self::invalid_lane_artifact_error(
+                    autonomous.view_state_path,
+                    "durably retired autonomous lane slot cannot be certified",
+                ));
+            }
+            if !autonomous_certificate && !same_proposal {
+                if autonomous.retirement.is_none() {
                     return Err(Self::invalid_lane_artifact_error(
                         Self::autonomous_lane_block_latest_attempt_path_for_entry(
                             &entry,
                             &self.store_root,
                             lane_block_height,
                         ),
-                        "certification proposal conflicts with the durable autonomous lane slot",
+                        "ordinary certification conflicts with a live durable autonomous lane slot",
                     ));
                 }
-                self.require_retired_autonomous_payload_complete_release_locked(
-                    Some(pending_canonical_bytes),
+                if authority.is_none() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        autonomous.view_state_path,
+                        "ordinary certification replacing a retired autonomous lane slot lacks State lifecycle authority",
+                    ));
+                }
+                if !self.active_certified_ordinary_is_canonical_hint_promotion_locked(
                     &entry,
-                    autonomous_payload,
-                    autonomous
-                        .retirement
-                        .as_ref()
-                        .expect("role-disjoint ordinary overlap checked a retired slot"),
+                    &autonomous.artifact.executable_payload.origin_proposal,
+                    artifact,
+                ) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        Self::autonomous_lane_block_latest_attempt_path_for_entry(
+                            &entry,
+                            &self.store_root,
+                            lane_block_height,
+                        ),
+                        "ordinary certification replacing a retired autonomous lane slot is not its authenticated canonical-hint promotion",
+                    ));
+                }
+                // Retirement is only the first half of losing-attempt
+                // terminalization. Reopen the source-authenticated Complete
+                // outcome and its released claims before allowing the
+                // State-authorized ordinary winner to occupy this lane height.
+                self.require_autonomous_lifecycle_retired_attempt_complete_for_ordinary_certificate_locked(
+                    pending_canonical_bytes,
+                    &entry,
+                    &autonomous,
                 )?;
-            } else if autonomous.retirement.is_some() {
-                return Err(Self::invalid_lane_artifact_error(
-                    autonomous.view_state_path,
-                    "durably retired autonomous lane slot cannot be certified",
-                ));
             }
         }
         if !self.recover_bound_progress_sidecar_artifacts(

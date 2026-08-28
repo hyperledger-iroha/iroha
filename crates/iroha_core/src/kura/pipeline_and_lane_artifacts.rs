@@ -2932,6 +2932,64 @@ pub(crate) struct AutonomousLifecycleTerminalOutcomeStageObservation {
     source_kind: AutonomousLifecycleTerminalOutcomeSourceKind,
     stage: AutonomousLifecycleTerminalOutcomeDurableStage,
 }
+/// Move-only Kura authorization for removing one State-committed Queue owner.
+///
+/// Construction reopens the hash-addressed entrypoint claim, its exact
+/// producer-authenticated payload and retirement, and the matching Complete
+/// terminal outcome. Queue must still join the target to its current durable
+/// QueuePlan binding and prove that no newer reservation owns the hash.
+#[must_use = "Kura terminal cleanup authorization must be consumed by Queue"]
+pub(crate) struct AutonomousLifecycleCommittedQueueCleanupAuthorization {
+    target_entrypoint_hash: Hash,
+    retirement_hash: Hash,
+    terminal_outcome_hash: Hash,
+    reservation_group: LaneQueueReservationGroupBindingV1,
+    ordered_keys: Vec<LaneQueueReservationKeyV1>,
+}
+impl AutonomousLifecycleCommittedQueueCleanupAuthorization {
+    /// Build exact structural authority for Queue unit tests.
+    #[cfg(test)]
+    pub(crate) fn for_queue_test(
+        target_entrypoint_hash: Hash,
+        ordered_keys: Vec<LaneQueueReservationKeyV1>,
+    ) -> Self {
+        let reservation_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
+                .expect("test Queue cleanup authority must carry one exact reservation group");
+        Self {
+            target_entrypoint_hash,
+            retirement_hash: Hash::new(b"test durable retirement"),
+            terminal_outcome_hash: Hash::new(b"test Complete terminal outcome"),
+            reservation_group,
+            ordered_keys,
+        }
+    }
+
+    /// Return the exact entrypoint whose later State commit may be removed.
+    #[must_use]
+    pub(crate) const fn target_entrypoint_hash(&self) -> Hash {
+        self.target_entrypoint_hash
+    }
+
+    /// Consume the authorization into the exact facts Queue must revalidate.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Hash,
+        Hash,
+        Hash,
+        LaneQueueReservationGroupBindingV1,
+        Vec<LaneQueueReservationKeyV1>,
+    ) {
+        (
+            self.target_entrypoint_hash,
+            self.retirement_hash,
+            self.terminal_outcome_hash,
+            self.reservation_group,
+            self.ordered_keys,
+        )
+    }
+}
 impl AutonomousLifecycleTerminalOutcomeStageObservation {
     /// Return the exact order-sensitive reservation-group identity.
     #[must_use]

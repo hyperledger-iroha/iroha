@@ -12,7 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CARGO_LOCK = REPO_ROOT / "Cargo.lock"
 CARGO_LOCK_SHA256 = (
-    "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7"
+    "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
 )
 
 TOKEN_PATH = REPO_ROOT / "crates/iroha_crypto/src/soranet/token.rs"

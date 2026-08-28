@@ -219,7 +219,7 @@ require_exact_token \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=84"
+  "  readonly expected_corridor_leg_count=85"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -880,13 +880,13 @@ if (
         f"{canonical_production_test_count}"
     )
 production_modules = receipt_assignments.get("_PRODUCTION_MODULES")
-if not isinstance(production_modules, tuple) or len(production_modules) != 43:
-    reject("receipt writer must bind exactly 43 production modules")
+if not isinstance(production_modules, tuple) or len(production_modules) != 44:
+    reject("receipt writer must bind exactly 44 production modules")
 module_counts = {
     module: count for _leg_id, module, count in production_modules
 }
 if (
-    len(module_counts) != 43
+    len(module_counts) != 44
     or sum(module_counts.values()) != canonical_production_test_count
 ):
     reject(
@@ -917,10 +917,10 @@ runner_modules = shell_array("production_liveness_modules")
 runner_leg_ids = shell_array("production_liveness_leg_ids")
 receipt_modules = tuple(module for _leg_id, module, _count in production_modules)
 receipt_leg_ids = tuple(leg_id for leg_id, _module, _count in production_modules)
-if runner_modules != receipt_modules or len(set(runner_modules)) != 43:
-    reject("release runner must bind the exact 43 receipt production modules")
-if runner_leg_ids != receipt_leg_ids or len(set(runner_leg_ids)) != 43:
-    reject("release runner must bind the exact 43 receipt production leg IDs")
+if runner_modules != receipt_modules or len(set(runner_modules)) != 44:
+    reject("release runner must bind the exact 44 receipt production modules")
+if runner_leg_ids != receipt_leg_ids or len(set(runner_leg_ids)) != 44:
+    reject("release runner must bind the exact 44 receipt production leg IDs")
 
 expected_apalache_refinement_results = (
     (
@@ -976,12 +976,13 @@ expected_changed_module_counts = {
     "kura::tests": 18,
     "sumeragi::authoritative_runtime_gate_tests": 42,
     "sumeragi::serviced_candidate_store::tests": 1,
-    "sumeragi::v2_effects::tests": 70,
-    "sumeragi::v2::tests": 48,
+    "queue::tests": 1,
+    "sumeragi::v2_effects::tests": 66,
+    "sumeragi::v2::tests": 49,
     "sumeragi::v2_runtime::tests": 65,
     "sumeragi::v2_certified_serve_payload_store::tests": 11,
     "sumeragi::v2_lifecycle_coordinator": 42,
-    "sumeragi::v2_runner::lifecycle_height_driver::tests": 1,
+    "sumeragi::v2_runner::lifecycle_height_driver::tests": 2,
     "merge_sidecar::tests": 118,
     "state::tests": 1,
     "sumeragi::v2_lane_work::tests": 63,
@@ -991,7 +992,7 @@ expected_changed_module_counts = {
     "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
     "network::handle_update_tests": 4,
-    "network_relay_tests": 4,
+    "network_relay_tests": 5,
 }
 if any(
     module_counts.get(module) != expected
@@ -1014,8 +1015,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "2858dd2206f1374c044fa0b3c0d3f02a"
-    "02cb7b2190d65540e13ce34ee35c6470"
+    "39d0b3083847ad0ad8bcf5c67469b20b"
+    "9a056148fad90679d753a9e63b07455b"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -2694,4 +2695,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] 84 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 43 modules, exact 522/522 G-UNIT (316 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 85 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 44 modules, exact 522/522 G-UNIT (316 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

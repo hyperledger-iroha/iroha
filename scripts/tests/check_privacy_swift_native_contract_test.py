@@ -116,7 +116,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             fake_python = tools / "python"
             fake_python.write_text(
                 "#!/usr/bin/env bash\n"
-                f'[[ "${{!#}}" == "{tracked}" ]] && echo "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7" || echo "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"\n',
+                f'[[ "${{!#}}" == "{tracked}" ]] && echo "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" || echo "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"\n',
                 encoding="utf-8",
             )
             (tools / "uname").write_text("#!/usr/bin/env bash\necho Darwin\n", encoding="utf-8")
@@ -161,7 +161,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             release.write_text("wrong release\n", encoding="utf-8")
             fake_python.write_text(
                 "#!/usr/bin/env bash\n"
-                f'[[ "${{!#}}" == "{tracked}" ]] && echo "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7" || echo "'
+                f'[[ "${{!#}}" == "{tracked}" ]] && echo "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" || echo "'
                 + ("0" * 64)
                 + '"\n',
                 encoding="utf-8",
