@@ -157,8 +157,10 @@ use std::{
 };
 use tokio::{sync::RwLock as AsyncRwLock, task::JoinHandle};
 #[cfg(target_os = "linux")]
+#[path = "soracloud_runtime/inrou_cgroup.rs"]
 mod inrou_cgroup;
 #[cfg(target_os = "linux")]
+#[path = "soracloud_runtime/inrou_namespace.rs"]
 mod inrou_namespace;
 #[path = "soracloud_runtime/remote_stream_token_auth.rs"]
 mod remote_stream_token_auth;
@@ -273,7 +275,6 @@ const SORACLOUD_LOCAL_HYDRATION_STREAM_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 const SORACLOUD_OPERATOR_PRESEED_MAX_MANIFEST_SCAN_V1: usize = 10_000;
 const SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const SORACLOUD_INROU_LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
-const SORACLOUD_INROU_HOST_COMMAND_STDOUT_MAX_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QMP_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "linux")]
@@ -6629,7 +6630,7 @@ impl SoracloudRuntimeManager {
             .iter()
             .map(PathBuf::as_path)
             .collect::<Vec<_>>();
-        let worker_cgroup = inrou_cgroup::InrouWorkerCgroup::prepare(
+        let mut worker_cgroup = inrou_cgroup::InrouWorkerCgroup::prepare(
             inrou_cgroup::InrouCgroupWorkerKey {
                 service_name: &cache_key.service_name,
                 service_version: &cache_key.service_version,
@@ -7481,79 +7482,7 @@ impl SoracloudRuntimeManager {
         }
         Ok(None)
     }
-    fn read_committed_sorafs_directory_payload_by_digest(
-        &self,
-        view: &StateView<'_>,
-        remote_sources: &[RemoteHydrationSource],
-        manifest_digest: [u8; 32],
-        expected_manifest_cid: &[u8],
-    ) -> eyre::Result<Option<(Vec<u8>, Vec<SorafsHydratedFileLayout>)>> {
-        if let Some(sorafs_node) = self.sorafs_node.as_ref()
-            && sorafs_node.is_enabled()
-            && let Ok(manifest) = sorafs_node.manifest_metadata_by_digest(&manifest_digest)
-        {
-            if manifest.manifest_cid() != expected_manifest_cid {
-                eyre::bail!(
-                    "local SoraFS manifest CID does not match the signed Inrou artifact reference"
-                );
-            }
-            if manifest.content_length() == 0
-                || manifest.content_length() > self.in_memory_hydration_payload_limit()
-            {
-                eyre::bail!(
-                    "local SoraFS guest-image payload is empty or exceeds the configured hydration limit"
-                );
-            }
-            if manifest.files().is_empty()
-                || manifest.files().len()
-                    > usize::try_from(SORA_INROU_GUEST_IMAGE_MAX_MEMBERS_V1).unwrap_or(usize::MAX)
-            {
-                eyre::bail!(
-                    "local SoraFS guest-image manifest file count is outside the configured range"
-                );
-            }
-            let content_length =
-                usize::try_from(manifest.content_length()).wrap_err_with(|| {
-                    format!(
-                        "convert committed SoraFS manifest {} content length to usize",
-                        hex::encode(manifest_digest)
-                    )
-                })?;
-            let payload = sorafs_node
-                .read_payload_range(manifest.manifest_id(), 0, content_length)
-                .wrap_err_with(|| {
-                    format!(
-                        "read committed SoraFS payload for manifest {}",
-                        hex::encode(manifest_digest)
-                    )
-                })?;
-            if payload.len() != content_length
-                || blake3::hash(&payload).as_bytes() != manifest.payload_digest()
-            {
-                eyre::bail!(
-                    "local SoraFS guest-image payload does not match committed storage metadata"
-                );
-            }
-            let files = manifest
-                .files()
-                .iter()
-                .map(|file| SorafsHydratedFileLayout {
-                    path: file.path.clone(),
-                    offset: file.offset,
-                    size: file.size,
-                })
-                .collect();
-            return Ok(Some((payload, files)));
-        }
-        if !manifest_is_committed(view, &self.state, &manifest_digest) {
-            return Ok(None);
-        }
-        self.read_committed_remote_sorafs_directory_payload(
-            remote_sources,
-            &hex::encode(manifest_digest),
-            expected_manifest_cid,
-        )
-    }
+    #[cfg(test)]
     fn read_committed_remote_sorafs_directory_payload(
         &self,
         remote_sources: &[RemoteHydrationSource],
@@ -9601,6 +9530,7 @@ fn content_type_for_path(path: &str) -> &'static str {
         _ => "application/octet-stream",
     }
 }
+#[cfg(test)]
 fn deployment_lifecycle_sequence_lower_bound(deployment: &SoraServiceDeploymentStateV1) -> u64 {
     let mut lower_bound = deployment.process_started_sequence;
     for entry in deployment.service_configs.values() {
@@ -9622,10 +9552,12 @@ fn deployment_lifecycle_sequence_lower_bound(deployment: &SoraServiceDeploymentS
     }
     lower_bound
 }
+#[cfg(test)]
 fn observe_soracloud_audit_sequence(audit_head: &mut Option<u64>, sequence: u64) {
     let next = (*audit_head).map_or(sequence, |head| head.max(sequence));
     *audit_head = Some(next);
 }
+#[cfg(test)]
 fn observe_keyed_soracloud_audit_sequence(
     audit_head: &mut Option<u64>,
     store: &str,
@@ -9640,6 +9572,7 @@ fn observe_keyed_soracloud_audit_sequence(
     observe_soracloud_audit_sequence(audit_head, embedded_sequence);
     Ok(())
 }
+#[cfg(test)]
 fn current_soracloud_audit_sequence(world: &impl WorldReadOnly) -> eyre::Result<u64> {
     let mut audit_head = None::<u64>;
     for (stored_sequence, event) in world.soracloud_service_audit_events().iter() {
@@ -10931,6 +10864,7 @@ fn sanitized_relative_material_path(key: &str) -> Result<PathBuf, VMError> {
     }
     Ok(path)
 }
+#[cfg(test)]
 fn parse_soracloud_egress_url(raw: &str) -> Option<reqwest::Url> {
     if raw.is_empty()
         || raw.trim() != raw
@@ -12072,8 +12006,10 @@ struct PortableVmLeaseDisk {
     mount_path: String,
     image_path: PathBuf,
     image_name: OsString,
+    #[cfg(all(test, unix))]
     binding_path: PathBuf,
     binding_name: OsString,
+    #[cfg(all(test, unix))]
     initialized_marker_path: PathBuf,
     initialized_marker_name: OsString,
     directory: PinnedInrouDirectory,
@@ -12786,6 +12722,7 @@ impl PortableVmReplicaEgressAccounting {
         Ok(reserved)
     }
 
+    #[cfg(test)]
     fn revision_accounted_egress_bytes(&self) -> u64 {
         self.revision.accounted_egress_bytes()
     }
@@ -15461,8 +15398,10 @@ fn ensure_inrou_portable_lease_disks(
         let image_path = volume_dir.path().join(&image_name);
         let binding = inrou_lease_disk_binding(plan, volume, &filesystem_uuid)?;
         let binding_name = inrou_lease_disk_sidecar_name(&image_name, "binding-v1")?;
+        #[cfg(all(test, unix))]
         let binding_path = volume_dir.path().join(&binding_name);
         let initialized_marker_name = inrou_lease_disk_sidecar_name(&image_name, "initialized-v1")?;
+        #[cfg(all(test, unix))]
         let initialized_marker_path = volume_dir.path().join(&initialized_marker_name);
         let image_exists = open_reusable_inrou_disk_at(
             &volume_dir,
@@ -15527,8 +15466,10 @@ fn ensure_inrou_portable_lease_disks(
             mount_path: volume.mount_path.clone(),
             image_path,
             image_name,
+            #[cfg(all(test, unix))]
             binding_path,
             binding_name,
+            #[cfg(all(test, unix))]
             initialized_marker_path,
             initialized_marker_name,
             directory: volume_dir,
@@ -17054,9 +16995,11 @@ fn finish_inrou_stdout_drain_bounded(
         .map_err(|_| eyre::eyre!("host-command stdout drain panicked"))?
         .wrap_err("drain bounded host-command stdout")
 }
+#[cfg(all(test, not(windows)))]
 fn run_host_command(program: &Path, args: &[&str]) -> eyre::Result<()> {
     run_host_command_with_timeout(program, args, Duration::from_secs(10 * 60))
 }
+#[cfg(all(test, not(windows)))]
 fn run_host_command_with_timeout(
     program: &Path,
     args: &[&str],
@@ -17841,9 +17784,6 @@ fn yaml_block_literal(contents: &str, indent: usize) -> String {
         output.push('\n');
     }
     output
-}
-fn yaml_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
@@ -19981,6 +19921,7 @@ fn validate_remote_hydration_file_plan(
     }
     Ok(())
 }
+#[cfg(test)]
 fn canonical_remote_hydration_file_layouts(
     plan: &RemoteHydrationPlan,
     car_plan: &CarBuildPlan,
@@ -20239,6 +20180,7 @@ fn materialize_operator_preseed_sorafs_files(
     target_root.directory.sync_all()?;
     Ok(())
 }
+#[cfg(test)]
 fn materialize_sorafs_payload_files(
     payload: &[u8],
     files: &[SorafsHydratedFileLayout],
@@ -20347,12 +20289,14 @@ fn materialize_sorafs_payload_files(
     }
     materialize_sorafs_directory_transaction(payload, &planned, target_root, maximum_total_bytes)
 }
+#[cfg(test)]
 #[derive(Debug)]
 struct SorafsMaterializationFile {
     target: PathBuf,
     start: usize,
     end: usize,
 }
+#[cfg(test)]
 fn materialize_sorafs_directory_transaction(
     payload: &[u8],
     planned: &[SorafsMaterializationFile],
@@ -20461,6 +20405,7 @@ fn materialize_sorafs_directory_transaction(
     }
     transaction_result
 }
+#[cfg(test)]
 fn recover_sorafs_materialization_swap(
     payload: &[u8],
     planned: &[SorafsMaterializationFile],
@@ -20501,6 +20446,7 @@ fn recover_sorafs_materialization_swap(
     }
     Ok(())
 }
+#[cfg(test)]
 fn sorafs_materialization_matches(
     payload: &[u8],
     planned: &[SorafsMaterializationFile],
@@ -20530,6 +20476,7 @@ fn sorafs_materialization_matches(
     }
     Ok(true)
 }
+#[cfg(test)]
 fn soracloud_file_matches_bytes(path: &Path, expected: &[u8]) -> io::Result<bool> {
     let (mut file, fingerprint) =
         open_soracloud_regular_file_no_follow(path, "existing SoraFS materialization member")?;
@@ -20555,6 +20502,7 @@ fn soracloud_file_matches_bytes(path: &Path, expected: &[u8]) -> io::Result<bool
     Ok(same_soracloud_regular_file(&fingerprint, &opened_after)
         && same_soracloud_regular_file(&opened_after, &named_after))
 }
+#[cfg(test)]
 fn copy_sorafs_materialization_tree(
     source: &Path,
     destination: &Path,
@@ -20625,6 +20573,7 @@ fn copy_sorafs_materialization_tree(
     sync_directory_if_supported(destination)?;
     Ok(())
 }
+#[cfg(test)]
 fn ensure_existing_directory_is_not_symlink(path: &Path, label: &str) -> eyre::Result<()> {
     let metadata = fs::symlink_metadata(path).wrap_err_with(|| format!("inspect {label}"))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -20632,6 +20581,7 @@ fn ensure_existing_directory_is_not_symlink(path: &Path, label: &str) -> eyre::R
     }
     Ok(())
 }
+#[cfg(test)]
 fn remove_owned_materialization_directory(path: &Path) -> eyre::Result<()> {
     let metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("inspect owned SoraFS transaction path {}", path.display()))?;
@@ -20644,13 +20594,13 @@ fn remove_owned_materialization_directory(path: &Path) -> eyre::Result<()> {
     fs::remove_dir_all(path)
         .wrap_err_with(|| format!("remove owned SoraFS transaction path {}", path.display()))
 }
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn sync_directory_if_supported(path: &Path) -> eyre::Result<()> {
     fs::File::open(path)
         .and_then(|directory| directory.sync_all())
         .wrap_err_with(|| format!("sync directory {}", path.display()))
 }
-#[cfg(not(unix))]
+#[cfg(all(test, not(unix)))]
 fn sync_directory_if_supported(_path: &Path) -> eyre::Result<()> {
     Ok(())
 }
@@ -22841,16 +22791,6 @@ mod tests {
             let manager = SoracloudRuntimeManager::new(config, Arc::clone(state));
             Ok(Self { manager, temp_dir })
         }
-        fn map_manager(
-            self,
-            map: impl FnOnce(SoracloudRuntimeManager) -> SoracloudRuntimeManager,
-        ) -> Self {
-            let Self { manager, temp_dir } = self;
-            Self {
-                manager: map(manager),
-                temp_dir,
-            }
-        }
         fn path(&self) -> &Path {
             self.temp_dir.path()
         }
@@ -24654,28 +24594,6 @@ mod tests {
                 extra_headers: Vec::new(),
             }
         }
-        fn head_ok(content_type: &'static str, content_length: u64) -> Self {
-            Self {
-                status_code: 200,
-                content_type,
-                body: Vec::new(),
-                content_length_override: Some(content_length),
-                extra_headers: Vec::new(),
-            }
-        }
-        fn with_header(mut self, key: &str, value: &str) -> Self {
-            self.extra_headers.push((key.to_owned(), value.to_owned()));
-            self
-        }
-        fn text(status_code: u16, body: &str) -> Self {
-            Self {
-                status_code,
-                content_type: "text/plain; charset=utf-8",
-                body: body.as_bytes().to_vec(),
-                content_length_override: None,
-                extra_headers: Vec::new(),
-            }
-        }
         fn not_found() -> Self {
             Self {
                 status_code: 404,
@@ -24685,13 +24603,6 @@ mod tests {
                 extra_headers: Vec::new(),
             }
         }
-    }
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    struct CapturedHttpRequest {
-        method: String,
-        path: String,
-        headers: BTreeMap<String, String>,
-        body: Vec<u8>,
     }
     struct HttpRouteFixture {
         base_url: String,
@@ -25988,138 +25899,6 @@ mod tests {
         stream.write_all(headers.as_bytes())?;
         stream.write_all(&response.body)?;
         Ok(())
-    }
-    fn parse_http_request(buffer: &[u8]) -> Result<CapturedHttpRequest> {
-        let Some(header_end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") else {
-            return Err(eyre::eyre!(
-                "HTTP fixture request missing header terminator"
-            ));
-        };
-        let header_bytes = &buffer[..header_end];
-        let request = String::from_utf8_lossy(header_bytes);
-        let mut lines = request.lines();
-        let request_line = lines.next().unwrap_or_default();
-        let mut parts = request_line.split_whitespace();
-        let method = parts.next().unwrap_or_default().to_owned();
-        let path = parts.next().unwrap_or_default().to_owned();
-        let mut headers = BTreeMap::new();
-        let mut content_length = 0_usize;
-        for line in lines {
-            let Some((key, value)) = line.split_once(':') else {
-                continue;
-            };
-            let key = key.trim().to_ascii_lowercase();
-            let value = value.trim().to_owned();
-            if key == "content-length" {
-                content_length = value.parse::<usize>().unwrap_or(0);
-            }
-            headers.insert(key, value);
-        }
-        let body_start = header_end + 4;
-        if buffer.len() < body_start.saturating_add(content_length) {
-            return Err(eyre::eyre!(
-                "HTTP fixture request body shorter than declared Content-Length"
-            ));
-        }
-        Ok(CapturedHttpRequest {
-            method,
-            path,
-            headers,
-            body: buffer[body_start..body_start + content_length].to_vec(),
-        })
-    }
-    fn read_http_request_full(stream: &mut std::net::TcpStream) -> Result<CapturedHttpRequest> {
-        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-        let mut buffer = Vec::new();
-        let mut chunk = [0_u8; 1024];
-        let mut expected_total_len = None;
-        loop {
-            match stream.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(read) => {
-                    buffer.extend_from_slice(&chunk[..read]);
-                    if expected_total_len.is_none()
-                        && let Some(header_end) =
-                            buffer.windows(4).position(|window| window == b"\r\n\r\n")
-                    {
-                        let header_text = String::from_utf8_lossy(&buffer[..header_end]);
-                        let content_length = header_text
-                            .lines()
-                            .skip(1)
-                            .find_map(|line| {
-                                let (key, value) = line.split_once(':')?;
-                                key.trim()
-                                    .eq_ignore_ascii_case("content-length")
-                                    .then(|| value.trim().parse::<usize>().ok())
-                                    .flatten()
-                            })
-                            .unwrap_or(0);
-                        expected_total_len = Some(header_end + 4 + content_length);
-                    }
-                    if expected_total_len.is_some_and(|expected| buffer.len() >= expected) {
-                        break;
-                    }
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    break;
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
-        parse_http_request(&buffer)
-    }
-    fn spawn_recording_http_route_fixture(
-        routes: BTreeMap<(String, String), HttpFixtureResponse>,
-    ) -> Result<(HttpRouteFixture, Arc<Mutex<Vec<CapturedHttpRequest>>>)> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        listener.set_nonblocking(true)?;
-        let base_url = format!("http://{}", listener.local_addr()?);
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let captured_requests = Arc::clone(&captured);
-        let (stop_tx, stop_rx) = mpsc::channel::<()>();
-        let handle = thread::spawn(move || {
-            loop {
-                if stop_rx.try_recv().is_ok() {
-                    break;
-                }
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let response = match read_http_request_full(&mut stream) {
-                            Ok(request) => {
-                                let key = (request.method.clone(), request.path.clone());
-                                captured_requests
-                                    .lock()
-                                    .expect("fixture capture mutex")
-                                    .push(request);
-                                routes
-                                    .get(&key)
-                                    .cloned()
-                                    .unwrap_or_else(HttpFixtureResponse::not_found)
-                            }
-                            Err(_) => HttpFixtureResponse::not_found(),
-                        };
-                        let _ = write_http_response(&mut stream, &response);
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-        Ok((
-            HttpRouteFixture {
-                base_url,
-                stop_tx,
-                handle: Some(handle),
-            },
-            captured,
-        ))
     }
     fn spawn_remote_hydration_fixture(
         fixtures: &[RemoteManifestFixture],
@@ -29020,7 +28799,7 @@ mod tests {
             .insert(reporter_key, Arc::new(parking_lot::Mutex::new(worker)));
         fs::write(&state_dir, b"not a directory")?;
 
-        manager
+        let _reconcile_error = manager
             .reconcile_once()
             .expect_err("an unusable runtime state directory must fail reconciliation");
         assert!(manager.hosted_http_workers.lock().is_empty());
@@ -31726,8 +31505,9 @@ mod tests {
         let mut control = PortableVmQmpControl {
             reader: io::BufReader::new(supervisor_qmp),
         };
-        request_inrou_qmp_system_powerdown(&mut control, Duration::from_secs(1))
-            .expect_err("a rejected system_powerdown request must fail closed");
+        let _powerdown_rejection_error =
+            request_inrou_qmp_system_powerdown(&mut control, Duration::from_secs(1))
+                .expect_err("a rejected system_powerdown request must fail closed");
         qemu.join().expect("QMP rejection fixture")?;
         Ok(())
     }
@@ -33275,17 +33055,19 @@ mod tests {
             );
         }
         validate_inrou_reserved_shadow("iroha-inrou-0:!:20000:0:99999:7:::\n", &identity)?;
-        validate_inrou_reserved_shadow("iroha-inrou-0:$6$hash:20000:0:99999:7:::\n", &identity)
-            .expect_err("an unlocked password must fail closed");
-        validate_inrou_reserved_shadow("iroha-inrou-1:!:20000:0:99999:7:::\n", &identity)
-            .expect_err("a shadow row for a different canonical slot must fail closed");
+        let _unlocked_shadow_error =
+            validate_inrou_reserved_shadow("iroha-inrou-0:$6$hash:20000:0:99999:7:::\n", &identity)
+                .expect_err("an unlocked password must fail closed");
+        let _wrong_slot_shadow_error =
+            validate_inrou_reserved_shadow("iroha-inrou-1:!:20000:0:99999:7:::\n", &identity)
+                .expect_err("a shadow row for a different canonical slot must fail closed");
         validate_inrou_reserved_gshadow("iroha-inrou-0:!::\n", &identity)?;
         for invalid in [
             "iroha-inrou-1:!::\n",
             "iroha-inrou-0:!:root:iroha-inrou-0\n",
             "docker:!:iroha-inrou-0:\niroha-inrou-0:!::\n",
         ] {
-            validate_inrou_reserved_gshadow(invalid, &identity)
+            let _gshadow_membership_error = validate_inrou_reserved_gshadow(invalid, &identity)
                 .expect_err("gshadow administrators or members must fail closed");
         }
 
@@ -33302,7 +33084,7 @@ mod tests {
             &identity,
         )?;
         for covered in [100_000, 165_535] {
-            validate_inrou_subordinate_id_unmapped(
+            let _covered_subid_error = validate_inrou_subordinate_id_unmapped(
                 "alice:100000:65536\n",
                 "subuid",
                 covered,
@@ -33310,7 +33092,7 @@ mod tests {
             )
             .expect_err("both subordinate-range boundaries must reserve the child id");
         }
-        validate_inrou_subordinate_id_unmapped(
+        let _highest_subid_error = validate_inrou_subordinate_id_unmapped(
             "alice:4294967294:1\n",
             "subuid",
             u32::MAX - 1,
@@ -33318,8 +33100,13 @@ mod tests {
         )
         .expect_err("the highest valid subordinate id range must be enforced");
         for forbidden_owner in ["iroha-inrou-0:200000:1\n", "70000:200000:1\n"] {
-            validate_inrou_subordinate_id_unmapped(forbidden_owner, "subuid", 70_000, &identity)
-                .expect_err("service and numeric identity owners must not receive subids");
+            let _forbidden_subid_owner_error = validate_inrou_subordinate_id_unmapped(
+                forbidden_owner,
+                "subuid",
+                70_000,
+                &identity,
+            )
+            .expect_err("service and numeric identity owners must not receive subids");
         }
         for malformed in [
             "alice:100000:0\n",
@@ -33327,8 +33114,11 @@ mod tests {
             "alice:not-a-number:1\n",
             "alice:100000\n",
         ] {
-            validate_inrou_subordinate_id_unmapped(malformed, "subgid", 70_000, &identity)
-                .expect_err("malformed, empty, or overflowing subordinate ranges must fail closed");
+            let _malformed_subid_error =
+                validate_inrou_subordinate_id_unmapped(malformed, "subgid", 70_000, &identity)
+                    .expect_err(
+                        "malformed, empty, or overflowing subordinate ranges must fail closed",
+                    );
         }
         Ok(())
     }

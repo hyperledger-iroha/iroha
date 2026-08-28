@@ -1108,7 +1108,7 @@ fn store_record_with_previous_dependencies(
 }
 
 /// Store a Kaigi fixture through the same metadata and reverse-index path as production.
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 pub(crate) fn store_kaigi_record_for_testing(
     state_transaction: &mut StateTransaction<'_, '_>,
     record: &KaigiRecord,

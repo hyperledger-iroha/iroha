@@ -4868,11 +4868,12 @@ mod executor_model {
             let unmarked = unmarked_iroha_hash(b"unmarked Iroha hash fixture");
             validate_lower_hex("raw SHA-256 fixture", &unmarked, 64)
                 .expect("raw SHA-256 does not impose Iroha marker semantics");
-            validate_canonical_iroha_hash("fixture hash", &unmarked)
+            let _error = validate_canonical_iroha_hash("fixture hash", &unmarked)
                 .expect_err("an Iroha hash must carry its marker bit");
 
-            validate_canonical_iroha_hash("fixture hash", &canonical.to_ascii_uppercase())
-                .expect_err("an Iroha hash must use its canonical lowercase spelling");
+            let _error =
+                validate_canonical_iroha_hash("fixture hash", &canonical.to_ascii_uppercase())
+                    .expect_err("an Iroha hash must use its canonical lowercase spelling");
         }
 
         #[test]
@@ -5288,7 +5289,7 @@ mod executor_model {
             ] {
                 let mut canary = canonical.clone();
                 canary.service_version = malformed;
-                validate_inrou(&canary)
+                let _error = validate_inrou(&canary)
                     .expect_err("legacy or malformed Inrou service revisions must fail closed");
             }
         }
@@ -5307,7 +5308,7 @@ mod executor_model {
             ] {
                 let mut malformed = canonical.clone();
                 mutate(&mut malformed);
-                validate_inrou(&malformed)
+                let _error = validate_inrou(&malformed)
                     .expect_err("printable legacy hash spellings must fail closed");
             }
         }
@@ -5463,22 +5464,23 @@ mod executor_model {
 
             let mut invalid_authority = inventory.faucet_policy.clone();
             invalid_authority.authority = "not-an-account".to_owned();
-            validate_faucet_policy(&invalid_authority)
+            let _error = validate_faucet_policy(&invalid_authority)
                 .expect_err("invalid faucet authority must fail closed");
 
             let mut invalid_asset = inventory.faucet_policy.clone();
             invalid_asset.asset_definition_id = "xor#universal".to_owned();
-            validate_faucet_policy(&invalid_asset)
+            let _error = validate_faucet_policy(&invalid_asset)
                 .expect_err("an alias or non-Taira faucet asset must fail closed");
 
             let mut zero_amount = inventory.faucet_policy.clone();
             zero_amount.amount = Quantity::zero();
-            validate_faucet_policy(&zero_amount).expect_err("zero faucet amount must fail closed");
+            let _error = validate_faucet_policy(&zero_amount)
+                .expect_err("zero faucet amount must fail closed");
 
             let admitted = signed_admitted(inventory, 1_000_000);
             let mut substituted = admitted.authorization.clone();
             substituted.claims.faucet_policy.amount = Quantity::from(1_u32);
-            verify_authorization(
+            let _error = verify_authorization(
                 &admitted.inventory,
                 &admitted.inventory_sha256,
                 &substituted,

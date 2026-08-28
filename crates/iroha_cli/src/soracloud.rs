@@ -19479,10 +19479,10 @@ mod tests {
             sample_published_inrou_artifact(0xAB)
         );
 
-        canonical_taira_inrou_source_fixture()
+        let _error = canonical_taira_inrou_source_fixture()
             .into_admitted(BTreeMap::new())
             .expect_err("every draft guest ISA must have a published artifact");
-        canonical_taira_inrou_source_fixture()
+        let _error = canonical_taira_inrou_source_fixture()
             .into_admitted(BTreeMap::from([
                 (
                     SoraInrouGuestIsaV1::Aarch64,
@@ -19530,20 +19530,20 @@ mod tests {
     fn unpublished_source_validation_reuses_common_container_rules() {
         validate_unpublished_deployment_source(&canonical_taira_inrou_source_fixture())
             .expect("canonical unpublished source must validate");
-        UnpublishedContainerManifestV1::from_non_inrou_manifest(
+        let _error = UnpublishedContainerManifestV1::from_non_inrou_manifest(
             canonical_taira_inrou_bundle_fixture().container,
         )
         .expect_err("an admitted Inrou manifest must never be downgraded to a workspace draft");
         let mut invalid = canonical_taira_inrou_source_fixture();
         invalid.container.bundle_path.clear();
         refresh_taira_source_container_reference(&mut invalid);
-        validate_unpublished_deployment_source(&invalid)
+        let _error = validate_unpublished_deployment_source(&invalid)
             .expect_err("common container bundle-path validation must run before upload");
 
         let mut missing_healthcheck = canonical_taira_inrou_source_fixture();
         missing_healthcheck.container.lifecycle.healthcheck_path = None;
         refresh_taira_source_container_reference(&mut missing_healthcheck);
-        validate_unpublished_deployment_source(&missing_healthcheck)
+        let _error = validate_unpublished_deployment_source(&missing_healthcheck)
             .expect_err("cross-manifest lifecycle validation must run before upload");
     }
     #[test]
@@ -19563,7 +19563,7 @@ mod tests {
         refresh_taira_source_container_reference(&mut lifecycle);
         validate_taira_inrou_canary_bundle(&admit_taira_inrou_source(lifecycle.clone()))
             .expect("generic admission still accepts the alternate lifecycle");
-        validate_taira_inrou_canary_source_bundle(&lifecycle)
+        let _error = validate_taira_inrou_canary_source_bundle(&lifecycle)
             .expect_err("release staging must reject an alternate lifecycle");
 
         let mut rollout = canonical_taira_inrou_source_fixture();
@@ -19572,7 +19572,7 @@ mod tests {
                 .expect("nonzero rollout window");
         validate_taira_inrou_canary_bundle(&admit_taira_inrou_source(rollout.clone()))
             .expect("generic admission still accepts the alternate rollout policy");
-        validate_taira_inrou_canary_source_bundle(&rollout)
+        let _error = validate_taira_inrou_canary_source_bundle(&rollout)
             .expect_err("release staging must reject an alternate rollout policy");
     }
     #[test]
@@ -19790,7 +19790,7 @@ mod tests {
             }
         }
 
-        create_taira_inrou_canary_workspace(&kernel, &rootfs, &initrd, &output)
+        let _error = create_taira_inrou_canary_workspace(&kernel, &rootfs, &initrd, &output)
             .expect_err("existing workspaces must never be reused");
         validate_generated_taira_inrou_workspace(&output)
             .expect("failed reuse must preserve the original valid workspace");
@@ -19839,7 +19839,7 @@ mod tests {
 
         let mut trailing = canonical;
         trailing.push(0);
-        validate_taira_inrou_canary_bundle_payload(&trailing)
+        let _error = validate_taira_inrou_canary_bundle_payload(&trailing)
             .expect_err("trailing archive bytes must fail");
     }
     fn taira_inrou_canary_python_command() -> Command {
@@ -21087,19 +21087,19 @@ mod tests {
             Some("ops_agent".to_owned())
         );
         for noncanonical in [" café", "cafe\u{301}"] {
-            parse_hf_service_name_arg(noncanonical)
+            let _error = parse_hf_service_name_arg(noncanonical)
                 .expect_err("service-name trim and NFC aliases must fail");
         }
         for noncanonical in [" ops_agent", "ops_agent "] {
-            parse_hf_apartment_name_arg(Some(noncanonical))
+            let _error = parse_hf_apartment_name_arg(Some(noncanonical))
                 .expect_err("apartment-name trim aliases must fail");
         }
-        parse_asset_definition_arg(
+        let _error = parse_asset_definition_arg(
             "--lease-asset-definition",
             &format!(" {}", hf_shared_lease_asset_definition()),
         )
         .expect_err("lease asset surrounding whitespace must fail");
-        parse_hf_account_id_arg(Some(" account"))
+        let _error = parse_hf_account_id_arg(Some(" account"))
             .expect_err("account surrounding whitespace must fail before parsing");
     }
     #[test]
@@ -21124,19 +21124,19 @@ mod tests {
         );
 
         for noncanonical in [" café", "cafe\u{301}", "café "] {
-            parse_exact_name_arg("--service-name", noncanonical)
+            let _error = parse_exact_name_arg("--service-name", noncanonical)
                 .expect_err("Name trim and NFC aliases must fail");
         }
         for noncanonical in [" config", "config ", "/config", "a/../config"] {
-            parse_service_material_name_arg("--config-name", noncanonical)
+            let _error = parse_service_material_name_arg("--config-name", noncanonical)
                 .expect_err("material-name aliases must fail");
         }
         for noncanonical in [" job-1", "job-1 ", "job 1", "jób-1"] {
-            parse_training_identifier_arg("--job-id", noncanonical)
+            let _error = parse_training_identifier_arg("--job-id", noncanonical)
                 .expect_err("training identifier aliases must fail");
         }
         for noncanonical in [" nightly-run", "nightly-run ", "nightly\nrun"] {
-            require_exact_nonempty_arg("--run-label", noncanonical)
+            let _error = require_exact_nonempty_arg("--run-label", noncanonical)
                 .expect_err("exact text aliases must fail");
         }
     }
@@ -23004,7 +23004,7 @@ mod tests {
         .expect("exact governed bundle pin");
 
         stage.bundle_manifest_digest_hex = "ef".repeat(32);
-        verify_taira_inrou_prepared_transaction_identity_v1(
+        let _error = verify_taira_inrou_prepared_transaction_identity_v1(
             &transaction,
             TairaInrouCanaryPreparedOperationV1::BundlePin,
             &stage,
@@ -23062,7 +23062,7 @@ mod tests {
             &binding.idempotency_key,
         )
         .expect("exact canonical Inrou deploy");
-        verify_taira_inrou_prepared_transaction_identity_v1(
+        let _error = verify_taira_inrou_prepared_transaction_identity_v1(
             &transaction,
             TairaInrouCanaryPreparedOperationV1::ServiceMutation,
             &stage,
@@ -24269,7 +24269,7 @@ mod tests {
                 .and_then(norito::json::Value::as_object_mut)
                 .expect("control-plane object")
                 .remove(field);
-            StatusOutput::from_network(endpoint.clone(), omitted, None)
+            let _error = StatusOutput::from_network(endpoint.clone(), omitted, None)
                 .expect_err("an omitted canonical control-plane key must fail");
         }
 
@@ -24279,7 +24279,7 @@ mod tests {
             .and_then(norito::json::Value::as_object_mut)
             .expect("control-plane object")
             .insert("legacy_services".to_owned(), norito::json::Value::Null);
-        StatusOutput::from_network(endpoint.clone(), unknown, None)
+        let _error = StatusOutput::from_network(endpoint.clone(), unknown, None)
             .expect_err("an unknown control-plane key must fail");
 
         let mut malformed = canonical.clone();
@@ -24288,7 +24288,7 @@ mod tests {
             .and_then(norito::json::Value::as_object_mut)
             .expect("control-plane object")
             .insert("services".to_owned(), norito::json::Value::Null);
-        StatusOutput::from_network(endpoint.clone(), malformed, None)
+        let _error = StatusOutput::from_network(endpoint.clone(), malformed, None)
             .expect_err("a malformed control-plane service list must fail");
 
         let mut inconsistent = canonical;
@@ -24467,14 +24467,14 @@ mod tests {
         assert!(error.to_string().contains("--service-name"));
         assert!(error.to_string().contains("--container"));
         assert!(error.to_string().contains("--service"));
-        resolve_required_workspace_service_name(
+        let _error = resolve_required_workspace_service_name(
             Some(" echo_console".to_owned()),
             None,
             None,
             "iroha soracloud service config-status",
         )
         .expect_err("service-name surrounding whitespace must fail rather than be trimmed");
-        resolve_required_workspace_service_name(
+        let _error = resolve_required_workspace_service_name(
             Some("cafe\u{301}".to_owned()),
             None,
             None,
@@ -25910,7 +25910,7 @@ mod tests {
         let key_pair = soracloud_fixture_key_pair(0x7B);
         let authority = AccountId::new(key_pair.public_key().clone());
 
-        signed_training_job_start_request(
+        let _error = signed_training_job_start_request(
             " web_portal",
             "model-1",
             "job-1",
@@ -25925,7 +25925,7 @@ mod tests {
             &key_pair,
         )
         .expect_err("training start must reject padded service names");
-        signed_training_job_checkpoint_request(
+        let _error = signed_training_job_checkpoint_request(
             "web_portal",
             "job-1 ",
             1,
@@ -25935,7 +25935,7 @@ mod tests {
             &key_pair,
         )
         .expect_err("training checkpoint must reject padded job IDs");
-        signed_training_job_retry_request(
+        let _error = signed_training_job_retry_request(
             "web_portal",
             "job-1",
             " retry",
@@ -25943,7 +25943,7 @@ mod tests {
             &key_pair,
         )
         .expect_err("training retry must reject padded reasons");
-        signed_model_artifact_register_request(
+        let _error = signed_model_artifact_register_request(
             "web_portal",
             "model-1",
             "job-1",
@@ -25956,7 +25956,7 @@ mod tests {
             &key_pair,
         )
         .expect_err("model artifact registration must reject padded dataset refs");
-        signed_model_weight_register_request(
+        let _error = signed_model_weight_register_request(
             "web_portal",
             "model-1",
             "v1 ",
@@ -25971,7 +25971,7 @@ mod tests {
             &key_pair,
         )
         .expect_err("model weight registration must reject padded versions");
-        signed_model_weight_promote_request(
+        let _error = signed_model_weight_promote_request(
             "web_portal",
             "cafe\u{301}",
             "v1",
@@ -25981,7 +25981,7 @@ mod tests {
             &key_pair,
         )
         .expect_err("model promotion must reject NFC aliases");
-        signed_model_weight_rollback_request(
+        let _error = signed_model_weight_rollback_request(
             "web_portal",
             "model-1",
             "v0",
@@ -26062,7 +26062,7 @@ mod tests {
         let mut container = fixture_container();
         let mut service = fixture_service();
         service.container.manifest_hash = Hash::new(Encode::encode(&container));
-        signed_bundle_request(
+        let _error = signed_bundle_request(
             SoraDeploymentBundleV1 {
                 schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
                 container: container.clone(),
@@ -26085,7 +26085,7 @@ mod tests {
                 [443],
             )]);
         service.container.manifest_hash = Hash::new(Encode::encode(&container));
-        signed_bundle_request(
+        let _error = signed_bundle_request(
             SoraDeploymentBundleV1 {
                 schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
                 container,
@@ -26923,7 +26923,7 @@ mod tests {
             " {\"inputs\":[]}",
             "{\"b\":1,\"a\":2}",
         ] {
-            parse_exact_agent_workflow_input_json(noncanonical)
+            let _error = parse_exact_agent_workflow_input_json(noncanonical)
                 .expect_err("non-canonical workflow JSON bytes must be rejected");
         }
     }
@@ -26934,7 +26934,7 @@ mod tests {
             "OpenAI/GPT-OSS"
         );
         for noncanonical in ["GPT-OSS", "OpenAI//GPT-OSS", " OpenAI/GPT-OSS"] {
-            parse_hf_repo_id_arg(noncanonical)
+            let _error = parse_hf_repo_id_arg(noncanonical)
                 .expect_err("repository aliases and whitespace must be rejected");
         }
     }
@@ -26950,7 +26950,7 @@ mod tests {
             "01234567",
             "0123456789ABCDEF0123456789ABCDEF01234567",
         ] {
-            parse_hf_revision_arg(revision)
+            let _error = parse_hf_revision_arg(revision)
                 .expect_err("mutable or noncanonical revision must fail");
         }
     }
