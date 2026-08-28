@@ -1984,6 +1984,8 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "Signer (minSdkVersion=28, maxSdkVersion=2147483647)",
             "Signer (minSdkVersion=35 (dev release=true), "
             "maxSdkVersion=2147483647)",
+            "Signer (minSdkVersion=28, "
+            "maxSdkVersion=36 (dev release=true))",
         )
         for signer_label in signer_labels:
             with self.subTest(signer_label=signer_label):
@@ -2039,6 +2041,61 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 ]
                 self.assertEqual(labels.count("configured Java executable"), 2)
                 self.assertEqual(labels.count("configured apksigner.jar"), 2)
+
+    def test_apk_verifier_matches_current_signer_across_certificate_labels(self) -> None:
+        main_apk, _, certificate_sha256 = (
+            _android_apk_fixtures.signed_candidate_apk_fixture(device_lab)
+        )
+        unrelated_digest = "ab" * 32
+        with tempfile.TemporaryDirectory() as temporary:
+            apk = Path(temporary) / "candidate.apk"
+            apk.write_bytes(main_apk)
+            completed = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=(
+                    "Source Stamp Signer certificate SHA-256 digest: "
+                    f"{unrelated_digest}\n"
+                    "Current APK signer certificate SHA-256 digest: "
+                    f"{certificate_sha256}\n"
+                ),
+                stderr="",
+            )
+            with mock.patch.object(
+                device_lab.subprocess,
+                "run",
+                return_value=completed,
+            ):
+                measured = device_lab.extract_apk_signing_certificate_sha256(apk)
+
+        self.assertEqual(measured, certificate_sha256)
+
+    def test_apk_verifier_rejects_report_without_parsed_current_signer(self) -> None:
+        main_apk, _, _ = _android_apk_fixtures.signed_candidate_apk_fixture(device_lab)
+        with tempfile.TemporaryDirectory() as temporary:
+            apk = Path(temporary) / "candidate.apk"
+            apk.write_bytes(main_apk)
+            completed = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=(
+                    "Source Stamp Signer certificate SHA-256 digest: "
+                    f"{'ab' * 32}\n"
+                ),
+                stderr="",
+            )
+            with (
+                mock.patch.object(
+                    device_lab.subprocess,
+                    "run",
+                    return_value=completed,
+                ),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "digest differs from parsed signer certificate DER",
+                ),
+            ):
+                device_lab.extract_apk_signing_certificate_sha256(apk)
 
     def test_candidate_bound_v2_slot_passes_exact_inventory_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

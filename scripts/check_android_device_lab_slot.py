@@ -491,13 +491,12 @@ def extract_apk_signing_certificate_sha256(apk_path: Path) -> str:
         raise ValueError("configured Java/apksigner.jar changed during verification")
     if verified.returncode != 0:
         raise ValueError("apksigner cryptographic verification failed")
-    # Older apksigner releases number current signers, while newer releases
-    # describe v3/v3.1 signers by their exact SDK range. Source-stamp and
-    # lineage certificates intentionally match neither form.
+    # apksigner has changed certificate labels across releases (numbered
+    # signers, SDK ranges, source stamps, and lineages). Treat labels as
+    # presentation only; the independently parsed v2/v3 signing block below
+    # identifies the one current signer that the verifier must report.
     verifier_digests = re.findall(
-        r"^Signer (?:#[1-9][0-9]*|"
-        r"\(minSdkVersion=[0-9]+(?: \(dev release=true\))?, "
-        r"maxSdkVersion=[0-9]+\)) certificate SHA-256 digest: "
+        r"^[ -~]{1,256} certificate SHA-256 digest: "
         r"([0-9A-Fa-f:]{64,95})$",
         verified.stdout,
         flags=re.MULTILINE,
@@ -505,8 +504,8 @@ def extract_apk_signing_certificate_sha256(apk_path: Path) -> str:
     normalized_verifier_digests = {
         digest.replace(":", "").lower() for digest in verifier_digests
     }
-    if len(normalized_verifier_digests) != 1:
-        raise ValueError("apksigner must report exactly one current signer digest")
+    if not normalized_verifier_digests:
+        raise ValueError("apksigner must report at least one certificate digest")
     with path.open("rb") as handle:
         tail_size = min(file_stat.st_size, 22 + 0xFFFF)
         handle.seek(file_stat.st_size - tail_size)
@@ -573,7 +572,7 @@ def extract_apk_signing_certificate_sha256(apk_path: Path) -> str:
     if pair_offset != len(pairs) or len(signer_certificates) != 1:
         raise ValueError("APK must expose exactly one current v2/v3 signer certificate")
     measured = hashlib.sha256(signer_certificates.pop()).hexdigest()
-    if normalized_verifier_digests != {measured}:
+    if measured not in normalized_verifier_digests:
         raise ValueError("apksigner digest differs from parsed signer certificate DER")
     return measured
 
