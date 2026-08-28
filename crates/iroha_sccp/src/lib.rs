@@ -1838,7 +1838,7 @@ pub struct SccpTonGroth16Bls12381ProofRequestV1 {
     pub backend: BridgeSccpDestinationProofBackendV1,
     /// Exact SORA Taira source profile.
     pub source_network: SccpNetworkV1,
-    /// Exact TON mainnet or testnet destination profile.
+    /// Exact TON mainnet destination profile.
     pub target_network: SccpNetworkV1,
     /// Structured base message inputs.
     pub public_inputs: SccpMessagePublicInputsV1,
@@ -5836,8 +5836,8 @@ pub fn decode_canonical_commitment_bytes(bytes: &[u8]) -> Option<SccpHubCommitme
 /// Derive the single V1 SCCP message identity for either lane direction.
 ///
 /// Exact source and target profiles are part of the preimage, preventing an
-/// otherwise identical payload from aliasing across external mainnet and
-/// testnet profiles. The governed destination binding is not part of this identity;
+/// otherwise identical payload from aliasing across the admitted external
+/// mainnet profiles. The governed destination binding is not part of this identity;
 /// replay protection therefore survives destination deployment rotation.
 /// The Keccak-256 input is `SCCP_LANE_MESSAGE_ID_PREFIX_V1 || 0x01 ||
 /// le_u32(lane_len) || canonical_lane || le_u32(payload_len) ||
@@ -6893,10 +6893,6 @@ mod tests {
                 SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             )
             .expect("valid exact EVM route configuration");
-        let custody = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
-            .expect("custody key")
-            .public_key()
-            .clone();
         let route = SccpGovernedRouteV1 {
             lane_id,
             route_id: route_id.to_owned(),
@@ -6916,7 +6912,6 @@ mod tests {
             sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
             settlement: SccpSoraSettlementV1 {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-                custody_owner: AccountId::new(custody),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
                 max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
             },
@@ -6944,10 +6939,6 @@ mod tests {
                 SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             )
             .expect("valid exact TON route configuration");
-        let custody = KeyPair::try_from_seed(vec![0x82; 32], Algorithm::Ed25519)
-            .expect("TON fixture custody key")
-            .public_key()
-            .clone();
         let route = SccpGovernedRouteV1 {
             lane_id,
             route_id: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.to_owned(),
@@ -6967,7 +6958,6 @@ mod tests {
             sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
             settlement: SccpSoraSettlementV1 {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-                custody_owner: AccountId::new(custody),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
                 max_outstanding_liability: TEST_MAX_OUTSTANDING_LIABILITY,
             },

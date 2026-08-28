@@ -13275,7 +13275,7 @@ pub mod isi {
             .get(route_key);
         ton_breaker_observation_allows_outbound_v1(
             route_key,
-            observation.as_deref(),
+            observation,
             state_transaction.block_unix_timestamp_ms(),
         )
         .map_err(invalid_bridge_proof)
