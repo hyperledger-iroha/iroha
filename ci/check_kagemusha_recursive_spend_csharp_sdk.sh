@@ -17,6 +17,7 @@ fi
 
 (
   cd "${ROOT_DIR}/csharp"
+  # The full C# workflow stages the native bridge; this DTO lane intentionally does not.
   "${DOTNET_BIN}" test \
     tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
     --artifacts-path "${ARTIFACTS}" \
@@ -26,7 +27,9 @@ fi
       Hyperledger.Iroha.Sdk.Tests.KagemushaToriiTests \
       Hyperledger.Iroha.Sdk.Tests.VerifyingKeyBackendTagTests \
       Hyperledger.Iroha.Sdk.Tests.ToriiClientTests \
-      Hyperledger.Iroha.Sdk.Tests.TransactionBuilderTests
+      Hyperledger.Iroha.Sdk.Tests.TransactionBuilderTests \
+    --filter-not-method \
+      Hyperledger.Iroha.Sdk.Tests.ToriiClientTests.HijiriQuoteNativeBridgeEncodesFreesAndRejectsMalformedResponse
 )
 
 client="${ROOT_DIR}/csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiKagemushaClient.cs"
