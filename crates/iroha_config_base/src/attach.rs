@@ -101,7 +101,7 @@ where
         Self { message }
     }
 }
-/// Attach a chain of extensions (see [`crate::util::ExtendsPaths`])
+/// Attach one edge in a configuration-extension chain.
 #[derive(Display, Debug)]
 #[display("extending ({depth}): `{}` -> `{}`", from.display(), to.display())]
 pub struct ExtendsChain {
@@ -142,44 +142,14 @@ impl UnknownParameter {
         Self { id }
     }
 }
-/// Attach an environment key-value entry
-#[derive(Display, Debug)]
-#[display("value: {var}={value}")]
-pub struct EnvValue {
-    var: String,
-    value: String,
-}
-impl EnvValue {
-    /// Capture the raw environment variable value used during configuration.
-    pub fn new(var: String, value: String) -> Self {
-        ensure_display_hook::<Self>();
-        Self { var, value }
-    }
-}
-/// Attach a raw configuration value rendered as a string.
-#[derive(Display, Debug)]
-#[display("actual value: {value}")]
-pub struct ConfigValue {
-    value: String,
-}
-impl ConfigValue {
-    /// Capture a configuration value for diagnostics.
-    pub fn new(value: impl Into<String>) -> Self {
-        ensure_display_hook::<Self>();
-        Self {
-            value: value.into(),
-        }
-    }
-}
 /// Attach config value and its origin.
 ///
 /// Usually constructed via [`crate::WithOrigin::into_attachment`].
 ///
-/// To support displaying values which don't implement [Display], it uses formats mechanism.
+/// To support displaying paths, it uses a format proxy.
 /// For example:
 ///
 /// - For [Path], use [`ConfigValueAndOrigin::display_path`]
-/// - For [Debug], use [`ConfigValueAndOrigin::display_as_debug`]
 ///
 /// Example usage with a path:
 ///
@@ -243,12 +213,6 @@ impl<T: AsRef<Path>> ConfigValueAndOrigin<T> {
         ConfigValueAndOrigin::new_internal(self.value, self.origin)
     }
 }
-impl<T: Debug> ConfigValueAndOrigin<T> {
-    /// Switch to [`FormatDebug`]
-    pub fn display_as_debug(self) -> ConfigValueAndOrigin<T, FormatDebug<T>> {
-        ConfigValueAndOrigin::new_internal(self.value, self.origin)
-    }
-}
 /// Workaround that [`ConfigValueAndOrigin`] uses to display a value that doesn't
 /// implement [`Display`] directly using some format, e.g. [`FormatPath`].
 pub trait DisplayProxy {
@@ -273,14 +237,6 @@ impl<T: AsRef<Path>> DisplayProxy for FormatPath<T> {
     type Base = T;
     fn fmt(value: &Self::Base, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", value.as_ref().display())
-    }
-}
-/// Indicates formatting using [`Debug`].
-pub struct FormatDebug<T>(PhantomData<T>);
-impl<T: Debug> DisplayProxy for FormatDebug<T> {
-    type Base = T;
-    fn fmt(value: &Self::Base, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{value:?}")
     }
 }
 struct DisplayWithProxy<'a, T, F>(&'a T, PhantomData<F>);

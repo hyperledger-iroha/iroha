@@ -421,6 +421,20 @@ impl ModuleBuildGraph {
     /// Parse, resolve, and type-check one complete locked source graph.
     pub fn link(
         &self,
+        request: SourceLinkRequest,
+        options: LinkerOptions,
+    ) -> Result<LinkedSourceGraph, SourceGraphError> {
+        crate::session::run_with_compiler_stack(move || self.link_inner(request, options)).map_err(
+            |_| SourceGraphError::Parse {
+                source: "<project>".to_owned(),
+                diagnostics: crate::session::compiler_worker_unavailable_diagnostic(Some(
+                    "<project>",
+                )),
+            },
+        )?
+    }
+    fn link_inner(
+        &self,
         mut request: SourceLinkRequest,
         options: LinkerOptions,
     ) -> Result<LinkedSourceGraph, SourceGraphError> {
@@ -551,6 +565,19 @@ impl ModuleBuildGraph {
     /// whole-graph call/effect checks run over the resulting typed HIR.
     pub fn validate_package(
         &self,
+        request: SourcePackageGraphRequest,
+        options: LinkerOptions,
+    ) -> Result<ValidatedSourcePackageGraph, SourceGraphError> {
+        crate::session::run_with_compiler_stack(move || {
+            self.validate_package_inner(request, options)
+        })
+        .map_err(|_| SourceGraphError::Parse {
+            source: "<project>".to_owned(),
+            diagnostics: crate::session::compiler_worker_unavailable_diagnostic(Some("<project>")),
+        })?
+    }
+    fn validate_package_inner(
+        &self,
         mut request: SourcePackageGraphRequest,
         options: LinkerOptions,
     ) -> Result<ValidatedSourcePackageGraph, SourceGraphError> {
@@ -654,6 +681,17 @@ impl ModuleBuildGraph {
     /// keeps external module calls bound to the supplied package identities while avoiding source
     /// rewriting between test and production compilation.
     pub fn build_test_project(
+        &self,
+        request: SourceLinkRequest,
+        options: crate::compiler::CompilerOptions,
+        source_name: &str,
+    ) -> Result<crate::session::TestCompileOutput, DiagnosticBundle> {
+        crate::session::run_with_compiler_stack(move || {
+            self.build_test_project_inner(request, options, source_name)
+        })
+        .map_err(|_| crate::session::compiler_worker_unavailable_diagnostic(Some(source_name)))?
+    }
+    fn build_test_project_inner(
         &self,
         request: SourceLinkRequest,
         options: crate::compiler::CompilerOptions,
@@ -801,15 +839,17 @@ impl ModuleBuildGraph {
             .collect::<Vec<_>>();
         let jobs = std::thread::available_parallelism()
             .map_or(1, std::num::NonZeroUsize::get)
-            .max(1);
+            .clamp(1, crate::syntax::parser::MAX_PARSER_WORKERS);
         let mut parse_diagnostics = Vec::new();
         for chunk in pending.chunks(jobs) {
             let parsed = std::thread::scope(|scope| {
-                let handles = chunk
-                    .iter()
-                    .map(|index| {
-                        let item = &unique[*index];
-                        scope.spawn(move || {
+                let mut handles = Vec::with_capacity(chunk.len());
+                for index in chunk {
+                    let item = &unique[*index];
+                    let spawn_source = item.source_name.clone();
+                    let handle = std::thread::Builder::new()
+                        .name("kotodama-module-parser".to_owned())
+                        .spawn_scoped(scope, move || {
                             #[cfg(test)]
                             self.parse_attempts
                                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -823,17 +863,25 @@ impl ModuleBuildGraph {
                                     .map(|(program, _)| program);
                             (*index, result)
                         })
-                    })
-                    .collect::<Vec<_>>();
-                handles
-                    .into_iter()
-                    .map(|handle| {
-                        handle
-                            .join()
-                            .expect("Kotodama module parser workers must not panic")
-                    })
-                    .collect::<Vec<_>>()
-            });
+                        .map_err(|_| SourceGraphError::Parse {
+                            diagnostics: crate::session::compiler_worker_unavailable_diagnostic(
+                                Some(&spawn_source),
+                            ),
+                            source: spawn_source,
+                        })?;
+                    handles.push(handle);
+                }
+                Ok::<_, SourceGraphError>(
+                    handles
+                        .into_iter()
+                        .map(|handle| {
+                            handle
+                                .join()
+                                .expect("Kotodama module parser workers must not panic")
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })?;
             // Join order follows deterministic source order. Keep every
             // independent file failure rather than making thread timing or the
             // first malformed module hide the rest of the project diagnostics.
@@ -1553,7 +1601,14 @@ impl TypedLinker {
         Self { options }
     }
     /// Resolve and link one seiyaku plus its locked module graph.
-    pub fn link(&self, mut request: LinkRequest) -> Result<TypedProgram, LinkError> {
+    pub fn link(&self, request: LinkRequest) -> Result<TypedProgram, LinkError> {
+        crate::session::run_with_compiler_stack(move || self.link_inner(request)).map_err(|_| {
+            LinkError::Semantic {
+                diagnostics: crate::session::compiler_worker_unavailable_diagnostic(None),
+            }
+        })?
+    }
+    fn link_inner(&self, mut request: LinkRequest) -> Result<TypedProgram, LinkError> {
         validate_linker_options(self.options)?;
         if request.root.ast().unit.kind != SourceUnitKind::Seiyaku {
             return Err(LinkError::RootMustBeSeiyaku {
@@ -1602,6 +1657,18 @@ impl TypedLinker {
     /// local identity must be present exactly once; export and import checks
     /// apply uniformly to the local package and dependencies.
     pub fn validate_package_graph(
+        &self,
+        packages: Vec<PackageUnit>,
+        local_identity: &str,
+    ) -> Result<Hash, LinkError> {
+        crate::session::run_with_compiler_stack(move || {
+            self.validate_package_graph_inner(packages, local_identity)
+        })
+        .map_err(|_| LinkError::Semantic {
+            diagnostics: crate::session::compiler_worker_unavailable_diagnostic(None),
+        })?
+    }
+    fn validate_package_graph_inner(
         &self,
         mut packages: Vec<PackageUnit>,
         local_identity: &str,
@@ -3861,6 +3928,10 @@ mod tests {
             source: source.to_owned(),
         }
     }
+    fn boundary_list_expression() -> String {
+        let depth = crate::source::MAX_NESTING_DEPTH - 2;
+        format!("{}0{}", "[".repeat(depth), "]".repeat(depth))
+    }
     fn invalid_logical_source_paths() -> Vec<(String, InvalidSourcePathReason)> {
         vec![
             (String::new(), InvalidSourcePathReason::Empty),
@@ -4041,6 +4112,54 @@ mod tests {
                 .iter()
                 .all(|entry| entry.function_name != "dependency_is_linked")
         );
+    }
+    #[test]
+    fn package_and_test_graphs_handoff_from_a_small_caller() {
+        let expression = boundary_list_expression();
+        let module_source =
+            format!("module Deep {{ fn value() {{ let nested = {expression}; }} }}");
+        let test_source = format!(
+            "seiyaku Deep {{ hajimari() {{ let nested = {expression}; }} #[test] fn boundary() {{ let nested = {expression}; }} }}"
+        );
+        std::thread::Builder::new()
+            .name("kotodama-small-package-graph-caller".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                let graph = ModuleBuildGraph::default();
+                let validated = graph
+                    .validate_package(
+                        SourcePackageGraphRequest {
+                            package: publish_package(
+                                vec![source_module("src/deep.ko", &module_source)],
+                                &["value"],
+                            ),
+                            dependencies: Vec::new(),
+                        },
+                        LinkerOptions::default(),
+                    )
+                    .expect("boundary-depth package graph must validate on the compiler worker");
+                assert_eq!(validated.exports, BTreeSet::from(["value".to_owned()]));
+
+                let output = graph
+                    .build_test_project(
+                        SourceLinkRequest {
+                            root: source_module("tests/deep.ko", &test_source),
+                            imports: Vec::new(),
+                            packages: Vec::new(),
+                        },
+                        crate::compiler::CompilerOptions {
+                            mode: crate::compiler::CompilerMode::Test,
+                            ..crate::compiler::CompilerOptions::default()
+                        },
+                        "tests/deep.ko",
+                    )
+                    .expect("boundary-depth test graph must build on the compiler worker");
+                assert!(!output.suite.artifact.is_empty());
+                assert!(output.runtime.is_some());
+            })
+            .expect("spawn small package graph caller")
+            .join()
+            .expect("package and test graph pipelines must not consume the caller stack");
     }
     #[test]
     fn package_graph_rejects_missing_and_ambiguous_exports() {

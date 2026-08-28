@@ -10,17 +10,13 @@ use crate::{
     account::AccountId,
     da::types::{BlobDigest, ExtraMetadata, StorageTicketId},
     name::Name,
-    sorafs::{
-        capacity::ProviderId,
-        pin_registry::{ManifestAliasBinding, StorageClass},
-    },
+    sorafs::pin_registry::{ManifestAliasBinding, StorageClass},
 };
 use core::{fmt, str::FromStr};
-use derive_more::Display;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use thiserror::Error;
 /// Exact schema identifier for a Taikai anchor acknowledgement.
 pub const TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1: &str = "iroha.taikai.anchor-receipt.v1";
@@ -58,7 +54,10 @@ pub fn is_canonical_taikai_anchor_base_id(base_id: &str) -> bool {
 }
 
 fn fixed_hex(value: &str, width: usize) -> bool {
-    value.len() == width && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    value.len() == width
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Statement signed by a Taikai anchor after durably accepting one exact upload.
@@ -1087,7 +1086,7 @@ pub enum TaikaiSegmentWindowError {
         /// Inclusive upper bound of the invalid window.
         end_sequence: u64,
     },
-    /// The inclusive upper bound would leave no successor window.
+    /// The inclusive upper bound selected the reserved terminal sequence.
     #[error("segment window end must be less than u64::MAX")]
     TerminalEndSequence,
     /// The inclusive window exceeded the first-release routing bound.
@@ -1098,51 +1097,6 @@ pub enum TaikaiSegmentWindowError {
         /// First-release maximum inclusive sequence count.
         maximum: u64,
     },
-}
-/// Identifier referencing a `SoraNet` guard directory circuit.
-#[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
-)]
-#[repr(transparent)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct GuardDirectoryId(pub String);
-impl GuardDirectoryId {
-    /// Construct a new guard directory identifier.
-    #[must_use]
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-}
-/// Guard policy describing the `SoraNet` circuit and quorum requirements.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct TaikaiGuardPolicy {
-    /// Canonical guard directory identifier.
-    pub directory: GuardDirectoryId,
-    /// Version/tag of the guard policy agreed with governance.
-    pub version: u32,
-    /// Minimum number of relays/guards required for this stream.
-    pub min_guard_relays: u16,
-    /// Optional lane or quorum labels enforced at runtime.
-    #[cfg_attr(feature = "json", norito(default))]
-    pub lane_labels: Vec<String>,
-}
-impl TaikaiGuardPolicy {
-    /// Build a guard policy descriptor.
-    #[must_use]
-    pub fn new(
-        directory: GuardDirectoryId,
-        version: u32,
-        min_guard_relays: u16,
-        lane_labels: Vec<String>,
-    ) -> Self {
-        Self {
-            directory,
-            version,
-            min_guard_relays,
-            lane_labels,
-        }
-    }
 }
 /// Availability class used for Taikai rendition routing (mirrors `SoraFS` storage tiers).
 #[derive(
@@ -1177,7 +1131,7 @@ impl From<StorageClass> for TaikaiAvailabilityClass {
         }
     }
 }
-/// Per-rendition routing record describing replication, CAR commitments, and guard data.
+/// Per-rendition routing record describing CAR commitments and availability.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct TaikaiRenditionRouteV1 {
@@ -1189,11 +1143,6 @@ pub struct TaikaiRenditionRouteV1 {
     pub latest_car: TaikaiCarPointer,
     /// Availability class applied to this rendition window.
     pub availability_class: TaikaiAvailabilityClass,
-    /// Ordered list of provider identifiers replicating the CAR window.
-    #[cfg_attr(feature = "json", norito(default))]
-    pub replication_targets: Vec<ProviderId>,
-    /// Guard circuit powering this rendition.
-    pub soranet_circuit: GuardDirectoryId,
     /// Sequence range covered by the current signing manifest(s).
     pub ssm_range: TaikaiSegmentWindow,
 }
@@ -1204,7 +1153,7 @@ impl TaikaiRenditionRouteV1 {
         self.ssm_range.contains(sequence)
     }
 }
-/// Routing manifest tying renditions, guard policy, and alias bindings together.
+/// Routing manifest tying renditions and alias bindings together.
 ///
 /// Torii persists each manifest alongside the Taikai envelope payloads
 /// (`taikai-trm-*.norito` artefacts and the `taikai-trm-state-*` lineage ledgers)
@@ -1225,10 +1174,6 @@ pub struct TaikaiRoutingManifestV1 {
     pub renditions: Vec<TaikaiRenditionRouteV1>,
     /// Alias binding anchored in `SoraNS` for this stream.
     pub alias_binding: TaikaiAliasBinding,
-    /// Guard policy requirements for the manifest window.
-    pub guard_policy: TaikaiGuardPolicy,
-    /// Optional metadata (policy directives, rollout annotations).
-    pub metadata: ExtraMetadata,
 }
 impl TaikaiRoutingManifestV1 {
     /// Current routing manifest format version.
@@ -1333,8 +1278,6 @@ pub struct TaikaiSegmentSigningBodyV1 {
     pub signed_unix_ms: u64,
     /// Alias binding proof stapled alongside the manifest.
     pub alias_binding: TaikaiAliasBinding,
-    /// Optional policy metadata.
-    pub metadata: ExtraMetadata,
 }
 impl TaikaiSegmentSigningBodyV1 {
     /// Current Taikai Segment Signing Manifest body version.
@@ -1344,7 +1287,6 @@ impl TaikaiSegmentSigningBodyV1 {
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
-        version: u16,
         segment_envelope_hash: BlobDigest,
         manifest_hash: BlobDigest,
         car_digest: BlobDigest,
@@ -1353,10 +1295,9 @@ impl TaikaiSegmentSigningBodyV1 {
         publisher_key: PublicKey,
         signed_unix_ms: u64,
         alias_binding: TaikaiAliasBinding,
-        metadata: ExtraMetadata,
     ) -> Self {
         Self {
-            version,
+            version: Self::VERSION,
             segment_envelope_hash,
             manifest_hash,
             car_digest,
@@ -1365,7 +1306,6 @@ impl TaikaiSegmentSigningBodyV1 {
             publisher_key,
             signed_unix_ms,
             alias_binding,
-            metadata,
         }
     }
 }
@@ -1393,179 +1333,6 @@ impl TaikaiSegmentSigningManifestV1 {
         &self.body.publisher_account
     }
 }
-/// `QoS` token bucket configuration captured by Taikai cache profiles.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct TaikaiCacheQosConfigV1 {
-    /// Priority stream budget in bits per second.
-    pub priority_rate_bps: u64,
-    /// Standard stream budget in bits per second.
-    pub standard_rate_bps: u64,
-    /// Bulk transfer budget in bits per second.
-    pub bulk_rate_bps: u64,
-    /// Burst multiplier applied to every bucket.
-    pub burst_multiplier: u32,
-}
-impl TaikaiCacheQosConfigV1 {
-    fn validate(&self) -> Result<(), TaikaiCacheProfileError> {
-        TaikaiCacheProfileError::ensure_positive(self.priority_rate_bps, "qos.priority_rate_bps")?;
-        TaikaiCacheProfileError::ensure_positive(self.standard_rate_bps, "qos.standard_rate_bps")?;
-        TaikaiCacheProfileError::ensure_positive(self.bulk_rate_bps, "qos.bulk_rate_bps")?;
-        if self.burst_multiplier == 0 {
-            return Err(TaikaiCacheProfileError::NonPositiveField {
-                field: "qos.burst_multiplier",
-            });
-        }
-        Ok(())
-    }
-}
-/// Cache capacity/retention knobs used by SNNet-14.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct TaikaiCacheConfigV1 {
-    /// Hot tier capacity in bytes.
-    pub hot_capacity_bytes: u64,
-    /// Hot tier retention window in seconds.
-    pub hot_retention_secs: u64,
-    /// Warm tier capacity in bytes.
-    pub warm_capacity_bytes: u64,
-    /// Warm tier retention window in seconds.
-    pub warm_retention_secs: u64,
-    /// Cold tier capacity in bytes.
-    pub cold_capacity_bytes: u64,
-    /// Cold tier retention window in seconds.
-    pub cold_retention_secs: u64,
-    /// `QoS` rate/burst configuration.
-    pub qos: TaikaiCacheQosConfigV1,
-}
-impl TaikaiCacheConfigV1 {
-    /// Validate the cache configuration to ensure positive capacities and durations.
-    ///
-    /// # Errors
-    /// Returns [`TaikaiCacheProfileError`] when any capacity, retention, or `QoS` knob is zero.
-    pub fn validate(&self) -> Result<(), TaikaiCacheProfileError> {
-        TaikaiCacheProfileError::ensure_positive(self.hot_capacity_bytes, "hot_capacity_bytes")?;
-        TaikaiCacheProfileError::ensure_positive(self.hot_retention_secs, "hot_retention_secs")?;
-        TaikaiCacheProfileError::ensure_positive(self.warm_capacity_bytes, "warm_capacity_bytes")?;
-        TaikaiCacheProfileError::ensure_positive(self.warm_retention_secs, "warm_retention_secs")?;
-        TaikaiCacheProfileError::ensure_positive(self.cold_capacity_bytes, "cold_capacity_bytes")?;
-        TaikaiCacheProfileError::ensure_positive(self.cold_retention_secs, "cold_retention_secs")?;
-        self.qos.validate()?;
-        Ok(())
-    }
-}
-/// Rollout stage describing where a Taikai cache profile is permitted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Display)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(tag = "stage", content = "value", rename_all = "kebab-case")]
-pub enum TaikaiCacheRolloutStage {
-    /// Limited canary deployments.
-    #[display("canary")]
-    Canary,
-    /// Region or provider ramp phase.
-    #[display("ramp")]
-    Ramp,
-    /// Default profile for production traffic.
-    #[display("default")]
-    Default,
-    /// Emergency override or rollback profile.
-    #[display("emergency")]
-    Emergency,
-}
-impl TaikaiCacheRolloutStage {
-    /// Resolve the canonical string label for this rollout stage.
-    #[must_use]
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Canary => "canary",
-            Self::Ramp => "ramp",
-            Self::Default => "default",
-            Self::Emergency => "emergency",
-        }
-    }
-}
-impl FromStr for TaikaiCacheRolloutStage {
-    type Err = TaikaiCacheRolloutStageParseError;
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let normalised = value.trim().to_ascii_lowercase();
-        match normalised.as_str() {
-            "canary" => Ok(Self::Canary),
-            "ramp" => Ok(Self::Ramp),
-            "default" => Ok(Self::Default),
-            "emergency" => Ok(Self::Emergency),
-            _ => Err(TaikaiCacheRolloutStageParseError {
-                value: value.trim().to_string(),
-            }),
-        }
-    }
-}
-/// Error surfaced when parsing a rollout stage label fails.
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
-pub struct TaikaiCacheRolloutStageParseError {
-    value: String,
-}
-impl fmt::Display for TaikaiCacheRolloutStageParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown Taikai cache rollout stage `{}`", self.value)
-    }
-}
-/// Governance-approved cache profile stored in the `SoraFS` governance DAG.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct TaikaiCacheProfileV1 {
-    /// Unique profile identifier (referenced by rollout manifests).
-    pub profile_id: String,
-    /// Rollout stage the profile targets.
-    pub rollout_stage: TaikaiCacheRolloutStage,
-    /// Human-friendly description used in runbooks/dashboards.
-    pub description: String,
-    /// Free-form annotations mirrored into governance evidence bundles.
-    #[cfg_attr(feature = "json", norito(default))]
-    pub annotations: BTreeMap<String, String>,
-    /// Cache configuration applied to orchestrators and relays.
-    #[cfg_attr(feature = "json", norito(rename = "taikai_cache"))]
-    pub config: TaikaiCacheConfigV1,
-}
-impl TaikaiCacheProfileV1 {
-    /// Validate the profile metadata and cache configuration.
-    ///
-    /// # Errors
-    /// Returns [`TaikaiCacheProfileError`] when IDs, descriptions, or cache settings are invalid.
-    pub fn validate(&self) -> Result<(), TaikaiCacheProfileError> {
-        if self.profile_id.trim().is_empty() {
-            return Err(TaikaiCacheProfileError::EmptyProfileId);
-        }
-        if self.description.trim().is_empty() {
-            return Err(TaikaiCacheProfileError::EmptyDescription);
-        }
-        self.config.validate()
-    }
-}
-/// Validation errors surfaced when processing Taikai cache profiles.
-#[derive(Copy, Clone, Debug, Error, PartialEq, Eq)]
-pub enum TaikaiCacheProfileError {
-    /// Profile identifier must not be empty.
-    #[error("Taikai cache profile id must not be empty")]
-    EmptyProfileId,
-    /// Profile description must not be empty.
-    #[error("Taikai cache profile description must not be empty")]
-    EmptyDescription,
-    /// Numeric field must be greater than zero.
-    #[error("Taikai cache profile field `{field}` must be greater than zero")]
-    NonPositiveField {
-        /// Fully-qualified name of the field that failed validation.
-        field: &'static str,
-    },
-}
-impl TaikaiCacheProfileError {
-    fn ensure_positive(value: u64, field: &'static str) -> Result<(), Self> {
-        if value == 0 {
-            Err(Self::NonPositiveField { field })
-        } else {
-            Ok(())
-        }
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1576,7 +1343,7 @@ mod tests {
         domain::DomainId,
     };
     use iroha_crypto::{Algorithm, KeyPair};
-    use std::{collections::BTreeMap, str::FromStr};
+    use std::str::FromStr;
     fn digest_from(value: u8) -> BlobDigest {
         let mut bytes = [0u8; 32];
         bytes.fill(value);
@@ -1625,6 +1392,12 @@ mod tests {
         assert_eq!(
             body.validate(),
             Err(TaikaiAnchorReceiptError::ZeroRequestDigest)
+        );
+        let mut body = sample_anchor_receipt_body();
+        body.base_id.make_ascii_uppercase();
+        assert_eq!(
+            body.validate(),
+            Err(TaikaiAnchorReceiptError::InvalidBaseId)
         );
     }
     #[test]
@@ -1773,14 +1546,6 @@ mod tests {
             proof: vec![0xAA, 0xBB, 0xCC],
         }
     }
-    fn sample_guard_policy() -> TaikaiGuardPolicy {
-        TaikaiGuardPolicy::new(
-            GuardDirectoryId::new("soranet/demo"),
-            2,
-            3,
-            vec!["lane-a".into(), "lane-b".into()],
-        )
-    }
     fn sample_routing_manifest() -> TaikaiRoutingManifestV1 {
         let event_id = TaikaiEventId::new(Name::from_str("global-keynote").unwrap());
         let stream_id = TaikaiStreamId::new(Name::from_str("stage-a").unwrap());
@@ -1790,8 +1555,6 @@ mod tests {
             latest_manifest_hash: digest_from(0x42),
             latest_car: TaikaiCarPointer::new("zbafyqra", digest_from(0x24), 131_072),
             availability_class: TaikaiAvailabilityClass::Hot,
-            replication_targets: vec![ProviderId::new([0x11; 32])],
-            soranet_circuit: GuardDirectoryId::new("soranet/demo"),
             ssm_range: TaikaiSegmentWindow::new(40, 50),
         };
         TaikaiRoutingManifestV1 {
@@ -1801,8 +1564,6 @@ mod tests {
             segment_window: TaikaiSegmentWindow::new(40, 64),
             renditions: vec![route],
             alias_binding: sample_alias_binding(),
-            guard_policy: sample_guard_policy(),
-            metadata: ExtraMetadata::default(),
         }
     }
     fn sample_cek_receipt() -> CekRotationReceiptV1 {
@@ -1885,7 +1646,6 @@ mod tests {
         let publisher_account = AccountId::new(kp.public_key().clone());
         let alias_binding = sample_alias_binding();
         let body = TaikaiSegmentSigningBodyV1::new(
-            TaikaiSegmentSigningBodyV1::VERSION,
             digest_from(0x10),
             digest_from(0x11),
             digest_from(0x12),
@@ -1894,8 +1654,8 @@ mod tests {
             kp.public_key().clone(),
             1_702_560_123_000,
             alias_binding.clone(),
-            ExtraMetadata::default(),
         );
+        assert_eq!(body.version, TaikaiSegmentSigningBodyV1::VERSION);
         let signature = SignatureOf::try_new(kp.private_key(), &body)
             .expect("sign checked Taikai segment manifest fixture");
         signature
@@ -1909,62 +1669,6 @@ mod tests {
         assert_eq!(decoded.signer(), &publisher_account);
         assert_eq!(decoded.body, body);
         assert_eq!(decoded.signature, signature);
-    }
-    fn sample_cache_profile() -> TaikaiCacheProfileV1 {
-        TaikaiCacheProfileV1 {
-            profile_id: "balanced-canary".to_string(),
-            rollout_stage: TaikaiCacheRolloutStage::Canary,
-            description: "Balanced cache profile for SNNet-14 pilots".to_string(),
-            annotations: BTreeMap::from([
-                ("ticket".to_string(), "SNNet-14D".to_string()),
-                ("owner".to_string(), "Ops Guild".to_string()),
-            ]),
-            config: TaikaiCacheConfigV1 {
-                hot_capacity_bytes: 8 * 1024 * 1024,
-                hot_retention_secs: 45,
-                warm_capacity_bytes: 32 * 1024 * 1024,
-                warm_retention_secs: 180,
-                cold_capacity_bytes: 256 * 1024 * 1024,
-                cold_retention_secs: 3_600,
-                qos: TaikaiCacheQosConfigV1 {
-                    priority_rate_bps: 80 * 1024 * 1024,
-                    standard_rate_bps: 40 * 1024 * 1024,
-                    bulk_rate_bps: 12 * 1024 * 1024,
-                    burst_multiplier: 3,
-                },
-            },
-        }
-    }
-    #[test]
-    fn taikai_cache_profile_round_trips() {
-        let profile = sample_cache_profile();
-        let encoded = profile.encode();
-        let mut cursor = std::io::Cursor::new(encoded);
-        let decoded = TaikaiCacheProfileV1::decode(&mut cursor).expect("profile decodes");
-        assert_eq!(decoded, profile);
-        decoded.validate().expect("profile validates");
-    }
-    #[test]
-    fn taikai_cache_profile_validation_rejects_zero_values() {
-        let mut profile = sample_cache_profile();
-        profile.config.hot_capacity_bytes = 0;
-        let err = profile.validate().expect_err("validation must fail");
-        assert!(matches!(
-            err,
-            TaikaiCacheProfileError::NonPositiveField {
-                field: "hot_capacity_bytes"
-            }
-        ));
-    }
-    #[test]
-    fn taikai_cache_rollout_stage_parses_labels() {
-        let stage = TaikaiCacheRolloutStage::from_str("RAMP").expect("stage parsed");
-        assert_eq!(stage, TaikaiCacheRolloutStage::Ramp);
-        let err = TaikaiCacheRolloutStage::from_str("unknown").expect_err("unknown stage");
-        assert_eq!(
-            err.to_string(),
-            "unknown Taikai cache rollout stage `unknown`"
-        );
     }
     #[test]
     fn cek_rotation_receipt_round_trips() {
@@ -2069,6 +1773,9 @@ mod tests {
         TaikaiSegmentWindow::new(0, TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1 - 1)
             .validate()
             .expect("the exact first-release window bound is valid");
+        TaikaiSegmentWindow::new(u64::MAX - 1, u64::MAX - 1)
+            .validate()
+            .expect("a penultimate singleton is structurally valid; lineage enforces its origin");
         assert_eq!(
             TaikaiSegmentWindow::new(0, TAIKAI_SEGMENT_WINDOW_MAX_SEQUENCES_V1).validate(),
             Err(TaikaiSegmentWindowError::TooWide {

@@ -1,15 +1,33 @@
 package org.hyperledger.iroha.sdk.client.transport
 
+import java.net.URI
 import java.util.Collections
 import java.util.TreeMap
 
-/** SDK-owned transport response wrapper to decouple callers from `java.net.http.HttpResponse`. */
+/**
+ * SDK-owned transport response wrapper to decouple callers from `java.net.http.HttpResponse`.
+ *
+ * [finalUri] and [redirected] carry network provenance for response paths that must remain bound
+ * to an exact signed URI. The four-argument constructor remains available for response paths that
+ * do not require that provenance; exact signed-response consumers fail closed when [finalUri] is
+ * absent.
+ */
 class TransportResponse(
     @JvmField val statusCode: Int,
     body: ByteArray?,
     message: String?,
     headers: Map<String, List<String>>?,
+    @JvmField val finalUri: URI?,
+    @JvmField val redirected: Boolean,
 ) {
+    /** Creates a response without network provenance for response paths that do not require it. */
+    constructor(
+        statusCode: Int,
+        body: ByteArray?,
+        message: String?,
+        headers: Map<String, List<String>>?,
+    ) : this(statusCode, body, message, headers, null, false)
+
     @JvmField val message: String = message ?: ""
 
     private val _body: ByteArray = body?.copyOf() ?: ByteArray(0)
@@ -41,6 +59,8 @@ class TransportResponse(
         private var body: ByteArray = ByteArray(0)
         private var message: String = ""
         private val headers: MutableMap<String, MutableList<String>> = LinkedHashMap()
+        private var finalUri: URI? = null
+        private var redirected: Boolean = false
 
         fun setStatusCode(statusCode: Int): Builder {
             this.statusCode = statusCode
@@ -72,7 +92,14 @@ class TransportResponse(
             return this
         }
 
+        /** Records the final network URI and whether any redirect was followed. */
+        fun setNetworkProvenance(finalUri: URI, redirected: Boolean): Builder {
+            this.finalUri = finalUri
+            this.redirected = redirected
+            return this
+        }
+
         fun build(): TransportResponse =
-            TransportResponse(statusCode, body, message, headers)
+            TransportResponse(statusCode, body, message, headers, finalUri, redirected)
     }
 }

@@ -469,38 +469,3 @@ fn startup_beep_respects_config_flag() {
         "beep enabled by config flag should play once"
     );
 }
-mod soranet_transport {
-    use iroha_config::parameters::actual;
-    use tempfile::tempdir;
-    #[test]
-    fn configure_soranet_transport_rejects_enabled_filesystem_publication_without_io() {
-        let temp = tempdir().expect("create temp dir");
-        let spool_dir = temp.path().join("spool");
-        let mut soranet = actual::StreamingSoranet::from_defaults();
-        soranet.enabled = true;
-        soranet.provision_spool_dir = spool_dir.clone();
-        let mut handle = iroha_core::streaming::StreamingHandle::new();
-        let error = super::super::configure_soranet_transport(&mut handle, &soranet)
-            .expect_err("enabled filesystem publication must fail at startup");
-        assert!(
-            format!("{error:?}").contains("durable revocation tombstones"),
-            "unexpected startup error: {error:?}"
-        );
-        assert!(!spool_dir.exists(), "hard cut must precede spool creation");
-    }
-    #[test]
-    fn configure_soranet_transport_noop_when_disabled() {
-        let temp = tempdir().expect("create temp dir");
-        let spool_dir = temp.path().join("disabled");
-        let mut soranet = actual::StreamingSoranet::from_defaults();
-        soranet.enabled = false;
-        soranet.provision_spool_dir = spool_dir.clone();
-        let mut handle = iroha_core::streaming::StreamingHandle::new();
-        super::super::configure_soranet_transport(&mut handle, &soranet)
-            .expect("disabled soranet transport should not fail");
-        assert!(
-            !spool_dir.exists(),
-            "disabled configuration must not create the spool directory"
-        );
-    }
-}

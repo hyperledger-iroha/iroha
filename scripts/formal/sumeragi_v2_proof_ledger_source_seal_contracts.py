@@ -1597,6 +1597,8 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "authenticated_command_reaches_fenced_reducer": (
         "f392d0b918b5de3c9a0ebe1988bca1ce3606a892e01e586acc4ed0c39385be16"
     ),
+    # `SumeragiV2Adapter::ready_to_finish`; executor readiness is sealed by
+    # `_REMOTE_PROPOSAL_REPLAY_ITEM_SHA256["executor_ready"]`.
     "ready_to_finish": (
         "039df6143d8b4505489db3c75ab2d3d24c01a30a4da0f0d277d865f44cfa0ffa"
     ),
@@ -1639,7 +1641,10 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "d71a57ec0eb41724bb65040a35e9d0ac308a2ef387868c207070add6e02be541"
     ),
     "scheduler_arbitration_inputs": (
-        "f1d2bddb203bf2c2fdc0e9d1cbf310a1b588248d9c679d35feb553882eba2499"
+        "79fc6e55d53b331ff01aab01f638cfb3238f607115ca56a4a8cbd423f3572028"
+    ),
+    "try_step_pre_timeout_locked_prepare_qc": (
+        "b2555b96fe2f6ff8a1c1f2cfc6e8738df498942e1bbf5cebbd6a1275619b29bb"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
@@ -1656,7 +1661,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "eligible_deferred_admission_ordinals": (
         "ca2db5b8e601e556e10001d3c0a6be5b18dd1cd1f92e5eecf0273fe158fb232d"
     ),
-    "runtime_step": "aaa41e0366ae660537780528c97e763e8f292e9a80234c21d4cc37a390eea414",
+    "runtime_step": "5963ef7728c8c6555bf7156b64cc649ee7c54b5a77befae64db17e24cdc4d313",
     "dispatch_one_adapter_deferred": (
         "a4c901cdd676731f6cfd3c4dcb52718df366f65bc7ca5e8d1a54a841ec30cdab"
     ),
@@ -1688,6 +1693,9 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_HELPER_CHAIN = (
     "oldest_active_lifecycle_ordinal_before_physical_cut_excluding",
     "physically_eligible_deferred_admission_ordinals",
     "pop_pacemaker_progress_with_ownership",
+    "runtime_view_blocked_progress_authorization_projection_hash",
+    "wire_payload_matches_current_strict_timeout_recovery_round",
+    "validates_retained_blocker",
     "runtime_queue_occurrence_owner_projection_hash",
     "runtime_queue_ownership_snapshot_projection_hash",
     "runtime_queue_occurrence_set_matches_snapshot",
@@ -1711,7 +1719,7 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "b46fe089ce520f215926646c49fb991755ae3e2ba6b4dda5242808df6f8d0645"
     ),
     "mint_selection_seal": (
-        "191659da714833827a2927e2f8a27c376b91d640d162f8d672dd3cbda5123500"
+        "3f4a3eaaa3f1a703392d04b9c05262f2638c2bb3d4f65a9e247b83a0c1a44af8"
     ),
     "contains_queue_occurrence_owner": (
         "c116a2a5423be69a43d6dbf13c00525a416f974020cd96ad7f55282a27293a98"
@@ -1726,7 +1734,16 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "0b51819b618a5d50f632ffb772a94be1560e960b57746c10ba3e077aa97b60d3"
     ),
     "pop_pacemaker_progress_with_ownership": (
-        "692569bf4ea55913a9fdd4cf41b476fc3b608f05b7b481627444849d0a6baf28"
+        "326f99b8605bbaceb6cc2328bc6235b77936cba4ad20b4011ccca08e5f6e1793"
+    ),
+    "runtime_view_blocked_progress_authorization_projection_hash": (
+        "e9a29e0a277bbae16f4b1ef8219bdf892f79ce733b56bbe01bd2a9f7c5c36158"
+    ),
+    "wire_payload_matches_current_strict_timeout_recovery_round": (
+        "68e1d7b8e1c16bca7c17b81a0cff0ef1709aa66d2a952d50c5b8d928835cd458"
+    ),
+    "validates_retained_blocker": (
+        "e1b3b5823bf3c81749298d436f04c1bdf1d8d0b06b3f1d26693089aab119a05b"
     ),
     "runtime_queue_occurrence_owner_projection_hash": (
         "c220a852adcdb9e7a2a20cec297ee79a87cf5b88acac55410eac3c824614d1a6"
@@ -1744,7 +1761,7 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
     ),
     "runtime_scheduler_projection_hash": (
-        "497073086b79550d943e21f017a217b7a07c924f2d7084e0c80702df9bb2ba4a"
+        "415a47652facf9236a0205764edc92f3eb545f35e2f83b9a3562a417bf77c1ba"
     ),
     "current_signature_fence_identity": (
         "d3e7b714af5442d66ec2e8f4e1c57bfe649c5b8f41b310d71929fa6586baf0ed"
@@ -1759,13 +1776,13 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "f6c5e5ac82dfda26d972715a073a2ddb7a41135ef9be0ee02ed77944f9e186f8"
     ),
     "retain_scheduler_ownership": (
-        "ce18f8f833ffb83ae57e9b4f10c943482960200cc6b0fb1045ab6dbb10b89afc"
+        "d333ce49089e9a1d7a15a9111d0ee6541fce2171f4af835249095e6a71aa0929"
     ),
     "try_step_pacemaker_escape": (
-        "aa0a41501d13d502e119566bb4fc55e202f820ece97cf66e486ac851b458c64d"
+        "55cd8225900a605ce0821bda634c5247d007b53db561c404b4be2de13a0ac9fe"
     ),
     "dispatch_one_pacemaker_progress": (
-        "5260b9beb639c080ec41742c604b19372f887a62e6e522d68dd8661ecb4b42e2"
+        "d806941928afcb15ee72ed7eef771ac10cad55a7b714827b49052617b76c894d"
     ),
     "occurrence_owner_validate_exact": (
         "0f018cbe8ab36b2a5e1f3aa128d7c22c367083b399184aedc8c829f9228db8e3"
@@ -1777,13 +1794,46 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "9ee5bf23ffa531c168a3722a216ef32a9c2cf83f4265e25dde0fe750b4fa890f"
     ),
     "queue_selection_validate_identity": (
-        "0194f41a94c3f750ddc5bfe4afafa7ec1b83a6e407001a4671eda0bc1d733808"
+        "94d5ca84828c28e62e55af3682b290e5d02eb1db477243ae0a25ad55c39d1542"
+    ),
+    "queue_selection_kind_code": (
+        "08b07eaf05cd85228dc54c2f49a2b54071814c916a19e92cb3cff56fd5eb2518"
+    ),
+    "view_blocked_authorization_struct": (
+        "fec50a1d9938ec78bdf262bb973e4943802843a0d4a48c0be4bf2624dff3c0dd"
+    ),
+    "scheduler_arbitration_inputs_struct": (
+        "af1222460a1e16f0e7d60b90ef34fc28a768185538f554bc0281cba85bb2a9a8"
+    ),
+    "scheduler_ownership_evidence_struct": (
+        "ea80f8f1f216fe71d8219279593dd64b86ba13afec0cfb86ac1b46b6a4a1a903"
     ),
     "queue_selection_matches_scheduler_occurrence": (
         "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
     ),
     "scheduler_evidence_validate_exact": (
-        "e5a0755e5ac26ed6cb61c58fe838e5459a539ca53e5429800dd0aaf459d73b64"
+        "458ee09d659891d8f30a77a2b2c49a564914ade84ee013e9be77a8aa89f59459"
+    ),
+    "view_blocked_authorization_new": (
+        "7c4cfb17b4841105a0bc2c7e966acbd72ea4c8c232cd502918f4136c9f8717ad"
+    ),
+    "bounded_ingress_ordinary_view_blocked_progress_authorization": (
+        "432f1bd53d20501e9fa004f394aa871f49eb7144c10b82aab0bbeb311c7688ee"
+    ),
+    "runtime_ordinary_view_blocked_progress_authorization": (
+        "1f145ba32cfdf6e21d078255e660ccfecc7de2fff4fd4a718fceeec24669511e"
+    ),
+    "runtime_driver_default_pacemaker_progress_blocked_target_view": (
+        "881e840c28227633ad82e695d9c1214352c16d6622cb9a0c57237b299ccb5424"
+    ),
+    "runtime_driver_default_pacemaker_progress_releases_view_block": (
+        "ecd3f05b7cff39a5654e509bee842092e9e39f7e96d01e188e067a7e44b4cab9"
+    ),
+    "runtime_driver_pacemaker_progress_blocked_target_view": (
+        "d667e1e855dd787defdaa559d4a3cfaef26f5b15cedf8e505184f7733db8495a"
+    ),
+    "runtime_driver_pacemaker_progress_releases_view_block": (
+        "0cdddcea836f909d53a45048fd38c97faf9e42f236fb234ad97a40550e376793"
     ),
     "adapter_pacemaker_escape_is_parked": (
         "5513bb3477396c268d3dc7ed75ded1d6c027bc5780c5f129b53920720c498d86"
@@ -1950,6 +2000,9 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
 }
 
 _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
+    "ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc": (
+        "e3aad9aae8a82eb29d223230fa3f8b2cf26ba5dfa75b6859be40d0ce1cd45b71"
+    ),
     "deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences": (
         "275408912512b0588a7fd1403629e9039115288b25d66aa707ddfb77a66d902e"
     ),
@@ -1980,7 +2033,7 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
 # inventory may be bulk-refreshed.
 _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
     "ingress::fair_v2_ingress_queue_gate_verdict": (
-        "f2c515c991e3e78e46548337976c9efbea7d3c820834d9e6fcebec5eeb4d4bc9"
+        "c55656b8ec95bbb766c81c2e6366251087127686224f0c490e64bea95b30121d"
     ),
     "ingress::select_fair_v2_ingress_candidate": (
         "9d12522aa0b65a229efc08e35feae5d887c7656366fa074e05b14c2c370a6068"
@@ -2154,7 +2207,7 @@ _TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256 = {
             "8dd0ff9ee7a45c7bd12d8cee1c0ba3c155115b1ec6f8cc83bbdfc237fe14b7d9"
         ),
         "AsyncTimeoutControlDependencyAdvancesLeaderWire": (
-            "fc8c50a29cf3a52c5ceccccf383c03b7b9d8e5d63670fb774d212c2049e1c0a2"
+            "f823bff8bf0319f9bdea8a9286328f81e850303b2ca7188655ea990ff50fa143"
         ),
         "AsyncServeIngressIndexMayPrecedeAdmittedTarget": (
             "836fb332ad28f0f0a5a5afa54ac9e14d1c0e74200427327d2a5c9dc2f328887e"
@@ -2491,7 +2544,7 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "7501414a5b20cfeacf429a9d2b43cf5dd2a797e2a579559c05d987437352ed8d"
     ),
     "production_capacity_saturation_admits_response_and_reconstructible_fetch": (
-        "4bc6c7fa409f6fabf09e0b6b6bd12c8f974d063c7ab24d3c7b9060be004c78db"
+        "886404673d31a039059920f1cae0c716722c7218b363d876786a5df1194dc894"
     ),
     "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner": (
         "920f70f6d4ebf90ce3f9a4365e99bc88da19671d80e4f716aa57bc08caece7fd"
@@ -3284,7 +3337,7 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "c6277d6ab0e71c9e7149921c6dc6fe6e3fe53e3eb317e624e3e6b490d9543bb7"
     ),
     "drain_retained_effect_batch": (
-        "bf4bc14d8826b67a427dc1881a5398740ce6fcbb7b7e11ddccf7adc0b0165f94"
+        "49f9e98c396498717f4a025e02419831434f683050469763ab27270b362e44ca"
     ),
     "consume_pacemaker_effects_with_runner_decision_cleanup": (
         "b89bf586aec000a7a5b01cd8dbddb774ab7dc07f74adc64df7b07cb379ae03b9"
@@ -3309,16 +3362,16 @@ _RETAINED_EFFECT_PROGRESS_INGRESS_REGRESSION_SHA256 = (
 # only after those owners have drained.
 _PRODUCTION_LIFECYCLE_DECISION_APPLY_ITEM_SHA256 = {
     "lifecycle_decision_apply_dispatch_available": (
-        "055da7306a43513c312075bb9c68fec00444b01c11e0dac52ea08db180a8128b"
+        "235710a10257053d4cd00578dae8297a42b8baa5418b8b8e35cb05d0444db5b4"
     ),
     "prepare_lifecycle_decision_apply_executor_dispatch": (
         "e8de0ddb2e236592bcef22f353567b2d2e32013ae79def9ca10ff76a4c8762a8"
     ),
     "prepare_lifecycle_decision_apply_completion": (
-        "397efec1eb204e2eecb0f7cba038312f72143b0ae75b97b7723c5c6533e55a18"
+        "97da0e4f7b3e220623e43f14b5c289d0ae27c1cf8e56ac42e746b7bd36d95562"
     ),
     "commit_lifecycle_decision_apply_finality": (
-        "d7b655a398aff83fa46888640014963d3e755e8249028c5195d7379ba29df1c5"
+        "a1e529a7b784fd7432f58d0f9d0dfc09787b131e610b33b63290c410f4a28083"
     ),
 }
 
@@ -4256,7 +4309,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
         "cb5b0f1088bd200ae57a9d5c8ca6fcdf97332fa376379e2f354d0b9706e36d67"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "f2c515c991e3e78e46548337976c9efbea7d3c820834d9e6fcebec5eeb4d4bc9"
+        "c55656b8ec95bbb766c81c2e6366251087127686224f0c490e64bea95b30121d"
     ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"

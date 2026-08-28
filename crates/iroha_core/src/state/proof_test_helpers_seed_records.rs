@@ -753,6 +753,7 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
         h.set_height(NonZeroU64::new(2).unwrap());
     }) };
     let mut state_block = state.block(block2.as_ref().header());
+    let fragments_before = state_block.committed_fragment_count();
     let outcomes = state_block.execute_pipeline_triggers_isolated([
         PipelineEventBox::from(BlockEvent {
             header: block2.as_ref().header(),
@@ -764,7 +765,7 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
     assert!(outcomes[0].1.is_ok());
     assert_eq!(
         state_block.committed_fragment_count(),
-        1,
+        fragments_before.saturating_add(1),
         "a skipped stale match must not commit a phantom empty fragment",
     );
     state_block.commit().unwrap();

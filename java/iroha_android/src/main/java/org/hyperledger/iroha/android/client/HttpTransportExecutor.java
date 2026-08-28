@@ -14,7 +14,9 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
  * permits one underlying network dispatch only: redirects, authentication follow-ups, connection
  * retries, and application retries are forbidden even when no response was received. The original
  * failure must be surfaced so the caller can reconcile by transaction hash or create a freshly
- * signed request.
+ * signed request. Executors handling exact signed-response paths must also populate the returned
+ * {@link TransportResponse#finalUri()} and {@link TransportResponse#redirected()} provenance; those
+ * callers reject responses with missing, redirected, or mismatched provenance.
  */
 public interface HttpTransportExecutor extends TransportExecutor {
 

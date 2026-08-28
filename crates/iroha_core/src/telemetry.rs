@@ -556,6 +556,7 @@ fn parliament_no_result_label(
         Kind::BallotCommitmentDeadlineExpired => "ballot_commitment_deadline_expired",
         Kind::BallotReleasePulseUnavailable => "ballot_release_pulse_unavailable",
         Kind::BallotOpeningDeadlineExpired => "ballot_opening_deadline_expired",
+        Kind::SortitionRetriesExhausted => "sortition_retries_exhausted",
     }
 }
 #[cfg(feature = "telemetry")]
@@ -580,6 +581,7 @@ fn parliament_no_result_matches_transition(
         | NoResult::BallotCommitmentDeadlineExpired
         | NoResult::BallotReleasePulseUnavailable
         | NoResult::BallotOpeningDeadlineExpired => transition == Transition::FailBallotNoResult,
+        NoResult::SortitionRetriesExhausted => transition == Transition::FailBodyElectionNoRoster,
     }
 }
 #[cfg(feature = "telemetry")]
@@ -4574,11 +4576,6 @@ impl StreamingTelemetry {
         .streaming_quic_datagrams_dropped_total.inc_by(delta);]
     /// Record a feedback timeout event.
     [inc_feedback_timeout() => .streaming_feedback_timeout_total.inc();]
-    /// Record a `SoraNet` provisioning failure.
-    [inc_soranet_provision_failure() => .streaming_soranet_provision_fail_total.inc();]
-    /// Record a `SoraNet` provisioning queue drop with the provided reason.
-    [inc_soranet_provision_queue_drop(reason: &'static str) =>
-        .streaming_soranet_provision_queue_drop_total.with_label_values(&[reason]).inc();]
     /// Record a privacy redaction failure event.
     [inc_privacy_redaction_failure() => .streaming_privacy_redaction_fail_total.inc();]
     }
@@ -5045,10 +5042,13 @@ impl From<&DaPinIntentValidationError> for PinIntentSpoolReason {
             }
             DaPinIntentValidationError::UnknownOwner { .. } => PinIntentSpoolReason::UnknownOwner,
             DaPinIntentValidationError::AuthorizationMismatch { .. }
+            | DaPinIntentValidationError::PinScopeMismatch { .. }
             | DaPinIntentValidationError::WrongNetwork { .. }
             | DaPinIntentValidationError::ZeroPayloadBytes { .. }
             | DaPinIntentValidationError::InvalidAuthorizationSignatures { .. }
+            | DaPinIntentValidationError::InvalidPinScopeSignatures { .. }
             | DaPinIntentValidationError::UnauthorizedOwner { .. }
+            | DaPinIntentValidationError::UnauthorizedPinScopeOwner { .. }
             | DaPinIntentValidationError::MissingAdmissionPolicy
             | DaPinIntentValidationError::InvalidAdmissionPolicy { .. }
             | DaPinIntentValidationError::AdmissionDenied { .. } => {
@@ -7391,6 +7391,9 @@ impl Actor {
         self.metrics
             .p2p_total_cap_reject_total
             .set(iroha_p2p::network::total_cap_reject_count());
+        self.metrics
+            .p2p_preauth_source_cap_reject_total
+            .set(iroha_p2p::network::preauth_source_cap_reject_count());
         self.metrics
             .p2p_scion_inbound_total
             .set(iroha_p2p::network::scion_inbound_total());
@@ -10307,44 +10310,26 @@ mod tests {
         record_network_metrics(&telemetry, metrics_ref);
         record_sync_metrics(&telemetry, metrics_ref);
         record_energy_metrics(&telemetry, metrics_ref);
-        telemetry.record_storage_budget_usage("soranet_spool", 64, 128);
-        telemetry.inc_storage_budget_exceeded("soranet_spool");
-        telemetry.inc_soranet_provision_failure();
-        telemetry.inc_soranet_provision_queue_drop("full");
-        telemetry.inc_soranet_provision_queue_drop("disconnected");
+        telemetry.record_storage_budget_usage("wsv_cold", 64, 128);
+        telemetry.inc_storage_budget_exceeded("wsv_cold");
         assert_eq!(
             metrics
                 .storage_budget_bytes_used
-                .with_label_values(&["soranet_spool"])
+                .with_label_values(&["wsv_cold"])
                 .get(),
             64
         );
         assert_eq!(
             metrics
                 .storage_budget_bytes_limit
-                .with_label_values(&["soranet_spool"])
+                .with_label_values(&["wsv_cold"])
                 .get(),
             128
         );
         assert_eq!(
             metrics
                 .storage_budget_exceeded_total
-                .with_label_values(&["soranet_spool"])
-                .get(),
-            1
-        );
-        assert_eq!(metrics.streaming_soranet_provision_fail_total.get(), 1);
-        assert_eq!(
-            metrics
-                .streaming_soranet_provision_queue_drop_total
-                .with_label_values(&["full"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .streaming_soranet_provision_queue_drop_total
-                .with_label_values(&["disconnected"])
+                .with_label_values(&["wsv_cold"])
                 .get(),
             1
         );
@@ -10943,6 +10928,10 @@ mod tests {
             Some(NoResult::PublicFindingDeadlineExpired),
         );
         telemetry.record_committed_parliament_transition(
+            Transition::FailBodyElectionNoRoster,
+            Some(NoResult::SortitionRetriesExhausted),
+        );
+        telemetry.record_committed_parliament_transition(
             Transition::CompleteQualification,
             Some(NoResult::PublicFindingDeadlineExpired),
         );
@@ -10982,6 +10971,13 @@ mod tests {
                 .get(),
             1,
             "an incompatible transition must not increment the valid deadline outcome again"
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_no_result_total
+                .with_label_values(&["sortition_retries_exhausted"])
+                .get(),
+            1
         );
 
         let exposition = metrics.try_to_string().expect("encode metrics exposition");

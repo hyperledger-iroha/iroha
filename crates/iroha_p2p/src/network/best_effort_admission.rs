@@ -46,7 +46,7 @@ pub enum NetworkPostAdmissionError<M> {
         reason: NetworkActorAdmissionRejection,
     },
 }
-impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
+impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// Construct a handle whose ordinary actor-byte corridor is saturated.
     ///
     /// This deterministic fixture lets downstream protocol tests prove that a recoverable post

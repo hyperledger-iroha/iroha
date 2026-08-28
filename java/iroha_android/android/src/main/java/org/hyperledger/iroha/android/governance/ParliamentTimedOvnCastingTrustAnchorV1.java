@@ -3,29 +3,33 @@
 
 package org.hyperledger.iroha.android.governance;
 
+import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Objects;
+import org.hyperledger.iroha.android.client.ParliamentApiV1;
 
 /** Immutable external trust anchor for one Parliament timed-OVN casting proof. */
 public final class ParliamentTimedOvnCastingTrustAnchorV1 {
   private static final int HASH_BYTES = 32;
 
   private final byte[] networkId;
-  private final long trustedCheckpointHeight;
+  private final BigInteger trustedCheckpointHeight;
   private final byte[] trustedCheckpointContextId;
   private final byte[] expectedBallotAttemptId;
 
-  /** Create an exact network/checkpoint/ballot trust anchor; no field has a default. */
+  /** Create an exact network/checkpoint/ballot trust anchor across the complete u64 height domain. */
   public ParliamentTimedOvnCastingTrustAnchorV1(
       final byte[] networkId,
-      final long trustedCheckpointHeight,
+      final BigInteger trustedCheckpointHeight,
       final byte[] trustedCheckpointContextId,
       final byte[] expectedBallotAttemptId) {
     this.networkId = exactBytes("networkId", networkId);
-    if (trustedCheckpointHeight <= 0) {
-      throw new IllegalArgumentException("trustedCheckpointHeight must be positive");
+    final BigInteger requiredHeight =
+        Objects.requireNonNull(trustedCheckpointHeight, "trustedCheckpointHeight");
+    if (requiredHeight.signum() <= 0 || requiredHeight.bitLength() > 64) {
+      throw new IllegalArgumentException("trustedCheckpointHeight must be a positive u64");
     }
-    this.trustedCheckpointHeight = trustedCheckpointHeight;
+    this.trustedCheckpointHeight = requiredHeight;
     this.trustedCheckpointContextId =
         exactBytes("trustedCheckpointContextId", trustedCheckpointContextId);
     this.expectedBallotAttemptId =
@@ -39,13 +43,26 @@ public final class ParliamentTimedOvnCastingTrustAnchorV1 {
     }
   }
 
+  /** Convenience constructor for positive checkpoint heights representable by {@code long}. */
+  public ParliamentTimedOvnCastingTrustAnchorV1(
+      final byte[] networkId,
+      final long trustedCheckpointHeight,
+      final byte[] trustedCheckpointContextId,
+      final byte[] expectedBallotAttemptId) {
+    this(
+        networkId,
+        BigInteger.valueOf(trustedCheckpointHeight),
+        trustedCheckpointContextId,
+        expectedBallotAttemptId);
+  }
+
   /** Return a defensive copy of the raw genesis-derived NetworkId. */
   public byte[] networkId() {
     return networkId.clone();
   }
 
-  /** Return the exact nonzero trusted checkpoint height. */
-  public long trustedCheckpointHeight() {
+  /** Return the exact nonzero trusted checkpoint height in the u64 protocol domain. */
+  public BigInteger trustedCheckpointHeight() {
     return trustedCheckpointHeight;
   }
 
@@ -57,6 +74,18 @@ public final class ParliamentTimedOvnCastingTrustAnchorV1 {
   /** Return a defensive copy of the exact expected BallotAttemptId. */
   public byte[] expectedBallotAttemptId() {
     return expectedBallotAttemptId.clone();
+  }
+
+  /** Returns a new immutable anchor promoted by one native-authenticated page result. */
+  public ParliamentTimedOvnCastingTrustAnchorV1 promoted(
+      final ParliamentApiV1.TimedOvnCastingProofPageVerification verification) {
+    final ParliamentApiV1.TimedOvnCastingProofPageVerification required =
+        Objects.requireNonNull(verification, "verification");
+    return new ParliamentTimedOvnCastingTrustAnchorV1(
+        networkId,
+        required.evaluatedBlockHeight,
+        required.evaluatedContextId(),
+        expectedBallotAttemptId);
   }
 
   @Override
@@ -71,7 +100,7 @@ public final class ParliamentTimedOvnCastingTrustAnchorV1 {
     }
     final ParliamentTimedOvnCastingTrustAnchorV1 anchor =
         (ParliamentTimedOvnCastingTrustAnchorV1) other;
-    return trustedCheckpointHeight == anchor.trustedCheckpointHeight
+    return trustedCheckpointHeight.equals(anchor.trustedCheckpointHeight)
         && Arrays.equals(networkId, anchor.networkId)
         && Arrays.equals(trustedCheckpointContextId, anchor.trustedCheckpointContextId)
         && Arrays.equals(expectedBallotAttemptId, anchor.expectedBallotAttemptId);

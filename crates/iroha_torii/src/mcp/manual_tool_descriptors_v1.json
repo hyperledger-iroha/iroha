@@ -3,8 +3,8 @@
   "historical_rust_preimage_sha256": "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4",
   "descriptors": [
     {
-      "function": "connect_ws_ticket_tool",
-      "name": "connect.ws.ticket",
+      "function": "iroha_connect_ws_ticket_tool",
+      "name": "iroha.connect.ws.ticket",
       "effect": "read",
       "description": "Build Connect WebSocket join metadata (URL + auth headers/protocol token).",
       "method": "GET",
@@ -14,7 +14,35 @@
         "additionalProperties": false,
         "required": [
           "sid",
-          "role"
+          "role",
+          "node_url"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "token"
+            ]
+          },
+          {
+            "properties": {
+              "role": {
+                "const": "app"
+              }
+            },
+            "required": [
+              "token_app"
+            ]
+          },
+          {
+            "properties": {
+              "role": {
+                "const": "wallet"
+              }
+            },
+            "required": [
+              "token_wallet"
+            ]
+          }
         ],
         "properties": {
           "sid": {
@@ -30,27 +58,37 @@
           },
           "token": {
             "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
             "description": "Explicit token for the selected role."
           },
           "token_app": {
             "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
             "description": "Token alias used when `role=app` and `token` is omitted."
           },
           "token_wallet": {
             "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
             "description": "Token alias used when `role=wallet` and `token` is omitted."
           },
           "node_url": {
             "type": "string",
-            "description": "Optional node URL; defaults to Host/X-Forwarded-Proto from the MCP request."
+            "minLength": 1,
+            "description": "Explicit trusted node URL. Torii never derives a credential-bearing destination from request forwarding headers."
           }
         },
-        "description": "Provide the canonical `sid` and selected `role`."
+        "description": "Provide the canonical `sid`, selected `role`, and an explicit trusted node URL."
       }
     },
     {
-      "function": "connect_session_create_tool",
-      "name": "connect.session.create",
+      "function": "iroha_connect_session_create_tool",
+      "name": "iroha.connect.session.create",
       "effect": "write",
       "description": "Create an Iroha Connect session and return app/wallet tokens.",
       "method": "POST",
@@ -97,70 +135,8 @@
       }
     },
     {
-      "function": "connect_session_create_and_ticket_tool",
-      "name": "connect.session.create_and_ticket",
-      "effect": "write",
-      "description": "Create an Iroha Connect session and immediately build WebSocket join metadata for a selected role.",
-      "method": "POST",
-      "path_template": "/v1/connect/session",
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "role",
-          "network_id",
-          "app_pk",
-          "nonce"
-        ],
-        "properties": {
-          "role": {
-            "type": "string",
-            "enum": [
-              "app",
-              "wallet"
-            ],
-            "description": "Role used to select `token_app` or `token_wallet` for ticket generation."
-          },
-          "network_id": {
-            "type": "string",
-            "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
-            "description": "Canonical checksummed genesis-derived NetworkId."
-          },
-          "app_pk": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9_-]{43}$",
-            "description": "Canonical unpadded base64url X25519 application public key (32 bytes)."
-          },
-          "nonce": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9_-]{22}$",
-            "description": "Canonical unpadded base64url fresh session nonce (16 bytes)."
-          },
-          "node": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Optional exact node hint included in both Connect deep links and used as the ticket URL base when `ticket_node_url` is omitted."
-          },
-          "ticket_node_url": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Optional node URL override used only for ticket generation."
-          },
-          "headers": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
-          "accept": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    {
-      "function": "connect_session_delete_tool",
-      "name": "connect.session.delete",
+      "function": "iroha_connect_session_delete_tool",
+      "name": "iroha.connect.session.delete",
       "effect": "write",
       "description": "Delete/purge an Iroha Connect session by SID using the management token or an Authorization header.",
       "method": "DELETE",
@@ -178,7 +154,7 @@
           },
           "token_management": {
             "type": "string",
-            "description": "Management bearer token returned by `connect.session.create`; the dispatcher maps this to `Authorization: Bearer ...`."
+            "description": "Management bearer token returned by `iroha.connect.session.create`; the dispatcher maps this to `Authorization: Bearer ...`."
           },
           "headers": {
             "type": "object",
@@ -500,157 +476,6 @@
       }
     },
     {
-      "function": "iroha_ledger_headers_tool",
-      "name": "iroha.ledger.headers",
-      "effect": "read",
-      "description": "Fetch recent block headers (`/v1/ledger/headers`) with optional `from`/`limit` query shortcuts.",
-      "method": "GET",
-      "path_template": "/v1/ledger/headers",
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": true,
-        "properties": {
-          "query": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "from": {
-            "type": "integer"
-          },
-          "limit": {
-            "type": "integer"
-          },
-          "headers": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
-          "accept": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    {
-      "function": "iroha_ledger_state_root_tool",
-      "name": "iroha.ledger.state_root",
-      "effect": "read",
-      "description": "Fetch a State-committed execution root with its exact verified Sumeragi-v2 finality artifact by canonical `path.height` (`/v1/ledger/state/{height}`).",
-      "method": "GET",
-      "path_template": "/v1/ledger/state/{height}",
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "path"
-        ],
-        "properties": {
-          "path": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "height"
-            ],
-            "properties": {
-              "height": {
-                "type": "integer"
-              }
-            }
-          },
-          "headers": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
-          "accept": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    {
-      "function": "iroha_ledger_state_proof_tool",
-      "name": "iroha.ledger.state_proof",
-      "effect": "read",
-      "description": "Fetch exact verified Sumeragi-v2 state-finality evidence by canonical `path.height` (`/v1/ledger/state-proof/{height}`).",
-      "method": "GET",
-      "path_template": "/v1/ledger/state-proof/{height}",
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "path"
-        ],
-        "properties": {
-          "path": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "height"
-            ],
-            "properties": {
-              "height": {
-                "type": "integer"
-              }
-            }
-          },
-          "headers": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
-          "accept": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    {
-      "function": "iroha_ledger_block_proof_tool",
-      "name": "iroha.ledger.block_proof",
-      "effect": "read",
-      "description": "Fetch block-entry Merkle proofs by canonical `path.height` and `path.entry_hash` (`/v1/ledger/block/{height}/proof/{entry_hash}`).",
-      "method": "GET",
-      "path_template": "/v1/ledger/block/{height}/proof/{entry_hash}",
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "path"
-        ],
-        "properties": {
-          "path": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "height",
-              "entry_hash"
-            ],
-            "properties": {
-              "height": {
-                "type": "integer"
-              },
-              "entry_hash": {
-                "type": "string"
-              }
-            }
-          },
-          "headers": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
-          "accept": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    {
       "function": "iroha_bridge_finality_proof_tool",
       "name": "iroha.bridge.finality.proof",
       "effect": "read",
@@ -711,44 +536,6 @@
             "properties": {
               "height": {
                 "type": "integer"
-              }
-            }
-          },
-          "headers": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
-          "accept": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    {
-      "function": "iroha_proofs_get_tool",
-      "name": "iroha.proofs.get",
-      "effect": "read",
-      "description": "Fetch a proof record by canonical `path.id` (`/v1/proofs/{id}`).",
-      "method": "GET",
-      "path_template": "/v1/proofs/{id}",
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "path"
-        ],
-        "properties": {
-          "path": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "id"
-            ],
-            "properties": {
-              "id": {
-                "type": "string"
               }
             }
           },
@@ -1307,7 +1094,7 @@
     {
       "function": "iroha_accounts_onboard_prepare_tool",
       "name": "iroha.accounts.onboard.prepare",
-      "effect": "read",
+      "effect": "write",
       "description": "Revalidate a signed onboarding receipt and return an authenticated exact transaction envelope without submitting it. The onboarding token is accepted only from the outer MCP request.",
       "method": "POST",
       "path_template": "/v1/accounts/onboard/prepare",
@@ -1644,74 +1431,6 @@
             "additionalProperties": {"type": "string"},
             "description": "Non-authentication headers only; the onboarding token must be sent on the outer MCP request."
           },
-          "accept": {"type": "string"}
-        }
-      }
-    },
-    {
-      "function": "iroha_accounts_faucet_prepare_tool",
-      "name": "iroha.accounts.faucet.prepare",
-      "effect": "read",
-      "description": "Validate one solved faucet claim and return an authenticated exact transaction envelope without submitting it.",
-      "method": "POST",
-      "path_template": "/v1/accounts/faucet/prepare",
-      "input_schema": {
-        "type": "object",
-        "x-iroha-mcp-strict-body": true,
-        "additionalProperties": false,
-        "required": ["body"],
-        "properties": {
-          "body": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["schema", "binding", "claim", "fee_payment"],
-            "properties": {
-              "schema": {"type": "string", "const": "iroha.accounts.faucet.prepare.v1"},
-              "binding": {"type": "object", "additionalProperties": false, "required": ["schema", "authorization_sha256", "authorization_nonce", "kind", "phase", "idempotency_key", "execution_expires_at_unix_ms"], "properties": {"schema": {"type": "string", "const": "iroha.taira.public-reset.mutation-binding.v1"}, "authorization_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "authorization_nonce": {"type": "string", "minLength": 32, "maxLength": 32, "pattern": "^[a-z0-9_-]+$"}, "kind": {"type": "string", "const": "faucet"}, "phase": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9_-]+$"}, "idempotency_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "execution_expires_at_unix_ms": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}}},
-              "claim": {"type": "object", "additionalProperties": false, "required": ["account_id", "pow_anchor_height", "pow_nonce_hex"], "properties": {"account_id": {"type": "string", "minLength": 8}, "pow_anchor_height": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, "pow_nonce_hex": {"type": "string", "maxLength": 64, "pattern": "^(?:[0-9a-f]{2})+$"}}},
-              "fee_payment": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["payer", "value"], "properties": {"payer": {"type": "string", "const": "authority"}, "value": {"type": "object", "additionalProperties": false, "required": ["charge_limits", "gas_limit"], "properties": {"charge_limits": {"type": "array", "maxItems": 2, "items": {"type": "object", "additionalProperties": false, "required": ["kind", "asset_definition_id", "max_amount"], "properties": {"kind": {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"type": "string", "enum": ["nexus", "pipeline_gas"]}, "value": {"type": "null"}}}, "asset_definition_id": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"}, "max_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"}}}}, "gas_limit": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, {"type": "null"}]}}}}}, {"type": "object", "additionalProperties": false, "required": ["payer", "value"], "properties": {"payer": {"type": "string", "const": "sponsor"}, "value": {"type": "object", "additionalProperties": false, "required": ["program_id", "program_revision", "charge_limits", "gas_limit"], "properties": {"program_id": {"type": "object", "additionalProperties": false, "required": ["sponsor", "name"], "properties": {"sponsor": {"type": "string", "minLength": 8}, "name": {"type": "string", "minLength": 1, "maxLength": 255}}}, "program_revision": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, "charge_limits": {"type": "array", "maxItems": 2, "items": {"type": "object", "additionalProperties": false, "required": ["kind", "asset_definition_id", "max_amount"], "properties": {"kind": {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"type": "string", "enum": ["nexus", "pipeline_gas"]}, "value": {"type": "null"}}}, "asset_definition_id": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"}, "max_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"}}}}, "gas_limit": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, {"type": "null"}]}}}}}]}
-            }
-          },
-          "headers": {"type": "object", "additionalProperties": {"type": "string"}},
-          "accept": {"type": "string"}
-        }
-      }
-    },
-    {
-      "function": "iroha_accounts_faucet_submit_tool",
-      "name": "iroha.accounts.faucet.submit",
-      "effect": "write",
-      "description": "Submit only the exact authenticated transaction envelope returned by iroha.accounts.faucet.prepare.",
-      "method": "POST",
-      "path_template": "/v1/accounts/faucet",
-      "input_schema": {
-        "type": "object",
-        "x-iroha-mcp-strict-body": true,
-        "additionalProperties": false,
-        "required": ["body"],
-        "properties": {
-          "body": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["schema", "binding", "operation", "claim", "semantic_hash_hex", "account_id", "asset_definition_id", "asset_id", "amount", "transaction_hash_hex", "signed_transaction_wire_hex", "signed_transaction_wire_sha256", "fee_payment", "server_signature"],
-            "properties": {
-              "schema": {"type": "string", "const": "iroha.taira.prepared-transaction.v1"},
-              "binding": {"type": "object", "additionalProperties": false, "required": ["schema", "authorization_sha256", "authorization_nonce", "kind", "phase", "idempotency_key", "execution_expires_at_unix_ms"], "properties": {"schema": {"type": "string", "const": "iroha.taira.public-reset.mutation-binding.v1"}, "authorization_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "authorization_nonce": {"type": "string", "minLength": 32, "maxLength": 32, "pattern": "^[a-z0-9_-]+$"}, "kind": {"type": "string", "const": "faucet"}, "phase": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9_-]+$"}, "idempotency_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "execution_expires_at_unix_ms": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}}},
-              "operation": {"type": "string", "const": "faucet"},
-              "claim": {"type": "object", "additionalProperties": false, "required": ["account_id", "pow_anchor_height", "pow_nonce_hex"], "properties": {"account_id": {"type": "string", "minLength": 8}, "pow_anchor_height": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, "pow_nonce_hex": {"type": "string", "maxLength": 64, "pattern": "^(?:[0-9a-f]{2})+$"}}},
-              "semantic_hash_hex": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-              "account_id": {"type": "string", "minLength": 8},
-              "asset_definition_id": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"},
-              "asset_id": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}#[^#\\s]+$"},
-              "amount": {"type": "string", "maxLength": 155, "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"},
-              "transaction_hash_hex": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-              "signed_transaction_wire_hex": {"type": "string", "pattern": "^(?:[0-9a-f]{2})+$"},
-              "signed_transaction_wire_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-              "fee_payment": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["payer", "value"], "properties": {"payer": {"type": "string", "const": "authority"}, "value": {"type": "object", "additionalProperties": false, "required": ["charge_limits", "gas_limit"], "properties": {"charge_limits": {"type": "array", "maxItems": 2, "items": {"type": "object", "additionalProperties": false, "required": ["kind", "asset_definition_id", "max_amount"], "properties": {"kind": {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"type": "string", "enum": ["nexus", "pipeline_gas"]}, "value": {"type": "null"}}}, "asset_definition_id": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"}, "max_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"}}}}, "gas_limit": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, {"type": "null"}]}}}}}, {"type": "object", "additionalProperties": false, "required": ["payer", "value"], "properties": {"payer": {"type": "string", "const": "sponsor"}, "value": {"type": "object", "additionalProperties": false, "required": ["program_id", "program_revision", "charge_limits", "gas_limit"], "properties": {"program_id": {"type": "object", "additionalProperties": false, "required": ["sponsor", "name"], "properties": {"sponsor": {"type": "string", "minLength": 8}, "name": {"type": "string", "minLength": 1, "maxLength": 255}}}, "program_revision": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, "charge_limits": {"type": "array", "maxItems": 2, "items": {"type": "object", "additionalProperties": false, "required": ["kind", "asset_definition_id", "max_amount"], "properties": {"kind": {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"type": "string", "enum": ["nexus", "pipeline_gas"]}, "value": {"type": "null"}}}, "asset_definition_id": {"type": "string", "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$"}, "max_amount": {"type": "string", "maxLength": 155, "pattern": "^(?:[1-9][0-9]{0,153}|(?:0|[1-9][0-9]*)\\.[0-9]{0,27}[1-9])$"}}}}, "gas_limit": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 18446744073709551615}, {"type": "null"}]}}}}}]},
-              "server_signature": {"type": "string", "minLength": 2, "pattern": "^(?!0+$)(?:[0-9A-F]{2})+$"}
-            }
-          },
-          "headers": {"type": "object", "additionalProperties": {"type": "string"}},
           "accept": {"type": "string"}
         }
       }

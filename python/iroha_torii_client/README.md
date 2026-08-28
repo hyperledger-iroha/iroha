@@ -1,5 +1,24 @@
 # Iroha Torii client
 
+Use the public Taira profile instead of copying its origin, address
+discriminant, Digital Shekel, and XOR metadata. The deployment's exact
+genesis-derived `NetworkId` remains caller-supplied because public resets can
+change it:
+
+```python
+from iroha_torii_client import (
+    TAIRA_TESTNET_PROFILE,
+    ToriiClient,
+    taira_local_signing_context,
+)
+
+client = ToriiClient(
+    TAIRA_TESTNET_PROFILE.torii_base_url,
+    local_signing_context=taira_local_signing_context(configured_network_id),
+    orderbook_chain_discriminant=TAIRA_TESTNET_PROFILE.i105_discriminant,
+)
+```
+
 The lightweight client exposes authoritative Sumeragi v2 status separately
 from the general operational-health endpoint:
 
@@ -46,6 +65,50 @@ Signed transaction hashes in this status surface use exact
 marker, not a normalization option. Contract `tx_hash_hex` receipt fields use
 the same exact spelling, as do contract entrypoint hashes, multisig transaction
 hashes, and offline-operation status transaction hashes.
+
+## Caller-trusted unsigned drafts
+
+Contract-call and multisig bytes returned for local signing fail closed unless
+the client has the exact genesis-derived `local_signing_context` and the caller
+supplies an off-wire `ContractCallDraftIntent` or `MultisigDraftIntent`. Each
+contract-call intent contains the exact Norito executable and final merged
+metadata archives plus the trusted resolved address, code hash, and request
+payload digest:
+
+```python
+from iroha_torii_client import ContractCallDraftIntent, contract_payload_digest_hex
+
+call_payload = {"amount": 1}
+
+draft = client.prepare_contract_call(
+    authority=authority,
+    contract_alias="router::universal",
+    entrypoint="increment",
+    payload=call_payload,
+    metadata={"caller_note": "trusted"},
+    creation_time_ms=created_at_ms,
+    transaction_ttl_ms=100_000,
+    fee_payment=quoted_fee_payment,
+    draft_intent=ContractCallDraftIntent(
+        executable_b64=trusted_executable_norito_b64,
+        metadata_b64=trusted_final_metadata_norito_b64,
+        contract_address=trusted_resolved_contract_address,
+        code_hash_hex=trusted_contract_code_hash_hex,
+        payload_digest_hex=contract_payload_digest_hex(call_payload),
+    ),
+)
+```
+
+These values must come from a trusted local builder and verified artifact/schema
+path, never from the Torii response being checked. Payload hashing uses compact,
+key-sorted UTF-8 JSON and rejects floats and integers outside the cross-SDK safe
+range; encode decimal and wider numeric schema values as canonical strings.
+Validation runs before network dispatch where possible, then binds the network,
+authority, executable, metadata, response-enriched fee, creation time, TTL,
+ordinary admission mode, absent nonce and attachments, and the closed operation
+receipt (selector resolution, code/ABI, entrypoint, gas state, and payload
+digest) before any bytes are exposed for signing. Generic multisig proposals
+apply their archive-binding rule whenever `signature_b64` is absent.
 
 ## Node-local core and pipeline reads
 
@@ -215,10 +278,11 @@ attempt = client.get_parliament_attempt_v1(
 )
 ```
 
-`get_parliament_timed_ovn_casting_proof_page_v1(...)` accepts an immutable
-canonical Norito request frame and returns an opaque, schema-bound Norito
-response frame. The lightweight Python package validates media type, schema,
-checksum, and the 8 MiB response bound only. Before any ballot seed is used,
+`get_parliament_timed_ovn_casting_proof_page_v1(...)` accepts an independently
+trusted nonzero checkpoint height, builds the sole canonical Norito request
+frame internally, and returns an opaque, schema-bound Norito response frame.
+The lightweight Python package validates media type, schema, flags, checksum,
+and the 8 MiB response bound only. Before any ballot seed is used,
 pass the response and the independently pinned network ID, checkpoint height,
 checkpoint context ID, and ballot-attempt ID to the ABI-23 native verifier.
 Python does not claim to verify finality, the ordinary-write witness,

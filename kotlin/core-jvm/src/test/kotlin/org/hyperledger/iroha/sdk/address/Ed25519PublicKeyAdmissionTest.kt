@@ -23,9 +23,30 @@ import org.hyperledger.iroha.sdk.client.IdentifierPolicySummary
 import org.hyperledger.iroha.sdk.client.RamLfeJsonParser
 import org.hyperledger.iroha.sdk.client.RamLfeProgramPolicySummary
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
+import org.hyperledger.iroha.sdk.crypto.SignatureAdmission
 import org.hyperledger.iroha.sdk.tx.MultisigSignature
 
 class Ed25519PublicKeyAdmissionTest {
+    @Test
+    fun `multisig Ed25519 signatures require canonical nonzero shape`() {
+        val publicKey = loadVectors().first { it.valid }.key
+        MultisigSignature.fromCurveId(
+            0x01,
+            publicKey,
+            ByteArray(SignatureAdmission.ED25519_SIGNATURE_LENGTH) { 1 },
+        )
+
+        for ((name, signature) in listOf(
+            "short" to ByteArray(SignatureAdmission.ED25519_SIGNATURE_LENGTH - 1) { 1 },
+            "long" to ByteArray(SignatureAdmission.ED25519_SIGNATURE_LENGTH + 1) { 1 },
+            "all-zero" to ByteArray(SignatureAdmission.ED25519_SIGNATURE_LENGTH),
+        )) {
+            assertFailsWith<IllegalArgumentException>(name) {
+                MultisigSignature.fromCurveId(0x01, publicKey, signature)
+            }
+        }
+    }
+
     @Test
     fun `shared vectors enforce strict admission across all address routes`() {
         for (vector in loadVectors()) {

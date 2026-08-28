@@ -55,9 +55,10 @@
   "governance": {
     "proposals": {
       "proposed": 0,
-      "approved": 0,
       "rejected": 0,
-      "enacted": 0
+      "enacted": 0,
+      "superseded": 0,
+      "execution_failed": 0
     },
     "protected_namespace": {
       "total_checks": 0,

@@ -3027,16 +3027,20 @@ fn enforce_policy_with_credit_and_hijiri(
             resolve_fee_coordinate_context(coordinate, &transfer_collection.transfers)
         })
         .transpose()?;
+    // The signed metadata describes the explicitly coordinated fee context. For ordinary
+    // transactions that is context zero; a multisig proposal can instead coordinate a nested
+    // execution account whose account-bound Hijiri quote hash necessarily differs from its signer.
+    let metadata_fee_context_index = explicit_fee_context_index.unwrap_or(0);
     let mut requires_policy_metadata = false;
     let mut credited_minor_units = 0_u64;
-    let mut top_level_hijiri_quote_hash = None;
+    let mut metadata_hijiri_quote_hash = None;
     for (context_index, context) in transfer_collection.contexts.iter().enumerate() {
         let resolved_hijiri =
             resolve_hijiri_fee(hijiri, &context.execution_account_id, resolve_account_risk)?;
-        if context_index == 0 {
-            top_level_hijiri_quote_hash = resolved_hijiri.map(|resolved| resolved.quote_hash);
+        if context_index == metadata_fee_context_index {
+            metadata_hijiri_quote_hash = resolved_hijiri.map(|resolved| resolved.quote_hash);
             if metadata_contains_validation_fee {
-                validate_policy_metadata(tx.metadata(), policy, top_level_hijiri_quote_hash)?;
+                validate_policy_metadata(tx.metadata(), policy, metadata_hijiri_quote_hash)?;
             }
         }
         let transaction_fee_coordinate = if explicit_fee_context_index == Some(context_index) {
@@ -3079,7 +3083,7 @@ fn enforce_policy_with_credit_and_hijiri(
         }
     }
     if requires_policy_metadata && !metadata_contains_validation_fee {
-        validate_policy_metadata(tx.metadata(), policy, top_level_hijiri_quote_hash)?;
+        validate_policy_metadata(tx.metadata(), policy, metadata_hijiri_quote_hash)?;
     }
     Ok(credited_minor_units)
 }
@@ -4290,15 +4294,7 @@ mod tests {
             execute_trigger::ExecuteTriggerEventFilter,
             time::{ExecutionTime, Schedule, TimeEventFilter},
         },
-        governance::types::{
-            BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, BodyInstanceId,
-            GovernanceAttemptId, GovernanceCertificateId, GovernanceCertificateV1,
-            GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1,
-            ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
-            ParliamentBallotCertificateBindingV1, ParliamentBody,
-            ParliamentBodyCertificateBindingV1, ProposalContentId, RiskTierV1, SortitionRequestV1,
-            TleKeySessionId, TleSessionId, parliament_ballot_result_root_v1,
-        },
+        governance::types::{GovernanceAttemptId, GovernanceCertificateId},
         hijiri::{FeeMultiplierBand, HijiriAccountRiskV1, HijiriFeePolicy, Q16},
         isi::{
             InstructionBox, Transfer, TransferAssetBatchEntry,
@@ -4472,8 +4468,11 @@ mod tests {
         policy.expires_after_height = Some(policy.effective_from_height + 100);
         policy
     }
+    fn test_parliament_candidates() -> Vec<AccountId> {
+        (220_u8..=243).map(account).collect()
+    }
     fn test_authorization(
-        proposal_fingerprint: [u8; 32],
+        proposal: &iroha_data_model::governance::types::ProposalKind,
         policy_effective_height: u64,
     ) -> ValidationFeeParliamentAuthorizationV1 {
         let enacted_at_height = policy_effective_height
@@ -4481,131 +4480,29 @@ mod tests {
                 iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
             )
             .expect("test policy leaves the full activation delay");
-        let base = enacted_at_height
-            .checked_sub(15)
-            .expect("test policy leaves a complete Parliament certificate lifecycle");
-        let root = |marker: u8| [marker; 32];
-        let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
-        let governance_attempt_sequence = 0;
-        let governance_attempt_id =
-            GovernanceAttemptId::derive_v1(proposal_content_id, governance_attempt_sequence);
-        let election_attempt_sequence = 0;
-        let election_attempt_id = BodyElectionAttemptId::derive_v1(
-            governance_attempt_id,
-            ParliamentBody::PolicyJury,
-            election_attempt_sequence,
+        let attempt = crate::governance::parliament::enacted_parliament_attempt_for_testing(
+            proposal,
+            test_parliament_candidates(),
+            &validation_fee_test_network_id(),
+            enacted_at_height,
         );
-        let beacon_session_id = BeaconSessionId::new(root(2));
-        let sortition_request = SortitionRequestV1::try_new_canonical(
-            governance_attempt_id,
-            election_attempt_id,
-            ParliamentBody::PolicyJury,
-            root(1),
-            3,
-            3,
-            base + 1,
-            base + 2,
-            beacon_session_id,
-            None,
-        )
-        .expect("canonical validation-fee Policy Jury request");
-        let roster_root = root(4);
-        let body_instance_id = BodyInstanceId::derive_v1(election_attempt_id, roster_root);
-        let ballot_attempt_sequence = 0;
-        let ballot_attempt_id =
-            BallotAttemptId::derive_v1(body_instance_id, ballot_attempt_sequence);
-        let release_beacon_session_id = BeaconSessionId::new(root(7));
-        let tle_key_session_id = TleKeySessionId::new(root(8));
-        let release_height = base + 12;
-        let tle_session_id = TleSessionId::derive_v1(
-            ballot_attempt_id,
-            tle_key_session_id,
-            release_beacon_session_id,
-            release_height,
-        );
-        let opening_root = root(16);
-        let tally = ParliamentAggregateTallyV1 {
-            original_seats: 3,
-            accepted_ballots: 3,
-            aye: 2,
-            nay: 1,
-            abstain: 0,
-        };
-        let outcome = ParliamentAggregateOutcomeV1::Approved;
-        let result_height = base + 13;
-        let result_root = parliament_ballot_result_root_v1(
-            governance_attempt_id,
-            body_instance_id,
-            ballot_attempt_id,
-            opening_root,
-            tally,
-            outcome,
-            result_height,
-        );
-        let governance_certificate = GovernanceCertificateV1 {
-            proposal_content_id,
-            governance_attempt_id,
-            governance_attempt_sequence,
-            risk_tier: RiskTierV1::Standard,
-            body_bindings: vec![ParliamentBodyCertificateBindingV1 {
-                body_instance_id,
-                election_attempt_id,
-                election_attempt_sequence,
-                sortition_request_id: sortition_request.id,
-                sortition_request,
-                body: ParliamentBody::PolicyJury,
-                original_seats: tally.original_seats,
-                beacon_session_id,
-                beacon_pulse_id: BeaconPulseId::new(root(3)),
-                roster_root,
-                assignment_root: root(5),
-                result_root,
-                result_height,
-                public_finding: None,
-                ballot: Some(ParliamentBallotCertificateBindingV1 {
-                    ballot_attempt_id,
-                    ballot_attempt_sequence,
-                    tle_session_id,
-                    tle_key_session_id,
-                    registration_root: root(9),
-                    dropout_root: root(10),
-                    survivor_root: root(11),
-                    corpus_root: root(12),
-                    no_recovery_root: root(13),
-                    timed_commitment_root: root(14),
-                    release_beacon_session_id,
-                    registered_at_height: base + 3,
-                    registration_close_height: base + 7,
-                    survivor_freeze_height: base + 10,
-                    commitment_close_height: base + 11,
-                    registration_closed_at_height: base + 7,
-                    survivors_frozen_at_height: base + 10,
-                    commitment_closed_at_height: base + 11,
-                    max_ballot_retries: 3,
-                    max_corpus_entries: 3,
-                    release_height,
-                    opening_deadline_height: result_height,
-                    release_pulse_id: BeaconPulseId::new(root(15)),
-                    opening_height: release_height,
-                    opening_root,
-                    tally,
-                    outcome,
-                }),
-            }],
-            policy_version: 1,
-            effect_preimage_hash: root(19),
-            expected_head: GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {
-                subject_id: root(17),
-                version: 1,
-                head_root: root(18),
-            }),
-            certified_at_height: base + 14,
-            enact_at_height: enacted_at_height,
+        let governance_certificate = attempt
+            .certificate()
+            .cloned()
+            .expect("test Parliament attempt retains its enacted certificate");
+        let proposal_operator = match proposal {
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(proposal) => {
+                proposal.proposal_operator.clone()
+            }
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
+                proposal,
+            ) => proposal.proposal_operator.clone(),
+            _ => panic!("validation-fee authorization fixture requires a validation-fee proposal"),
         };
         let governance_certificate_id = GovernanceCertificateId::derive_v1(&governance_certificate);
         ValidationFeeParliamentAuthorizationV1 {
-            proposal_operator: account(250),
-            proposal_fingerprint,
+            proposal_operator,
+            proposal_fingerprint: proposal.fingerprint(),
             governance_certificate_id,
             governance_certificate,
             enacted_at_height,
@@ -4628,11 +4525,10 @@ mod tests {
                             payout_binding: binding.clone(),
                         },
                     );
-                    let lifecycle_id = lifecycle_kind.fingerprint();
                     ValidationFeePayoutLifecycleReferenceV1 {
                         lifecycle_seal,
                         parliament_authorization: test_authorization(
-                            lifecycle_id,
+                            &lifecycle_kind,
                             policy.effective_from_height,
                         ),
                     }
@@ -4645,10 +4541,9 @@ mod tests {
                     policy: policy.clone(),
                     payout_lifecycle_proposal_id: lifecycle_id,
                 });
-                let proposal_id = kind.fingerprint();
                 ValidationFeePolicyRegistryEntryV1::from_enactment(
                     policy.clone(),
-                    test_authorization(proposal_id, policy.effective_from_height),
+                    test_authorization(&kind, policy.effective_from_height),
                     payout_lifecycle,
                 )
                 .expect("registry entry")
@@ -4666,18 +4561,35 @@ mod tests {
         let proposal_id = authorization.proposal_fingerprint;
         assert_eq!(kind.fingerprint(), proposal_id);
         assert_eq!(authorization.invariant_error(), None);
+        let proposal_operator = authorization.proposal_operator.clone();
+        let attempt = crate::governance::parliament::enacted_parliament_attempt_for_testing(
+            &kind,
+            test_parliament_candidates(),
+            &validation_fee_test_network_id(),
+            authorization.enacted_at_height,
+        );
+        assert_eq!(
+            attempt.certificate(),
+            Some(&authorization.governance_certificate),
+            "authorization must retain the exact certificate produced by its Parliament attempt"
+        );
+        let attempt_id = attempt.attempt().id;
         state_tx
             .world
             .put_governance_proposal(
                 proposal_id,
                 crate::state::GovernanceProposalRecord {
-                    proposer: account(250),
+                    proposer: proposal_operator,
                     kind,
                     created_height: 1,
                     status: crate::state::GovernanceProposalStatus::Enacted,
                 },
             )
             .expect("validation-fee test proposal must satisfy first-release JSON bounds");
+        state_tx
+            .world
+            .put_parliament_attempt_for_testing(attempt_id, attempt)
+            .expect("persist exact enacted validation-fee Parliament attempt");
     }
     fn install_policy_registry_fixture(
         registry: &ValidationFeePolicyRegistryV1,
@@ -6485,6 +6397,24 @@ mod tests {
                 &no_hijiri_account_risk,
             ),
             Err(ValidationFeeAdmissionError::MalformedHijiriFeeQuoteHashMetadata)
+        );
+    }
+    #[test]
+    fn hijiri_quote_hash_only_metadata_is_detected_and_rejected_as_incomplete() {
+        let policy = policy(&account(3));
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str(VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY)
+                .expect("metadata key"),
+            Json::new("ab".repeat(32)),
+        );
+        let transaction = tx(1, Vec::new(), metadata);
+
+        assert!(has_validation_fee_metadata(transaction.metadata()));
+        assert!(transaction_has_validation_fee_metadata(&transaction));
+        assert_eq!(
+            enforce_policy(&transaction, &policy),
+            Err(ValidationFeeAdmissionError::MissingPolicyVersionMetadata)
         );
     }
     #[test]
@@ -9758,6 +9688,95 @@ mod tests {
                 ValidationFeeAdmissionError::AmbiguousFeeInstructionCoordinate {
                     instruction_index: 1,
                     entry_index: None,
+                }
+            )
+        );
+    }
+    #[test]
+    fn multisig_hijiri_metadata_binds_the_explicit_nested_fee_context() {
+        let outer_signer = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let multisig = account(4);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let hijiri = HijiriParametersV1::first_release_genesis();
+        let outer_quote_hash = hijiri
+            .fee_quote_hash(&outer_signer, None)
+            .expect("outer signer quote hash");
+        let nested_quote_hash = hijiri
+            .fee_quote_hash(&multisig, None)
+            .expect("nested multisig quote hash");
+        assert_ne!(
+            outer_quote_hash, nested_quote_hash,
+            "Hijiri quote hashes must remain account-bound"
+        );
+
+        let transaction = |metadata_quote_hash, marker_quote_hash| {
+            tx(
+                1,
+                vec![
+                    MultisigPropose::new(
+                        multisig.clone(),
+                        with_multisig_fee_marker_and_hijiri(
+                            &policy,
+                            Some(marker_quote_hash),
+                            vec![
+                                transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
+                                transfer(
+                                    &multisig,
+                                    &fee_asset,
+                                    minor_units(TEST_VALIDATION_FEE_MINOR_UNITS),
+                                    &treasury,
+                                ),
+                            ],
+                            1,
+                            None,
+                        ),
+                        None,
+                    )
+                    .into(),
+                ],
+                metadata_for_hijiri_fee_instruction(&policy, metadata_quote_hash, 1),
+            )
+        };
+
+        assert_eq!(
+            enforce_policy_with_credit_and_hijiri(
+                &transaction(nested_quote_hash, nested_quote_hash),
+                &policy,
+                Some(&hijiri),
+                &no_hijiri_account_risk,
+            )
+            .expect("nested-account metadata and marker hashes must validate"),
+            0,
+            "registering the nested proposal must not credit its deferred fee"
+        );
+        assert_eq!(
+            enforce_policy_with_credit_and_hijiri(
+                &transaction(outer_quote_hash, nested_quote_hash),
+                &policy,
+                Some(&hijiri),
+                &no_hijiri_account_risk,
+            ),
+            Err(
+                ValidationFeeAdmissionError::WrongHijiriFeeQuoteHashMetadata {
+                    expected_hash_hex: hex::encode(nested_quote_hash),
+                    observed_hash_hex: hex::encode(outer_quote_hash),
+                }
+            )
+        );
+        assert_eq!(
+            enforce_policy_with_credit_and_hijiri(
+                &transaction(nested_quote_hash, outer_quote_hash),
+                &policy,
+                Some(&hijiri),
+                &no_hijiri_account_risk,
+            ),
+            Err(
+                ValidationFeeAdmissionError::WrongMultisigFeeMarkerHijiriFeeQuoteHash {
+                    expected_hash_hex: Some(hex::encode(nested_quote_hash)),
+                    observed_hash_hex: Some(hex::encode(outer_quote_hash)),
                 }
             )
         );

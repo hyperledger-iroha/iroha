@@ -44,7 +44,7 @@ fun sendInternalTransfer(
     forwardPayload: ForwardPayloadRemainder,
 ) {
     val transfer = createMessage({
-        bounce: BounceMode.Only256BitsOfBody,
+        bounce: BounceMode.RichBounce,
         dest: calcDeployedJettonWallet(destinationOwner, storage.masterAddress, contract.getCode()),
         value: 0,
         body: InternalTransferStep {
@@ -60,44 +60,72 @@ fun sendInternalTransfer(
 }
 
 fun onBouncedMessage(in: InMessageBounced) {
-    in.bouncedBody.skipBouncedPrefix();
-    val msg = lazy WalletBounceMessage.fromSlice(in.bouncedBody);
+    val rich = lazy RichBounceBody.fromSlice(in.bouncedBody);
+    val msg = lazy WalletBounceMessage.fromSlice(rich.originalBody.beginParse());
     var storage = WalletStorage.load();
-    var replay = storage.replay.load();
+    val replay = storage.replay.load();
     match (msg) {
         InternalTransferStep => {
+            assert (
+                msg.transferInitiator != null && msg.transferInitiator! == storage.ownerAddress
+            ) throw SccpErrors.InvalidCallback;
             storage.jettonBalance += msg.jettonAmount;
         }
         BurnNotificationForMinter => {
+            assert (in.senderAddress == storage.masterAddress) throw SccpErrors.InvalidCallback;
             storage.jettonBalance += msg.jettonAmount;
         }
         SccpMasterBurn => {
-            if (
-                replay.burns.exists(msg.messageId) &&
-                replay.burns.mustGet(msg.messageId) == SCCP_PENDING_BURN
-            ) {
-                storage.jettonBalance += msg.jettonAmount;
-                replay.burns.delete(msg.messageId);
-            }
+            assert (in.senderAddress == storage.masterAddress) throw SccpErrors.InvalidCallback;
+            assert (replay.burns.exists(msg.messageId)) throw SccpErrors.UnknownPendingOperation;
+            val record = replay.burns.mustGet(msg.messageId).load();
+            val tail = msg.tail.load();
+            assert (
+                sccpWalletBurnRecordMatches(
+                    record,
+                    SCCP_PENDING_BURN,
+                    msg.queryId,
+                    msg.bridgeAddress,
+                    msg.jettonAmount,
+                    tail.payloadHash,
+                    tail.sourceEventDigest,
+                )
+            ) throw SccpErrors.InvalidCallback;
+            // One failed attempt cannot release a debit that another exact
+            // in-flight attempt may already have settled at the master.
         }
         SccpWalletMintAck => {
-            if (
+            assert (in.senderAddress == storage.masterAddress) throw SccpErrors.InvalidCallback;
+            assert (
                 replay.mints.exists(msg.messageId) &&
-                replay.mints.mustGet(msg.messageId) == SCCP_PENDING_MINT
-            ) {
-                assert (storage.jettonBalance >= msg.jettonAmount) throw SccpErrors.BalanceError;
-                storage.jettonBalance -= msg.jettonAmount;
-                replay.mints.delete(msg.messageId);
-            }
+                (replay.mints.mustGet(msg.messageId) == SCCP_PENDING_MINT ||
+                replay.mints.mustGet(msg.messageId) == SCCP_COMPLETED)
+            ) throw SccpErrors.InvalidCallback;
+            // Minted Jettons remain reserved because a sibling acknowledgement
+            // may already have completed the master-side operation.
         }
         SccpWalletRefundTransfer => {
-            if (
-                replay.refunds.exists(msg.refundId) &&
-                replay.refunds.mustGet(msg.refundId) == SCCP_PENDING_BURN
-            ) {
-                storage.jettonBalance += msg.jettonAmount;
-                replay.refunds.delete(msg.refundId);
-            }
+            assert (replay.refunds.exists(msg.refundId)) throw SccpErrors.UnknownPendingOperation;
+            val record = replay.refunds.mustGet(msg.refundId).load();
+            assert (
+                sccpWalletRefundRecordMatches(
+                    record,
+                    SCCP_PENDING_BURN,
+                    msg.queryId,
+                    msg.bridgeAddress,
+                    msg.recipientOwner,
+                    msg.jettonAmount,
+                )
+            ) throw SccpErrors.InvalidCallback;
+            assert (
+                in.senderAddress ==
+                calcAddressOfJettonWallet(
+                    record.recipientOwner,
+                    storage.masterAddress,
+                    contract.getCode(),
+                )
+            ) throw SccpErrors.InvalidCallback;
+            // Keep the refund debit reserved; retry is driven by bridge state.
         }
         SccpWalletRefundAck => {
             // A recipient keeps the already credited refund. A replay from the custody wallet
@@ -105,7 +133,6 @@ fun onBouncedMessage(in: InMessageBounced) {
         }
         else => throw 0xFFFF,
     }
-    storage.replay = replay.toCell();
     storage.save();
 }
 
@@ -113,6 +140,9 @@ fun onInternalMessage(in: InMessage) {
     val msg = lazy AllowedWalletMessage.fromSlice(in.body);
     match (msg) {
         InternalTransferStep => {
+            assert (
+                sccpInternalTransferValueIsSufficient(in.valueCoins, msg.forwardTonAmount)
+            ) throw SccpErrors.NotEnoughGas;
             var storage = WalletStorage.load();
             if (in.senderAddress != storage.masterAddress) {
                 assert (msg.transferInitiator != null) throw SccpErrors.NotValidWallet;
@@ -143,22 +173,26 @@ fun onInternalMessage(in: InMessage) {
                 notification.send(SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
             }
             if (msg.sendExcessesTo != null) {
-                reserveToncoinsOnBalance(SCCP_MIN_WALLET_RESERVE, RESERVE_MODE_AT_MOST);
                 val excess = createMessage({
                     bounce: BounceMode.NoBounce,
                     dest: msg.sendExcessesTo!,
                     value: 0,
                     body: ReturnExcessesBack { queryId: msg.queryId },
                 });
-                // SAFETY: the fixed wallet reserve is established immediately above; only the
-                // unreserved balance is returned and a failed excess refund cannot affect Jettons.
-                excess.send(SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
+                // Mode 64 returns only value remaining from this inbound transfer. It cannot sweep
+                // pre-existing wallet balance or operator top-ups to an attacker-chosen address.
+                excess.send(
+                    SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS,
+                );
             }
         }
 
         AskToTransfer => {
             msg.forwardPayload.checkIsCorrectTlbEither();
             requireOperationValue(in.valueCoins);
+            assert (
+                sccpTransferRequestValueIsSufficient(in.valueCoins, msg.forwardTonAmount)
+            ) throw SccpErrors.NotEnoughGas;
             assert (
                 msg.transferRecipient.getWorkchain() == SCCP_WORKCHAIN
             ) throw SccpErrors.WrongWorkchain;
@@ -190,7 +224,7 @@ fun onInternalMessage(in: InMessage) {
             storage.jettonBalance -= msg.jettonAmount;
             storage.save();
             val burn = createMessage({
-                bounce: BounceMode.Only256BitsOfBody,
+                bounce: BounceMode.RichBounce,
                 dest: storage.masterAddress,
                 value: 0,
                 body: BurnNotificationForMinter {
@@ -227,7 +261,7 @@ fun onInternalMessage(in: InMessage) {
                 ) throw SccpErrors.Replay;
             }
             val ack = createMessage({
-                bounce: BounceMode.Only256BitsOfBody,
+                bounce: BounceMode.RichBounce,
                 dest: storage.masterAddress,
                 value: 0,
                 body: SccpWalletMintAck {
@@ -252,30 +286,49 @@ fun onInternalMessage(in: InMessage) {
                 msg.payloadHash != msg.sourceEventDigest
             ) throw SccpErrors.InvalidMessage;
             var replay = storage.replay.load();
+            var record: WalletBurnRecord;
             if (!replay.burns.exists(msg.messageId)) {
                 assert (
                     msg.jettonAmount != 0 && storage.jettonBalance >= msg.jettonAmount
                 ) throw SccpErrors.BalanceError;
                 storage.jettonBalance -= msg.jettonAmount;
-                replay.burns.set(msg.messageId, SCCP_PENDING_BURN);
+                record = {
+                    status: SCCP_PENDING_BURN,
+                    queryId: msg.queryId,
+                    bridgeAddress: storage.ownerAddress,
+                    jettonAmount: msg.jettonAmount,
+                    payloadHash: msg.payloadHash,
+                    sourceEventDigest: msg.sourceEventDigest,
+                };
+                replay.burns.set(msg.messageId, record.toCell());
                 storage.replay = replay.toCell();
                 storage.save();
             } else {
-                val status = replay.burns.mustGet(msg.messageId);
-                assert (status == SCCP_PENDING_BURN) throw SccpErrors.Replay;
+                record = replay.burns.mustGet(msg.messageId).load();
+                assert (
+                    sccpWalletBurnRecordMatches(
+                        record,
+                        SCCP_PENDING_BURN,
+                        msg.queryId,
+                        storage.ownerAddress,
+                        msg.jettonAmount,
+                        msg.payloadHash,
+                        msg.sourceEventDigest,
+                    )
+                ) throw SccpErrors.Replay;
             }
             val burn = createMessage({
-                bounce: BounceMode.Only256BitsOfBody,
+                bounce: BounceMode.RichBounce,
                 dest: storage.masterAddress,
                 value: 0,
                 body: SccpMasterBurn {
-                    queryId: msg.queryId,
+                    queryId: record.queryId,
                     messageId: msg.messageId,
-                    bridgeAddress: storage.ownerAddress,
-                    jettonAmount: msg.jettonAmount,
+                    bridgeAddress: record.bridgeAddress,
+                    jettonAmount: record.jettonAmount,
                     tail: (SccpMasterBurnTail {
-                        payloadHash: msg.payloadHash,
-                        sourceEventDigest: msg.sourceEventDigest,
+                        payloadHash: record.payloadHash,
+                        sourceEventDigest: record.sourceEventDigest,
                     }).toCell(),
                 },
             });
@@ -290,30 +343,47 @@ fun onInternalMessage(in: InMessage) {
             assert (in.senderAddress == storage.ownerAddress) throw SccpErrors.NotOwner;
             assert (msg.refundId != 0 && msg.jettonAmount != 0) throw SccpErrors.InvalidMessage;
             var replay = storage.replay.load();
+            var record: WalletRefundRecord;
             if (!replay.refunds.exists(msg.refundId)) {
                 assert (storage.jettonBalance >= msg.jettonAmount) throw SccpErrors.BalanceError;
                 storage.jettonBalance -= msg.jettonAmount;
-                replay.refunds.set(msg.refundId, SCCP_PENDING_BURN);
+                record = {
+                    status: SCCP_PENDING_BURN,
+                    queryId: msg.queryId,
+                    bridgeAddress: storage.ownerAddress,
+                    recipientOwner: msg.recipientOwner,
+                    jettonAmount: msg.jettonAmount,
+                };
+                replay.refunds.set(msg.refundId, record.toCell());
                 storage.replay = replay.toCell();
                 storage.save();
             } else {
-                val status = replay.refunds.mustGet(msg.refundId);
-                assert (status == SCCP_PENDING_BURN) throw SccpErrors.Replay;
+                record = replay.refunds.mustGet(msg.refundId).load();
+                assert (
+                    sccpWalletRefundRecordMatches(
+                        record,
+                        SCCP_PENDING_BURN,
+                        msg.queryId,
+                        storage.ownerAddress,
+                        msg.recipientOwner,
+                        msg.jettonAmount,
+                    )
+                ) throw SccpErrors.Replay;
             }
             val refund = createMessage({
-                bounce: BounceMode.Only256BitsOfBody,
+                bounce: BounceMode.RichBounce,
                 dest: calcDeployedJettonWallet(
-                    msg.recipientOwner,
+                    record.recipientOwner,
                     storage.masterAddress,
                     contract.getCode(),
                 ),
                 value: 0,
                 body: SccpWalletRefundTransfer {
-                    queryId: msg.queryId,
+                    queryId: record.queryId,
                     refundId: msg.refundId,
-                    bridgeAddress: storage.ownerAddress,
-                    recipientOwner: msg.recipientOwner,
-                    jettonAmount: msg.jettonAmount,
+                    bridgeAddress: record.bridgeAddress,
+                    recipientOwner: record.recipientOwner,
+                    jettonAmount: record.jettonAmount,
                 },
             });
             refund.send(
@@ -333,21 +403,45 @@ fun onInternalMessage(in: InMessage) {
                 )
             ) throw SccpErrors.NotValidWallet;
             var replay = storage.replay.load();
-            if (!replay.refunds.exists(msg.refundId)) {
+            var record: WalletRefundRecord;
+            val destinationReplayId = sccpWalletRefundDestinationReplayId(
+                msg.bridgeAddress,
+                msg.refundId,
+            );
+            if (!replay.refunds.exists(destinationReplayId)) {
                 storage.jettonBalance += msg.jettonAmount;
-                replay.refunds.set(msg.refundId, SCCP_COMPLETED);
+                record = {
+                    status: SCCP_COMPLETED,
+                    queryId: msg.queryId,
+                    bridgeAddress: msg.bridgeAddress,
+                    recipientOwner: msg.recipientOwner,
+                    jettonAmount: msg.jettonAmount,
+                };
+                replay.refunds.set(destinationReplayId, record.toCell());
                 storage.replay = replay.toCell();
                 storage.save();
+            } else {
+                record = replay.refunds.mustGet(destinationReplayId).load();
+                assert (
+                    sccpWalletRefundRecordMatches(
+                        record,
+                        SCCP_COMPLETED,
+                        msg.queryId,
+                        msg.bridgeAddress,
+                        msg.recipientOwner,
+                        msg.jettonAmount,
+                    )
+                ) throw SccpErrors.Replay;
             }
             val ack = createMessage({
                 bounce: BounceMode.NoBounce,
-                dest: msg.bridgeAddress,
+                dest: record.bridgeAddress,
                 value: 0,
                 body: SccpWalletRefundAck {
-                    queryId: msg.queryId,
+                    queryId: record.queryId,
                     refundId: msg.refundId,
-                    recipientOwner: msg.recipientOwner,
-                    jettonAmount: msg.jettonAmount,
+                    recipientOwner: record.recipientOwner,
+                    jettonAmount: record.jettonAmount,
                 },
             });
             ack.send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS);

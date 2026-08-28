@@ -32,6 +32,7 @@ fn autonomous_test_fixture(
         true,
         locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
         Some(local_validator_index),
+        true,
     )
 }
 
@@ -139,6 +140,9 @@ fn enqueue_autonomous_test_transactions(
                 Level::INFO,
                 format!("autonomous lane fixture {index}"),
             )])
+            .with_admission_intent(
+                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            )
             .sign(key.private_key());
             let accepted =
                 crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(transaction));
@@ -1825,6 +1829,7 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(
         true,
         locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
         Some(0),
+        true,
     );
     let quorum_keys = if local_signer_quorum {
         &keys[..3]

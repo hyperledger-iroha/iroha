@@ -7,7 +7,7 @@ use crate::sumeragi::{
     Queue,
     v2_lifecycle_coordinator::{
         AttemptedProducerTurnV1, ClaimedProducerTurnV1, ProducerTurnSchedulerClaimErrorV1,
-        ProducerTurnTerminalSettlementErrorV1,
+        ProducerTurnTerminalSettlementErrorV1, RecoveredLifecycleOutputSettlementV1,
     },
 };
 
@@ -426,6 +426,7 @@ impl PreparedPendingKuraLaneRecoveryV1 {
 impl PendingKuraActivatedProductionLifecycleV1 {
     fn locally_ready_for_finalized_rollover(&mut self) -> bool {
         self.launched.executor.ready_to_finish()
+            && !self.launched.owner.has_recovered_lifecycle_outputs()
             && self.launched.pending_kura_apply_replay.is_none()
             && self.launched.recovered_local_proposal_attempt.is_none()
             && self
@@ -453,6 +454,30 @@ impl PendingKuraActivatedProductionLifecycleV1 {
                 .registry
                 .registry_mut()
                 .exactly_covers_finalization_work(&self.launched.owner.coordinator)
+    }
+
+    /// Settle at most one owner-held cold output in the no-clock corridor.
+    ///
+    /// The recovered output keeps its exact Ready row until guarded service I/O
+    /// accepts it and the same-row terminal successor is durable. This bounded
+    /// turn exposes no ordinary reducer, ingress, producer, or clock authority.
+    pub(in crate::sumeragi) fn settle_recovered_lifecycle_output_for_no_clock_recovery(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    ) -> Result<
+        RecoveredLifecycleOutputSettlementV1,
+        crate::sumeragi::v2_effects::EffectExecutorError,
+    > {
+        let _ = self
+            .launched
+            .services
+            .retry_pending_exact_output()
+            .map_err(crate::sumeragi::v2_effects::EffectExecutorError::Service)?;
+        settle_one_recovered_lifecycle_output(
+            &mut self.launched.owner,
+            &mut self.launched.executor,
+            &mut self.launched.services,
+        )
     }
 
     /// Return whether the interrupted-tip executor and lifecycle owner can

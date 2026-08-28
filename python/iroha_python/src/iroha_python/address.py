@@ -142,10 +142,10 @@ class AddressHeader:
 
     @classmethod
     def new(cls, version: int, class_: AddressClass, norm_version: int) -> "AddressHeader":
-        if not 0 <= version <= 0b111:
-            raise AccountAddressError(f"invalid address header version: {version}")
-        if not 0 <= norm_version <= 0b11:
-            raise AccountAddressError(f"invalid normalization version: {norm_version}")
+        if version != HEADER_VERSION_V1:
+            raise AccountAddressError(f"unsupported address header version: {version}")
+        if norm_version != HEADER_NORM_VERSION_V1:
+            raise AccountAddressError(f"unsupported normalization version: {norm_version}")
         return cls(version=version, class_=class_, norm_version=norm_version, ext_flag=False)
 
     def encode(self) -> int:
@@ -163,6 +163,10 @@ class AddressHeader:
         ext_flag = bool(byte & 0b1)
         if ext_flag:
             raise AccountAddressError("address header reserves extension flag but it was set")
+        if version != HEADER_VERSION_V1:
+            raise AccountAddressError(f"unsupported address header version: {version}")
+        if norm_version != HEADER_NORM_VERSION_V1:
+            raise AccountAddressError(f"unsupported normalization version: {norm_version}")
         try:
             class_ = AddressClass(class_bits)
         except ValueError as exc:
@@ -322,6 +326,16 @@ class ControllerPayload:
 class AccountAddress:
     header: AddressHeader
     controller: ControllerPayload
+
+    def __post_init__(self) -> None:
+        if (
+            self.header.version != HEADER_VERSION_V1
+            or self.header.norm_version != HEADER_NORM_VERSION_V1
+            or self.header.ext_flag
+        ):
+            raise AccountAddressError("unsupported account address header")
+        if self.header.class_ is not AddressClass.SINGLE_KEY:
+            raise AccountAddressError("address header class does not match controller tag")
 
     @classmethod
     def from_account(

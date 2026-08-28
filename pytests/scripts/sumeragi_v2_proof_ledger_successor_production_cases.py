@@ -3699,8 +3699,8 @@ def test_retired_generic_runtime_recovery_symbol_fails_closed(
 
     runtime_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
     source = runtime_path.read_text(encoding="utf-8")
-    old = "    /// No live owner was ready.\n    Idle,\n}"
-    new = "    /// No live owner was ready.\n    Idle,\n    RecoveryIdle,\n}"
+    old = "    /// No serialized owner was ready.\n    Idle,\n}"
+    new = "    /// No serialized owner was ready.\n    Idle,\n    RecoveryIdle,\n}"
     assert source.count(old) == 1
     baseline_errors = (
         module._lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(

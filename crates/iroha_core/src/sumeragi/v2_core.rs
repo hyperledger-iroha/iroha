@@ -186,16 +186,18 @@ pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION: 
 /// advancing this identity fails the source-bound formal preflight.
 pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256:
     ProductionDigest256Projection = ProductionDigest256Projection {
-    word0: 0xfadf_d6bd_c5b9_5767,
-    word1: 0x65cf_f17d_1dab_a165,
-    word2: 0x5b35_cd66_f961_4617,
-    word3: 0x03e5_4552_334f_660c,
+    word0: 0x2a74_3bb2_11d4_b36f,
+    word1: 0x587c_dd65_bffc_84c9,
+    word2: 0xe822_a45b_2c7c_7115,
+    word3: 0x0a0a_e281_fb6f_8598,
 };
 /// Explicit classification accepted by the production trace replay reducer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProductionInFlightFirstReleaseReplayStepV1 {
     /// A state-changing member of the composed first-release `Next` relation.
     ComposedNext,
+    /// A strict non-producer replica re-authenticating an already-proved FIFO-only direct release.
+    ReleaseReservationDirectProofStutter,
     /// Reservation snapshot reconstruction which changes no abstract fact.
     RecoverReservationSnapshotStutter,
     /// Post-carrier receipt/index repair which changes no abstract fact.
@@ -307,7 +309,7 @@ pub(crate) fn authenticate_production_in_flight_first_release_transition_witness
 }
 /// Replay one classified trace step through the sole composed production relation.
 ///
-/// The reducer rejects both named stutters unless the caller classifies them
+/// The reducer rejects all named stutters unless the caller classifies them
 /// explicitly. Every other accepted step must change the abstract state and be
 /// a member of the same composed `Next` relation used by the production gates
 /// and the Verus instantiation.
@@ -321,6 +323,10 @@ pub(crate) fn check_production_in_flight_first_release_replay_step_v1(
             projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT
                 && projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER
                 && projection.before != projection.after
+        }
+        ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter => {
+            projection.action == IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT
+                && projection.before == projection.after
         }
         ProductionInFlightFirstReleaseReplayStepV1::RecoverReservationSnapshotStutter => {
             projection.action == IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT
@@ -345,6 +351,11 @@ pub(crate) fn check_production_in_flight_first_release_transition(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
 ) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
     let classification = match projection.action {
+        IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT
+            if projection.before == projection.after =>
+        {
+            ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter
+        }
         IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT => {
             ProductionInFlightFirstReleaseReplayStepV1::RecoverReservationSnapshotStutter
         }

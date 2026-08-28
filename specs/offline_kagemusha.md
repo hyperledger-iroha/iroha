@@ -721,13 +721,14 @@ required by that transaction, and the production verifier must construct from
 authenticated material. There is no process-wide boolean admission shortcut,
 per-asset enablement bit, or node-readiness consequence.
 
-`KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE` remains `false` in the
-candidate change set. It may be changed only by the final signed promotion
-commit after the authenticated review, benchmark, physical-device, and
-role-threshold evidence has been added. Even after promotion it is not by
-itself authorization for a transaction: the exact authenticated ABI-21/V4
-material referenced by that transaction must validate and construct
-successfully. None of these transaction checks gates node startup or health.
+`KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE` is `false` in ordinary
+candidate and development artifacts. The protected production SDK build sets
+it through the `privacy-production-enabled` bridge feature only after the
+authenticated review, benchmark, physical-device, and role-threshold evidence
+has authorized promotion. That build-time signal is not by itself
+authorization for a transaction: the exact authenticated ABI-21/V4 material
+referenced by that transaction must validate and construct successfully. None
+of these transaction checks gates node startup or health.
 Top-up and redemption change additionally require the governed selected
 release's issuance window to be active. Full redemption authenticates the
 parent release for its longer redemption lifetime, so a legitimately issued
@@ -1204,13 +1205,23 @@ KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT="/Library/SORA/Kagemu
   /absolute/root-custodied/reviewed-iroha/ci/check_kagemusha_production_readiness.sh promotion
 ```
 
-The checked-in workflow is deliberately named as readiness verification, not
-promotion. Its gate authenticates a catalog that already contains
-`promotion-record-v4.norito`; it does not publish that record, write a validator
-qualification seal, prepare or submit an activation, or archive a
-workflow-identity-bound durable receipt. Verification success is not promotion,
-and the workflow does not invoke the authenticated controller's
+The checked-in workflow authenticates a catalog that already contains
+`promotion-record-v4.norito`, then uses separate protected Apple and Android
+physical-device qualification jobs to issue platform-scoped mobile build
+authorizations. Each exact authorization and its GitHub OIDC attestation bundle
+is carried into the final mobile release; each platform build verifies only its
+own receipt, validates every member and checksum in its packaged output, and
+exports a digest over the complete five-file Apple or three-file Android
+package. The publisher independently verifies both receipts, requires those
+two build-job digests, rejects anything except the exact eight package files,
+then adds the six durable authorization assets and requires the exact resulting
+fourteen-file inventory before and immediately at its first release mutation.
+The workflow
+does not publish the Kagemusha promotion record, write a validator qualification
+seal, prepare or submit an activation, or invoke the authenticated controller's
 `promote-kagemusha-release-v4` subcommand.
+Mobile build authorization is not
+protocol activation.
 
 The local Kagami publication boundary is non-circular. `promote-release-v4`
 first authenticates the exact seventeen-file pre-promotion candidate, including

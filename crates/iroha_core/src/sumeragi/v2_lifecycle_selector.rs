@@ -1586,6 +1586,9 @@ impl PreparedLifecycleIngressSelector {
             .ok()
             .and_then(|family| family.candidate.ordinary())
             .map(CertifiedResponsePriorityCandidate::work_id);
+        // Capacity capture has already moved the exact I/O target into its
+        // live reservation. The consumed selector marker and reservation seal
+        // must still name the same physical certified-fetch work.
         if !matches!(
             self.io_target,
             PreparedLifecycleIngressIoTarget::Unsupported

@@ -2336,6 +2336,16 @@ impl PendingRuntimeEffectFingerprintV1 {
     pub(crate) const fn candidate_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
         self.candidate_statement
     }
+
+    /// Borrow the immutable causal key retained by this comparison-only owner.
+    pub(in crate::sumeragi) const fn causal_lifecycle_key(&self) -> &iroha_crypto::Hash {
+        &self.causal_lifecycle_key
+    }
+
+    /// Borrow the physical effect identity retained at lifecycle publication.
+    pub(in crate::sumeragi) const fn exact_effect_identity(&self) -> &iroha_crypto::Hash {
+        &self.effect_identity
+    }
 }
 /// Move-only restart successor derived from one exact recovered WAL vote.
 ///
@@ -2967,6 +2977,29 @@ impl PendingRuntimeEffectBinding {
         effect: &AdapterEffect,
     ) -> Option<PendingRuntimeEffectFingerprintV1> {
         if !matches!(effect, AdapterEffect::StoreBody { .. }) || !self.validate_exact(effect) {
+            return None;
+        }
+        Some(PendingRuntimeEffectFingerprintV1 {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind: self.effect_kind,
+            effect_identity: self.effect_identity,
+            candidate_kind: self.candidate_kind,
+            candidate_statement: self.candidate_statement,
+            candidate_semantic_identity: self.candidate_semantic_identity,
+            projection_hash: self.projection_hash,
+        })
+    }
+
+    /// Project a comparison-only fingerprint for one exact Validate binding.
+    ///
+    /// This has no admission or execution surface. It is retained only to
+    /// authenticate the terminal `AdvancedNoSuccessor` row after its concrete
+    /// Validate carrier has completed.
+    pub(in crate::sumeragi) fn published_validate_retry_fingerprint(
+        &self,
+        effect: &AdapterEffect,
+    ) -> Option<PendingRuntimeEffectFingerprintV1> {
+        if !matches!(effect, AdapterEffect::ValidateBody { .. }) || !self.validate_exact(effect) {
             return None;
         }
         Some(PendingRuntimeEffectFingerprintV1 {
@@ -4361,6 +4394,92 @@ impl RuntimeQueueOccurrenceOwner {
             && queued.cached_queue_occurrence_owner(source_identity) == Some(self)
     }
 }
+/// Exact retained Progress occurrence which authorizes one ordinary FIFO
+/// pacemaker escape while a future-view PrepareQC owns the class minimum.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeViewBlockedProgressAuthorization {
+    blocker: RuntimeQueueOccurrenceOwner,
+    blocker_lifecycle_ordinal: u128,
+    blocker_fifo_position: u64,
+    target_view: u64,
+    projection_hash: iroha_crypto::Hash,
+}
+fn runtime_view_blocked_progress_authorization_projection_hash(
+    authorization: &RuntimeViewBlockedProgressAuthorization,
+) -> iroha_crypto::Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:view-blocked-progress-authorization:v1");
+    append_runtime_identity_field(
+        &mut projection,
+        authorization.blocker.projection_hash.as_ref(),
+    );
+    append_runtime_identity_field(
+        &mut projection,
+        &authorization.blocker_lifecycle_ordinal.to_le_bytes(),
+    );
+    append_runtime_identity_u64(&mut projection, authorization.blocker_fifo_position);
+    append_runtime_identity_u64(&mut projection, authorization.target_view);
+    iroha_crypto::Hash::new(projection)
+}
+impl RuntimeViewBlockedProgressAuthorization {
+    fn new(
+        blocker: RuntimeQueueOccurrenceOwner,
+        blocker_lifecycle_ordinal: u128,
+        blocker_fifo_position: u64,
+        target_view: u64,
+    ) -> Option<Self> {
+        let mut authorization = Self {
+            blocker,
+            blocker_lifecycle_ordinal,
+            blocker_fifo_position,
+            target_view,
+            projection_hash: iroha_crypto::Hash::new([]),
+        };
+        authorization.projection_hash =
+            runtime_view_blocked_progress_authorization_projection_hash(&authorization);
+        (authorization.blocker.validate_exact()
+            && authorization.blocker.identity.kind == RuntimeCommandKind::Authenticated
+            && authorization.blocker_lifecycle_ordinal != 0)
+            .then_some(authorization)
+    }
+    fn validates_retained_blocker(
+        &self,
+        round_tag: EventTag,
+        before: &RuntimeQueueOwnershipSnapshot,
+        after: &RuntimeQueueOwnershipSnapshot,
+    ) -> bool {
+        let position = usize::try_from(self.blocker_fifo_position).ok();
+        let blocker_is_exact_minimum = position
+            .and_then(|position| before.occurrence_owners.get(position))
+            == Some(&self.blocker)
+            && before.progress_minimum_lifecycle_ordinal == Some(self.blocker_lifecycle_ordinal);
+        let blocker_remains_owned = before
+            .occurrence_index
+            .get(&self.blocker.admission_ordinal)
+            .and_then(|position| before.occurrence_owners.get(*position))
+            == Some(&self.blocker)
+            && after
+                .occurrence_index
+                .get(&self.blocker.admission_ordinal)
+                .and_then(|position| after.occurrence_owners.get(*position))
+                == Some(&self.blocker);
+        let readiness = before.class_readiness();
+        let ordinary = select_bounded_service_class(
+            before.projection.service_cursor,
+            readiness.0,
+            readiness.1,
+            readiness.2,
+        );
+        self.projection_hash == runtime_view_blocked_progress_authorization_projection_hash(self)
+            && self.blocker.validate_exact()
+            && self.blocker.identity.kind == RuntimeCommandKind::Authenticated
+            && self.blocker_lifecycle_ordinal != 0
+            && self.target_view > round_tag.view()
+            && ordinary.selected == SERVICE_CLASS_PROGRESS
+            && blocker_is_exact_minimum
+            && blocker_remains_owned
+    }
+}
 /// Queue rank observed immediately before or after one scheduler decision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeQueueOwnershipProjection {
@@ -4416,6 +4535,7 @@ impl Eq for RuntimeQueueOwnershipSnapshot {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeQueueSelectionKind {
     Ordinary,
+    OrdinaryViewProgress,
     FenceCompletion,
     FencePredecessor,
     PacemakerProgress,
@@ -4426,6 +4546,7 @@ impl RuntimeQueueSelectionKind {
     const fn code(self) -> u8 {
         match self {
             Self::Ordinary => 1,
+            Self::OrdinaryViewProgress => 7,
             Self::FenceCompletion => 2,
             Self::PacemakerProgress => 3,
             Self::PacemakerCertifiedProgress => 4,
@@ -4736,6 +4857,15 @@ impl RuntimeQueueSelectionSeal {
                         && self.max_debt_after_upper_bound
                             == self.queue_before.max_service_debt.saturating_add(1)
                 }
+                RuntimeQueueSelectionKind::OrdinaryViewProgress => {
+                    self.selected_class == SERVICE_CLASS_PROGRESS
+                        && self.selected_identity.kind == RuntimeCommandKind::Authenticated
+                        && self.selected_ingress_ownership_hash.is_some()
+                        && selected_by_ordinary_cursor.selected == SERVICE_CLASS_PROGRESS
+                        && selected_by_ordinary_cursor.next == self.cursor_after_removal
+                        && self.max_debt_after_upper_bound
+                            == self.queue_before.max_service_debt.saturating_add(1)
+                }
                 RuntimeQueueSelectionKind::FenceCompletion => {
                     self.selected_class == SERVICE_CLASS_COMPLETION
                         && self.cursor_after_removal == self.queue_before.service_cursor
@@ -4848,6 +4978,7 @@ struct RuntimeSchedulerArbitrationInputs {
     completion_ready: bool,
     progress_ready: bool,
     normal_ready: bool,
+    view_blocked_progress_authorization: Option<RuntimeViewBlockedProgressAuthorization>,
     pre_timeout_locked_prepare_qc_physical_cut: Option<u128>,
     fence_completion_bypass: bool,
     fence_dependency_minimum_lifecycle_ordinal: Option<u128>,
@@ -4956,6 +5087,9 @@ pub(crate) struct RuntimeSchedulerOwnershipEvidence {
     pub(crate) progress_ready: bool,
     /// Whether the Normal class had an admitted owner.
     pub(crate) normal_ready: bool,
+    /// Exact retained future-PrepareQC occurrence which authorized a later
+    /// view-releasing Progress owner to use this ordinary FIFO turn.
+    view_blocked_progress_authorization: Option<RuntimeViewBlockedProgressAuthorization>,
     /// Frozen fair-ingress cut proving that this exceptional PrepareQC was
     /// physically admitted before the already-due timeout occurrence.
     pre_timeout_locked_prepare_qc_physical_cut: Option<u128>,
@@ -5175,6 +5309,13 @@ fn runtime_scheduler_projection_hash(
     projection.push(u8::from(evidence.completion_ready));
     projection.push(u8::from(evidence.progress_ready));
     projection.push(u8::from(evidence.normal_ready));
+    match &evidence.view_blocked_progress_authorization {
+        None => projection.push(0),
+        Some(authorization) => {
+            projection.push(1);
+            append_runtime_identity_field(&mut projection, authorization.projection_hash.as_ref());
+        }
+    }
     append_runtime_optional_ordinal(
         &mut projection,
         evidence.pre_timeout_locked_prepare_qc_physical_cut,
@@ -5313,6 +5454,16 @@ impl RuntimeSchedulerOwnershipEvidence {
                 }
                 None => self.selected != RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc,
             };
+        let view_blocked_progress_kind_is_exact = self
+            .view_blocked_progress_authorization
+            .as_ref()
+            .is_none_or(|_| {
+                matches!(
+                    self.selected,
+                    RuntimeSelectedOwnerKind::PacemakerProgress
+                        | RuntimeSelectedOwnerKind::PacemakerProgressRetryRetained
+                )
+            });
         let fence_dependency_rank_is_exact = match (
             self.fence_dependency_minimum_lifecycle_ordinal,
             self.fence_dependency_minimum_admission_ordinal,
@@ -5411,6 +5562,7 @@ impl RuntimeSchedulerOwnershipEvidence {
             || !fence_retry_transition_is_exact
             || !fence_predecessor_is_exact
             || !pre_timeout_locked_prepare_qc_cut_is_exact
+            || !view_blocked_progress_kind_is_exact
         {
             return Err(RuntimeSchedulerEvidenceError::InvalidProjection);
         }
@@ -5688,6 +5840,12 @@ impl RuntimeSchedulerOwnershipEvidence {
                         && candidate.kind == RuntimeCommandKind::Authenticated
                         && candidate.ingress_ownership.is_some()
                 }
+                RuntimeQueueSelectionKind::OrdinaryViewProgress => {
+                    self.view_blocked_progress_authorization.is_some()
+                        && candidate.class == SERVICE_CLASS_PROGRESS
+                        && candidate.kind == RuntimeCommandKind::Authenticated
+                        && candidate.ingress_ownership.is_some()
+                }
                 RuntimeQueueSelectionKind::PacemakerProgress => matches!(
                     CommandClass::from_service_code(candidate.class),
                     Some(CommandClass::Completion | CommandClass::Progress)
@@ -5697,14 +5855,59 @@ impl RuntimeSchedulerOwnershipEvidence {
                 | RuntimeQueueSelectionKind::FencePredecessor
                 | RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc => false,
             };
+            let view_blocked_escape_is_exact = match &self.view_blocked_progress_authorization {
+                None => {
+                    !self.timeout_due
+                        && !self.periodic_timer_due
+                        && !self.fifo_ready
+                        && !self.completion_ready
+                        && !self.progress_ready
+                        && !self.normal_ready
+                }
+                Some(authorization) => {
+                    let schedule_before = ScheduleState {
+                        fifo_owed: self.fifo_owed_before,
+                    };
+                    let (scheduled, schedule_after) = schedule_before.select(
+                        self.timeout_due,
+                        self.periodic_timer_due,
+                        self.fifo_ready,
+                    );
+                    authorization.validates_retained_blocker(
+                        self.round_tag,
+                        &self.queue_before_snapshot,
+                        &self.queue_after_snapshot,
+                    ) && scheduled == ScheduledWork::Fifo
+                        && self.fifo_owed_after == schedule_after.fifo_owed
+                        && !retry_retained
+                        && candidate.class == SERVICE_CLASS_PROGRESS
+                        && candidate.kind == RuntimeCommandKind::Authenticated
+                        && candidate.ingress_ownership.is_some()
+                        && RuntimeQueueOccurrenceOwner::from_candidate(candidate)
+                            .is_some_and(|selected| selected != authorization.blocker)
+                }
+            };
+            let service_debt_transition_is_exact =
+                if self.view_blocked_progress_authorization.is_some() {
+                    let readiness = self.queue_before_snapshot.class_readiness();
+                    let service = select_bounded_service_class(
+                        self.queue_before.service_cursor,
+                        readiness.0,
+                        readiness.1,
+                        readiness.2,
+                    );
+                    service.selected == SERVICE_CLASS_PROGRESS
+                        && self.queue_after.service_cursor == service.next
+                        && self.queue_after.max_service_debt
+                            <= self.queue_before.max_service_debt.saturating_add(1)
+                } else {
+                    self.queue_before.service_cursor == self.queue_after.service_cursor
+                        && self.queue_after.max_service_debt <= self.queue_before.max_service_debt
+                        && self.fifo_owed_before == self.fifo_owed_after
+                };
             let exact = self.clocks_armed
                 && !self.fence_completion_bypass
-                && !self.timeout_due
-                && !self.periodic_timer_due
-                && !self.fifo_ready
-                && !self.completion_ready
-                && !self.progress_ready
-                && !self.normal_ready
+                && view_blocked_escape_is_exact
                 && candidate.identity.validate_exact()
                 && candidate.kind == candidate.identity.kind
                 && candidate.admission_ordinal != 0
@@ -5720,9 +5923,7 @@ impl RuntimeSchedulerOwnershipEvidence {
                 && candidate.fifo_position < self.queue_before.len
                 && candidate.eligible_skips_before <= self.queue_before.max_service_debt
                 && candidate.eligible_skips_after == 0
-                && self.queue_before.service_cursor == self.queue_after.service_cursor
-                && self.queue_after.max_service_debt <= self.queue_before.max_service_debt
-                && self.fifo_owed_before == self.fifo_owed_after
+                && service_debt_transition_is_exact
                 && if retry_retained {
                     self.queue_after.len == self.queue_before.len
                 } else {
@@ -6728,7 +6929,8 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .minimum_lifecycle_ordinal
             .ok_or(EnqueueError::FailClosed)?;
         let max_debt_after_upper_bound = match kind {
-            RuntimeQueueSelectionKind::Ordinary => {
+            RuntimeQueueSelectionKind::Ordinary
+            | RuntimeQueueSelectionKind::OrdinaryViewProgress => {
                 queue_before.projection.max_service_debt.saturating_add(1)
             }
             RuntimeQueueSelectionKind::FenceCompletion
@@ -7105,26 +7307,74 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         Ok(Some((command, candidate, selected_is_completion)))
     }
     /// Remove one exact authenticated certified fence escape first, otherwise
-    /// the oldest Progress root or one of its trusted Completion descendants,
-    /// without advancing ordinary class debt.
+    /// the oldest Progress root or one of its trusted Completion descendants.
     ///
     /// This is the narrow control escape used while an older ordinary
     /// producer or effect batch is backpressured. Eligibility comes only from
     /// the deeply validated frozen causal root; raw command bytes and caller
-    /// assertions cannot promote Normal work into this path.
+    /// assertions cannot promote Normal work into this path. A caller holding
+    /// exact blocked-view authorization may consume one ordinary Progress
+    /// class turn; every other caller leaves ordinary class debt unchanged.
     fn pop_pacemaker_progress_with_ownership(
         &mut self,
         mut is_runnable: impl FnMut(&TaggedCommand<C>) -> bool,
         mut is_certified_fence_escape: impl FnMut(&C) -> bool,
+        advance_ordinary_progress_service: bool,
         forced_selection_kind: Option<RuntimeQueueSelectionKind>,
     ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError> {
-        if forced_selection_kind
-            .is_some_and(|kind| kind != RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc)
+        if (advance_ordinary_progress_service && forced_selection_kind.is_some())
+            || forced_selection_kind
+                .is_some_and(|kind| kind != RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc)
         {
             return Err(EnqueueError::FailClosed);
         }
         let _ = self.oldest_lifecycle_ordinal()?;
         let queue_before = self.ownership_snapshot();
+        let ordinary_service = if advance_ordinary_progress_service {
+            let (completion_ready, progress_ready, normal_ready) = self.class_readiness();
+            let selection = select_bounded_service_class(
+                self.next_class.service_code(),
+                completion_ready,
+                progress_ready,
+                normal_ready,
+            );
+            if selection.selected != SERVICE_CLASS_PROGRESS {
+                return Err(EnqueueError::FailClosed);
+            }
+            let trace = EffectiveLockTraceProjection {
+                kind: EFFECTIVE_LOCK_TRACE_SERVICE,
+                relation_exact: select_bounded_service_class(
+                    self.next_class.service_code(),
+                    completion_ready,
+                    progress_ready,
+                    normal_ready,
+                ) == selection,
+                protected_before: 0,
+                protected_after: 0,
+                owner_before: 0,
+                owner_after: 0,
+                owner_reused: false,
+                ready_before: 0,
+                retired_retained: 0,
+                retired_ready: 0,
+                ready_after: 0,
+                store_before: 0,
+                retired_store: 0,
+                store_after: 0,
+                cursor_before: self.next_class.service_code(),
+                completion_ready,
+                progress_ready,
+                normal_ready,
+                selected: selection.selected,
+                cursor_after: selection.next,
+            };
+            let checked = check_production_body_service_effective_lock_transition(trace)
+                .ok_or(EnqueueError::FailClosed)?;
+            let _authorized_service = checked.into_projection();
+            Some(selection)
+        } else {
+            None
+        };
         let selected = self
             .commands
             .iter()
@@ -7171,16 +7421,27 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             || !selected.causal_origin.validate_exact()
             || selected.causal_origin.root_class != SERVICE_CLASS_PROGRESS
             || selected.causal_origin.root_lifecycle_ordinal != Some(lifecycle_ordinal)
+            || (advance_ordinary_progress_service
+                && (selected.class != CommandClass::Progress
+                    || identity.kind != RuntimeCommandKind::Authenticated
+                    || selected.ingress_ownership.is_none()))
         {
             return Err(EnqueueError::FailClosed);
         }
         let fifo_position =
             u64::try_from(index).expect("bounded runtime FIFO position is representable as u64");
-        let selection_kind = forced_selection_kind.unwrap_or(if certified_fence_escape {
-            RuntimeQueueSelectionKind::PacemakerCertifiedProgress
-        } else {
-            RuntimeQueueSelectionKind::PacemakerProgress
-        });
+        let selection_kind =
+            forced_selection_kind.unwrap_or(if advance_ordinary_progress_service {
+                RuntimeQueueSelectionKind::OrdinaryViewProgress
+            } else if certified_fence_escape {
+                RuntimeQueueSelectionKind::PacemakerCertifiedProgress
+            } else {
+                RuntimeQueueSelectionKind::PacemakerProgress
+            });
+        let cursor_after = ordinary_service
+            .map_or(queue_before.projection.service_cursor, |selection| {
+                selection.next
+            });
         let selection_seal = self.mint_selection_seal(
             selection_kind,
             &queue_before,
@@ -7196,7 +7457,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 .ingress_ownership
                 .as_ref()
                 .map(|ownership| ownership.projection_hash),
-            queue_before.projection.service_cursor,
+            cursor_after,
         )?;
         let mut candidate = RuntimeFifoCandidateOwnership {
             kind: identity.kind,
@@ -7217,6 +7478,34 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             return Err(EnqueueError::FailClosed);
         }
         candidate.projection_hash = runtime_fifo_candidate_projection_hash(&candidate);
+        if let Some(selection) = ordinary_service {
+            for skipped_class in [CommandClass::Completion, CommandClass::Normal] {
+                let skipped_minimum = self.minimum_lifecycle_for_class(skipped_class);
+                if self
+                    .commands
+                    .iter()
+                    .find(|queued| {
+                        queued.class == skipped_class && queued.lifecycle_ordinal == skipped_minimum
+                    })
+                    .is_some_and(|oldest| oldest.eligible_skips.checked_add(1).is_none())
+                {
+                    return Err(EnqueueError::FailClosed);
+                }
+            }
+            self.next_class =
+                CommandClass::from_service_code(selection.next).ok_or(EnqueueError::FailClosed)?;
+            for skipped_class in [CommandClass::Completion, CommandClass::Normal] {
+                let skipped_minimum = self.minimum_lifecycle_for_class(skipped_class);
+                if let Some(oldest) = self.commands.iter_mut().find(|queued| {
+                    queued.class == skipped_class && queued.lifecycle_ordinal == skipped_minimum
+                }) {
+                    oldest.eligible_skips = oldest
+                        .eligible_skips
+                        .checked_add(1)
+                        .expect("service debt overflow was preflighted");
+                }
+            }
+        }
         let command = self
             .commands
             .remove(index)
@@ -7244,6 +7533,60 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                     .ok_or(EnqueueError::FailClosed)
             })
             .collect()
+    }
+    /// Mint an exact authorization when ordinary class rotation currently
+    /// selects a future-view authenticated Progress minimum.
+    fn ordinary_view_blocked_progress_authorization(
+        &self,
+        mut blocked_target_view: impl FnMut(&TaggedCommand<C>) -> Option<u64>,
+    ) -> Result<Option<RuntimeViewBlockedProgressAuthorization>, EnqueueError> {
+        if self.oldest_lifecycle_ordinal()?.is_none() {
+            return Ok(None);
+        }
+        let (completion_ready, progress_ready, normal_ready) = self.class_readiness();
+        let selection = select_bounded_service_class(
+            self.next_class.service_code(),
+            completion_ready,
+            progress_ready,
+            normal_ready,
+        );
+        if selection.selected != SERVICE_CLASS_PROGRESS {
+            return Ok(None);
+        }
+        let oldest_progress_lifecycle_ordinal = self
+            .minimum_lifecycle_for_class(CommandClass::Progress)
+            .ok_or(EnqueueError::FailClosed)?;
+        let (fifo_position, selected) = self
+            .commands
+            .iter()
+            .enumerate()
+            .find(|(_, queued)| {
+                queued.class == CommandClass::Progress
+                    && queued.lifecycle_ordinal == Some(oldest_progress_lifecycle_ordinal)
+            })
+            .ok_or(EnqueueError::FailClosed)?;
+        if !selected.validate_admission_identity()
+            || selected.identity.kind != RuntimeCommandKind::Authenticated
+            || selected.ingress_ownership.is_none()
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let Some(target_view) = blocked_target_view(selected) else {
+            return Ok(None);
+        };
+        let blocker = selected
+            .cached_queue_occurrence_owner(&self.selection_source_identity)
+            .cloned()
+            .ok_or(EnqueueError::FailClosed)?;
+        let fifo_position = u64::try_from(fifo_position).map_err(|_| EnqueueError::FailClosed)?;
+        RuntimeViewBlockedProgressAuthorization::new(
+            blocker,
+            oldest_progress_lifecycle_ordinal,
+            fifo_position,
+            target_view,
+        )
+        .map(Some)
+        .ok_or(EnqueueError::FailClosed)
     }
     /// Return the lifecycle owner of the exact command ordinary class
     /// rotation would select and the adapter's exact fence state for it.
@@ -9350,6 +9693,28 @@ pub(crate) trait RuntimeDriver {
     ) -> RuntimeCommandAdmissionPreflight {
         RuntimeCommandAdmissionPreflight::Admit
     }
+    /// Return the future view whose PrepareQC cannot run until a certified
+    /// view transition installs it.
+    ///
+    /// Synthetic drivers have no wire-level view relation, so their Progress
+    /// commands remain runnable by default. Production closes this predicate
+    /// only over an authenticated future-view PrepareQC whose exact FIFO owner
+    /// must survive until certified timeout progress reaches its view.
+    fn pacemaker_progress_blocked_target_view(&self, _command: &Self::Command) -> Option<u64> {
+        None
+    }
+    /// Return whether this exact authenticated Progress root can advance
+    /// toward, or terminally supersede, a retained future-PrepareQC target.
+    ///
+    /// The ordinary scheduler uses this only after exact blocked-owner
+    /// authorization. Synthetic drivers remain fail-closed by default.
+    fn pacemaker_progress_releases_view_block(
+        &self,
+        _command: &Self::Command,
+        _target_view: u64,
+    ) -> bool {
+        false
+    }
     /// Return whether this deeply authenticated Progress root carries a TC or
     /// CommitQC which may supersede an outstanding local signature fence.
     /// The default is deliberately closed; only a driver which owns the
@@ -9678,6 +10043,39 @@ impl RuntimeDriver for SumeragiV2Adapter {
         command: &Self::Command,
     ) -> RuntimeCommandAdmissionPreflight {
         self.preflight_runtime_command_admission(tag, command)
+    }
+    fn pacemaker_progress_blocked_target_view(&self, command: &Self::Command) -> Option<u64> {
+        match command {
+            AdapterCommand::Authenticated(authenticated) => match authenticated.payload() {
+                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
+                    if certificate.phase == wire::GlobalPhase::Prepare
+                        && certificate.round.view > self.current_tag().view() =>
+                {
+                    Some(certificate.round.view)
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    fn pacemaker_progress_releases_view_block(
+        &self,
+        command: &Self::Command,
+        target_view: u64,
+    ) -> bool {
+        let current_view = self.current_tag().view();
+        if target_view <= current_view {
+            return false;
+        }
+        matches!(
+            command,
+            AdapterCommand::Authenticated(authenticated)
+                if wire_payload_matches_current_strict_timeout_recovery_round(
+                    authenticated.payload(),
+                    self.wire_context(),
+                    self.current_tag(),
+                )
+        )
     }
     fn certified_progress_bypasses_signature_fence(&self, command: &Self::Command) -> bool {
         self.signature_fence_is_active()
@@ -13240,6 +13638,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             completion_ready,
             progress_ready,
             normal_ready,
+            view_blocked_progress_authorization: None,
             pre_timeout_locked_prepare_qc_physical_cut: None,
             fence_completion_bypass: false,
             fence_dependency_minimum_lifecycle_ordinal: None,
@@ -13253,6 +13652,23 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             fence_retry_blocked_fifo_before: self.fence_retry_blocked_fifo_owners.clone(),
             fence_retry_marker_required: false,
         })
+    }
+    /// Return exact authorization when ordinary class rotation currently
+    /// selects an authenticated future-view PrepareQC which cannot run until
+    /// another Progress owner installs its view.
+    ///
+    /// The selected occurrence remains in place. This preview exists only so
+    /// an ordinary FIFO turn can use the ownership-sealed pacemaker selector
+    /// for one later runnable Progress owner instead of retrying the blocked
+    /// class minimum forever.
+    fn ordinary_view_blocked_progress_authorization(
+        &self,
+    ) -> Result<Option<RuntimeViewBlockedProgressAuthorization>, EnqueueError> {
+        let driver = &self.driver;
+        self.ingress
+            .ordinary_view_blocked_progress_authorization(|queued| {
+                driver.pacemaker_progress_blocked_target_view(&queued.command)
+            })
     }
     fn retain_scheduler_ownership(
         &mut self,
@@ -13290,6 +13706,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             completion_ready: arbitration.completion_ready,
             progress_ready: arbitration.progress_ready,
             normal_ready: arbitration.normal_ready,
+            view_blocked_progress_authorization: arbitration.view_blocked_progress_authorization,
             pre_timeout_locked_prepare_qc_physical_cut: arbitration
                 .pre_timeout_locked_prepare_qc_physical_cut,
             fence_completion_bypass: arbitration.fence_completion_bypass,
@@ -13406,6 +13823,35 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             arbitration.periodic_timer_due,
             arbitration.fifo_ready,
         );
+        // A future-view PrepareQC is retained for re-evaluation after its view
+        // is installed, but retrying it as the Progress class minimum cannot
+        // itself install that view. Only when ordinary arbitration already
+        // owes the FIFO a turn, allow the existing ownership-sealed pacemaker
+        // selector to run one later authenticated TimeoutVote, TC, or
+        // CommitQC which can release that view dependency.
+        // A periodic timer selected by ScheduleState, or another ordinary
+        // service class, keeps its normal turn. A due periodic timer can still
+        // be deferred when existing FIFO debt makes ScheduleState select FIFO.
+        // If no view-releasing occurrence exists, fall through to the exact
+        // Busy retry without changing scheduler or class service debt.
+        if work == ScheduledWork::Fifo {
+            let authorization = self
+                .ordinary_view_blocked_progress_authorization()
+                .map_err(|_| {
+                    self.latch_fail_closed(
+                        "ordinary future-PrepareQC preview lost exact ownership",
+                    );
+                    RuntimeError::FailClosed
+                })?;
+            if let Some(authorization) = authorization
+                && let Some(step) = self.dispatch_one_pacemaker_progress(
+                    now,
+                    Some((arbitration.clone(), authorization)),
+                )?
+            {
+                return Ok(step);
+            }
+        }
         self.schedule = next_schedule;
         let (
             effects,
@@ -13800,6 +14246,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                             .command_previews_pre_timeout_locked_prepare_qc(&queued.command, target)
                 },
                 |_| false,
+                false,
                 Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             )
             .map_err(|_| {
@@ -13936,15 +14383,20 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if let Some(step) = self.dispatch_one_adapter_deferred(now, Some(SERVICE_CLASS_PROGRESS))? {
             return Ok(Some(step));
         }
-        self.dispatch_one_pacemaker_progress(now)
+        self.dispatch_one_pacemaker_progress(now, None)
     }
     fn dispatch_one_pacemaker_progress(
         &mut self,
         now: Instant,
+        ordinary_view_escape: Option<(
+            RuntimeSchedulerArbitrationInputs,
+            RuntimeViewBlockedProgressAuthorization,
+        )>,
     ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
         if self.driver.pacemaker_escape_is_parked() {
             return Ok(None);
         }
+        let ordinary_view_escape_selected = ordinary_view_escape.is_some();
         let selected_round_tag = self.round_tag;
         let schedule = self.schedule;
         let queue_before = self.ingress.ownership_snapshot();
@@ -13957,11 +14409,35 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let active_unserviceable_fence = self.driver.signature_fence_is_active()
             && !self.driver.deferred_work_is_serviceable()
             && !self.driver.all_deferred_admission_ordinals().is_empty();
+        let view_release_target = ordinary_view_escape
+            .as_ref()
+            .map(|(_, authorization)| authorization.target_view);
         let driver = &self.driver;
         let selected = self
             .ingress
             .pop_pacemaker_progress_with_ownership(
                 |queued| {
+                    if driver
+                        .pacemaker_progress_blocked_target_view(&queued.command)
+                        .is_some()
+                    {
+                        // The exact FIFO occurrence stays owned while a later
+                        // TC remains eligible to install the missing view.
+                        // Re-evaluate it against the reducer tag after that
+                        // certified transition rather than spinning on Busy.
+                        return false;
+                    }
+                    if view_release_target.is_some_and(|target_view| {
+                        queued.class != CommandClass::Progress
+                            || queued.identity.kind != RuntimeCommandKind::Authenticated
+                            || queued.ingress_ownership.is_none()
+                            || !driver.pacemaker_progress_releases_view_block(
+                                &queued.command,
+                                target_view,
+                            )
+                    }) {
+                        return false;
+                    }
                     if queued
                         .admission_ordinal
                         .is_some_and(|ordinal| retry_blocked_admissions.contains(&ordinal))
@@ -13982,6 +14458,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                                 .command_is_blocked_by_deferred_fence(queued.tag, &queued.command))
                 },
                 |command| driver.certified_progress_bypasses_signature_fence(command),
+                ordinary_view_escape_selected,
                 None,
             )
             .map_err(|_| {
@@ -13991,15 +14468,36 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let Some((command, candidate)) = selected else {
             return Ok(None);
         };
+        let schedule_after = if let Some((arbitration, _)) = &ordinary_view_escape {
+            let (work, next_schedule) = schedule.select(
+                arbitration.timeout_due,
+                arbitration.periodic_timer_due,
+                arbitration.fifo_ready,
+            );
+            if work != ScheduledWork::Fifo {
+                self.latch_fail_closed(
+                    "ordinary future-PrepareQC escape no longer owned the FIFO turn",
+                );
+                return Err(RuntimeError::FailClosed);
+            }
+            self.schedule = next_schedule;
+            next_schedule
+        } else {
+            schedule
+        };
         let certified_fence_escape = self
             .driver
             .certified_progress_bypasses_signature_fence(&command.command);
-        if certified_fence_escape
-            != matches!(
-                candidate.selection_seal.kind,
-                RuntimeQueueSelectionKind::PacemakerCertifiedProgress
-            )
-        {
+        let selection_kind_is_exact = if ordinary_view_escape_selected {
+            candidate.selection_seal.kind == RuntimeQueueSelectionKind::OrdinaryViewProgress
+        } else {
+            certified_fence_escape
+                == matches!(
+                    candidate.selection_seal.kind,
+                    RuntimeQueueSelectionKind::PacemakerCertifiedProgress
+                )
+        };
+        if !selection_kind_is_exact {
             self.latch_fail_closed(
                 "pacemaker certified-progress selection changed after queue ownership transfer",
             );
@@ -14034,6 +14532,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             }
             Err(error) => return Err(self.close(error)),
         };
+        if ordinary_view_escape_selected && (retry_unadmitted || retained_deferred_ingress) {
+            self.latch_fail_closed(
+                "ordinary future-PrepareQC escape did not terminally consume view progress",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
         if certified_fence_escape && (retry_unadmitted || retained_deferred_ingress) {
             self.latch_fail_closed(
                 "certified pacemaker escape became retryable or adapter-deferred",
@@ -14046,16 +14550,25 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // reconciliation compares the stored signer identity and retires the
         // exclusions only if certified progress really consumed or replaced
         // that fence.
-        let mut arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
-            self.latch_fail_closed("pacemaker Progress scheduler ownership was invalid");
-            RuntimeError::FailClosed
-        })?;
-        arbitration.timeout_due = false;
-        arbitration.periodic_timer_due = false;
-        arbitration.fifo_ready = false;
-        arbitration.completion_ready = false;
-        arbitration.progress_ready = false;
-        arbitration.normal_ready = false;
+        let mut arbitration = match ordinary_view_escape {
+            Some((mut arbitration, authorization)) => {
+                arbitration.view_blocked_progress_authorization = Some(authorization);
+                arbitration
+            }
+            None => {
+                let mut arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
+                    self.latch_fail_closed("pacemaker Progress scheduler ownership was invalid");
+                    RuntimeError::FailClosed
+                })?;
+                arbitration.timeout_due = false;
+                arbitration.periodic_timer_due = false;
+                arbitration.fifo_ready = false;
+                arbitration.completion_ready = false;
+                arbitration.progress_ready = false;
+                arbitration.normal_ready = false;
+                arbitration
+            }
+        };
         arbitration.fence_retry_blocked_fifo_before = fence_retry_blocked_fifo_before;
         if retry_unadmitted {
             if self
@@ -14097,7 +14610,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 queue_after,
                 arbitration,
                 schedule,
-                schedule,
+                schedule_after,
             )?;
             return Ok(Some(RuntimeStep::Advanced(Vec::new())));
         }
@@ -14110,7 +14623,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             queue_after,
             arbitration,
             schedule,
-            schedule,
+            schedule_after,
         )?;
         self.finish_dispatched_step(
             now,
@@ -15279,6 +15792,36 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             return Err((marker, AdapterError::RecoveredPendingKuraApplyMismatch));
         }
         marker.prepare_apply(&mut self.driver, predecessor, ownership)
+    }
+
+    /// Stage one released live lifecycle validation and its exact Apply child.
+    ///
+    /// Stable queued ingress is inert. Live clocks must already be armed, and
+    /// every active runtime ownership transfer must have left the serialized
+    /// shell before this cached fsynced result may re-enter the reducer.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn prepare_released_lifecycle_validated_apply(
+        &mut self,
+        marker: super::v2::DeferredReleasedLifecycleValidatedMarkerV1,
+    ) -> Result<
+        super::v2::PreparedReleasedLifecycleValidatedApplyV1<'_>,
+        (
+            super::v2::DeferredReleasedLifecycleValidatedMarkerV1,
+            AdapterError,
+        ),
+    > {
+        if self.fail_closed
+            || !self.clocks_armed
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err((
+                marker,
+                AdapterError::ReleasedLifecycleValidatedApplyMismatch,
+            ));
+        }
+        marker.prepare_apply(&mut self.driver)
     }
 
     /// Freeze the serialized shell around one ordinary Fetch-to-Store preview.

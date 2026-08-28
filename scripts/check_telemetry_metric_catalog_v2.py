@@ -19,13 +19,13 @@ from pathlib import Path
 CATALOG = Path("crates/iroha_telemetry/src/metrics/catalog_v2.tsv")
 SOURCE = Path("crates/iroha_telemetry/src/metrics.rs")
 HEADER = "# iroha-telemetry-metric-catalog-v2"
-CATALOG_BYTES = 110_834
-CATALOG_SHA256 = "78138992abaae0758c2c780b929d5f58771a436215038ecf3c1235ce25be3113"
-CATALOG_BLAKE3 = "1be62b26a5e9f1ddee730267ec5a5534cffe9a3826df65f14b7e15b3e2ee9a1e"
-ROWS = 812
-REGISTERED = 767
-LEDGER_BYTES = 241_029
-LEDGER_SHA256 = "ec6234bcf94b04303482fd5cae9a346a03fd6ef98d9c6b079f8821cd92225d6c"
+CATALOG_BYTES = 109_426
+CATALOG_SHA256 = "a450755e840fe4b1a0f9356d122d63a54d5aca5816e83678e04cdfd3d529dc1a"
+CATALOG_BLAKE3 = "62cba32dfc1d08ef52d5721497a312e0c879fcf9a2e5a2e5d69e8ebb2a5a0812"
+ROWS = 801
+REGISTERED = 756
+LEDGER_BYTES = 237_771
+LEDGER_SHA256 = "681ef47ceb0a52f2c51c9ce9dae8eaf4df5925a62d72d1e69172eb9e44c90def"
 DSL_MACROS_TOKENS_SHA256 = "879271505b3c3259b930122d4e79f6b8e9eb4b725a1cc267d6397a116ab84fb9"
 FACTORY_TOKENS_SHA256 = "41a07ee3fc3e40d3c0d18b7dd9200f5a11d75f1e3fe1bf074fe36b380be8c19f"
 SUFFIX_TOKENS_SHA256 = "0344d5ecf4b99e1800a445b33b6aa5c9bcc6166d75f0cce18eb28e6cc5be032e"
@@ -33,16 +33,27 @@ METHOD_COUNTS = {
     "float_counter_vec": 6,
     "float_gauge": 11,
     "float_gauge_vec": 34,
-    "gauge": 260,
+    "gauge": 261,
     "gauge_vec": 95,
     "histogram_vec": 2,
     "histogram_vec_with_buckets": 52,
     "histogram_with_buckets": 28,
-    "int_counter": 70,
-    "int_counter_vec": 218,
+    "int_counter": 69,
+    "int_counter_vec": 209,
     "int_gauge": 12,
-    "int_gauge_vec": 24,
+    "int_gauge_vec": 22,
 }
+
+RETIRED_CONSENSUS_VRF_METRICS = (
+    "sumeragi_vrf_commits_emitted_total",
+    "sumeragi_vrf_reveals_emitted_total",
+    "sumeragi_vrf_reveals_late_total",
+    "sumeragi_vrf_non_reveal_penalties_total",
+    "sumeragi_vrf_non_reveal_by_signer",
+    "sumeragi_vrf_no_participation_total",
+    "sumeragi_vrf_no_participation_by_signer",
+    "sumeragi_vrf_rejects_total_by_reason",
+)
 
 DSL_MACROS_START = "macro_rules! metric_field_type {"
 DSL_MACROS_END = "define_metrics! {"
@@ -559,14 +570,22 @@ def check_contents(catalog_raw: bytes, source: str) -> list[str]:
     if "catalog_v1.tsv" in source:
         findings.append("obsolete catalog_v1 consumer remains")
     expected_literals = (
-        "const METRIC_CATALOG_V2_ROWS: usize = 812;",
-        "const METRIC_CATALOG_V2_REGISTERED: usize = 767;",
-        "const METRIC_CATALOG_V2_BYTES: usize = 110_834;",
+        "const METRIC_CATALOG_V2_ROWS: usize = 801;",
+        "const METRIC_CATALOG_V2_REGISTERED: usize = 756;",
+        "const METRIC_CATALOG_V2_BYTES: usize = 109_426;",
         CATALOG_BLAKE3,
     )
     for literal in expected_literals:
         if source.count(literal) != 1:
             findings.append(f"Rust catalog invariant changed or duplicated: {literal}")
+    catalog_keys = {row[0] for row in rows}
+    catalog_names = {row[1] for row in rows}
+    compacted_source = _compact_rust(source)
+    for retired in RETIRED_CONSENSUS_VRF_METRICS:
+        if retired in catalog_keys or retired in catalog_names:
+            findings.append(f"retired consensus-VRF catalog row returned: {retired}")
+        if re.search(r"\b" + re.escape(retired) + r"\b", compacted_source):
+            findings.append(f"retired consensus-VRF metric source returned: {retired}")
 
     if len(calls) != ROWS:
         findings.append(f"DSL factory calls: expected {ROWS}, got {len(calls)}")

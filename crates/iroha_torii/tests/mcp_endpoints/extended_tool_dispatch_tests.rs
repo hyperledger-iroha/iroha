@@ -143,17 +143,9 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_cancel_accepts_exact_s
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid subscription id should be marked as MCP tool error for subscription cancel alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid subscription id to be rejected by subscription cancel alias"
+    assert_tool_schema_error(
+        &call,
+        "invalid subscription id must be rejected before subscription cancel dispatch",
     );
 }
 #[tokio::test]
@@ -185,28 +177,19 @@ async fn mcp_jsonrpc_tools_call_subscription_draft_actions_use_exact_id() {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(
-            tool_is_error(&call),
-            "invalid subscription id should be marked as MCP tool error for `{tool_name}`"
-        );
-        let structured = structured_content(&call);
-        assert!(
-            structured
-                .get("status")
-                .and_then(Value::as_u64)
-                .is_some_and(|status| status >= 400),
-            "expected invalid subscription id to be rejected by `{tool_name}`"
+        assert_tool_schema_error(
+            &call,
+            &format!("invalid subscription id must be rejected before `{tool_name}` dispatch"),
         );
     }
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
-    async fn mcp_jsonrpc_tools_call_agent_alias_subscription_usage_accepts_canonical_path => error(
+    async fn mcp_jsonrpc_tools_call_agent_alias_subscription_usage_accepts_canonical_path => schema_error(
         10622344,
         "iroha.subscriptions.usage",
         InvalidSubscriptionId,
-        "invalid canonical subscription path should be marked as MCP tool error for usage",
-        "expected invalid canonical subscription path to be rejected by usage",
+        "invalid canonical subscription path must fail advertised-schema validation",
     )
 }
 #[tokio::test]
@@ -507,16 +490,10 @@ async fn mcp_jsonrpc_tools_call_canonical_transaction_submit_rejects_unknown_pay
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_tool_error(
+    let message = assert_tool_schema_error(
         &call,
-        "unknown signed transaction payload field should be marked as MCP tool error",
+        "unknown signed transaction payload field must fail advertised-schema validation",
     );
-    let structured = structured_content(&call);
-    let message = structured
-        .get("message")
-        .and_then(Value::as_str)
-        .expect("tool error message");
-    assert!(message.contains("wire_hex"));
     assert!(message.contains("body_base64"));
 }
 #[tokio::test]
@@ -578,23 +555,19 @@ async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_rejects_unknown_payload
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_tool_error(
+    let message = assert_tool_schema_error(
         &call,
-        "unknown signed query payload field should be marked as MCP tool error",
+        "unknown signed query payload field must fail advertised-schema validation",
     );
-    let structured = structured_content(&call);
-    let message = structured
-        .get("message")
-        .and_then(Value::as_str)
-        .expect("tool error message");
-    assert!(message.contains("wire_hex"));
     assert!(message.contains("body_base64"));
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_iso20022_pacs008_rejects_retired_message_xml() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    enable_writer_mcp(&mut cfg);
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
+    cfg.torii.mcp.expose_operator_routes = true;
     let app = build_router(cfg);
     let (status, call) = post_mcp(
         &app,
@@ -612,13 +585,15 @@ async fn mcp_jsonrpc_tools_call_iso20022_pacs008_rejects_retired_message_xml() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_tool_error(&call, "retired message_xml must fail closed");
+    assert_tool_schema_error(&call, "retired message_xml must fail closed");
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_iso20022_pacs009_rejects_retired_xml() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    enable_writer_mcp(&mut cfg);
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
+    cfg.torii.mcp.expose_operator_routes = true;
     let app = build_router(cfg);
     let (status, call) = post_mcp(
         &app,
@@ -636,13 +611,15 @@ async fn mcp_jsonrpc_tools_call_iso20022_pacs009_rejects_retired_xml() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_tool_error(&call, "retired xml must fail closed");
+    assert_tool_schema_error(&call, "retired xml must fail closed");
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_iso20022_status_rejects_retired_message_id() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
+    cfg.torii.mcp.expose_operator_routes = true;
     let app = build_router(cfg);
     let (status, call) = post_mcp(
         &app,
@@ -660,7 +637,7 @@ async fn mcp_jsonrpc_tools_call_iso20022_status_rejects_retired_message_id() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_tool_error(&call, "retired message_id must fail closed");
+    assert_tool_schema_error(&call, "retired message_id must fail closed");
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_submit_and_wait_surfaces_submit_error() {
@@ -687,15 +664,9 @@ async fn mcp_jsonrpc_tools_call_agent_alias_submit_and_wait_surfaces_submit_erro
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_tool_error(
+    let message = assert_tool_schema_error(
         &call,
-        "unknown signed transaction payload field should be surfaced as MCP tool error",
+        "unknown signed transaction payload field must fail advertised-schema validation",
     );
-    let structured = structured_content(&call);
-    let message = structured
-        .get("message")
-        .and_then(Value::as_str)
-        .expect("tool error message");
-    assert!(message.contains("wire_hex"));
     assert!(message.contains("body_base64"));
 }

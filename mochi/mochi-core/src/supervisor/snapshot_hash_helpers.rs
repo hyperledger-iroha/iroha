@@ -1,4 +1,5 @@
-const SNAPSHOT_DIRECTORY_SORT_WINDOW_V1: usize = 4_096;
+const SNAPSHOT_DIRECTORY_ENTRY_LIMIT_V1: usize = 65_536;
+const SNAPSHOT_TREE_ENTRY_LIMIT_V1: usize = 262_144;
 const SNAPSHOT_TREE_MAX_DEPTH_V1: usize = 64;
 #[derive(Debug, Eq, PartialEq)]
 struct SnapshotDirectoryEntry {
@@ -16,15 +17,15 @@ impl PartialOrd for SnapshotDirectoryEntry {
         Some(self.cmp(other))
     }
 }
-fn snapshot_directory_window_after(
+fn snapshot_directory_entries_sorted(
     directory: &Path,
-    cursor: Option<&OsStr>,
-    window_entries: usize,
+    directory_entry_limit: usize,
+    remaining_tree_entries: &mut usize,
 ) -> io::Result<Vec<SnapshotDirectoryEntry>> {
-    if window_entries == 0 {
+    if directory_entry_limit == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "snapshot directory window must retain at least one entry",
+            "snapshot directory entry limit must be positive",
         ));
     }
     let named = fs::symlink_metadata(directory)?;
@@ -37,25 +38,32 @@ fn snapshot_directory_window_after(
             ),
         ));
     }
-    let mut storage = Vec::new();
-    storage.try_reserve_exact(window_entries).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::OutOfMemory,
-            "snapshot directory window allocation failed",
-        )
-    })?;
-    let mut retained = std::collections::BinaryHeap::from(storage);
+    let mut entries = Vec::new();
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
+        if entries.len() == directory_entry_limit {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "snapshot directory `{}` exceeds the V1 {directory_entry_limit}-entry limit",
+                    directory.display()
+                ),
+            ));
+        }
+        *remaining_tree_entries = remaining_tree_entries.checked_sub(1).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "snapshot tree exceeds the V1 {SNAPSHOT_TREE_ENTRY_LIMIT_V1}-entry limit"
+                ),
+            )
+        })?;
         let name = entry.file_name();
         if name.to_str().is_none() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "snapshot storage contains a non-UTF-8 entry name",
             ));
-        }
-        if cursor.is_some_and(|cursor| name.as_os_str() <= cursor) {
-            continue;
         }
         let file_type = entry.file_type()?;
         let is_directory = if file_type.is_dir() {
@@ -71,31 +79,65 @@ fn snapshot_directory_window_after(
                 ),
             ));
         };
-        let candidate = SnapshotDirectoryEntry {
+        if entries.len() == entries.capacity() {
+            entries.try_reserve(1).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    "snapshot directory entry allocation failed",
+                )
+            })?;
+        }
+        entries.push(SnapshotDirectoryEntry {
             name,
             path: entry.path(),
             is_directory,
-        };
-        if retained.len() < window_entries {
-            retained.push(candidate);
-        } else if retained.peek().is_some_and(|largest| candidate < *largest) {
-            let _ = retained.pop();
-            retained.push(candidate);
-        }
+        });
     }
-    let mut window = retained.into_vec();
-    window.sort_unstable();
-    Ok(window)
+    entries.sort_unstable();
+    Ok(entries)
 }
 fn visit_snapshot_files_sorted(
     root: &Path,
     visit: &mut impl FnMut(&Path) -> io::Result<()>,
 ) -> io::Result<()> {
-    fn visit_directory(
+    let mut load_directory = snapshot_directory_entries_sorted;
+    visit_snapshot_files_sorted_with_loader(
+        root,
+        SNAPSHOT_DIRECTORY_ENTRY_LIMIT_V1,
+        SNAPSHOT_TREE_ENTRY_LIMIT_V1,
+        &mut load_directory,
+        visit,
+    )
+}
+fn visit_snapshot_files_sorted_with_loader<L, V>(
+    root: &Path,
+    directory_entry_limit: usize,
+    tree_entry_limit: usize,
+    load_directory: &mut L,
+    visit: &mut V,
+) -> io::Result<()>
+where
+    L: FnMut(&Path, usize, &mut usize) -> io::Result<Vec<SnapshotDirectoryEntry>>,
+    V: FnMut(&Path) -> io::Result<()>,
+{
+    if directory_entry_limit == 0 || tree_entry_limit == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "snapshot directory and tree entry limits must be positive",
+        ));
+    }
+    fn visit_directory<L, V>(
         directory: &Path,
         depth: usize,
-        visit: &mut impl FnMut(&Path) -> io::Result<()>,
-    ) -> io::Result<()> {
+        directory_entry_limit: usize,
+        remaining_tree_entries: &mut usize,
+        load_directory: &mut L,
+        visit: &mut V,
+    ) -> io::Result<()>
+    where
+        L: FnMut(&Path, usize, &mut usize) -> io::Result<Vec<SnapshotDirectoryEntry>>,
+        V: FnMut(&Path) -> io::Result<()>,
+    {
         if depth > SNAPSHOT_TREE_MAX_DEPTH_V1 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -104,48 +146,44 @@ fn visit_snapshot_files_sorted(
                 ),
             ));
         }
-        let mut cursor: Option<std::ffi::OsString> = None;
-        loop {
-            let window = snapshot_directory_window_after(
-                directory,
-                cursor.as_deref(),
-                SNAPSHOT_DIRECTORY_SORT_WINDOW_V1,
-            )?;
-            if window.is_empty() {
-                return Ok(());
-            }
-            let mut descend = None;
-            for entry in window {
-                cursor = Some(entry.name);
-                if entry.is_directory {
-                    // Discard the remainder of this bounded window before
-                    // descending. The next scan resumes strictly after the
-                    // directory name, so only one 4,096-entry window is ever
-                    // resident across the complete tree.
-                    descend = Some(entry.path);
-                    break;
-                }
-                visit(&entry.path)?;
-            }
-            if let Some(directory) = descend {
+        let entries = load_directory(
+            directory,
+            directory_entry_limit,
+            remaining_tree_entries,
+        )?;
+        for entry in entries {
+            if entry.is_directory {
                 visit_directory(
-                    &directory,
+                    &entry.path,
                     depth.checked_add(1).ok_or_else(|| {
                         io::Error::new(
                             io::ErrorKind::InvalidData,
                             "snapshot directory depth overflowed usize",
                         )
                     })?,
+                    directory_entry_limit,
+                    remaining_tree_entries,
+                    load_directory,
                     visit,
                 )?;
-                continue;
+            } else {
+                visit(&entry.path)?;
             }
         }
+        Ok(())
     }
     if !root.exists() {
         return Ok(());
     }
-    visit_directory(root, 0, visit)
+    let mut remaining_tree_entries = tree_entry_limit;
+    visit_directory(
+        root,
+        0,
+        directory_entry_limit,
+        &mut remaining_tree_entries,
+        load_directory,
+        visit,
+    )
 }
 fn normalized_relative_path(base: &Path, path: &Path) -> io::Result<String> {
     let relative = path.strip_prefix(base).unwrap_or(path);
@@ -457,28 +495,108 @@ mod snapshot_hash_helper_tests {
         );
     }
     #[test]
-    fn directory_window_retains_only_the_smallest_bounded_suffix() {
+    fn directory_entry_reader_sorts_once_and_enforces_its_bound() {
         let temp = tempfile::tempdir().expect("temporary snapshot root");
         for name in ["d", "b", "a", "c"] {
-            fs::write(temp.path().join(name), name).expect("write window fixture");
+            fs::write(temp.path().join(name), name).expect("write directory fixture");
         }
-        let first = snapshot_directory_window_after(temp.path(), None, 3)
-            .expect("select first bounded directory window");
+        let mut remaining = 4;
+        let entries = snapshot_directory_entries_sorted(temp.path(), 4, &mut remaining)
+            .expect("read one bounded directory");
         assert_eq!(
-            first
+            entries
                 .iter()
                 .map(|entry| entry.name.to_string_lossy().into_owned())
                 .collect::<Vec<_>>(),
-            ["a", "b", "c"]
+            ["a", "b", "c", "d"]
         );
-        let second = snapshot_directory_window_after(temp.path(), Some(OsStr::new("c")), 3)
-            .expect("select next bounded directory window");
         assert_eq!(
-            second
-                .iter()
-                .map(|entry| entry.name.to_string_lossy().into_owned())
-                .collect::<Vec<_>>(),
-            ["d"]
+            snapshot_directory_entries_sorted(temp.path(), 3, &mut 4)
+                .expect_err("a directory above its entry limit must fail")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+    #[test]
+    fn sorted_directory_walk_scans_each_directory_once() {
+        let temp = tempfile::tempdir().expect("temporary snapshot root");
+        for index in 0..32 {
+            let directory = temp.path().join(format!("d{index:03}"));
+            fs::create_dir(&directory).expect("create child directory");
+            fs::write(directory.join("value.bin"), [index as u8])
+                .expect("write child artifact");
+        }
+        let mut scans = std::collections::HashMap::<PathBuf, usize>::new();
+        let mut load_directory = |directory: &Path, entry_limit, remaining: &mut usize| {
+            *scans.entry(directory.to_path_buf()).or_default() += 1;
+            snapshot_directory_entries_sorted(directory, entry_limit, remaining)
+        };
+        let mut visited = Vec::new();
+        visit_snapshot_files_sorted_with_loader(
+            temp.path(),
+            64,
+            128,
+            &mut load_directory,
+            &mut |path| {
+                visited.push(normalized_relative_path(temp.path(), path)?);
+                Ok(())
+            },
+        )
+        .expect("walk directory tree");
+        assert_eq!(
+            scans.get(temp.path()),
+            Some(&1),
+            "the root directory must be examined exactly once"
+        );
+        assert!(scans.values().all(|count| *count == 1));
+        assert_eq!(visited.len(), 32);
+        assert!(visited.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+    #[test]
+    fn sorted_directory_walk_enforces_the_total_tree_bound() {
+        let temp = tempfile::tempdir().expect("temporary snapshot root");
+        for name in ["a", "b", "c", "d"] {
+            fs::write(temp.path().join(name), name).expect("write tree fixture");
+        }
+        let mut loader = snapshot_directory_entries_sorted;
+        let error = visit_snapshot_files_sorted_with_loader(
+            temp.path(),
+            8,
+            3,
+            &mut loader,
+            &mut |_| Ok(()),
+        )
+        .expect_err("tree entries above the total bound must fail");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn sorted_directory_walk_accepts_an_exact_budget_ending_in_an_empty_directory() {
+        let temp = tempfile::tempdir().expect("temporary snapshot root");
+        let empty = temp.path().join("empty");
+        fs::create_dir(&empty).expect("create empty child directory");
+        let mut loader = snapshot_directory_entries_sorted;
+        visit_snapshot_files_sorted_with_loader(
+            temp.path(),
+            2,
+            1,
+            &mut loader,
+            &mut |_| Ok(()),
+        )
+        .expect("an empty final directory consumes exactly one tree entry");
+
+        fs::write(empty.join("overflow"), b"value").expect("populate final directory");
+        let mut loader = snapshot_directory_entries_sorted;
+        assert_eq!(
+            visit_snapshot_files_sorted_with_loader(
+                temp.path(),
+                2,
+                1,
+                &mut loader,
+                &mut |_| Ok(()),
+            )
+            .expect_err("a child beyond the exact tree budget must fail")
+            .kind(),
+            io::ErrorKind::InvalidData
         );
     }
 }

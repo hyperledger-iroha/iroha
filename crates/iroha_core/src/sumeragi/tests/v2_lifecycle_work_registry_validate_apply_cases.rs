@@ -615,16 +615,15 @@ fn assert_ready_validate_vote_sign_live_transaction(
                 None,
             );
             let mut staged = coordinator.stage_durable_transaction();
-            let retry_ordinal = match staged
-                .reduce_admit(AdmissionRequest::Candidate(retry_candidate))
-            {
-                AdmissionDecision::Admitted {
-                    owner,
-                    ordinal,
-                    producer_turn_ordinal: None,
-                } if owner == lease.owner() => ordinal,
-                decision => panic!("admit later same-owner Validate retry: {decision:?}"),
-            };
+            let retry_ordinal =
+                match staged.reduce_admit(AdmissionRequest::Candidate(retry_candidate)) {
+                    AdmissionDecision::Admitted {
+                        owner,
+                        ordinal,
+                        producer_turn_ordinal: None,
+                    } if owner == lease.owner() => ordinal,
+                    decision => panic!("admit later same-owner Validate retry: {decision:?}"),
+                };
             assert_eq!(
                 retry_ordinal,
                 broadcast_ordinal
@@ -1988,7 +1987,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     live_adapter: crate::sumeragi::v2::SumeragiV2Adapter,
     live_startup: Vec<AdapterEffect>,
     live_cleanup: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
-    live_validate_dispatch_key: LifecycleValidateDispatchKeyV1,
+    _live_validate_dispatch_key: LifecycleValidateDispatchKeyV1,
     recovered_validate_retry_census: RecoveredDurableValidateRetryCensusV1,
     live_body_root: &std::path::Path,
 ) {
@@ -2040,16 +2039,15 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
             live_started_at,
         )
         .expect("arm exact live Apply lineage clocks after service construction");
-    live_executor
-        .arm_live_lifecycle_validate_successor(
-            live_validate_dispatch_key,
-            None,
-            live_cleanup.certificate().proposal_round,
-            live_cleanup.subject(),
-            true,
-        )
-        .expect("restore exact published Validate predecessor owner before lineage import");
     let live_certificate = live_cleanup.certificate();
+    assert_eq!(
+        live_executor.validate_retry_lifecycle_ordinal_for_test((
+            live_certificate.proposal_round,
+            live_cleanup.subject(),
+        )),
+        None,
+        "cold lineage executor must not reconstruct a terminal Validate parent"
+    );
     assert_eq!(
         live_executor
             .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(&mut live_services, true,)

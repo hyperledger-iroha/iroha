@@ -78,6 +78,7 @@ from iroha_torii_client.client import (
     VpnReceiptSubmitRequest,
     VpnSession,
     VpnSessionCreateRequest,
+    _read_bounded_sccp_response_body,
     build_canonical_request_headers,
     canonical_network_request_signature_message,
     canonical_query_string,
@@ -121,8 +122,6 @@ from iroha_torii_client.client import (
     ToriiClient as _BaseToriiClient,
 )
 from iroha_torii_client.client_status_models import (
-    StreamingSoranetConfig,
-    StreamingTransportConfig,
     TransportConfig,
     TransportNoritoRpcConfig,
     parse_sumeragi_json_object,
@@ -289,6 +288,13 @@ from .torii_client_runtime_auth import (
 )
 from .torii_client_space_directory import create_torii_client_space_directory_mixin
 from .torii_client_streaming_query import create_torii_client_streaming_query_mixin
+from .validation_fee_hijiri_quote import (
+    VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
+    VALIDATION_FEE_HIJIRI_QUOTE_PATH,
+    ValidationFeeHijiriQuoteV1,
+    encode_validation_fee_hijiri_quote_request_v1,
+    verify_validation_fee_hijiri_quote_response_v1,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
@@ -5417,24 +5423,6 @@ def _configuration_snapshot_to_dict(snapshot: ConfigurationSnapshot) -> Dict[str
                 "require_mtls": norito_rpc.require_mtls,
                 "canary_allowlist_size": norito_rpc.canary_allowlist_size,
             }
-        if snapshot.transport.streaming is not None:
-            streaming_payload: Dict[str, Any] = {}
-            soranet = snapshot.transport.streaming.soranet
-            if soranet is not None:
-                streaming_payload["soranet"] = {
-                    "enabled": soranet.enabled,
-                    "stream_tag": soranet.stream_tag,
-                    "exit_multiaddr": soranet.exit_multiaddr,
-                    "padding_budget_ms": soranet.padding_budget_ms,
-                    "access_kind": soranet.access_kind,
-                    "gar_category": soranet.gar_category,
-                    "channel_salt": soranet.channel_salt,
-                    "provision_spool_dir": soranet.provision_spool_dir,
-                    "provision_window_segments": soranet.provision_window_segments,
-                    "provision_queue_capacity": soranet.provision_queue_capacity,
-                }
-            if streaming_payload:
-                transport_payload["streaming"] = streaming_payload
         if transport_payload:
             result["transport"] = transport_payload
     return result
@@ -12965,8 +12953,6 @@ __all__ = [
     "NodeAdminSnapshot",
     "TransportConfig",
     "TransportNoritoRpcConfig",
-    "StreamingTransportConfig",
-    "StreamingSoranetConfig",
     "SorafsPorSubmissionResponse",
     "SorafsPorVerdictResponse",
     "SorafsPinRegisterResponse",
@@ -13086,6 +13072,7 @@ __all__ = [
     "VpnSession",
     "VpnReceipt",
     "VpnReceiptListResponse",
+    "ValidationFeeHijiriQuoteV1",
     "ConnectAppRecord",
     "ConnectAppRegistryPage",
     "ConnectAdmissionManifestEntry",
@@ -13188,6 +13175,62 @@ _ToriiClientRuntimeAuthMixin: type[Any] = create_torii_client_runtime_auth_mixin
     runtime_metrics_type=RuntimeMetrics,
     runtime_abi_active_type=RuntimeAbiActive,
 )
+
+
+def _hijiri_quote_cache_control_is_private_no_store(value: str) -> bool:
+    """Validate exact cache directives without splitting quoted values."""
+
+    if not value:
+        return False
+
+    directives: list[str] = []
+    current: list[str] = []
+    quoted = False
+    escaped = False
+    for character in value:
+        if escaped:
+            current.append(character)
+            escaped = False
+            continue
+        if quoted and character == "\\":
+            current.append(character)
+            escaped = True
+            continue
+        if character == '"':
+            current.append(character)
+            quoted = not quoted
+            continue
+        if character == "," and not quoted:
+            directives.append("".join(current))
+            current.clear()
+            continue
+        current.append(character)
+    if quoted or escaped:
+        return False
+    directives.append("".join(current))
+
+    has_private = False
+    has_no_store = False
+    for raw_directive in directives:
+        directive = raw_directive.strip()
+        if not directive:
+            return False
+        name, separator, _parameter = directive.partition("=")
+        normalized_name = name.strip().lower()
+        if not normalized_name:
+            return False
+        if normalized_name == "public":
+            return False
+        if normalized_name == "private":
+            if separator:
+                return False
+            has_private = True
+        elif normalized_name == "no-store":
+            if separator:
+                return False
+            has_no_store = True
+    return has_private and has_no_store
+
 
 class ToriiClient(
     _ToriiClientSpaceDirectoryMixin,
@@ -13345,23 +13388,7 @@ class ToriiClient(
     def _exact_account_identity_pin(self, value: Any, context: str) -> str:
         """Validate an exact I105 literal while treating its discriminator as presentation."""
 
-        literal = _require_exact_non_empty_string(value, context)
-        if "@" in literal:
-            raise ValueError(f"{context} must be an exact canonical I105 account id")
-        candidate_discriminants = [DEFAULT_I105_DISCRIMINANT]
-        if self._chain_discriminant != DEFAULT_I105_DISCRIMINANT:
-            candidate_discriminants.append(self._chain_discriminant)
-        for discriminant in candidate_discriminants:
-            try:
-                address = AccountAddress.parse_encoded(
-                    literal,
-                    expected_discriminant=discriminant,
-                )
-            except AccountAddressError:
-                continue
-            if address.to_i105(discriminant) == literal:
-                return literal
-        raise ValueError(f"{context} must be an exact canonical I105 account id")
+        return _normalize_exact_any_i105_account_id(value, context)
 
     def _native_transaction_asset_id(self, value: Any, context: str) -> str:
         literal = _require_non_empty_string(value, context)
@@ -13415,6 +13442,121 @@ class ToriiClient(
                 "privacy capabilities response must use application/x-norito media type"
             )
         return crypto.privacy_exact12_capability_manifest_v1(response.content)
+
+    def quote_validation_fee_hijiri(
+        self,
+        account_id: str,
+        qualifying_transfer_count: int,
+        *,
+        canonical_auth: ToriiCanonicalRequestAuth,
+    ) -> ValidationFeeHijiriQuoteV1:
+        """Return one exact native-verified current-state Hijiri fee quote.
+
+        The account may be the authenticated account or a live multisig
+        controller for which it is a direct signatory. Torii owns that
+        authorization decision. The SDK sends and accepts only bounded native
+        Norito and rejects a success response unless it is private and
+        ``no-store``.
+        """
+
+        exact_account_id = self._exact_account_identity_pin(
+            account_id,
+            "quote_validation_fee_hijiri.account_id",
+        )
+        canonical_auth = self._require_canonical_auth(
+            canonical_auth,
+            "quote_validation_fee_hijiri",
+        )
+        if urlparse(self._base_url).scheme.lower() != "https":
+            raise RuntimeError(
+                "Hijiri validation-fee quote requests require an HTTPS Torii base URL"
+            )
+        request_norito = encode_validation_fee_hijiri_quote_request_v1(
+            exact_account_id,
+            qualifying_transfer_count,
+        )
+        headers = self._canonical_request_headers(
+            "POST",
+            VALIDATION_FEE_HIJIRI_QUOTE_PATH,
+            request_norito,
+            canonical_auth=canonical_auth,
+            headers={
+                "Accept": "application/x-norito",
+                "Accept-Encoding": "identity",
+                "Cache-Control": "no-store",
+                "Content-Encoding": "identity",
+                "Content-Type": "application/x-norito",
+            },
+            has_body=True,
+        )
+        response = self._request(
+            "POST",
+            VALIDATION_FEE_HIJIRI_QUOTE_PATH,
+            headers=headers,
+            data=request_norito,
+            stream=True,
+            allow_retry=False,
+            allow_redirects=False,
+        )
+        expected_response_url = f"{self._base_url}{VALIDATION_FEE_HIJIRI_QUOTE_PATH}"
+        if response.url != expected_response_url or response.history:
+            response.close()
+            raise RuntimeError(
+                "Hijiri validation-fee quote response must come from the exact signed URL "
+                "without redirects"
+            )
+        response_status = response.status_code
+        if (
+            response_status == 200
+            and response.headers.get("x-iroha-reject-code") is not None
+        ):
+            response.close()
+            raise RuntimeError(
+                "successful Hijiri validation-fee quote carried a rejection code"
+            )
+        media_type = response.headers.get("Content-Type", "")
+        if media_type.strip().lower() != "application/x-norito":
+            response.close()
+            raise RuntimeError(
+                "Hijiri validation-fee quote response must use exact application/x-norito"
+            )
+        content_encoding = response.headers.get("Content-Encoding")
+        if content_encoding is not None and content_encoding.strip().lower() != "identity":
+            response.close()
+            raise RuntimeError(
+                "Hijiri validation-fee quote response Content-Encoding must be identity"
+            )
+        if not _hijiri_quote_cache_control_is_private_no_store(
+            response.headers.get("Cache-Control", "")
+        ):
+            response.close()
+            raise RuntimeError(
+                "Hijiri validation-fee quote response must remain private and no-store "
+                "and must not be public"
+            )
+        declared_content_length = response.headers.get("Content-Length")
+        response_norito = _read_bounded_sccp_response_body(
+            response,
+            VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
+            "Hijiri validation-fee quote",
+        )
+        if (
+            declared_content_length is not None
+            and int(declared_content_length) != len(response_norito)
+        ):
+            raise RuntimeError(
+                "Hijiri validation-fee quote response Content-Length does not match "
+                "the response body"
+            )
+        if response_status != 200:
+            raise RuntimeError(
+                "Hijiri validation-fee quote returned unexpected status "
+                f"{response_status}; expected 200"
+            )
+        return verify_validation_fee_hijiri_quote_response_v1(
+            response_norito,
+            request_norito,
+        )
 
     def submit_signed_privacy_zk_x509_identity_presentation_action_v1(
         self,
@@ -17368,8 +17510,11 @@ class ToriiClient(
                 warning_hook=self._handle_sorafs_alias_warning,
                 logger=self._sorafs_alias_logger,
             )
-        except SorafsAliasError as exc:
-            raise RuntimeError(f"failed to validate SoraFS alias proof: {exc}") from exc
+        except Exception as exc:
+            response.close()
+            if isinstance(exc, SorafsAliasError):
+                raise RuntimeError(f"failed to validate SoraFS alias proof: {exc}") from exc
+            raise
         if evaluation is None:
             self._last_sorafs_alias_evaluation = None
             return None

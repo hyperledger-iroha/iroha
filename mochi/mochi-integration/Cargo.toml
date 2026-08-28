@@ -43,3 +43,8 @@ iroha_genesis.workspace = true
 [[test]]
 name = "readiness_smoke"
 path = "tests/readiness_smoke.rs"
+
+[[test]]
+name = "supervisor"
+path = "tests/supervisor.rs"
+required-features = ["dev-tools"]

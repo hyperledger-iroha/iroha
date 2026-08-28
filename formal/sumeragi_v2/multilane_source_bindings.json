@@ -2783,8 +2783,16 @@
           "self.reservation_group.reservation_count",
           "canonical_lane_queue_reservation_group_identity_projection(",
           "replacement.retirement_hash() != Some(self.retirement_hash)",
+          "let (action, actor, before, after) = if finalize_release",
+          "match release_mode",
+          "AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared",
+          "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo",
+          "if self.actor == self.producer",
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED",
+          "self.actor,",
           "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
           "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
+          "actor,",
           "check_production_in_flight_first_release_transition(projection)",
           "Ok(AutonomousLaneEntrypointClaimTransitionAuthorization {",
           "path: path.to_path_buf()",
@@ -3084,7 +3092,18 @@
         "required_tokens": [
           "AutonomousLaneQueueReleaseFinalizationAuthorization",
           "LaneQueueReleaseFinalizationGate::from_authorization",
-          "finalize_lane_reservation_release_barrier_inner(barrier, gate)"
+          "finalize_lane_reservation_release_barrier_inner(barrier, gate, false)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "method",
+        "symbol": "Queue::finalize_lane_reservation_release_barrier_with_replica_fifo_authorization",
+        "required_tokens": [
+          "DurableAutonomousNonQueueReplicaFifoAuthorization",
+          "replica_fifo_authorization.covers_queue_barrier(self, barrier)",
+          "LaneQueueReleaseFinalizationGate::from_authorization",
+          "finalize_lane_reservation_release_barrier_inner(barrier, gate, true)"
         ]
       },
       {
@@ -4089,10 +4108,18 @@
           "let selected_count = self.reservation_group.reservation_count;",
           "let binding_a =",
           "if replacement.retirement_hash() != Some(self.retirement_hash)",
-          "let (action, before, after) = if finalize_release",
+          "let (action, actor, before, after) = if finalize_release",
+          "let (reservation_state, fifo_restored, actor) = match release_mode",
+          "AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared",
+          "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo",
+          "if self.actor == self.producer",
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED",
+          "true,",
+          "self.actor,",
           "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
           "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
           "let projection = ProductionInFlightFirstReleaseTransitionProjection {",
+          "actor,",
           "check_production_in_flight_first_release_transition(projection)",
           "Ok(AutonomousLaneEntrypointClaimTransitionAuthorization {",
           "projection,",
@@ -7433,6 +7460,7 @@
             "exactly_precedes_periodic_retransmit_apply",
             "self.pending_work() == self.pending_lifecycle_output_admissions.len()",
             "successor_debt_is_exact",
+            "self.pending_runner_decision_cleanup.is_none()",
             "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
             "self.retained_effect_batch.is_none()",
             "self.parked_effect_batch.is_none()",
@@ -7622,6 +7650,7 @@
             "attestation.exactly_matches_pending_keys(",
             "self.pending_work() != self.pending_lifecycle_output_admissions.len()",
             "|| !successor_outputs_are_exact",
+            "self.pending_runner_decision_cleanup.is_some()",
             "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
             "|| self.retained_effect_batch.is_some()",
             "|| self.parked_effect_batch.is_some()",
@@ -7637,6 +7666,7 @@
           "kind": "method",
           "symbol": "V2EffectExecutor<SerializedV2Runtime>::commit_lifecycle_decision_apply_finality",
           "required_tokens": [
+            "self.pending_runner_decision_cleanup.is_none()",
             "evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched",
             "tag == evidence.replay_tag()",
             "artifact.subject == evidence.commit_subject()",

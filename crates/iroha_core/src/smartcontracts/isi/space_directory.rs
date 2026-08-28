@@ -571,15 +571,13 @@ mod tests {
             .insert_account_alias_binding(hbl_alias.clone(), hbl_customer.clone());
         tx.world
             .insert_account_alias_binding(ubl_alias.clone(), ubl_customer.clone());
-        tx.world.account_rekey_records.insert(
-            hbl_alias.clone(),
+        tx.world.replace_account_rekey_record(
             iroha_data_model::account::rekey::AccountRekeyRecord::new(
                 hbl_alias.clone(),
                 hbl_customer.clone(),
             ),
         );
-        tx.world.account_rekey_records.insert(
-            ubl_alias.clone(),
+        tx.world.replace_account_rekey_record(
             iroha_data_model::account::rekey::AccountRekeyRecord::new(
                 ubl_alias.clone(),
                 ubl_customer.clone(),

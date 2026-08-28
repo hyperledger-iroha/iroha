@@ -101,10 +101,9 @@ fn seed_test_account_alias_binding(
     state_transaction
         .world
         .insert_account_alias_binding(alias.clone(), owner.clone());
-    state_transaction.world.account_rekey_records.insert(
-        alias.clone(),
-        AccountRekeyRecord::new(alias.clone(), owner.clone()),
-    );
+    state_transaction
+        .world
+        .replace_account_rekey_record(AccountRekeyRecord::new(alias.clone(), owner.clone()));
 }
 fn fee_sponsor_custody_state() -> (State, AccountId, AssetDefinitionId, AssetId) {
     let custody_key =

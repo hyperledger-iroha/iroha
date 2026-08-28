@@ -472,6 +472,10 @@ fn mark_sensitive_response(response: &mut Response) {
         .headers_mut()
         .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
 }
+struct SignedTicketIssuer {
+    public_key: Vec<u8>,
+    secret_key: SensitiveBytes,
+}
 struct PuzzleService {
     descriptor_commit: [u8; 32],
     relay_id: [u8; 32],
@@ -481,16 +485,8 @@ struct PuzzleService {
     max_future_skew: Duration,
     pow_revocation_store_capacity: u64,
     pow_revocation_store_ttl_secs: u64,
-    signed_ticket_public_key: Option<Vec<u8>>,
-    signed_ticket_secret: Option<SensitiveBytes>,
+    signed_ticket_issuer: Option<SignedTicketIssuer>,
     token: Option<Mutex<TokenIssuer>>,
-}
-impl PuzzleService {
-    fn clear_signed_ticket_secret(&mut self) {
-        if let Some(secret) = self.signed_ticket_secret.as_mut() {
-            secret.clear();
-        }
-    }
 }
 impl fmt::Debug for PuzzleService {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -498,16 +494,11 @@ impl fmt::Debug for PuzzleService {
             .debug_struct("PuzzleService")
             .field("relay_id", &self.relay_id)
             .field(
-                "signed_ticket_secret",
-                &self.signed_ticket_secret.as_ref().map(|_| "<redacted>"),
+                "signed_ticket_issuer",
+                &self.signed_ticket_issuer.as_ref().map(|_| "<redacted>"),
             )
             .field("token_enabled", &self.token.is_some())
             .finish_non_exhaustive()
-    }
-}
-impl Drop for PuzzleService {
-    fn drop(&mut self) {
-        self.clear_signed_ticket_secret();
     }
 }
 impl PuzzleService {
@@ -526,9 +517,8 @@ impl PuzzleService {
         let relay_id = derive_relay_id(policy, &descriptor_commit, now_unix)
             .wrap_err("failed to derive relay identity for bindings")?;
         let pow_cfg = config.pow_config().clone();
-        let base_params = pow_cfg.parameters().wrap_err("invalid PoW configuration")?;
         let puzzle_params = pow_cfg
-            .puzzle_parameters(&base_params)
+            .puzzle_parameters()
             .wrap_err("invalid puzzle configuration")?;
         let min_ticket_ttl = puzzle_params.min_ticket_ttl();
         let max_future_skew = puzzle_params.max_future_skew();
@@ -572,22 +562,26 @@ impl PuzzleService {
                     .map_err(|error| eyre!(error))
             })
             .transpose()?;
-        if signed_ticket_secret.is_some() && signed_ticket_public_key.is_none() {
-            return Err(eyre!(
-                "signed_ticket_secret_* supplied but pow.signed_ticket_public_key_hex missing from relay config"
-            ));
-        }
-        if signed_ticket_public_key.is_some() && signed_ticket_secret.is_none() {
-            return Err(eyre!(
-                "pow.signed_ticket_public_key_hex requires --signed-ticket-secret-path in the puzzle issuer"
-            ));
-        }
-        if let (Some(secret), Some(public)) = (
-            signed_ticket_secret.as_deref(),
-            signed_ticket_public_key.as_deref(),
-        ) {
-            validate_signed_ticket_keypair(public, secret)?;
-        }
+        let signed_ticket_issuer = match (signed_ticket_public_key, signed_ticket_secret) {
+            (Some(public_key), Some(secret_key)) => {
+                validate_signed_ticket_keypair(&public_key, &secret_key)?;
+                Some(SignedTicketIssuer {
+                    public_key,
+                    secret_key,
+                })
+            }
+            (None, Some(_)) => {
+                return Err(eyre!(
+                    "--signed-ticket-secret-path requires pow.signed_ticket_public_key_hex in the relay config"
+                ));
+            }
+            (Some(_), None) => {
+                return Err(eyre!(
+                    "pow.signed_ticket_public_key_hex requires --signed-ticket-secret-path in the puzzle issuer"
+                ));
+            }
+            (None, None) => None,
+        };
         Ok(Self {
             descriptor_commit,
             relay_id,
@@ -597,8 +591,7 @@ impl PuzzleService {
             max_future_skew,
             pow_revocation_store_capacity: pow_cfg.revocation_store_capacity,
             pow_revocation_store_ttl_secs: pow_cfg.revocation_store_ttl_secs,
-            signed_ticket_public_key,
-            signed_ticket_secret,
+            signed_ticket_issuer,
             token,
         })
     }
@@ -616,11 +609,13 @@ impl PuzzleService {
         }
     }
     fn signed_ticket_public_key_hex(&self) -> Option<String> {
-        self.signed_ticket_public_key.as_ref().map(encode)
+        self.signed_ticket_issuer
+            .as_ref()
+            .map(|issuer| encode(&issuer.public_key))
     }
     fn signed_ticket_public_key_fingerprint_hex(&self) -> Option<String> {
-        self.signed_ticket_public_key.as_ref().map(|key| {
-            let fingerprint = blake3_hash(key);
+        self.signed_ticket_issuer.as_ref().map(|issuer| {
+            let fingerprint = blake3_hash(&issuer.public_key);
             encode(fingerprint.as_bytes())
         })
     }
@@ -662,20 +657,18 @@ impl PuzzleService {
         ttl_override: Option<Duration>,
         transcript_hash: [u8; 32],
         issued_at: SystemTime,
-        flags: u8,
         rng: &mut R,
-    ) -> Result<Option<AdmissionToken>, TokenIssuerError> {
-        let Some(issuer_mutex) = &self.token else {
-            return Ok(None);
-        };
+    ) -> Result<AdmissionToken, TokenIssuerError> {
+        let issuer_mutex = self
+            .token
+            .as_ref()
+            .ok_or(TokenIssuerError::PolicyDisabled)?;
         let mut issuer = issuer_mutex
             .lock()
             .map_err(|_| TokenIssuerError::StateUnavailable)?;
         issuer.refresh_revocations()?;
         let ttl = issuer.clamp_ttl(ttl_override)?;
-        issuer
-            .mint(transcript_hash, ttl, issued_at, flags, rng)
-            .map(Some)
+        issuer.mint(transcript_hash, ttl, issued_at, 0, rng)
     }
 }
 #[derive(Debug, Error)]
@@ -718,6 +711,8 @@ impl From<RelayConfigError> for TokenInitError {
 }
 #[derive(Debug, Error)]
 enum TokenIssuerError {
+    #[error("admission token policy is disabled")]
+    PolicyDisabled,
     #[error("token TTL {requested:?} shorter than required minimum {minimum:?}")]
     TtlTooShort {
         requested: Duration,
@@ -1092,16 +1087,10 @@ struct ConfigResponse {
     ticket_ttl_secs: u64,
     puzzle: PuzzleParamsResponse,
     token: TokenConfigResponse,
-    #[norito(default)]
-    revocation_store_capacity: Option<u64>,
-    #[norito(default)]
-    revocation_store_ttl_secs: Option<u64>,
-    #[norito(default)]
+    revocation_store_capacity: u64,
+    revocation_store_ttl_secs: u64,
     signed_ticket_public_key_hex: Option<String>,
-    #[norito(default)]
     signed_ticket_public_key_fingerprint_hex: Option<String>,
-    #[norito(default)]
-    signed_ticket_signing_enabled: bool,
 }
 #[derive(Debug, JsonSerialize)]
 struct PuzzleParamsResponse {
@@ -1162,19 +1151,16 @@ impl TokenConfigResponse {
     }
 }
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct MintRequest {
     #[norito(default)]
     ttl_secs: Option<u64>,
     transcript_hash_hex: String,
-    #[norito(default)]
-    signed: bool,
 }
 #[derive(JsonSerialize, JsonDeserialize)]
 struct MintResponse {
-    #[norito(default)]
-    ticket_b64: Option<String>,
-    #[norito(default)]
-    signed_ticket_b64: Option<String>,
+    credential_kind: String,
+    credential_b64: String,
     #[norito(default)]
     signed_ticket_fingerprint_hex: Option<String>,
     difficulty: u8,
@@ -1183,26 +1169,15 @@ struct MintResponse {
 }
 impl MintResponse {
     fn clear_credentials(&mut self) {
-        if let Some(ticket) = self.ticket_b64.as_mut() {
-            clear_sensitive_string(ticket);
-        }
-        if let Some(ticket) = self.signed_ticket_b64.as_mut() {
-            clear_sensitive_string(ticket);
-        }
+        clear_sensitive_string(&mut self.credential_b64);
     }
 }
 impl fmt::Debug for MintResponse {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("MintResponse")
-            .field(
-                "ticket_b64",
-                &self.ticket_b64.as_ref().map(|_| "<redacted>"),
-            )
-            .field(
-                "signed_ticket_b64",
-                &self.signed_ticket_b64.as_ref().map(|_| "<redacted>"),
-            )
+            .field("credential_kind", &self.credential_kind)
+            .field("credential_b64", &"<redacted>")
             .field(
                 "signed_ticket_fingerprint_hex",
                 &self.signed_ticket_fingerprint_hex,
@@ -1219,12 +1194,11 @@ impl Drop for MintResponse {
     }
 }
 #[derive(Debug, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct MintTokenRequest {
     transcript_hash_hex: String,
     #[norito(default)]
     ttl_secs: Option<u64>,
-    #[norito(default)]
-    flags: Option<u8>,
 }
 #[derive(JsonSerialize, JsonDeserialize)]
 struct MintTokenResponse {
@@ -1233,7 +1207,6 @@ struct MintTokenResponse {
     issued_at: u64,
     expires_at: u64,
     ttl_secs: u64,
-    flags: u8,
     issuer_fingerprint_hex: String,
     relay_id_hex: String,
 }
@@ -1251,7 +1224,6 @@ impl fmt::Debug for MintTokenResponse {
             .field("issued_at", &self.issued_at)
             .field("expires_at", &self.expires_at)
             .field("ttl_secs", &self.ttl_secs)
-            .field("flags", &self.flags)
             .field("issuer_fingerprint_hex", &self.issuer_fingerprint_hex)
             .field("relay_id_hex", &self.relay_id_hex)
             .finish()
@@ -1277,11 +1249,10 @@ async fn get_config(State(state): State<Arc<PuzzleService>>) -> Result<JsonBytes
             lanes: state.puzzle_params.lanes().get(),
         },
         token,
-        revocation_store_capacity: Some(state.pow_revocation_store_capacity),
-        revocation_store_ttl_secs: Some(state.pow_revocation_store_ttl_secs),
+        revocation_store_capacity: state.pow_revocation_store_capacity,
+        revocation_store_ttl_secs: state.pow_revocation_store_ttl_secs,
         signed_ticket_public_key_hex: state.signed_ticket_public_key_hex(),
         signed_ticket_public_key_fingerprint_hex: state.signed_ticket_public_key_fingerprint_hex(),
-        signed_ticket_signing_enabled: state.signed_ticket_secret.is_some(),
     };
     JsonBytes::from_serializable(&response)
 }
@@ -1320,12 +1291,6 @@ async fn mint_ticket(
             "transcript_hash_hex must not be all zeros".to_owned(),
         ));
     }
-    let signed = payload.signed;
-    if state.signed_ticket_public_key.is_some() && !signed {
-        return Err(ApiError::BadRequest(
-            "signed must be true when a signed-ticket verifier key is configured".to_owned(),
-        ));
-    }
     let mint_state = Arc::clone(&state);
     enum MintedCredential {
         Raw(PowTicket),
@@ -1336,30 +1301,30 @@ async fn mint_ticket(
         let ticket = mint_state
             .mint_ticket(ttl, transcript_hash, &mut rng)
             .map_err(|err| ApiError::Internal(err.to_string()))?;
-        if signed {
-            let secret = mint_state.signed_ticket_secret.as_ref().ok_or_else(|| {
-                ApiError::BadRequest(
-                    "signed ticket requested but signing key not configured".to_string(),
-                )
-            })?;
-            SignedTicket::sign(ticket, &mint_state.relay_id, &transcript_hash, secret)
-                .map(MintedCredential::Signed)
-                .map_err(|err| ApiError::Internal(format!("signed ticket mint failed: {err}")))
+        if let Some(issuer) = mint_state.signed_ticket_issuer.as_ref() {
+            SignedTicket::sign(
+                ticket,
+                &mint_state.relay_id,
+                &transcript_hash,
+                &issuer.secret_key,
+            )
+            .map(MintedCredential::Signed)
+            .map_err(|err| ApiError::Internal(format!("signed ticket mint failed: {err}")))
         } else {
             Ok(MintedCredential::Raw(ticket))
         }
     })
     .await
     .map_err(|err| ApiError::Internal(format!("mint worker failed: {err}")))??;
-    let (ticket_b64, signed_ticket_b64, signed_ticket_fingerprint_hex, expires_at, difficulty) =
+    let (credential_kind, credential_b64, signed_ticket_fingerprint_hex, expires_at, difficulty) =
         match credential {
             MintedCredential::Raw(ticket) => {
                 let expires_at = ticket.expires_at;
                 let difficulty = ticket.difficulty;
                 let ticket_bytes = SensitiveBytes(ticket.to_vec());
                 (
-                    Some(STANDARD.encode(&*ticket_bytes)),
-                    None,
+                    "raw".to_owned(),
+                    STANDARD.encode(&*ticket_bytes),
                     None,
                     expires_at,
                     difficulty,
@@ -1368,11 +1333,11 @@ async fn mint_ticket(
             MintedCredential::Signed(signed_ticket) => {
                 let expires_at = signed_ticket.ticket.expires_at;
                 let difficulty = signed_ticket.ticket.difficulty;
-                let fingerprint = encode(signed_ticket.revocation_fingerprint());
+                let fingerprint = encode(signed_ticket.ticket.revocation_fingerprint());
                 let signed_ticket_bytes = SensitiveBytes(signed_ticket.encode());
                 (
-                    None,
-                    Some(STANDARD.encode(&*signed_ticket_bytes)),
+                    "signed".to_owned(),
+                    STANDARD.encode(&*signed_ticket_bytes),
                     Some(fingerprint),
                     expires_at,
                     difficulty,
@@ -1385,8 +1350,8 @@ async fn mint_ticket(
         .as_secs();
     let ttl_secs = expires_at.saturating_sub(now);
     let response = MintResponse {
-        ticket_b64,
-        signed_ticket_b64,
+        credential_kind,
+        credential_b64,
         signed_ticket_fingerprint_hex,
         difficulty,
         ttl_secs,
@@ -1398,11 +1363,6 @@ async fn mint_token(
     State(state): State<Arc<PuzzleService>>,
     body: Bytes,
 ) -> Result<SensitiveJsonBytes, ApiError> {
-    if state.token.is_none() {
-        return Err(ApiError::BadRequest(
-            "admission token policy disabled on this relay".to_string(),
-        ));
-    }
     let payload = if body.is_empty() {
         return Err(ApiError::BadRequest(
             "transcript_hash_hex is required".to_string(),
@@ -1434,15 +1394,17 @@ async fn mint_token(
     }
     let ttl_override = payload.ttl_secs.map(Duration::from_secs);
     let issued_at = canonical_issued_at(SystemTime::now())?;
-    let flags = payload.flags.unwrap_or(0);
     let mint_state = Arc::clone(&state);
     let minted = tokio::task::spawn_blocking(move || {
         let mut rng = StdRng::from_os_rng();
-        mint_state.mint_token(ttl_override, transcript_hash, issued_at, flags, &mut rng)
+        mint_state.mint_token(ttl_override, transcript_hash, issued_at, &mut rng)
     })
     .await
     .map_err(|err| ApiError::Internal(format!("token mint worker failed: {err}")))?;
-    let token = match minted.map_err(|err| match err {
+    let token = minted.map_err(|err| match err {
+        TokenIssuerError::PolicyDisabled => {
+            ApiError::BadRequest("admission token policy disabled on this relay".to_owned())
+        }
         TokenIssuerError::TtlTooShort { minimum, .. } => ApiError::BadRequest(format!(
             "ttl_secs shorter than minimum {}",
             minimum.as_secs()
@@ -1463,14 +1425,7 @@ async fn mint_token(
         TokenIssuerError::StateUnavailable => {
             ApiError::Internal("token issuer state is unavailable".to_owned())
         }
-    })? {
-        Some(token) => token,
-        None => {
-            return Err(ApiError::BadRequest(
-                "admission token policy disabled on this relay".to_string(),
-            ));
-        }
-    };
+    })?;
     let token_bytes = SensitiveBytes(token.encode());
     let token_b64 = STANDARD.encode(&*token_bytes);
     let issued_at_secs = token.issued_at();
@@ -1482,7 +1437,6 @@ async fn mint_token(
         issued_at: issued_at_secs,
         expires_at: expires_at_secs,
         ttl_secs,
-        flags: token.flags(),
         issuer_fingerprint_hex: encode(token.issuer_fingerprint()),
         relay_id_hex: encode(token.relay_id()),
     };
@@ -1620,24 +1574,20 @@ fn token_issuer_from_config(
     )))
 }
 fn load_signed_ticket_secret(opts: &SignedTicketSecretOptions) -> Result<Option<SensitiveBytes>> {
-    if opts.secret_path.is_none() {
+    let Some(path) = opts.secret_path.as_ref() else {
         return Ok(None);
-    }
+    };
     let suite = MlDsaSuite::MlDsa44;
     let expected = suite.secret_key_len();
-    let mut source_hex = if let Some(path) = opts.secret_path.as_ref() {
-        let maximum = secret_file_max_bytes(expected).map_err(|error| eyre!(error))?;
-        read_bounded_private_file(path, maximum, "SoraNet signed-ticket secret key").wrap_err_with(
-            || {
+    let maximum = secret_file_max_bytes(expected).map_err(|error| eyre!(error))?;
+    let mut source_hex =
+        read_bounded_private_file(path, maximum, "SoraNet signed-ticket secret key")
+            .wrap_err_with(|| {
                 format!(
                     "failed to read signed ticket secret from {}",
                     path.display()
                 )
-            },
-        )?
-    } else {
-        PrivateFileBytes::from(Vec::new())
-    };
+            })?;
     let decoded = decode_private_hex_bytes(&mut source_hex, expected, "signed-ticket secret key")
         .map_err(|error| eyre!(error))?;
     Ok(Some(decoded))
@@ -1694,9 +1644,8 @@ mod tests {
     use super::*;
     use iroha_crypto::{
         Algorithm, KeyPair,
-        soranet::{
-            pow::{ChallengeBinding, Parameters as PowParameters},
-            token::{AdmissionTokenVerifier, InMemoryTokenStore, TokenStore, TokenStoreLimits},
+        soranet::token::{
+            AdmissionTokenVerifier, InMemoryTokenStore, TokenStore, TokenStoreLimits,
         },
     };
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
@@ -1856,7 +1805,7 @@ mod tests {
         let permit = Arc::clone(&permits)
             .try_acquire_owned()
             .expect("mint permit");
-        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(0);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
         let request = tokio::spawn(retain_mint_permit_until_complete(permit, async move {
             tokio::task::spawn_blocking(move || {
@@ -1866,8 +1815,9 @@ mod tests {
             .await
             .expect("blocking mint worker");
         }));
-        started_rx
-            .recv_timeout(Duration::from_secs(2))
+        tokio::time::timeout(Duration::from_secs(2), started_rx)
+            .await
+            .expect("blocking work start timeout")
             .expect("blocking work started");
         request.abort();
         assert_eq!(
@@ -1980,7 +1930,7 @@ mod tests {
         max_future_skew: Duration,
         min_ticket_ttl: Duration,
     ) -> PuzzleParameters {
-        PuzzleParameters::new(
+        PuzzleParameters::try_new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
@@ -1988,26 +1938,21 @@ mod tests {
             max_future_skew,
             min_ticket_ttl,
         )
+        .expect("test puzzle parameters must be valid")
     }
     fn base_service() -> PuzzleService {
-        let pow_params = PowParameters::new(5, Duration::from_secs(120), Duration::from_secs(30));
-        let min_ticket_ttl = pow_params.min_ticket_ttl();
-        let max_future_skew = pow_params.max_future_skew();
+        let min_ticket_ttl = Duration::from_secs(30);
+        let max_future_skew = Duration::from_secs(120);
         PuzzleService {
             descriptor_commit: [0u8; 32],
             relay_id: [0u8; 32],
-            puzzle_params: test_puzzle_parameters(
-                pow_params.difficulty(),
-                max_future_skew,
-                min_ticket_ttl,
-            ),
+            puzzle_params: test_puzzle_parameters(5, max_future_skew, min_ticket_ttl),
             ticket_ttl: Duration::from_secs(45),
             min_ticket_ttl,
             max_future_skew,
             pow_revocation_store_capacity: 8_192,
             pow_revocation_store_ttl_secs: 900,
-            signed_ticket_public_key: None,
-            signed_ticket_secret: None,
+            signed_ticket_issuer: None,
             token: None,
         }
     }
@@ -2046,26 +1991,13 @@ mod tests {
         issuer.secret_key.0.clear();
 
         let mut service = base_service();
-        let mut signing_secret = Vec::with_capacity(36);
-        let signing_secret_capacity = signing_secret.capacity();
-        signing_secret.resize(signing_secret_capacity, 205);
-        signing_secret.truncate(4);
-        service.signed_ticket_secret = Some(signing_secret.into());
+        service.signed_ticket_issuer = Some(SignedTicketIssuer {
+            public_key: vec![1],
+            secret_key: vec![205; 4].into(),
+        });
         let rendered = format!("{service:?}");
         assert!(rendered.contains("<redacted>"));
         assert!(!rendered.contains("205"));
-        service.clear_signed_ticket_secret();
-        let signing_secret = service
-            .signed_ticket_secret
-            .as_mut()
-            .expect("secret holder");
-        assert!(signing_secret.is_empty());
-        assert_eq!(signing_secret.0.capacity(), signing_secret_capacity);
-        // SAFETY: `SensitiveBytes::clear` initializes and wipes the complete
-        // allocation immediately before clearing its logical length.
-        unsafe { signing_secret.0.set_len(signing_secret_capacity) };
-        assert!(signing_secret.iter().all(|byte| *byte == 0));
-        signing_secret.0.clear();
     }
     fn first_rejected_puzzle_relay_id(
         ticket: &PowTicket,
@@ -2112,9 +2044,8 @@ mod tests {
         panic!("failed to find a transcript binding rejected by the puzzle predicate")
     }
     fn token_service() -> (PuzzleService, AdmissionTokenVerifier) {
-        let pow_params = PowParameters::new(5, Duration::from_secs(180), Duration::from_secs(30));
-        let min_ticket_ttl = pow_params.min_ticket_ttl();
-        let max_future_skew = pow_params.max_future_skew();
+        let min_ticket_ttl = Duration::from_secs(30);
+        let max_future_skew = Duration::from_secs(180);
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
         let secret_key = keypair.secret_key().to_vec();
@@ -2165,18 +2096,13 @@ mod tests {
         let service = PuzzleService {
             descriptor_commit: [0u8; 32],
             relay_id,
-            puzzle_params: test_puzzle_parameters(
-                pow_params.difficulty(),
-                max_future_skew,
-                min_ticket_ttl,
-            ),
+            puzzle_params: test_puzzle_parameters(5, max_future_skew, min_ticket_ttl),
             ticket_ttl: Duration::from_secs(45),
             min_ticket_ttl,
             max_future_skew,
             pow_revocation_store_capacity: 8_192,
             pow_revocation_store_ttl_secs: 900,
-            signed_ticket_public_key: None,
-            signed_ticket_secret: None,
+            signed_ticket_issuer: None,
             token: Some(Mutex::new(issuer)),
         };
         (service, verifier)
@@ -2262,17 +2188,17 @@ mod tests {
         let _ = fs::remove_file(secret_path);
     }
     fn signed_ticket_service() -> (PuzzleService, Vec<u8>, Vec<u8>) {
-        let pow_params = PowParameters::new(1, Duration::from_secs(180), Duration::from_secs(60));
-        let min_ticket_ttl = pow_params.min_ticket_ttl();
-        let max_future_skew = pow_params.max_future_skew();
-        let puzzle_params = PuzzleParameters::new(
+        let min_ticket_ttl = Duration::from_secs(60);
+        let max_future_skew = Duration::from_secs(180);
+        let puzzle_params = PuzzleParameters::try_new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
             1,
             max_future_skew,
             min_ticket_ttl,
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let kp = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
         let secret = kp.secret_key().to_vec();
         let public = kp.public_key().to_vec();
@@ -2289,8 +2215,10 @@ mod tests {
             max_future_skew,
             pow_revocation_store_capacity: 8_192,
             pow_revocation_store_ttl_secs: 900,
-            signed_ticket_public_key: Some(public.clone()),
-            signed_ticket_secret: Some(secret.clone().into()),
+            signed_ticket_issuer: Some(SignedTicketIssuer {
+                public_key: public.clone(),
+                secret_key: secret.clone().into(),
+            }),
             token: None,
         };
         (service, secret, public)
@@ -2318,14 +2246,15 @@ mod tests {
     #[test]
     fn mint_ticket_uses_puzzle_when_configured() {
         let mut service = base_service();
-        service.puzzle_params = PuzzleParameters::new(
+        service.puzzle_params = PuzzleParameters::try_new(
             NonZeroU32::new(8_192).unwrap(),
             NonZeroU32::new(1).unwrap(),
             NonZeroU32::new(1).unwrap(),
             6,
             Duration::from_secs(90),
             Duration::from_secs(30),
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let mut rng = StdRng::from_seed([9u8; 32]);
         let ttl = service.clamp_ttl(Some(Duration::from_secs(60)));
         let ticket = service
@@ -2339,14 +2268,15 @@ mod tests {
         let mut service = base_service();
         service.descriptor_commit = [0xAB; 32];
         service.relay_id = [0xCD; 32];
-        service.puzzle_params = PuzzleParameters::new(
+        service.puzzle_params = PuzzleParameters::try_new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).unwrap(),
             NonZeroU32::new(1).unwrap(),
             NonZeroU32::new(1).unwrap(),
             1,
             Duration::from_secs(90),
             Duration::from_secs(30),
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let mut rng = StdRng::seed_from_u64(42);
         let transcript = [0xAA; 32];
         let ttl = service.clamp_ttl(Some(Duration::from_secs(40)));
@@ -2403,14 +2333,15 @@ mod tests {
         let mut service = base_service();
         service.descriptor_commit = [0x01; 32];
         service.relay_id = [0x02; 32];
-        service.puzzle_params = PuzzleParameters::new(
+        service.puzzle_params = PuzzleParameters::try_new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).unwrap(),
             NonZeroU32::new(1).unwrap(),
             NonZeroU32::new(1).unwrap(),
             3,
             Duration::from_secs(90),
             Duration::from_secs(30),
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let state = Arc::new(service);
         let transcript = [0x44; 32];
         let payload = format!(
@@ -2422,14 +2353,10 @@ mod tests {
             .expect("mint response")
             .0;
         let minted: MintResponse = norito::json::from_slice(&response).expect("decode mint");
+        assert_eq!(minted.credential_kind, "raw");
+        assert!(minted.signed_ticket_fingerprint_hex.is_none());
         let ticket_bytes = STANDARD
-            .decode(
-                minted
-                    .ticket_b64
-                    .as_deref()
-                    .expect("unsigned ticket present")
-                    .as_bytes(),
-            )
+            .decode(minted.credential_b64.as_bytes())
             .expect("base64 decode");
         let ticket = PowTicket::parse(&ticket_bytes).expect("ticket parse");
         let params = &state.puzzle_params;
@@ -2442,20 +2369,23 @@ mod tests {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
         let mut service = base_service();
         service.relay_id = [0x12; 32];
-        service.puzzle_params = PuzzleParameters::new(
+        service.puzzle_params = PuzzleParameters::try_new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
             service.puzzle_params.difficulty(),
             service.max_future_skew,
             service.min_ticket_ttl,
-        );
-        service.signed_ticket_public_key = Some(keypair.public_key().to_vec());
-        service.signed_ticket_secret = Some(keypair.secret_key().to_vec().into());
+        )
+        .expect("test puzzle parameters must be valid");
+        service.signed_ticket_issuer = Some(SignedTicketIssuer {
+            public_key: keypair.public_key().to_vec(),
+            secret_key: keypair.secret_key().to_vec().into(),
+        });
         let state = Arc::new(service);
         let transcript = [0xAB; 32];
         let payload = format!(
-            "{{\"ttl_secs\":60,\"transcript_hash_hex\":\"{}\",\"signed\":true}}",
+            "{{\"ttl_secs\":60,\"transcript_hash_hex\":\"{}\"}}",
             hex::encode(transcript)
         );
         let response = mint_ticket(State(state.clone()), Bytes::from(payload.into_bytes()))
@@ -2463,24 +2393,21 @@ mod tests {
             .expect("mint response")
             .0;
         let minted: MintResponse = norito::json::from_slice(&response).expect("decode mint");
-        let signed_b64 = minted
-            .signed_ticket_b64
-            .as_ref()
-            .expect("signed ticket present");
+        assert_eq!(minted.credential_kind, "signed");
         let signed_bytes = STANDARD
-            .decode(signed_b64.as_bytes())
+            .decode(minted.credential_b64.as_bytes())
             .expect("decode signed ticket");
         let signed = SignedTicket::decode(&signed_bytes).expect("decode signed ticket payload");
-        assert!(
-            minted.ticket_b64.is_none(),
-            "signed mint must return exactly one bearer credential"
-        );
         assert_eq!(signed.relay_id, state.relay_id);
         assert_eq!(signed.transcript_hash, transcript);
         let binding = PuzzleBinding::new(&state.descriptor_commit, &state.relay_id, &transcript);
         puzzle::verify_signed_ticket(
             &signed,
-            state.signed_ticket_public_key.as_ref().expect("public key"),
+            &state
+                .signed_ticket_issuer
+                .as_ref()
+                .expect("signed ticket issuer")
+                .public_key,
             &binding,
             &state.puzzle_params,
         )
@@ -2490,7 +2417,7 @@ mod tests {
                 .signed_ticket_fingerprint_hex
                 .as_deref()
                 .expect("fingerprint"),
-            hex::encode(signed.revocation_fingerprint())
+            hex::encode(signed.ticket.revocation_fingerprint())
         );
     }
     #[test]
@@ -2656,7 +2583,6 @@ mod tests {
         let request = MintRequest {
             ttl_secs: Some(90),
             transcript_hash_hex: "11".repeat(32),
-            signed: true,
         };
         let body = Bytes::from(json::to_vec(&request).expect("serialize request"));
         let response = mint_ticket(State(Arc::clone(&state)), body)
@@ -2664,60 +2590,56 @@ mod tests {
             .expect("mint response");
         let parsed: MintResponse =
             json::from_slice(&response.0).expect("deserialize mint response");
-        let signed_b64 = parsed
-            .signed_ticket_b64
-            .as_ref()
-            .expect("signed ticket missing")
-            .clone();
+        assert_eq!(parsed.credential_kind, "signed");
         let fingerprint = parsed
             .signed_ticket_fingerprint_hex
             .as_ref()
             .expect("fingerprint missing")
             .clone();
-        let signed_bytes = STANDARD.decode(signed_b64).expect("decode signed ticket");
+        let signed_bytes = STANDARD
+            .decode(parsed.credential_b64.as_bytes())
+            .expect("decode signed ticket");
         let signed = SignedTicket::decode(&signed_bytes).expect("decode signed ticket");
         let binding = PuzzleBinding::new(&state.descriptor_commit, &state.relay_id, &[0x11; 32]);
         puzzle::verify_signed_ticket(&signed, &public, &binding, &state.puzzle_params)
             .expect("signed ticket verifies");
         assert_eq!(
             fingerprint,
-            hex::encode(signed.revocation_fingerprint()),
+            hex::encode(signed.ticket.revocation_fingerprint()),
             "fingerprint must track the signed ticket signature"
         );
     }
     #[tokio::test]
-    async fn http_mint_signed_ticket_without_secret_rejected() {
+    async fn http_mint_rejects_retired_signed_selector() {
         use axum::{body::Bytes, extract::State};
         let service = base_service();
         let state = Arc::new(service);
-        let request = MintRequest {
-            ttl_secs: Some(30),
-            transcript_hash_hex: "22".repeat(32),
-            signed: true,
-        };
-        let body = Bytes::from(json::to_vec(&request).expect("serialize request"));
+        let body = Bytes::from(format!(
+            "{{\"ttl_secs\":60,\"transcript_hash_hex\":\"{}\",\"signed\":true}}",
+            "22".repeat(32)
+        ));
         let err = mint_ticket(State(state), body)
             .await
-            .expect_err("should fail");
+            .expect_err("retired client-side signing selector must fail");
         assert!(matches!(err, ApiError::BadRequest(_)));
     }
     #[tokio::test]
     async fn http_mint_puzzle_rejects_ttl_without_solution_window() {
         use axum::{body::Bytes, extract::State};
         let mut service = base_service();
-        service.puzzle_params = PuzzleParameters::new(
+        service.puzzle_params = PuzzleParameters::try_new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
             1,
             service.max_future_skew,
             service.min_ticket_ttl,
-        );
+        )
+        .expect("test puzzle parameters must be valid");
         let state = Arc::new(service);
         let request = MintRequest {
             ttl_secs: Some(state.min_ticket_ttl.as_secs()),
             transcript_hash_hex: "33".repeat(32),
-            signed: false,
         };
         let body = Bytes::from(json::to_vec(&request).expect("serialize request"));
         let err = mint_ticket(State(state), body)
@@ -2753,9 +2675,8 @@ mod tests {
         use axum::{body::Bytes, extract::State};
         let state = Arc::new(base_service());
         let request = MintRequest {
-            ttl_secs: Some(30),
+            ttl_secs: Some(60),
             transcript_hash_hex: "00".repeat(32),
-            signed: false,
         };
         let body = Bytes::from(json::to_vec(&request).expect("serialize request"));
         let err = mint_ticket(State(state), body)
@@ -2775,10 +2696,16 @@ mod tests {
             Some(Duration::from_secs(1)),
             [0x11; 32],
             SystemTime::now(),
-            0,
             &mut rng,
         );
         assert!(matches!(result, Err(TokenIssuerError::TtlTooShort { .. })));
+    }
+    #[test]
+    fn mint_token_rejects_disabled_policy() {
+        let service = base_service();
+        let mut rng = StdRng::from_seed([0x56; 32]);
+        let result = service.mint_token(None, [0x12; 32], SystemTime::now(), &mut rng);
+        assert!(matches!(result, Err(TokenIssuerError::PolicyDisabled)));
     }
     #[test]
     fn mint_token_roundtrip_verifies() {
@@ -2786,8 +2713,7 @@ mod tests {
         let mut rng = StdRng::from_seed([0x77; 32]);
         let issued_at = canonical_issued_at(SystemTime::now()).expect("canonical current time");
         let token = service
-            .mint_token(None, [0x22; 32], issued_at, 0, &mut rng)
-            .expect("mint result")
+            .mint_token(None, [0x22; 32], issued_at, &mut rng)
             .expect("token enabled");
         verifier
             .verify(
@@ -2813,7 +2739,7 @@ mod tests {
         assert!(summary.enabled);
         assert_eq!(summary.suite.as_deref(), Some("ml-dsa-44"));
         let mint_payload = format!(
-            "{{\"transcript_hash_hex\":\"{}\",\"ttl_secs\":120,\"flags\":0}}",
+            "{{\"transcript_hash_hex\":\"{}\",\"ttl_secs\":120}}",
             hex::encode([0xAB; 32])
         );
         let mint_bytes = mint_token(State(state), Bytes::from(mint_payload.into_bytes()))
@@ -2833,8 +2759,21 @@ mod tests {
                 SystemTime::now(),
             )
             .expect("verification succeeds");
-        assert_eq!(minted.flags, token.flags());
+        assert_eq!(token.flags(), 0);
         assert_eq!(minted.token_id_hex, hex::encode(token.token_id()));
+    }
+    #[tokio::test]
+    async fn http_token_mint_rejects_retired_flags() {
+        use axum::{body::Bytes, extract::State};
+        let (service, _) = token_service();
+        let payload = format!(
+            "{{\"transcript_hash_hex\":\"{}\",\"ttl_secs\":120,\"flags\":0}}",
+            hex::encode([0xAC; 32])
+        );
+        let error = mint_token(State(Arc::new(service)), Bytes::from(payload))
+            .await
+            .expect_err("retired token flags input must fail");
+        assert!(matches!(error, ApiError::BadRequest(_)));
     }
     #[test]
     fn derive_relay_id_requires_verified_certificate() {
@@ -2856,8 +2795,8 @@ mod tests {
     #[test]
     fn mint_responses_redact_and_sensitive_json_owner_scrubs() {
         let mut mint = MintResponse {
-            ticket_b64: Some("raw-ticket-capability".to_owned()),
-            signed_ticket_b64: Some("raw-signed-ticket-capability".to_owned()),
+            credential_kind: "raw".to_owned(),
+            credential_b64: "raw-ticket-capability".to_owned(),
             signed_ticket_fingerprint_hex: Some("fingerprint".to_owned()),
             difficulty: 1,
             ttl_secs: 30,
@@ -2866,7 +2805,6 @@ mod tests {
         let rendered = format!("{mint:?}");
         assert!(rendered.contains("<redacted>"));
         assert!(!rendered.contains("raw-ticket-capability"));
-        assert!(!rendered.contains("raw-signed-ticket-capability"));
 
         let mut token = MintTokenResponse {
             token_b64: "raw-admission-token-capability".to_owned(),
@@ -2874,7 +2812,6 @@ mod tests {
             issued_at: 1,
             expires_at: 31,
             ttl_secs: 30,
-            flags: 0,
             issuer_fingerprint_hex: "02".repeat(32),
             relay_id_hex: "03".repeat(32),
         };
@@ -2900,12 +2837,7 @@ mod tests {
         assert!(std::mem::needs_drop::<MintTokenResponse>());
         mint.clear_credentials();
         token.clear_credentials();
-        assert!(mint.ticket_b64.as_ref().is_some_and(String::is_empty));
-        assert!(
-            mint.signed_ticket_b64
-                .as_ref()
-                .is_some_and(String::is_empty)
-        );
+        assert!(mint.credential_b64.is_empty());
         assert!(token.token_b64.is_empty());
     }
 }

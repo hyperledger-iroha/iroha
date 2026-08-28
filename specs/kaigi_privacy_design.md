@@ -63,7 +63,7 @@ pub struct KaigiRelayHop {
 `KaigiRecord` gains the following fields:
 
 - `roster_commitments: Vec<KaigiParticipantCommitment>` – carries private roster commitments; transparent rooms use the explicit `participants` list instead.
-- `nullifier_log: Vec<KaigiParticipantNullifier>` – strictly append-only; native metadata-size admission rejects a mutation before the stored record can exceed the configured bound. V1 does not evict nullifiers, because eviction would reopen proof replay.
+- `nullifier_log: Vec<KaigiParticipantNullifier>` – strictly append-only and capped at 4,098 entries (4,096 participant joins plus optional host-create and host-end nullifiers). V1 does not evict nullifiers, because eviction would reopen proof replay.
 - `room_policy: KaigiRoomPolicy` – selects the viewer authentication stance for the session (`Public` rooms mirror read-only relays; `Authenticated` rooms require viewer tickets before an exit forwards packets).
 - `relay_manifest: Option<KaigiRelayManifest>` – structured manifest encoded with Norito so hops, HPKE keys, and weights stay canonical without JSON shims.
 - `privacy_mode: KaigiPrivacyMode` enum (see below).
@@ -80,6 +80,16 @@ pub enum KaigiPrivacyMode {
 
 - Fields use `#[norito(with = "...")]` helpers to enforce canonical encoding (little-endian for integers, sorted hops by position).
 - `KaigiRecord::from_new` seeds the new vectors empty and copies any provided relay manifest.
+- Every retained V1 call record has an immutable 1 MiB JSON ceiling independent
+  of the configurable metadata limit. Transparent participant and private roster
+  collections are capped at 4,096, private usage commitments at 4,096, and
+  participant metadata may reference only the host or a current transparent
+  participant. Retained collection identifiers remain unique and transparent
+  participants remain canonically sorted. Restore and every rewrite also bind
+  the roster root to the retained commitments and reject records which mix
+  transparent participant IDs with private roster artifacts. Active records
+  cannot carry an end timestamp; ended records require one at or after their
+  creation timestamp.
 
 # Instruction Surface Changes
 
@@ -142,6 +152,12 @@ Only unique, live, explicitly proven account-ID rekey successors of the stored
 host or current transparent participants qualify; the historical stored ID is
 not a bypass when its lineage is no longer live. Ordinary alias reassignment and
 revoked or expired lineage do not qualify.
+Core lineage authorization starts from the identities named by the operation
+and follows a derived reverse occurrence index instead of collecting every
+persisted rekey record. A connected component may consume at most 4,096 record
+occurrences; an oversized, cyclic, branched, or otherwise ambiguous relevant
+component fails closed, while unrelated rekey history cannot consume that
+operation's budget.
 Private calls remain host-only while private roster joins are disabled. The
 route remains classified as expensive compute and requires a canonical
 account-signed request; it is available to ordinary on-ledger accounts rather
@@ -175,7 +191,9 @@ before authorization or state changes.
   foreign account cannot squat the protected `kaigi__*` namespace. Installed
   executors are responsible for applying an equivalent or stricter domain
   policy before dispatch.
-- Reject an explicitly configured zero participant limit; an omitted limit remains unbounded.
+- Reject an explicitly configured zero participant limit or a value above
+  4,096. An omitted limit retains its `None` wire encoding and uses the same
+  effective 4,096-participant protocol maximum.
 - Require the signed host to be a registered account. An explicit
   `billing_account` must identify that same host; third-party billing remains
   unavailable until a delegated billing authorization is defined.
@@ -297,9 +315,24 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
 ## Relay Registration
 
 - Relays self-register as domain metadata entries `kaigi_relay__<account-digest>` including HPKE key material and bandwidth class. V1 rejects empty keys and encoded keys larger than 4 KiB before metadata persistence or event emission; the opaque ceiling accommodates the current ML-KEM suites while bounding ledger and subscriber work until the descriptor carries an explicit suite tag. Native domain registration and generic metadata ISIs reject attempts to seed, overwrite, or remove these reserved entries; relay descriptors must use `RegisterKaigiRelay` or `UnregisterKaigiRelay`. The signed relay account must be registered and have a live domain-qualified primary alias; that authenticated primary alias, not a global allowlist scan, selects the descriptor's governance domain. Aliasless or domainless-primary relays fail closed. While relay state exists, primary-alias changes may stay within that storage domain but cannot clear or move to another domain; account/domain removal likewise fails while protected Kaigi dependencies remain.
-- The V1 registry admits at most 500 live descriptors. Domain metadata remains authoritative while a deterministic, snapshot-skipped relay-to-domain index bounds admission and query validation to registry entries rather than unrelated domain metadata. Restore validates malformed, duplicate, and mis-homed rows without rejecting valid legacy over-cap state. A new registration validates indexed relay rows and fails closed at the cap; an existing descriptor may still rotate at or above the cap so recovery is not blocked. Repeating the exact stored descriptor is a successful event-free no-op.
-- The `RegisterKaigiRelay` instruction persists the descriptor in domain metadata, emits a `KaigiRelayRegistered` summary (with HPKE fingerprint and bandwidth class), and can be re-invoked to rotate keys deterministically. `UnregisterKaigiRelay` is authorized by the relay or its active canonical account-ID rekey successor and atomically removes the descriptor plus retained feedback before emitting `KaigiRelayUnregistered`. Retirement prevents the descriptor from being admitted to future manifests. Existing manifests remain self-contained: they retain their pinned key until the host refreshes or ends the call, or until the manifest expires.
-- Governance can curate allowlists through domain metadata (`kaigi_relay_allowlist`); when an allowlist is configured, relay registration and manifest updates enforce membership before accepting new paths. Membership follows only a unique, explicitly typed account-ID rekey lineage, including retained canonical `AccountIdRekey` edges after lease expiry or reassignment, so a retired allowlist entry can authorize its valid successor without granting authority to an independent alias assignee. The relay itself still needs a live domain-qualified primary alias, and malformed allowlists in unrelated domains are never consulted.
+- The V1 registry admits at most 500 live descriptors. Domain metadata remains authoritative while a deterministic, snapshot-skipped relay-to-domain index bounds admission and query validation to registry entries rather than unrelated domain metadata. Restore validates malformed, duplicate, and mis-homed rows without rejecting valid legacy over-cap state. A new registration validates indexed relay rows and fails closed at the cap; an existing descriptor may still rotate at or above the cap so recovery is not blocked. Repeating the exact stored descriptor is a successful event-free no-op. Index rebuilds reproduce both the current projection and the latest-block undo projection so a snapshot restart cannot change reorg behavior.
+- The `RegisterKaigiRelay` instruction persists the descriptor in domain metadata, emits a `KaigiRelayRegistered` summary (with HPKE fingerprint and bandwidth class), and can be re-invoked to rotate keys deterministically. `UnregisterKaigiRelay` is authorized by the relay or its active canonical account-ID rekey successor and atomically removes the descriptor plus retained feedback before emitting `KaigiRelayUnregistered`. The indexed storage domain remains the descriptor's authenticated home after its primary alias expires, so the stale descriptor cannot poison later registry admission and the relay can still retire it. Retirement prevents the descriptor from being admitted to future manifests. Existing manifests remain self-contained: they retain their pinned key until the host refreshes or ends the call, or until the manifest expires.
+- Governance can curate allowlists through domain metadata (`kaigi_relay_allowlist`); V1 accepts at most 500 identities and at most 1 MiB of canonical JSON. Generic metadata updates, domain registration, runtime loads, and snapshot rebuilds all enforce those protocol bounds. When an allowlist is configured, relay registration and manifest updates enforce membership before accepting new paths. Membership follows only a unique, explicitly typed account-ID rekey lineage, including retained canonical `AccountIdRekey` edges after lease expiry or reassignment, so a retired allowlist entry can authorize its valid successor without granting authority to an independent alias assignee. One matched identity receives the full live-versus-persisted lineage consistency check, and a manifest decodes each involved domain's allowlist once. The relay itself still needs a live domain-qualified primary alias, and malformed allowlists in unrelated domains are never consulted.
+
+Snapshot JSON persists authoritative manifest-alias bindings, while omitted
+reverse account-alias, account-rekey, Kaigi relay-registry, and Kaigi
+account-dependency indexes are rebuilt deterministically. Each skipped index
+reconstructs its latest-block undo layer as well as its current view, preserving
+rollback semantics across restart. Rebuild also validates retained call-record
+and relay-allowlist protocol bounds before accepting the snapshot. A retained
+call cannot list its implicit host as a participant, delegate V1 billing away
+from that host, or recover clear alias/timing hints that native storage scrubs.
+Call creation and end timestamps cannot exceed the latest authenticated block time,
+including an exact-tip hash-only snapshot anchor once its bootstrap record is authenticated.
+Retained relay feedback must remain within the 1 MiB metadata and 512-character
+note bounds, reside in the relay descriptor's registered home domain, and not
+claim a timestamp after that ledger time; the current and undo projections both
+fail closed on a violation.
 
 ## Manifest Creation
 
@@ -313,7 +346,7 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
 
 ## Failover
 
-- Clients monitor relay health via the `ReportKaigiRelayHealth` instruction, which persists signed feedback in domain metadata (`kaigi_relay_feedback__<account-digest>`), broadcasts `KaigiRelayHealthUpdated`, and allows governance/hosts to reason about current availability. The summary carries the relay's owning governance domain separately from the originating call ID, so relay-domain SSE filters remain correct when a call uses a cross-domain relay. Stored feedback must embed the relay identifier selected by its metadata key. The global latest-observation singleton is strictly ordered by `reported_at_ms`: future timestamps beyond the current block time and older reports are rejected, every non-identical equal-timestamp report is rejected across calls, and an exact duplicate is an event-free idempotent no-op. Feedback is diagnostic and does not override relay governance or manifest admission; when a relay fails, the host issues an updated manifest and logs a `KaigiRelayManifestUpdated` event (see below).
+- Clients monitor relay health via the `ReportKaigiRelayHealth` instruction, which persists signed feedback in domain metadata (`kaigi_relay_feedback__<account-digest>`), broadcasts `KaigiRelayHealthUpdated`, and allows governance/hosts to reason about current availability. The summary carries the relay's owning governance domain separately from the originating call ID, so relay-domain SSE filters remain correct when a call uses a cross-domain relay. Stored feedback must embed the relay identifier selected by its metadata key, remain in that relay's registered descriptor domain, and keep notes within 512 characters. The global latest-observation singleton is strictly ordered by `reported_at_ms`: future timestamps beyond the current block time and older reports are rejected, every non-identical equal-timestamp report is rejected across calls, and an exact duplicate is an event-free idempotent no-op. Feedback is diagnostic and does not override relay governance or manifest admission; when a relay fails, the host issues an updated manifest and logs a `KaigiRelayManifestUpdated` event (see below).
 - Hosts apply manifest changes on-ledger through the `SetKaigiRelayManifest` instruction, which replaces the stored path or clears it entirely. Clearing emits a summary with `hop_count = 0` so operators can observe the transition back to direct routing.
 - Prometheus metrics (`kaigi_relay_registered_total`, `kaigi_relay_registration_bandwidth_class`, `kaigi_relay_manifest_updates_total`, `kaigi_relay_manifest_updates_by_domain_total`, `kaigi_relay_manifest_hop_count`, `kaigi_relay_health_reports_total`, `kaigi_relay_health_reports_by_domain_total`, `kaigi_relay_health_state`, `kaigi_relay_failover_total`, `kaigi_relay_failovers_by_domain_total`, `kaigi_relay_failover_hop_count`) now surface relay churn, health status, and failover cadence for operator dashboards. The domain-only counters back bounded diagnostic snapshots without collecting the dimensioned Prometheus label families.
 
@@ -336,8 +369,9 @@ CLI tooling (`iroha kaigi …`) wraps each ISI so operators can register relay
 descriptors, create sessions, submit transparent roster updates, replace relay manifests,
 report relay health, and record usage without hand-crafting transactions.
 Relay manifests and privacy proofs are loaded from JSON/hex files passed
-through the CLI’s normal submission path, making it straightforward to script
-contract admission in staging environments.
+through the CLI’s normal submission path. Manifest preflight rejects zero
+weights and duplicate relay identities as well as invalid hop/key bounds, so a
+transaction already known to fail native admission is not submitted.
 
 # Gas Accounting
 
@@ -356,6 +390,17 @@ contract admission in staging environments.
 - Relay registration and manifest costs scale with bounded HPKE descriptor bytes
   and hop count; relay health reports scale with optional note bytes. Relay
   retirement has an explicit fixed native cost.
+- Existing-call instructions reserve the bounded work needed to read one
+  retained record. A complete pass over a protocol-capped metadata value is
+  priced as a calibrated 32 Ki-gas unit: record replacement reserves three
+  units for decode, deep-copy/scrub, and canonical encode; relay lifecycle and
+  health paths reserve two units for their independent metadata reads; and
+  manifest admission reserves two units per hop for its allowlist and relay
+  descriptor reads. Creation also meters the canonical encoded call input,
+  including title, description, and metadata. Proofless maximum-size and
+  eight-hop paths remain below the shipped 1,680,000 block-gas limit, while
+  replay of maximum retained values is no longer charged as a fixed trivial
+  instruction.
 - Instruction-batch gas totals use saturating addition, matching every dynamic
   proof component, so extreme governed schedules cannot wrap in release builds
   or panic in debug builds.

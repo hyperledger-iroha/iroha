@@ -214,6 +214,221 @@ fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
 }
 
 #[test]
+fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
+    let directory = TempDir::new().expect("temporary future-PrepareQC runtime directory");
+    let (mut runtime, context, keys) =
+        authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+    let timeout_certificate = signed_runtime_timeout_certificate(&context, &keys);
+    let certificate = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0xC0,
+        wire::GlobalPhase::Prepare,
+        1,
+    );
+    let certificate_message = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone()),
+    );
+    let semantic_origin = context.roster[0].validator.clone();
+    let (_ingress_directory, ingress, mut ownerships) = preowned_leader_wire_ownerships(
+        &context,
+        &[(certificate_message.clone(), semantic_origin.clone())],
+        runtime.ingress.lifecycle_ordinals.clone(),
+    );
+    let certificate_ownership = ownerships
+        .pop()
+        .expect("future PrepareQC owns one fair-ingress carrier");
+    let certificate_receipt = certificate_ownership
+        .leader_wire_runtime_receipt()
+        .expect("future PrepareQC owns one runtime receipt")
+        .clone();
+    runtime
+        .enqueue_network_with_ingress_ownership(certificate_message.clone(), certificate_ownership)
+        .expect("enqueue authenticated future PrepareQC");
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm future-PrepareQC runtime");
+
+    assert!(matches!(
+        runtime.step(now),
+        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+    ));
+    let retained = runtime
+        .take_last_scheduler_ownership()
+        .expect("future PrepareQC retry retains scheduler ownership");
+    assert_eq!(
+        retained.selected,
+        RuntimeSelectedOwnerKind::FifoRetryRetained
+    );
+    assert_eq!(retained.validate_exact(), Ok(()));
+    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+    assert_eq!(runtime.queued_commands(), 1);
+    assert!(runtime.pending_leader_wire_terminals.is_empty());
+    assert_eq!(
+        runtime
+            .leader_wire_runtime_receipts
+            .get(&certificate_receipt.owner().admission_ordinal()),
+        Some(&certificate_receipt)
+    );
+
+    let intervening_certificate = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0xC1,
+        wire::GlobalPhase::Prepare,
+        2,
+    );
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(intervening_certificate.clone()),
+        ))
+        .expect("enqueue a second retryable future PrepareQC before the matching TC");
+    runtime
+        .enqueue_network(signed_runtime_proposal(&context, &keys, 0xC2))
+        .expect("enqueue ordinary work whose class debt must remain fair");
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
+        ))
+        .expect("enqueue the matching timeout certificate");
+    runtime.schedule.fifo_owed = true;
+    runtime.ingress.next_class = CommandClass::Progress;
+    let normal_debt_before = runtime
+        .ingress
+        .commands
+        .iter()
+        .find(|queued| queued.class == CommandClass::Normal)
+        .expect("ordinary proposal remains queued before TC service")
+        .eligible_skips;
+    let entered = runtime
+        .step(now)
+        .expect("ordinary production step admits the matching TC");
+    let RuntimeStep::Advanced(enter_view_effects) = entered else {
+        panic!("matching TC unexpectedly idled")
+    };
+    assert!(enter_view_effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::EnterView { tag, .. } if tag.view() == certificate.round.view
+    )));
+    let tc_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("matching TC retains scheduler ownership");
+    assert_eq!(
+        tc_scheduler.selected,
+        RuntimeSelectedOwnerKind::PacemakerProgress
+    );
+    assert!(
+        tc_scheduler.view_blocked_progress_authorization.is_some(),
+        "ordinary TC bypass must retain its exact blocked-PrepareQC authorization"
+    );
+    assert!(tc_scheduler.fifo_owed_before);
+    assert!(!tc_scheduler.fifo_owed_after);
+    assert!(!runtime.schedule.fifo_owed);
+    assert_eq!(runtime.ingress.next_class, CommandClass::Normal);
+    let normal_debt_after = runtime
+        .ingress
+        .commands
+        .iter()
+        .find(|queued| queued.class == CommandClass::Normal)
+        .expect("ordinary proposal remains queued after TC service")
+        .eligible_skips;
+    assert_eq!(normal_debt_after, normal_debt_before + 1);
+    let RuntimeSelectedCandidateOwnership::Exact(tc_candidate) = &tc_scheduler.candidate else {
+        panic!("ordinary TC bypass must retain its exact queue candidate")
+    };
+    assert_eq!(
+        tc_candidate.selection_seal.kind,
+        RuntimeQueueSelectionKind::OrdinaryViewProgress
+    );
+    assert_eq!(tc_scheduler.validate_exact(), Ok(()));
+    let mut forged_target = tc_scheduler.clone();
+    let selected_view = forged_target.round_tag.view();
+    let authorization = forged_target
+        .view_blocked_progress_authorization
+        .as_mut()
+        .expect("matching TC evidence carries a blocked-PrepareQC authorization");
+    authorization.target_view = selected_view;
+    authorization.projection_hash =
+        runtime_view_blocked_progress_authorization_projection_hash(authorization);
+    forged_target.projection_hash = runtime_scheduler_projection_hash(&forged_target);
+    assert!(
+        forged_target.validate_exact().is_err(),
+        "scheduler evidence must reject a target view which cannot unblock the retained QC"
+    );
+    runtime
+        .take_effect_ownership(enter_view_effects.len())
+        .expect("consume matching TC effect ownership");
+    assert_eq!(runtime.round_tag().view(), certificate.round.view);
+    assert_eq!(runtime.queued_commands(), 3);
+
+    assert!(matches!(
+        runtime.step(now),
+        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+    ));
+    let normal_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("ordinary class receives the turn after Progress rotates");
+    assert_eq!(normal_scheduler.selected, RuntimeSelectedOwnerKind::Fifo);
+    assert_eq!(normal_scheduler.validate_exact(), Ok(()));
+    assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+    assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
+    assert_eq!(runtime.queued_commands(), 2);
+
+    let retried = runtime
+        .step(now)
+        .expect("retry the exact PrepareQC after entering its view");
+    let RuntimeStep::Advanced(certificate_effects) = retried else {
+        panic!("matching-view PrepareQC unexpectedly idled")
+    };
+    assert!(certificate_effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::FetchBody {
+            tag,
+            certificate: Some(fetch_certificate),
+            ..
+        } if tag.view() == certificate.round.view && fetch_certificate == &certificate
+    )));
+    let certificate_scheduler = runtime
+        .take_last_scheduler_ownership()
+        .expect("matching-view PrepareQC retains scheduler ownership");
+    assert_eq!(
+        certificate_scheduler.selected,
+        RuntimeSelectedOwnerKind::Fifo
+    );
+    assert_eq!(certificate_scheduler.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(certificate_effects.len())
+        .expect("consume matching-view PrepareQC effect ownership");
+    assert_eq!(runtime.queued_commands(), 1);
+    assert!(matches!(
+        runtime.ingress.commands.front().map(|queued| &queued.command),
+        Some(AdapterCommand::Authenticated(message))
+            if matches!(
+                message.payload(),
+                wire::ConsensusMessageV2Payload::QuorumCertificate(remaining)
+                    if remaining == &intervening_certificate
+            )
+    ));
+    let terminals = runtime.take_leader_wire_runtime_terminals();
+    let [LeaderWireRuntimeTerminal::Volatile(retired)] = terminals.as_slice() else {
+        panic!("matching-view PrepareQC must emit one volatile runtime terminal")
+    };
+    assert_eq!(retired, &certificate_receipt);
+    ingress
+        .mark_leader_wire_volatile_terminal(retired)
+        .expect("publish the consumed PrepareQC's volatile terminal");
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(certificate_message),
+            semantic_origin,
+        )),
+        Ok(super::super::FairV2IngressPushDisposition::Coalesced)
+    ));
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
 fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
     let directory = TempDir::new().expect("temporary leader-wire lock directory");
     let (mut runtime, context, keys) =
@@ -1663,6 +1878,7 @@ fn retiring_the_sole_certificate_does_not_fake_completion_headroom() {
         .pop_pacemaker_progress_with_ownership(
             |_| true,
             |command| command.is_certified_fence_escape(),
+            false,
             None,
         )
         .expect("the certified priority seam remains exact")
@@ -1788,7 +2004,7 @@ fn pacemaker_retry_marks_excludes_and_reconciles_exact_fifo_occurrence() {
     .expect("admit one unblocked retryable Progress root");
     bind_fake_local_deferred_target_for_test(&mut runtime, b"pacemaker-retry-target");
     let first = runtime
-        .dispatch_one_pacemaker_progress(start)
+        .dispatch_one_pacemaker_progress(start, None)
         .expect("retryable pacemaker dispatch remains exact")
         .expect("the unmarked occurrence owns one bounded turn");
     assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
@@ -1816,7 +2032,7 @@ fn pacemaker_retry_marks_excludes_and_reconciles_exact_fifo_occurrence() {
     );
     assert!(
         runtime
-            .dispatch_one_pacemaker_progress(start)
+            .dispatch_one_pacemaker_progress(start, None)
             .expect("marked pacemaker selection remains valid")
             .is_none(),
         "the same retryable occurrence cannot spin on the next turn"

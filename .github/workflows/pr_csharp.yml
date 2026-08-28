@@ -28,10 +28,12 @@ on:
       - "fixtures/kagemusha_recursive_spend_abi6/**"
       - "integration_tests/tests/native_escrow.rs"
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
-      - "scripts/check_native_sdk_abi22_artifact.py"
+      - "scripts/check_native_sdk_abi23_artifact.py"
       - "scripts/compute_workspace_source_manifest.py"
+      - "scripts/csharp_linux_arm_cross_handoff.py"
       - "scripts/package_csharp_native_artifacts.py"
-      - "scripts/tests/check_native_sdk_abi22_artifact_test.py"
+      - "scripts/tests/check_native_sdk_abi23_artifact_test.py"
+      - "scripts/tests/csharp_linux_arm_cross_handoff_test.py"
       - "scripts/tests/package_csharp_native_artifacts_test.py"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
@@ -117,21 +119,23 @@ jobs:
           target="${{ matrix.target }}"
           library_name="${{ matrix.library_name }}"
           artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi22.json"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi23.json"
           mkdir -p "$(dirname "$artifact")"
           cp "target/$target/release/$library_name" "$artifact"
-          python scripts/check_native_sdk_abi22_artifact.py record \
+          python scripts/check_native_sdk_abi23_artifact.py record \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE" \
             --sdk csharp \
             --target "$target"
-          python scripts/check_native_sdk_abi22_artifact.py verify \
+          python scripts/check_native_sdk_abi23_artifact.py verify \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE"
 
       - name: Upload authenticated target-native input
+        id: upload_primary
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: csharp-native-${{ matrix.target }}
@@ -139,154 +143,278 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  native-release-artifact-linux-arm:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 120
-    # GitHub can retire a hosted ARM runner without a Cargo diagnostic. The
-    # authenticated upload ID distinguishes a completed producer from that
-    # infrastructure failure and permits up to two bounded fresh-host retries.
-    continue-on-error: true
-    outputs:
-      artifact_id: ${{ steps.upload.outputs.artifact-id }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: "3.12"
-
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
-        with:
-          cache: "false"
-          target: aarch64-unknown-linux-gnu
-
-      - name: Build native C# bridge on its matching Linux ARM release host
-        shell: bash
-        run: |
-          target="aarch64-unknown-linux-gnu"
-          host_target="$(rustc -vV | sed -n 's/^host: //p')"
-          if [[ "$host_target" != "$target" ]]; then
-            echo "C# native runner host ${host_target} does not match required target ${target}" >&2
-            exit 1
-          fi
-          if [[ -e target ]]; then
-            echo "C# native release build requires a fresh target directory" >&2
-            exit 1
-          fi
-          cargo build --locked --release -p connect_norito_bridge --target "$target"
-
-      - name: Authenticate and stage exact ABI-23 C# Linux ARM bridge
-        shell: bash
-        run: |
-          target="aarch64-unknown-linux-gnu"
-          library_name="libconnect_norito_bridge.so"
-          artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi22.json"
-          mkdir -p "$(dirname "$artifact")"
-          cp "target/$target/release/$library_name" "$artifact"
-          python scripts/check_native_sdk_abi22_artifact.py record \
-            --artifact "$artifact" \
-            --manifest "$manifest" \
-            --source-root "$GITHUB_WORKSPACE" \
-            --sdk csharp \
-            --target "$target"
-          python scripts/check_native_sdk_abi22_artifact.py verify \
-            --artifact "$artifact" \
-            --manifest "$manifest" \
-            --source-root "$GITHUB_WORKSPACE"
-
-      - name: Upload authenticated Linux ARM input
-        id: upload
+      - name: Retry authenticated target-native input upload once
+        if: steps.upload_primary.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: csharp-native-aarch64-unknown-linux-gnu
-          path: ${{ runner.temp }}/csharp-native-upload
-          if-no-files-found: error
-          retention-days: 14
-
-  native-release-artifact-linux-arm-retry:
-    needs: native-release-artifact-linux-arm
-    # An empty ID means the primary never completed its authenticated upload.
-    if: >-
-      ${{
-        !cancelled() &&
-        needs.native-release-artifact-linux-arm.outputs.artifact_id == ''
-      }}
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 120
-    continue-on-error: true
-    outputs:
-      artifact_id: ${{ steps.upload.outputs.artifact-id }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: "3.12"
-
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
-        with:
-          cache: "false"
-          target: aarch64-unknown-linux-gnu
-
-      - name: Build native C# bridge on its matching Linux ARM release host
-        shell: bash
-        run: |
-          target="aarch64-unknown-linux-gnu"
-          host_target="$(rustc -vV | sed -n 's/^host: //p')"
-          if [[ "$host_target" != "$target" ]]; then
-            echo "C# native runner host ${host_target} does not match required target ${target}" >&2
-            exit 1
-          fi
-          if [[ -e target ]]; then
-            echo "C# native release build requires a fresh target directory" >&2
-            exit 1
-          fi
-          cargo build --locked --release -p connect_norito_bridge --target "$target"
-
-      - name: Authenticate and stage exact ABI-23 C# Linux ARM bridge
-        shell: bash
-        run: |
-          target="aarch64-unknown-linux-gnu"
-          library_name="libconnect_norito_bridge.so"
-          artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi22.json"
-          mkdir -p "$(dirname "$artifact")"
-          cp "target/$target/release/$library_name" "$artifact"
-          python scripts/check_native_sdk_abi22_artifact.py record \
-            --artifact "$artifact" \
-            --manifest "$manifest" \
-            --source-root "$GITHUB_WORKSPACE" \
-            --sdk csharp \
-            --target "$target"
-          python scripts/check_native_sdk_abi22_artifact.py verify \
-            --artifact "$artifact" \
-            --manifest "$manifest" \
-            --source-root "$GITHUB_WORKSPACE"
-
-      - name: Upload authenticated Linux ARM input
-        id: upload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: csharp-native-aarch64-unknown-linux-gnu
+          name: csharp-native-${{ matrix.target }}
           path: ${{ runner.temp }}/csharp-native-upload
           if-no-files-found: error
           retention-days: 14
           overwrite: true
 
+  native-release-artifact-linux-arm-cross:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+      CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+      CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          target: aarch64-unknown-linux-gnu
+
+      - name: Test the Linux ARM cross-build handoff contract
+        run: python -I scripts/tests/csharp_linux_arm_cross_handoff_test.py
+
+      - name: Install the official Ubuntu AArch64 cross toolchain
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            binutils-aarch64-linux-gnu \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libc6-dev-arm64-cross
+
+      - name: Cross-build the cdylib-only C# Linux ARM bridge
+        shell: bash
+        run: |
+          target="aarch64-unknown-linux-gnu"
+          host_target="$(rustc -vV | sed -n 's/^host: //p')"
+          if [[ "$host_target" != "x86_64-unknown-linux-gnu" ]]; then
+            echo "C# Linux ARM cross-build requires the x86_64 GNU Rust host, found ${host_target}" >&2
+            exit 1
+          fi
+          if [[ "$(aarch64-linux-gnu-gcc -dumpmachine)" != "aarch64-linux-gnu" ]]; then
+            echo "C# Linux ARM cross linker has the wrong target machine" >&2
+            exit 1
+          fi
+          if [[ -e target ]]; then
+            echo "C# native release build requires a fresh target directory" >&2
+            exit 1
+          fi
+          # The C# runtime package consumes only the shared library. Avoid the
+          # unused staticlib and rlib final codegen/link work.
+          cargo rustc --locked --release -p connect_norito_bridge \
+            --target "$target" --lib --crate-type cdylib
+
+      - name: Seal the authenticated Linux ARM cross-build candidate
+        shell: bash
+        run: |
+          target="aarch64-unknown-linux-gnu"
+          python -I scripts/csharp_linux_arm_cross_handoff.py seal \
+            --artifact "$GITHUB_WORKSPACE/target/$target/release/libconnect_norito_bridge.so" \
+            --candidate-root "$RUNNER_TEMP/csharp-linux-arm-cross-candidate" \
+            --source-root "$GITHUB_WORKSPACE" \
+            --cargo cargo \
+            --rustc rustc \
+            --linker aarch64-linux-gnu-gcc
+
+      - name: Upload immutable Linux ARM cross-build candidate
+        id: upload_primary
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          # This deliberately does not match the final csharp-native-* pattern.
+          name: csharp-linux-arm-cross-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/csharp-linux-arm-cross-candidate
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Retry immutable Linux ARM candidate upload once
+        if: steps.upload_primary.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: csharp-linux-arm-cross-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/csharp-linux-arm-cross-candidate
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: true
+
+  native-release-artifact-linux-arm:
+    needs: native-release-artifact-linux-arm-cross
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    # GitHub can retire a hosted ARM runner without a diagnostic. Keep the
+    # native phase bounded to candidate authentication and permit two fresh
+    # hosted-runner retries when no final authenticated upload ID was produced.
+    continue-on-error: true
+    outputs:
+      artifact_id: ${{ steps.upload_primary.outcome == 'success' && steps.upload_primary.outputs.artifact-id || steps.upload_retry.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Download immutable Linux ARM cross-build candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: csharp-linux-arm-cross-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/csharp-linux-arm-cross-candidate
+
+      - name: Authenticate and stage exact ABI-23 C# Linux ARM bridge natively
+        shell: bash
+        run: |
+          machine="$(uname -m)"
+          if [[ "$machine" != "aarch64" ]]; then
+            echo "C# Linux ARM candidate authentication requires AArch64, found ${machine}" >&2
+            exit 1
+          fi
+          target="aarch64-unknown-linux-gnu"
+          library_name="libconnect_norito_bridge.so"
+          candidate_root="$RUNNER_TEMP/csharp-linux-arm-cross-candidate"
+          artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi23.json"
+          mkdir -p "$(dirname "$artifact")"
+          python -I scripts/csharp_linux_arm_cross_handoff.py verify-stage \
+            --candidate-root "$candidate_root" \
+            --source-root "$GITHUB_WORKSPACE" \
+            --stage-artifact "$artifact"
+          python scripts/check_native_sdk_abi23_artifact.py record \
+            --artifact "$artifact" \
+            --manifest "$manifest" \
+            --source-root "$GITHUB_WORKSPACE" \
+            --sdk csharp \
+            --target "$target"
+          python scripts/check_native_sdk_abi23_artifact.py verify \
+            --artifact "$artifact" \
+            --manifest "$manifest" \
+            --source-root "$GITHUB_WORKSPACE"
+
+      - name: Upload authenticated Linux ARM input
+        id: upload_primary
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: csharp-native-aarch64-unknown-linux-gnu
+          path: ${{ runner.temp }}/csharp-native-upload
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Retry authenticated Linux ARM input upload once
+        id: upload_retry
+        if: steps.upload_primary.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: csharp-native-aarch64-unknown-linux-gnu
+          path: ${{ runner.temp }}/csharp-native-upload
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: true
+
+  native-release-artifact-linux-arm-retry:
+    needs:
+      - native-release-artifact-linux-arm-cross
+      - native-release-artifact-linux-arm
+    # An empty ID means the primary never completed its authenticated upload.
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.native-release-artifact-linux-arm-cross.result == 'success' &&
+        needs.native-release-artifact-linux-arm.outputs.artifact_id == ''
+      }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    continue-on-error: true
+    outputs:
+      artifact_id: ${{ steps.upload_primary.outcome == 'success' && steps.upload_primary.outputs.artifact-id || steps.upload_retry.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Download immutable Linux ARM cross-build candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: csharp-linux-arm-cross-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/csharp-linux-arm-cross-candidate
+
+      - name: Authenticate and stage exact ABI-23 C# Linux ARM bridge natively
+        shell: bash
+        run: |
+          machine="$(uname -m)"
+          if [[ "$machine" != "aarch64" ]]; then
+            echo "C# Linux ARM candidate authentication requires AArch64, found ${machine}" >&2
+            exit 1
+          fi
+          target="aarch64-unknown-linux-gnu"
+          library_name="libconnect_norito_bridge.so"
+          candidate_root="$RUNNER_TEMP/csharp-linux-arm-cross-candidate"
+          artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi23.json"
+          mkdir -p "$(dirname "$artifact")"
+          python -I scripts/csharp_linux_arm_cross_handoff.py verify-stage \
+            --candidate-root "$candidate_root" \
+            --source-root "$GITHUB_WORKSPACE" \
+            --stage-artifact "$artifact"
+          python scripts/check_native_sdk_abi23_artifact.py record \
+            --artifact "$artifact" \
+            --manifest "$manifest" \
+            --source-root "$GITHUB_WORKSPACE" \
+            --sdk csharp \
+            --target "$target"
+          python scripts/check_native_sdk_abi23_artifact.py verify \
+            --artifact "$artifact" \
+            --manifest "$manifest" \
+            --source-root "$GITHUB_WORKSPACE"
+
+      - name: Upload authenticated Linux ARM input
+        id: upload_primary
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: csharp-native-aarch64-unknown-linux-gnu
+          path: ${{ runner.temp }}/csharp-native-upload
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: true
+
+      - name: Retry authenticated Linux ARM input upload once
+        id: upload_retry
+        if: steps.upload_primary.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: csharp-native-aarch64-unknown-linux-gnu
+          path: ${{ runner.temp }}/csharp-native-upload
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: true
+
   native-release-artifact-linux-arm-retry-2:
     needs:
+      - native-release-artifact-linux-arm-cross
       - native-release-artifact-linux-arm
       - native-release-artifact-linux-arm-retry
     # Both earlier producers must have failed before authenticated upload.
     if: >-
       ${{
         !cancelled() &&
+        needs.native-release-artifact-linux-arm-cross.result == 'success' &&
         needs.native-release-artifact-linux-arm.outputs.artifact_id == '' &&
         needs.native-release-artifact-linux-arm-retry.outputs.artifact_id == ''
       }}
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 120
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -294,59 +422,69 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - name: Download immutable Linux ARM cross-build candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          cache: "false"
-          target: aarch64-unknown-linux-gnu
+          name: csharp-linux-arm-cross-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/csharp-linux-arm-cross-candidate
 
-      - name: Build native C# bridge on its matching Linux ARM release host
+      - name: Authenticate and stage exact ABI-23 C# Linux ARM bridge natively
         shell: bash
         run: |
-          target="aarch64-unknown-linux-gnu"
-          host_target="$(rustc -vV | sed -n 's/^host: //p')"
-          if [[ "$host_target" != "$target" ]]; then
-            echo "C# native runner host ${host_target} does not match required target ${target}" >&2
+          machine="$(uname -m)"
+          if [[ "$machine" != "aarch64" ]]; then
+            echo "C# Linux ARM candidate authentication requires AArch64, found ${machine}" >&2
             exit 1
           fi
-          if [[ -e target ]]; then
-            echo "C# native release build requires a fresh target directory" >&2
-            exit 1
-          fi
-          cargo build --locked --release -p connect_norito_bridge --target "$target"
-
-      - name: Authenticate and stage exact ABI-23 C# Linux ARM bridge
-        shell: bash
-        run: |
           target="aarch64-unknown-linux-gnu"
           library_name="libconnect_norito_bridge.so"
+          candidate_root="$RUNNER_TEMP/csharp-linux-arm-cross-candidate"
           artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi22.json"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi23.json"
           mkdir -p "$(dirname "$artifact")"
-          cp "target/$target/release/$library_name" "$artifact"
-          python scripts/check_native_sdk_abi22_artifact.py record \
+          python -I scripts/csharp_linux_arm_cross_handoff.py verify-stage \
+            --candidate-root "$candidate_root" \
+            --source-root "$GITHUB_WORKSPACE" \
+            --stage-artifact "$artifact"
+          python scripts/check_native_sdk_abi23_artifact.py record \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE" \
             --sdk csharp \
             --target "$target"
-          python scripts/check_native_sdk_abi22_artifact.py verify \
+          python scripts/check_native_sdk_abi23_artifact.py verify \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE"
 
       - name: Upload authenticated Linux ARM input
-        id: upload
+        id: upload_primary
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
+          overwrite: true
+
+      - name: Retry authenticated Linux ARM input upload once
+        id: upload_retry
+        if: steps.upload_primary.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: csharp-native-aarch64-unknown-linux-gnu
+          path: ${{ runner.temp }}/csharp-native-upload
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
           overwrite: true
 
   build-test-pack:
     needs:
       - native-release-artifacts
+      - native-release-artifact-linux-arm-cross
       - native-release-artifact-linux-arm
       - native-release-artifact-linux-arm-retry
       - native-release-artifact-linux-arm-retry-2
@@ -354,6 +492,7 @@ jobs:
       ${{
         !cancelled() &&
         needs.native-release-artifacts.result == 'success' &&
+        needs.native-release-artifact-linux-arm-cross.result == 'success' &&
         (needs.native-release-artifact-linux-arm.outputs.artifact_id != '' ||
          needs.native-release-artifact-linux-arm-retry.outputs.artifact_id != '' ||
          needs.native-release-artifact-linux-arm-retry-2.result == 'success')

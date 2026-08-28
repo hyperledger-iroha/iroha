@@ -2267,25 +2267,25 @@ impl IVMHost for CoreHost {
             access_log: self.access_log.clone(),
         }))
     }
-    fn restore(&mut self, snapshot: &dyn core::any::Any) -> bool {
-        if let Some(saved) = snapshot.downcast_ref::<CoreHostSnapshot>() {
-            let _ = self.state.restore(&saved.state);
-            self.axt_state = saved.axt_state.clone();
-            self.axt_policy = Arc::clone(&saved.axt_policy);
-            self.axt_policy_snapshot = saved.axt_policy_snapshot.clone();
-            self.axt_proof_cache = saved.axt_proof_cache.clone();
-            self.axt_proof_cache_slot = saved.axt_proof_cache_slot;
-            self.slot_length_ms = saved.slot_length_ms;
-            self.max_clock_skew_ms = saved.max_clock_skew_ms;
-            self.axt_active = saved.axt_active;
-            self.fastpq_batch_active = saved.fastpq_batch_active;
-            self.fastpq_batch_has_entries = saved.fastpq_batch_has_entries;
-            self.sm_enabled = saved.sm_enabled;
-            self.current_time_ms = saved.current_time_ms;
-            self.access_log = saved.access_log.clone();
-            return true;
-        }
-        false
+    fn restore(&mut self, snapshot: &dyn core::any::Any) -> Result<(), VMError> {
+        let saved = snapshot
+            .downcast_ref::<CoreHostSnapshot>()
+            .ok_or(VMError::HostUnavailable)?;
+        self.state.restore(&saved.state)?;
+        self.axt_state = saved.axt_state.clone();
+        self.axt_policy = Arc::clone(&saved.axt_policy);
+        self.axt_policy_snapshot = saved.axt_policy_snapshot.clone();
+        self.axt_proof_cache = saved.axt_proof_cache.clone();
+        self.axt_proof_cache_slot = saved.axt_proof_cache_slot;
+        self.slot_length_ms = saved.slot_length_ms;
+        self.max_clock_skew_ms = saved.max_clock_skew_ms;
+        self.axt_active = saved.axt_active;
+        self.fastpq_batch_active = saved.fastpq_batch_active;
+        self.fastpq_batch_has_entries = saved.fastpq_batch_has_entries;
+        self.sm_enabled = saved.sm_enabled;
+        self.current_time_ms = saved.current_time_ms;
+        self.access_log = saved.access_log.clone();
+        Ok(())
     }
     fn access_logging_supported(&self) -> bool {
         true

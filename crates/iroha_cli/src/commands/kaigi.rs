@@ -8,8 +8,8 @@ use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr};
 use iroha::data_model::{
     kaigi::{
-        KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1, KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
-        KAIGI_RELAY_MANIFEST_MIN_HOPS_V1,
+        KAIGI_MAX_PARTICIPANTS_V1, KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
+        KAIGI_RELAY_MANIFEST_MAX_HOPS_V1, KAIGI_RELAY_MANIFEST_MIN_HOPS_V1,
     },
     metadata::Metadata,
     prelude::{
@@ -20,6 +20,7 @@ use iroha::data_model::{
 };
 use iroha_crypto::Hash;
 use std::{
+    collections::BTreeSet,
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
@@ -82,7 +83,7 @@ pub struct CreateArgs {
     /// Optional description for participants.
     #[arg(long)]
     pub description: Option<String>,
-    /// Maximum concurrent participants (excluding host); zero is invalid.
+    /// Maximum concurrent participants excluding the host (1..=4096).
     #[arg(long, value_name = "U32")]
     pub max_participants: Option<u32>,
     /// Gas rate charged per minute (defaults to 0).
@@ -501,6 +502,7 @@ impl KaigiCommitmentBuilder {
         })
     }
 }
+#[derive(Debug)]
 struct ParsedKaigiPrivacyArtifacts {
     commitment: Option<KaigiParticipantCommitment>,
     nullifier: Option<KaigiParticipantNullifier>,
@@ -777,8 +779,12 @@ fn parse_call_id(domain: &str, call_name: &str) -> Result<KaigiId> {
     Ok(KaigiId::new(domain_id, call))
 }
 fn validate_max_participants(max_participants: Option<u32>) -> Result<()> {
-    if max_participants == Some(0) {
-        eyre::bail!("Kaigi max participants must be greater than zero when provided");
+    if max_participants
+        .is_some_and(|limit| !(1..=KAIGI_MAX_PARTICIPANTS_V1 as u32).contains(&limit))
+    {
+        eyre::bail!(
+            "Kaigi max participants must be between 1 and {KAIGI_MAX_PARTICIPANTS_V1} when provided"
+        );
     }
     Ok(())
 }
@@ -802,8 +808,15 @@ fn validate_relay_manifest_limits(manifest: &KaigiRelayManifest) -> Result<()> {
             "relay manifest must not include more than {KAIGI_RELAY_MANIFEST_MAX_HOPS_V1} hops"
         );
     }
+    let mut seen_relays = BTreeSet::new();
     for hop in &manifest.hops {
         validate_relay_hpke_public_key(&hop.hpke_public_key)?;
+        if hop.weight == 0 {
+            eyre::bail!("relay weights must be non-zero");
+        }
+        if !seen_relays.insert(hop.relay_id.clone()) {
+            eyre::bail!("relay manifest must not contain duplicate relays");
+        }
     }
     Ok(())
 }
@@ -874,6 +887,9 @@ fn validate_usage_privacy_artifacts(
 }
 fn parse_hash(hex: &str) -> Result<Hash> {
     let trimmed = hex.strip_prefix("0x").unwrap_or(hex);
+    if trimmed.starts_with("0x") {
+        eyre::bail!("hash literal accepts at most one `0x` prefix");
+    }
     Hash::from_str(trimmed).wrap_err("invalid hash literal")
 }
 fn decode_hex_vec(hex: &str) -> Result<Vec<u8>> {
@@ -1229,7 +1245,9 @@ mod tests {
     fn local_scalar_validation_rejects_requests_core_would_refuse() {
         assert!(validate_max_participants(None).is_ok());
         assert!(validate_max_participants(Some(1)).is_ok());
+        assert!(validate_max_participants(Some(KAIGI_MAX_PARTICIPANTS_V1 as u32)).is_ok());
         assert!(validate_max_participants(Some(0)).is_err());
+        assert!(validate_max_participants(Some(KAIGI_MAX_PARTICIPANTS_V1 as u32 + 1)).is_err());
         assert!(validate_usage_duration(1).is_ok());
         assert!(validate_usage_duration(0).is_err());
         assert!(validate_relay_hpke_public_key(&[1]).is_ok());
@@ -1279,6 +1297,14 @@ mod tests {
             expiry_ms: 1,
         };
         assert!(validate_relay_manifest_limits(&exact_minimum).is_ok());
+
+        let mut zero_weight = exact_minimum.clone();
+        zero_weight.hops[0].weight = 0;
+        assert!(validate_relay_manifest_limits(&zero_weight).is_err());
+
+        let mut duplicate_relay = exact_minimum.clone();
+        duplicate_relay.hops[1].relay_id = duplicate_relay.hops[0].relay_id.clone();
+        assert!(validate_relay_manifest_limits(&duplicate_relay).is_err());
 
         let too_few = KaigiRelayManifest {
             hops: (0..KAIGI_RELAY_MANIFEST_MIN_HOPS_V1 - 1)

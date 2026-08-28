@@ -400,6 +400,21 @@ impl BuildDriver {
         graph: &ModuleBuildGraph,
         request: LinkedSourceBuildRequest,
     ) -> Result<BuildOutcome, BuildError> {
+        let source_name = request.source_name.clone();
+        crate::session::run_with_compiler_stack(move || {
+            self.build_linked_source_inner(graph, request)
+        })
+        .map_err(|_| {
+            BuildError::Compile(crate::session::compiler_worker_unavailable_diagnostic(
+                Some(&source_name),
+            ))
+        })?
+    }
+    fn build_linked_source_inner(
+        &self,
+        graph: &ModuleBuildGraph,
+        request: LinkedSourceBuildRequest,
+    ) -> Result<BuildOutcome, BuildError> {
         let _chain_discriminant = self.session.enter_chain_discriminant();
         validate_profile(&request.profile)?;
         reject_layout_collisions(&request.layout, &request.source_name)?;
@@ -454,6 +469,20 @@ impl BuildDriver {
         graph: SourceLinkRequest,
         source_name: &str,
     ) -> Result<CompileOutput, BuildError> {
+        crate::session::run_with_compiler_stack(move || {
+            self.compile_project_inner(graph, source_name)
+        })
+        .map_err(|_| {
+            BuildError::Compile(crate::session::compiler_worker_unavailable_diagnostic(
+                Some(source_name),
+            ))
+        })?
+    }
+    fn compile_project_inner(
+        &self,
+        graph: SourceLinkRequest,
+        source_name: &str,
+    ) -> Result<CompileOutput, BuildError> {
         let _chain_discriminant = self.session.enter_chain_discriminant();
         let linked = self
             .graph
@@ -465,6 +494,19 @@ impl BuildDriver {
     }
     /// Validate one reusable package through this driver's shared graph.
     pub fn validate_package_project(
+        &self,
+        request: SourcePackageGraphRequest,
+    ) -> Result<ValidatedSourcePackageGraph, BuildError> {
+        crate::session::run_with_compiler_stack(move || {
+            self.validate_package_project_inner(request)
+        })
+        .map_err(|_| {
+            BuildError::Compile(crate::session::compiler_worker_unavailable_diagnostic(
+                Some("<project>"),
+            ))
+        })?
+    }
+    fn validate_package_project_inner(
         &self,
         request: SourcePackageGraphRequest,
     ) -> Result<ValidatedSourcePackageGraph, BuildError> {
@@ -480,6 +522,18 @@ impl BuildDriver {
     /// complete V1 linking authority. Lints are returned for the root and every explicitly locked
     /// module with their original logical source names.
     pub fn check_project(
+        &self,
+        graph: SourceLinkRequest,
+    ) -> Result<Vec<ProjectLintWarning>, BuildError> {
+        crate::session::run_with_compiler_stack(move || self.check_project_inner(graph)).map_err(
+            |_| {
+                BuildError::Compile(crate::session::compiler_worker_unavailable_diagnostic(
+                    Some("<project>"),
+                ))
+            },
+        )?
+    }
+    fn check_project_inner(
         &self,
         graph: SourceLinkRequest,
     ) -> Result<Vec<ProjectLintWarning>, BuildError> {
@@ -533,6 +587,17 @@ impl BuildDriver {
     /// independently. Mixing a root and modules requires an explicit project manifest because
     /// positional order is never linking authority in strict V1.
     pub fn check_explicit_sources(
+        &self,
+        sources: Vec<SourceModuleUnit>,
+    ) -> Result<Vec<ProjectLintWarning>, BuildError> {
+        crate::session::run_with_compiler_stack(move || self.check_explicit_sources_inner(sources))
+            .map_err(|_| {
+                BuildError::Compile(crate::session::compiler_worker_unavailable_diagnostic(
+                    Some("<project>"),
+                ))
+            })?
+    }
+    fn check_explicit_sources_inner(
         &self,
         mut sources: Vec<SourceModuleUnit>,
     ) -> Result<Vec<ProjectLintWarning>, BuildError> {
@@ -645,14 +710,15 @@ impl BuildDriver {
         reject_output_collisions(&requests)?;
         let jobs = std::thread::available_parallelism()
             .map_or(1, std::num::NonZeroUsize::get)
-            .max(1);
+            .clamp(1, crate::session::MAX_COMPILER_WORKERS);
         let mut outcomes = Vec::with_capacity(requests.len());
         for chunk in requests.chunks(jobs) {
             let results = std::thread::scope(|scope| {
-                let handles = chunk
-                    .iter()
-                    .map(|request| {
-                        scope.spawn(move || {
+                let mut handles = Vec::with_capacity(chunk.len());
+                for request in chunk {
+                    let handle = std::thread::Builder::new()
+                        .name("kotodama-source-build".to_owned())
+                        .spawn_scoped(scope, move || {
                             self.build_source_fields(
                                 &request.source,
                                 &request.source_name,
@@ -661,8 +727,13 @@ impl BuildDriver {
                                 request.mode,
                             )
                         })
-                    })
-                    .collect::<Vec<_>>();
+                        .map_err(|error| {
+                            BuildError::Internal(format!(
+                                "could not spawn Kotodama build worker: {error}"
+                            ))
+                        })?;
+                    handles.push(handle);
+                }
                 handles
                     .into_iter()
                     .map(|handle| {
@@ -684,14 +755,22 @@ impl BuildDriver {
         reject_linked_output_collisions(&requests)?;
         let jobs = std::thread::available_parallelism()
             .map_or(1, std::num::NonZeroUsize::get)
-            .max(1);
+            .clamp(1, crate::session::MAX_COMPILER_WORKERS);
         let mut outcomes = Vec::with_capacity(requests.len());
         for chunk in requests.chunks(jobs) {
             let results = std::thread::scope(|scope| {
-                let handles = chunk
-                    .iter()
-                    .map(|request| scope.spawn(move || self.build_project(request.clone())))
-                    .collect::<Vec<_>>();
+                let mut handles = Vec::with_capacity(chunk.len());
+                for request in chunk {
+                    let handle = std::thread::Builder::new()
+                        .name("kotodama-project-build".to_owned())
+                        .spawn_scoped(scope, move || self.build_project(request.clone()))
+                        .map_err(|error| {
+                            BuildError::Internal(format!(
+                                "could not spawn Kotodama project build worker: {error}"
+                            ))
+                        })?;
+                    handles.push(handle);
+                }
                 handles
                     .into_iter()
                     .map(|handle| {
@@ -1905,6 +1984,20 @@ mod tests {
             mode: PublishMode::Write,
         }
     }
+    fn boundary_source_graph() -> SourceLinkRequest {
+        let depth = crate::source::MAX_NESTING_DEPTH - 2;
+        let expression = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
+        SourceLinkRequest {
+            root: SourceModuleUnit {
+                source_name: "contracts/stack-margin.ko".to_owned(),
+                source: format!(
+                    "seiyaku StackMargin {{ hajimari() {{ let value = {expression}; }} }}"
+                ),
+            },
+            imports: Vec::new(),
+            packages: Vec::new(),
+        }
+    }
     #[test]
     fn bounded_source_reader_preserves_typed_budget_and_utf8_failures() {
         let root = temp_root("source-errors");
@@ -2191,6 +2284,61 @@ mod tests {
                 .and_then(|span| span.source.as_deref()),
             Some("contracts/app.ko")
         );
+    }
+    #[test]
+    fn graph_link_and_codegen_handoff_from_a_small_caller() {
+        let graph = boundary_source_graph();
+        std::thread::Builder::new()
+            .name("kotodama-small-graph-caller".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                let linked = ModuleBuildGraph::default()
+                    .link(graph.clone(), crate::linker::LinkerOptions::default())
+                    .expect("boundary-depth source graph must link on the compiler worker");
+                assert_eq!(linked.program.unit.name, "StackMargin");
+                drop(linked);
+
+                let output = BuildDriver::new(CompilerSession::default(), "stack-margin-test")
+                    .compile_project(graph, "contracts/stack-margin.ko")
+                    .expect("boundary-depth graph codegen must stay on the compiler worker");
+                assert!(!output.artifact.is_empty());
+            })
+            .expect("spawn small graph caller")
+            .join()
+            .expect("graph linking and codegen must not consume the caller stack");
+    }
+    #[test]
+    fn concurrent_boundary_graphs_do_not_deadlock_worker_gates() {
+        const CALLERS: usize = 4;
+        let graph = Arc::new(ModuleBuildGraph::default());
+        let request = Arc::new(boundary_source_graph());
+        let barrier = Arc::new(std::sync::Barrier::new(CALLERS));
+        std::thread::scope(|scope| {
+            let handles = (0..CALLERS)
+                .map(|caller| {
+                    let graph = Arc::clone(&graph);
+                    let request = Arc::clone(&request);
+                    let barrier = Arc::clone(&barrier);
+                    std::thread::Builder::new()
+                        .name(format!("kotodama-graph-gate-caller-{caller}"))
+                        .stack_size(128 * 1024)
+                        .spawn_scoped(scope, move || {
+                            barrier.wait();
+                            let linked = graph
+                                .link(
+                                    request.as_ref().clone(),
+                                    crate::linker::LinkerOptions::default(),
+                                )
+                                .expect("parallel boundary source graph");
+                            assert_eq!(linked.program.unit.name, "StackMargin");
+                        })
+                        .expect("spawn graph gate caller")
+                })
+                .collect::<Vec<_>>();
+            for handle in handles {
+                handle.join().expect("graph gate caller must not panic");
+            }
+        });
     }
     #[test]
     fn lsp_open_sources_reject_multiple_seiyaku_roots_with_cross_file_spans() {

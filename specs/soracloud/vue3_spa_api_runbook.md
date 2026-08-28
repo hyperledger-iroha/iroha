@@ -358,8 +358,9 @@ Single-api app:
 cd .soracloud-docs-portal
 export IROHA_BIN=/absolute/path/to/same-revision/iroha
 export IROHA_BIN_SHA256="$(sha256sum "$IROHA_BIN" | awk '{print $1}')"
+export SORAFS_RETENTION_EPOCH=2000000000
 TORII_URL=http://127.0.0.1:8080 ./release.sh
-"$IROHA_BIN" soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+"$IROHA_BIN" soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --sorafs-retention-epoch "$SORAFS_RETENTION_EPOCH" --dry-run
 ```
 
 Split app: its Inrou member requires an explicitly enabled validator with a
@@ -438,9 +439,13 @@ path again:
 cd .soracloud-docs-portal
 export IROHA_BIN=/absolute/path/to/same-revision/iroha
 export IROHA_BIN_SHA256="$(sha256sum "$IROHA_BIN" | awk '{print $1}')"
+export SORAFS_RETENTION_EPOCH=2000000000
 TORII_URL=http://127.0.0.1:8080 ./release.sh
-"$IROHA_BIN" soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+"$IROHA_BIN" soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --sorafs-retention-epoch "$SORAFS_RETENTION_EPOCH" --dry-run
 ```
+
+Reuse the same future absolute Unix-second retention epoch for every retry of
+one release; changing it intentionally creates different SoraFS manifests.
 
 The generated `release.sh` invokes the only first-release app mutation command.
 It performs the mandatory build, validation, publication, submission,

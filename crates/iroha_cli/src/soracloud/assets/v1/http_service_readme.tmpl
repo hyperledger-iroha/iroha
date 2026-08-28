@@ -113,9 +113,9 @@ shared application state.
 ## Deploy
 
 ```bash
-TORII_URL=http://127.0.0.1:8080 ./release.sh
-TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --bundle-file ./http-service/build/http-service.tgz --torii-url http://127.0.0.1:8080
+SORAFS_RETENTION_EPOCH=2000000000 TORII_URL=http://127.0.0.1:8080 ./release.sh
+SORAFS_RETENTION_EPOCH=2000000000 TORII_URL=http://127.0.0.1:8080 ./deploy.sh
+iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --bundle-file ./http-service/build/http-service.tgz --sorafs-retention-epoch 2000000000 --torii-url http://127.0.0.1:8080
 ```
 
 `release.sh` runs `doctor.sh` first and then submits the deploy mutation using
@@ -128,9 +128,12 @@ returning the live mutation response.
 ## Upgrade
 
 ```bash
-TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --bundle-file ./http-service/build/http-service.tgz --torii-url http://127.0.0.1:8080
+SORAFS_RETENTION_EPOCH=2000000000 TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
+iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --bundle-file ./http-service/build/http-service.tgz --sorafs-retention-epoch 2000000000 --torii-url http://127.0.0.1:8080
 ```
+
+Choose one future Unix-second SoraFS retention boundary and reuse it unchanged
+when retrying the same deploy or upgrade; it is part of every manifest digest.
 
 ## Status
 

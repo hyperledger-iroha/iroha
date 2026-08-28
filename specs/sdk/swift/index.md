@@ -250,8 +250,8 @@ plus `POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
 `GET /v1/offline/operations/{operation_id}` for separate online consensus
 lifecycles. Use `getOfflineCapability()`, `submitKagemushaTopUp(_:)`,
 `submitKagemushaRedeem(_:)`, and
-`getKagemushaOperationStatus(operationId:)`. Capability discovery takes no
-selector.
+`getKagemushaOperationStatus(operationId:chainDiscriminant:)`.
+Capability discovery takes no selector.
 
 Capability discovery is not per-asset or per-dataspace backend readiness. The
 SDK accepts only the exact four-field ABI-21 `cash_handoff_v1` contract with

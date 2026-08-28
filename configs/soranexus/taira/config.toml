@@ -45,6 +45,11 @@ deferred_send_max_bytes_per_peer = 268435456
 deferred_send_max_bytes_total = 134217728
 disconnect_on_post_overflow = false
 
+[network.soranet_vpn]
+# The disabled profile is still parsed. Bind its default operator identity to
+# this network explicitly so strict V1 account decoding never accepts a foreign prefix.
+operator_account_id = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+
 [nts]
 sample_interval_ms = 5_000
 sample_cap_per_round = 8
@@ -120,6 +125,7 @@ allowed_headers = [
   "x-iroha-signature",
   "x-iroha-timestamp-ms",
   "x-iroha-nonce",
+  "x-iroha-witness",
 ]
 exposed_headers = ["etag", "location", "retry-after"]
 
@@ -130,7 +136,6 @@ expose_operator_routes = false
 allow_tool_prefixes = ["iroha."]
 
 [torii.kagemusha_commands]
-enabled = true
 private_key_file = "/run/secrets/iroha/taira-kagemusha-commands-private-key"
 minimum_xor_balance = "1"
 max_tx_value = "1000000000"
@@ -237,6 +242,10 @@ retention_grace_secs = 86400
 
 [soracloud_runtime]
 production_mode = true
+# Artifact hydration workers and retained idle IVMs are independent resource pools.
+# Neither value controls the number of concurrently hosted Inrou guests.
+hydration_concurrency = 4
+prepared_runtime_cache_capacity = 4
 
 [soracloud_runtime.submission]
 fee_payer = "sponsor"
@@ -386,11 +395,9 @@ local_budget_bytes = 68719476736
 [nexus.storage.disk_budget_weights]
 # The fixed launcher requires this exact V1 split. Embedded SoraFS provider
 # storage remains disabled even though aggregate accounting reserves its share.
-kura_blocks_bps = 5500
+kura_blocks_bps = 6000
 wsv_snapshots_bps = 2000
 sorafs_bps = 2000
-soranet_spool_bps = 250
-soravpn_spool_bps = 250
 
 [nexus.registry]
 # Public Taira governance lanes require a manifest with explicit validator
@@ -732,6 +739,7 @@ bond_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjW
 slash_receiver_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
 viral_incentive_pool_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
 viral_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+sorafs_pin_fee_treasury_account = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 parliament_committee_size = 21
 parliament_term_blocks = 43200
 parliament_min_stake = "1"

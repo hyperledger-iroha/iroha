@@ -11,8 +11,12 @@ test_build_source_seal() {
     "$root/crates/unrelated/src" "$cargo_target" "$bridge_build" "$bridge_output"
   cp "$SCRIPT_DIR/build_norito_xcframework.sh" \
     "$root/scripts/build_norito_xcframework.sh"
+  cp "$SCRIPT_DIR/check_mobile_sdk_artifact_pin_commit.py" \
+    "$root/scripts/check_mobile_sdk_artifact_pin_commit.py"
   cp "$SCRIPT_DIR/exec_with_file_lock.py" \
     "$root/scripts/exec_with_file_lock.py"
+  cp "$SCRIPT_DIR/norito_bridge_apple_slice_handoff.py" \
+    "$root/scripts/norito_bridge_apple_slice_handoff.py"
   cp "$SCRIPT_DIR/norito_bridge_source_seal.py" \
     "$root/scripts/norito_bridge_source_seal.py"
   cp "$SCRIPT_DIR/run_mobile_hermetic_command.py" \

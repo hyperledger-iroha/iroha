@@ -23,6 +23,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import sccp_release_bundle as builder  # noqa: E402
 import sccp_release_common as common  # noqa: E402
+import sccp_phase_log_runner as phase_log_runner  # noqa: E402
 import sccp_verify_release_bundle as verifier  # noqa: E402
 
 
@@ -66,6 +67,42 @@ def test_release_evidence_requires_every_production_corridor_phase() -> None:
     )
     assert tuple(line.strip() for line in listed.stdout.splitlines()[1:]) == CORRIDOR_PHASES
     assert common.REQUIRED_PHASES == CORRIDOR_PHASES
+
+
+def test_production_profile_inventory_requires_ton_mainnet_on_bls12381() -> None:
+    assert common.PROFILE_ORDER == (
+        "ethereum-mainnet",
+        "bsc-mainnet",
+        "tron-mainnet",
+        "ton-mainnet",
+    )
+    assert common.PROOF_CURVE_BY_PROFILE == {
+        "ethereum-mainnet": "bn254",
+        "bsc-mainnet": "bn254",
+        "tron-mainnet": "bn254",
+        "ton-mainnet": "bls12-381",
+    }
+    assert common.PROFILE_DOMAINS["ton-mainnet"] == 4
+    assert "ton-testnet" not in common.PROFILE_ORDER
+
+
+def test_legacy_three_lane_evidence_cannot_report_global_readiness() -> None:
+    evidence = {
+        "release_id": "legacy-three-lane-evidence",
+        "lanes": [
+            {
+                "counterparty_profile": profile,
+                "inbound_status": "verified",
+                "outbound_status": "verified",
+            }
+            for profile in common.PROFILE_ORDER[:-1]
+        ],
+    }
+    summary = common.readiness_summary(evidence, bundle_root_hash=None)
+    assert summary["ready"] is False
+    assert summary["lanes"][-1]["counterparty_profile"] == "ton-mainnet"
+    assert summary["lanes"][-1]["inbound_status"] == "missing"
+    assert "ton-mainnet:missing:requires:present" in summary["blocking_capabilities"]
 
 
 def validator_path() -> Path:
@@ -202,9 +239,14 @@ def unit_v4_policy() -> tuple[
         )
         proof_systems: list[dict[str, object]] = []
         for index, profile in enumerate(common.PROFILE_ORDER):
+            proof_curve = common.PROOF_CURVE_BY_PROFILE[profile]
             circuit_artifact = bytes.fromhex(_unit_v4_hash(profile, "circuit-artifact"))
             witness_generator = bytes.fromhex(_unit_v4_hash(profile, "witness-generator"))
-            public_signal_schema = bytes.fromhex(common.PUBLIC_SIGNAL_SCHEMA_HASH_HEX)
+            public_signal_schema = bytes.fromhex(
+                common.BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH_HEX
+                if proof_curve == "bls12-381"
+                else common.PUBLIC_SIGNAL_SCHEMA_HASH_HEX
+            )
             anchor: dict[str, object] = {
                 "version": 1,
                 "source_profile": "sora-taira",
@@ -220,6 +262,7 @@ def unit_v4_policy() -> tuple[
             proof: dict[str, object] = {
                 "counterparty_profile": profile,
                 "circuit_id": common.RELEASE_CIRCUIT_IDS[index],
+                "proof_curve": proof_curve,
                 "semantics": list(common.REQUIRED_SEMANTICS),
                 "circuit_artifact_sha256_hex": circuit_artifact.hex(),
                 "witness_generator_sha256_hex": witness_generator.hex(),
@@ -228,6 +271,7 @@ def unit_v4_policy() -> tuple[
                     circuit_artifact,
                     witness_generator,
                     public_signal_schema,
+                    proof_curve,
                 ).hex(),
                 "sora_finality_anchor": anchor,
                 "sora_finality_anchor_hash_hex": common.sora_finality_anchor_hash(
@@ -782,7 +826,7 @@ def test_production_clis_cannot_accept_fixture_policy(script: Path, tmp_path: Pa
             counterparty_profile="solana-mainnet-beta"
         ),
         lambda value: value["destination_attestors"][0].update(
-            counterparty_profile="ton-mainnet"
+            counterparty_profile="ton-testnet"
         ),
         lambda value: value["roles"][1].update(
             public_key_hex=value["roles"][0]["public_key_hex"]
@@ -800,6 +844,7 @@ def test_production_clis_cannot_accept_fixture_policy(script: Path, tmp_path: Pa
             semantics=["pairing-valid-v1", "sccp-exact-statement-v1"]
         ),
         lambda value: value["proof_systems"][0].update(circuit_id="smoke-circuit-v1"),
+        lambda value: value["proof_systems"][0].update(proof_curve="bls12-381"),
         lambda value: value["proof_systems"][0].update(
             circuit_id="sccp-sora-taira-generic-groth16-bn254-v1"
         ),
@@ -980,16 +1025,15 @@ def test_production_loader_rejects_test_policy_without_override() -> None:
 
 
 def test_production_loader_rejects_relabelled_public_fixture_keys(tmp_path: Path) -> None:
-    policy = json.loads(FIXTURE_POLICY.read_text(encoding="utf-8"))
+    published_fixture = json.loads(FIXTURE_POLICY.read_text(encoding="utf-8"))
+    policy, _, _ = unit_v4_policy()
     policy["schema"] = common.TRUST_POLICY_SCHEMA
     policy["environment"] = "production"
     policy["policy_id"] = "forged-production-policy-v1"
-    for index, role in enumerate(policy["roles"]):
-        role["signer_id"] = f"forged-release-role-{index}"
-    for index, attestor in enumerate(policy["destination_attestors"]):
-        attestor["attestor_id"] = f"forged-attestor-{index}"
-    for index, auditor in enumerate(policy["circuit_auditors"]):
-        auditor["auditor_id"] = f"forged-auditor-{index}"
+    policy["roles"][0]["signer_id"] = "forged-release-role"
+    policy["roles"][0]["public_key_hex"] = published_fixture["roles"][0][
+        "public_key_hex"
+    ]
     path = tmp_path / "forged-production-policy.json"
     write_json(path, policy)
     with pytest.raises(common.SccpReleaseError, match="fixture-only"):
@@ -1540,6 +1584,222 @@ def test_secret_scanner_rejects_deep_encoding_and_colon_credentials() -> None:
         common.reject_secret_material(b"password: hunter2", label="colon artifact")
 
 
+@pytest.mark.parametrize(
+    "payload",
+    (
+        b'{"pa\\u0073sword":"hidden"}',
+        "pass\u200bword=hidden".encode(),
+        "ｐａｓｓｗｏｒｄ＝hidden".encode(),
+        base64.b64encode(b"client_secret=hidden").rstrip(b"="),
+        base64.urlsafe_b64encode("\u083eclient_secret=hidden".encode()),
+        base64.urlsafe_b64encode("\u083eclient_secret=hidden".encode()).rstrip(b"="),
+        b"707269766174655f6b65793d68696464656e",
+        b"-----BEGIN OPENSSH PRIVATE KEY-----",
+        b"Authorization: Basic YWxpY2U6aGlkZGVu",
+        b"AKIAABCDEFGHIJKLMNOP",
+    ),
+)
+def test_secret_scanner_rejects_recursive_and_concrete_secret_shapes(
+    payload: bytes,
+) -> None:
+    with pytest.raises(common.SccpReleaseError, match="credential material"):
+        common.reject_secret_material(payload, label="adversarial artifact")
+
+
+def test_secret_scanner_decodes_jwt_segments_and_nested_json() -> None:
+    header = base64.urlsafe_b64encode(b'{"alg":"EdDSA"}').rstrip(b"=")
+    payload = base64.urlsafe_b64encode(b'{"client_secret":"hidden"}').rstrip(b"=")
+    token = b".".join((header, payload, b"c2lnbmF0dXJl"))
+    with pytest.raises(common.SccpReleaseError, match="credential material"):
+        common.reject_secret_material(token, label="JWT artifact")
+
+
+def test_secret_scanner_allows_public_hashes_keys_signatures_and_safe_jwt() -> None:
+    header = base64.urlsafe_b64encode(b'{"alg":"EdDSA"}').rstrip(b"=")
+    payload = base64.urlsafe_b64encode(b'{"sub":"public-release"}').rstrip(b"=")
+    public_material = common.canonical_json_bytes(
+        {
+            "sha256_hex": "ab" * 32,
+            "public_key_hex": "cd" * 32,
+            "signature_b64": base64.b64encode(bytes(range(64))).decode(),
+            "signed_claim": b".".join((header, payload, b"c2lnbmF0dXJl")).decode(),
+        }
+    )
+    common.reject_secret_material(public_material, label="public cryptographic material")
+
+
+def test_secret_scanner_errors_never_echo_untrusted_labels_or_values() -> None:
+    hidden = "scanner-label-hidden-value"
+    with pytest.raises(common.SccpReleaseError) as failure:
+        common.reject_secret_material(
+            b"client_secret=scanner-content-hidden-value",
+            label=f"token={hidden}",
+        )
+    message = str(failure.value)
+    assert hidden not in message
+    assert "scanner-content-hidden-value" not in message
+
+
+def _phase_log_command(log_dir: Path, *command: str) -> list[str]:
+    return [
+        sys.executable,
+        str(SCRIPTS / "sccp_phase_log_runner.py"),
+        "--log-dir",
+        str(log_dir),
+        "--phase",
+        "python-sdk",
+        "--",
+        *command,
+    ]
+
+
+def test_phase_log_runner_publishes_private_hashed_manifest_and_exit_status(
+    tmp_path: Path,
+) -> None:
+    log_dir = tmp_path / "corridor-logs"
+    result = subprocess.run(
+        _phase_log_command(
+            log_dir,
+            sys.executable,
+            "-c",
+            "import os,sys;os.write(1,b'out\\n');os.write(2,b'err\\n');sys.exit(7)",
+        ),
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 7
+    assert result.stdout == b"out\nerr\n"
+    assert result.stderr == b""
+
+    log_path = log_dir / "python-sdk.log"
+    manifest_path = log_dir / "python-sdk.manifest.json"
+    log_bytes = log_path.read_bytes()
+    manifest = json.loads(manifest_path.read_bytes())
+    assert log_bytes == result.stdout
+    assert manifest == {
+        "schema": phase_log_runner.MANIFEST_SCHEMA,
+        "phase": "python-sdk",
+        "log_file": "python-sdk.log",
+        "log_sha256_hex": hashlib.sha256(log_bytes).hexdigest(),
+        "size_bytes": len(log_bytes),
+        "maximum_size_bytes": phase_log_runner._PHASE_LOG_LIMITS["python-sdk"],
+        "command_sha256_hex": phase_log_runner._command_hash(
+            (
+                sys.executable,
+                "-c",
+                "import os,sys;os.write(1,b'out\\n');os.write(2,b'err\\n');sys.exit(7)",
+            )
+        ),
+        "exit_status": 7,
+        "terminating_signal": None,
+    }
+    assert stat.S_IMODE(log_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(manifest_path.stat().st_mode) == 0o600
+
+
+def test_phase_log_runner_never_overwrites_existing_publication(tmp_path: Path) -> None:
+    log_dir = tmp_path / "corridor-logs"
+    first = subprocess.run(
+        _phase_log_command(log_dir, sys.executable, "-c", "print('first')"),
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert first.returncode == 0
+    before_log = (log_dir / "python-sdk.log").read_bytes()
+    before_manifest = (log_dir / "python-sdk.manifest.json").read_bytes()
+    second = subprocess.run(
+        _phase_log_command(log_dir, sys.executable, "-c", "print('second')"),
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert second.returncode == phase_log_runner.RUNNER_FAILURE_STATUS
+    assert second.stdout == b""
+    assert (log_dir / "python-sdk.log").read_bytes() == before_log
+    assert (log_dir / "python-sdk.manifest.json").read_bytes() == before_manifest
+
+
+def test_phase_log_runner_rejects_secret_output_without_echo_or_publication(
+    tmp_path: Path,
+) -> None:
+    log_dir = tmp_path / "corridor-logs"
+    hidden = "phase-runner-hidden-value"
+    result = subprocess.run(
+        _phase_log_command(
+            log_dir,
+            sys.executable,
+            "-c",
+            f"print('client_secret={hidden}')",
+        ),
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == phase_log_runner.RUNNER_FAILURE_STATUS
+    assert result.stdout == b""
+    assert hidden.encode() not in result.stderr
+    assert not (log_dir / "python-sdk.log").exists()
+    assert not (log_dir / "python-sdk.manifest.json").exists()
+
+
+def test_phase_log_runner_rejects_links_and_nonprivate_directories(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    linked = tmp_path / "linked-logs"
+    linked.symlink_to(outside, target_is_directory=True)
+    linked_result = subprocess.run(
+        _phase_log_command(linked, sys.executable, "-c", "print('safe')"),
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert linked_result.returncode == phase_log_runner.RUNNER_FAILURE_STATUS
+    assert not tuple(outside.iterdir())
+
+    nonprivate = tmp_path / "nonprivate-logs"
+    nonprivate.mkdir(mode=0o755)
+    nonprivate.chmod(0o755)
+    mode_result = subprocess.run(
+        _phase_log_command(nonprivate, sys.executable, "-c", "print('safe')"),
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert mode_result.returncode == phase_log_runner.RUNNER_FAILURE_STATUS
+    assert not tuple(nonprivate.iterdir())
+
+
+def test_phase_log_runner_removes_overflowed_partial_log(tmp_path: Path) -> None:
+    log_dir = tmp_path / "corridor-logs"
+    with pytest.raises(phase_log_runner.PhaseLogError, match="byte limit"):
+        phase_log_runner.run_phase(
+            str(log_dir),
+            "python-sdk",
+            (sys.executable, "-c", "print('x' * 64)"),
+            maximum_bytes=8,
+        )
+    assert not (log_dir / "python-sdk.log").exists()
+    assert not (log_dir / "python-sdk.manifest.json").exists()
+
+
+def test_corridor_log_mode_uses_descriptor_relative_runner_not_shell_tee() -> None:
+    source = (SCRIPTS / "check_sccp_production_corridor.sh").read_text()
+    log_function = source.split("run_with_log_dir()", 1)[1].split("\n}\n", 1)[0]
+    assert "sccp_phase_log_runner.py" in log_function
+    assert "tee " not in log_function
+
+
 def test_public_error_is_bounded_and_redacts_userinfo_and_secret_markers() -> None:
     error = ValueError(
         "https://alice:password@example.test private_key=\n\x1b[31m\u202eforged"
@@ -1689,6 +1949,16 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
     assert profile_hash.hex() == (
         "ce5a1e17aca3cafe47a403fd66479f0a36339eb56092dafa67c8d97bdeeb60ef"
     )
+    ton_profile_hash = common.semantic_proof_profile_hash(
+        bytes([0x71]) * 32,
+        bytes([0x72]) * 32,
+        bytes.fromhex(common.BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH_HEX),
+        "bls12-381",
+    )
+    assert ton_profile_hash.hex() == (
+        "311a6f92ff2bd8e50c5ba7d457bbf66122fc451f92275ba99a2d71835a568cfb"
+    )
+    assert ton_profile_hash != profile_hash
     anchor_hash = common.sora_finality_anchor_hash(
         {
             "version": 1,
@@ -1921,6 +2191,16 @@ def test_semantic_profile_hash_rejects_malformed_and_aliased_roles(
         common.semantic_proof_profile_hash(*commitments)
 
 
+def test_semantic_profile_hash_rejects_an_open_ended_curve_label() -> None:
+    with pytest.raises(common.SccpReleaseError, match="curve"):
+        common.semantic_proof_profile_hash(
+            bytes([1]) * 32,
+            bytes([2]) * 32,
+            bytes([3]) * 32,
+            "caller-selected-curve",
+        )
+
+
 def _semantic_hash(label: str) -> str:
     return hashlib.sha256(label.encode("ascii")).hexdigest()
 
@@ -1947,6 +2227,12 @@ def synthetic_production_semantic_inventory() -> tuple[
     contents: dict[str, bytes] = {}
     artifact_by_path: dict[str, dict[str, object]] = {}
     for profile_index, profile in enumerate(common.PROFILE_ORDER):
+        proof_curve = common.PROOF_CURVE_BY_PROFILE[profile]
+        public_signal_schema_hash = (
+            common.BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH_HEX
+            if proof_curve == "bls12-381"
+            else common.PUBLIC_SIGNAL_SCHEMA_HASH_HEX
+        )
         artifact_rows: list[dict[str, object]] = []
         role_digests: dict[str, str] = {}
         for role, kind, filename in common.SEMANTIC_ARTIFACT_ROLES:
@@ -1973,7 +2259,8 @@ def synthetic_production_semantic_inventory() -> tuple[
         semantic_profile_hash = common.semantic_proof_profile_hash(
             bytes.fromhex(role_digests["circuit-artifact"]),
             bytes.fromhex(role_digests["witness-generator"]),
-            bytes.fromhex(common.PUBLIC_SIGNAL_SCHEMA_HASH_HEX),
+            bytes.fromhex(public_signal_schema_hash),
+            proof_curve,
         ).hex()
         anchor = {
             "version": 1,
@@ -1994,11 +2281,12 @@ def synthetic_production_semantic_inventory() -> tuple[
         anchor_hash = common.sora_finality_anchor_hash(anchor).hex()
         proof_system: dict[str, object] = {
             "counterparty_profile": profile,
-            "circuit_id": f"sccp-sora-taira-to-{profile}-groth16-bn254-v1",
+            "circuit_id": common.RELEASE_CIRCUIT_IDS[profile_index],
+            "proof_curve": proof_curve,
             "semantics": list(common.REQUIRED_SEMANTICS),
             "circuit_artifact_sha256_hex": role_digests["circuit-artifact"],
             "witness_generator_sha256_hex": role_digests["witness-generator"],
-            "public_signal_schema_hash_hex": common.PUBLIC_SIGNAL_SCHEMA_HASH_HEX,
+            "public_signal_schema_hash_hex": public_signal_schema_hash,
             "semantic_proof_profile_hash_hex": semantic_profile_hash,
             "sora_finality_anchor": anchor,
             "sora_finality_anchor_hash_hex": anchor_hash,
@@ -2013,6 +2301,7 @@ def synthetic_production_semantic_inventory() -> tuple[
             "source_profile": "sora-taira",
             "target_profile": profile,
             "target_domain": common.PROFILE_DOMAINS[profile],
+            "proof_curve": proof_curve,
             "route_revision": profile_index + 1,
             "message_id_hex": _semantic_hash(f"{profile}:message"),
             "payload_hash_hex": _semantic_hash(f"{profile}:payload"),
@@ -2038,6 +2327,7 @@ def synthetic_production_semantic_inventory() -> tuple[
                 "auditor_id": auditors[auditor_index]["auditor_id"],
                 "counterparty_profile": profile,
                 "circuit_id": proof_system["circuit_id"],
+                "proof_curve": proof_curve,
                 "semantics": list(common.REQUIRED_SEMANTICS),
                 "artifacts": artifact_rows,
                 "honest_proof_claim": claim,
@@ -2060,7 +2350,7 @@ def synthetic_production_semantic_inventory() -> tuple[
     return policy, evidence, contents
 
 
-def test_production_semantic_inventory_closes_two_audits_and_three_honest_proofs() -> None:
+def test_production_semantic_inventory_closes_two_audits_and_four_honest_proofs() -> None:
     policy, evidence, contents = synthetic_production_semantic_inventory()
     records = common.verify_production_semantic_artifacts(evidence, contents, policy)
     assert tuple(record[0] for record in records) == common.PROFILE_ORDER
@@ -2178,6 +2468,7 @@ def _mock_semantic_receipt(
         "evidence_sha256_hex": hashlib.sha256(evidence_bytes).hexdigest(),
         "proof_artifact_path": proof_path,
         "proof_artifact_sha256_hex": metadata["sha256_hex"],
+        "proof_curve": common.PROOF_CURVE_BY_PROFILE[profile],
         "canonical_norito_verified": True,
         "pairing_verified": True,
         "claim": claim,
@@ -2233,6 +2524,7 @@ def test_authenticated_rust_semantic_receipts_must_equal_both_auditors_claims(
     (
         lambda receipt: receipt.update(pairing_verified=False),
         lambda receipt: receipt.update(canonical_norito_verified=1),
+        lambda receipt: receipt.update(proof_curve="bn254" if receipt["proof_curve"] == "bls12-381" else "bls12-381"),
         lambda receipt: receipt["claim"]["public_signal_words_hex"].__setitem__(
             0, "ff" * 32
         ),

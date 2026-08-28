@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Norito;
+using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Torii;
 
@@ -20,6 +21,7 @@ internal static class ToriiMultisigJson
             response.TransactionHashHex,
             response.ExecutedTransactionHashHex,
             response.CreationTimeMilliseconds,
+            response.FeePayment,
             response.TransactionPayloadBase64,
             response.SigningMessageBase64,
             context);
@@ -40,12 +42,16 @@ internal static class ToriiMultisigJson
             response.TransactionHashHex,
             response.ExecutedTransactionHashHex,
             response.CreationTimeMilliseconds,
+            response.FeePayment,
             response.TransactionPayloadBase64,
             response.SigningMessageBase64,
             context);
     }
 
-    internal static MultisigResponseFields ReadCommonResponseFields(ref Utf8JsonReader reader, string context)
+    internal static MultisigResponseFields ReadCommonResponseFields(
+        ref Utf8JsonReader reader,
+        JsonSerializerOptions options,
+        string context)
     {
         if (reader.TokenType == JsonTokenType.Null)
         {
@@ -77,6 +83,7 @@ internal static class ToriiMultisigJson
                     fields.TransactionHashHex,
                     fields.ExecutedTransactionHashHex,
                     fields.CreationTimeMilliseconds,
+                    fields.FeePayment,
                     fields.TransactionPayloadBase64,
                     fields.SigningMessageBase64,
                     context);
@@ -128,6 +135,14 @@ internal static class ToriiMultisigJson
                 case "creation_time_ms":
                     fields.CreationTimeMilliseconds = ReadOptionalUInt64(ref reader, $"{context}.creation_time_ms");
                     break;
+                case "fee_payment":
+                    if (reader.TokenType == JsonTokenType.Null)
+                    {
+                        throw new JsonException($"{context}.fee_payment must not be null.");
+                    }
+                    fields.FeePayment = JsonSerializer.Deserialize<FeePaymentIntent>(ref reader, options)
+                        ?? throw new JsonException($"{context}.fee_payment must not be null.");
+                    break;
                 case "transaction_payload_b64":
                     fields.TransactionPayloadBase64 = ToriiAccountFaucetJson.ReadOptionalString(
                         ref reader,
@@ -154,6 +169,7 @@ internal static class ToriiMultisigJson
     internal static void WriteCommonResponseFields(
         Utf8JsonWriter writer,
         MultisigResponseFields fields,
+        JsonSerializerOptions options,
         string context)
     {
         var resolvedMultisigAccountId = RequireString(
@@ -169,6 +185,7 @@ internal static class ToriiMultisigJson
             fields.TransactionHashHex,
             fields.ExecutedTransactionHashHex,
             fields.CreationTimeMilliseconds,
+            fields.FeePayment,
             fields.TransactionPayloadBase64,
             fields.SigningMessageBase64,
             context);
@@ -193,6 +210,12 @@ internal static class ToriiMultisigJson
             writer.WriteNull("creation_time_ms");
         }
 
+        writer.WritePropertyName("fee_payment");
+        JsonSerializer.Serialize(
+            writer,
+            fields.FeePayment
+                ?? throw new JsonException($"{context}.fee_payment must not be null."),
+            options);
         ToriiVpnJson.WriteNullableString(
             writer,
             "transaction_payload_b64",
@@ -210,6 +233,7 @@ internal static class ToriiMultisigJson
         string? transactionHashHex,
         string? executedTransactionHashHex,
         ulong? creationTimeMilliseconds,
+        FeePaymentIntent? feePayment,
         string? transactionPayloadBase64,
         string? signingMessageBase64,
         string context)
@@ -230,9 +254,12 @@ internal static class ToriiMultisigJson
         {
             throw new JsonException($"{context}.creation_time_ms must be positive when provided.");
         }
-
         ValidateOptionalBase64(transactionPayloadBase64, $"{context}.transaction_payload_b64");
         ValidateOptionalBase64(signingMessageBase64, $"{context}.signing_message_b64");
+        if (feePayment is null)
+        {
+            throw new JsonException($"{context}.fee_payment must not be null.");
+        }
         if (submitted is null)
         {
             throw new JsonException($"{context}.submitted must not be null.");
@@ -377,6 +404,7 @@ internal static class ToriiMultisigJson
             nameof(ToriiMultisigResponse.TransactionHashHex) => "tx_hash_hex",
             nameof(ToriiMultisigResponse.ExecutedTransactionHashHex) => "executed_tx_hash_hex",
             nameof(ToriiMultisigResponse.CreationTimeMilliseconds) => "creation_time_ms",
+            nameof(ToriiMultisigResponse.FeePayment) => "fee_payment",
             nameof(ToriiMultisigResponse.TransactionPayloadBase64) => "transaction_payload_b64",
             nameof(ToriiMultisigResponse.SigningMessageBase64) => "signing_message_b64",
             _ => error.ParamName,
@@ -404,6 +432,8 @@ internal struct MultisigResponseFields
 
     internal ulong? CreationTimeMilliseconds { get; set; }
 
+    internal FeePaymentIntent? FeePayment { get; set; }
+
     internal string? TransactionPayloadBase64 { get; set; }
 
     internal string? SigningMessageBase64 { get; set; }
@@ -418,7 +448,10 @@ internal sealed class ToriiMultisigResponseJsonConverter : JsonConverter<ToriiMu
         Type typeToConvert,
         JsonSerializerOptions options)
     {
-        var fields = ToriiMultisigJson.ReadCommonResponseFields(ref reader, "multisig response");
+        var fields = ToriiMultisigJson.ReadCommonResponseFields(
+            ref reader,
+            options,
+            "multisig response");
         try
         {
             return new ToriiMultisigResponse
@@ -433,6 +466,8 @@ internal sealed class ToriiMultisigResponseJsonConverter : JsonConverter<ToriiMu
                 TransactionHashHex = fields.TransactionHashHex,
                 ExecutedTransactionHashHex = fields.ExecutedTransactionHashHex,
                 CreationTimeMilliseconds = fields.CreationTimeMilliseconds,
+                FeePayment = fields.FeePayment
+                    ?? throw new JsonException("multisig response.fee_payment must not be null."),
                 TransactionPayloadBase64 = fields.TransactionPayloadBase64,
                 SigningMessageBase64 = fields.SigningMessageBase64,
             };
@@ -462,9 +497,11 @@ internal sealed class ToriiMultisigResponseJsonConverter : JsonConverter<ToriiMu
                 TransactionHashHex = value.TransactionHashHex,
                 ExecutedTransactionHashHex = value.ExecutedTransactionHashHex,
                 CreationTimeMilliseconds = value.CreationTimeMilliseconds,
+                FeePayment = value.FeePayment,
                 TransactionPayloadBase64 = value.TransactionPayloadBase64,
                 SigningMessageBase64 = value.SigningMessageBase64,
             },
+            options,
             "multisig response");
     }
 }
@@ -479,7 +516,10 @@ internal sealed class ToriiMultisigContractCallResponseJsonConverter
         Type typeToConvert,
         JsonSerializerOptions options)
     {
-        var fields = ToriiMultisigJson.ReadCommonResponseFields(ref reader, "multisig contract-call response");
+        var fields = ToriiMultisigJson.ReadCommonResponseFields(
+            ref reader,
+            options,
+            "multisig contract-call response");
         try
         {
             return new ToriiMultisigContractCallResponse
@@ -495,6 +535,9 @@ internal sealed class ToriiMultisigContractCallResponseJsonConverter
                 TransactionHashHex = fields.TransactionHashHex,
                 ExecutedTransactionHashHex = fields.ExecutedTransactionHashHex,
                 CreationTimeMilliseconds = fields.CreationTimeMilliseconds,
+                FeePayment = fields.FeePayment
+                    ?? throw new JsonException(
+                        "multisig contract-call response.fee_payment must not be null."),
                 TransactionPayloadBase64 = fields.TransactionPayloadBase64,
                 SigningMessageBase64 = fields.SigningMessageBase64,
             };
@@ -524,9 +567,11 @@ internal sealed class ToriiMultisigContractCallResponseJsonConverter
                 TransactionHashHex = value.TransactionHashHex,
                 ExecutedTransactionHashHex = value.ExecutedTransactionHashHex,
                 CreationTimeMilliseconds = value.CreationTimeMilliseconds,
+                FeePayment = value.FeePayment,
                 TransactionPayloadBase64 = value.TransactionPayloadBase64,
                 SigningMessageBase64 = value.SigningMessageBase64,
             },
+            options,
             "multisig contract-call response");
     }
 }

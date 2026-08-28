@@ -53,7 +53,6 @@ fn assert_relay_origin_signature_roundtrip(seed_tag: u8) {
         &key_pair,
         RelayTarget::Direct(target.clone()),
         7,
-        message::Priority::High,
         payload.clone(),
     )
     .expect("sign BLS-normal relay origin");
@@ -68,13 +67,7 @@ fn assert_relay_origin_signature_roundtrip(seed_tag: u8) {
     let materialized_wire_len = crate::peer::materialized_data_message_wire_len(frame.clone())
         .expect("materialize signed relay frame");
     assert_eq!(
-        data_frame_wire_len(
-            &frame.origin,
-            Some(&target),
-            frame.ttl,
-            frame.priority,
-            &payload,
-        ),
+        data_frame_wire_len(&frame.origin, Some(&target), &payload),
         materialized_wire_len,
         "estimated wire geometry must match the signed frame"
     );
@@ -96,7 +89,6 @@ fn assert_relay_origin_signature_roundtrip(seed_tag: u8) {
     assert_eq!(decoded.origin_signature, frame.origin_signature);
     assert_eq!(decoded.origin_signature.len(), RELAY_ORIGIN_SIGNATURE_BYTES);
     assert_eq!(decoded.ttl, frame.ttl);
-    assert_eq!(decoded.priority, frame.priority);
     assert_eq!(decoded.payload.body, payload.body);
     match &decoded.target {
         RelayTarget::Direct(decoded_target) => assert_eq!(decoded_target, &target),
@@ -134,14 +126,7 @@ fn relay_origin_signature_rejects_non_node_algorithms() {
         let key_pair = KeyPair::try_from_seed(vec![0x21; 32], algorithm)
             .expect("derive non-node rejection key");
         assert!(
-            RelayMessage::try_new(
-                &key_pair,
-                RelayTarget::Broadcast,
-                1,
-                message::Priority::Low,
-                Dummy { tag: 7 },
-            )
-            .is_err(),
+            RelayMessage::try_new(&key_pair, RelayTarget::Broadcast, 1, Dummy { tag: 7 },).is_err(),
             "{algorithm:?} must not sign a node relay envelope"
         );
         let unsupported_target = PeerId::from(key_pair.public_key().clone());
@@ -150,7 +135,6 @@ fn relay_origin_signature_rejects_non_node_algorithms() {
                 &node_key_pair,
                 RelayTarget::Direct(unsupported_target.clone()),
                 1,
-                message::Priority::Low,
                 Dummy { tag: 7 },
             )
             .is_err(),
@@ -172,7 +156,7 @@ fn data_frame_wire_len_matches_manual_envelope() {
     let origin = PeerId::from(node_key_pair(0x31).public_key().clone());
     let target = PeerId::from(node_key_pair(0x32).public_key().clone());
     let payload = Dummy { tag: 7 };
-    let direct = data_frame_wire_len(&origin, Some(&target), 8, message::Priority::High, &payload);
+    let direct = data_frame_wire_len(&origin, Some(&target), &payload);
     let direct_from_len = data_frame_wire_len_from_payload_len::<Dummy>(
         &origin,
         Some(&target),
@@ -183,7 +167,6 @@ fn data_frame_wire_len_matches_manual_envelope() {
         origin.clone(),
         RelayTarget::Direct(target.clone()),
         8,
-        message::Priority::High,
         payload.clone(),
     );
     let direct_expected = crate::peer::materialized_data_message_wire_len(direct_frame)
@@ -192,17 +175,11 @@ fn data_frame_wire_len_matches_manual_envelope() {
         direct, direct_expected,
         "direct frame size should match envelope"
     );
-    let broadcast = data_frame_wire_len(&origin, None, 8, message::Priority::Low, &payload);
+    let broadcast = data_frame_wire_len(&origin, None, &payload);
     let broadcast_from_len =
         data_frame_wire_len_from_payload_len::<Dummy>(&origin, None, payload.encoded_len());
     assert_eq!(broadcast_from_len, broadcast);
-    let broadcast_frame = RelayMessage::new(
-        origin,
-        RelayTarget::Broadcast,
-        8,
-        message::Priority::Low,
-        payload,
-    );
+    let broadcast_frame = RelayMessage::new(origin, RelayTarget::Broadcast, 8, payload);
     let broadcast_expected = crate::peer::materialized_data_message_wire_len(broadcast_frame)
         .expect("materialize broadcast comparator frame");
     assert_eq!(
@@ -220,14 +197,8 @@ fn data_frame_wire_len_from_payload_len_matches_varint_boundaries() {
             body: vec![0xA5; body_len],
         };
         let payload_len = payload.encoded_len();
-        let direct = data_frame_wire_len(
-            &origin,
-            Some(&target),
-            u8::MAX,
-            message::Priority::High,
-            &payload,
-        );
-        let broadcast = data_frame_wire_len(&origin, None, 0, message::Priority::Low, &payload);
+        let direct = data_frame_wire_len(&origin, Some(&target), &payload);
+        let broadcast = data_frame_wire_len(&origin, None, &payload);
         assert_eq!(
             data_frame_wire_len_from_payload_len::<DynamicDummy>(
                 &origin,
@@ -274,7 +245,6 @@ fn relay_message_decode_from_slice_roundtrip() {
         origin.clone(),
         RelayTarget::Direct(target.clone()),
         5,
-        message::Priority::High,
         payload.clone(),
     );
     let bytes = frame.encode();
@@ -284,7 +254,6 @@ fn relay_message_decode_from_slice_roundtrip() {
     assert_eq!(used, bytes.len(), "should consume full payload");
     assert_eq!(decoded.origin, origin);
     assert_eq!(decoded.ttl, 5);
-    assert_eq!(decoded.priority, message::Priority::High);
     assert_eq!(decoded.payload.tag, payload.tag);
     match decoded.target {
         RelayTarget::Direct(peer_id) => assert_eq!(peer_id, target),
@@ -302,7 +271,6 @@ fn relay_message_decode_from_slice_roundtrip_with_dynamic_payload() {
         origin.clone(),
         RelayTarget::Direct(target.clone()),
         6,
-        message::Priority::Low,
         payload.clone(),
     );
     let bytes = frame.encode();
@@ -312,7 +280,6 @@ fn relay_message_decode_from_slice_roundtrip_with_dynamic_payload() {
     assert_eq!(used, bytes.len(), "should consume full payload");
     assert_eq!(decoded.origin, origin);
     assert_eq!(decoded.ttl, 6);
-    assert_eq!(decoded.priority, message::Priority::Low);
     assert_eq!(decoded.payload.body, payload.body);
     match decoded.target {
         RelayTarget::Direct(peer_id) => assert_eq!(peer_id, target),
@@ -326,13 +293,7 @@ fn relay_envelope_delegates_policy_to_exact_nested_payload() {
     let nested = DynamicDummy {
         body: vec![1, 3, 3, 7],
     };
-    let frame = RelayMessage::new(
-        origin,
-        RelayTarget::Direct(target),
-        5,
-        message::Priority::High,
-        nested.clone(),
-    );
+    let frame = RelayMessage::new(origin, RelayTarget::Direct(target), 5, nested.clone());
     let (bare, flags) = norito::codec::encode_with_header_flags(&frame);
     let nested_bare = nested.encode();
     assert_eq!(
@@ -361,7 +322,6 @@ fn relay_payload_extractor_rejects_truncated_or_trailing_layouts() {
         origin,
         RelayTarget::Broadcast,
         1,
-        message::Priority::Low,
         DynamicDummy { body: vec![9] },
     );
     let (bare, flags) = norito::codec::encode_with_header_flags(&frame);
@@ -392,12 +352,6 @@ fn relay_payload_extractor_rejects_truncated_or_trailing_layouts() {
 #[test]
 fn relay_message_preserves_outbound_admission_policy() {
     let origin = PeerId::from(node_key_pair(0x68).public_key().clone());
-    let frame = RelayMessage::new(
-        origin,
-        RelayTarget::Broadcast,
-        1,
-        message::Priority::High,
-        DeniedDummy,
-    );
+    let frame = RelayMessage::new(origin, RelayTarget::Broadcast, 1, DeniedDummy);
     assert!(!message::ClassifyTopic::is_outbound_allowed(&frame));
 }

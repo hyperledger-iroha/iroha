@@ -39,6 +39,7 @@ import {
   buildRegisterKaigiRelayInstruction,
   buildUnregisterKaigiRelayInstruction,
   buildReportKaigiRelayHealthInstruction,
+  KAIGI_MAX_PARTICIPANTS_V1,
   KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
   KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
   buildRegisterSmartContractCodeInstruction,
@@ -152,6 +153,7 @@ import * as sdkExports from "../src/index.js";
 import { ValidationErrorCode } from "../src/validationError.js";
 import {
   AccountAddress,
+  configureCurveSupport,
 } from "../src/address.js";
 
 function hexToBytes(hex) {
@@ -165,6 +167,22 @@ function hexToBytes(hex) {
   }
   return out;
 }
+
+function mlDsaManifestSigner(keyLength, fill = 0x5a) {
+  const lengthVarint = [];
+  let remaining = keyLength;
+  do {
+    const byte = remaining & 0x7f;
+    remaining = Math.floor(remaining / 0x80);
+    lengthVarint.push(remaining === 0 ? byte : byte | 0x80);
+  } while (remaining !== 0);
+  const multihash = Buffer.concat([
+    Buffer.from([0xee, 0x01, ...lengthVarint]),
+    Buffer.alloc(keyLength, fill),
+  ]);
+  return `ml-dsa:${multihash.toString("hex")}`;
+}
+
 function canonicalizeValue(value) {
   if (Array.isArray(value)) {
     return value.map((entry) => canonicalizeValue(entry));
@@ -1653,13 +1671,14 @@ baseTest("buildLeaveKaigiInstruction rejects reserved V1 privacy artifacts", () 
   );
 });
 
-baseTest("Kaigi builders preserve the full u64 and u32 wire domains", () => {
+baseTest("Kaigi builders preserve full-width u64 values and the participant limit", () => {
   const maxU64 = "18446744073709551615";
-  const maxU32 = 0xffff_ffff;
+  const maxParticipants = KAIGI_MAX_PARTICIPANTS_V1;
+  assert.equal(maxParticipants, 4_096);
   const create = buildCreateKaigiInstruction({
     id: "wonderland.sora:full-width",
     host: ACCOUNT_ID,
-    maxParticipants: maxU32,
+    maxParticipants,
     gasRatePerMinute: BigInt(maxU64),
     scheduledStartMs: maxU64,
     relayManifest: {
@@ -1667,7 +1686,7 @@ baseTest("Kaigi builders preserve the full u64 and u32 wire domains", () => {
       hops: kaigiRelayHops(),
     },
   });
-  assert.equal(create.Kaigi.CreateKaigi.call.max_participants, maxU32);
+  assert.equal(create.Kaigi.CreateKaigi.call.max_participants, maxParticipants);
   assert.equal(create.Kaigi.CreateKaigi.call.gas_rate_per_minute, maxU64);
   assert.equal(create.Kaigi.CreateKaigi.call.scheduled_start_ms, maxU64);
   assert.equal(create.Kaigi.CreateKaigi.call.relay_manifest.expiry_ms, maxU64);
@@ -1699,7 +1718,7 @@ baseTest("Kaigi builders preserve the full u64 and u32 wire domains", () => {
   assert.deepEqual(encodeAndDecode(health), health);
 });
 
-baseTest("Kaigi builders reject values outside their unsigned wire domains", () => {
+baseTest("Kaigi builders reject values outside their protocol bounds", () => {
   const overflowU64 = "18446744073709551616";
   assert.throws(
     () =>
@@ -1718,7 +1737,7 @@ baseTest("Kaigi builders reject values outside their unsigned wire domains", () 
       buildCreateKaigiInstruction({
         id: "wonderland.sora:overflow",
         host: ACCOUNT_ID,
-        maxParticipants: 0x1_0000_0000,
+        maxParticipants: 4_097,
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
@@ -2914,6 +2933,46 @@ baseTest("buildProposeDeployContractInstruction encodes manifest provenance as f
     instruction.ProposeDeployContract.manifest_provenance,
   );
   assert.equal(Object.hasOwn(decoded.ProposeDeployContract, "limits"), false);
+});
+
+baseTest("buildProposeDeployContractInstruction validates ML-DSA manifest signer keys", () => {
+  const base = {
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    codeHash: "aa".repeat(32),
+    abiHash: "bb".repeat(32),
+  };
+  const withSigner = (signer) => ({
+    ...base,
+    manifestProvenance: {
+      signer,
+      signature: "22".repeat(64),
+    },
+  });
+
+  configureCurveSupport({ allowMlDsa: true });
+  try {
+    const validSigner = mlDsaManifestSigner(1_952);
+    const instruction = buildProposeDeployContractInstruction(withSigner(validSigner));
+    assert.equal(
+      instruction.ProposeDeployContract.manifest_provenance.signer,
+      `ee01a00f${"5A".repeat(1_952)}`,
+    );
+
+    for (const [label, signer, errorPattern] of [
+      ["one-byte", mlDsaManifestSigner(1), /expected 1952 bytes/u],
+      ["short", mlDsaManifestSigner(1_951), /expected 1952 bytes/u],
+      ["overlong", mlDsaManifestSigner(1_953), /expected 1952 bytes/u],
+      ["all-zero", mlDsaManifestSigner(1_952, 0), /all-zero/u],
+    ]) {
+      assert.throws(
+        () => buildProposeDeployContractInstruction(withSigner(signer)),
+        errorPattern,
+        `${label} ML-DSA signer must be rejected before instruction emission`,
+      );
+    }
+  } finally {
+    configureCurveSupport();
+  }
 });
 
 baseTest("buildProposeDeployContractInstruction has a closed canonical local target", () => {

@@ -32,6 +32,7 @@ use crate::{
         AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization,
         AutonomousLifecycleCursorPhaseKindV1, AutonomousLifecycleCursorRead,
         AutonomousLifecycleCursorV1, AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization,
+        AutonomousNonQueueReplicaClaimReleaseAuthorization,
     },
     nexus::space_directory::{
         LaneIdentityMetadataError,
@@ -1028,6 +1029,45 @@ impl LaneQueueReservationReleaseBarrierV1 {
 pub(crate) struct DurableLaneQueueReleaseBarrierAuthorization {
     barrier: LaneQueueReservationReleaseBarrierV1,
     terminal_absence: bool,
+}
+
+/// Move-only proof that one non-producer replica has no lane-reservation
+/// ownership for an exact retired attempt and that every transaction is
+/// already durably represented by ordinary FIFO in its original order.
+///
+/// Queue constructs this value only after consuming Kura's signed-cursor-bound
+/// replica authority under the reservation-transition and global FIFO locks.
+/// Kura consumes and returns it while changing that replica's exact claims
+/// from `ReleasePending` to `Released`; the wrapper retains the same fence
+/// through terminal Queue evidence and Kura completion.
+#[must_use = "authenticated replica FIFO ownership must be consumed by Kura"]
+pub(crate) struct DurableAutonomousNonQueueReplicaFifoAuthorization<'queue> {
+    barrier: LaneQueueReservationReleaseBarrierV1,
+    kura_authorization: AutonomousNonQueueReplicaClaimReleaseAuthorization,
+    _durability_transition: QueueDurabilityTransition<'queue>,
+}
+impl DurableAutonomousNonQueueReplicaFifoAuthorization<'_> {
+    /// Borrow Kura's originating authority only while this proof's exact-hash
+    /// durability fence remains live and the retirement barrier is unchanged.
+    pub(crate) fn authorization_for_kura(
+        &self,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
+    ) -> Option<&AutonomousNonQueueReplicaClaimReleaseAuthorization> {
+        (self.barrier == *barrier).then_some(&self.kura_authorization)
+    }
+
+    /// Prove that this still-live exact-hash fence belongs to `queue` and
+    /// covers every member of the unchanged retirement barrier.
+    fn covers_queue_barrier(
+        &self,
+        queue: &Queue,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
+    ) -> bool {
+        self.barrier == *barrier
+            && self
+                ._durability_transition
+                .covers_reservation_keys(queue, &barrier.ordered_keys)
+    }
 }
 impl DurableLaneQueueReleaseBarrierAuthorization {
     fn durable(barrier: &LaneQueueReservationReleaseBarrierV1) -> Self {
@@ -5911,9 +5951,11 @@ impl Queue {
             let checked_selection = check_production_in_flight_first_release_transition(
                 selected_projection,
             )
-            .ok_or(LaneQueueReservationError::InvalidIdentity(String::from(
-                "QueuePlan conjunction failed the composed first-release transition gate",
-            )))?;
+            .ok_or_else(|| {
+                LaneQueueReservationError::InvalidIdentity(format!(
+                    "QueuePlan conjunction failed the composed first-release transition gate: {selected_projection:?}"
+                ))
+            })?;
             if checked_selection.into_projection() != selected_projection {
                 return Err(LaneQueueReservationError::InvalidIdentity(
                     "checked QueuePlan conjunction changed before reservation ownership".to_owned(),
@@ -7017,6 +7059,53 @@ impl Queue {
         self.prepare_lane_reservation_release_barrier_inner(barrier, gate)
             .map(|(_, authorization)| authorization)
     }
+    /// Prove exact FIFO-only ownership for a non-producer replica retirement.
+    ///
+    /// This path is strictly read-only. It accepts only Kura's opaque authority
+    /// for an exact signed, retired, actor-different lifecycle attempt, then
+    /// proves that no reservation, commit, release, selection, transition, or
+    /// removal owner remains for any barrier member. Every transaction and its
+    /// durable QueuePlan/routing/FIFO identity must already be present in the
+    /// barrier's original order.
+    pub(crate) fn authenticate_autonomous_nonqueue_replica_fifo_ownership<'queue>(
+        &'queue self,
+        authorization: AutonomousNonQueueReplicaClaimReleaseAuthorization,
+    ) -> Result<DurableAutonomousNonQueueReplicaFifoAuthorization<'queue>, LaneQueueReservationError>
+    {
+        let barrier = authorization.release_barrier().clone();
+        barrier
+            .validate()
+            .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+        let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
+        let _queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
+        let store = self.lane_reservations.lock();
+        self.authenticate_release_queue_fifo_ownership_locked(&store, &barrier, false)?;
+        let projection = *authorization.fifo_projection();
+        let checked =
+            check_production_in_flight_first_release_transition(projection).ok_or_else(|| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "replica FIFO ownership failed the composed direct-release gate".to_owned(),
+                )
+            })?;
+        if checked.into_projection() != projection {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "checked replica FIFO ownership projection changed before fencing".to_owned(),
+            ));
+        }
+        let durability_transition = self
+            .begin_durability_transition_locked(
+                barrier.ordered_keys.iter().map(|key| key.entrypoint_hash),
+            )
+            .map_err(|hash| LaneQueueReservationError::Conflict { hash })?;
+        Ok(DurableAutonomousNonQueueReplicaFifoAuthorization {
+            barrier,
+            kura_authorization: authorization,
+            _durability_transition: durability_transition,
+        })
+    }
     #[cfg(test)]
     pub(crate) fn prepare_lane_reservation_release_barrier(
         &self,
@@ -7191,10 +7280,47 @@ impl Queue {
             source_outcome_authorization,
         )?;
         let (finalized_reservations, terminal_evidence) =
-            self.finalize_lane_reservation_release_barrier_inner(barrier, gate)?;
+            self.finalize_lane_reservation_release_barrier_inner(barrier, gate, false)?;
         let terminal_evidence = terminal_evidence.ok_or_else(|| {
             LaneQueueReservationError::InvalidIdentity(
                 "complete release did not mint terminal Queue evidence".to_owned(),
+            )
+        })?;
+        Ok(LaneQueueReleaseCompletionResult {
+            finalized_reservations,
+            terminal_evidence,
+        })
+    }
+
+    /// Complete the terminal-absence half of a non-producer replica release
+    /// while its exact FIFO hashes remain fenced against selection/removal.
+    ///
+    /// The borrowed proof must belong to this Queue and cover the unchanged
+    /// retirement barrier. Only that proof permits the inner terminal check to
+    /// ignore its own active durability transition; every competing owner is
+    /// still rejected.
+    pub(crate) fn finalize_lane_reservation_release_barrier_with_replica_fifo_authorization(
+        &self,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
+        authorization: AutonomousLaneQueueReleaseFinalizationAuthorization,
+        source_outcome_authorization: AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization,
+        replica_fifo_authorization: &DurableAutonomousNonQueueReplicaFifoAuthorization<'_>,
+    ) -> Result<LaneQueueReleaseCompletionResult, LaneQueueReservationError> {
+        if !replica_fifo_authorization.covers_queue_barrier(self, barrier) {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "replica FIFO release proof names another Queue or retirement barrier".to_owned(),
+            ));
+        }
+        let gate = LaneQueueReleaseFinalizationGate::from_authorization(
+            barrier,
+            authorization,
+            source_outcome_authorization,
+        )?;
+        let (finalized_reservations, terminal_evidence) =
+            self.finalize_lane_reservation_release_barrier_inner(barrier, gate, true)?;
+        let terminal_evidence = terminal_evidence.ok_or_else(|| {
+            LaneQueueReservationError::InvalidIdentity(
+                "replica FIFO release did not mint terminal Queue evidence".to_owned(),
             )
         })?;
         Ok(LaneQueueReleaseCompletionResult {
@@ -7266,7 +7392,7 @@ impl Queue {
             source_outcome_authorization,
         )?;
         let (finalized_reservations, terminal_evidence) =
-            self.finalize_lane_reservation_release_barrier_inner(barrier, gate)?;
+            self.finalize_lane_reservation_release_barrier_inner(barrier, gate, false)?;
         let terminal_evidence = terminal_evidence.ok_or_else(|| {
             LaneQueueReservationError::InvalidIdentity(
                 "Pending release completion did not mint terminal Queue evidence".to_owned(),
@@ -7286,6 +7412,7 @@ impl Queue {
             .finalize_lane_reservation_release_barrier_inner(
                 barrier,
                 LaneQueueReleaseFinalizationGate::DirectTest,
+                false,
             )?;
         Ok(finalized_reservations)
     }
@@ -7293,6 +7420,7 @@ impl Queue {
         &self,
         barrier: &LaneQueueReservationReleaseBarrierV1,
         gate: LaneQueueReleaseFinalizationGate,
+        allow_replica_fifo_transition: bool,
     ) -> Result<
         (usize, Option<AutonomousLaneReleaseQueueTerminalEvidence>),
         LaneQueueReservationError,
@@ -7334,7 +7462,7 @@ impl Queue {
                     barrier,
                     barrier_group,
                     &gate,
-                    false,
+                    allow_replica_fifo_transition,
                 )?;
                 return Ok((0, terminal_evidence));
             };
@@ -18104,6 +18232,22 @@ impl Queue {
         if fifo.len() < ordered_keys.len() {
             return false;
         }
+        let mut previous_global_fifo_ordinal = None;
+        for hash in &fifo {
+            let Some(order) = self
+                .fifo_order_by_hash
+                .get(hash)
+                .map(|entry| *entry.value())
+            else {
+                return false;
+            };
+            if order.validate().is_err()
+                || previous_global_fifo_ordinal.is_some_and(|previous| previous >= order.ordinal)
+            {
+                return false;
+            }
+            previous_global_fifo_ordinal = Some(order.ordinal);
+        }
         let mut positions = HashMap::with_capacity(fifo.len());
         for (position, hash) in fifo.into_iter().enumerate() {
             if positions.insert(hash, position).is_some() {
@@ -18183,16 +18327,19 @@ impl Queue {
     ) -> bool {
         self.replica_group_has_byte_exact_ordinary_fifo_ownership_locked(&barrier.ordered_keys)
     }
-    /// Authenticate the physical Queue half of action 23 while both the global
-    /// FIFO ownership lock and the reservation-store lock are held.
-    fn authenticate_release_queue_terminal_evidence_locked(
+    /// Authenticate exact FIFO-only ownership while both the global FIFO
+    /// ownership lock and the reservation-store lock are held.
+    ///
+    /// This is shared by the ordinary post-barrier terminal join and the
+    /// non-producer replica corridor. It proves absence of every competing
+    /// Queue owner and revalidates the transaction, routing, durable claim,
+    /// timestamp, FIFO ordinal, and original barrier order for every member.
+    fn authenticate_release_queue_fifo_ownership_locked(
         &self,
         store: &LaneQueueReservationStore,
         barrier: &LaneQueueReservationReleaseBarrierV1,
-        reservation_group: LaneQueueReservationGroupBindingV1,
-        gate: &LaneQueueReleaseFinalizationGate,
         allow_active_durability_transition: bool,
-    ) -> Result<Option<AutonomousLaneReleaseQueueTerminalEvidence>, LaneQueueReservationError> {
+    ) -> Result<(), LaneQueueReservationError> {
         store.ensure_release_no_conflict(barrier)?;
         let global_selection_owners = self.global_selection_owners.lock();
         let active_durability_transitions = self.durability_transitions.lock();
@@ -18325,6 +18472,23 @@ impl Queue {
                 "forgotten Queue release lacks exact ordinary FIFO ownership".to_owned(),
             ));
         }
+        Ok(())
+    }
+    /// Authenticate the physical Queue half of action 23 while both the global
+    /// FIFO ownership lock and the reservation-store lock are held.
+    fn authenticate_release_queue_terminal_evidence_locked(
+        &self,
+        store: &LaneQueueReservationStore,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
+        reservation_group: LaneQueueReservationGroupBindingV1,
+        gate: &LaneQueueReleaseFinalizationGate,
+        allow_active_durability_transition: bool,
+    ) -> Result<Option<AutonomousLaneReleaseQueueTerminalEvidence>, LaneQueueReservationError> {
+        self.authenticate_release_queue_fifo_ownership_locked(
+            store,
+            barrier,
+            allow_active_durability_transition,
+        )?;
         gate.terminal_evidence(barrier, reservation_group)
     }
     /// Remove a hash set from FIFO without changing the order of any unrelated hash.

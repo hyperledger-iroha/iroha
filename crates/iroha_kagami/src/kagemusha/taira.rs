@@ -51,6 +51,7 @@ use std::{
     path::PathBuf,
     str::FromStr as _,
 };
+use zeroize::Zeroizing;
 const PUBLIC_TAIRA_CHAIN_NAME: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const TAIRA_RELEASE_GENERATION_V4: &str = "production-gate-real-artifacts-v4";
 const TAIRA_RELEASE_ACTIVATION_HEIGHT_V4: u64 = 2;
@@ -344,15 +345,16 @@ pub(super) fn prepare_release_roster_v4<T: std::io::Write>(
     args: &PrepareReleaseRosterV4Args,
     writer: &mut std::io::BufWriter<T>,
 ) -> Outcome {
-    let config_bytes = super::read_external_bounded(
+    let config_bytes = Zeroizing::new(super::read_external_bounded(
         &args.validator_config,
         2 * 1024 * 1024,
         "rendered Taira validator config",
-    )?;
+    )?);
     let config_text = std::str::from_utf8(&config_bytes)
         .wrap_err("rendered Taira validator config is not UTF-8")?;
-    let config: toml::Value =
-        toml::from_str(config_text).wrap_err("failed to decode rendered validator config")?;
+    let config = crate::secret_toml::Value::new(toml::Value::Table(
+        crate::secret_toml::parse_table(config_text, "rendered Taira validator config")?,
+    ));
     let validators = parse_public_validator_roster(&config)?;
     let validator_count = validators.len();
     let roster = taira_release_roster_v4(args.network_id, validators, args.withdrawal_height)?;

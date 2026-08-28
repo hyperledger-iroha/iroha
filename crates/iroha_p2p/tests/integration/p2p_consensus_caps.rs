@@ -48,9 +48,9 @@ fn consensus_config_caps_wire_roundtrip_preserves_admission_digests() {
     assert_eq!(decoded.ivm_gas_schedule_hash, [0xE7; 32]);
 }
 fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
-    // Admission remains mandatory; its minimum-cost fixture keeps this suite's
-    // timing budget focused on consensus-capability negotiation.
-    let soranet_handshake = super::mandatory_test_soranet_handshake();
+    // Keep admission inexpensive so these tests continue to measure consensus
+    // capability matching. `test_network_config` isolates replay state.
+    let soranet_handshake = super::low_cost_test_soranet_handshake();
     Config {
         happy_eyeballs_stagger: Duration::from_millis(10),
         p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),

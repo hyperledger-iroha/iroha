@@ -31,18 +31,6 @@ impl State {
         self.oracle = oracle;
     }
 
-    /// Update the process-local streaming spool paths used for disk-budget enforcement.
-    pub fn set_streaming_storage_paths(
-        &mut self,
-        soranet_provision_spool_dir: PathBuf,
-        soravpn_provision_spool_dir: PathBuf,
-    ) {
-        self.streaming_storage_paths = StreamingStoragePaths {
-            soranet_provision_spool_dir,
-            soravpn_provision_spool_dir,
-        };
-    }
-
     /// Update settlement configuration snapshot and rebuild the router engine.
     pub fn set_settlement(&mut self, settlement: iroha_config::parameters::actual::Settlement) {
         self.settlement = settlement;

@@ -20,11 +20,12 @@ use iroha_data_model::{
     domain::DomainId,
     level::Level,
     peer::PeerId,
-    prelude::{Account, AssetDefinition, Domain, InstructionBox, Log, Mint, SignedTransaction},
+    prelude::{
+        Account, AssetDefinition, Domain, InstructionBox, Log, Mint, Name, SignedTransaction,
+    },
 };
 use iroha_torii::{Torii, json_entry, json_object};
 use iroha_version::codec::DecodeVersioned as _;
-use mv::storage::StorageReadOnly;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest as _, Sha256};
 use std::{borrow::Cow, num::NonZeroU8, sync::Arc};
@@ -452,7 +453,7 @@ fn solve_faucet_pow(
     unreachable!("u64 nonce space exhausted");
 }
 fn advance_faucet_state_chain(
-    state: &State,
+    state: &Arc<State>,
     chain_id: &iroha_data_model::ChainId,
     authority_id: &AccountId,
     authority_key_pair: &KeyPair,
@@ -587,6 +588,32 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
     .expect("decode prepared transaction wire");
     let prepared_tx =
         SignedTransaction::decode_all_versioned(&prepared_wire).expect("decode prepared tx");
+    let marker_key: Name = iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
+        .parse()
+        .expect("marker metadata key");
+    assert_eq!(
+        prepared_tx
+            .metadata()
+            .get(&marker_key)
+            .expect("consensus claim marker version")
+            .clone()
+            .try_into_any_norito::<u64>()
+            .expect("unsigned marker version"),
+        iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1
+    );
+    let operation_key: Name = iroha_data_model::transaction::PREPARED_OPERATION_METADATA_KEY
+        .parse()
+        .expect("operation metadata key");
+    assert_eq!(
+        prepared_tx
+            .metadata()
+            .get(&operation_key)
+            .expect("prepared operation")
+            .clone()
+            .try_into_any_norito::<String>()
+            .expect("operation string"),
+        iroha_data_model::transaction::PREPARED_FAUCET_OPERATION
+    );
     let prepared_instructions: Vec<_> =
         prepared_tx.instructions().explicit_instructions().collect();
     assert_eq!(prepared_instructions.len(), 2);

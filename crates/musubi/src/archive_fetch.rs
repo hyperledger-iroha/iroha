@@ -786,10 +786,6 @@ fn validate_transport_plan(
     plan.validate().map_err(|_| invalid())?;
     if plan.content_length != commitment.content_length
         || plan.chunks.len() != usize::try_from(commitment.chunk_count).unwrap_or(usize::MAX)
-        || plan
-            .chunks
-            .iter()
-            .any(|chunk| chunk.taikai_segment_hint.is_some())
         || compute_chunk_plan_digest_sha3(&plan.chunks) != *commitment.chunk_plan_digest.as_bytes()
     {
         return Err(invalid());
@@ -1113,19 +1109,6 @@ mod tests {
         assert_eq!(
             error.integrity_surface(),
             Some(ArchiveFetchIntegritySurfaceV1::ArchiveCommitment)
-        );
-        let mut hinted = plan.clone();
-        hinted.chunks[0].taikai_segment_hint = Some(sorafs_car::TaikaiSegmentHint {
-            event: "event".to_owned(),
-            stream: "stream".to_owned(),
-            rendition: "rendition".to_owned(),
-            sequence: 0,
-            payload_len: None,
-            payload_digest: None,
-        });
-        assert!(
-            validate_transport_plan(&commitment, &hinted).is_err(),
-            "Musubi V1 provider plans must reject uncommitted Taikai hints"
         );
         let mut wrong_root = commitment.clone();
         wrong_root.root_cid = ManifestRootCid::from_blake3_digest([0xaa; 32]).expect("other CID");

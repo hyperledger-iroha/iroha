@@ -15,7 +15,18 @@ use crate::{
 };
 use iroha_config::parameters::{
     actual::{NexusStorageWeights, Root as Config, SoracloudRuntime},
-    defaults::soracloud_runtime as soracloud_runtime_defaults,
+    defaults::{
+        soracloud_runtime as soracloud_runtime_defaults,
+        taira::{
+            INROU_EGRESS_MAX_BYTES_PER_MINUTE as TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1,
+            INROU_EGRESS_RATE_PER_MINUTE as TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1,
+            NEXUS_KURA_BLOCKS_BPS as TAIRA_NEXUS_KURA_BLOCKS_BPS_V1,
+            NEXUS_SORAFS_BPS as TAIRA_NEXUS_SORAFS_BPS_V1,
+            NEXUS_STORAGE_BUDGET_BYTES as TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1,
+            NEXUS_WSV_SNAPSHOTS_BPS as TAIRA_NEXUS_WSV_SNAPSHOTS_BPS_V1,
+            SORAFS_STORAGE_CAP_BYTES as TAIRA_SORAFS_STORAGE_CAP_BYTES_V1,
+        },
+    },
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
@@ -58,20 +69,6 @@ pub const TAIRA_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 pub const TAIRA_CHAIN_DISCRIMINANT_V1: u16 = 369;
 /// Exact first-release Taira validator count.
 pub const TAIRA_VALIDATOR_COUNT_V1: usize = 4;
-/// Exact aggregate Nexus disk budget for one first-release Taira validator.
-pub const TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1: u64 = 68_719_476_736;
-/// Exact Kura share of the first-release Taira Nexus disk budget.
-pub const TAIRA_NEXUS_KURA_BLOCKS_BPS_V1: u16 = 5_500;
-/// Exact WSV snapshot share of the first-release Taira Nexus disk budget.
-pub const TAIRA_NEXUS_WSV_SNAPSHOTS_BPS_V1: u16 = 2_000;
-/// Exact `SoraFS` share of the first-release Taira Nexus disk budget.
-pub const TAIRA_NEXUS_SORAFS_BPS_V1: u16 = 2_000;
-/// Exact `SoraNet` spool share of the first-release Taira Nexus disk budget.
-pub const TAIRA_NEXUS_SORANET_SPOOL_BPS_V1: u16 = 250;
-/// Exact `SoraVPN` spool share of the first-release Taira Nexus disk budget.
-pub const TAIRA_NEXUS_SORAVPN_SPOOL_BPS_V1: u16 = 250;
-/// Exact effective `SoraFS` component cap derived for first-release Taira.
-pub const TAIRA_SORAFS_STORAGE_CAP_BYTES_V1: u64 = 13_743_895_347;
 /// Exact aggregate Inrou CPU ceiling for one first-release Taira validator.
 pub const TAIRA_INROU_MAX_CPU_MILLIS_V1: u32 = 8_000;
 /// Exact aggregate Inrou memory ceiling for one first-release Taira validator.
@@ -84,10 +81,6 @@ pub const TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
 pub const TAIRA_INROU_START_GRACE_MS_V1: u64 = 30_000;
 /// Exact Inrou shutdown grace for one first-release Taira validator.
 pub const TAIRA_INROU_STOP_GRACE_MS_V1: u64 = 10_000;
-/// Exact Inrou egress request budget for one first-release Taira validator.
-pub const TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1: u32 = 600;
-/// Exact Inrou egress byte budget for one first-release Taira validator.
-pub const TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1: u64 = 100 * 1024 * 1024;
 
 const TAIRA_RUNTIME_SIGNER_HANDLE_PREFIX_V1: &str = "software://taira/inrou/";
 const TAIRA_RUNTIME_SIGNER_POLICY_DIGEST_DOMAIN_V1: &[u8] =
@@ -133,6 +126,15 @@ fn validate_taira_launcher_profile_v1(
     }
     if !runtime.production_mode {
         return Err("Taira launcher requires Soracloud production mode".to_owned());
+    }
+    if runtime.hydration_concurrency != soracloud_runtime_defaults::HYDRATION_CONCURRENCY
+        || runtime.prepared_runtime_cache_capacity
+            != soracloud_runtime_defaults::PREPARED_RUNTIME_CACHE_CAPACITY
+    {
+        return Err(
+            "Taira launcher requires the exact V1 hydration-worker and prepared-runtime capacities"
+                .to_owned(),
+        );
     }
     let inrou = &runtime.inrou;
     if !inrou.enabled {
@@ -198,8 +200,6 @@ fn validate_taira_storage_profile_v1(
     if weights.kura_blocks_bps != TAIRA_NEXUS_KURA_BLOCKS_BPS_V1
         || weights.wsv_snapshots_bps != TAIRA_NEXUS_WSV_SNAPSHOTS_BPS_V1
         || weights.sorafs_bps != TAIRA_NEXUS_SORAFS_BPS_V1
-        || weights.soranet_spool_bps != TAIRA_NEXUS_SORANET_SPOOL_BPS_V1
-        || weights.soravpn_spool_bps != TAIRA_NEXUS_SORAVPN_SPOOL_BPS_V1
     {
         return Err("Taira launcher requires the exact V1 Nexus storage weights".to_owned());
     }
@@ -582,13 +582,16 @@ mod tests {
     };
     use std::{
         fs,
-        num::NonZeroU32,
+        num::{NonZeroU32, NonZeroUsize},
         os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     };
 
     fn canonical_runtime_profile() -> SoracloudRuntime {
         let mut runtime = SoracloudRuntime::default();
         runtime.production_mode = true;
+        runtime.hydration_concurrency = soracloud_runtime_defaults::HYDRATION_CONCURRENCY;
+        runtime.prepared_runtime_cache_capacity =
+            soracloud_runtime_defaults::PREPARED_RUNTIME_CACHE_CAPACITY;
         runtime.inrou.enabled = true;
         runtime.inrou.portable_vm_uid = NonZeroU32::new(70_000);
         runtime.inrou.portable_vm_gid = NonZeroU32::new(70_000);
@@ -723,6 +726,20 @@ mod tests {
         };
 
         let mut changed = runtime.clone();
+        changed.hydration_concurrency = NonZeroUsize::new(
+            soracloud_runtime_defaults::HYDRATION_CONCURRENCY.get() + 1,
+        )
+        .expect("changed hydration-worker count is nonzero");
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed.prepared_runtime_cache_capacity = NonZeroUsize::new(
+            soracloud_runtime_defaults::PREPARED_RUNTIME_CACHE_CAPACITY.get() + 1,
+        )
+        .expect("changed prepared-runtime capacity is nonzero");
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
         changed.inrou.guest_image_max_bytes =
             NonZeroU64::new(TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1 + 1)
                 .expect("changed guest-image budget is nonzero");
@@ -777,8 +794,6 @@ mod tests {
             kura_blocks_bps: TAIRA_NEXUS_KURA_BLOCKS_BPS_V1,
             wsv_snapshots_bps: TAIRA_NEXUS_WSV_SNAPSHOTS_BPS_V1,
             sorafs_bps: TAIRA_NEXUS_SORAFS_BPS_V1,
-            soranet_spool_bps: TAIRA_NEXUS_SORANET_SPOOL_BPS_V1,
-            soravpn_spool_bps: TAIRA_NEXUS_SORAVPN_SPOOL_BPS_V1,
         }
     }
 

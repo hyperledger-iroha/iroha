@@ -11,7 +11,7 @@ use crate::{
     },
     nexus::LaneId,
     parameter::CustomParameterId,
-    sorafs::pin_registry::StorageClass,
+    sorafs::pin_registry::{ManifestDigest, StorageClass},
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
 #[cfg(feature = "json")]
@@ -23,6 +23,8 @@ use thiserror::Error;
 pub const DA_INGEST_REQUEST_SIGNING_DOMAIN_V1: &[u8] = b"iroha:da-ingest-request:v1\0";
 /// Domain separator for the immutable request-content commitment carried into consensus.
 pub const DA_INGEST_REQUEST_CONTENT_DOMAIN_V1: &[u8] = b"iroha:da-ingest-request:content:v1\0";
+/// Domain separator for the producer's exact post-ingest pin-scope authorization.
+pub const DA_PIN_SCOPE_SIGNING_DOMAIN_V1: &[u8] = b"iroha:da:pin-scope:v1\0";
 /// Consensus-wide ceiling for lane/epoch windows retained by DA admission.
 pub const MAX_DA_INGEST_ADMISSION_WINDOWS_V1: usize = 1_024;
 /// Consensus-wide ceiling for lane records retained by DA admission.
@@ -473,6 +475,16 @@ pub struct DaIngestSignatureV1 {
     /// Signature over [`DaIngestAuthorizationV1::signing_digest`].
     pub signature: Signature,
 }
+/// One canonical account-controller signature over an exact DA pin scope.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct DaPinScopeSignatureV1 {
+    /// Account-controller key that approved the exact pin scope.
+    pub signer: PublicKey,
+    /// Signature over [`DaPinScopeV1::signing_digest`].
+    pub signature: Signature,
+}
 /// Minimal immutable DA admission authorization committed into a block sidecar.
 ///
 /// The request-content commitment keeps the consensus payload compact while the
@@ -533,6 +545,169 @@ impl DaIngestAuthorizationV1 {
             return false;
         }
         let digest = self.signing_digest();
+        self.signatures
+            .iter()
+            .all(|witness| witness.signature.verify(&witness.signer, &digest).is_ok())
+    }
+}
+/// Exact post-ingest scope that a producer must approve before pin publication.
+///
+/// Torii computes the storage ticket and canonical manifest digest before this
+/// scope exists. The producer signs the returned scope and retries the same
+/// ingest request with those witnesses, preventing a block proposer from
+/// substituting any index-bearing pin field.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct DaPinScopeV1 {
+    /// Exact genesis-derived network identity of the original ingest authorization.
+    pub network_id: NetworkId,
+    /// Account that signed the original request and this exact pin scope.
+    pub owner: AccountId,
+    /// Digest signed by the original ingest authorization witnesses.
+    pub request_authorization_digest: Hash,
+    /// Nexus lane carried by both the request and resulting pin intent.
+    pub lane_id: LaneId,
+    /// Epoch carried by both the request and resulting pin intent.
+    pub epoch: u64,
+    /// Sequence carried by both the request and resulting pin intent.
+    pub sequence: u64,
+    /// Exact durable storage ticket assigned by Torii.
+    pub storage_ticket: StorageTicketId,
+    /// Exact digest of the durable canonical manifest.
+    pub manifest_hash: ManifestDigest,
+    /// Exact normalized registry alias, when requested.
+    #[norito(required)]
+    pub alias: Option<String>,
+}
+impl DaPinScopeV1 {
+    /// Construct the exact scope corresponding to an ingest authorization and durable outputs.
+    #[must_use]
+    pub fn new(
+        authorization: &DaIngestAuthorizationV1,
+        storage_ticket: StorageTicketId,
+        manifest_hash: ManifestDigest,
+        alias: Option<String>,
+    ) -> Self {
+        Self {
+            network_id: authorization.network_id,
+            owner: authorization.owner.clone(),
+            request_authorization_digest: Hash::prehashed(authorization.signing_digest()),
+            lane_id: authorization.lane_id,
+            epoch: authorization.epoch,
+            sequence: authorization.sequence,
+            storage_ticket,
+            manifest_hash,
+            alias,
+        }
+    }
+
+    /// Return whether this scope names the exact original ingest authorization.
+    #[must_use]
+    pub fn matches_authorization(&self, authorization: &DaIngestAuthorizationV1) -> bool {
+        self.network_id == authorization.network_id
+            && self.owner == authorization.owner
+            && *self.request_authorization_digest.as_ref() == authorization.signing_digest()
+            && self.lane_id == authorization.lane_id
+            && self.epoch == authorization.epoch
+            && self.sequence == authorization.sequence
+    }
+
+    /// Compute the domain-separated digest signed by every pin-scope witness.
+    #[must_use]
+    pub fn signing_digest(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(DA_PIN_SCOPE_SIGNING_DOMAIN_V1);
+        hasher.update(self.network_id.as_bytes());
+        let owner = self
+            .owner
+            .to_account_address()
+            .and_then(|address| address.canonical_bytes())
+            .expect("a validated AccountId must have canonical controller bytes");
+        hash_len_prefixed(&mut hasher, &owner);
+        hasher.update(self.request_authorization_digest.as_ref());
+        hasher.update(&self.lane_id.as_u32().to_le_bytes());
+        hasher.update(&self.epoch.to_le_bytes());
+        hasher.update(&self.sequence.to_le_bytes());
+        hasher.update(self.storage_ticket.as_ref());
+        hasher.update(self.manifest_hash.as_bytes());
+        match &self.alias {
+            Some(alias) => {
+                hasher.update(&[1]);
+                hash_len_prefixed(&mut hasher, alias.as_bytes());
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+        *hasher.finalize().as_bytes()
+    }
+}
+/// Producer authorization over one exact durable DA pin scope.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct DaPinScopeAuthorizationV1 {
+    /// Exact scope approved by the producer.
+    pub scope: DaPinScopeV1,
+    /// Canonically signer-key-ordered account-controller witnesses.
+    pub signatures: Vec<DaPinScopeSignatureV1>,
+}
+impl DaPinScopeAuthorizationV1 {
+    /// Sign one exact scope with an account-controller key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the signing backend rejects the key.
+    pub fn try_sign(scope: DaPinScopeV1, key_pair: &KeyPair) -> Result<Self, iroha_crypto::Error> {
+        let signature = Signature::try_new(key_pair.private_key(), &scope.signing_digest())?;
+        Ok(Self {
+            scope,
+            signatures: vec![DaPinScopeSignatureV1 {
+                signer: key_pair.public_key().clone(),
+                signature,
+            }],
+        })
+    }
+
+    /// Add one account-controller witness and restore canonical signer ordering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when signing fails or the signer is already present.
+    pub fn try_add_signature(&mut self, key_pair: &KeyPair) -> Result<(), iroha_crypto::Error> {
+        let signer = key_pair.public_key();
+        if self
+            .signatures
+            .iter()
+            .any(|witness| &witness.signer == signer)
+        {
+            return Err(iroha_crypto::Error::Other(
+                "duplicate DA pin-scope authorization signer".to_owned(),
+            ));
+        }
+        let signature = Signature::try_new(key_pair.private_key(), &self.scope.signing_digest())?;
+        self.signatures.push(DaPinScopeSignatureV1 {
+            signer: signer.clone(),
+            signature,
+        });
+        self.signatures
+            .sort_by(|left, right| left.signer.cmp(&right.signer));
+        Ok(())
+    }
+
+    /// Return whether witnesses are non-empty, strictly ordered, and individually valid.
+    #[must_use]
+    pub fn has_valid_canonical_signatures(&self) -> bool {
+        if self.signatures.is_empty()
+            || self
+                .signatures
+                .windows(2)
+                .any(|pair| pair[0].signer >= pair[1].signer)
+        {
+            return false;
+        }
+        let digest = self.scope.signing_digest();
         self.signatures
             .iter()
             .all(|witness| witness.signature.verify(&witness.signer, &digest).is_ok())
@@ -615,6 +790,13 @@ pub struct DaIngestRequest {
     pub metadata: ExtraMetadata,
     /// Canonically signer-key-ordered account-controller witnesses.
     pub signatures: Vec<DaIngestSignatureV1>,
+    /// Post-ingest witnesses over the exact scope returned by Torii.
+    ///
+    /// This vector is empty on the prepare request and deliberately excluded
+    /// from the primary request digest. A retry adds canonical scope witnesses
+    /// without invalidating the original request authorization.
+    #[norito(default)]
+    pub pin_scope_signatures: Vec<DaPinScopeSignatureV1>,
 }
 /// Canonical version-one intent signed by a DA ingest submitter.
 ///
@@ -847,6 +1029,7 @@ impl DaIngestRequestIntentV1 {
                 signer: key_pair.public_key().clone(),
                 signature,
             }],
+            pin_scope_signatures: Vec::new(),
         })
     }
 }
@@ -895,6 +1078,50 @@ impl DaIngestRequest {
         self.signatures
             .sort_by(|left, right| left.signer.cmp(&right.signer));
         Ok(())
+    }
+    /// Add one witness approving an exact scope returned for this request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the scope belongs to another request, signing
+    /// fails, or the signer is already present.
+    pub fn try_add_pin_scope_signature(
+        &mut self,
+        scope: &DaPinScopeV1,
+        key_pair: &KeyPair,
+    ) -> Result<(), iroha_crypto::Error> {
+        if !scope.matches_authorization(&self.authorization()) {
+            return Err(iroha_crypto::Error::Other(
+                "DA pin scope does not match the ingest request authorization".to_owned(),
+            ));
+        }
+        let signer = key_pair.public_key();
+        if self
+            .pin_scope_signatures
+            .iter()
+            .any(|witness| &witness.signer == signer)
+        {
+            return Err(iroha_crypto::Error::Other(
+                "duplicate DA pin-scope authorization signer".to_owned(),
+            ));
+        }
+        let signature = Signature::try_new(key_pair.private_key(), &scope.signing_digest())?;
+        self.pin_scope_signatures.push(DaPinScopeSignatureV1 {
+            signer: signer.clone(),
+            signature,
+        });
+        self.pin_scope_signatures
+            .sort_by(|left, right| left.signer.cmp(&right.signer));
+        Ok(())
+    }
+
+    /// Project the producer's witnesses onto an exact pin scope.
+    #[must_use]
+    pub fn pin_scope_authorization(&self, scope: DaPinScopeV1) -> DaPinScopeAuthorizationV1 {
+        DaPinScopeAuthorizationV1 {
+            scope,
+            signatures: self.pin_scope_signatures.clone(),
+        }
     }
     /// Verify that every request witness is canonical and cryptographically valid.
     ///
@@ -952,6 +1179,85 @@ pub struct DaIngestReceipt {
     pub rent_quote: DaRentQuote,
     /// Signature generated by the Torii DA service.
     pub operator_signature: Signature,
+}
+
+#[cfg(test)]
+mod pin_scope_tests {
+    use super::*;
+    use crate::block::BlockHeader;
+    use iroha_crypto::{Algorithm, HashOf};
+
+    fn signed_authorization() -> (KeyPair, DaIngestAuthorizationV1) {
+        let key_pair = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
+            .expect("valid deterministic pin-scope key");
+        let mut authorization = DaIngestAuthorizationV1 {
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x92; 32])),
+            ),
+            owner: AccountId::new(key_pair.public_key().clone()),
+            lane_id: LaneId::new(3),
+            epoch: 5,
+            sequence: 7,
+            payload_hash: BlobDigest::new([0x93; 32]),
+            payload_bytes: 11,
+            request_content_hash: Hash::prehashed([0x94; 32]),
+            signatures: Vec::new(),
+        };
+        authorization.signatures.push(DaIngestSignatureV1 {
+            signer: key_pair.public_key().clone(),
+            signature: Signature::try_new(key_pair.private_key(), &authorization.signing_digest())
+                .expect("sign deterministic ingest authorization"),
+        });
+        (key_pair, authorization)
+    }
+
+    #[test]
+    fn pin_scope_signatures_bind_ticket_manifest_and_alias() {
+        let (key_pair, authorization) = signed_authorization();
+        let scope = DaPinScopeV1::new(
+            &authorization,
+            StorageTicketId::new([0xA1; 32]),
+            ManifestDigest::new([0xA2; 32]),
+            Some("video.example".to_owned()),
+        );
+        assert!(scope.matches_authorization(&authorization));
+        let signed = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
+            .expect("sign deterministic pin scope");
+        assert!(signed.has_valid_canonical_signatures());
+
+        let mut mutated_ticket = signed.clone();
+        mutated_ticket.scope.storage_ticket = StorageTicketId::new([0xB1; 32]);
+        assert!(!mutated_ticket.has_valid_canonical_signatures());
+
+        let mut mutated_manifest = signed.clone();
+        mutated_manifest.scope.manifest_hash = ManifestDigest::new([0xB2; 32]);
+        assert!(!mutated_manifest.has_valid_canonical_signatures());
+
+        let mut mutated_alias = signed;
+        mutated_alias.scope.alias = Some("other.example".to_owned());
+        assert!(!mutated_alias.has_valid_canonical_signatures());
+    }
+
+    #[test]
+    fn pin_scope_authorization_adds_canonical_witnesses() {
+        let (key_pair, authorization) = signed_authorization();
+        let second = KeyPair::try_from_seed(vec![0x95; 32], Algorithm::Ed25519)
+            .expect("valid second pin-scope key");
+        let scope = DaPinScopeV1::new(
+            &authorization,
+            StorageTicketId::new([0xA3; 32]),
+            ManifestDigest::new([0xA4; 32]),
+            None,
+        );
+        let mut signed = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
+            .expect("sign deterministic pin scope");
+        signed
+            .try_add_signature(&second)
+            .expect("add second deterministic pin-scope witness");
+        assert!(signed.has_valid_canonical_signatures());
+        assert!(signed.signatures[0].signer < signed.signatures[1].signer);
+        assert!(signed.try_add_signature(&second).is_err());
+    }
 }
 
 #[cfg(all(test, feature = "json"))]

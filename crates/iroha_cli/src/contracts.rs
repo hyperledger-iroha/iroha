@@ -8,7 +8,7 @@ use base64::Engine as _;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     account_address::parse_account_address,
-    client::Client,
+    client::{Client, ContractCallDraftIntent},
     config::{Config, LoadPath},
     data_model::{
         isi::contract_alias::SetContractAlias,
@@ -253,6 +253,10 @@ pub struct DevCallArgs {
     /// Request the exact unsigned transaction payload instead of direct submission.
     #[arg(long)]
     pub draft_only: bool,
+    /// Secret-free JSON file containing the exact invocation and final metadata authorized for
+    /// the unsigned draft.
+    #[arg(long, value_name = "PATH")]
+    pub draft_intent_file: PathBuf,
     /// Contract entrypoint selector.
     #[arg(long)]
     pub entrypoint: String,
@@ -398,6 +402,7 @@ struct ContractDevManifestSmoke {
     payload: Option<toml::Value>,
     expected_result: Option<toml::Value>,
     gas_limit: Option<u64>,
+    draft_intent: Option<PathBuf>,
 }
 #[derive(clap::Args, Debug, Clone)]
 pub struct ContractAppManifestArgs {
@@ -649,6 +654,7 @@ fn parse_contract_manifest_smoke(
         payload: table.get("payload").cloned(),
         expected_result: table.get("expected_result").cloned(),
         gas_limit: toml_optional_u64(table, "gas_limit", &context)?,
+        draft_intent: toml_optional_path(table, "draft_intent", &context)?,
     })
 }
 fn parse_contract_app_manifest(value: toml::Value) -> Result<ContractAppManifest> {
@@ -1133,6 +1139,7 @@ impl DevCallArgs {
         });
         let fee_payment =
             apply_cli_gas_limit_override(context.transaction_fee_payment()?, Some(gas_limit))?;
+        let draft_intent = load_contract_call_draft_intent(&self.draft_intent_file)?;
         let value = client.post_contract_call_json(
             &authority,
             private_key.as_ref(),
@@ -1141,7 +1148,10 @@ impl DevCallArgs {
             &self.entrypoint,
             payload.as_ref(),
             None,
+            None,
+            None,
             &fee_payment,
+            &draft_intent,
         )?;
         if self.wait.is_enabled() {
             let tx_hash = extract_submitted_transaction_hash(&value)
@@ -1264,6 +1274,12 @@ impl DevSmokeArgs {
                         context.transaction_fee_payment()?,
                         Some(case.gas_limit),
                     )?;
+                    let draft_intent = case.draft_intent.as_ref().ok_or_else(|| {
+                        eyre!(
+                            "smoke `{}` is a call scenario and must declare draft_intent",
+                            case.id
+                        )
+                    })?;
                     let submit = client.post_contract_call_json(
                         &authority,
                         Some(private_key),
@@ -1272,7 +1288,10 @@ impl DevSmokeArgs {
                         &case.entrypoint,
                         case.payload.as_ref(),
                         None,
+                        None,
+                        None,
                         &fee_payment,
+                        draft_intent,
                     )?;
                     if self.wait.is_enabled() {
                         let tx_hash = extract_submitted_transaction_hash(&submit)
@@ -1498,6 +1517,7 @@ struct PreparedDevSmoke {
     payload: Option<norito::json::Value>,
     expected_result: Option<norito::json::Value>,
     gas_limit: u64,
+    draft_intent: Option<ContractCallDraftIntent>,
 }
 fn prepare_dev_smoke_cases(
     manifest_path: &Path,
@@ -1537,6 +1557,13 @@ fn prepare_dev_smoke_cases(
                 .map(toml_to_json_value)
                 .transpose()?,
             gas_limit: smoke.gas_limit.unwrap_or(profile_gas_limit),
+            draft_intent: smoke
+                .draft_intent
+                .as_ref()
+                .map(|path| {
+                    load_contract_call_draft_intent(&resolve_manifest_path(manifest_dir, path))
+                })
+                .transpose()?,
         });
     }
     Ok(cases)
@@ -2273,6 +2300,10 @@ pub struct CallArgs {
     /// Request the exact unsigned transaction payload instead of direct submission.
     #[arg(long, conflicts_with = "simulate")]
     pub draft_only: bool,
+    /// Secret-free JSON file containing the exact invocation and final metadata authorized for
+    /// the unsigned draft.
+    #[arg(long, value_name = "PATH", conflicts_with = "simulate")]
+    pub draft_intent_file: Option<PathBuf>,
     /// Simulate the contract call locally on Torii without submitting a transaction.
     #[arg(long, conflicts_with_all = ["draft_only", "private_key", "wait"])]
     pub simulate: bool,
@@ -2337,6 +2368,13 @@ impl Run for CallArgs {
         };
         let fee_payment =
             apply_cli_gas_limit_override(context.transaction_fee_payment()?, Some(self.gas_limit))?;
+        let draft_intent = self
+            .draft_intent_file
+            .as_deref()
+            .ok_or_else(|| {
+                eyre!("contract calls that produce an unsigned payload require --draft-intent-file")
+            })
+            .and_then(load_contract_call_draft_intent)?;
         let value = client.post_contract_call_json(
             &authority,
             private_key.as_ref(),
@@ -2345,7 +2383,10 @@ impl Run for CallArgs {
             &self.entrypoint,
             payload.as_ref(),
             None,
+            None,
+            None,
             &fee_payment,
+            &draft_intent,
         )?;
         if self.wait.is_enabled() {
             let tx_hash = extract_submitted_transaction_hash(&value)
@@ -2606,6 +2647,11 @@ fn resolve_contract_target(args: ContractTargetArgs) -> Result<ResolvedContractT
         )),
     }
 }
+fn load_contract_call_draft_intent(path: &Path) -> Result<ContractCallDraftIntent> {
+    let bytes = fs::read(path).wrap_err_with(|| format!("read {}", path.display()))?;
+    norito::json::from_slice(&bytes)
+        .wrap_err_with(|| format!("invalid contract-call draft intent in {}", path.display()))
+}
 fn load_contract_payload_value(
     payload_json: Option<&str>,
     payload_file: Option<&std::path::Path>,
@@ -2837,7 +2883,7 @@ where
     fn checkpoint(&self) -> Option<Box<dyn std::any::Any + Send>> {
         self.inner.checkpoint()
     }
-    fn restore(&mut self, snapshot: &dyn std::any::Any) -> bool {
+    fn restore(&mut self, snapshot: &dyn std::any::Any) -> Result<(), ivm::VMError> {
         self.inner.restore(snapshot)
     }
     fn access_logging_supported(&self) -> bool {

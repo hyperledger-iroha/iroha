@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.offline;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -1768,7 +1769,16 @@ public final class KagemushaRecursiveSpendProver {
   public static ToriiClient newToriiClient(
       final URI baseUri, final TransportExecutor transport,
       final LocalSigningContext localSigningContext) {
-    return new ToriiClient(baseUri, transport, localSigningContext);
+    return newToriiClient(baseUri, transport, localSigningContext, null);
+  }
+
+  /** Builds a Kagemusha Torii client with an optional per-request timeout. */
+  public static ToriiClient newToriiClient(
+      final URI baseUri,
+      final TransportExecutor transport,
+      final LocalSigningContext localSigningContext,
+      final Duration requestTimeout) {
+    return new ToriiClient(baseUri, transport, localSigningContext, requestTimeout);
   }
 
   static boolean isExactBridgeAbi(final int abiVersion) {
@@ -4172,12 +4182,25 @@ public final class KagemushaRecursiveSpendProver {
     private final String baseUri;
     private final TransportExecutor transport;
     private final LocalSigningContext localSigningContext;
+    private final Duration requestTimeout;
 
     private ToriiClient(final URI baseUri, final TransportExecutor transport,
         final LocalSigningContext localSigningContext) {
+      this(baseUri, transport, localSigningContext, null);
+    }
+
+    private ToriiClient(
+        final URI baseUri,
+        final TransportExecutor transport,
+        final LocalSigningContext localSigningContext,
+        final Duration requestTimeout) {
       Objects.requireNonNull(baseUri, "baseUri");
       this.transport = Objects.requireNonNull(transport, "transport");
       this.localSigningContext = Objects.requireNonNull(localSigningContext, "localSigningContext");
+      if (requestTimeout != null && requestTimeout.isNegative()) {
+        throw new IllegalArgumentException("requestTimeout must be non-negative");
+      }
+      this.requestTimeout = requestTimeout;
       if (!baseUri.isAbsolute()
           || baseUri.isOpaque()
           || baseUri.getHost() == null
@@ -4200,6 +4223,7 @@ public final class KagemushaRecursiveSpendProver {
                   .setMethod("GET")
                   .setUri(URI.create(baseUri + CAPABILITY_PATH))
                   .addHeader("Accept", JSON_MEDIA_TYPE)
+                  .setTimeout(requestTimeout)
                   .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
                   .build(),
               200,
@@ -4211,7 +4235,7 @@ public final class KagemushaRecursiveSpendProver {
         final RecipientLineageQueryV2 query, final ToriiCanonicalRequestAuth canonicalAuth) {
       return execute(
               KagemushaToriiLineageRequest.build(
-                  baseUri, query, localSigningContext, canonicalAuth),
+                  baseUri, query, localSigningContext, canonicalAuth, requestTimeout),
               200)
           .thenApply(response -> new RecipientRegistrationLineage(response.body()));
     }
@@ -4235,6 +4259,7 @@ public final class KagemushaRecursiveSpendProver {
                   .setMethod("GET")
                   .setUri(URI.create(baseUri + OPERATIONS_PATH + "/" + id))
                   .addHeader("Accept", NORITO_MEDIA_TYPE)
+                  .setTimeout(requestTimeout)
                   .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
                   .build(),
               200)
@@ -4252,6 +4277,7 @@ public final class KagemushaRecursiveSpendProver {
                   .addHeader("Content-Type", NORITO_MEDIA_TYPE)
                   .addHeader("Idempotency-Key", id)
                   .setBody(request)
+                  .setTimeout(requestTimeout)
                   .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
                   .build(),
               202)

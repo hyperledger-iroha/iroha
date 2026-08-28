@@ -6900,8 +6900,7 @@ redistributable schemas, and official trust/revocation bundles.
   before request builders are emitted; SoraFS orchestrator guard-cache
   persistence now generates authentication-tag nonces through checked OS RNG
   fills and returns labelled persistence errors before tagged cache bytes are
-  emitted, and Taikai cache-admission gossip bodies now generate replay nonces
-  through checked OS RNG fills before signed gossip entries are emitted;
+  emitted;
   SoraFS orchestrator fetch job IDs now use checked OS RNG fills and return
   `OrchestratorError::JobIdRandomness` before fetch telemetry or provider
   selection continues on entropy failure; local QUIC proxy browser-manifest
@@ -10657,9 +10656,6 @@ redistributable schemas, and official trust/revocation bundles.
     SoraFS CLI manifest-submit, account-address parsing, authority literal, and
     pin-register payload fixtures now use checked deterministic Ed25519 seed
     expansion before CLI account parsing and payload regressions consume them;
-    SoraFS Taikai cache-admission envelope/gossip signer fixtures now use
-    checked deterministic Ed25519 seed expansion before signature and nonce
-    failure regressions consume them;
     SoraFS treasury payout account helpers now use checked deterministic
     Ed25519 seed expansion before payout, reconciliation, and dispute
     regressions consume them; client

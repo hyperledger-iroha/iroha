@@ -95,17 +95,6 @@ identity_private_key_file = "/run/secrets/iroha/nexus-streaming-identity-private
 # Advertise support for feedback hints and privacy overlay provider
 feature_bits = 0b11
 
-[streaming.soranet]
-# Token-bearing exit publication remains disabled until proof-bound RouteOpen and durable revocation.
-enabled = false
-exit_multiaddr = "/dns/torii/udp/9443/quic"
-padding_budget_ms = 25
-access_kind = "authenticated"
-provision_spool_dir = "./storage/streaming/soranet_routes"
-provision_spool_max_bytes = 0
-provision_window_segments = 4
-provision_queue_capacity = 256
-
 [nexus]
 lane_count = 3
 
@@ -126,11 +115,9 @@ budget_enforce_interval_blocks = 10
 max_wsv_memory_bytes = 8589934592
 
 [nexus.storage.disk_budget_weights]
-kura_blocks_bps = 3000
+kura_blocks_bps = 3500
 wsv_snapshots_bps = 2000
-sorafs_bps = 4000
-soranet_spool_bps = 500
-soravpn_spool_bps = 500
+sorafs_bps = 4500
 
 # Lanes are logical workload streams. Their `dataspace` binding names the
 # physical validator/storage boundary that owns the lane.

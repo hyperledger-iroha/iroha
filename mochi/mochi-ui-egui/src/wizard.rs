@@ -19,39 +19,33 @@ impl MochiApp {
                 ui.add_space(12.0);
                 ui.label(RichText::new("Topology").strong());
                 ui.horizontal_wrapped(|ui| {
-                    for preset in [ProfilePreset::FourPeerBft] {
-                        let selected = self.first_run_wizard.preset == preset;
-                        let subtitle = match preset {
-                            ProfilePreset::FourPeerBft => {
-                                "Four validators for consensus debugging and failure drills."
-                            }
-                        };
-                        Frame::new()
-                            .fill(if selected {
-                                Color32::from_rgb(45, 63, 88)
+                    let preset = ProfilePreset::FourPeerBft;
+                    let selected = self.first_run_wizard.preset == preset;
+                    Frame::new()
+                        .fill(if selected {
+                            Color32::from_rgb(45, 63, 88)
+                        } else {
+                            Color32::from_rgb(31, 37, 51)
+                        })
+                        .stroke(Stroke::new(
+                            1.0,
+                            if selected {
+                                Color32::from_rgb(116, 176, 141)
                             } else {
-                                Color32::from_rgb(31, 37, 51)
-                            })
-                            .stroke(Stroke::new(
-                                1.0,
-                                if selected {
-                                    Color32::from_rgb(116, 176, 141)
-                                } else {
-                                    Color32::from_rgb(76, 95, 126)
-                                },
-                            ))
-                            .corner_radius(CornerRadius::same(14))
-                            .inner_margin(Margin::symmetric(14, 12))
-                            .show(ui, |ui| {
-                                ui.set_width(240.0);
-                                ui.label(RichText::new(preset.label()).strong());
-                                ui.small(subtitle);
-                                ui.add_space(6.0);
-                                if ui.selectable_label(selected, "Use this").clicked() {
-                                    self.first_run_wizard.preset = preset;
-                                }
-                            });
-                    }
+                                Color32::from_rgb(76, 95, 126)
+                            },
+                        ))
+                        .corner_radius(CornerRadius::same(14))
+                        .inner_margin(Margin::symmetric(14, 12))
+                        .show(ui, |ui| {
+                            ui.set_width(240.0);
+                            ui.label(RichText::new(preset.label()).strong());
+                            ui.small("Four validators for consensus debugging and failure drills.");
+                            ui.add_space(6.0);
+                            if ui.selectable_label(selected, "Use this").clicked() {
+                                self.first_run_wizard.preset = preset;
+                            }
+                        });
                 });
                 ui.add_space(12.0);
                 ui.label(RichText::new("Workspace").strong());

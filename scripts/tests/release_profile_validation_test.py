@@ -390,6 +390,8 @@ def test_release_pipeline_signs_final_manifest_before_publish_plan() -> None:
     assert "image_cmd.extend(signing_cli_args)" not in main_source
     assert "--development-allow-unsigned-publish-plan" in main_source
     assert "production publish plans require --external-signer" in main_source
+    assert "production publish plans require the complete independent timed-OVN" in main_source
+    assert "timed_ovn_audit_manifest_path=" in main_source
     assert '"oci-archive"' in main_source
     assert '"--source-commit"' in main_source
     assert '"--image-builder-base-image"' in main_source
@@ -434,7 +436,7 @@ def test_docker_workflows_pin_buildx_tool_version() -> None:
 def test_root_dockerfile_workflows_require_digest_pinned_base_refs() -> None:
     expected_root_builds = {
         "publish_dev.yml": 1,
-        "publish.yml": 3,
+        "publish.yml": 2,
         "pr_docker_compose.yml": 1,
         # One additional custom build uses Dockerfile.musl.
         "publish_custom.yml": 2,
@@ -456,6 +458,106 @@ def test_root_dockerfile_workflows_require_digest_pinned_base_refs() -> None:
             )
             == expected
         )
+
+
+def _official_tag_candidate_workflow_errors(source: str) -> list[str]:
+    """Return direct-publication contract violations for the tag workflow."""
+
+    errors: list[str] = []
+    folded = source.casefold()
+
+    if not source.startswith("name: Qualify Iroha 3 release candidates\n"):
+        errors.append("workflow must remain candidate qualification only")
+    if '      - "v3*"' not in source:
+        errors.append("workflow must retain the Iroha 3 tag trigger")
+
+    build_action = "uses: docker/build-push-action@"
+    build_sections = source.split(build_action)[1:]
+    if len(build_sections) != 2:
+        errors.append("workflow must contain exactly two candidate builds")
+    for index, remainder in enumerate(build_sections, start=1):
+        step = remainder.split("\n      - ", 1)[0]
+        if step.count("\n          load: true\n") != 1:
+            errors.append(f"candidate build {index} must load exactly once")
+        if re.search(r"(?m)^\s+push\s*:", step):
+            errors.append(f"candidate build {index} must not enable push")
+        if re.search(r"(?m)^\s+outputs\s*:", step):
+            errors.append(f"candidate build {index} must not export a registry output")
+        if "\n          tags: iroha-release-candidate:" not in step:
+            errors.append(f"candidate build {index} must use a local-only tag")
+
+    for marker in (
+        "scripts/run_release_pipeline.py",
+        "complete externally reviewed",
+        "timed-OVN audit bundle",
+        "scripts/release_manifest_signing.py",
+    ):
+        if marker not in source:
+            errors.append(f"workflow is missing audited-promotion marker: {marker}")
+
+    for forbidden in (
+        "docker/login-action@",
+        "${{ secrets.",
+        "type=registry",
+        "docker push ",
+        "buildx build --push",
+        "oras push",
+        "skopeo copy",
+        "crane push",
+        "crane copy",
+        "docker.soramitsu.co.jp",
+    ):
+        if forbidden.casefold() in folded:
+            errors.append(f"workflow contains a publication sink: {forbidden}")
+
+    return errors
+
+
+def test_official_tag_workflow_is_candidate_only_and_cannot_publish() -> None:
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "publish.yml"
+    source = workflow_path.read_text(encoding="utf-8")
+
+    assert _official_tag_candidate_workflow_errors(source) == []
+
+    release_gate = (
+        REPO_ROOT / ".github" / "workflows" / "sorafs-cli-release.yml"
+    ).read_text(encoding="utf-8")
+    assert '- ".github/workflows/publish.yml"' in release_gate
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            "          load: true\n",
+            "          push: ${{ startsWith(github.ref, 'refs/tags/') }}\n",
+        ),
+        (
+            "          load: true\n",
+            "          outputs: type=registry\n",
+        ),
+        (
+            "      - name: Set up Docker Buildx\n",
+            "      - uses: docker/login-action@deadbeef\n"
+            "      - name: Set up Docker Buildx\n",
+        ),
+        (
+            '          docker tag "iroha-release-candidate:${TAG}" ',
+            '          docker push "iroha-release-candidate:${TAG}"\n'
+            '          docker tag "iroha-release-candidate:${TAG}" ',
+        ),
+    ),
+)
+def test_official_tag_candidate_contract_rejects_publish_mutations(
+    old: str, new: str
+) -> None:
+    source = (
+        REPO_ROOT / ".github" / "workflows" / "publish.yml"
+    ).read_text(encoding="utf-8")
+    assert old in source
+
+    mutated = source.replace(old, new, 1)
+    assert _official_tag_candidate_workflow_errors(mutated)
 
 
 def test_release_and_evidence_dockerfiles_have_no_mutable_base_defaults() -> None:
@@ -1135,6 +1237,45 @@ def test_release_pipeline_rejects_unpaired_signer_and_verifier_contracts(
     assert (
         "aggregate signing requires both the complete external signer contract "
         "and the pinned native release-manifest verifier contract"
+    ) in result.stderr
+    assert not output_dir.exists()
+
+
+def test_release_pipeline_rejects_official_publish_without_timed_ovn_audit(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "release-output"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "run_release_pipeline.py"),
+            "--version",
+            "0.0.0-test",
+            "--output-dir",
+            str(output_dir),
+            "--publish-target",
+            "sorafs://release-test",
+            "--dry-run",
+            "--external-signer",
+            "/reviewed/external-signer",
+            "--signing-public-key",
+            "/reviewed/release-public.raw",
+            "--trusted-signing-fingerprint",
+            "a" * 64,
+            "--release-manifest-verifier",
+            "/reviewed/sorafs-validate",
+            "--trusted-release-manifest-verifier-sha256",
+            "b" * 64,
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert (
+        "production publish plans require the complete independent timed-OVN "
+        "official-release audit input set"
     ) in result.stderr
     assert not output_dir.exists()
 

@@ -24,9 +24,9 @@ impl FileWrap {
         })
     }
     fn open_read_only(path: PathBuf) -> Result<Self> {
-        Self::open_with(path, |opts| {
-            opts.read(true);
-        })
+        let file =
+            open_read_only_regular_file(&path, "canonical Kura journal").add_err_context(&path)?;
+        Ok(Self { path, file })
     }
     fn try_io<F, T>(&mut self, f: F) -> Result<T>
     where
@@ -34,6 +34,50 @@ impl FileWrap {
     {
         let value = f(&mut self.file).add_err_context(&self.path)?;
         Ok(value)
+    }
+}
+#[cfg(unix)]
+fn open_read_only_regular_file(path: &Path, description: &str) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let flags =
+        (rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
+            .bits();
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(i32::try_from(flags).expect("open flags fit platform c_int"))
+        .open(path)?;
+    ensure_read_only_input_is_regular(file, description)
+}
+#[cfg(windows)]
+fn open_read_only_regular_file(path: &Path, description: &str) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    ensure_read_only_input_is_regular(file, description)
+}
+#[cfg(not(any(unix, windows)))]
+fn open_read_only_regular_file(_path: &Path, _description: &str) -> std::io::Result<std::fs::File> {
+    Err(std::io::Error::new(
+        ErrorKind::Unsupported,
+        "secure read-only Kura file admission is unavailable on this platform",
+    ))
+}
+fn ensure_read_only_input_is_regular(
+    file: std::fs::File,
+    description: &str,
+) -> std::io::Result<std::fs::File> {
+    if file.metadata()?.is_file() {
+        Ok(file)
+    } else {
+        Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("{description} is not a regular file"),
+        ))
     }
 }
 fn create_dir_all_with_context(path: &Path) -> Result<()> {

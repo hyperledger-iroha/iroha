@@ -3,7 +3,9 @@ package org.hyperledger.iroha.android.norito;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
@@ -15,6 +17,9 @@ import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.util.HashLiteral;
 import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoDecoder;
+import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
@@ -26,6 +31,12 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
 
   private static final String DEFAULT_SCHEMA = "iroha.android.transaction.Payload.v1";
+  private static final String LOG_WIRE_NAME = "iroha.log";
+  private static final String LOG_SCHEMA = "iroha_data_model::isi::transparent::Log";
+  private static final String VALIDATION_FEE_MULTISIG_MARKER_PREFIX =
+      "iroha:validation_fee:multisig:v1:";
+  private static final String VALIDATION_FEE_MULTISIG_RESERVED_PREFIX =
+      "iroha:validation_fee:multisig:";
 
   private final int chainDiscriminant;
   private final String schemaName;
@@ -81,6 +92,227 @@ public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
     } catch (final Exception ex) {
       throw new NoritoException("Failed to encode Norito instruction box", ex);
     }
+  }
+
+  /** Decodes one exact canonical wire-framed instruction box. */
+  public static InstructionBox decodeInstructionBox(final byte[] encoded) throws NoritoException {
+    byte[] canonical = null;
+    try {
+      final InstructionBox decoded = TransactionPayloadAdapter.decodeInstructionBox(encoded);
+      canonical = TransactionPayloadAdapter.encodeInstructionBox(decoded);
+      if (!Arrays.equals(encoded, canonical)) {
+        throw new IllegalArgumentException("instruction box is not canonically encoded");
+      }
+      return decoded;
+    } catch (final Exception ex) {
+      throw new NoritoException("Failed to decode canonical Norito instruction box", ex);
+    } finally {
+      if (canonical != null) {
+        Arrays.fill(canonical, (byte) 0);
+      }
+    }
+  }
+
+  /**
+   * Returns the exact inner instruction frames committed by a multisig proposal.
+   *
+   * <p>Torii appends one canonical TRACE log marker when a validation-fee instruction coordinate
+   * is supplied. The returned list includes that marker so local proposal hashing and unsigned
+   * draft verification cover the policy, optional Hijiri quote, and exact fee coordinate.
+   */
+  public static List<byte[]> canonicalMultisigProposalInstructionBoxes(
+      final MultisigProposeRequest request) throws NoritoException {
+    if (request == null) {
+      throw new NoritoException("Multisig propose request must not be null");
+    }
+    final List<byte[]> instructions = snapshotInstructionBoxes(request.instructions());
+    byte[] canonicalProbe = null;
+    try {
+      canonicalProbe = TransactionPayloadAdapter.encodeCanonicalInstructionBoxes(instructions);
+      for (final byte[] encoded : instructions) {
+        final InstructionBox instruction = decodeInstructionBox(encoded);
+        if (instruction.payload() instanceof InstructionBox.WirePayload) {
+          final InstructionBox.WirePayload wire =
+              (InstructionBox.WirePayload) instruction.payload();
+          if (LOG_WIRE_NAME.equals(wire.wireName())
+              && decodeCanonicalLogInstruction(encoded)
+                  .message
+                  .startsWith(VALIDATION_FEE_MULTISIG_RESERVED_PREFIX)) {
+            throw new IllegalArgumentException(
+                "multisig propose request instructions must not contain a validation-fee marker");
+          }
+        }
+      }
+      if (request.validationFeeInstructionIndex() != null) {
+        instructions.add(encodeValidationFeeMultisigMarker(request));
+      }
+      final List<byte[]> result = new ArrayList<>(instructions.size());
+      for (final byte[] instruction : instructions) {
+        result.add(instruction.clone());
+      }
+      return Collections.unmodifiableList(result);
+    } catch (final Exception ex) {
+      for (final byte[] instruction : instructions) {
+        Arrays.fill(instruction, (byte) 0);
+      }
+      if (ex instanceof NoritoException) {
+        throw (NoritoException) ex;
+      }
+      throw new NoritoException(
+          "Failed to construct canonical multisig proposal instructions", ex);
+    } finally {
+      if (canonicalProbe != null) {
+        Arrays.fill(canonicalProbe, (byte) 0);
+      }
+    }
+  }
+
+  private static byte[] encodeValidationFeeMultisigMarker(
+      final MultisigProposeRequest request) throws NoritoException {
+    final Long version = request.validationFeePolicyVersion();
+    final String policyHash = canonicalLowerHex32(
+        request.validationFeePolicyHash(), "validationFeePolicyHash");
+    final String hijiriHash =
+        request.validationFeeHijiriFeeQuoteHash() == null
+            ? "-"
+            : canonicalLowerHex32(
+                request.validationFeeHijiriFeeQuoteHash(),
+                "validationFeeHijiriFeeQuoteHash");
+    final Long instructionIndex = request.validationFeeInstructionIndex();
+    final Long transferEntryIndex = request.validationFeeTransferEntryIndex();
+    if (version == null || version.longValue() <= 0L) {
+      throw new NoritoException(
+          "validationFeePolicyVersion must be positive when a marker is required");
+    }
+    if (instructionIndex == null || instructionIndex.longValue() < 0L) {
+      throw new NoritoException("validationFeeInstructionIndex must be non-negative");
+    }
+    if (transferEntryIndex != null && transferEntryIndex.longValue() < 0L) {
+      throw new NoritoException("validationFeeTransferEntryIndex must be non-negative");
+    }
+    final String message =
+        VALIDATION_FEE_MULTISIG_MARKER_PREFIX
+            + version
+            + ":"
+            + policyHash
+            + ":"
+            + hijiriHash
+            + ":"
+            + instructionIndex
+            + ":"
+            + (transferEntryIndex == null ? "-" : transferEntryIndex.toString());
+    final byte[] payload =
+        NoritoCodec.encode(
+            new ValidationFeeMarkerLog(0L, message),
+            LOG_SCHEMA,
+            ValidationFeeMarkerLogAdapter.INSTANCE);
+    final InstructionBox marker = InstructionBox.fromWirePayload(LOG_WIRE_NAME, payload);
+    return TransactionPayloadAdapter.encodeInstructionBox(marker);
+  }
+
+  private static ValidationFeeMarkerLog decodeCanonicalLogInstruction(
+      final byte[] encodedInstruction) {
+    final InstructionBox instruction;
+    try {
+      instruction = decodeInstructionBox(encodedInstruction);
+    } catch (final NoritoException ex) {
+      throw new IllegalArgumentException("log instruction box is not canonical", ex);
+    }
+    if (!(instruction.payload() instanceof InstructionBox.WirePayload)) {
+      throw new IllegalArgumentException("instruction must contain a wire payload");
+    }
+    final InstructionBox.WirePayload wire =
+        (InstructionBox.WirePayload) instruction.payload();
+    if (!LOG_WIRE_NAME.equals(wire.wireName())) {
+      throw new IllegalArgumentException("instruction wire name must be iroha.log");
+    }
+    final byte[] framed = wire.payloadBytes();
+    final ValidationFeeMarkerLog decoded =
+        NoritoCodec.decode(framed, ValidationFeeMarkerLogAdapter.INSTANCE, LOG_SCHEMA);
+    final byte[] canonical =
+        NoritoCodec.encode(decoded, LOG_SCHEMA, ValidationFeeMarkerLogAdapter.INSTANCE);
+    if (!Arrays.equals(framed, canonical)) {
+      throw new IllegalArgumentException("log instruction payload is not canonically encoded");
+    }
+    return decoded;
+  }
+
+  private static String canonicalLowerHex32(final String value, final String field)
+      throws NoritoException {
+    if (value == null) {
+      throw new NoritoException(field + " must be provided");
+    }
+    final String normalized = value.trim().toLowerCase(Locale.ROOT);
+    if (normalized.length() != 64) {
+      throw new NoritoException(field + " must contain 64 hexadecimal characters");
+    }
+    for (int index = 0; index < normalized.length(); index++) {
+      final char character = normalized.charAt(index);
+      if (!((character >= '0' && character <= '9')
+          || (character >= 'a' && character <= 'f'))) {
+        throw new NoritoException(field + " must contain 64 hexadecimal characters");
+      }
+    }
+    return normalized;
+  }
+
+  private static final class ValidationFeeMarkerLog {
+    private final long level;
+    private final String message;
+
+    private ValidationFeeMarkerLog(final long level, final String message) {
+      this.level = level;
+      this.message = message;
+    }
+  }
+
+  private static final class ValidationFeeMarkerLogAdapter
+      implements TypeAdapter<ValidationFeeMarkerLog> {
+    private static final ValidationFeeMarkerLogAdapter INSTANCE =
+        new ValidationFeeMarkerLogAdapter();
+    private static final TypeAdapter<Long> LEVEL = NoritoAdapters.uint(8);
+    private static final TypeAdapter<String> STRING = NoritoAdapters.stringAdapter();
+
+    @Override
+    public void encode(
+        final NoritoEncoder encoder, final ValidationFeeMarkerLog value) {
+      encodeSizedField(encoder, LEVEL, value.level);
+      encodeSizedField(encoder, STRING, value.message);
+    }
+
+    @Override
+    public ValidationFeeMarkerLog decode(final NoritoDecoder decoder) {
+      final long level = decodeSizedField(decoder, LEVEL);
+      if (level < 0L || level > 4L) {
+        throw new IllegalArgumentException("log level must be a canonical Level tag");
+      }
+      return new ValidationFeeMarkerLog(level, decodeSizedField(decoder, STRING));
+    }
+  }
+
+  private static <T> void encodeSizedField(
+      final NoritoEncoder encoder, final TypeAdapter<T> adapter, final T value) {
+    final NoritoEncoder child = encoder.childEncoder();
+    adapter.encode(child, value);
+    final byte[] payload = child.toByteArray();
+    final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+    encoder.writeLength(payload.length, compact);
+    encoder.writeBytes(payload);
+  }
+
+  private static <T> T decodeSizedField(
+      final NoritoDecoder decoder, final TypeAdapter<T> adapter) {
+    final long length = decoder.readLength(decoder.compactLenActive());
+    if (length < 0L || length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("field payload is too large");
+    }
+    final NoritoDecoder child =
+        new NoritoDecoder(decoder.readBytes((int) length), decoder.flags());
+    final T value = adapter.decode(child);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException("trailing bytes after field payload");
+    }
+    return value;
   }
 
   /**

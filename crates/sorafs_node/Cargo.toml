@@ -64,3 +64,7 @@ base64 = { workspace = true }
 [[test]]
 name = "pin_workflows"
 path = "tests/pin_workflows.rs"
+
+[[test]]
+name = "cli"
+path = "tests/cli.rs"

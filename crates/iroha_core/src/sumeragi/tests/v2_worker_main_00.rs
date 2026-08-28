@@ -905,6 +905,7 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
     };
     (service, keys)
 }
+
 fn lane_commit_qc(validator: PeerId) -> LaneBlockQcV1 {
     let validator_set = vec![validator];
     let validator_set_hash = HashOf::new(&validator_set);

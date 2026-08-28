@@ -2504,7 +2504,9 @@ impl GlobalBeaconPartialSignature {
         Ok(())
     }
 }
-/// Payload variants accepted by the Sumeragi v2 network envelope.
+/// Payload variants decoded by the Sumeragi v2 network envelope.
+///
+/// Runtime admission rejects the retained legacy VRF variants below.
 #[expect(
     clippy::large_enum_variant,
     reason = "consensus variants retain their canonical V1 Norito payloads inline; introducing indirection would change the signed wire representation"

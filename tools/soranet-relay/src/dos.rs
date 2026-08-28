@@ -11,7 +11,6 @@ use crate::{
 use blake3::Hasher;
 use hex;
 use iroha_crypto::soranet::{
-    pow::Parameters,
     puzzle,
     token::{AdmissionToken, AdmissionTokenVerifier, VerifyError as TokenVerifyError},
 };
@@ -68,7 +67,6 @@ const fn emergency_throttle_preflight_limits_v1() -> json::JsonPreflightLimits {
 }
 /// Aggregated controls applied to inbound handshakes.
 pub struct DoSControls {
-    pow_params: Parameters,
     remote_limiter: Mutex<RateLimiter<IpAddr>>,
     slowloris: SlowlorisDetector,
     puzzle: PuzzlePolicy,
@@ -86,15 +84,14 @@ impl DoSControls {
         metrics: Arc<Metrics>,
         mode: RelayMode,
     ) -> Result<Self, ConfigError> {
-        let base_params = config.parameters()?;
-        let puzzle = config.puzzle_parameters(&base_params)?;
+        let puzzle = config.puzzle_parameters()?;
         let quotas_cfg = config.quotas_for_mode(mode);
         let mut slowloris_cfg = config.slowloris.clone();
         slowloris_cfg.apply_defaults();
         let remote_params = RateLimitParams::from_remote(&quotas_cfg);
         let remote_limits = QuotaLimits::from(&remote_params);
         let remote_limiter = Mutex::new(RateLimiter::new(remote_params));
-        metrics.set_pow_difficulty(base_params.difficulty());
+        metrics.set_pow_difficulty(puzzle.difficulty());
         metrics.set_active_remote_cooldowns(0);
         let puzzle_policy = PuzzlePolicy::new(puzzle);
         let signed_ticket_public_key = config.signed_ticket_public_key()?.map(Arc::new);
@@ -103,7 +100,6 @@ impl DoSControls {
             .map(|cfg| EmergencyThrottle::new(cfg.clone()))
             .transpose()?;
         Ok(Self {
-            pow_params: base_params,
             remote_limiter,
             slowloris: SlowlorisDetector::new(slowloris_cfg, remote_limits.max_entries()),
             puzzle: puzzle_policy,
@@ -113,10 +109,6 @@ impl DoSControls {
             remote_limits,
             emergency,
         })
-    }
-    /// Returns the static configured first-release PoW parameters.
-    pub fn current_pow_parameters(&self) -> Parameters {
-        self.pow_params
     }
     /// Returns the static configured first-release puzzle parameters.
     pub fn current_puzzle_parameters(&self) -> puzzle::Parameters {
@@ -671,7 +663,6 @@ struct RateLimiter<K> {
 }
 /// Snapshot of quota settings for metrics and compliance logging.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub struct QuotaLimits {
     /// Maximum bursts permitted within a window.
     burst: u32,
@@ -692,7 +683,6 @@ impl From<&RateLimitParams> for QuotaLimits {
         }
     }
 }
-#[allow(dead_code)]
 impl QuotaLimits {
     pub fn burst(&self) -> u32 {
         self.burst

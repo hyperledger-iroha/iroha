@@ -61,6 +61,29 @@ test_hermetic_command_environment() {
   local probe="$TMP_DIR/hermetic-environment-probe"
   local output="$TMP_DIR/hermetic-environment.txt"
   local rejected_output
+  "$TEST_PYTHON_BINARY" -I -S -B - \
+    "$SCRIPT_DIR/run_mobile_hermetic_command.py" <<'PY'
+from pathlib import Path
+import runpy
+import sys
+
+profiles = runpy.run_path(str(Path(sys.argv[1])))['PROFILES']
+source_revision_environment = {
+    'CONNECT_NORITO_SOURCE_REVISION',
+    'IROHA_GIT_COMMIT_HASH',
+    'VERGEN_GIT_SHA',
+}
+for profile in ('apple-ios-device', 'apple-ios-simulator', 'apple-macos'):
+    if not source_revision_environment <= profiles[profile]:
+        raise SystemExit(f'{profile} must admit the canonical source revision')
+for profile in ('android-cargo', 'host-cargo'):
+    unexpected = source_revision_environment & profiles[profile]
+    if unexpected:
+        raise SystemExit(
+            f'{profile} must not admit Apple source-revision variables: '
+            f'{sorted(unexpected)}'
+        )
+PY
   printf '%s\n' \
     "#!$TEST_PYTHON_BINARY" \
     'import os' \
@@ -1873,12 +1896,21 @@ run_expect_reference_only_binary_fail \
   "connect_norito_bridge_abi_version" \
   "$inspection_tools"
 for parliament_c_symbol in \
+  connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1 \
   connect_norito_parliament_timed_ovn_verify_casting_proof_v1 \
   connect_norito_parliament_timed_ovn_registration_from_proof_v1 \
   connect_norito_parliament_timed_ovn_ballot_from_proof_v1; do
   run_expect_reference_only_binary_fail \
     "$extra_binary_symbol" \
     "$parliament_c_symbol" \
+    "$inspection_tools"
+done
+for hijiri_quote_c_symbol in \
+  connect_norito_validation_fee_hijiri_quote_request_v1 \
+  connect_norito_validation_fee_hijiri_quote_response_verify_v1; do
+  run_expect_reference_only_binary_fail \
+    "$extra_binary_symbol" \
+    "$hijiri_quote_c_symbol" \
     "$inspection_tools"
 done
 run_expect_binary_fail \
@@ -2507,6 +2539,7 @@ run_expect_android_missing_symbol_fail \
   "Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignerContractRevision" \
   "$android_inspection_tools"
 for parliament_c_symbol in \
+  connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1 \
   connect_norito_parliament_timed_ovn_verify_casting_proof_v1 \
   connect_norito_parliament_timed_ovn_registration_from_proof_v1 \
   connect_norito_parliament_timed_ovn_ballot_from_proof_v1; do
@@ -2517,12 +2550,25 @@ for parliament_c_symbol in \
 done
 for parliament_jni_symbol in \
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofPageV1 \
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofV1 \
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeRegistrationFromProofV1 \
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBallotFromProofV1; do
   run_expect_android_missing_symbol_fail \
     "$with_android_outputs" \
     "$parliament_jni_symbol" \
+    "$android_inspection_tools"
+done
+for hijiri_quote_jni_symbol in \
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1 \
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1 \
+  Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1 \
+  Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1; do
+  run_expect_android_missing_symbol_fail \
+    "$with_android_outputs" \
+    "$hijiri_quote_jni_symbol" \
     "$android_inspection_tools"
 done
 run_expect_android_missing_symbol_fail \

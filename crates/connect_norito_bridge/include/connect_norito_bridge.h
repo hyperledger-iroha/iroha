@@ -29,12 +29,19 @@ extern "C" {
 #define CONNECT_NORITO_ERR_CANONICAL_JSON -503
 #define CONNECT_NORITO_ERR_VALIDATION_FEE_POLICY_PROOF -504
 #define CONNECT_NORITO_ERR_PARLIAMENT_TIMED_OVN -505
+#define CONNECT_NORITO_ERR_VALIDATION_FEE_HIJIRI_QUOTE -506
 #define CONNECT_NORITO_ERR_CONNECT_IDENTITY -410
 #define CONNECT_NORITO_ERR_CONNECT_APPROVAL -411
+
+#define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1 1
+#define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS_V1 100000
+#define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1 4096
+#define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1 65536
 
 #define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1 32
 #define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1 32
 #define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1 8388608
+#define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1 41
 
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST 1
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_CANCEL 2
@@ -195,7 +202,52 @@ int32_t connect_norito_validation_fee_current_policy_proof_verify_v1(
     uint8_t** out_projection_json,
     unsigned long* out_projection_json_len);
 
+// Encodes the exact canonical Norito V1 request body for
+// POST /v1/validation-fee/hijiri/quote. The account id must be a canonical
+// I105 literal and qualifying_transfer_count must be in 1..100000. The output
+// is cleared on failure and must be released with connect_norito_free on
+// success.
+int32_t connect_norito_validation_fee_hijiri_quote_request_v1(
+    const uint8_t* account_id_utf8,
+    unsigned long account_id_len,
+    uint32_t qualifying_transfer_count,
+    uint8_t** out_request,
+    unsigned long* out_request_len);
+
+// Canonically decodes and re-encodes both native-Norito archives, validates
+// the response's full Hijiri arithmetic/coherence, and binds its echoed
+// account, transfer count, and checked successor height to the exact request.
+// The response is bounded to 64 KiB and the request to 4 KiB. On success this
+// returns typed canonical Norito JSON using schema
+// iroha.torii.v1.validation_fee.hijiri_quote.response. The output is cleared
+// on failure and must be released with connect_norito_free on success.
+int32_t connect_norito_validation_fee_hijiri_quote_response_verify_v1(
+    const uint8_t* response_norito,
+    unsigned long response_norito_len,
+    const uint8_t* request_norito,
+    unsigned long request_norito_len,
+    uint8_t** out_projection_json,
+    unsigned long* out_projection_json_len);
+
 // ---------------- Parliament timed-OVN wallet operations ----------------
+
+// Authenticates one bounded proof page against independently configured
+// network/checkpoint/ballot anchors. The caller-owned output must contain
+// exactly 41 bytes: big-endian u64 evaluated height, 32-byte evaluated context
+// id, and canonical 0/1 more-available. Intermediate pages promote only the
+// checkpoint; terminal pages also replay and bind the complete Core archive.
+int32_t connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1(
+    const uint8_t* proof_response_norito,
+    unsigned long proof_response_norito_len,
+    const uint8_t* network_id,
+    unsigned long network_id_len,
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id,
+    unsigned long trusted_checkpoint_context_id_len,
+    const uint8_t* expected_ballot_attempt_id,
+    unsigned long expected_ballot_attempt_id_len,
+    uint8_t* out_page_result,
+    unsigned long out_page_result_len);
 
 // Authenticates a terminal proof response against independently configured
 // network/checkpoint/ballot anchors, then canonical-decodes and replay-validates

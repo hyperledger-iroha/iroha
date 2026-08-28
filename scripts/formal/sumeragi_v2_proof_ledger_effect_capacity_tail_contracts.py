@@ -1,5 +1,544 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py.
 
+def _effect_capacity_apply_dispatch_barrier_source_fidelity_errors(
+    effects_path: Path,
+    source: str,
+    generic_executor_context: tuple[tuple[str, ...], ...],
+    errors: list[str],
+) -> None:
+    """Bind Apply dispatch to every process-local settlement owner."""
+
+    barrier = _require_rust_item(
+        effects_path,
+        source,
+        "decision_apply_dispatch_barrier_is_occupied",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        barrier,
+        generic_executor_context,
+        "closed Decision Apply process-local settlement barrier",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        effects_path,
+        barrier,
+        """
+fn decision_apply_dispatch_barrier_is_occupied(&self) -> bool {
+    self.pending_runner_decision_cleanup.is_some()
+        || !self.pending_durable_validate_admissions.is_empty()
+        || self.pending_released_lifecycle_validate_apply.is_some()
+        || self.pending_live_wal_sign_admission.is_some()
+        || !self.pending_lifecycle_output_admissions.is_empty()
+}
+""",
+        "closed Decision Apply barrier must retain runner cleanup, durable and released Validate, live-WAL Sign, and lifecycle-output owners",
+        errors,
+    )
+
+
+def _effect_capacity_mutation_runner_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Validate the semantic inventory and outcomes pinned by the TLC runner."""
+
+    path = repo_root / EFFECT_CAPACITY_MUTATION_RUNNER
+    if not path.is_file() or path.is_symlink():
+        return [
+            f"{path}: effect-capacity mutation runner must be a regular file"
+        ]
+
+    source = path.read_text(encoding="utf-8")
+    normalized_source = re.sub(r"[ \t]*\\\r?\n[ \t]*", " ", source)
+    errors: list[str] = []
+    for summary in (
+        "capacity-blocked Fetch B keeps one exact task/authority/lifecycle FIFO owner without partial P/Q installation",
+        "capacity release atomically installs Fetch B P/Q; new B drains T while an authority upgrade retains its exact retry barrier",
+    ):
+        if source.count(summary) != 1:
+            errors.append(
+                f"{path}: effect-capacity runner must contain exactly one "
+                f"reviewed summary {summary!r}"
+            )
+
+    expected_models = {
+        name
+        for name in EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS
+        if name.endswith(".tla")
+    }
+    expected_configs = {
+        name
+        for name in EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS
+        if name.endswith(".cfg")
+    }
+    model_names = {
+        "OWNERSHIP_MODULE": "SumeragiV2EffectCapacityOwnershipMutation.tla",
+        "CERTIFIED_REQUEST_MODULE": (
+            "SumeragiV2CertifiedRequestCapacityMutation.tla"
+        ),
+        "OUTER_TRANSPORT_MODULE": (
+            "SumeragiV2EffectCapacityOuterTransportMutation.tla"
+        ),
+        "RETIREMENT_MODULE": "SumeragiV2EffectCapacityRetirementMutation.tla",
+        "PRIORITY_MODULE": "SumeragiV2EffectPreemptionPriorityMutation.tla",
+        "BATCH_MODULE": "SumeragiV2RetainedEffectBatchMutation.tla",
+    }
+    declared_models: dict[str, str] = {}
+    for variable, expected_model in model_names.items():
+        matches = re.findall(
+            rf'(?m)^readonly {re.escape(variable)}="([^"]+)"$', source
+        )
+        if len(matches) != 1:
+            errors.append(
+                f"{path}: runner must declare {variable} exactly once"
+            )
+            continue
+        declared_models[variable] = matches[0]
+        if matches[0] != expected_model:
+            errors.append(
+                f"{path}: {variable} must name {expected_model}; "
+                f"found {matches[0]}"
+            )
+
+    expected_model_by_config: dict[str, str] = {}
+    config_groups = (
+        (
+            "SumeragiV2EffectCapacityOwnershipMutation.tla",
+            {
+                "effect_capacity_timeout_sign_fixed.cfg",
+                "effect_capacity_timeout_sign_lost_bug.cfg",
+                "effect_capacity_timeout_sign_refill_bug.cfg",
+            },
+        ),
+        (
+            "SumeragiV2CertifiedRequestCapacityMutation.tla",
+            {
+                "effect_capacity_certified_request_fatal_bug.cfg",
+                "effect_capacity_certified_request_fixed.cfg",
+                "effect_capacity_certified_request_lost_bug.cfg",
+                "effect_capacity_certified_request_duplicate_bug.cfg",
+                "effect_capacity_certified_request_overtake_bug.cfg",
+                "effect_capacity_certified_request_partial_pq_bug.cfg",
+                "effect_capacity_certified_request_substitute_bug.cfg",
+                "effect_capacity_certified_request_upgrade_barrier_lost_bug.cfg",
+                "effect_capacity_certified_response_blocked_bug.cfg",
+                "effect_capacity_certified_response_byte_reserve_bug.cfg",
+                "effect_capacity_certified_response_count_reserve_bug.cfg",
+            },
+        ),
+        (
+            "SumeragiV2EffectCapacityOuterTransportMutation.tla",
+            {
+                "effect_capacity_outer_transport_chunk_class_bug.cfg",
+                "effect_capacity_outer_transport_class_fixed.cfg",
+                "effect_capacity_outer_transport_response_class_bug.cfg",
+            },
+        ),
+        (
+            "SumeragiV2EffectCapacityRetirementMutation.tla",
+            {
+                "effect_capacity_decided_retirement_fixed.cfg",
+                "effect_capacity_full_fetch_hol_bug.cfg",
+                "effect_capacity_non_fetch_retirement_fixed.cfg",
+                "effect_capacity_retirement_disabled_bug.cfg",
+            },
+        ),
+        (
+            "SumeragiV2EffectPreemptionPriorityMutation.tla",
+            {
+                "effect_preemption_decided_victim_bug.cfg",
+                "effect_preemption_priority_fixed.cfg",
+                "effect_preemption_wrong_class_bug.cfg",
+                "effect_preemption_wrong_work_id_bug.cfg",
+            },
+        ),
+        (
+            "SumeragiV2RetainedEffectBatchMutation.tla",
+            {
+                "effect_batch_bound_fixed.cfg",
+                "effect_batch_decision_filter_fixed.cfg",
+                "effect_batch_decision_no_filter_bug.cfg",
+                "effect_batch_oversize_accepted_bug.cfg",
+                "effect_batch_partial_fifo_fixed.cfg",
+                "effect_batch_partial_fifo_reverse_bug.cfg",
+                "effect_batch_second_accepted_bug.cfg",
+                "effect_batch_second_rejected_fixed.cfg",
+            },
+        ),
+    )
+    for model, configs in config_groups:
+        for config in configs:
+            expected_model_by_config[config] = model
+    if set(expected_model_by_config) != expected_configs:
+        errors.append(
+            f"{path}: semantic config/model inventory differs from the sealed "
+            "thirty-three-config corpus"
+        )
+    if {model for model, _ in config_groups} != expected_models:
+        errors.append(
+            f"{path}: semantic model inventory differs from the sealed "
+            "six-model corpus"
+        )
+
+    loop_contracts = (
+        "for blocking_kind in decided non-fetch; do",
+        'config_kind="${blocking_kind//-/_}"',
+    )
+    for contract in loop_contracts:
+        if source.count(contract) != 1:
+            errors.append(
+                f"{path}: retirement expansion must contain exactly one "
+                f"{contract!r}"
+            )
+
+    cases: list[dict[str, Any]] = []
+    for line in normalized_source.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("run_case "):
+            continue
+        try:
+            tokens = shlex.split(stripped, comments=False, posix=True)
+        except ValueError as error:
+            errors.append(f"{path}: cannot parse run_case invocation: {error}")
+            continue
+        if len(tokens) < 6 or tokens[0] != "run_case":
+            errors.append(
+                f"{path}: each run_case invocation must name label, model, "
+                "config, status, and outcome markers"
+            )
+            continue
+        label, model_token, config, status_token = tokens[1:5]
+        markers = tuple(tokens[5:])
+        if model_token.startswith("$"):
+            variable = (
+                model_token.removeprefix("$")
+                .removeprefix("{")
+                .removesuffix("}")
+            )
+            model = declared_models.get(variable, model_token)
+        else:
+            model = model_token
+        try:
+            status = int(status_token)
+        except ValueError:
+            errors.append(
+                f"{path}: {label} has non-integer TLC status {status_token!r}"
+            )
+            continue
+
+        expanded = ((label, config),)
+        if (
+            label == "${blocking_kind}-work-fair-retirement"
+            and config
+            == "effect_capacity_${config_kind}_retirement_fixed.cfg"
+        ):
+            expanded = (
+                (
+                    "decided-work-fair-retirement",
+                    "effect_capacity_decided_retirement_fixed.cfg",
+                ),
+                (
+                    "non-fetch-work-fair-retirement",
+                    "effect_capacity_non_fetch_retirement_fixed.cfg",
+                ),
+            )
+        elif "${" in label or "${" in config:
+            errors.append(
+                f"{path}: unreviewed dynamic effect-capacity case "
+                f"{label!r}/{config!r}"
+            )
+            continue
+        for expanded_label, expanded_config in expanded:
+            cases.append(
+                {
+                    "label": expanded_label,
+                    "model": model,
+                    "config": expanded_config,
+                    "status": status,
+                    "markers": markers,
+                }
+            )
+
+    observed_configs = [case["config"] for case in cases]
+    observed_config_set = set(observed_configs)
+    duplicate_configs = sorted(
+        config
+        for config in observed_config_set
+        if observed_configs.count(config) != 1
+    )
+    if (
+        len(cases) != 33
+        or observed_config_set != expected_configs
+        or duplicate_configs
+    ):
+        errors.append(
+            f"{path}: runner must execute each of the thirty-three sealed "
+            "configurations exactly once; "
+            f"cases={len(cases)}, missing={sorted(expected_configs - observed_config_set)}, "
+            f"extra={sorted(observed_config_set - expected_configs)}, "
+            f"duplicates={duplicate_configs}"
+        )
+
+    repaired_count = sum(case["status"] == 0 for case in cases)
+    mutant_count = sum(case["status"] != 0 for case in cases)
+    if repaired_count != 10 or mutant_count != 23:
+        errors.append(
+            f"{path}: runner must contain exactly 10 repaired cases and 23 "
+            f"mutant cases; found repaired={repaired_count}, mutants={mutant_count}"
+        )
+
+    generated_total = 0
+    distinct_total = 0
+    parsed_state_cases = 0
+    state_marker = re.compile(
+        r"(?P<generated>\d+) states generated, "
+        r"(?P<distinct>\d+) distinct states found, "
+        r"\d+ states left on queue\."
+    )
+    for case in cases:
+        matches = [
+            match
+            for marker in case["markers"]
+            if (match := state_marker.fullmatch(marker)) is not None
+        ]
+        if (
+            case["model"]
+            == "SumeragiV2CertifiedRequestCapacityMutation.tla"
+        ):
+            if matches:
+                errors.append(
+                    f"{path}: {case['label']} must not pin unreviewed "
+                    "generated/distinct-state totals for the revised "
+                    "certified-request model"
+                )
+            continue
+        if len(matches) != 1:
+            errors.append(
+                f"{path}: {case['label']} must pin exactly one complete "
+                "generated/distinct-state marker"
+            )
+            continue
+        parsed_state_cases += 1
+        generated_total += int(matches[0].group("generated"))
+        distinct_total += int(matches[0].group("distinct"))
+    if (
+        parsed_state_cases != 22
+        or generated_total != 131
+        or distinct_total != 130
+    ):
+        errors.append(
+            f"{path}: runner must report exactly 131 generated states and "
+            "130 distinct states across the 22 unchanged cases; found "
+            f"generated={generated_total}, distinct={distinct_total}, "
+            f"parsed_cases={parsed_state_cases}"
+        )
+
+    by_config = {
+        case["config"]: case
+        for case in cases
+        if observed_configs.count(case["config"]) == 1
+    }
+    for config, expected_model in expected_model_by_config.items():
+        case = by_config.get(config)
+        if case is not None and case["model"] != expected_model:
+            errors.append(
+                f"{path}: {config} must execute with {expected_model}; "
+                f"found {case['model']}"
+            )
+        if case is None:
+            continue
+        if config.endswith("_fixed.cfg") and case["status"] != 0:
+            errors.append(
+                f"{path}: repaired config {config} must expect TLC status 0"
+            )
+        if config.endswith("_bug.cfg") and case["status"] not in {12, 13}:
+            errors.append(
+                f"{path}: mutant config {config} must expect TLC status 12 or 13"
+            )
+
+    certified_roles = {
+        "effect_capacity_certified_request_lost_bug.cfg": (
+            "certified-request-retained-owner-drop",
+            12,
+            (
+                "Invariant RetainedFetchBIsNotDropped is violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
+                "retainedEffects = <<>>",
+            ),
+        ),
+        "effect_capacity_certified_request_substitute_bug.cfg": (
+            "certified-request-retained-owner-substitution",
+            12,
+            (
+                "Invariant RetainedFetchBHasExactAuthorityAndTask is violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
+            ),
+        ),
+        "effect_capacity_certified_request_duplicate_bug.cfg": (
+            "certified-request-retained-owner-duplication",
+            12,
+            (
+                "Invariant RetainedFetchBHasOneOwner is violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
+            ),
+        ),
+        "effect_capacity_certified_request_overtake_bug.cfg": (
+            "certified-request-retained-owner-overtake",
+            12,
+            (
+                "Invariant RetainedFetchBRemainsFifoHead is violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
+            ),
+        ),
+        "effect_capacity_certified_request_fatal_bug.cfg": (
+            "certified-request-capacity-fatal",
+            12,
+            (
+                "Invariant CertifiedRequestPressureIsNonfatal is violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
+                "fatal = TRUE",
+            ),
+        ),
+        "effect_capacity_certified_response_blocked_bug.cfg": (
+            "certified-response-blocked-by-unrelated-retained-debt",
+            13,
+            (
+                "Temporal properties were violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
+                "unrelatedRetainedT = TRUE",
+                "fatal = FALSE",
+                "State 3: <AdmitOuterTransportResponseA",
+                "responseAQueued = TRUE",
+                "State 4: Stuttering",
+            ),
+        ),
+        "effect_capacity_certified_response_count_reserve_bug.cfg": (
+            "certified-response-count-reserve-missing",
+            13,
+            (
+                "Temporal properties were violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
+                "outerGenericCountOwned = TRUE",
+                "responseAAdmitted = FALSE",
+                "State 3: Stuttering",
+            ),
+        ),
+        "effect_capacity_certified_response_byte_reserve_bug.cfg": (
+            "certified-response-byte-reserve-missing",
+            13,
+            (
+                "Temporal properties were violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
+                "outerGenericBytesOwned = TRUE",
+                "responseAAdmitted = FALSE",
+                "State 3: Stuttering",
+            ),
+        ),
+        "effect_capacity_certified_request_partial_pq_bug.cfg": (
+            "certified-request-partial-pq-drain",
+            12,
+            (
+                "Invariant RetainedFetchBInstallsExactPQAtomically is violated.",
+                "<AdmitRetainedFetchBAtReleasedCapacity",
+            ),
+        ),
+        "effect_capacity_certified_request_upgrade_barrier_lost_bug.cfg": (
+            "certified-request-upgrade-barrier-lost",
+            12,
+            (
+                "Invariant UpgradeFetchBKeepsExactRetryBarrier is violated.",
+                "<AdmitRetainedFetchBAtReleasedCapacity",
+            ),
+        ),
+        "effect_capacity_certified_request_fixed.cfg": (
+            "certified-request-retained-owner-installs-atomically",
+            0,
+            (
+                "Finished computing initial states: 3 distinct states generated",
+                "Model checking completed. No error has been found.",
+                "<RetainCapacityBlockedFetchB",
+                "<AdmitOuterTransportResponseA",
+                "<ConsumeTransportOnlyResponseA",
+                "<ReleaseOrdinaryWorkCapacityA",
+                "<AdmitRetainedFetchBAtReleasedCapacity",
+            ),
+        ),
+    }
+    for config, (expected_label, expected_status, required_markers) in (
+        certified_roles.items()
+    ):
+        case = by_config.get(config)
+        if case is None:
+            continue
+        missing_markers = [
+            marker for marker in required_markers if marker not in case["markers"]
+        ]
+        if (
+            case["label"] != expected_label
+            or case["status"] != expected_status
+            or missing_markers
+        ):
+            errors.append(
+                f"{path}: certified-request role {config} must remain "
+                f"{expected_label!r} at status {expected_status} with its "
+                f"named witness markers; found label={case['label']!r}, "
+                f"status={case['status']}, missing_markers={missing_markers}"
+            )
+
+    outer_transport_roles = {
+        "effect_capacity_outer_transport_response_class_bug.cfg": (
+            "outer-certified-response-classification-missing",
+            13,
+            (
+                "Temporal properties were violated.",
+                'completionKind = "CertifiedBodyResponse"',
+                "State 2: Stuttering",
+            ),
+        ),
+        "effect_capacity_outer_transport_chunk_class_bug.cfg": (
+            "outer-payload-chunk-classification-missing",
+            13,
+            (
+                "Temporal properties were violated.",
+                'completionKind = "PayloadChunk"',
+                "State 2: Stuttering",
+            ),
+        ),
+        "effect_capacity_outer_transport_class_fixed.cfg": (
+            "outer-transport-completion-shared-reserve",
+            0,
+            (
+                "Finished computing initial states: 2 distinct states generated",
+                "Model checking completed. No error has been found.",
+                "<AdmitTransportCompletion",
+                "<ConsumeTransportCompletion",
+            ),
+        ),
+    }
+    for config, (expected_label, expected_status, required_markers) in (
+        outer_transport_roles.items()
+    ):
+        case = by_config.get(config)
+        if case is None:
+            continue
+        missing_markers = [
+            marker for marker in required_markers if marker not in case["markers"]
+        ]
+        if (
+            case["label"] != expected_label
+            or case["status"] != expected_status
+            or missing_markers
+        ):
+            errors.append(
+                f"{path}: outer-transport role {config} must remain "
+                f"{expected_label!r} at status {expected_status} with its "
+                f"named witness markers; found label={case['label']!r}, "
+                f"status={case['status']}, missing_markers={missing_markers}"
+            )
+    return errors
+
+
 _RETAINED_EFFECT_PACEMAKER_PROGRESS_REGRESSION_SHA256 = (
     "316bd1d4d3d9771f3566abaf6e77f07ad80d1d74fb1f5186875a4a3d30d1b88c"
 )
@@ -445,6 +984,51 @@ Ok(())
                 "ready-body, Fetch, and certified-request retirement"
             )
 
+    bound_leader_wire_ingress = _require_rust_item(
+        effects_path,
+        source,
+        "bound_leader_wire_ingress_ownership",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        effects_path,
+        bound_leader_wire_ingress,
+        """
+fn bound_leader_wire_ingress_ownership(
+    ingress: &crate::sumeragi::FairV2Ingress,
+    message: wire::ConsensusMessageV2,
+    sender: PeerId,
+) -> FairV2IngressOwnershipEvidence {
+    let expected = BlockMessage::V2(message.clone());
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            expected.clone(),
+            sender,
+        )),
+        Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let mut delivered = ingress
+        .try_recv()
+        .expect("bound leader-wire ingress returns its admitted owner");
+    assert_eq!(delivered.message().encode(), expected.encode());
+    let ownership = delivered
+        .take_ingress_ownership()
+        .expect("bound leader-wire ingress attaches exact ownership");
+    assert!(
+        ownership.leader_wire_token().is_some(),
+        "productive wire must carry its full-roster lifecycle token"
+    );
+    assert!(
+        ownership.leader_wire_runtime_receipt().is_some(),
+        "checked dequeue must durably transfer the leader-wire token to runtime"
+    );
+    ownership
+}
+""",
+        "saturation ingress helper must authenticate, dequeue, and retain the exact leader-wire token and runtime receipt",
+        errors,
+    )
+
     saturation_regression = _require_rust_item(
         effects_path,
         source,
@@ -461,6 +1045,53 @@ Ok(())
         errors,
     )
     for required, description in (
+        (
+            """
+let mut fixture = ProductionTransportFixture::new_with_runtime_queue_config(
+    RuntimeQueueConfig::new(12, 4, 4),
+);
+""",
+            "saturation regression must exercise all authenticated normal and progress owners within the explicit runtime queue geometry",
+        ),
+        (
+            """
+let sender = fixture.context.roster[ordinal].validator.clone();
+let ingress_ownership =
+    bound_leader_wire_ingress_ownership(&saturation_ingress, message.clone(), sender);
+assert!(
+    fixture
+        .executor
+        .can_admit_network_message_with_ingress_ownership(&message, &ingress_ownership)
+);
+fixture
+    .executor
+    .enqueue_network_with_ingress_ownership(message, ingress_ownership)
+    .expect("admit production Normal ingress");
+""",
+            "normal-lane saturation must retain authenticated leader-wire ownership through executor admission",
+        ),
+        (
+            """
+let signer = wire::ValidatorIndex::try_from(offset)
+    .expect("four-validator Progress saturation signer");
+let message = fixture.signed_timeout_vote_from(view, signer);
+let ingress_ownership = bound_leader_wire_ingress_ownership(
+    &saturation_ingress,
+    message.clone(),
+    fixture.context.roster[offset].validator.clone(),
+);
+assert!(
+    fixture
+        .executor
+        .can_admit_network_message_with_ingress_ownership(&message, &ingress_ownership)
+);
+fixture
+    .executor
+    .enqueue_network_with_ingress_ownership(message, ingress_ownership)
+    .expect("admit production Progress ingress");
+""",
+            "progress-lane saturation must retain the exact authenticated signer and leader-wire ownership",
+        ),
         (
             """
 fixture

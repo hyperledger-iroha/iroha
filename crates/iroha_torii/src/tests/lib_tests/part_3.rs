@@ -400,9 +400,7 @@ async fn alias_resolve_rejects_account_label_without_authoritative_binding() {
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
         let world = tx.world_mut_for_testing();
-        world
-            .account_rekey_records_mut_for_testing()
-            .remove(alias_label.clone());
+        world.remove_account_rekey_record_for_testing(&alias_label);
         world
             .account_aliases_mut_for_testing()
             .remove(alias_label.clone());
@@ -465,9 +463,7 @@ async fn alias_resolve_rejects_rekey_record_without_authoritative_binding() {
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
         tx.world_mut_for_testing()
-            .account_rekey_records_mut_for_testing()
-            .insert(
-                alias_label.clone(),
+            .replace_account_rekey_record_for_testing(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     alias_label.clone(),
                     authority.clone(),

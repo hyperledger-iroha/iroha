@@ -798,6 +798,20 @@ impl ProductionLifecycleLocalProposalStateV1 {
         }
     }
 
+    /// Build one exact attempted owner for runner-handoff regression tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn with_attempted_for_test(directive: LocalProposalDirective) -> Self {
+        Self {
+            state: LocalProposalState::from_recovered_lifecycle_attempt(true, directive),
+        }
+    }
+
+    /// Report whether every process-local proposal owner has retired in a test.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn is_pristine_for_test(&self) -> bool {
+        self.state.is_pristine()
+    }
+
     /// Check whether the retained state owns the exact recovered attempt.
     pub(in crate::sumeragi) fn already_attempted(&self, directive: LocalProposalDirective) -> bool {
         self.state.attempted == Some(LocalProposalOwner::from(directive))
@@ -1609,6 +1623,24 @@ fn submit_encoded_body(
     executor.admit_local_proposal(owner.tag, manifest, canonical_wire, services)?;
     Ok(())
 }
+/// Periodically recreate one exact WAL-recovered Decision Fetch occurrence
+/// from its executor owner until an authenticated response claims it.
+pub(in crate::sumeragi) fn retry_recovered_decision_fetch_if_due(
+    now: Instant,
+    next_attempt: &mut Instant,
+    retransmit_interval: Duration,
+    executor: &V2EffectExecutor<SerializedV2Runtime>,
+    services: &ProductionV2Services,
+) -> Result<bool, V2RunnerError> {
+    if now < *next_attempt {
+        return Ok(false);
+    }
+    let attempted = services
+        .retry_recovered_decision_fetch(executor)
+        .map_err(V2RunnerError::Service)?;
+    *next_attempt = deadline_after(now, retransmit_interval);
+    Ok(attempted)
+}
 fn drive_block_sync(
     now: Instant,
     next_attempt: &mut Instant,
@@ -1917,6 +1949,8 @@ pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
     RecoveredLifecycleOutputSourceRetained,
     SettledLiveWalSign,
     PendingLiveWalSign,
+    SettledReleasedValidateApply,
+    PendingReleasedValidateApply,
     SettledLifecycleOutput,
     PendingLifecycleOutput,
     SettledDurableValidate,
@@ -1982,6 +2016,24 @@ fn advance_executor(
                 AdvanceExecutorYieldV1::new(
                     AdvanceExecutorYieldCheckpointV1::BeforeStep,
                     AdvanceExecutorYieldCauseV1::PendingLiveWalSign,
+                ),
+            ));
+        }
+        if executor.settle_pending_released_validate_apply_publication(lifecycle_owner, services)?
+            > 0
+        {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::SettledReleasedValidateApply,
+                ),
+            ));
+        }
+        if executor.has_pending_released_validate_apply_publication() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                    AdvanceExecutorYieldCauseV1::PendingReleasedValidateApply,
                 ),
             ));
         }
@@ -2054,6 +2106,24 @@ fn advance_executor(
                 AdvanceExecutorYieldV1::new(
                     AdvanceExecutorYieldCheckpointV1::AfterStep,
                     AdvanceExecutorYieldCauseV1::PendingLiveWalSign,
+                ),
+            ));
+        }
+        if executor.settle_pending_released_validate_apply_publication(lifecycle_owner, services)?
+            > 0
+        {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::SettledReleasedValidateApply,
+                ),
+            ));
+        }
+        if executor.has_pending_released_validate_apply_publication() {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::PendingReleasedValidateApply,
                 ),
             ));
         }
@@ -2537,12 +2607,13 @@ fn retry_exact_output_and_apply_sidecar_admissions(
     let _ = apply_native_amx_output_retention(lane_work, services)?;
     let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
     let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+    let _ = apply_obsolete_merge_sidecar_generation_hints(lane_work, services)?;
     let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
     apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
+    apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
     let pending = services
         .retry_pending_exact_output()
         .map_err(V2RunnerError::Service)?;
-    apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
     Ok(pending)
 }
 fn apply_native_amx_output_retention(
@@ -2591,6 +2662,24 @@ pub(in crate::sumeragi) fn apply_retired_merge_sidecar_requests(
         Ok(cancelled) => Ok(cancelled),
         Err(error) => {
             lane_work.requeue_retired_merge_sidecar_request_hashes(request_hashes)?;
+            Err(V2RunnerError::Service(error))
+        }
+    }
+}
+/// Cancel canonical old-generation Request/Close output for each exact endpoint
+/// whose authenticated responder generation was durably fenced.
+pub(in crate::sumeragi) fn apply_obsolete_merge_sidecar_generation_hints(
+    lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+) -> Result<usize, V2RunnerError> {
+    let hints = lane_work.drain_obsolete_merge_sidecar_generation_hints();
+    if hints.is_empty() {
+        return Ok(0);
+    }
+    match services.cancel_obsolete_certified_merge_sidecar_generation_hints(&hints) {
+        Ok(cancelled) => Ok(cancelled),
+        Err(error) => {
+            lane_work.requeue_obsolete_merge_sidecar_generation_hints(hints)?;
             Err(V2RunnerError::Service(error))
         }
     }
@@ -2668,6 +2757,7 @@ fn dispatch_lane_work_effects_with_progress(
     let _ = apply_native_amx_output_retention(lane_work, services)?;
     let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
     let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+    let _ = apply_obsolete_merge_sidecar_generation_hints(lane_work, services)?;
     let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
     apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
     apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
@@ -2881,12 +2971,12 @@ fn dispatch_lane_work_effect_from_snapshot(
     Ok(LaneWorkEffectDispatch::Complete)
 }
 include!("v2_runner/merge_sidecar_recovery.rs");
-fn drain_lane_relay_ingress(
+fn drain_lane_relay_prefix(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     lane_work: &mut V2LaneWorkAdapter,
     active_view: wire::View,
     limit: usize,
-) -> std::result::Result<(), V2LaneWorkError> {
+) -> bool {
     let mut drained_any = false;
     for _ in 0..limit.max(1) {
         let mut drained = false;
@@ -2899,10 +2989,43 @@ fn drain_lane_relay_ingress(
             break;
         }
     }
+    drained_any
+}
+fn drain_lane_relay_ingress(
+    lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
+    lane_work: &mut V2LaneWorkAdapter,
+    active_view: wire::View,
+    limit: usize,
+) -> std::result::Result<bool, V2LaneWorkError> {
+    let drained_any = drain_lane_relay_prefix(lane_relay_rx, lane_work, active_view, limit);
     if drained_any {
         let _ = lane_work.service_next_historical_recovery()?;
     }
-    Ok(())
+    Ok(drained_any)
+}
+/// Drain the already-admitted relay prefix after shared runner ingress closes.
+///
+/// Decision-pending lane admission rejects ordinary relay work. Unlike the
+/// open-height drain, this terminal helper never starts a historical recovery
+/// tick; it only lets the finite serialized prefix publish its monotonic
+/// sidecar cancellation/admission handoffs.
+fn drain_finalized_lane_relay_prefix(
+    lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
+    lane_work: &mut V2LaneWorkAdapter,
+    active_view: wire::View,
+    limit: usize,
+) -> bool {
+    drain_lane_relay_prefix(lane_relay_rx, lane_work, active_view, limit)
+}
+#[cfg(test)]
+/// Exercise the terminal relay-prefix drain from sibling stateful regressions.
+pub(in crate::sumeragi) fn drain_finalized_lane_relay_prefix_for_test(
+    lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
+    lane_work: &mut V2LaneWorkAdapter,
+    active_view: wire::View,
+    limit: usize,
+) -> bool {
+    drain_finalized_lane_relay_prefix(lane_relay_rx, lane_work, active_view, limit)
 }
 /// Fail-closed live-runner error.
 #[derive(Debug, Error)]
@@ -2997,6 +3120,9 @@ pub(super) enum V2RunnerError {
     /// Bounded lane-local/merge/Native-AMX adapter failed closed.
     #[error(transparent)]
     LaneWork(#[from] super::v2_lane_work::V2LaneWorkError),
+    /// Retired NPoS VRF tombstone or committed epoch-parameter boundary failed closed.
+    #[error(transparent)]
+    NposVrf(#[from] super::v2_npos::V2NposError),
     /// Durable lane reservation ownership could not be reconciled exactly.
     #[error(transparent)]
     Reservation(#[from] V2ReservationLifecycleError),

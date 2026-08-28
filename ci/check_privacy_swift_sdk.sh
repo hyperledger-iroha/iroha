@@ -5,7 +5,7 @@ ROOT_DIR="${PRIVACY_SWIFT_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && 
 SWIFTC_BIN="${PRIVACY_SWIFT_SDK_SWIFTC_BIN:-swiftc}"
 SWIFT_BIN="${PRIVACY_SWIFT_SDK_SWIFT_BIN:-swift}"
 FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
+TRACKED_ROOT_CARGO_LOCK_SHA256="0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7"
 PYTHON_BIN="${MOBILE_SDK_PYTHON_BINARY:-${PRIVACY_SWIFT_SDK_PYTHON_BIN:-}}"
 APPLE_ARTIFACT_CHECKER="${ROOT_DIR}/scripts/check_mobile_sdk_artifacts.sh"
 
@@ -74,11 +74,6 @@ PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-}"
   echo "error: privacy Swift external Cargo.lock is not the frozen release lock" >&2
   exit 1
 }
-echo \
-  "error: privacy Swift native tooling requires external-lock requalification before it can consume cd9e without replacing the tracked c90b root authority" \
-  >&2
-exit 1
-
 DEVELOPER_DIR="$(xcode-select -p)"
 [[ "${DEVELOPER_DIR}" == */Xcode*.app/Contents/Developer ]] || {
   echo "error: privacy Swift native execution requires full Xcode" >&2

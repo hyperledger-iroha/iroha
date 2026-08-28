@@ -3411,6 +3411,7 @@ impl SoracloudInrouPersistedStateV1<'_> {
         }
 
         let mut inrou_reservation_usage = BTreeMap::<AccountId, (u32, u64, u64, u64)>::new();
+        let mut inrou_available_hosts = BTreeSet::<AccountId>::new();
         for (key, placement) in inrou_service_placements.iter() {
             placement.validate().map_err(|error| {
                 invalid_soracloud_state("soracloud_inrou_service_placements", error.to_string())
@@ -3549,38 +3550,60 @@ impl SoracloudInrouPersistedStateV1<'_> {
                         ),
                     ));
                 }
-                let capability = inrou_host_capabilities
-                    .get(&assignment.validator_account_id)
+                if !admitted_bundle
+                    .service
+                    .placement_targets
+                    .iter()
+                    .any(|target| {
+                        target.validator_account_id == assignment.validator_account_id
+                            && target.peer_id == assignment.peer_id
+                    })
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_inrou_service_placements",
+                        "Inrou assignment must match an exact admitted placement target",
+                    ));
+                }
+                let selected_guest_artifact = inrou
+                    .guest_images
+                    .get(&assignment.selected_guest_isa)
+                    .map(|image| &image.published_artifact)
                     .ok_or_else(|| {
                         invalid_soracloud_state(
                             "soracloud_inrou_service_placements",
-                            "Inrou assignment is missing its authoritative host capability",
+                            "Inrou assignment selected guest ISA is absent from its admitted revision",
                         )
                     })?;
-                if !inrou
-                    .guest_images
-                    .get(&assignment.selected_guest_isa)
-                    .is_some_and(|image| {
-                        image.published_artifact == capability.trusted_guest_artifact
-                    })
-                    || capability.peer_id != assignment.peer_id
-                    || !capability
-                        .supported_guest_isas
-                        .contains(&assignment.selected_guest_isa)
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_inrou_service_placements",
-                        "Inrou assignment must exactly match its retained capability peer and a guest ISA supported by both host and revision",
-                    ));
-                }
-                if per_replica_cpu_millis > u64::from(capability.max_cpu_millis)
-                    || per_replica_memory_bytes > capability.max_memory_bytes
-                    || per_replica_storage_bytes > capability.max_storage_bytes
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_inrou_service_placements",
-                        "Inrou assignment's per-replica resources exceed its retained host capability",
-                    ));
+                if assignment.host_availability.is_available() {
+                    inrou_available_hosts.insert(assignment.validator_account_id.clone());
+                    let capability = inrou_host_capabilities
+                        .get(&assignment.validator_account_id)
+                        .ok_or_else(|| {
+                            invalid_soracloud_state(
+                                "soracloud_inrou_service_placements",
+                                "available Inrou assignment is missing its exact authoritative host capability",
+                            )
+                        })?;
+                    if capability.peer_id != assignment.peer_id
+                        || !capability
+                            .supported_guest_isas
+                            .contains(&assignment.selected_guest_isa)
+                        || selected_guest_artifact != &capability.trusted_guest_artifact
+                    {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_inrou_service_placements",
+                            "available Inrou assignment must exactly match its retained capability peer, selected guest ISA, and trusted artifact",
+                        ));
+                    }
+                    if per_replica_cpu_millis > u64::from(capability.max_cpu_millis)
+                        || per_replica_memory_bytes > capability.max_memory_bytes
+                        || per_replica_storage_bytes > capability.max_storage_bytes
+                    {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_inrou_service_placements",
+                            "available Inrou assignment's per-replica resources exceed its retained host capability",
+                        ));
+                    }
                 }
                 let usage = inrou_reservation_usage
                     .entry(assignment.validator_account_id.clone())
@@ -3620,14 +3643,15 @@ impl SoracloudInrouPersistedStateV1<'_> {
         for (validator_account_id, (replicas, cpu_millis, memory_bytes, storage_bytes)) in
             inrou_reservation_usage
         {
-            let capability = inrou_host_capabilities
-                .get(&validator_account_id)
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_inrou_service_placements",
-                        "Inrou reservation aggregate has no retained host capability",
-                    )
-                })?;
+            if !inrou_available_hosts.contains(&validator_account_id) {
+                continue;
+            }
+            let Some(capability) = inrou_host_capabilities.get(&validator_account_id) else {
+                return Err(invalid_soracloud_state(
+                    "soracloud_inrou_service_placements",
+                    "available Inrou reservation aggregate has no retained host capability",
+                ));
+            };
             if replicas > u32::from(capability.max_hosted_replica_capacity)
                 || cpu_millis > u64::from(capability.max_cpu_millis)
                 || memory_bytes > capability.max_memory_bytes
@@ -5416,6 +5440,7 @@ fn validate_global_beacon_persistence(world: &World) -> Result<(), json::Error> 
     let active_sessions = world.global_beacon_active_session.view();
     let latest_pulses = world.global_beacon_latest_pulse.view();
     let pulses = world.global_beacon_pulses.view();
+    let pulse_slots = world.global_beacon_pulse_slots.view();
 
     for (session_id, snapshot) in dkg.iter() {
         snapshot.validate().map_err(|error| {
@@ -5480,6 +5505,11 @@ fn validate_global_beacon_persistence(world: &World) -> Result<(), json::Error> 
     }
 
     let mut ordered_pulses = Vec::with_capacity(pulses.len());
+    if pulse_slots.len() != pulses.len() {
+        return Err(invalid_global_beacon_persistence(
+            "derived pulse-slot index cardinality differs from finalized history",
+        ));
+    }
     for (pulse_id, pulse) in pulses.iter() {
         let link = validate_persisted_global_threshold_beacon_pulse_v1(pulse).map_err(|error| {
             invalid_global_beacon_persistence(format!(
@@ -5490,6 +5520,11 @@ fn validate_global_beacon_persistence(world: &World) -> Result<(), json::Error> 
         if pulse_id != &pulse.pulse_id || pulse_id != &link.pulse_id {
             return Err(invalid_global_beacon_persistence(
                 "pulse storage key differs from its canonical pulse id",
+            ));
+        }
+        if pulse_slots.get(&(pulse.network_id, pulse.height)) != Some(pulse_id) {
+            return Err(invalid_global_beacon_persistence(
+                "derived pulse-slot index differs from finalized history",
             ));
         }
         let key_session = key_sessions.get(&pulse.session_id).ok_or_else(|| {
@@ -5513,6 +5548,18 @@ fn validate_global_beacon_persistence(world: &World) -> Result<(), json::Error> 
         if (current.height, current.round) <= (previous.height, previous.round) {
             return Err(invalid_global_beacon_persistence(
                 "finalized pulse history is not strictly monotonic",
+            ));
+        }
+    }
+    let parliament_attempts = world.parliament_attempts.view();
+    for ((network_id, height), _) in pulse_slots.iter() {
+        let logical_session =
+            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(network_id);
+        if parliament_attempts.iter().any(|(_, attempt)| {
+            attempt.classifies_beacon_pulse_unavailable_at(logical_session, *height)
+        }) {
+            return Err(invalid_global_beacon_persistence(
+                "finalized pulse conflicts with a Parliament slot terminally classified as unavailable",
             ));
         }
     }
@@ -5545,6 +5592,79 @@ fn validate_global_beacon_persistence(world: &World) -> Result<(), json::Error> 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod global_beacon_persistence_tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        block::BlockHeader,
+        governance::types::{BodyElectionAttemptId, ParliamentBody},
+        peer::PeerId,
+    };
+
+    #[test]
+    fn restore_rejects_pulse_after_sortition_slot_was_terminally_unavailable() {
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; 32])),
+        );
+        let (key_record, pulse) =
+            crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
+        let roster = (1_u8..=4)
+            .map(|marker| {
+                KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
+                    .map(|key| PeerId::new(key.public_key().clone()))
+                    .expect("derive deterministic Parliament candidate")
+            })
+            .collect::<Vec<_>>();
+        let (governance_attempt_id, _, mut attempt) =
+            crate::beacon::tests::pending_batched_sortition_attempt(
+                &network_id,
+                &roster,
+                pulse.height,
+            );
+        let election_attempt_id = BodyElectionAttemptId::derive_v1(
+            governance_attempt_id,
+            ParliamentBody::RulesCommittee,
+            0,
+        );
+        attempt
+            .fail_body_election_no_roster(
+                governance_attempt_id,
+                election_attempt_id,
+                false,
+                pulse.height + 1,
+            )
+            .expect("terminally classify the missing sortition slot");
+
+        let link = validate_persisted_global_threshold_beacon_pulse_v1(&pulse)
+            .expect("canonical persisted pulse link");
+        let mut world = World::new();
+        world
+            .global_beacon_key_sessions
+            .insert(pulse.session_id, key_record);
+        world
+            .global_beacon_active_session
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
+        world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
+        world
+            .global_beacon_pulse_slots
+            .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+        world
+            .global_beacon_latest_pulse
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
+        world
+            .parliament_attempts
+            .insert(governance_attempt_id, attempt);
+
+        let error = validate_global_beacon_persistence(&world)
+            .expect_err("restart must reject a pulse contradicting terminal Parliament state");
+        assert!(
+            error.to_string().contains("terminally classified"),
+            "unexpected restore rejection: {error}"
+        );
+    }
 }
 
 fn invalid_tle_ovn_persistence(field: &'static str, message: impl Into<String>) -> json::Error {
@@ -5938,6 +6058,21 @@ fn validate_tle_ovn_snapshot_network_v1(
     Ok(())
 }
 
+fn validate_parliament_attempt_encoded_size_bounds_v1(world: &World) -> Result<(), json::Error> {
+    let parliament_attempts_view = world.parliament_attempts.view();
+    for (attempt_id, attempt) in parliament_attempts_view.iter() {
+        attempt
+            .validate_encoded_size_v1()
+            .map_err(|error| json::Error::InvalidField {
+                field: "parliament_attempts".into(),
+                message: format!(
+                    "persisted Parliament attempt {attempt_id:?} violates the authoritative encoded-size bound: {error}"
+                ),
+            })?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod timed_ovn_persistence_phase_tests {
     use super::*;
@@ -6085,6 +6220,40 @@ mod timed_ovn_persistence_phase_tests {
     }
 }
 
+#[cfg(test)]
+mod parliament_attempt_size_restore_tests {
+    use super::*;
+
+    #[test]
+    fn mode_independent_restore_prefix_accepts_small_and_rejects_oversized_attempts() {
+        let mut world = World::default();
+        let small =
+            crate::governance::parliament::tests::active_timed_ovn_reservation_attempt_fixture_v1(
+                0xE1, 0xE2, 27,
+            );
+        world.parliament_attempts.insert(small.attempt().id, small);
+        validate_parliament_attempt_encoded_size_bounds_v1(&world)
+            .expect("ordinary attempt fits the unconditional restore prefix");
+
+        let oversized =
+            crate::governance::parliament::tests::oversized_attempt_state_fixture_v1(0xE3);
+        world
+            .parliament_attempts
+            .insert(oversized.attempt().id, oversized);
+        let error = validate_parliament_attempt_encoded_size_bounds_v1(&world)
+            .expect_err("oversized attempt must fail before either restore-mode branch");
+        assert!(
+            matches!(
+                &error,
+                json::Error::InvalidField { field, message }
+                    if field == "parliament_attempts"
+                        && message.contains("authoritative encoded-size bound")
+            ),
+            "restore rejection identifies the authoritative attempt bound: {error}"
+        );
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn parse_world(
     mut map: SnapshotJsonMap<'_>,
@@ -6114,8 +6283,6 @@ fn parse_world(
     let domains: Storage<DomainId, Domain> = take_required(&mut map, "domains")?;
     let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
     let account_aliases = take_required(&mut map, "account_aliases")?;
-    let account_aliases_by_account = take_required(&mut map, "account_aliases_by_account")?;
-    let account_scope_directory = take_required(&mut map, "account_scope_directory")?;
     let ram_lfe_program_policies = take_ram_lfe_program_policies(&mut map)?;
     validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
     let identifier_policies = take_required(&mut map, "identifier_policies")?;
@@ -6353,6 +6520,8 @@ fn parse_world(
         .validate_sccp_registry()?;
     let sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1> =
         take_required(&mut map, "sccp_registry")?;
+    let sccp_route_liabilities: Storage<SccpRouteKeyV1, SccpRouteLiabilityV1> =
+        take_required(&mut map, "sccp_route_liabilities")?;
     let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
     let sccp_outbound_pending_messages = take_required(&mut map, "sccp_outbound_pending_messages")?;
     let sccp_outbound_message_locator = take_required(&mut map, "sccp_outbound_message_locator")?;
@@ -6642,11 +6811,12 @@ fn parse_world(
         domains,
         domains_by_owner: Storage::default(),
         kaigi_relay_registry: Storage::default(),
+        kaigi_account_dependencies: Storage::default(),
         accounts,
         uaid_accounts: Storage::default(),
         account_aliases,
-        account_aliases_by_account,
-        account_scope_directory,
+        account_aliases_by_account: Storage::default(),
+        account_scope_directory: Storage::default(),
         account_scope_accounts: Storage::default(),
         opaque_uaids: Storage::default(),
         ram_lfe_program_policies,
@@ -6658,6 +6828,7 @@ fn parse_world(
         fee_sponsor_budget_counters,
         identifier_claims,
         account_rekey_records,
+        account_rekey_records_by_account: Storage::default(),
         account_recovery_policies,
         account_recovery_requests,
         asset_definitions,
@@ -6716,6 +6887,7 @@ fn parse_world(
         axt_replay_ledger,
         axt_handle_budget_ledger,
         sccp_registry,
+        sccp_route_liabilities,
         sccp_outbound_pending_usage,
         sccp_outbound_pending_messages,
         sccp_outbound_message_locator,
@@ -6875,11 +7047,16 @@ fn parse_world(
         global_beacon_active_session,
         global_beacon_latest_pulse,
         global_beacon_pulses,
+        global_beacon_pulse_slots: Storage::default(),
         merge_hint_roots,
         merge_global_state_root,
         consensus_evidence: Storage::default(),
         external_event_buf,
     };
+    world
+        .rebuild_global_beacon_pulse_slots()
+        .map_err(invalid_global_beacon_persistence)?;
+    validate_parliament_attempt_encoded_size_bounds_v1(&world)?;
     {
         let parliament_attempts_view = world.parliament_attempts.view();
         let governance_proposals_view = world.governance_proposals.view();
@@ -7138,6 +7315,12 @@ fn parse_world(
             message,
         },
     )?;
+    crate::smartcontracts::isi::kaigi::rebuild_kaigi_account_dependencies(&mut world).map_err(
+        |message| json::Error::InvalidField {
+            field: "kaigi_account_dependencies".into(),
+            message,
+        },
+    )?;
     world
         .rebuild_asset_definition_alias_indexes()
         .map_err(|message| json::Error::InvalidField {
@@ -7162,7 +7345,12 @@ fn parse_world(
             field: "asset_definitions.confidential_policy.pending_transition".into(),
             message,
         })?;
-    world.rebuild_governance_read_indexes();
+    world
+        .rebuild_governance_read_indexes()
+        .map_err(|message| json::Error::InvalidField {
+            field: "parliament_attempts".into(),
+            message,
+        })?;
     world.rebuild_nft_owner_index();
     world.rebuild_rwa_indexes();
     world.rebuild_escrow_indexes();
@@ -7238,7 +7426,6 @@ fn build_state(
     #[cfg(feature = "telemetry")]
     let telemetry_seed = telemetry.clone();
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
-    let streaming_storage_paths = StreamingStoragePaths::default();
     let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
     let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
     let restored_height = u64::try_from(block_hashes.committed_height()).map_err(|error| {
@@ -7365,7 +7552,6 @@ fn build_state(
         pipeline_ivm_prepared_cache: parking_lot::RwLock::new(
             PreparedContractCache::with_capacity(pipeline_cache_size),
         ),
-        streaming_storage_paths,
         crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
         nexus: parking_lot::RwLock::new(nexus),
         lane_incarnations: parking_lot::RwLock::new(lane_incarnations),
@@ -7654,6 +7840,8 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
             iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
         parliament_quorum_bps:
             iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
+        parliament_sortition_pulse_delay_blocks:
+            iroha_config::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
         parliament_invitation_phase_blocks:
             iroha_config::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
         parliament_public_finding_phase_blocks:

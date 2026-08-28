@@ -2302,7 +2302,6 @@ fn build_range_car_bytes(
             offset,
             length: chunk.length,
             digest: chunk.digest,
-            taikai_segment_hint: chunk.taikai_segment_hint.clone(),
         });
         offset += u64::from(chunk.length);
     }

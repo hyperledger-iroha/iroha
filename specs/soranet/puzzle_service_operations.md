@@ -15,19 +15,27 @@ It exposes five HTTP endpoints:
   can validate the shared replay cache settings. This unauthenticated metadata
   route neither exposes revocation IDs nor reads or refreshes their file.
 - `POST /v1/puzzle/mint` – mints an Argon2 ticket. The JSON body must contain
-  `"transcript_hash_hex"` with exactly 32 non-zero bytes; `"ttl_secs"` and
-  `"signed"` are optional when no signed-ticket verifier key is configured;
-  `"signed": true` is mandatory when one is configured:
-  `{ "transcript_hash_hex": "<32-byte hex>", "ttl_secs": <u64>, "signed": true }`.
+  `"transcript_hash_hex"` with exactly 32 non-zero bytes and may contain a
+  `"ttl_secs"` override:
+  `{ "transcript_hash_hex": "<32-byte hex>", "ttl_secs": <u64> }`.
   The service clamps TTL overrides to the policy window and returns a
-  canonical ML-DSA envelope over the Argon2 ticket plus its replay fingerprint
-  when signing keys are configured. Signed envelopes never select hashcash.
+  single `credential_b64` tagged by `credential_kind` (`raw` or `signed`). It
+  returns a canonical ML-DSA envelope over the Argon2 ticket plus its replay
+  fingerprint when signing keys are configured. Every returned puzzle
+  credential uses Argon2; signing wraps that exact ticket and never selects a
+  second work mode. The response schema is
+  `{ "credential_kind": "raw" | "signed", "credential_b64": "<base64>",
+  "signed_ticket_fingerprint_hex": "<conditional 32-byte hex>", "difficulty": <u8>,
+  "ttl_secs": <u64>, "expires_at": <u64> }`; the fingerprint is absent or null
+  for raw credentials and required for signed credentials.
 - `GET /v1/token/config` – when `pow.token.enabled = true`, returns the active
   admission-token policy (issuer fingerprint, TTL/clock-skew bounds, relay ID,
   and the merged revocation set).
 - `POST /v1/token/mint` – mints an ML-DSA admission token bound to the supplied
-  resume hash; the request body accepts `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": 0 }`.
-  All token flag bits are reserved in v1, so non-zero values are rejected.
+  resume hash; the request body accepts
+  `{ "transcript_hash_hex": "...", "ttl_secs": <u64> }`. All token flag bits
+  are reserved in v1 and the service always mints them as zero without exposing
+  a request or response `flags` field.
 
 `POST /v1/puzzle/mint`, `GET /v1/token/config`, and
 `POST /v1/token/mint` require `Authorization: Bearer <token>`, where the token is
@@ -167,12 +175,14 @@ intentionally want shorter replay retention windows).
 Set `pow.signed_ticket_public_key_hex` in the relay JSON to advertise the ML-DSA-44 public
 key used to verify signed Argon2 tickets; the `/v1/puzzle/config` endpoint now echoes both the
 public key and its BLAKE3 fingerprint (`signed_ticket_public_key_fingerprint_hex`) so clients
-can pin the verifier key. Signed tickets are validated against the relay ID and transcript
-bindings and still share the same revocation store. Both Iroha P2P and the
-standalone relay authenticate the envelope, apply the configured Argon2 timing
-and work policy, then consume the underlying ticket identity. Relays with a
-configured signed-ticket verifier key reject raw 74-byte tickets; raw tickets are only
-accepted by relays that do not configure a signed-ticket verifier key.
+can pin the verifier key. The standalone relay validates signed tickets against
+the relay ID and transcript bindings, applies the configured Argon2 timing and
+work policy, and consumes the underlying ticket identity in the shared
+revocation store. Relays with a configured signed-ticket verifier key reject
+raw 74-byte tickets; raw tickets are only accepted by relays that do not
+configure a signed-ticket verifier key. This optional signed-envelope policy
+belongs to the standalone SoraNet relay; the direct Iroha P2P handshake accepts
+the mandatory raw Argon2 ticket format.
 For both raw and signed tickets, the 32-byte `client_nonce` field carries the
 domain-separated commitment to the exact descriptor, relay ID, and admission
 transcript. Relays compare it in constant time before Argon2 work, so a wrong
@@ -182,17 +192,13 @@ Pass the signer secret via the private `--signed-ticket-secret-path` file when
 launching the puzzle service; startup rejects mismatched keypairs if the secret does not
 validate against `pow.signed_ticket_public_key_hex`, and rejects a verifier key
 without both an Argon2 policy and signer secret. The same exact lowercase-hex,
-no-whitespace file rule applies. `POST /v1/puzzle/mint` accepts
-`"signed": true` together with the required `"transcript_hash_hex"` to return a
-Norito-encoded signed ticket instead of a second raw bearer credential;
-responses include `signed_ticket_b64` and
-`signed_ticket_fingerprint_hex` so clients can pin the replay fingerprint. Requests with
-`signed = true` are rejected if the signer secret is not configured.
-The p2p handshake path now records every accepted PoW ticket into the same Norito
-snapshot and rejects handshakes while the cache is unavailable. Ops tooling can query
-and prune the live cache via the in-process helpers (`active_revocations`,
-`purge_expired_revocations`) to surface revocation counts on dashboards or to force a
-deterministic purge without deleting the snapshot on disk.
+no-whitespace file rule applies. `POST /v1/puzzle/mint` returns one
+Norito-encoded `credential_b64`; `credential_kind` is `signed` when the keypair
+is configured and `raw` otherwise. Signed responses also include
+`signed_ticket_fingerprint_hex` so clients can pin the replay fingerprint. The
+client does not select this mode per request.
+The p2p handshake path records every accepted PoW ticket into its bounded durable
+Norito snapshot and rejects handshakes while that replay ledger is unavailable.
 
 ## Key rotation playbook
 
@@ -257,8 +263,8 @@ deterministic purge without deleting the snapshot on disk.
 Relays emit structured `handshake` events that include throttle reasons and
 cooldown durations. Ensure the compliance pipeline described in
 `specs/soranet/relay_audit_pipeline.md` ingests these logs so puzzle
-policy changes remain auditable. When the puzzle gate is enabled, archive the
-minted ticket samples and the Norito configuration snapshot with the rollout
-ticket for future audits. Admission tokens minted ahead of maintenance windows
+policy changes remain auditable. Archive the minted puzzle-ticket samples and
+the Norito configuration snapshot with the rollout ticket for future audits.
+Admission tokens minted ahead of maintenance windows
 should be tracked with their `token_id_hex` values and inserted into the
 revocation file once they expire or are revoked.

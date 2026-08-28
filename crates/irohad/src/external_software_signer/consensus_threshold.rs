@@ -1485,7 +1485,7 @@ pub(crate) mod tests {
         policy_digest: [u8; 32],
     ) -> IrohaRuntimeProviderBindingsV1 {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../defaults/kagami/iroha3-dev/config.toml");
+            .join("../../defaults/kagami/iroha3-dev/peer0.toml");
         let source = fs::read_to_string(path).expect("read checked-in default daemon config");
         let mut table: toml::Table = toml::from_str(&source).expect("parse default daemon config");
         let genesis = table

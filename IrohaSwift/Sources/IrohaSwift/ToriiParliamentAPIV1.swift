@@ -87,10 +87,27 @@ public struct ToriiParliamentFinalReleaseV1: Sendable, Equatable, Encodable {
 ///
 /// Consensus-owned certificate construction and automatic execution outcomes
 /// are deliberately absent from this enum.
+public struct ToriiParliamentSortitionRequestRegistrationV1:
+    Sendable, Equatable, Encodable
+{
+    public let sequence: UInt32
+    public let request: ToriiJSONValue
+
+    public init(sequence: UInt32, request: ToriiJSONValue) {
+        self.sequence = sequence
+        self.request = request
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sequence
+        case request
+    }
+}
+
 public enum ToriiParliamentLifecycleTransitionV1: Sendable, Equatable, Encodable {
     case escalateRisk(target: ToriiJSONValue)
     case completeQualification
-    case registerSortitionRequest(sequence: UInt32, request: ToriiJSONValue, candidateSnapshot: [ToriiJSONValue])
+    case registerSortitionRequest(requests: [ToriiParliamentSortitionRequestRegistrationV1])
     case consumeSortitionPulseBatch(requestIds: [String], beaconSessionId: String, pulseHeight: UInt64, pulseId: String)
     case beginInvitationAcceptance(electionAttemptId: String)
     case failBodyElectionNoRoster(electionAttemptId: String)
@@ -163,10 +180,8 @@ public enum ToriiParliamentLifecycleTransitionV1: Sendable, Equatable, Encodable
             try payload.encode(target, forKey: .init("target"))
         case .completeQualification:
             break
-        case let .registerSortitionRequest(sequence, request, candidateSnapshot):
-            try payload.encode(sequence, forKey: .init("sequence"))
-            try payload.encode(request, forKey: .init("request"))
-            try payload.encode(candidateSnapshot, forKey: .init("candidate_snapshot"))
+        case let .registerSortitionRequest(requests):
+            try payload.encode(requests, forKey: .init("requests"))
         case let .consumeSortitionPulseBatch(requestIds, beaconSessionId, pulseHeight, pulseId):
             try payload.encode(requestIds, forKey: .init("request_ids"))
             try payload.encode(beaconSessionId, forKey: .init("beacon_session_id"))
@@ -244,14 +259,19 @@ public enum ToriiParliamentLifecycleTransitionV1: Sendable, Equatable, Encodable
             try ToriiParliamentAPIV1.rejectSigningMaterial(target, context: "EscalateRisk.target")
         case .completeQualification:
             break
-        case let .registerSortitionRequest(_, request, candidateSnapshot):
-            guard !candidateSnapshot.isEmpty,
-                  candidateSnapshot.count <= ToriiParliamentAPIV1.maximumCorpusEntries else {
+        case let .registerSortitionRequest(requests):
+            guard (1...ToriiParliamentAPIV1.maximumSortitionRequestsPerBatch)
+                .contains(requests.count) else {
                 throw ToriiClientError.invalidPayload(
-                    "candidate_snapshot must contain one through 1000 entries."
+                    "requests must contain one through 10 sortition registrations."
                 )
             }
-            try ToriiParliamentAPIV1.rejectSigningMaterial(request, context: "sortition request")
+            for (index, registration) in requests.enumerated() {
+                try ToriiParliamentAPIV1.rejectSigningMaterial(
+                    registration.request,
+                    context: "sortition requests[\(index)].request"
+                )
+            }
         case let .consumeSortitionPulseBatch(requestIds, beaconSessionId, _, pulseId):
             try ToriiParliamentAPIV1.requireStrictIdentifiers(requestIds, field: "request_ids")
             _ = try ToriiParliamentAPIV1.requireIdentifier(beaconSessionId, field: "beacon_session_id")
@@ -418,7 +438,11 @@ public struct ToriiParliamentAttemptReadResponseV1: Sendable, Equatable {
     public let terminalHeight: UInt64?
     public let executionFailureRoot: [UInt8]?
     public let statePayloadHex: String
+    /// Canonical ordered body names admitted from `required_bodies`.
+    public let requiredBodyOrder: [String]
     public let bodyStates: [ToriiParliamentBodyStateProjectionV1]
+    /// Canonical ordered body names carried by the certificate, or empty when absent.
+    public let certificateBodyOrder: [String]
     public let publicFindingBindings: [ToriiParliamentPublicFindingCertificateBindingV1]
     public let rawJSON: Data
 }
@@ -502,6 +526,52 @@ public struct ToriiParliamentTimedOvnCastingContextResponseV1: Sendable, Equatab
     public let archiveNorito: Data
 }
 
+/// Canonical bounded checkpoint request for the Parliament timed-OVN casting proof route.
+public struct ToriiParliamentTimedOvnCastingProofRequestV1: Sendable, Equatable {
+    public let trustedCheckpointHeight: UInt64
+
+    public init(trustedCheckpointHeight: UInt64) throws {
+        guard trustedCheckpointHeight > 0 else {
+            throw ToriiClientError.invalidPayload(
+                "trustedCheckpointHeight must be a positive u64."
+            )
+        }
+        self.trustedCheckpointHeight = trustedCheckpointHeight
+    }
+
+    /// Encode the exact uncompressed, zero-padding Norito request frame.
+    public func noritoData() throws -> Data {
+        try ToriiParliamentAPIV1.timedOvnCastingProofRequestData(
+            trustedCheckpointHeight: trustedCheckpointHeight
+        )
+    }
+}
+
+/// Schema- and checksum-admitted response frame passed unchanged to the native wallet bridge.
+///
+/// Framing admission does not establish consensus validity. Wallets must verify the page with the
+/// external network, checkpoint context, and expected ballot before accessing seed material.
+public struct ToriiParliamentTimedOvnCastingProofResponseV1: Sendable, Equatable {
+    /// Exact canonical response frame, including its Norito header.
+    public let canonicalNorito: Data
+    /// Exact payload bytes covered by the frame CRC64-XZ checksum.
+    public let payload: Data
+}
+
+/// Terminal casting-proof page and the exact native-authenticated checkpoint promotion.
+public struct ToriiParliamentTimedOvnCastingProofTerminalV1: Sendable, Equatable {
+    /// Canonical terminal response suitable for a proof-gated native wallet operation.
+    public let response: ToriiParliamentTimedOvnCastingProofResponseV1
+    /// Exact checkpoint supplied while native code authenticated `response`.
+    public let verificationAnchor: ParliamentTimedOvnCastingTrustAnchorV1
+    /// Durable checkpoint produced by the terminal page.
+    public let promotedTrustAnchor: ParliamentTimedOvnCastingTrustAnchorV1
+    /// Native-authenticated terminal promotion.
+    public let verification: ParliamentTimedOvnCastingProofPageVerificationV1
+    /// Total number of independently fetched and verified pages.
+    public let verifiedPageCount: Int
+}
+
 /// Core-authorized release context available only during the inclusive Opening window.
 public struct ToriiParliamentTleReleaseContextResponseV1: Sendable, Equatable {
     public let currentHeight: UInt64
@@ -568,12 +638,37 @@ public enum ToriiParliamentAPIV1 {
     public static let maximumAttemptStateBytes = 16 * 1024 * 1024
     public static let maximumTimedOvnCastingContextArchiveBytes = 4 * 1024 * 1024
     public static let maximumTimedOvnCastingProofResponseBytes = 8 * 1024 * 1024
+    public static let maximumTimedOvnCastingProofFinalityProofs = 64
+    /// Maximum checkpoint advance authenticated by one checkpoint-inclusive page.
+    public static let maximumTimedOvnCastingProofPageHeightAdvance: UInt64 =
+        UInt64(maximumTimedOvnCastingProofFinalityProofs - 1)
+    /// Deterministic maximum number of pages admitted by one client catch-up operation.
+    public static let maximumTimedOvnCastingProofPages = 64
+    /// Deterministic aggregate height advance admitted by one client catch-up operation.
+    public static let maximumTimedOvnCastingProofHeightAdvance: UInt64 =
+        maximumTimedOvnCastingProofPageHeightAdvance * UInt64(maximumTimedOvnCastingProofPages)
+    public static let timedOvnCastingProofRequestSchema =
+        "iroha.torii.v1.parliament.timed_ovn_casting_proof.request"
+    public static let timedOvnCastingProofResponseSchema =
+        "iroha.torii.v1.parliament.timed_ovn_casting_proof.response"
+    public static let timedOvnCastingProofRequestSchemaHashHex =
+        "adccf322a5fcf43040e20bea238f55f3"
+    public static let timedOvnCastingProofResponseSchemaHashHex =
+        "46d29299272433b1299646bee722bd11"
+    public static let timedOvnCastingProofRequestVersion: UInt16 = 1
+    public static let timedOvnCastingProofRequestFlags = NoritoHeader.compactLen
+    public static let timedOvnCastingProofRequestPayloadAlignment = 8
+    public static let timedOvnCastingProofRequestPaddingBytes = 0
+    public static let timedOvnCastingProofRequestBytes = 52
     public static let maximumTleCommitteeSize: UInt32 = 31
     public static let timedOvnRegistrationRecordBytes = 3_624
     public static let timedOvnBallotRecordBytes = 2_858
     /// Maximum records appended by one transition; the complete corpus may contain 1,000.
     public static let maximumTimedOvnBallotChunkRecords = 32
     public static let maximumCorpusEntries = 1_000
+    /// Maximum retry sequence for a whole governance attempt; valid sequences are 0 through 16.
+    public static let maximumGovernanceAttemptRetries: UInt32 = 16
+    public static let maximumSortitionRequestsPerBatch = 10
 
     public static let publicTransitionDigestDomain =
         "iroha.governance.parliament.lifecycle_transition.digest.v1"
@@ -636,6 +731,7 @@ public enum ToriiParliamentAPIV1 {
         .init(noritoIndex: 4, jsonTag: "BallotCommitmentDeadlineExpired"),
         .init(noritoIndex: 5, jsonTag: "BallotReleasePulseUnavailable"),
         .init(noritoIndex: 6, jsonTag: "BallotOpeningDeadlineExpired"),
+        .init(noritoIndex: 7, jsonTag: "SortitionRetriesExhausted"),
     ]
 
     public static let bodyStateFields = [
@@ -648,6 +744,20 @@ public enum ToriiParliamentAPIV1 {
         "no_result_kind",
         "no_result_height",
         "timed_ovn_progress",
+    ]
+
+    /// Canonical presentation order for first-release Parliament bodies.
+    public static let canonicalBodyOrder = [
+        "rules-committee",
+        "agenda-council",
+        "interest-panel",
+        "review-panel",
+        "coordination-council",
+        "mpc-committee",
+        "fma-committee",
+        "oversight-committee",
+        "policy-jury",
+        "confirmation-jury",
     ]
 
     public static let certificateBodyBindingNoritoFields = [
@@ -675,19 +785,7 @@ public enum ToriiParliamentAPIV1 {
         "quorum",
     ]
 
-    private static let bodyOrder = [
-        "rules-committee",
-        "agenda-council",
-        "interest-panel",
-        "review-panel",
-        "coordination-council",
-        "mpc-committee",
-        "fma-committee",
-        "oversight-committee",
-        "policy-jury",
-        "confirmation-jury",
-    ]
-    private static let bodies = Set(bodyOrder)
+    private static let bodies = Set(canonicalBodyOrder)
     private static let privateBodies: Set<String> = ["policy-jury", "confirmation-jury"]
     private static let riskTiers: Set<String> = [
         "Routine", "Standard", "Constitutional", "Emergency",
@@ -741,6 +839,61 @@ public enum ToriiParliamentAPIV1 {
         )
     }
 
+    /// Encode one positive u64 checkpoint height as the canonical zero-padding request frame.
+    public static func timedOvnCastingProofRequestData(
+        trustedCheckpointHeight: UInt64
+    ) throws -> Data {
+        guard trustedCheckpointHeight > 0 else {
+            throw ToriiClientError.invalidPayload(
+                "trustedCheckpointHeight must be a positive u64."
+            )
+        }
+        var payload = Data([2])
+        var wireVersion = timedOvnCastingProofRequestVersion.littleEndian
+        withUnsafeBytes(of: &wireVersion) { payload.append(contentsOf: $0) }
+        payload.append(UInt8(timedOvnCastingProofRequestPayloadAlignment))
+        var wireHeight = trustedCheckpointHeight.littleEndian
+        withUnsafeBytes(of: &wireHeight) { payload.append(contentsOf: $0) }
+        let frame = noritoEncode(
+            typeName: timedOvnCastingProofRequestSchema,
+            payload: payload,
+            flags: timedOvnCastingProofRequestFlags,
+            payloadAlignment: timedOvnCastingProofRequestPayloadAlignment
+        )
+        precondition(frame.count == timedOvnCastingProofRequestBytes)
+        return frame
+    }
+
+    /// Admit one exact, uncompressed, compact-length response frame with no header padding.
+    public static func decodeTimedOvnCastingProofResponse(
+        _ data: Data
+    ) throws -> ToriiParliamentTimedOvnCastingProofResponseV1 {
+        guard !data.isEmpty,
+              data.count <= maximumTimedOvnCastingProofResponseBytes else {
+            throw ToriiClientError.invalidPayload(
+                "Parliament timed-OVN casting proof response exceeds its 8 MiB bound."
+            )
+        }
+        guard let frame = noritoDecodeFrame(data),
+              frame.header.schema == noritoSchemaHash(
+                  forTypeName: timedOvnCastingProofResponseSchema
+              ),
+              frame.header.compression == .none,
+              frame.header.flags == timedOvnCastingProofRequestFlags,
+              frame.paddingLength == timedOvnCastingProofRequestPaddingBytes,
+              data.count == NoritoHeader.encodedLength + frame.payload.count,
+              data.prefix(NoritoHeader.encodedLength) == frame.header.encode(),
+              !frame.payload.isEmpty else {
+            throw ToriiClientError.invalidPayload(
+                "Parliament timed-OVN casting proof response is not an exact canonical Norito frame."
+            )
+        }
+        return ToriiParliamentTimedOvnCastingProofResponseV1(
+            canonicalNorito: data,
+            payload: frame.payload
+        )
+    }
+
     /// Replace the release-context ballot parameter after exact identifier validation.
     public static func tleReleaseContextReadPath(ballotAttemptId: String) throws -> String {
         let identifier = try requireIdentifier(ballotAttemptId, field: "ballotAttemptId")
@@ -764,7 +917,12 @@ public enum ToriiParliamentAPIV1 {
         proposal: ToriiParliamentProposalV1,
         attemptSequence: UInt32
     ) throws -> Data {
-        try JSONEncoder().encode(
+        guard attemptSequence <= maximumGovernanceAttemptRetries else {
+            throw ToriiClientError.invalidPayload(
+                "attempt_sequence must be between zero and 16."
+            )
+        }
+        return try JSONEncoder().encode(
             ToriiParliamentAttemptDraftEnvelopeV1(
                 version: version,
                 proposal: proposal,
@@ -981,6 +1139,7 @@ public enum ToriiParliamentAPIV1 {
             requiredBodies: requiredBodies,
             bodyStates: bodyStates
         )
+        let certificateBodyOrder = root["certificate"] is NSNull ? [] : requiredBodies
         if !(root["superseding_head"] is NSNull) {
             try validateExpectedHead(root["superseding_head"], context: "superseding_head")
         }
@@ -996,7 +1155,9 @@ public enum ToriiParliamentAPIV1 {
             terminalHeight: terminalHeight,
             executionFailureRoot: executionFailureRoot,
             statePayloadHex: statePayloadHex,
+            requiredBodyOrder: requiredBodies,
             bodyStates: bodyStates,
+            certificateBodyOrder: certificateBodyOrder,
             publicFindingBindings: publicFindings,
             rawJSON: data
         )
@@ -2084,7 +2245,8 @@ fileprivate extension ToriiParliamentAPIV1 {
                 )
             }
             try requireBody(body, field: "required_bodies[\(index)].body")
-            guard let bodyIndex = bodyOrder.firstIndex(of: body), bodyIndex > previousBodyIndex else {
+            guard let bodyIndex = canonicalBodyOrder.firstIndex(of: body),
+                  bodyIndex > previousBodyIndex else {
                 throw ToriiClientError.invalidPayload(
                     "required_bodies must use strict canonical body order."
                 )

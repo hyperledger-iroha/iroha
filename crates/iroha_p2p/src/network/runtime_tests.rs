@@ -29,15 +29,8 @@ fn runtime_from_handshake_preserves_puzzle_parameters() {
         .into();
     let runtime = runtime_from_handshake(handshake).expect("runtime");
     let runtime = runtime.snapshot().expect("runtime policy");
-    assert!(
-        runtime.inbound_pow_required(),
-        "puzzle-enabled handshake must require PoW"
-    );
-    let pow = runtime.pow_parameters();
-    assert_eq!(pow.difficulty(), 6);
-    let puzzle = runtime
-        .puzzle_parameters()
-        .expect("puzzle parameters should be present");
+    let puzzle = runtime.puzzle_parameters();
+    assert_eq!(puzzle.difficulty(), 6);
     assert_eq!(puzzle.memory_kib().get(), 64 * 1024);
     assert_eq!(puzzle.time_cost().get(), 3);
     assert_eq!(puzzle.lanes().get(), 2);
@@ -100,18 +93,18 @@ fn runtime_from_handshake_rejects_oversized_actual_puzzle_capacity() {
 }
 
 #[test]
-fn runtime_from_handshake_rejects_invalid_pow_bounds() {
+fn runtime_from_handshake_rejects_invalid_puzzle_bounds() {
     let mut handshake = ActualSoranetHandshake::default();
     handshake.pow.max_future_skew = Duration::from_secs(30);
     handshake.pow.min_ticket_ttl = Duration::from_secs(60);
-    let err = runtime_from_handshake(handshake).expect_err("invalid PoW bounds must fail");
+    let err = runtime_from_handshake(handshake).expect_err("invalid puzzle bounds must fail");
     match err {
         Error::HandshakeSoranet(message) => {
             assert!(
-                message.contains("PoW")
+                message.contains("puzzle")
                     && message.contains("max_future_skew")
-                    && message.contains("min_ttl"),
-                "expected PoW bounds validation failure, got {message}"
+                    && message.contains("min_ticket_ttl"),
+                "expected puzzle bounds validation failure, got {message}"
             );
         }
         other => panic!("unexpected error type: {other:?}"),
@@ -170,17 +163,19 @@ fn runtime_from_handshake_fails_closed_on_corrupt_revocation_snapshot() {
     );
 }
 #[test]
-fn disabled_test_admission_uses_only_in_memory_replay_state() {
+fn mandatory_admission_never_bypasses_persistent_replay_state() {
     let mut handshake = ActualSoranetHandshake::default();
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("intentionally-unused-revocations.norito");
     fs::write(&path, b"corrupt snapshot").expect("write corrupt revocation file");
     handshake.pow.revocation_store_path = path.to_string_lossy().into_owned().into();
-    let runtime = runtime_from_handshake_without_admission_for_test(handshake)
-        .expect("test-local disabled admission is in-memory");
-    let policy = runtime.snapshot().expect("runtime policy");
-    assert!(!policy.inbound_pow_required());
-    assert_eq!(policy.active_revocations().expect("active count"), 0);
+    let error = runtime_from_handshake(handshake)
+        .expect_err("mandatory admission must load and validate persistent replay state");
+    assert!(matches!(
+        error,
+        Error::HandshakeSoranet(message)
+            if message.contains("failed to load soranet revocation store")
+    ));
 }
 
 fn handshake_with_replay_path(path: &std::path::Path) -> ActualSoranetHandshake {
@@ -200,7 +195,7 @@ fn runtime_reload_same_path_publishes_new_difficulty() {
     handshake.pow.difficulty = 7;
     let updated = runtime.reload(handshake).expect("compatible reload");
 
-    assert_eq!(updated.pow_parameters().difficulty(), 7);
+    assert_eq!(updated.puzzle_parameters().difficulty(), 7);
     assert!(!Arc::ptr_eq(&initial, &updated));
     assert!(Arc::ptr_eq(
         &updated,
@@ -282,6 +277,6 @@ fn listener_and_outbound_runtime_clones_observe_published_snapshot() {
 
     assert!(Arc::ptr_eq(&updated, &listener_snapshot));
     assert!(Arc::ptr_eq(&updated, &outbound_snapshot));
-    assert_eq!(listener_snapshot.pow_parameters().difficulty(), 8);
-    assert_eq!(outbound_snapshot.pow_parameters().difficulty(), 8);
+    assert_eq!(listener_snapshot.puzzle_parameters().difficulty(), 8);
+    assert_eq!(outbound_snapshot.puzzle_parameters().difficulty(), 8);
 }

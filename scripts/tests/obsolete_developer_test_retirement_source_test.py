@@ -299,7 +299,6 @@ REPLACEMENT_MARKERS = {
     "crates/iroha_core/src/streaming.rs": (
         ("fn process_streaming_event_registers_ticket_from_ready_event()", 1),
         ("fn process_streaming_event_revokes_ticket()", 1),
-        ("fn register_stream_ticket_populates_soranet_defaults()", 1),
         ("fn ticket_revoked_removes_registered_state()", 1),
         ("fn duplicate_ticket_nullifier_is_rejected()", 1),
         ("fn ticket_envelope_commitment_mismatch_is_rejected()", 1),

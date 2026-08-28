@@ -280,7 +280,8 @@ _REMOTE_PROPOSAL_REPLAY_ITEM_SHA256 = {
     "fetch_authority_adopt": "e846fda5841a09586c8baded336d1723f2cc2d625a1078ff21e8185913cb38b1",
     "body_fetch_rebind": "eba1c4dbbc4292774bfb50861995e9fb212643576d8522e318a91efa7cec6399",
     "executor_retain": "498ebc89028de5a60f9cc909f7a7c6f99fc3b3cf3efda45c2ecf9c62834eb097",
-    "executor_ready": "5debfd191a5f8370484b67f34e019060ec363efa0c0592068a32aa50f83c50d3",
+    # `V2EffectExecutor<SerializedV2Runtime>::ready_to_finish`.
+    "executor_ready": "b4c1f3ac9a79b81749e6ec918ff9d2a72b922e2bd710e13f94d5241a2e179482",
     "ownership_fetch_replay": "1ac9ff4ff448a03d9348faab7796bc1c986cd0600f64d3feb27b4f0abee657c1",
     "authority_mint": "ea8680ad00ae88245688355cc371724b4a133b112be43c3d46fe50f9cc4785e3",
     "authority_match": "fffb59ff81f0cdf5b0f8c1c222693c0fb586af021b2c68746ca5e846bf0ba8e5",

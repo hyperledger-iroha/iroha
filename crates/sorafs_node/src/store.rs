@@ -15,7 +15,7 @@ use norito::{
 use sorafs_car::{
     self, CarBuildPlan, CarChunk, CarStreamingWriter, ChunkStore, ChunkStoreError,
     DirectoryPublicationStatus, FilePlan, PayloadSource, PorMerkleTree, PorProof, PorSampleIndices,
-    TaikaiSegmentHint, compute_chunk_plan_digest_sha3,
+    compute_chunk_plan_digest_sha3,
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
@@ -1018,16 +1018,6 @@ impl StoredManifest {
     /// Reconstruct a [`CarBuildPlan`] matching the stored manifest chunk metadata.
     #[must_use]
     pub fn to_car_plan(&self, profile: ChunkProfile) -> CarBuildPlan {
-        self.to_car_plan_with_hint(profile, None)
-    }
-    /// Reconstruct a [`CarBuildPlan`] matching the stored manifest chunk metadata and
-    /// attach an optional Taikai hint to each chunk.
-    #[must_use]
-    pub fn to_car_plan_with_hint(
-        &self,
-        profile: ChunkProfile,
-        taikai_hint: Option<TaikaiSegmentHint>,
-    ) -> CarBuildPlan {
         let chunks = self
             .chunk_files
             .iter()
@@ -1035,7 +1025,6 @@ impl StoredManifest {
                 offset: chunk.offset,
                 length: chunk.length,
                 digest: chunk.digest,
-                taikai_segment_hint: taikai_hint.clone(),
             })
             .collect::<Vec<_>>();
         let files = self
@@ -1056,16 +1045,12 @@ impl StoredManifest {
             files,
         }
     }
-    /// Fallibly reconstruct a [`CarBuildPlan`] with an optional Taikai hint per chunk.
+    /// Fallibly reconstruct a [`CarBuildPlan`] matching the stored manifest chunk metadata.
     ///
     /// # Errors
     ///
-    /// Returns an allocation error when chunk, file, path, or hint metadata cannot be cloned.
-    pub fn try_to_car_plan_with_hint(
-        &self,
-        profile: ChunkProfile,
-        taikai_hint: Option<&TaikaiSegmentHint>,
-    ) -> Result<CarBuildPlan, StorageError> {
+    /// Returns an allocation error when chunk, file, or path metadata cannot be cloned.
+    pub fn try_to_car_plan(&self, profile: ChunkProfile) -> Result<CarBuildPlan, StorageError> {
         let mut chunks = Vec::new();
         chunks
             .try_reserve_exact(self.chunk_files.len())
@@ -1080,7 +1065,6 @@ impl StoredManifest {
                 offset: chunk.offset,
                 length: chunk.length,
                 digest: chunk.digest,
-                taikai_segment_hint: taikai_hint.map(try_clone_taikai_segment_hint).transpose()?,
             });
         }
         let mut files = Vec::new();
@@ -1105,9 +1089,6 @@ impl StoredManifest {
             chunks,
             files,
         })
-    }
-    fn try_to_car_plan(&self, profile: ChunkProfile) -> Result<CarBuildPlan, StorageError> {
-        self.try_to_car_plan_with_hint(profile, None)
     }
     /// Build an in-memory PoR tree for the stored manifest.
     #[must_use]
@@ -1484,18 +1465,6 @@ fn try_clone_chunk_file_record(chunk: &ChunkFileRecord) -> Result<ChunkFileRecor
         digest: chunk.digest,
         role: chunk.role,
         group_id: chunk.group_id,
-    })
-}
-fn try_clone_taikai_segment_hint(
-    hint: &TaikaiSegmentHint,
-) -> Result<TaikaiSegmentHint, StorageError> {
-    Ok(TaikaiSegmentHint {
-        event: try_clone_text(&hint.event, "Taikai event hint")?,
-        stream: try_clone_text(&hint.stream, "Taikai stream hint")?,
-        rendition: try_clone_text(&hint.rendition, "Taikai rendition hint")?,
-        sequence: hint.sequence,
-        payload_len: hint.payload_len,
-        payload_digest: hint.payload_digest,
     })
 }
 fn try_clone_retention_source(
@@ -7277,25 +7246,6 @@ mod tests {
         assert_eq!(rebuilt.chunks, plan.chunks);
         assert_eq!(rebuilt.payload_digest, plan.payload_digest);
         assert_eq!(rebuilt.files, plan.files);
-        let hint = TaikaiSegmentHint {
-            event: "event-a".to_owned(),
-            stream: "stream-a".to_owned(),
-            rendition: "1080p".to_owned(),
-            sequence: 7,
-            payload_len: Some(plan.content_length),
-            payload_digest: Some(*plan.payload_digest.as_bytes()),
-        };
-        let fallible = stored
-            .try_to_car_plan_with_hint(sorafs_chunker::ChunkProfile::DEFAULT, Some(&hint))
-            .expect("fallibly rebuild CAR plan with Taikai hint");
-        assert_eq!(fallible.files, plan.files);
-        assert_eq!(fallible.chunks.len(), plan.chunks.len());
-        assert!(
-            fallible
-                .chunks
-                .iter()
-                .all(|chunk| chunk.taikai_segment_hint.as_ref() == Some(&hint))
-        );
     }
     #[test]
     fn sample_por_returns_proofs() {

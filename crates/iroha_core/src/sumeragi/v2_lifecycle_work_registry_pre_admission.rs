@@ -1212,8 +1212,8 @@ impl DurableStoreTerminalRetrySealV1 {
         let validate_pending = validate_ownership
             .exact_pending_adapter_effect_binding(validate_effect)
             .ok()?;
-        let projected_store_pending = validate_pending
-            .project_validate_store_predecessor(validate_effect, &store_effect)?;
+        let projected_store_pending =
+            validate_pending.project_validate_store_predecessor(validate_effect, &store_effect)?;
         let store_ownership = validate_ownership
             .rebind_as_inherited_adapter_effect(&store_effect)
             .ok()?;
@@ -1583,16 +1583,6 @@ pub(in crate::sumeragi) struct ProtectedLockValidateReplayPreAdmissionError {
     _durable_receipt: DurableBodyReceipt,
     _certificate: wire::QuorumCertificate,
 }
-/// Ownership-preserving failure while resealing one terminal Validate for the
-/// exact durable Decision that still requires its lifecycle Apply successor.
-#[derive(Debug)]
-pub(in crate::sumeragi) struct ProtectedDecisionValidateReplayPreAdmissionError {
-    _effect: AdapterEffect,
-    _ownership: RuntimeEffectOwnership,
-    _manifest: wire::PayloadManifest,
-    _durable_receipt: DurableBodyReceipt,
-    _certificate: wire::QuorumCertificate,
-}
 impl RemoteProposalStoreReplayPreAdmissionError {
     /// Return the exact Fetch owner when Store projection does not commit.
     pub(in crate::sumeragi) fn into_fetch(self) -> PreparedRemoteProposalFetchReplayPreAdmission {
@@ -1837,11 +1827,7 @@ impl PreparedAuthenticatedGenesisStoredReplayPreAdmission {
     ) -> Option<DurableStoreTerminalRetrySealV1> {
         self.exactly_retains_owned_store(durable_receipt, ownership)
             .then_some(())?;
-        DurableStoreTerminalRetrySealV1::seal_exact(
-            &self.store_effect,
-            ownership,
-            durable_receipt,
-        )
+        DurableStoreTerminalRetrySealV1::seal_exact(&self.store_effect, ownership, durable_receipt)
     }
     /// Adopt a same-body durable Store carrier from a strictly later reducer
     /// view while the original Store-to-Validate replay root stays sealed.
@@ -2238,11 +2224,7 @@ impl PreparedRemoteProposalStoredReplayPreAdmission {
     ) -> Option<DurableStoreTerminalRetrySealV1> {
         self.exactly_retains_owned_store(durable_receipt, ownership)
             .then_some(())?;
-        DurableStoreTerminalRetrySealV1::seal_exact(
-            &self.store_effect,
-            ownership,
-            durable_receipt,
-        )
+        DurableStoreTerminalRetrySealV1::seal_exact(&self.store_effect, ownership, durable_receipt)
     }
     /// Adopt a same-body durable Store carrier from a strictly later reducer
     /// view while the original Store-to-Validate replay root stays sealed.
@@ -2582,101 +2564,6 @@ impl PreparedLocalBodyValidateReplayPreAdmission {
                 &effect,
                 &manifest,
                 &durable_receipt,
-                &certificate,
-                replay_pending,
-            )
-        else {
-            return Err(failed(
-                effect,
-                ownership,
-                manifest,
-                durable_receipt,
-                certificate,
-            ));
-        };
-        let prepared = Self {
-            effect,
-            pending,
-            durable_receipt,
-            replay_evidence,
-        };
-        if !prepared.validates() {
-            let Self {
-                effect,
-                pending: _,
-                durable_receipt,
-                replay_evidence: _,
-            } = prepared;
-            return Err(failed(
-                effect,
-                ownership,
-                manifest,
-                durable_receipt,
-                certificate,
-            ));
-        }
-        Ok(prepared)
-    }
-
-    /// Reseal one terminal direct-lifecycle Validate beneath the exact durable
-    /// Commit decision which still needs the registry to mint its Apply child.
-    ///
-    /// The cached validation receipt is checked by the executor before this
-    /// boundary. This carrier adds the complete CommitQC and body frame, so
-    /// normal lifecycle admission and cold recovery reauthenticate the handoff.
-    #[allow(clippy::result_large_err)]
-    pub(in crate::sumeragi) fn seal_exact_protected_decision_validate(
-        effect: AdapterEffect,
-        ownership: RuntimeEffectOwnership,
-        manifest: wire::PayloadManifest,
-        durable_receipt: DurableBodyReceipt,
-        validated_receipt: &ValidatedBodyReceipt,
-        certificate: wire::QuorumCertificate,
-    ) -> Result<Self, ProtectedDecisionValidateReplayPreAdmissionError> {
-        let failed = |effect, ownership, manifest, durable_receipt, certificate| {
-            ProtectedDecisionValidateReplayPreAdmissionError {
-                _effect: effect,
-                _ownership: ownership,
-                _manifest: manifest,
-                _durable_receipt: durable_receipt,
-                _certificate: certificate,
-            }
-        };
-        if validated_receipt.durable() != &durable_receipt
-            || validated_receipt.execution_commitment() != certificate.execution_commitment
-            || !ownership.binds_durable_decision_authority(
-                certificate.round,
-                certificate.proposal_round,
-                certificate.subject,
-                certificate.execution_commitment,
-            )
-        {
-            return Err(failed(
-                effect,
-                ownership,
-                manifest,
-                durable_receipt,
-                certificate,
-            ));
-        }
-        let Ok(pending) = ownership.exact_pending_adapter_effect_binding(&effect) else {
-            return Err(failed(
-                effect,
-                ownership,
-                manifest,
-                durable_receipt,
-                certificate,
-            ));
-        };
-        let Ok(replay_pending) = ownership.exact_pending_adapter_effect_binding(&effect) else {
-            unreachable!("an unchanged exact ownership binding projects deterministically")
-        };
-        let Some(replay_evidence) =
-            LocalValidateReplayEvidenceV1::from_exact_protected_decision_validate(
-                &effect,
-                &manifest,
-                &durable_receipt,
-                validated_receipt,
                 &certificate,
                 replay_pending,
             )

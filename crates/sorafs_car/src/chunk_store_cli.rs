@@ -692,7 +692,6 @@ fn plan_from_store(store: &ChunkStore) -> CarBuildPlan {
                 offset: chunk.offset,
                 length: chunk.length,
                 digest: chunk.blake3,
-                taikai_segment_hint: None,
             })
             .collect(),
         files: vec![FilePlan {

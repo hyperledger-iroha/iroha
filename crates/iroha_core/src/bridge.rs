@@ -299,6 +299,20 @@ pub(crate) fn decode_recorded_sccp_payload_bytes(payload_bytes: &[u8]) -> Option
     Some(payload)
 }
 #[cfg(test)]
+fn test_sccp_target_network_for_domain(
+    target_domain: u32,
+) -> iroha_data_model::bridge::SccpNetworkV1 {
+    use iroha_data_model::bridge::SccpNetworkV1;
+    match target_domain {
+        iroha_sccp::SCCP_DOMAIN_ETH => SccpNetworkV1::EthereumMainnet,
+        iroha_sccp::SCCP_DOMAIN_BSC => SccpNetworkV1::BscMainnet,
+        iroha_sccp::SCCP_DOMAIN_SOLANA => SccpNetworkV1::SolanaTestnet,
+        iroha_sccp::SCCP_DOMAIN_TON => SccpNetworkV1::TonMainnet,
+        iroha_sccp::SCCP_DOMAIN_TRON => SccpNetworkV1::TronMainnet,
+        domain => panic!("test SCCP payload names unsupported target domain {domain}"),
+    }
+}
+#[cfg(test)]
 pub(crate) fn test_sccp_outbound_context_for_payload_bytes(
     payload_bytes: &[u8],
 ) -> iroha_data_model::bridge::SccpOutboundMessageContextV1 {
@@ -307,13 +321,7 @@ pub(crate) fn test_sccp_outbound_context_for_payload_bytes(
         .map(|payload| iroha_sccp::sccp_message_target_domain(&payload))
         .filter(|domain| *domain != iroha_sccp::SCCP_DOMAIN_SORA)
         .unwrap_or(iroha_sccp::SCCP_DOMAIN_ETH);
-    let target = match target_domain {
-        iroha_sccp::SCCP_DOMAIN_ETH => Some(SccpNetworkV1::EthereumMainnet),
-        iroha_sccp::SCCP_DOMAIN_BSC => Some(SccpNetworkV1::BscMainnet),
-        iroha_sccp::SCCP_DOMAIN_TRON => Some(SccpNetworkV1::TronMainnet),
-        _ => None,
-    }
-    .unwrap_or(SccpNetworkV1::EthereumMainnet);
+    let target = test_sccp_target_network_for_domain(target_domain);
     let (destination_binding_hash, route_configuration_hash) = if matches!(
         target_domain,
         iroha_sccp::SCCP_DOMAIN_ETH | iroha_sccp::SCCP_DOMAIN_BSC
@@ -1484,6 +1492,29 @@ pub fn build_sccp_groth16_bn254_proof_request_from_verified_finality_v1(
         &finality,
     )
 }
+/// Build the governed curve-specific SCCP destination proving request from an
+/// already verified local finality artifact.
+///
+/// TON routes select BLS12-381; EVM, TRON, and Solana routes select BN254.
+/// The marker and exact embedded finality equality remain the trust boundary,
+/// so this function performs no second Taira BLS verification.
+#[must_use]
+pub fn build_sccp_destination_proof_request_from_verified_finality_v1(
+    verified_finality: &VerifiedV2FinalityArtifact,
+    bundle: &TairaSccpMessageProofV1,
+    governed_route: &SccpGovernedRouteV1,
+) -> Option<iroha_sccp::SccpDestinationProofRequestV1> {
+    let finality = TairaBridgeFinalityProofV1 {
+        version: BRIDGE_FINALITY_PROOF_VERSION_V2,
+        block_header: verified_finality.retained_header().clone(),
+        finality_artifact: verified_finality.artifact().clone(),
+    };
+    iroha_sccp::build_sccp_destination_proof_request_from_structurally_bound_finality_v1(
+        bundle,
+        governed_route,
+        &finality,
+    )
+}
 /// Fully authenticated finalized SCCP outbox projection for one exact block height.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedSccpFinalizedMessagesV1 {
@@ -1743,17 +1774,17 @@ pub fn verify_sccp_finality_proof_against_local_state(
     }
     verify_structural_sccp_finality_proof_against_local_state(state, finality)
 }
-/// Bind an opaque route/Groth16-verified destination context to local committed
-/// block and durable v2 artifact state without repeating proof-controlled parsing.
+/// Bind a parse-only destination proof to local committed block and durable v2
+/// artifact state before any settlement-call material can be derived.
 ///
 /// # Errors
 /// Returns a human-readable rejection reason when the context's finality artifact differs from
 /// authoritative local state or the proof-typed storage lookup rejects that local artifact.
-pub fn verify_sccp_destination_context_against_local_state(
+pub fn verify_sccp_parsed_destination_proof_against_local_state(
     state: &impl BridgeStateReadOnly,
-    context: &iroha_sccp::SccpVerifiedDestinationContextV1,
+    parsed: &iroha_sccp::SccpParsedDestinationProofV1,
 ) -> Result<BridgeFinalityProof, String> {
-    verify_structural_sccp_finality_proof_against_local_state(state, context.finality())
+    verify_structural_sccp_finality_proof_against_local_state(state, parsed.finality())
 }
 fn verify_structural_sccp_finality_proof_against_local_state(
     state: &impl BridgeStateReadOnly,
@@ -2091,6 +2122,24 @@ mod tests {
                 .as_bytes()
                 .to_vec(),
         })
+    }
+    #[test]
+    fn outbound_context_fixture_maps_every_supported_remote_domain_exactly() {
+        use iroha_data_model::bridge::SccpNetworkV1;
+
+        for (domain, expected) in [
+            (iroha_sccp::SCCP_DOMAIN_ETH, SccpNetworkV1::EthereumMainnet),
+            (iroha_sccp::SCCP_DOMAIN_BSC, SccpNetworkV1::BscMainnet),
+            (iroha_sccp::SCCP_DOMAIN_SOLANA, SccpNetworkV1::SolanaTestnet),
+            (iroha_sccp::SCCP_DOMAIN_TON, SccpNetworkV1::TonMainnet),
+            (iroha_sccp::SCCP_DOMAIN_TRON, SccpNetworkV1::TronMainnet),
+        ] {
+            assert_eq!(test_sccp_target_network_for_domain(domain), expected);
+        }
+        assert!(
+            std::panic::catch_unwind(|| test_sccp_target_network_for_domain(u32::MAX)).is_err(),
+            "unknown domains must not silently inherit an Ethereum test context",
+        );
     }
     fn non_sora_source_transfer_payload(nonce: u64) -> SccpPayloadV1 {
         SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -2575,34 +2624,74 @@ mod tests {
         (fixture, state)
     }
     #[test]
-    fn destination_context_uses_one_decode_pairing_and_verified_local_artifact() {
+    fn parsed_destination_proof_binds_local_state_before_deriving_call() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let (fixture, state) = persisted_state_for_exact_sccp_fixture(&fixture);
         iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
         let parsed = iroha_sccp::parse_sccp_destination_proof_v1(&fixture.bridge_proof)
             .expect("exact destination proof parses");
-        let verified = iroha_sccp::verify_parsed_sccp_destination_proof_v1(parsed, &fixture.route)
-            .expect("exact destination proof verifies against governed route");
+        let trusted_finality =
+            verify_sccp_parsed_destination_proof_against_local_state(&state, &parsed)
+                .expect("parse-only destination proof must anchor to exact local v2 artifact");
         assert_eq!(
             iroha_sccp::sccp_destination_proof_work_counters_v1(),
             iroha_sccp::SccpDestinationProofWorkCountersV1 {
                 artifact_framing_decodes: 1,
                 bundle_decodes: 1,
-                groth16_pairings: 1,
+                groth16_pairings: 0,
                 bls_verifications: 0,
-            }
-        );
-        verify_sccp_destination_context_against_local_state(&state, &verified)
-            .expect("route-bound context must anchor to exact local v2 artifact");
-        assert_eq!(
-            iroha_sccp::sccp_destination_proof_work_counters_v1(),
-            iroha_sccp::SccpDestinationProofWorkCountersV1 {
-                artifact_framing_decodes: 1,
-                bundle_decodes: 1,
-                groth16_pairings: 1,
-                bls_verifications: 0,
+                bls12381_point_decodes: 0,
             },
-            "local anchoring must not re-enter proof-controlled SCCP crypto"
+            "local authority must be established before proof-controlled cryptography"
+        );
+        let call = iroha_sccp::verify_parsed_sccp_destination_proof_v1(
+            parsed,
+            &fixture.route,
+            &trusted_finality,
+        )
+        .expect("locally anchored destination proof verifies against governed route");
+        assert_eq!(call.public_inputs, fixture.request.public_inputs);
+        assert_eq!(
+            iroha_sccp::sccp_destination_proof_work_counters_v1(),
+            iroha_sccp::SccpDestinationProofWorkCountersV1 {
+                artifact_framing_decodes: 1,
+                bundle_decodes: 1,
+                groth16_pairings: 1,
+                bls_verifications: 1,
+                bls12381_point_decodes: 0,
+            },
+            "call derivation must perform exactly one pairing and one finality check"
+        );
+    }
+    #[test]
+    fn verified_finality_builder_selects_ton_bls12381_request() {
+        let fixture = iroha_sccp::sccp_exact_ton_outbound_test_fixture_v1();
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact TON fixture finality proof");
+        let verified = VerifiedV2FinalityArtifact::verify_for_header(
+            finality.block_header,
+            finality.finality_artifact,
+        )
+        .expect("exact TON fixture finality verifies");
+        assert!(
+            build_sccp_groth16_bn254_proof_request_from_verified_finality_v1(
+                &verified,
+                &fixture.bundle,
+                &fixture.route,
+            )
+            .is_none(),
+            "TON routes must never be projected into the BN254 request type"
+        );
+        assert_eq!(
+            build_sccp_destination_proof_request_from_verified_finality_v1(
+                &verified,
+                &fixture.bundle,
+                &fixture.route,
+            ),
+            Some(iroha_sccp::SccpDestinationProofRequestV1::Groth16Bls12381(
+                fixture.request,
+            ))
         );
     }
     #[test]

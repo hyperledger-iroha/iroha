@@ -1079,7 +1079,7 @@ fn fair_v2_ingress_same_control_slot(
         && left_round.context_id == right_round.context_id
         && left_round.height == right_round.height
 }
-/// Whether timeout control can advance past the selected control owner's view.
+/// Whether timeout control can advance past the selected view-scoped owner's view.
 ///
 /// A direct Vote may deliberately remain in fair ingress until its Proposal
 /// binds the execution commitment. Requiring that blocked Vote to cross before
@@ -1087,10 +1087,13 @@ fn fair_v2_ingress_same_control_slot(
 /// assemble the TC which retires the view's proposal and vote work. The same
 /// cycle exists when one validator's already-counted TimeoutVote owns the
 /// barrier, so another validator's exact-view share may cross it. An already
-/// assembled TC for that view or a later one has the same dependency. Every
-/// candidate still crosses normal downstream authentication and quorum checks;
-/// this helper only allows the verifier to observe it when the immutable
-/// control owner is currently inadmissible.
+/// assembled TC for that view or a later one has the same dependency. A
+/// manifest-bound Chunk is also view-scoped: timeout shares must be observable
+/// to form the TC which retires a body whose downstream capacity is blocked.
+/// Certified responses are request-scoped and deliberately remain excluded.
+/// Every candidate still crosses normal downstream authentication and quorum
+/// checks; this helper only allows the verifier to observe it when the
+/// immutable owner is currently inadmissible.
 fn fair_v2_ingress_timeout_control_advances_owner(
     owner: &FairV2IngressLeaderWireToken,
     candidate: Option<&FairV2IngressLeaderWireToken>,
@@ -1105,6 +1108,7 @@ fn fair_v2_ingress_timeout_control_advances_owner(
             | FairV2IngressLeaderWirePhase::PrepareQc
             | FairV2IngressLeaderWirePhase::CommitQc
             | FairV2IngressLeaderWirePhase::TimeoutVote
+            | FairV2IngressLeaderWirePhase::Chunk
     ) {
         return false;
     }
@@ -1144,13 +1148,14 @@ fn fair_v2_ingress_timeout_control_advances_owner(
         && round.height == owner.identity.height
         && view_advances
 }
-/// Whether a certified reducer input can advance the selected productive owner.
+/// Whether a certified reducer input can advance the selected productive leader-wire owner.
 ///
 /// Fair ingress observes only authenticated transport provenance at this
 /// point; the reducer still verifies the certificate and sender before any
 /// state transition. This dependency edge merely prevents a retained
-/// Proposal/Prepare/signing owner or body chunk from hiding the TC or CommitQC
-/// that can advance its exact height and view.
+/// Proposal, vote, or body owner from hiding the TC or CommitQC that can
+/// advance it. Exact context, height, and nondecreasing-view checks keep the
+/// escape scoped to the owner's own consensus incarnation.
 fn fair_v2_ingress_certified_fence_escape_advances_owner(
     owner: &FairV2IngressLeaderWireToken,
     inbound: &InboundBlockMessage,
@@ -4903,6 +4908,23 @@ impl FairV2Ingress {
     pub(crate) fn close(&self) {
         self.state.lock().open = false;
     }
+    /// Linearize one lane-relay transfer against the shared ingress close.
+    ///
+    /// The caller retains `value` when admission is already closed. Otherwise
+    /// the nonblocking channel transfer completes while the same state mutex
+    /// used by [`Self::close`] remains held, so the receiver owns a finite
+    /// pre-close prefix after closure returns.
+    fn try_with_open_lane_relay_admission<T, R>(
+        &self,
+        value: T,
+        operation: impl FnOnce(T) -> R,
+    ) -> Result<R, T> {
+        let state = self.state.lock();
+        if !state.open {
+            return Err(value);
+        }
+        Ok(operation(value))
+    }
     /// Prove that the closed physical ingress has no queued or in-flight owner.
     pub(crate) fn ensure_closed_drained_cut(&self) -> Result<(), String> {
         let _service_guard = self.service_lock.lock();
@@ -6811,7 +6833,15 @@ impl SumeragiHandle {
             );
             return SumeragiIngressDisposition::Rejected(message);
         }
-        match self.lane_relay.try_send(message) {
+        let send = match self
+            .block
+            .try_with_open_lane_relay_admission(message, |message| {
+                self.lane_relay.try_send(message)
+            }) {
+            Ok(send) => send,
+            Err(message) => return SumeragiIngressDisposition::Retry(message),
+        };
+        match send {
             Ok(()) => {
                 status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
                 self.wake();
@@ -7427,6 +7457,71 @@ mod authoritative_runtime_gate_tests {
     include!("tests/mod_authoritative_runtime_gate_01_support.rs");
     include!("tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs");
     include!("tests/mod_authoritative_runtime_gate_03_admission_and_fairness.rs");
+    #[test]
+    fn lane_relay_admission_gate_drains_pre_cut_sender_before_close() {
+        let (_handle, ingress, _lane_relay_rx) = super::test_sumeragi_handle(1);
+        let sender_ingress = std::sync::Arc::clone(&ingress);
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+        let (lane_tx, lane_rx) = std::sync::mpsc::sync_channel(1);
+        let sender = std::thread::spawn(move || {
+            let result = sender_ingress.try_with_open_lane_relay_admission(7_u8, |value| {
+                entered_tx.send(()).expect("announce pre-cut lane sender");
+                release_rx
+                    .recv()
+                    .expect("release pre-cut lane sender after close blocks");
+                lane_tx.try_send(value)
+            });
+            result_tx
+                .send(result)
+                .expect("publish lane admission result");
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("pre-cut sender acquires the ingress state gate");
+
+        let closer_ingress = std::sync::Arc::clone(&ingress);
+        let (closed_tx, closed_rx) = std::sync::mpsc::sync_channel(1);
+        let closer = std::thread::spawn(move || {
+            closer_ingress.close();
+            closed_tx.send(()).expect("publish completed ingress close");
+        });
+        assert!(
+            closed_rx
+                .recv_timeout(std::time::Duration::from_millis(25))
+                .is_err(),
+            "close must wait for the already-admitted lane transfer"
+        );
+        release_tx
+            .send(())
+            .expect("complete the pre-cut lane transfer");
+        assert!(
+            matches!(
+                result_rx
+                    .recv_timeout(std::time::Duration::from_secs(1))
+                    .expect("pre-cut lane transfer completes"),
+                Ok(Ok(()))
+            ),
+            "the channel owns the pre-close occurrence"
+        );
+        closed_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("close completes after the sender releases the state gate");
+        sender.join().expect("join pre-cut lane sender");
+        closer.join().expect("join ingress closer");
+        assert_eq!(
+            lane_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .expect("finite relay prefix retains the pre-cut occurrence"),
+            7
+        );
+        assert_eq!(
+            ingress.try_with_open_lane_relay_admission(9_u8, |value| value),
+            Err(9),
+            "post-cut lane ownership remains with its caller"
+        );
+    }
     #[test]
     fn authenticated_non_validator_source_cap_retries_third_source_until_one_lane_drains() {
         const SOURCE_BYTES: usize = 1024 * 1024;
@@ -8409,17 +8504,10 @@ mod authoritative_runtime_gate_tests {
         let exact_direct_frame = iroha_p2p::network::data_frame_wire_len(
             maximal_peer,
             Some(maximal_peer),
-            u8::MAX,
-            iroha_p2p::network::message::Priority::High,
             &network_message,
         );
-        let exact_broadcast_frame = iroha_p2p::network::data_frame_wire_len(
-            maximal_peer,
-            None,
-            u8::MAX,
-            iroha_p2p::network::message::Priority::High,
-            &network_message,
-        );
+        let exact_broadcast_frame =
+            iroha_p2p::network::data_frame_wire_len(maximal_peer, None, &network_message);
         let required_control_frame =
             super::fair_v2_ingress_required_p2p_frame_bytes(required_proposal);
         let network_message_bytes = network_message.encoded_len();
@@ -8553,8 +8641,6 @@ mod authoritative_runtime_gate_tests {
         let actual_direct_response_frame = iroha_p2p::network::data_frame_wire_len(
             &validator,
             Some(&validator),
-            u8::MAX,
-            iroha_p2p::network::message::Priority::High,
             &network_response,
         );
         assert_eq!(

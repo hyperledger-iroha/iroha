@@ -2201,24 +2201,22 @@ impl PowConfig {
         if let Some(emergency) = self.emergency.as_mut() {
             emergency.apply_defaults()?;
         }
-        let base = self.parameters()?;
-        let _ = self.puzzle_parameters(&base)?;
+        let _ = self.puzzle_parameters()?;
         Ok(())
     }
-    /// Build the base PoW verifier parameters from config.
-    pub fn parameters(&self) -> Result<pow::Parameters, ConfigError> {
+    /// Build the mandatory Argon2 puzzle parameters from config.
+    pub fn puzzle_parameters(&self) -> Result<puzzle::Parameters, ConfigError> {
         let difficulty = u8::try_from(self.difficulty).map_err(|_| {
             ConfigError::Puzzle(format!(
                 "pow.difficulty {} exceeds the u8 representation",
                 self.difficulty
             ))
         })?;
-        pow::Parameters::try_new(
+        self.puzzle.parameters(
             difficulty,
             Duration::from_secs(self.max_future_skew_secs),
             Duration::from_secs(self.min_ticket_ttl_secs),
         )
-        .map_err(|err| ConfigError::Puzzle(format!("invalid pow ticket timing parameters: {err}")))
     }
     /// Build the admission token verifier if configured.
     pub fn token_policy(&self) -> Result<Option<TokenPolicySource>, ConfigError> {
@@ -2237,12 +2235,6 @@ impl PowConfig {
         };
         effective.apply_defaults();
         effective
-    }
-    pub fn puzzle_parameters(
-        &self,
-        base: &pow::Parameters,
-    ) -> Result<puzzle::Parameters, ConfigError> {
-        self.puzzle.parameters(base)
     }
     /// Decode and validate the optional ML-DSA-44 signed-puzzle verifier key.
     pub fn signed_ticket_public_key(&self) -> Result<Option<Vec<u8>>, ConfigError> {
@@ -2333,7 +2325,12 @@ impl PuzzleConfig {
         }
         Ok(())
     }
-    fn parameters(&self, base: &pow::Parameters) -> Result<puzzle::Parameters, ConfigError> {
+    fn parameters(
+        &self,
+        difficulty: u8,
+        max_future_skew: Duration,
+        min_ticket_ttl: Duration,
+    ) -> Result<puzzle::Parameters, ConfigError> {
         let memory = NonZeroU32::new(self.memory_kib).ok_or_else(|| {
             ConfigError::Puzzle("pow.puzzle.memory_kib must be non-zero".to_string())
         })?;
@@ -2346,9 +2343,9 @@ impl PuzzleConfig {
             memory,
             time,
             lanes,
-            base.difficulty(),
-            base.max_future_skew(),
-            base.min_ticket_ttl(),
+            difficulty,
+            max_future_skew,
+            min_ticket_ttl,
         )
         .map_err(|err| ConfigError::Puzzle(format!("invalid pow.puzzle timing parameters: {err}")))
     }
@@ -2937,18 +2934,16 @@ impl Default for PaddingConfig {
         }
     }
 }
-/// Capability advertisement for best-effort constant-rate cover lanes.
+/// Capability advertisement for authenticated constant-rate transport lanes.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct ConstantRateCapabilityConfig {
-    /// Whether best-effort constant-rate cover support is advertised.
+    /// Whether constant-rate transport support is advertised.
     #[norito(default = "ConstantRateCapabilityConfig::default_enabled")]
     pub enabled: bool,
     /// Protocol version for the capability handshake.
     #[norito(default = "ConstantRateCapabilityConfig::default_version")]
     pub version: u8,
-    /// Whether to require peers to honour constant-rate strictly.
-    ///
-    /// Strict mode is rejected until application payload is carried by the fixed-rate scheduler.
+    /// Whether to require peers to use the authenticated fixed-rate DATAGRAM mux.
     #[norito(default = "ConstantRateCapabilityConfig::default_strict")]
     pub strict: bool,
 }
@@ -2971,7 +2966,7 @@ impl ConstantRateCapabilityConfig {
         }
         if self.enabled && self.strict {
             return Err(ConfigError::ConstantRateCapability(
-                "strict mode is unavailable until application payload is carried by the fixed-rate scheduler and DATAGRAM failures close the circuit"
+                "strict constant-rate mode is unavailable while locked Quinn 0.11.9 / quinn-proto 0.11.15 accounts DATAGRAM receive buffering by payload bytes instead of entries"
                     .to_owned(),
             ));
         }
@@ -4133,7 +4128,6 @@ impl RelayConfig {
             .as_ref()
             .expect("padding defaults applied during validation")
     }
-    #[allow(dead_code)]
     pub fn congestion_config(&self) -> &CongestionConfig {
         self.congestion
             .as_ref()

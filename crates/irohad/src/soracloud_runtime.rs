@@ -323,6 +323,7 @@ const SORACLOUD_INROU_EGRESS_CHECKPOINT_MAGIC_V1: &[u8; 8] = b"INREGV1\0";
 const SORACLOUD_INROU_EGRESS_CHECKPOINT_RECORD_BYTES_V1: usize = 80;
 const SORACLOUD_INROU_EGRESS_CHECKPOINT_MAX_FILES_V1: usize = 65_536;
 const SORACLOUD_INROU_LEASE_USAGE_RETRY_MS: u64 = 10_000;
+const SORACLOUD_INROU_RUNTIME_STATE_RETRY_MS: u64 = SORACLOUD_INROU_LEASE_USAGE_RETRY_MS;
 const SORACLOUD_EGRESS_DNS_MAX_ADDRESSES_V1: usize = 32;
 const SORACLOUD_EGRESS_DNS_MAX_IN_FLIGHT_V1: usize = 4;
 const SORACLOUD_EGRESS_DNS_TIMEOUT_V1: Duration = Duration::from_secs(5);
@@ -626,8 +627,10 @@ pub(crate) struct SoracloudRuntimeManagerConfig {
     pub state_dir: PathBuf,
     /// Reconciliation cadence against authoritative state.
     pub reconcile_interval: Duration,
-    /// Reserved concurrency budget for future hydration workers.
+    /// Maximum concurrent artifact hydration workers, independent of Inrou guest concurrency.
     pub hydration_concurrency: NonZeroUsize,
+    /// Maximum idle prepared IVM runtimes retained independently of hydration workers.
+    pub prepared_runtime_cache_capacity: NonZeroUsize,
     /// Configured artifact-cache budgets for the embedded runtime manager.
     pub cache_budgets: iroha_config::parameters::actual::SoracloudRuntimeCacheBudgets,
     /// Mutable `Inrou` microVM hosting limits.
@@ -1443,6 +1446,22 @@ fn validate_inrou_portable_vm_v1_config(
 fn validate_soracloud_runtime_manager_posture(
     config: &SoracloudRuntimeManagerConfig,
 ) -> eyre::Result<()> {
+    if config.hydration_concurrency.get()
+        > iroha_config::parameters::defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX
+    {
+        eyre::bail!(
+            "Soracloud artifact hydration worker count exceeds the first-release limit of {}",
+            iroha_config::parameters::defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX
+        );
+    }
+    if config.prepared_runtime_cache_capacity.get()
+        > iroha_config::parameters::defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX
+    {
+        eyre::bail!(
+            "Soracloud prepared-runtime cache capacity exceeds the first-release limit of {}",
+            iroha_config::parameters::defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX
+        );
+    }
     validate_inrou_portable_vm_v1_config(&config.inrou)?;
     if config.inrou.enabled && !config.production_mode {
         eyre::bail!(
@@ -1498,6 +1517,7 @@ impl SoracloudRuntimeManagerConfig {
             state_dir: config.state_dir.clone(),
             reconcile_interval: config.reconcile_interval,
             hydration_concurrency: config.hydration_concurrency,
+            prepared_runtime_cache_capacity: config.prepared_runtime_cache_capacity,
             cache_budgets: config.cache_budgets.clone(),
             inrou: config.inrou.clone(),
             submission: config.submission.clone(),
@@ -1824,13 +1844,13 @@ impl SoracloudPreparedRuntimeCounters {
 }
 struct PooledSoracloudIvm {
     vm: IVM,
+    template: Arc<RuntimeTemplate>,
     previously_used: bool,
 }
 struct SoracloudPreparedContractEntry {
     cache_path: PathBuf,
     fingerprint: SoracloudArtifactFileFingerprint,
     prepared: PreparedContract,
-    template: Arc<RuntimeTemplate>,
     idle_runtimes: Vec<PooledSoracloudIvm>,
     artifact_bytes: u64,
     generation: u64,
@@ -1841,7 +1861,6 @@ struct CachedSoracloudPreparedContract {
     key: Hash,
     generation: u64,
     prepared: PreparedContract,
-    template: Arc<RuntimeTemplate>,
 }
 impl CachedSoracloudPreparedContract {
     fn entrypoint_pc(&self, name: &str) -> Option<u64> {
@@ -1908,7 +1927,7 @@ impl SoracloudPreparedRuntimeCache {
     fn from_config(config: &SoracloudRuntimeManagerConfig) -> Self {
         Self::new(
             config.cache_budgets.bundle_bytes.get(),
-            config.hydration_concurrency,
+            config.prepared_runtime_cache_capacity,
         )
     }
     fn invalidate(&self, key: Hash) {
@@ -1938,7 +1957,6 @@ impl SoracloudPreparedRuntimeCache {
             key,
             generation: entry.generation,
             prepared: entry.prepared.clone(),
-            template: Arc::clone(&entry.template),
         }
     }
     fn prepare(
@@ -2074,9 +2092,9 @@ impl SoracloudPreparedRuntimeCache {
                 cache_path: cache_path.to_path_buf(),
                 fingerprint,
                 prepared: prepared.clone(),
-                template: Arc::clone(&template),
                 idle_runtimes: vec![PooledSoracloudIvm {
                     vm,
+                    template,
                     previously_used: false,
                 }],
                 artifact_bytes,
@@ -2111,11 +2129,11 @@ impl SoracloudPreparedRuntimeCache {
             }
             pooled
         };
-        let vm = if let Some(pooled) = pooled {
+        let (vm, template) = if let Some(pooled) = pooled {
             if pooled.previously_used {
                 SoracloudPreparedRuntimeCounters::increment(&self.counters.runtime_reuses);
             }
-            pooled.vm
+            (pooled.vm, pooled.template)
         } else {
             let mut vm = IVM::new(u64::MAX);
             SoracloudPreparedRuntimeCounters::increment(&self.counters.runtime_allocations);
@@ -2129,17 +2147,19 @@ impl SoracloudPreparedRuntimeCache {
                 )
             })?;
             SoracloudPreparedRuntimeCounters::increment(&self.counters.prepared_loads);
-            vm
+            let template = Arc::new(vm.runtime_template());
+            SoracloudPreparedRuntimeCounters::increment(&self.counters.template_builds);
+            (vm, template)
         };
         Ok(SoracloudIvmRuntimeLease {
             cache: self,
             key: prepared.key,
             generation: prepared.generation,
-            template: Arc::clone(&prepared.template),
+            template,
             vm: Some(vm),
         })
     }
-    fn return_runtime(&self, key: Hash, generation: u64, vm: IVM) {
+    fn return_runtime(&self, key: Hash, generation: u64, template: Arc<RuntimeTemplate>, vm: IVM) {
         let mut state = self.state.lock();
         let tick = state.next_tick();
         let Some(entry) = state
@@ -2153,6 +2173,7 @@ impl SoracloudPreparedRuntimeCache {
         entry.last_used = tick;
         entry.idle_runtimes.push(PooledSoracloudIvm {
             vm,
+            template,
             previously_used: true,
         });
         state.idle_runtimes = state.idle_runtimes.saturating_add(1);
@@ -2217,7 +2238,8 @@ impl Drop for SoracloudIvmRuntimeLease<'_> {
             return;
         }
         SoracloudPreparedRuntimeCounters::increment(&self.cache.counters.dirty_resets);
-        self.cache.return_runtime(self.key, self.generation, vm);
+        self.cache
+            .return_runtime(self.key, self.generation, Arc::clone(&self.template), vm);
     }
 }
 #[cfg(test)]
@@ -3541,6 +3563,11 @@ struct HostedHttpLeaseUsageSubmissionAttempt {
     attempted_at_ms: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HostedHttpRuntimeStateSubmissionAttempt {
+    commitment: Hash,
+    attempted_at_ms: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HostedHttpReporterCheckpointState {
     lease_started_height: u64,
     reporting_epoch: u64,
@@ -3644,7 +3671,8 @@ pub(crate) struct SoracloudRuntimeManager {
     inrou_startup_capability: Option<InrouStartupCapabilitySnapshot>,
     last_inrou_host_withdraw_attempt_ms: Mutex<Option<u64>>,
     last_inrou_placement_reconcile_attempt_ms: Mutex<Option<u64>>,
-    last_runtime_state_submission_commitments: Mutex<BTreeMap<HostedHttpReplicaStateKey, Hash>>,
+    last_runtime_state_submission_commitments:
+        Mutex<BTreeMap<HostedHttpReplicaStateKey, HostedHttpRuntimeStateSubmissionAttempt>>,
     last_service_lease_usage_submission_bytes:
         Mutex<BTreeMap<HostedHttpReporterKey, HostedHttpLeaseUsageSubmissionAttempt>>,
     inrou_revision_egress_accounting:
@@ -3652,9 +3680,95 @@ pub(crate) struct SoracloudRuntimeManager {
     inrou_replica_egress_accounting:
         Mutex<BTreeMap<HostedHttpReporterKey, PortableVmEgressAccounting>>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
-    operator_preseed_store: Option<Arc<StorageBackend>>,
+    operator_preseed_store: Option<QualifiedOperatorPreseedStore>,
     sorafs_provider_cache: Option<Arc<AsyncRwLock<ProviderAdvertCache>>>,
+    remote_hydration_provider_gates: Mutex<BTreeMap<[u8; 32], Arc<RemoteHydrationProviderGate>>>,
     remote_stream_token_operator: Option<remote_stream_token_auth::RemoteStreamTokenOperator>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct QualifiedOperatorPreseedManifest {
+    payload_digest: [u8; 32],
+    content_length: u64,
+}
+struct QualifiedOperatorPreseedStore {
+    backend: Arc<StorageBackend>,
+    manifests: BTreeMap<[u8; 32], QualifiedOperatorPreseedManifest>,
+}
+impl QualifiedOperatorPreseedStore {
+    fn from_validated_digests(
+        backend: Arc<StorageBackend>,
+        qualified_manifest_digests: BTreeSet<[u8; 32]>,
+    ) -> eyre::Result<Self> {
+        if qualified_manifest_digests.is_empty() {
+            eyre::bail!(
+                "operator-preseed attachment requires at least one current qualified manifest"
+            );
+        }
+        if qualified_manifest_digests.len() > SORACLOUD_OPERATOR_PRESEED_MAX_MANIFEST_SCAN_V1 {
+            eyre::bail!(
+                "operator-preseed qualification contains {} manifests, exceeding the V1 hydration limit of {}",
+                qualified_manifest_digests.len(),
+                SORACLOUD_OPERATOR_PRESEED_MAX_MANIFEST_SCAN_V1
+            );
+        }
+        let mut manifests = BTreeMap::new();
+        for digest in qualified_manifest_digests {
+            let manifest = backend.manifest_by_digest(&digest).ok_or_else(|| {
+                eyre::eyre!(
+                    "current operator-preseed qualification references missing manifest {}",
+                    hex::encode(digest)
+                )
+            })?;
+            if manifest.content_length() == 0 {
+                eyre::bail!(
+                    "current operator-preseed qualification references empty manifest {}",
+                    hex::encode(digest)
+                );
+            }
+            manifests.insert(
+                digest,
+                QualifiedOperatorPreseedManifest {
+                    payload_digest: *manifest.payload_digest(),
+                    content_length: manifest.content_length(),
+                },
+            );
+        }
+        Ok(Self { backend, manifests })
+    }
+
+    fn manifest_by_digest(&self, digest: &[u8; 32]) -> eyre::Result<Option<StoredManifest>> {
+        let Some(qualified) = self.manifests.get(digest) else {
+            return Ok(None);
+        };
+        let manifest = self.backend.manifest_by_digest(digest).ok_or_else(|| {
+            eyre::eyre!(
+                "qualified operator-preseed manifest {} disappeared after startup validation",
+                hex::encode(digest)
+            )
+        })?;
+        if manifest.payload_digest() != &qualified.payload_digest
+            || manifest.content_length() != qualified.content_length
+        {
+            eyre::bail!(
+                "qualified operator-preseed manifest {} changed payload identity after startup validation",
+                hex::encode(digest)
+            );
+        }
+        Ok(Some(manifest))
+    }
+}
+fn validate_operator_preseed_provider_boundary(
+    inrou_enabled: bool,
+    operator_preseed_attached: bool,
+    provider_storage_enabled: bool,
+) -> eyre::Result<()> {
+    if operator_preseed_attached && !inrou_enabled {
+        eyre::bail!("operator-preseed storage is valid only while Inrou hosting is enabled");
+    }
+    if inrou_enabled && provider_storage_enabled {
+        eyre::bail!("Inrou V1 hosting requires embedded SoraFS provider storage to be disabled");
+    }
+    Ok(())
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RemoteHydrationSource {
@@ -3662,6 +3776,215 @@ struct RemoteHydrationSource {
     manifest_cid_hex: String,
     chunker_handle: Option<String>,
     provider_ids: Vec<[u8; 32]>,
+}
+#[derive(Debug)]
+struct RequiredArtifactHydration {
+    cache_path: PathBuf,
+    artifact_hash: Hash,
+    artifact_path: String,
+    maximum_bytes: u64,
+    operator_preseed_required: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RemoteHydrationProviderTarget {
+    base_url: reqwest::Url,
+    advert_issued_at: u64,
+    maximum_concurrent_streams: NonZeroUsize,
+}
+#[derive(Debug)]
+struct RemoteHydrationProviderGate {
+    state: Mutex<RemoteHydrationProviderGateState>,
+    available: parking_lot::Condvar,
+}
+#[derive(Clone, Copy, Debug)]
+struct RemoteHydrationProviderGateState {
+    in_flight: usize,
+    advert_issued_at: u64,
+    maximum_concurrent_streams: NonZeroUsize,
+}
+impl RemoteHydrationProviderGate {
+    fn new(advert_issued_at: u64, maximum_concurrent_streams: NonZeroUsize) -> Self {
+        Self {
+            state: Mutex::new(RemoteHydrationProviderGateState {
+                in_flight: 0,
+                advert_issued_at,
+                maximum_concurrent_streams,
+            }),
+            available: parking_lot::Condvar::new(),
+        }
+    }
+
+    fn acquire(
+        self: &Arc<Self>,
+        advert_issued_at: u64,
+        advertised_maximum: NonZeroUsize,
+    ) -> Option<RemoteHydrationProviderPermit> {
+        let mut state = self.state.lock();
+        if advert_issued_at > state.advert_issued_at {
+            state.advert_issued_at = advert_issued_at;
+            state.maximum_concurrent_streams = advertised_maximum;
+            self.available.notify_all();
+        } else if advert_issued_at == state.advert_issued_at
+            && advertised_maximum < state.maximum_concurrent_streams
+        {
+            state.maximum_concurrent_streams = advertised_maximum;
+            self.available.notify_all();
+        }
+        loop {
+            if advert_issued_at < state.advert_issued_at {
+                return None;
+            }
+            if state.in_flight < state.maximum_concurrent_streams.get() {
+                state.in_flight += 1;
+                drop(state);
+                return Some(RemoteHydrationProviderPermit {
+                    gate: Arc::clone(self),
+                });
+            }
+            self.available.wait(&mut state);
+        }
+    }
+}
+struct RemoteHydrationProviderPermit {
+    gate: Arc<RemoteHydrationProviderGate>,
+}
+impl Drop for RemoteHydrationProviderPermit {
+    fn drop(&mut self) {
+        let mut state = self.gate.state.lock();
+        state.in_flight = state
+            .in_flight
+            .checked_sub(1)
+            .expect("a provider permit increments the in-flight count before construction");
+        self.gate.available.notify_one();
+    }
+}
+struct RemoteHydrationProviderSession {
+    target: RemoteHydrationProviderTarget,
+    _permit: RemoteHydrationProviderPermit,
+}
+
+fn run_bounded_hydration_tasks<T, F>(
+    tasks: &[T],
+    maximum_workers: NonZeroUsize,
+    operation: F,
+) -> eyre::Result<()>
+where
+    T: Sync,
+    F: Fn(&T) -> eyre::Result<()> + Sync,
+{
+    if maximum_workers.get()
+        > iroha_config::parameters::defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX
+    {
+        eyre::bail!(
+            "Soracloud artifact hydration worker count exceeds the first-release limit of {}",
+            iroha_config::parameters::defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX
+        );
+    }
+    if tasks.is_empty() {
+        return Ok(());
+    }
+    let worker_count = maximum_workers.get().min(tasks.len());
+    thread::scope(|scope| {
+        let operation = &operation;
+        let mut task_senders = Vec::with_capacity(worker_count);
+        let mut result_receivers = Vec::with_capacity(worker_count);
+        let mut workers = Vec::with_capacity(worker_count);
+        let mut spawn_error = None;
+        for worker_index in 0..worker_count {
+            let (task_sender, task_receiver) = mpsc::sync_channel::<Option<usize>>(1);
+            let (result_sender, result_receiver) =
+                mpsc::sync_channel::<(usize, eyre::Result<()>)>(1);
+            match thread::Builder::new()
+                .name(format!("soracloud-hydration-{worker_index}"))
+                .spawn_scoped(scope, move || {
+                    while let Ok(Some(task_index)) = task_receiver.recv() {
+                        let result = operation(&tasks[task_index]);
+                        if result_sender.send((task_index, result)).is_err() {
+                            break;
+                        }
+                    }
+                }) {
+                Ok(worker) => {
+                    task_senders.push(task_sender);
+                    result_receivers.push(result_receiver);
+                    workers.push(worker);
+                }
+                Err(error) => {
+                    spawn_error = Some(error);
+                    break;
+                }
+            }
+        }
+        if let Some(error) = spawn_error {
+            for sender in &task_senders {
+                let _ = sender.send(None);
+            }
+            for worker in workers {
+                let _ = worker.join();
+            }
+            return Err(error).wrap_err("spawn Soracloud artifact hydration worker");
+        }
+
+        let mut outcome = Ok(());
+        let mut wave_start = 0;
+        while wave_start < tasks.len() {
+            let wave_size = worker_count.min(tasks.len() - wave_start);
+            for (worker_index, sender) in task_senders.iter().take(wave_size).enumerate() {
+                let task_index = wave_start + worker_index;
+                if sender.send(Some(task_index)).is_err() {
+                    outcome = Err(eyre::eyre!(
+                        "Soracloud artifact hydration worker {worker_index} terminated before accepting task {task_index}"
+                    ));
+                    break;
+                }
+            }
+            if outcome.is_err() {
+                break;
+            }
+
+            let mut wave_error = None;
+            for (worker_index, receiver) in result_receivers.iter().take(wave_size).enumerate() {
+                let expected_task_index = wave_start + worker_index;
+                match receiver.recv() {
+                    Ok((task_index, result)) => {
+                        if task_index != expected_task_index && wave_error.is_none() {
+                            wave_error = Some(eyre::eyre!(
+                                "Soracloud artifact hydration worker {worker_index} returned task {task_index}, expected {expected_task_index}"
+                            ));
+                        }
+                        if let Err(error) = result
+                            && wave_error.is_none()
+                        {
+                            wave_error = Some(error);
+                        }
+                    }
+                    Err(_) if wave_error.is_none() => {
+                        wave_error = Some(eyre::eyre!(
+                            "Soracloud artifact hydration worker {worker_index} panicked while running task {expected_task_index}"
+                        ));
+                    }
+                    Err(_) => {}
+                }
+            }
+            if let Some(error) = wave_error {
+                outcome = Err(error);
+                break;
+            }
+            wave_start += wave_size;
+        }
+
+        for sender in &task_senders {
+            let _ = sender.send(None);
+        }
+        let mut worker_panicked = false;
+        for worker in workers {
+            worker_panicked |= worker.join().is_err();
+        }
+        if outcome.is_ok() && worker_panicked {
+            return Err(eyre::eyre!("Soracloud artifact hydration worker panicked"));
+        }
+        outcome
+    })
 }
 const SORAFS_REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 const SORAFS_REPLICATION_ORDER_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
@@ -3833,6 +4156,7 @@ impl SoracloudRuntimeManager {
             operator_preseed_store: None,
             sorafs_provider_cache: None,
             remote_stream_token_operator: None,
+            remote_hydration_provider_gates: Mutex::new(BTreeMap::new()),
         }
     }
     fn qualify_inrou_startup_capability(&mut self) -> eyre::Result<()> {
@@ -3857,11 +4181,23 @@ impl SoracloudRuntimeManager {
     /// Attach the deployment-owned, read-only hydration view over an operator-preseeded store.
     ///
     /// This store is intentionally separate from the embedded provider node: it exposes no
-    /// routes or workers and is admitted only while provider storage is disabled.
-    #[must_use]
-    pub(crate) fn with_operator_preseed_store(mut self, store: Arc<StorageBackend>) -> Self {
-        self.operator_preseed_store = Some(store);
-        self
+    /// routes or workers and is admitted only while provider storage is disabled. The manifest
+    /// allowlist must be the exact result of durable current-peer/current-capacity receipt
+    /// validation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty or oversized allowlist, a missing manifest, or an empty qualified payload.
+    pub(crate) fn with_operator_preseed_store(
+        mut self,
+        store: Arc<StorageBackend>,
+        qualified_manifest_digests: BTreeSet<[u8; 32]>,
+    ) -> eyre::Result<Self> {
+        self.operator_preseed_store = Some(QualifiedOperatorPreseedStore::from_validated_digests(
+            store,
+            qualified_manifest_digests,
+        )?);
+        Ok(self)
     }
     /// Attach the shared SoraFS provider-discovery cache used for remote hydration.
     #[must_use]
@@ -3886,22 +4222,13 @@ impl SoracloudRuntimeManager {
     ) -> eyre::Result<(SoracloudRuntimeManagerHandle, Child)> {
         validate_soracloud_runtime_manager_posture(&self.config)
             .wrap_err("validate Soracloud runtime-manager PortableVM V1 posture")?;
-        if self.operator_preseed_store.is_some() {
-            if !self.config.inrou.enabled {
-                eyre::bail!(
-                    "operator-preseed storage is valid only while Inrou hosting is enabled"
-                );
-            }
-            if self
-                .sorafs_node
+        validate_operator_preseed_provider_boundary(
+            self.config.inrou.enabled,
+            self.operator_preseed_store.is_some(),
+            self.sorafs_node
                 .as_ref()
-                .is_some_and(sorafs_node::NodeHandle::is_enabled)
-            {
-                eyre::bail!(
-                    "operator-preseed storage cannot be attached while embedded SoraFS provider storage is enabled"
-                );
-            }
-        }
+                .is_some_and(sorafs_node::NodeHandle::is_enabled),
+        )?;
         self.ensure_trusted_inrou_guest_artifact_preseeded()
             .wrap_err("verify the exact operator-approved Inrou guest artifact preseed")?;
         self.qualify_inrou_startup_capability()
@@ -4386,18 +4713,23 @@ impl SoracloudRuntimeManager {
                     continue;
                 }
                 let commitment = inrou_runtime_state_submission_commitment(&desired_state);
+                let attempted_at_ms = desired_state.updated_at_ms;
                 let key = (
                     service_name.clone(),
                     service_version.clone(),
                     replica.replica_slot,
                     replica.placement_incarnation.clone(),
                 );
-                if authoritative_state.is_some()
-                    && self
-                        .last_runtime_state_submission_commitments
-                        .lock()
-                        .get(&key)
-                        .is_some_and(|previous| *previous == commitment)
+                if self
+                    .last_runtime_state_submission_commitments
+                    .lock()
+                    .get(&key)
+                    .is_some_and(|previous| {
+                        previous.commitment == commitment
+                            && attempted_at_ms >= previous.attempted_at_ms
+                            && attempted_at_ms - previous.attempted_at_ms
+                                < SORACLOUD_INROU_RUNTIME_STATE_RETRY_MS
+                    })
                 {
                     continue;
                 }
@@ -4420,7 +4752,13 @@ impl SoracloudRuntimeManager {
                 }
                 self.last_runtime_state_submission_commitments
                     .lock()
-                    .insert(key, commitment);
+                    .insert(
+                        key,
+                        HostedHttpRuntimeStateSubmissionAttempt {
+                            commitment,
+                            attempted_at_ms,
+                        },
+                    );
             }
         }
         Ok(())
@@ -6898,9 +7236,11 @@ impl SoracloudRuntimeManager {
         snapshot: &SoracloudRuntimeSnapshot,
     ) -> eyre::Result<()> {
         let remote_sources = collect_remote_hydration_sources(view, &self.state);
-        let mut required = BTreeMap::<String, (Hash, String, u64)>::new();
+        let mut required = BTreeMap::<String, (Hash, String, u64, bool)>::new();
         for versions in snapshot.services.values() {
             for plan in versions.values() {
+                let operator_preseed_required = plan.runtime == SoraContainerRuntimeV1::Inrou
+                    && !plan.local_replica_slots.is_empty();
                 for artifact in &plan.artifacts {
                     if artifact.local_cache_path.len() > SORACLOUD_RUNTIME_ARTIFACT_PATH_MAX_BYTES
                         || artifact.artifact_path.len() > SORACLOUD_RUNTIME_ARTIFACT_PATH_MAX_BYTES
@@ -6916,12 +7256,27 @@ impl SoracloudRuntimeManager {
                         })?;
                     let maximum_bytes =
                         runtime_cache_budget_for_kind(artifact.kind, &self.config.cache_budgets);
-                    required
-                        .entry(artifact.local_cache_path.clone())
-                        .and_modify(|entry| {
-                            entry.2 = entry.2.min(maximum_bytes);
-                        })
-                        .or_insert((artifact_hash, artifact.artifact_path.clone(), maximum_bytes));
+                    match required.entry(artifact.local_cache_path.clone()) {
+                        std::collections::btree_map::Entry::Occupied(mut entry) => {
+                            let existing = entry.get_mut();
+                            if existing.0 != artifact_hash || existing.1 != artifact.artifact_path {
+                                eyre::bail!(
+                                    "Soracloud runtime snapshot maps cache path `{}` to conflicting artifact identities",
+                                    artifact.local_cache_path
+                                );
+                            }
+                            existing.2 = existing.2.min(maximum_bytes);
+                            existing.3 |= operator_preseed_required;
+                        }
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert((
+                                artifact_hash,
+                                artifact.artifact_path.clone(),
+                                maximum_bytes,
+                                operator_preseed_required,
+                            ));
+                        }
+                    }
                     if required.len() > SORACLOUD_HYDRATION_MAX_REQUIRED_ARTIFACTS {
                         eyre::bail!(
                             "Soracloud runtime snapshot requires more than {} distinct hydrated artifacts",
@@ -6931,54 +7286,132 @@ impl SoracloudRuntimeManager {
                 }
             }
         }
-        for (local_cache_path, (artifact_hash, artifact_path, maximum_bytes)) in required {
-            let cache_path = PathBuf::from(&local_cache_path);
-            if verify_cached_soracloud_artifact(&cache_path, artifact_hash, maximum_bytes).is_ok() {
-                continue;
-            }
-            if self.hydrate_local_sorafs_payload_to_cache(
-                &remote_sources,
-                artifact_hash,
-                &cache_path,
-                maximum_bytes,
-            )? {
-                verify_cached_soracloud_artifact(&cache_path, artifact_hash, maximum_bytes)
-                    .map_err(|error| {
-                        eyre::eyre!(
-                            "verify streamed local Soracloud artifact `{artifact_path}` at {}: {}",
-                            cache_path.display(),
-                            error.message
+        let tasks = required
+            .into_iter()
+            .filter_map(
+                |(
+                    local_cache_path,
+                    (artifact_hash, artifact_path, maximum_bytes, operator_preseed_required),
+                )| {
+                    let cache_path = PathBuf::from(local_cache_path);
+                    (operator_preseed_required
+                        || verify_cached_soracloud_artifact(
+                            &cache_path,
+                            artifact_hash,
+                            maximum_bytes,
                         )
-                    })?;
-                continue;
+                        .is_err())
+                    .then_some(RequiredArtifactHydration {
+                        cache_path,
+                        artifact_hash,
+                        artifact_path,
+                        maximum_bytes,
+                        operator_preseed_required,
+                    })
+                },
+            )
+            .collect::<Vec<_>>();
+        run_bounded_hydration_tasks(&tasks, self.config.hydration_concurrency, |task| {
+            self.hydrate_required_artifact(&remote_sources, task)
+        })
+    }
+    fn hydrate_required_artifact(
+        &self,
+        remote_sources: &[RemoteHydrationSource],
+        task: &RequiredArtifactHydration,
+    ) -> eyre::Result<()> {
+        if task.operator_preseed_required {
+            if self.cached_artifact_has_operator_preseed_qualification(
+                &task.cache_path,
+                task.artifact_hash,
+                task.maximum_bytes,
+            )? {
+                return Ok(());
             }
-            let payload =
-                self.read_committed_remote_sorafs_payload(&remote_sources, artifact_hash)?;
-            let Some(payload) = payload else {
-                continue;
-            };
-            if u64::try_from(payload.len()).unwrap_or(u64::MAX) > maximum_bytes {
-                return Err(eyre::eyre!(
-                    "hydrated Soracloud artifact `{artifact_path}` requires {} bytes, exceeding its configured {maximum_bytes}-byte cache limit",
-                    payload.len()
-                ));
-            }
-            write_bytes_atomic(&cache_path, &payload).wrap_err_with(|| {
-                format!(
-                    "persist hydrated Soracloud artifact `{artifact_path}` at {}",
-                    cache_path.display()
+            if self.hydrate_operator_preseed_payload_to_cache(
+                task.artifact_hash,
+                &task.cache_path,
+                task.maximum_bytes,
+            )? {
+                verify_cached_soracloud_artifact(
+                    &task.cache_path,
+                    task.artifact_hash,
+                    task.maximum_bytes,
                 )
-            })?;
-            verify_cached_soracloud_artifact(&cache_path, artifact_hash, maximum_bytes).map_err(
-                |error| {
+                .map_err(|error| {
                     eyre::eyre!(
-                        "verify hydrated Soracloud artifact `{artifact_path}` at {} after persistence: {}",
-                        cache_path.display(),
+                        "verify qualified operator-preseed artifact `{}` at {}: {}",
+                        task.artifact_path,
+                        task.cache_path.display(),
                         error.message
                     )
-                },
-            )?;
+                })?;
+                return Ok(());
+            }
+            eyre::bail!(
+                "locally assigned Inrou artifact `{}` has no exact current operator-preseed qualification; remote hydration fallback is forbidden",
+                task.artifact_path
+            );
         }
+        if verify_cached_soracloud_artifact(
+            &task.cache_path,
+            task.artifact_hash,
+            task.maximum_bytes,
+        )
+        .is_ok()
+        {
+            return Ok(());
+        }
+        if self.hydrate_local_sorafs_payload_to_cache(
+            remote_sources,
+            task.artifact_hash,
+            &task.cache_path,
+            task.maximum_bytes,
+        )? {
+            verify_cached_soracloud_artifact(
+                &task.cache_path,
+                task.artifact_hash,
+                task.maximum_bytes,
+            )
+            .map_err(|error| {
+                eyre::eyre!(
+                    "verify streamed local Soracloud artifact `{}` at {}: {}",
+                    task.artifact_path,
+                    task.cache_path.display(),
+                    error.message
+                )
+            })?;
+            return Ok(());
+        }
+        let payload =
+            self.read_committed_remote_sorafs_payload(remote_sources, task.artifact_hash)?;
+        let Some(payload) = payload else {
+            return Ok(());
+        };
+        if u64::try_from(payload.len()).unwrap_or(u64::MAX) > task.maximum_bytes {
+            return Err(eyre::eyre!(
+                "hydrated Soracloud artifact `{}` requires {} bytes, exceeding its configured {}-byte cache limit",
+                task.artifact_path,
+                payload.len(),
+                task.maximum_bytes
+            ));
+        }
+        write_bytes_atomic(&task.cache_path, &payload).wrap_err_with(|| {
+            format!(
+                "persist hydrated Soracloud artifact `{}` at {}",
+                task.artifact_path,
+                task.cache_path.display()
+            )
+        })?;
+        verify_cached_soracloud_artifact(&task.cache_path, task.artifact_hash, task.maximum_bytes)
+            .map_err(|error| {
+                eyre::eyre!(
+                    "verify hydrated Soracloud artifact `{}` at {} after persistence: {}",
+                    task.artifact_path,
+                    task.cache_path.display(),
+                    error.message
+                )
+            })?;
         Ok(())
     }
     fn hydrate_local_sorafs_payload_to_cache(
@@ -7043,6 +7476,73 @@ impl SoracloudRuntimeManager {
         }
         Ok(false)
     }
+    fn cached_artifact_has_operator_preseed_qualification(
+        &self,
+        cache_path: &Path,
+        expected_hash: Hash,
+        maximum_bytes: u64,
+    ) -> eyre::Result<bool> {
+        let Some(store) = self.operator_preseed_store.as_ref() else {
+            return Ok(false);
+        };
+        let (mut file, fingerprint) =
+            match open_verified_cached_soracloud_artifact(cache_path, expected_hash, maximum_bytes)
+            {
+                Ok(opened) => opened,
+                Err(_) => return Ok(false),
+            };
+        if !store
+            .manifests
+            .values()
+            .any(|qualified| qualified.content_length == fingerprint.bytes)
+        {
+            return Ok(false);
+        }
+        let mut payload_hasher = blake3::Hasher::new();
+        let mut observed_bytes = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buffer).wrap_err_with(|| {
+                format!(
+                    "hash cached Soracloud artifact {} against operator-preseed qualification",
+                    cache_path.display()
+                )
+            })?;
+            if read == 0 {
+                break;
+            }
+            observed_bytes = observed_bytes
+                .checked_add(u64::try_from(read).expect("read length fits u64"))
+                .ok_or_else(|| eyre::eyre!("cached operator-preseed byte count overflow"))?;
+            if observed_bytes > maximum_bytes {
+                eyre::bail!(
+                    "cached Soracloud artifact {} exceeds its configured {}-byte limit while checking operator-preseed qualification",
+                    cache_path.display(),
+                    maximum_bytes
+                );
+            }
+            payload_hasher.update(&buffer[..read]);
+        }
+        validate_opened_soracloud_artifact_after_read(
+            &file,
+            cache_path,
+            &fingerprint,
+            observed_bytes,
+        )
+        .map_err(|error| eyre::eyre!(error.message))?;
+        let payload_digest = *payload_hasher.finalize().as_bytes();
+        for (manifest_digest, qualified) in &store.manifests {
+            if qualified.content_length == observed_bytes
+                && qualified.payload_digest == payload_digest
+            {
+                store
+                    .manifest_by_digest(manifest_digest)?
+                    .expect("qualified manifest keys are present in the qualification map");
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     fn hydrate_operator_preseed_payload_to_cache(
         &self,
         expected_hash: Hash,
@@ -7052,16 +7552,10 @@ impl SoracloudRuntimeManager {
         let Some(store) = self.operator_preseed_store.as_ref() else {
             return Ok(false);
         };
-        let mut manifests = store.manifests();
-        manifests.sort_by(|left, right| left.manifest_id().cmp(right.manifest_id()));
-        if manifests.len() > SORACLOUD_OPERATOR_PRESEED_MAX_MANIFEST_SCAN_V1 {
-            eyre::bail!(
-                "operator-preseed SoraFS store contains {} manifests, exceeding the V1 hydration scan limit of {}",
-                manifests.len(),
-                SORACLOUD_OPERATOR_PRESEED_MAX_MANIFEST_SCAN_V1
-            );
-        }
-        for manifest in manifests {
+        for manifest_digest in store.manifests.keys() {
+            let manifest = store
+                .manifest_by_digest(manifest_digest)?
+                .expect("qualified manifest keys are present in the qualification map");
             if manifest.content_length() == 0 || manifest.content_length() > maximum_bytes {
                 continue;
             }
@@ -7073,6 +7567,7 @@ impl SoracloudRuntimeManager {
                 maximum_bytes,
                 |manifest_id, offset, len| {
                     store
+                        .backend
                         .read_payload_range(manifest_id, offset, len)
                         .map_err(|error| error.to_string())
                 },
@@ -7103,10 +7598,12 @@ impl SoracloudRuntimeManager {
         }
         for source in remote_sources {
             for provider_id in &source.provider_ids {
-                let Some(base_url) = self.remote_provider_base_url(provider_id) else {
+                let Some(provider) = self.acquire_remote_hydration_provider_session(provider_id)
+                else {
                     continue;
                 };
-                let client = match build_remote_hydration_http_client(&base_url) {
+                let base_url = &provider.target.base_url;
+                let client = match build_remote_hydration_http_client(base_url) {
                     Ok(client) => client,
                     Err(error) => {
                         iroha_logger::warn!(
@@ -7306,10 +7803,12 @@ impl SoracloudRuntimeManager {
                 continue;
             }
             for provider_id in &source.provider_ids {
-                let Some(base_url) = self.remote_provider_base_url(provider_id) else {
+                let Some(provider) = self.acquire_remote_hydration_provider_session(provider_id)
+                else {
                     continue;
                 };
-                let client = match build_remote_hydration_http_client(&base_url) {
+                let base_url = &provider.target.base_url;
+                let client = match build_remote_hydration_http_client(base_url) {
                     Ok(client) => client,
                     Err(error) => {
                         iroha_logger::warn!(
@@ -7424,7 +7923,7 @@ impl SoracloudRuntimeManager {
         let Some(store) = self.operator_preseed_store.as_ref() else {
             return Ok(false);
         };
-        let Some(manifest) = store.manifest_by_digest(&manifest_digest) else {
+        let Some(manifest) = store.manifest_by_digest(&manifest_digest)? else {
             return Ok(false);
         };
         if manifest.manifest_cid() != expected_manifest_cid {
@@ -7445,7 +7944,7 @@ impl SoracloudRuntimeManager {
         let inrou_root = reset_inrou_child_directory(bundle_root, OsStr::new("inrou"), 0o700)
             .wrap_err("reset pinned Inrou guest-image materialization root")?;
         materialize_operator_preseed_sorafs_files(
-            store,
+            store.backend.as_ref(),
             &manifest,
             &files,
             &inrou_root,
@@ -7483,9 +7982,9 @@ impl SoracloudRuntimeManager {
         })?;
         let manifest_digest = parse_sorafs_manifest_digest_hex(&artifact.manifest_digest_hex)?;
         let expected_manifest_cid = parse_canonical_sorafs_content_cid(&artifact.content_cid)?;
-        let manifest = store.manifest_by_digest(&manifest_digest).ok_or_else(|| {
+        let manifest = store.manifest_by_digest(&manifest_digest)?.ok_or_else(|| {
             eyre::eyre!(
-                "operator-preseed store is missing trusted Inrou guest manifest {}",
+                "operator-preseed store is missing or does not currently qualify trusted Inrou guest manifest {}",
                 artifact.manifest_digest_hex
             )
         })?;
@@ -7590,7 +8089,10 @@ impl SoracloudRuntimeManager {
             plan.selected_guest_isa.as_str()
         ))
     }
-    fn remote_provider_base_url(&self, provider_id: &[u8; 32]) -> Option<reqwest::Url> {
+    fn remote_hydration_provider_target(
+        &self,
+        provider_id: &[u8; 32],
+    ) -> Option<RemoteHydrationProviderTarget> {
         let cache = self.sorafs_provider_cache.as_ref()?;
         let guard = cache.try_read().ok()?;
         let record = guard.record_by_provider(provider_id)?;
@@ -7612,7 +8114,75 @@ impl SoracloudRuntimeManager {
             .endpoints
             .iter()
             .find(|endpoint| endpoint.kind == EndpointKind::Torii)?;
-        normalize_remote_provider_base_url(&endpoint.host_pattern)
+        let stream_budget = advert.body.stream_budget?;
+        let maximum_concurrent_streams = advert
+            .body
+            .qos
+            .max_concurrent_streams
+            .min(stream_budget.max_in_flight);
+        Some(RemoteHydrationProviderTarget {
+            base_url: normalize_remote_provider_base_url(&endpoint.host_pattern)?,
+            advert_issued_at: advert.issued_at,
+            maximum_concurrent_streams: NonZeroUsize::new(usize::from(maximum_concurrent_streams))?,
+        })
+    }
+    fn acquire_remote_hydration_provider_permit(
+        &self,
+        provider_id: &[u8; 32],
+        advert_issued_at: u64,
+        maximum_concurrent_streams: NonZeroUsize,
+    ) -> Option<RemoteHydrationProviderPermit> {
+        let gate = {
+            let mut gates = self.remote_hydration_provider_gates.lock();
+            if let Some(gate) = gates.get(provider_id) {
+                Arc::clone(gate)
+            } else {
+                // Provider churn must not make this registry append-only.
+                // Active permits and waiters own another `Arc`; idle entries
+                // are reconstructed from the currently admitted advert.
+                gates.retain(|_, gate| Arc::strong_count(gate) > 1);
+                let gate = Arc::new(RemoteHydrationProviderGate::new(
+                    advert_issued_at,
+                    maximum_concurrent_streams,
+                ));
+                gates.insert(*provider_id, Arc::clone(&gate));
+                gate
+            }
+        };
+        gate.acquire(advert_issued_at, maximum_concurrent_streams)
+    }
+    fn acquire_remote_hydration_provider_session(
+        &self,
+        provider_id: &[u8; 32],
+    ) -> Option<RemoteHydrationProviderSession> {
+        self.acquire_remote_hydration_provider_session_inner(provider_id, |_, _| {})
+    }
+    fn acquire_remote_hydration_provider_session_inner<F>(
+        &self,
+        provider_id: &[u8; 32],
+        mut after_resolve: F,
+    ) -> Option<RemoteHydrationProviderSession>
+    where
+        F: FnMut(usize, &RemoteHydrationProviderTarget),
+    {
+        for attempt in 0..2 {
+            let target = self.remote_hydration_provider_target(provider_id)?;
+            after_resolve(attempt, &target);
+            let Some(permit) = self.acquire_remote_hydration_provider_permit(
+                provider_id,
+                target.advert_issued_at,
+                target.maximum_concurrent_streams,
+            ) else {
+                continue;
+            };
+            if self.remote_hydration_provider_target(provider_id).as_ref() == Some(&target) {
+                return Some(RemoteHydrationProviderSession {
+                    target,
+                    _permit: permit,
+                });
+            }
+        }
+        None
     }
     fn remote_hydration_payload_limit(&self) -> u64 {
         [
@@ -11939,6 +12509,15 @@ fn inrou_egress_reporter_key_digest(
 fn prepare_inrou_egress_checkpoint_dir(path: &Path) -> io::Result<PathBuf> {
     use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 
+    // Runtime configuration deliberately permits peer-local relative state
+    // roots. Anchor them before walking ancestors so `Path::ancestors()` does
+    // not finish at the empty relative path while retaining every custody
+    // check for the actual filesystem path.
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -11972,17 +12551,17 @@ fn prepare_inrou_egress_checkpoint_dir(path: &Path) -> io::Result<PathBuf> {
             ));
         }
     }
-    match fs::symlink_metadata(path) {
+    match fs::symlink_metadata(&path) {
         Ok(_) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let mut builder = fs::DirBuilder::new();
             builder.mode(0o700);
-            builder.create(path)?;
+            builder.create(&path)?;
             fs::File::open(parent)?.sync_all()?;
         }
         Err(error) => return Err(error),
     }
-    let named = fs::symlink_metadata(path)?;
+    let named = fs::symlink_metadata(&path)?;
     if named.file_type().is_symlink()
         || !named.is_dir()
         || named.uid() != effective_uid
@@ -11996,7 +12575,7 @@ fn prepare_inrou_egress_checkpoint_dir(path: &Path) -> io::Result<PathBuf> {
             ),
         ));
     }
-    let canonical = fs::canonicalize(path)?;
+    let canonical = fs::canonicalize(&path)?;
     for (index, ancestor) in canonical.ancestors().enumerate() {
         let metadata = fs::metadata(ancestor)?;
         let replaceable = metadata.mode() & 0o022 != 0;
@@ -19370,7 +19949,6 @@ fn remote_hydration_car_plan(
             offset: chunk.offset,
             length: chunk.length,
             digest: chunk.digest,
-            taikai_segment_hint: None,
         })
         .collect();
     let files = plan
@@ -20709,7 +21287,7 @@ fn write_atomic_file<T>(
             sequence
         ));
         let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
+        options.read(true).write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
@@ -21012,6 +21590,157 @@ mod tests {
             expected.iter().any(|fragment| message.contains(fragment)),
             "expected error containing one of {expected:?}, got {message:?}"
         );
+    }
+
+    #[test]
+    fn remote_hydration_provider_gate_honors_a_lower_newer_advert() {
+        let one = NonZeroUsize::new(1).expect("nonzero stream limit");
+        let two = NonZeroUsize::new(2).expect("nonzero stream limit");
+        let gate = Arc::new(RemoteHydrationProviderGate::new(10, two));
+        let first = gate.acquire(10, two).expect("first provider permit");
+        let second = gate.acquire(10, two).expect("second provider permit");
+        let (attempted_sender, attempted_receiver) = mpsc::channel();
+        let (acquired_sender, acquired_receiver) = mpsc::channel();
+
+        let (updated, blocked_with_two, blocked_with_one, acquired) = thread::scope(|scope| {
+            let worker_gate = Arc::clone(&gate);
+            let worker = scope.spawn(move || {
+                attempted_sender
+                    .send(())
+                    .expect("test attempt observer remains connected");
+                let permit = worker_gate
+                    .acquire(11, one)
+                    .expect("the newest advert remains admissible");
+                acquired_sender
+                    .send(())
+                    .expect("test acquisition observer remains connected");
+                drop(permit);
+            });
+            attempted_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .expect("newer advert acquisition must start");
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let updated = loop {
+                if gate.state.lock().advert_issued_at == 11 {
+                    break true;
+                }
+                if std::time::Instant::now() >= deadline {
+                    break false;
+                }
+                thread::yield_now();
+            };
+            let blocked_with_two = matches!(
+                acquired_receiver.recv_timeout(Duration::from_millis(50)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            );
+            drop(first);
+            let blocked_with_one = matches!(
+                acquired_receiver.recv_timeout(Duration::from_millis(50)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            );
+            drop(second);
+            let acquired = acquired_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .is_ok();
+            worker.join().expect("provider-gate worker must not panic");
+            (updated, blocked_with_two, blocked_with_one, acquired)
+        });
+
+        assert!(updated, "the newer advert must update the active gate");
+        assert!(blocked_with_two);
+        assert!(blocked_with_one);
+        assert!(acquired);
+        assert!(
+            gate.acquire(
+                10,
+                NonZeroUsize::new(8).expect("nonzero stale stream limit")
+            )
+            .is_none(),
+            "a delayed older advert must not raise or enter the newer gate"
+        );
+    }
+
+    #[test]
+    fn bounded_hydration_tasks_respect_worker_limit_and_input_error_order() {
+        use std::sync::{
+            Condvar,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let tasks = [0_usize, 1, 2, 3, 4, 5, 6, 7, 8];
+        let active = AtomicUsize::new(0);
+        let maximum_active = AtomicUsize::new(0);
+        let release_gate = (Mutex::new(false), Condvar::new());
+        let (started_sender, started_receiver) = mpsc::channel();
+        let (mut executed, result) = thread::scope(|scope| {
+            let runner = scope.spawn(|| {
+                run_bounded_hydration_tasks(
+                    &tasks,
+                    NonZeroUsize::new(4).expect("nonzero worker count"),
+                    |task| {
+                        let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        maximum_active.fetch_max(current, Ordering::SeqCst);
+                        started_sender
+                            .send(*task)
+                            .expect("test start observer remains connected");
+                        let (released, wake) = &release_gate;
+                        let mut released = released.lock().expect("release gate lock");
+                        while !*released {
+                            released = wake.wait(released).expect("release gate wait");
+                        }
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        match *task {
+                            0 => Err(eyre::eyre!("task zero failed")),
+                            2 => Err(eyre::eyre!("task two failed")),
+                            _ => Ok(()),
+                        }
+                    },
+                )
+            });
+            let mut executed = Vec::new();
+            for _ in 0..4 {
+                match started_receiver.recv_timeout(Duration::from_secs(2)) {
+                    Ok(task) => executed.push(task),
+                    Err(_) => break,
+                }
+            }
+            let (released, wake) = &release_gate;
+            *released.lock().expect("release gate lock") = true;
+            wake.notify_all();
+            let result = runner.join().expect("hydration coordinator must not panic");
+            (executed, result)
+        });
+        let error = result.expect_err("the earliest input error must be returned");
+
+        assert_eq!(maximum_active.load(Ordering::SeqCst), 4);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert!(error.to_string().contains("task zero failed"));
+        executed.sort_unstable();
+        assert_eq!(executed, vec![0, 1, 2, 3]);
+
+        let completed = AtomicUsize::new(0);
+        run_bounded_hydration_tasks(
+            &tasks,
+            NonZeroUsize::new(4).expect("nonzero worker count"),
+            |_| {
+                completed.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .expect("successful waves must reuse workers until every task completes");
+        assert_eq!(completed.load(Ordering::SeqCst), tasks.len());
+
+        let error = run_bounded_hydration_tasks(
+            &[0_usize],
+            NonZeroUsize::new(
+                iroha_config::parameters::defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX
+                    + 1,
+            )
+            .expect("V1 hydration limit plus one is nonzero"),
+            |_| Ok(()),
+        )
+        .expect_err("the helper must reject a programmatic worker count above the V1 ceiling");
+        assert!(error.to_string().contains("hydration worker count"));
     }
 
     #[test]
@@ -21726,6 +22455,19 @@ mod tests {
         );
     }
     #[test]
+    fn prepared_runtime_cache_uses_dedicated_idle_capacity() {
+        let runtime = iroha_config::parameters::actual::SoracloudRuntime {
+            hydration_concurrency: NonZeroUsize::new(1).expect("nonzero hydration concurrency"),
+            prepared_runtime_cache_capacity: NonZeroUsize::new(3)
+                .expect("nonzero prepared runtime cache capacity"),
+            ..Default::default()
+        };
+        let config = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+        let cache = SoracloudPreparedRuntimeCache::from_config(&config);
+
+        assert_eq!(cache.max_idle_runtimes, 3);
+    }
+    #[test]
     fn prepared_runtime_cache_rejects_oversized_artifact_before_reading() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let artifact_path = temp_dir.path().join("oversized.to");
@@ -21767,6 +22509,49 @@ mod tests {
             .checkout(&prepared)
             .map_err(|error| eyre::eyre!("{}", error.message))?;
         assert!(!runtime.zk_trace_enabled());
+        Ok(())
+    }
+    #[test]
+    fn overlapping_soracloud_runtimes_return_with_their_own_templates() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let artifact = simple_soracloud_contract_artifact(&["overlap"]);
+        let artifact_path = temp_dir.path().join("overlap.to");
+        fs::write(&artifact_path, &artifact)?;
+        let cache = SoracloudPreparedRuntimeCache::new(
+            u64::try_from(artifact.len())?,
+            NonZeroUsize::new(2).expect("non-zero runtime bound"),
+        );
+        let prepared = cache
+            .prepare(&artifact_path, Hash::new(&artifact))
+            .map_err(|error| eyre::eyre!("{}", error.message))?;
+        let first = cache
+            .checkout(&prepared)
+            .map_err(|error| eyre::eyre!("{}", error.message))?;
+        let second_allocation = {
+            let mut second = cache
+                .checkout(&prepared)
+                .map_err(|error| eyre::eyre!("{}", error.message))?;
+            let allocation = second.memory.load_region(0, 1)?.as_ptr();
+            second.memory.preload_input(0, &[0xA5])?;
+            allocation
+        };
+        let third = cache
+            .checkout(&prepared)
+            .map_err(|error| eyre::eyre!("{}", error.message))?;
+        assert_eq!(third.memory.load_region(0, 1)?.as_ptr(), second_allocation);
+        assert_eq!(
+            third.memory.load_region(Memory::INPUT_START, 1)?,
+            [0],
+            "the cold overlapping runtime must reset against its own template"
+        );
+        let stats = cache.stats();
+        assert_eq!(stats.runtime_allocations, 2);
+        assert_eq!(stats.prepared_loads, 2);
+        assert_eq!(stats.template_builds, 2);
+        assert_eq!(stats.runtime_reuses, 1);
+        assert_eq!(stats.dirty_resets, 1);
+        assert_eq!(stats.runtime_returns, 1);
+        drop((third, first));
         Ok(())
     }
     #[test]
@@ -23501,6 +24286,11 @@ mod tests {
         bundle.service.execution_plane =
             iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
         bundle.service.replicas = std::num::NonZeroU16::new(1).expect("replica");
+        bundle.service.placement_targets =
+            BTreeSet::from([iroha_data_model::soracloud::SoraInrouPlacementTargetV1 {
+                validator_account_id: ALICE_ID.clone(),
+                peer_id: canonical_inrou_test_peer_id().to_owned(),
+            }]);
         bundle.service.state_bindings.clear();
         bundle.service.handlers.clear();
         bundle.service.artifacts.clear();
@@ -23655,6 +24445,44 @@ mod tests {
                 selected_guest_isa,
             }],
         );
+    }
+    fn insert_local_inrou_host_capability_fixture(
+        state: &mut Arc<State>,
+        bundle: &SoraDeploymentBundleV1,
+        local_peer_id: &str,
+        selected_guest_isa: SoraInrouGuestIsaV1,
+    ) {
+        let trusted_guest_artifact = bundle
+            .container
+            .inrou
+            .as_ref()
+            .expect("Inrou fixture manifest")
+            .guest_images
+            .get(&selected_guest_isa)
+            .expect("selected guest-image fixture")
+            .published_artifact
+            .clone();
+        let capability = SoraInrouHostCapabilityRecordV1 {
+            schema_version: SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+            validator_account_id: ALICE_ID.clone(),
+            peer_id: local_peer_id.to_owned(),
+            supported_guest_isas: BTreeSet::from([selected_guest_isa]),
+            trusted_guest_artifact,
+            max_hosted_replica_capacity: SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
+            max_cpu_millis: u32::MAX,
+            max_memory_bytes: u64::MAX,
+            max_storage_bytes: u64::MAX,
+            advertised_at_ms: 1,
+            heartbeat_expires_at_ms: u64::MAX,
+        };
+        capability
+            .validate()
+            .expect("valid local Inrou host capability fixture");
+        Arc::get_mut(state)
+            .expect("unique test state")
+            .world
+            .soracloud_inrou_host_capabilities_mut_for_testing()
+            .insert(ALICE_ID.clone(), capability);
     }
     fn materialize_inrou_replica_plan_for_tests(
         bundle: &SoraDeploymentBundleV1,
@@ -23918,7 +24746,6 @@ mod tests {
                 .ok_or_else(|| eyre::eyre!("portable Inrou chunk offset overflow"))?,
             length: u32::try_from(bytes.len())?,
             digest: blake3::hash(bytes).into(),
-            taikai_segment_hint: None,
         });
         Ok(())
     }
@@ -24776,13 +25603,16 @@ mod tests {
         ingest_operator_preseed_payload(&store, &decoy_plan, &decoy_manifest, decoy)?;
         let payload = b"operator-preseed-bundle";
         let (plan, manifest) = build_sorafs_manifest(payload)?;
-        ingest_operator_preseed_payload(&store, &plan, &manifest, payload)?;
+        let qualified = ingest_operator_preseed_payload(&store, &plan, &manifest, payload)?;
         let state = test_state()?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().join("runtime-state")),
             Arc::clone(&state),
         )
-        .with_operator_preseed_store(Arc::clone(&store));
+        .with_operator_preseed_store(
+            Arc::clone(&store),
+            BTreeSet::from([*qualified.manifest_digest()]),
+        )?;
         let cache_path = temp_dir.path().join("runtime-state/artifacts/bundle");
         fs::create_dir_all(cache_path.parent().expect("cache path parent"))?;
         assert!(!manager.hydrate_local_sorafs_payload_to_cache(
@@ -24792,6 +25622,16 @@ mod tests {
             1 << 20,
         )?);
         assert!(!cache_path.exists());
+        assert!(!manager.hydrate_local_sorafs_payload_to_cache(
+            &[],
+            Hash::new(decoy),
+            &cache_path,
+            1 << 20,
+        )?);
+        assert!(
+            !cache_path.exists(),
+            "an ingested payload outside the current qualification must not hydrate"
+        );
         assert!(manager.hydrate_local_sorafs_payload_to_cache(
             &[],
             Hash::new(payload),
@@ -24799,6 +25639,11 @@ mod tests {
             1 << 20,
         )?);
         assert_eq!(fs::read(cache_path)?, payload);
+        assert!(manager.cached_artifact_has_operator_preseed_qualification(
+            &temp_dir.path().join("runtime-state/artifacts/bundle"),
+            Hash::new(payload),
+            1 << 20,
+        )?);
         Ok(())
     }
     #[test]
@@ -24899,7 +25744,10 @@ mod tests {
             ),
             Arc::clone(&state),
         )
-        .with_operator_preseed_store(Arc::clone(&store));
+        .with_operator_preseed_store(
+            Arc::clone(&store),
+            qualified_test_operator_preseed_manifests(&store),
+        )?;
         let plan = sample_inrou_runtime_plan(&bundle, guest_isa);
         let bundle_root_path = canonical_test_runtime_state_dir(&temp_dir)?.join("bundle");
         fs::create_dir_all(&bundle_root_path)?;
@@ -24938,7 +25786,10 @@ mod tests {
             ),
             state,
         )
-        .with_operator_preseed_store(store);
+        .with_operator_preseed_store(
+            Arc::clone(&store),
+            qualified_test_operator_preseed_manifests(&store),
+        )?;
         manager.hydrate_published_inrou_guest_image_artifact(&bundle_root, &bundle, &plan)?;
         for (path, expected) in files {
             assert_eq!(
@@ -24992,12 +25843,15 @@ mod tests {
             ),
             Arc::clone(&state),
         )
-        .with_operator_preseed_store(Arc::clone(&store));
+        .with_operator_preseed_store(
+            Arc::clone(&store),
+            qualified_test_operator_preseed_manifests(&store),
+        )?;
         assert_report_contains(
             missing_artifact
                 .ensure_trusted_inrou_guest_artifact_preseeded()
                 .expect_err("a different valid artifact must not satisfy the configured trust"),
-            "is missing trusted Inrou guest manifest",
+            "is missing or does not currently qualify trusted Inrou guest manifest",
         );
 
         let mut undersized_guest_budget = test_runtime_manager_config_with_trusted_guest(
@@ -25012,7 +25866,10 @@ mod tests {
         .expect("one byte below guest image fixture remains nonzero");
         let undersized_guest_budget =
             SoracloudRuntimeManager::new(undersized_guest_budget, Arc::clone(&state))
-                .with_operator_preseed_store(Arc::clone(&store));
+                .with_operator_preseed_store(
+                    Arc::clone(&store),
+                    qualified_test_operator_preseed_manifests(&store),
+                )?;
         assert_report_contains(
             undersized_guest_budget
                 .ensure_trusted_inrou_guest_artifact_preseeded()
@@ -25030,8 +25887,24 @@ mod tests {
             std::num::NonZeroU64::new(SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1)
                 .expect("minimum writable storage capacity");
         SoracloudRuntimeManager::new(exact_config, state)
-            .with_operator_preseed_store(store)
+            .with_operator_preseed_store(
+                Arc::clone(&store),
+                qualified_test_operator_preseed_manifests(&store),
+            )?
             .ensure_trusted_inrou_guest_artifact_preseeded()?;
+        Ok(())
+    }
+    #[test]
+    fn enabled_inrou_host_rejects_embedded_provider_storage() -> Result<()> {
+        for operator_preseed_attached in [false, true] {
+            let error =
+                validate_operator_preseed_provider_boundary(true, operator_preseed_attached, true)
+                    .expect_err("Inrou V1 hosting and provider storage must be mutually exclusive");
+            assert_report_contains(
+                error,
+                "Inrou V1 hosting requires embedded SoraFS provider storage to be disabled",
+            );
+        }
         Ok(())
     }
     #[test]
@@ -25061,7 +25934,10 @@ mod tests {
             ),
             test_state()?,
         )
-        .with_operator_preseed_store(store);
+        .with_operator_preseed_store(
+            Arc::clone(&store),
+            qualified_test_operator_preseed_manifests(&store),
+        )?;
         assert_report_contains(
             manager
                 .ensure_trusted_inrou_guest_artifact_preseeded()
@@ -25104,7 +25980,10 @@ mod tests {
             ),
             test_state()?,
         )
-        .with_operator_preseed_store(store);
+        .with_operator_preseed_store(
+            Arc::clone(&store),
+            qualified_test_operator_preseed_manifests(&store),
+        )?;
         assert_report_contains(
             manager
                 .ensure_trusted_inrou_guest_artifact_preseeded()
@@ -25688,6 +26567,8 @@ mod tests {
         base_url: &str,
         provider_id: [u8; 32],
         transport_hints: Option<Vec<TransportHintV1>>,
+        max_concurrent_streams: u16,
+        max_in_flight: Option<u16>,
     ) -> Result<Arc<AsyncRwLock<ProviderAdvertCache>>> {
         let advert_key = PrivateKey::from_bytes(Algorithm::Ed25519, &[0xA5; 32])?;
         let advert_public = PublicKey::from(advert_key.clone());
@@ -25718,8 +26599,8 @@ mod tests {
                 .to_bytes()?,
             },
         ];
-        let stream_budget = Some(StreamBudgetV1 {
-            max_in_flight: 8,
+        let stream_budget = max_in_flight.map(|max_in_flight| StreamBudgetV1 {
+            max_in_flight,
             max_bytes_per_sec: 8_388_608,
             burst_bytes: Some(1_048_576),
         });
@@ -25743,7 +26624,7 @@ mod tests {
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
                 max_retrieval_latency_ms: 1_000,
-                max_concurrent_streams: 8,
+                max_concurrent_streams,
             },
             capabilities: capabilities.clone(),
             endpoints: vec![endpoint.clone()],
@@ -25871,20 +26752,23 @@ mod tests {
                 protocol: TransportProtocol::ToriiHttpRange,
                 priority: 0,
             }]),
+            8,
+            Some(8),
         )
     }
     #[test]
-    fn remote_provider_base_url_requires_explicit_torii_http_range_hint() -> Result<()> {
+    fn remote_hydration_provider_target_requires_range_hint_and_stream_budget() -> Result<()> {
         let state = test_state()?;
         let temp_dir = tempfile::tempdir()?;
         let cases = [
-            ([0x91; 32], None, false),
+            ([0x91; 32], None, Some(8), false),
             (
                 [0x92; 32],
                 Some(vec![TransportHintV1 {
                     protocol: TransportProtocol::QuicStream,
                     priority: 0,
                 }]),
+                Some(8),
                 false,
             ),
             (
@@ -25893,14 +26777,26 @@ mod tests {
                     protocol: TransportProtocol::ToriiHttpRange,
                     priority: 0,
                 }]),
+                Some(8),
                 true,
             ),
+            (
+                [0x94; 32],
+                Some(vec![TransportHintV1 {
+                    protocol: TransportProtocol::ToriiHttpRange,
+                    priority: 0,
+                }]),
+                None,
+                false,
+            ),
         ];
-        for (provider_id, transport_hints, expected) in cases {
+        for (provider_id, transport_hints, max_in_flight, expected) in cases {
             let cache = test_provider_cache_with_transport_hints(
                 "https://provider.example/",
                 provider_id,
                 transport_hints,
+                8,
+                max_in_flight,
             )?;
             let manager = SoracloudRuntimeManager::new(
                 test_runtime_manager_config(
@@ -25910,10 +26806,371 @@ mod tests {
             )
             .with_sorafs_provider_cache(cache);
             assert_eq!(
-                manager.remote_provider_base_url(&provider_id).is_some(),
+                manager
+                    .remote_hydration_provider_target(&provider_id)
+                    .is_some(),
                 expected
             );
         }
+        Ok(())
+    }
+    #[test]
+    fn remote_hydration_provider_target_uses_tighter_advertised_stream_limit() -> Result<()> {
+        let provider_id = [0x95; 32];
+        let cache = test_provider_cache_with_transport_hints(
+            "https://provider.example/",
+            provider_id,
+            Some(vec![TransportHintV1 {
+                protocol: TransportProtocol::ToriiHttpRange,
+                priority: 0,
+            }]),
+            7,
+            Some(3),
+        )?;
+        let state = test_state()?;
+        let temp_dir = tempfile::tempdir()?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            state,
+        )
+        .with_sorafs_provider_cache(cache);
+
+        let target = manager
+            .remote_hydration_provider_target(&provider_id)
+            .expect("admitted range provider with a stream budget");
+        assert_eq!(target.maximum_concurrent_streams.get(), 3);
+        Ok(())
+    }
+    #[test]
+    fn remote_hydration_provider_session_retries_after_advert_replacement() -> Result<()> {
+        let provider_id = [0x96; 32];
+        let cache = test_provider_cache_with_transport_hints(
+            "https://provider.example/",
+            provider_id,
+            Some(vec![TransportHintV1 {
+                protocol: TransportProtocol::ToriiHttpRange,
+                priority: 0,
+            }]),
+            2,
+            Some(2),
+        )?;
+        let old_advert = cache
+            .try_read()
+            .expect("provider advert fixture cache is uncontended")
+            .record_by_provider(&provider_id)
+            .expect("provider advert fixture record")
+            .advert()
+            .clone();
+        let state = test_state()?;
+        let temp_dir = tempfile::tempdir()?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            state,
+        )
+        .with_sorafs_provider_cache(Arc::clone(&cache));
+        let observed_generations = Arc::new(Mutex::new(Vec::new()));
+
+        let session = thread::scope(|scope| -> Result<_> {
+            let (paused_sender, paused_receiver) = mpsc::channel();
+            let (resume_sender, resume_receiver) = mpsc::channel();
+            let worker_generations = Arc::clone(&observed_generations);
+            let worker_manager = &manager;
+            let worker_provider_id = provider_id;
+            let worker = scope.spawn(move || {
+                worker_manager.acquire_remote_hydration_provider_session_inner(
+                    &worker_provider_id,
+                    |attempt, target| {
+                        worker_generations
+                            .lock()
+                            .expect("generation observer lock")
+                            .push((attempt, target.advert_issued_at));
+                        if attempt == 0 {
+                            let _ = paused_sender.send(());
+                            let _ = resume_receiver.recv();
+                        }
+                    },
+                )
+            });
+            paused_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .wrap_err("provider session did not pause after resolving the old advert")?;
+
+            let mut replacement = old_advert.clone();
+            replacement.issued_at = replacement.issued_at.saturating_add(1);
+            replacement.expires_at = replacement.expires_at.saturating_add(1);
+            let replacement_issued_at = replacement.issued_at;
+            let advert_key = PrivateKey::from_bytes(Algorithm::Ed25519, &[0xA5; 32])?;
+            let signature_payload = replacement
+                .signature_payload_bytes()
+                .wrap_err("encode replacement provider advert signature envelope")?;
+            replacement.signature.signature = Signature::try_new(&advert_key, &signature_payload)
+                .wrap_err("sign replacement provider advert")?
+                .payload()
+                .to_vec();
+            let validation_policy = cache
+                .try_read()
+                .expect("provider advert fixture cache is uncontended")
+                .validation_policy();
+            let prepared = validation_policy
+                .prepare(replacement, replacement_issued_at)
+                .map_err(|error| eyre::eyre!(error.to_string()))?;
+            cache
+                .try_write()
+                .expect("provider advert fixture cache is uncontended")
+                .commit_prepared(prepared, replacement_issued_at)
+                .map_err(|error| eyre::eyre!(error.to_string()))?;
+            resume_sender
+                .send(())
+                .expect("provider session worker remains connected");
+            worker
+                .join()
+                .map_err(|_| eyre::eyre!("provider session worker panicked"))
+        })?
+        .expect("the replacement advert must be admitted on the bounded retry");
+
+        assert_eq!(
+            *observed_generations
+                .lock()
+                .expect("generation observer lock"),
+            vec![
+                (0, old_advert.issued_at),
+                (1, old_advert.issued_at.saturating_add(1))
+            ]
+        );
+        assert_eq!(
+            session.target.advert_issued_at,
+            old_advert.issued_at.saturating_add(1)
+        );
+        assert_eq!(session.target.maximum_concurrent_streams.get(), 2);
+        let gate = manager
+            .remote_hydration_provider_gates
+            .lock()
+            .get(&provider_id)
+            .cloned()
+            .expect("provider gate is retained while its session is active");
+        {
+            let gate_state = gate.state.lock();
+            assert_eq!(
+                gate_state.advert_issued_at,
+                old_advert.issued_at.saturating_add(1)
+            );
+            assert_eq!(gate_state.in_flight, 1);
+        }
+        drop(session);
+        assert_eq!(gate.state.lock().in_flight, 0);
+        Ok(())
+    }
+    #[test]
+    fn remote_hydration_provider_session_fails_closed_when_advert_expires() -> Result<()> {
+        let provider_id = [0x97; 32];
+        let cache = test_provider_cache_with_transport_hints(
+            "https://provider.example/",
+            provider_id,
+            Some(vec![TransportHintV1 {
+                protocol: TransportProtocol::ToriiHttpRange,
+                priority: 0,
+            }]),
+            1,
+            Some(1),
+        )?;
+        let old_advert = cache
+            .try_read()
+            .expect("provider advert fixture cache is uncontended")
+            .record_by_provider(&provider_id)
+            .expect("provider advert fixture record")
+            .advert()
+            .clone();
+        let state = test_state()?;
+        let temp_dir = tempfile::tempdir()?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            state,
+        )
+        .with_sorafs_provider_cache(Arc::clone(&cache));
+        let observed_generations = Arc::new(Mutex::new(Vec::new()));
+
+        let session = thread::scope(|scope| -> Result<_> {
+            let (paused_sender, paused_receiver) = mpsc::channel();
+            let (resume_sender, resume_receiver) = mpsc::channel();
+            let worker_generations = Arc::clone(&observed_generations);
+            let worker_manager = &manager;
+            let worker_provider_id = provider_id;
+            let worker = scope.spawn(move || {
+                worker_manager.acquire_remote_hydration_provider_session_inner(
+                    &worker_provider_id,
+                    |attempt, target| {
+                        worker_generations
+                            .lock()
+                            .expect("generation observer lock")
+                            .push((attempt, target.advert_issued_at));
+                        if attempt == 0 {
+                            let _ = paused_sender.send(());
+                            let _ = resume_receiver.recv();
+                        }
+                    },
+                )
+            });
+            paused_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .wrap_err("provider session did not pause after resolving the live advert")?;
+            assert_eq!(
+                cache
+                    .try_write()
+                    .expect("provider advert fixture cache is uncontended")
+                    .prune_stale(old_advert.expires_at.saturating_add(1)),
+                1
+            );
+            resume_sender
+                .send(())
+                .expect("provider session worker remains connected");
+            worker
+                .join()
+                .map_err(|_| eyre::eyre!("provider session worker panicked"))
+        })?;
+
+        assert!(session.is_none());
+        assert_eq!(
+            *observed_generations
+                .lock()
+                .expect("generation observer lock"),
+            vec![(0, old_advert.issued_at)]
+        );
+        assert!(
+            manager
+                .remote_hydration_provider_target(&provider_id)
+                .is_none()
+        );
+        let gate = manager
+            .remote_hydration_provider_gates
+            .lock()
+            .get(&provider_id)
+            .cloned()
+            .expect("the rejected attempt constructed one provider gate");
+        assert_eq!(gate.state.lock().in_flight, 0);
+        Ok(())
+    }
+    #[test]
+    fn hydration_workers_share_the_provider_stream_limit() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let provider_id = [0x98; 32];
+        let cache = test_provider_cache_with_transport_hints(
+            "https://provider.example/",
+            provider_id,
+            Some(vec![TransportHintV1 {
+                protocol: TransportProtocol::ToriiHttpRange,
+                priority: 0,
+            }]),
+            4,
+            Some(1),
+        )?;
+        let state = test_state()?;
+        let temp_dir = tempfile::tempdir()?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            state,
+        )
+        .with_sorafs_provider_cache(cache);
+        let blocker = manager
+            .acquire_remote_hydration_provider_session(&provider_id)
+            .expect("provider fixture admits one blocking session");
+        assert_eq!(blocker.target.maximum_concurrent_streams.get(), 1);
+        let active = AtomicUsize::new(0);
+        let maximum_active = AtomicUsize::new(0);
+        let (attempted_sender, attempted_receiver) = mpsc::channel();
+        let (acquired_sender, acquired_receiver) = mpsc::channel();
+        let (completed_sender, completed_receiver) = mpsc::channel();
+        let tasks = [0_usize, 1, 2, 3];
+
+        let (mut attempted, mut acquired, gate_counts, result) = thread::scope(|scope| {
+            let runner = scope.spawn(|| {
+                run_bounded_hydration_tasks(
+                    &tasks,
+                    NonZeroUsize::new(4).expect("nonzero hydration worker count"),
+                    |task| {
+                        attempted_sender
+                            .send(*task)
+                            .wrap_err("send provider admission attempt")?;
+                        let session = manager
+                            .acquire_remote_hydration_provider_session(&provider_id)
+                            .ok_or_else(|| eyre::eyre!("provider session was not admitted"))?;
+                        let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        maximum_active.fetch_max(current, Ordering::SeqCst);
+                        let (release_sender, release_receiver) = mpsc::channel();
+                        acquired_sender
+                            .send((*task, release_sender))
+                            .wrap_err("send admitted provider session")?;
+                        release_receiver
+                            .recv_timeout(Duration::from_secs(2))
+                            .wrap_err("wait for provider-session release")?;
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        drop(session);
+                        completed_sender
+                            .send(*task)
+                            .wrap_err("send completed provider session")?;
+                        Ok(())
+                    },
+                )
+            });
+            let mut attempted = Vec::new();
+            for _ in &tasks {
+                attempted.push(
+                    attempted_receiver
+                        .recv_timeout(Duration::from_secs(2))
+                        .expect("all four workers must reach provider admission"),
+                );
+            }
+            drop(blocker);
+            let mut acquired = Vec::new();
+            let mut gate_counts = Vec::new();
+            for _ in &tasks {
+                let (task, release) = acquired_receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("one provider session must be admitted at a time");
+                acquired.push(task);
+                gate_counts.push(
+                    manager
+                        .remote_hydration_provider_gates
+                        .lock()
+                        .get(&provider_id)
+                        .expect("provider gate remains registered")
+                        .state
+                        .lock()
+                        .in_flight,
+                );
+                release
+                    .send(())
+                    .expect("hydration worker remains connected");
+                assert_eq!(
+                    completed_receiver
+                        .recv_timeout(Duration::from_secs(2))
+                        .expect("released provider session must complete"),
+                    task
+                );
+            }
+            let result = runner.join().expect("hydration coordinator must not panic");
+            (attempted, acquired, gate_counts, result)
+        });
+        result?;
+
+        attempted.sort_unstable();
+        acquired.sort_unstable();
+        assert_eq!(attempted, tasks.to_vec());
+        assert_eq!(acquired, tasks.to_vec());
+        assert_eq!(maximum_active.load(Ordering::SeqCst), 1);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert_eq!(gate_counts, vec![1; tasks.len()]);
+        assert_eq!(
+            manager
+                .remote_hydration_provider_gates
+                .lock()
+                .get(&provider_id)
+                .expect("provider gate remains registered")
+                .state
+                .lock()
+                .in_flight,
+            0
+        );
         Ok(())
     }
     #[test]
@@ -26069,7 +27326,10 @@ mod tests {
         {
             let mut pin_manifests = block.world.pin_manifests_mut_for_testing().transaction();
             for fixture in fixtures {
-                let policy = PinPolicy::default();
+                let policy = PinPolicy {
+                    retention_epoch: fixture.issued_epoch.saturating_add(600),
+                    ..PinPolicy::default()
+                };
                 let content_length = fixture.payload.len() as u64;
                 let amount = pricing
                     .public_pin_fee(
@@ -26508,6 +27768,13 @@ mod tests {
             .expect("operator-preseed storage fixture"),
         )
     }
+    fn qualified_test_operator_preseed_manifests(store: &StorageBackend) -> BTreeSet<[u8; 32]> {
+        store
+            .manifests()
+            .into_iter()
+            .map(|manifest| *manifest.manifest_digest())
+            .collect()
+    }
     fn ingest_operator_preseed_payload(
         store: &StorageBackend,
         plan: &CarBuildPlan,
@@ -26628,8 +27895,10 @@ mod tests {
             production_mode: false,
             state_dir: PathBuf::from("/tmp/iroha-soracloud-runtime-config"),
             reconcile_interval: Duration::from_secs(17),
-            hydration_concurrency: std::num::NonZeroUsize::new(9)
+            hydration_concurrency: std::num::NonZeroUsize::new(7)
                 .expect("nonzero hydration concurrency"),
+            prepared_runtime_cache_capacity: std::num::NonZeroUsize::new(11)
+                .expect("nonzero prepared runtime cache capacity"),
             cache_budgets: iroha_config::parameters::actual::SoracloudRuntimeCacheBudgets {
                 bundle_bytes: std::num::NonZeroU64::new(1_024).expect("nonzero"),
                 static_asset_bytes: std::num::NonZeroU64::new(2_048).expect("nonzero"),
@@ -26688,6 +27957,10 @@ mod tests {
         assert_eq!(manager.production_mode, runtime.production_mode);
         assert_eq!(manager.reconcile_interval, runtime.reconcile_interval);
         assert_eq!(manager.hydration_concurrency, runtime.hydration_concurrency);
+        assert_eq!(
+            manager.prepared_runtime_cache_capacity,
+            runtime.prepared_runtime_cache_capacity
+        );
         assert_eq!(manager.cache_budgets, runtime.cache_budgets);
         assert_eq!(manager.inrou, runtime.inrou);
         assert_eq!(manager.submission, runtime.submission);
@@ -26703,6 +27976,31 @@ mod tests {
         runtime.egress.default_allow = true;
         runtime.egress.rate_per_minute = std::num::NonZeroU32::new(60);
         runtime.egress.max_bytes_per_minute = std::num::NonZeroU64::new(1_048_576);
+        let _ = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+    }
+    #[test]
+    #[should_panic(
+        expected = "soracloud_runtime.hydration_concurrency exceeds the first-release worker limit"
+    )]
+    fn manager_config_rejects_direct_actual_hydration_workers_above_v1_limit() {
+        let mut runtime = iroha_config::parameters::actual::SoracloudRuntime::default();
+        runtime.hydration_concurrency = NonZeroUsize::new(
+            iroha_config::parameters::defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX + 1,
+        )
+        .expect("V1 hydration limit plus one is nonzero");
+        let _ = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+    }
+    #[test]
+    #[should_panic(
+        expected = "soracloud_runtime.prepared_runtime_cache_capacity exceeds the first-release idle-runtime limit"
+    )]
+    fn manager_config_rejects_direct_actual_prepared_cache_above_v1_limit() {
+        let mut runtime = iroha_config::parameters::actual::SoracloudRuntime::default();
+        runtime.prepared_runtime_cache_capacity = NonZeroUsize::new(
+            iroha_config::parameters::defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX
+                + 1,
+        )
+        .expect("V1 prepared-runtime cache limit plus one is nonzero");
         let _ = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
     }
     #[test]
@@ -26740,6 +28038,34 @@ mod tests {
         let error = validate_soracloud_runtime_manager_posture(&above_maximum)
             .expect_err("an above-maximum operator shutdown grace must fail closed");
         assert!(error.to_string().contains("stop_grace must be between"));
+    }
+    #[test]
+    fn programmatic_manager_rejects_worker_and_cache_limits_above_v1_maximum() {
+        let runtime = iroha_config::parameters::actual::SoracloudRuntime::default();
+        let config = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+
+        let mut hydration = config.clone();
+        hydration.hydration_concurrency = NonZeroUsize::new(
+            iroha_config::parameters::defaults::soracloud_runtime::HYDRATION_CONCURRENCY_MAX + 1,
+        )
+        .expect("V1 hydration limit plus one is nonzero");
+        let error = validate_soracloud_runtime_manager_posture(&hydration)
+            .expect_err("programmatic hydration workers must respect the V1 ceiling");
+        assert!(error.to_string().contains("hydration worker count"));
+
+        let mut prepared = config;
+        prepared.prepared_runtime_cache_capacity = NonZeroUsize::new(
+            iroha_config::parameters::defaults::soracloud_runtime::PREPARED_RUNTIME_CACHE_CAPACITY_MAX
+                + 1,
+        )
+        .expect("V1 prepared-runtime cache limit plus one is nonzero");
+        let error = validate_soracloud_runtime_manager_posture(&prepared)
+            .expect_err("programmatic prepared-runtime caching must respect the V1 ceiling");
+        assert!(
+            error
+                .to_string()
+                .contains("prepared-runtime cache capacity")
+        );
     }
     #[test]
     fn programmatic_manager_rejects_nonproduction_inrou_before_writes() {
@@ -27829,6 +29155,13 @@ mod tests {
             local_peer_id,
             selected_guest_isa,
         );
+        insert_local_inrou_host_capability_fixture(
+            &mut state,
+            &bundle,
+            local_peer_id,
+            selected_guest_isa,
+        );
+        push_committed_test_block_hash(&mut state, 1)?;
         let temp_dir = tempfile::tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let config = test_runtime_manager_config(state_dir)
@@ -28567,6 +29900,13 @@ mod tests {
             local_peer_id,
             selected_guest_isa,
         );
+        insert_local_inrou_host_capability_fixture(
+            &mut state,
+            &bundle,
+            local_peer_id,
+            selected_guest_isa,
+        );
+        push_committed_test_block_hash(&mut state, 1)?;
         let temp_dir = tempfile::tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let config = test_runtime_manager_config(state_dir)
@@ -28593,16 +29933,37 @@ mod tests {
             manager.submit_http_service_runtime_state_updates(&view, &snapshot)?;
             manager.submit_http_service_runtime_state_updates(&view, &snapshot)?;
         }
+        assert_eq!(
+            mutation_sink.submitted_inrou_replica_runtime_states().len(),
+            1,
+            "a missing authoritative row must not enqueue a duplicate inside the bounded retry window"
+        );
+        let submission_key = (
+            bundle.service.service_name.to_string(),
+            bundle.service.service_version.clone(),
+            1,
+            Hash::new(b"placement-1").to_string(),
+        );
+        manager
+            .last_runtime_state_submission_commitments
+            .lock()
+            .get_mut(&submission_key)
+            .expect("recorded missing-row submission attempt")
+            .attempted_at_ms = 0;
+        {
+            let view = state.view();
+            manager.submit_http_service_runtime_state_updates(&view, &snapshot)?;
+        }
         let submitted_states = mutation_sink.submitted_inrou_replica_runtime_states();
         assert_eq!(
             submitted_states.len(),
             2,
-            "hosted replica runtime state must be retried while the authoritative chain state is still missing"
+            "a missing authoritative row must retry after the bounded window"
         );
         let submitted_clears = mutation_sink.submitted_inrou_replica_runtime_state_clears();
         assert_eq!(
             submitted_clears.len(),
-            2,
+            3,
             "a retired runtime-state row must be cleared on every reconcile until WSV catches up"
         );
         assert_eq!(submitted_clears[0].service_version, "2026.01.0");
@@ -28669,20 +30030,174 @@ mod tests {
             mutation_sink
                 .submitted_inrou_replica_runtime_state_clears()
                 .len(),
-            3,
+            4,
             "a stale clear must remain retryable independently of current-state catch-up"
         );
         assert!(
             !manager
                 .last_runtime_state_submission_commitments
                 .lock()
-                .contains_key(&(
+                .contains_key(&submission_key),
+            "authoritative catch-up must clear the local retry commitment"
+        );
+        Ok(())
+    }
+    #[test]
+    fn submit_http_service_runtime_state_retries_stale_row_after_cooldown() -> Result<()> {
+        let mut state = test_state()?;
+        let bundle = sample_inrou_test_bundle()?;
+        bundle.validate_for_admission()?;
+        let deployment_state = sample_deployment_state(&bundle);
+        let reporting_epoch = deployment_state
+            .service_lease
+            .as_ref()
+            .expect("hosted service lease")
+            .reporting_epoch;
+        let local_peer_id = canonical_inrou_test_peer_id();
+        let selected_guest_isa =
+            current_host_inrou_guest_isa().expect("tests require a supported Inrou host ISA");
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, deployment_state);
+        }
+        insert_local_inrou_service_placement_fixture(
+            &mut state,
+            &bundle,
+            local_peer_id,
+            selected_guest_isa,
+        );
+        insert_local_inrou_host_capability_fixture(
+            &mut state,
+            &bundle,
+            local_peer_id,
+            selected_guest_isa,
+        );
+        push_committed_test_block_hash(&mut state, 1)?;
+        Arc::get_mut(&mut state)
+            .expect("unique test state")
+            .world
+            .soracloud_inrou_replica_runtime_mut_for_testing()
+            .insert(
+                (
                     bundle.service.service_name.to_string(),
                     bundle.service.service_version.clone(),
-                    1,
-                    Hash::new(b"placement-1").to_string(),
-                )),
-            "authoritative catch-up must clear the local retry commitment"
+                    "1".to_owned(),
+                ),
+                SoraInrouReplicaRuntimeStateV1 {
+                    schema_version: SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+                    service_name: bundle.service.service_name.clone(),
+                    service_version: bundle.service.service_version.clone(),
+                    replica_slot: 1,
+                    placement_incarnation: Hash::new(b"placement-1"),
+                    validator_account_id: ALICE_ID.clone(),
+                    peer_id: local_peer_id.to_owned(),
+                    selected_guest_isa,
+                    health_status: SoraServiceHealthStatusV1::Unavailable,
+                    load_factor_bps: 0,
+                    materialized_bundle_hash: bundle.container.bundle_hash,
+                    reporting_epoch,
+                    accounted_egress_bytes: 0,
+                    updated_at_ms: 1,
+                    last_error: Some("stale authoritative runtime state".to_owned()),
+                },
+            );
+
+        let temp_dir = tempfile::tempdir()?;
+        let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
+        let config = test_runtime_manager_config(state_dir)
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(config.clone(), Arc::clone(&state))
+            .with_mutation_sink(mutation_sink.clone());
+        let snapshot = {
+            let view = state.view();
+            let bundle_registry = collect_service_revision_registry(&view);
+            build_runtime_snapshot(
+                &view,
+                &bundle_registry,
+                &config.state_dir,
+                config.state_dir.join("artifacts"),
+                &config.cache_budgets,
+                config.local_validator_account_id.as_ref(),
+                config.local_peer_id.as_deref(),
+                true,
+            )?
+        };
+        let submission_key = (
+            bundle.service.service_name.to_string(),
+            bundle.service.service_version.clone(),
+            1,
+            Hash::new(b"placement-1").to_string(),
+        );
+
+        {
+            let view = state.view();
+            manager.submit_http_service_runtime_state_updates(&view, &snapshot)?;
+            manager.submit_http_service_runtime_state_updates(&view, &snapshot)?;
+        }
+        assert_eq!(
+            mutation_sink.submitted_inrou_replica_runtime_states().len(),
+            1,
+            "an identical stale-row update should be suppressed only inside the bounded retry window"
+        );
+        manager
+            .last_runtime_state_submission_commitments
+            .lock()
+            .get_mut(&submission_key)
+            .expect("recorded stale-row submission attempt")
+            .attempted_at_ms = 0;
+        {
+            let view = state.view();
+            manager.submit_http_service_runtime_state_updates(&view, &snapshot)?;
+        }
+        let submitted_states = mutation_sink.submitted_inrou_replica_runtime_states();
+        assert_eq!(
+            submitted_states.len(),
+            2,
+            "an enqueued update must retry after the bounded window while WSV remains stale"
+        );
+        let caught_up_state = submitted_states
+            .last()
+            .expect("retried runtime-state submission")
+            .state
+            .clone();
+
+        let next_height = state
+            .latest_block_header_fast()
+            .map_or(1, |header| header.height().get().saturating_add(1));
+        let header = BlockHeader::new(
+            NonZeroU64::new(next_height).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        isi::soracloud::SetSoracloudInrouReplicaRuntimeState {
+            state: caught_up_state,
+        }
+        .execute(&ALICE_ID, &mut tx)?;
+        tx.apply();
+        block.commit()?;
+
+        {
+            let view = state.view();
+            manager.submit_http_service_runtime_state_updates(&view, &snapshot)?;
+        }
+        assert_eq!(
+            mutation_sink.submitted_inrou_replica_runtime_states().len(),
+            2,
+            "the exact authoritative catch-up must stop runtime-state retries"
+        );
+        assert!(
+            !manager
+                .last_runtime_state_submission_commitments
+                .lock()
+                .contains_key(&submission_key),
+            "authoritative catch-up must clear the bounded retry attempt"
         );
         Ok(())
     }
@@ -29140,14 +30655,14 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn reconcile_once_hydrates_missing_artifacts_from_committed_remote_sorafs_provider()
-    -> Result<()> {
+    fn generic_ivm_hydration_preserves_committed_remote_sorafs_fallback() -> Result<()> {
         let mut state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         bundle.service.artifacts.truncate(1);
         let bundle_bytes = simple_soracloud_contract_artifact(&["update"]);
         let artifact_payloads =
             assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "remote-provider");
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             insert_service_revision_fixture(world, &bundle);
@@ -29173,19 +30688,48 @@ mod tests {
         let server = spawn_remote_hydration_fixture(&remote_fixtures)?;
         let provider_cache = test_provider_cache(&server.base_url, provider_id)?;
         let temp_dir = tempfile::tempdir()?;
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(temp_dir.path().to_path_buf()),
-            Arc::clone(&state),
-        )
-        .with_test_remote_stream_token_operator(*state.network_id_ref())
-        .with_sorafs_provider_cache(provider_cache);
-        manager.reconcile_once()?;
-        let snapshot = manager.snapshot.read().clone();
+        let config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        let manager = SoracloudRuntimeManager::new(config.clone(), Arc::clone(&state))
+            .with_test_remote_stream_token_operator(*state.network_id_ref())
+            .with_sorafs_provider_cache(provider_cache);
+        let initial_snapshot = {
+            let view = state.view();
+            let bundle_registry = collect_service_revision_registry(&view);
+            build_runtime_snapshot(
+                &view,
+                &bundle_registry,
+                &config.state_dir,
+                config.state_dir.join("artifacts"),
+                &config.cache_budgets,
+                None,
+                None,
+                false,
+            )?
+        };
+        {
+            let view = state.view();
+            manager.hydrate_missing_artifacts(&view, &initial_snapshot)?;
+        }
+        let snapshot = {
+            let view = state.view();
+            let bundle_registry = collect_service_revision_registry(&view);
+            build_runtime_snapshot(
+                &view,
+                &bundle_registry,
+                &config.state_dir,
+                config.state_dir.join("artifacts"),
+                &config.cache_budgets,
+                None,
+                None,
+                false,
+            )?
+        };
         let plan = snapshot
             .services
             .get("web_portal")
             .and_then(|versions| versions.get("2026.02.0"))
             .expect("hydrated service plan");
+        assert_eq!(plan.runtime, SoraContainerRuntimeV1::Ivm);
         assert!(plan.bundle_available_locally);
         assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Healthy);
         assert!(
@@ -29213,6 +30757,97 @@ mod tests {
                 payload
             );
         }
+        Ok(())
+    }
+    #[test]
+    fn locally_assigned_inrou_hydration_rejects_remote_only_and_shared_cache_fallback() -> Result<()>
+    {
+        let mut state = test_state()?;
+        let mut bundle = sample_inrou_test_bundle()?;
+        bundle.service.artifacts.clear();
+        let bundle_bytes = b"assigned-inrou-bundle-must-be-operator-preseeded".to_vec();
+        bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+        bundle.validate_for_admission()?;
+        let deployment_state = sample_deployment_state(&bundle);
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, deployment_state);
+        }
+        let local_peer_id = canonical_inrou_test_peer_id();
+        let selected_guest_isa =
+            current_host_inrou_guest_isa().expect("tests require a supported Inrou host ISA");
+        insert_local_inrou_service_placement_fixture(
+            &mut state,
+            &bundle,
+            local_peer_id,
+            selected_guest_isa,
+        );
+        insert_local_inrou_host_capability_fixture(
+            &mut state,
+            &bundle,
+            local_peer_id,
+            selected_guest_isa,
+        );
+        push_committed_test_block_hash(&mut state, 1)?;
+
+        let provider_id = [0x59; 32];
+        let remote_fixture = build_remote_manifest_fixture(&bundle_bytes, provider_id, 1)?;
+        approve_remote_hydration_sources(&state, std::slice::from_ref(&remote_fixture))?;
+        let server = spawn_remote_hydration_fixture(std::slice::from_ref(&remote_fixture))?;
+        let provider_cache = test_provider_cache(&server.base_url, provider_id)?;
+        let temp_dir = tempfile::tempdir()?;
+        let config = test_runtime_manager_config(temp_dir.path().to_path_buf())
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let snapshot = {
+            let view = state.view();
+            let bundle_registry = collect_service_revision_registry(&view);
+            build_runtime_snapshot(
+                &view,
+                &bundle_registry,
+                &config.state_dir,
+                config.state_dir.join("artifacts"),
+                &config.cache_budgets,
+                config.local_validator_account_id.as_ref(),
+                config.local_peer_id.as_deref(),
+                true,
+            )?
+        };
+        let plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("locally assigned Inrou plan");
+        assert_eq!(plan.runtime, SoraContainerRuntimeV1::Inrou);
+        assert_eq!(plan.local_replica_slots, vec![1]);
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+            .with_test_remote_stream_token_operator(*state.network_id_ref())
+            .with_sorafs_provider_cache(provider_cache);
+
+        let error = {
+            let view = state.view();
+            manager
+                .hydrate_missing_artifacts(&view, &snapshot)
+                .expect_err("a remote provider must not satisfy an assigned Inrou artifact")
+        };
+        assert_report_contains(error, "remote hydration fallback is forbidden");
+        let cache_path = temp_dir
+            .path()
+            .join("artifacts")
+            .join(hash_cache_name(bundle.container.bundle_hash));
+        assert!(!cache_path.exists());
+
+        fs::create_dir_all(cache_path.parent().expect("cache path parent"))?;
+        fs::write(&cache_path, &bundle_bytes)?;
+        let error = {
+            let view = state.view();
+            manager
+                .hydrate_missing_artifacts(&view, &snapshot)
+                .expect_err("an unqualified shared cache hit must not satisfy assigned Inrou")
+        };
+        assert_report_contains(error, "remote hydration fallback is forbidden");
+        assert_eq!(fs::read(cache_path)?, bundle_bytes);
         Ok(())
     }
     #[test]
@@ -31062,6 +32697,35 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn durable_inrou_egress_checkpoint_accepts_relative_state_root() -> Result<()> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let temp_dir = tempfile::Builder::new()
+            .prefix(".soracloud-relative-state-")
+            .tempdir_in(".")?;
+        assert!(
+            !temp_dir.path().is_absolute(),
+            "fixture must exercise a relative state root"
+        );
+        let state_dir = temp_dir.path().join("runtime");
+        fs::create_dir(&state_dir)?;
+
+        let checkpoint_dir = prepare_inrou_egress_checkpoint_dir(
+            &state_dir.join(SORACLOUD_INROU_EGRESS_CHECKPOINT_DIR),
+        )?;
+        let metadata = fs::symlink_metadata(&checkpoint_dir)?;
+
+        assert!(checkpoint_dir.is_absolute());
+        assert_eq!(
+            checkpoint_dir,
+            fs::canonicalize(state_dir.join(SORACLOUD_INROU_EGRESS_CHECKPOINT_DIR))?
+        );
+        assert!(metadata.is_dir());
+        assert_eq!(metadata.mode() & 0o077, 0);
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
     fn durable_inrou_egress_checkpoint_recovers_precharge_and_rejects_deletion() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
@@ -31496,11 +33160,7 @@ mod tests {
         assert!(relative_state_dir.is_relative());
 
         assert_eq!(
-            reconcile_inrou_egress_checkpoint_directory(
-                relative_state_dir,
-                &BTreeSet::new(),
-                8,
-            )?,
+            reconcile_inrou_egress_checkpoint_directory(relative_state_dir, &BTreeSet::new(), 8,)?,
             0
         );
         let checkpoint_metadata = fs::symlink_metadata(&checkpoint_dir)?;
@@ -34066,7 +35726,10 @@ exec python3 /var/lib/soracloud/materialization/bundle/app/inrou-health.py
         #[cfg(target_os = "linux")]
         let child_identity = portable_vm_child_identity(&config.inrou)?;
         let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
-            .with_operator_preseed_store(operator_preseed_store)
+            .with_operator_preseed_store(
+                Arc::clone(&operator_preseed_store),
+                qualified_test_operator_preseed_manifests(&operator_preseed_store),
+            )?
             .with_mutation_sink(Arc::new(StartupQualifiedSmokeRuntimeMutationSink::default()));
         let mut supervisor = Supervisor::new();
         let shutdown = supervisor.shutdown_signal();

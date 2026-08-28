@@ -12,7 +12,7 @@ pub struct ToriiHttpTransport {
     /// Maximum number of HTTP/1 headers accepted in one request.
     pub max_headers: NonZeroUsize,
     /// Maximum HTTP/1 parser buffer, including the request head.
-    pub max_header_bytes: Bytes<u64>,
+    pub max_header_bytes: Bytes,
 }
 impl Default for ToriiHttpTransport {
     fn default() -> Self {

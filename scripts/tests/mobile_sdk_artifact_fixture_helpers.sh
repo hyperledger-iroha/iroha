@@ -99,6 +99,7 @@ manifest = {
     "cargo_locked": True,
     "privacy_production_enabled": production,
     "cargo_features": ["privacy-production-enabled"] if production else [],
+    "kagemusha_production_authorization_sha256": None,
     "build_environment": {
         "schema": "iroha.mobile-native-build-environment.v1",
         "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -528,6 +529,7 @@ SWIFT
   "native_bridge_abi_version": 23,
   "privacy_production_enabled": false,
   "cargo_features": [],
+  "kagemusha_production_authorization_sha256": null,
   "build_environment": {
     "schema": "iroha.mobile-native-build-environment.v1",
     "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -535,23 +537,24 @@ SWIFT
     "environment_profiles": {
       "apple-ios-device": [
         "CARGO", "CARGO_BUILD_JOBS", "CARGO_HOME", "CARGO_INCREMENTAL", "CARGO_NET_OFFLINE",
-        "CARGO_TARGET_DIR", "DEVELOPER_DIR", "HOME",
-        "IPHONEOS_DEPLOYMENT_TARGET", "LANG", "LC_ALL",
+        "CARGO_TARGET_DIR", "CONNECT_NORITO_SOURCE_REVISION", "DEVELOPER_DIR", "HOME",
+        "IPHONEOS_DEPLOYMENT_TARGET", "IROHA_GIT_COMMIT_HASH", "LANG", "LC_ALL",
         "NORITO_SKIP_BINDINGS_SYNC", "PATH", "RUSTC", "RUSTC_BOOTSTRAP", "RUSTDOC",
-        "RUSTUP_HOME", "SDKROOT", "TMPDIR"
+        "RUSTUP_HOME", "SDKROOT", "TMPDIR", "VERGEN_GIT_SHA"
       ],
       "apple-ios-simulator": [
         "CARGO", "CARGO_BUILD_JOBS", "CARGO_HOME", "CARGO_INCREMENTAL", "CARGO_NET_OFFLINE",
-        "CARGO_TARGET_DIR", "DEVELOPER_DIR", "HOME",
+        "CARGO_TARGET_DIR", "CONNECT_NORITO_SOURCE_REVISION", "DEVELOPER_DIR", "HOME",
         "IPHONEOS_DEPLOYMENT_TARGET", "IPHONESIMULATOR_DEPLOYMENT_TARGET",
-        "LANG", "LC_ALL", "NORITO_SKIP_BINDINGS_SYNC", "PATH", "RUSTC",
-        "RUSTC_BOOTSTRAP", "RUSTDOC", "RUSTUP_HOME", "SDKROOT", "TMPDIR"
+        "IROHA_GIT_COMMIT_HASH", "LANG", "LC_ALL", "NORITO_SKIP_BINDINGS_SYNC", "PATH", "RUSTC",
+        "RUSTC_BOOTSTRAP", "RUSTDOC", "RUSTUP_HOME", "SDKROOT", "TMPDIR", "VERGEN_GIT_SHA"
       ],
       "apple-macos": [
         "CARGO", "CARGO_BUILD_JOBS", "CARGO_HOME", "CARGO_INCREMENTAL", "CARGO_NET_OFFLINE",
-        "CARGO_TARGET_DIR", "DEVELOPER_DIR", "HOME", "LANG", "LC_ALL",
+        "CARGO_TARGET_DIR", "CONNECT_NORITO_SOURCE_REVISION", "DEVELOPER_DIR", "HOME",
+        "IROHA_GIT_COMMIT_HASH", "LANG", "LC_ALL",
         "MACOSX_DEPLOYMENT_TARGET", "NORITO_SKIP_BINDINGS_SYNC", "PATH",
-        "RUSTC", "RUSTC_BOOTSTRAP", "RUSTDOC", "RUSTUP_HOME", "SDKROOT", "TMPDIR"
+        "RUSTC", "RUSTC_BOOTSTRAP", "RUSTDOC", "RUSTUP_HOME", "SDKROOT", "TMPDIR", "VERGEN_GIT_SHA"
       ]
     },
     "cargo_build_jobs": 1,
@@ -581,6 +584,7 @@ SWIFT
     "macosx_deployment_target": "12.0"
   },
   "source_commit": "0000000000000000000000000000000000000000",
+  "embedded_source_commit": "0000000000000000000000000000000000000000",
   "source_tree_dirty": false,
   "source_fingerprint_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
   "cargo_lock_sha256": "$cargo_lock_hash",
@@ -597,6 +601,7 @@ SWIFT
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1",
     "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
     "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
     "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",
@@ -611,6 +616,8 @@ SWIFT
     "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
     "connect_norito_validation_fee_current_policy_proof_request_v1",
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
+    "connect_norito_validation_fee_hijiri_quote_request_v1",
+    "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v4",

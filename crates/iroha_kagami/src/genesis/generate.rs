@@ -4,7 +4,7 @@ use crate::{
         GenesisProfile, PUBLIC_XOR_ALIAS, PUBLIC_XOR_DOMAIN, ProfileDefaults,
         TAIRA_XOR_ASSET_DEFINITION_ID, TAIRA_XOR_SCALE, known_chain_discriminant_for_chain_id,
         parse_vrf_seed_hex, profile_defaults, profile_requires_npos,
-        resolve_public_xor_asset_definition_id, resolve_vrf_seed,
+        reject_retired_public_chain_id, resolve_public_xor_asset_definition_id, resolve_vrf_seed,
     },
     tui,
 };
@@ -14,6 +14,7 @@ use iroha_crypto::Algorithm;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::AssetDefinitionAlias,
+    hijiri::HijiriParametersV1,
     parameter::{
         Parameter, Parameters,
         custom::{CustomParameter, CustomParameterId},
@@ -278,6 +279,7 @@ fn resolve_profile_settings(
         public_xor_asset_definition_id =
             resolve_public_xor_asset_definition_id(profile, xor_asset_definition_id, wants_npos)?;
     }
+    reject_retired_public_chain_id(chain.as_str())?;
     Ok(ResolvedGenesisSettings {
         chain,
         consensus_mode,
@@ -678,6 +680,9 @@ pub fn generate_default(
         ALICE_ID.clone(),
     );
     let mut parameters = Parameters::default();
+    parameters.set_parameter(Parameter::Custom(
+        HijiriParametersV1::first_release_genesis().into_custom_parameter(),
+    ));
     if let Some(defaults) = profile_defaults {
         builder = builder.with_block_cadence_ms(defaults.block_cadence_ms);
     }
@@ -752,6 +757,23 @@ mod consensus_manifest_tests {
             .any(|(authority, permission)| {
                 authority == expected_authority && permission == &expected_permission
             })
+    }
+    fn assert_first_release_hijiri_bootstrap(manifest: &RawGenesisTransaction, description: &str) {
+        let parameters = manifest
+            .effective_parameters()
+            .unwrap_or_else(|error| panic!("derive parameters for {description}: {error}"));
+        let custom = parameters
+            .custom()
+            .get(&HijiriParametersV1::parameter_id())
+            .unwrap_or_else(|| panic!("{description} must seed global Hijiri parameters"));
+        let actual = HijiriParametersV1::from_custom_parameter(custom)
+            .unwrap_or_else(|error| panic!("decode Hijiri parameters for {description}: {error}"))
+            .unwrap_or_else(|| panic!("{description} changed the reserved Hijiri identity"));
+        assert_eq!(
+            actual,
+            HijiriParametersV1::first_release_genesis(),
+            "{description} must seed the exact neutral first-release Hijiri snapshot"
+        );
     }
     #[test]
     fn genesis_generation_requires_an_explicit_display_chain_without_a_profile() {
@@ -917,6 +939,24 @@ mod consensus_manifest_tests {
             grants_global_reader_to(&manifest, &ALICE_ID),
             "the bootstrap operator must receive the immutable global query root"
         );
+        assert_first_release_hijiri_bootstrap(&manifest, "generated default genesis");
+    }
+    #[test]
+    fn checked_in_first_release_manifests_seed_neutral_hijiri() {
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for relative_path in [
+            "defaults/genesis.json",
+            "defaults/kagami/iroha3-dev/genesis.json",
+            "defaults/kagami/iroha3-nexus/genesis.json",
+            "defaults/nexus/genesis.json",
+            "configs/soranexus/nexus/genesis.json",
+            "configs/soranexus/taira/genesis.json",
+            "crates/iroha_kagami/tests/fixtures/taira_nevo_v2/unsigned-genesis.json",
+        ] {
+            let manifest = RawGenesisTransaction::from_path(repository_root.join(relative_path))
+                .unwrap_or_else(|error| panic!("parse {relative_path}: {error}"));
+            assert_first_release_hijiri_bootstrap(&manifest, relative_path);
+        }
     }
     #[test]
     fn shipped_first_release_manifests_name_an_intentional_global_reader() {

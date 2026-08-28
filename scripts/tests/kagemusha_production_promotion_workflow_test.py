@@ -211,14 +211,14 @@ def _validate_promotion_workflow(workflow: str) -> list[str]:
 
     errors: list[str] = []
     if not workflow.startswith(
-        "name: Verify Kagemusha V4 production readiness (publication blocked)\n"
+        "name: Authorize Kagemusha V4 mobile production builds\n"
     ):
-        errors.append("verification-only workflow must not claim release promotion")
+        errors.append("workflow must disclose its mobile authorization boundary")
     production = _job_block(workflow, "production-promotion")
     if not production:
         return ["protected production-promotion job is missing"]
-    if "name: Verify reviewed production inputs (does not publish or activate)" not in production:
-        errors.append("protected job must disclose that it does not publish or activate")
+    if "name: Qualify and authorize the Apple production build" not in production:
+        errors.append("protected Apple authorization job is mislabeled")
 
     checkout = _named_step_block(
         production, "Check out the exact workflow commit for identity binding"
@@ -372,10 +372,37 @@ def test_production_job_is_distinct_from_the_untrusted_controller_build() -> Non
     assert "environment:" not in build
     assert "kagemusha-untrusted-build" in build
     assert "environment: kagemusha-v4-production" in promotion
-    assert "name: Verify reviewed production inputs (does not publish or activate)" in promotion
+    assert "name: Qualify and authorize the Apple production build" in promotion
     assert "needs: controller-build" in promotion
     assert "kagemusha-production" in promotion
     assert "cancel-in-progress: false" in source
+
+
+def test_mobile_authorizations_use_distinct_protected_platform_lanes() -> None:
+    """Apple evidence must never stand in for Android qualification."""
+
+    source = PROMOTION_WORKFLOW.read_text(encoding="utf-8")
+    apple = _job_block(source, "production-promotion")
+    android = _job_block(source, "android-production-qualification")
+    assert apple and android
+    assert "environment: kagemusha-v4-production" in apple
+    assert "environment: kagemusha-v4-android-production" in android
+    assert "needs: production-promotion" in android
+    assert "--platform apple" in apple
+    assert "--platform android" not in apple
+    assert "--platform android" in android
+    assert "--platform apple" not in android
+    assert "check_android_device_lab_slot.py" in android
+    assert "--require-kagemusha-production-evidence" in android
+    assert "--require-kagemusha-standard-matrix" in android
+    assert source.count("uses: actions/attest@") == 2
+    assert "kagemusha-mobile-apple-production-authorization-" in apple
+    assert "kagemusha-mobile-android-production-authorization-" in android
+    assert "mobile_release_manifest_sha256" in source
+    assert "--artifact-manifest-sha256" in apple
+    assert "--artifact-manifest-sha256" in android
+    assert "--release-verification-report" in apple
+    assert "--release-verification-report" in android
 
 
 def test_protected_workflow_semantics_are_fail_closed() -> None:
@@ -414,9 +441,9 @@ def test_executable_control_flow_reaches_the_native_gate() -> None:
     ("old", "new", "expected_error"),
     (
         (
-            "name: Verify Kagemusha V4 production readiness (publication blocked)",
-            "name: Promote Kagemusha V4 production release",
-            "must not claim release promotion",
+            "name: Authorize Kagemusha V4 mobile production builds",
+            "name: Publish unauthenticated mobile builds",
+            "must disclose its mobile authorization boundary",
         ),
         (
             "          /usr/bin/sudo -n /bin/test ! -d ",
@@ -512,7 +539,7 @@ def test_protected_workflow_rejects_identity_and_control_flow_mutations(
     """Hostile source mutations must be detected before protected execution."""
 
     source = PROMOTION_WORKFLOW.read_text(encoding="utf-8")
-    assert source.count(old) == 1
+    assert old in source
     errors = _validate_promotion_workflow(source.replace(old, new, 1))
     assert any(expected_error in error for error in errors), errors
 
@@ -654,8 +681,9 @@ def test_runbook_carries_native_runtime_and_sealed_report_inputs() -> None:
     assert runbook.count(
         f"KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN={FIXED_CONTROLLER_PATH}"
     ) == 2
-    assert "workflow is deliberately named as readiness verification" in runbook
-    assert "Verification success is not promotion" in runbook
+    assert "separate protected Apple and Android" in runbook
+    assert "Mobile build authorization is not\nprotocol activation" in runbook
+    assert "publisher independently verifies both receipts" in runbook
     assert PROMOTION_ID_DOMAIN in runbook
     assert f"{CATALOG_REVALIDATION_RECEIPT_ROOT}/<promotion-id>.json" in runbook
     assert re.search(
@@ -664,11 +692,8 @@ def test_runbook_carries_native_runtime_and_sealed_report_inputs() -> None:
     assert "invokes `revalidate-catalog`" in runbook
     assert "exact seventeen-file pre-promotion candidate" in runbook
     assert "full exact\neighteen-file promoted-release verifier" in runbook
-    assert re.search(
-        r"workflow does not invoke the authenticated controller's\s+"
-        r"`promote-kagemusha-release-v4`",
-        runbook,
-    )
+    assert "The workflow\ndoes not publish the Kagemusha promotion record" in runbook
+    assert "`promote-kagemusha-release-v4` subcommand" in runbook
     assert "generic writable-file mode pre-creates outputs" in runbook
 
 

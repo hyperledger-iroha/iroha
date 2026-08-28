@@ -2859,12 +2859,19 @@ pub fn lower_with_cap_and_test_mode(
     dyn_iter_cap: usize,
     test_mode: bool,
 ) -> Result<Program, String> {
-    lower_with_cap_and_test_mode_diagnostics(program, dyn_iter_cap, test_mode).map_err(|failures| {
-        failures
-            .into_iter()
-            .map(|failure| failure.message)
-            .collect::<Vec<_>>()
-            .join("\n")
+    crate::session::run_with_compiler_stack(move || {
+        lower_with_cap_and_test_mode_diagnostics(program, dyn_iter_cap, test_mode).map_err(
+            |failures| {
+                failures
+                    .into_iter()
+                    .map(|failure| failure.message)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            },
+        )
+    })
+    .unwrap_or_else(|_| {
+        Err("compiler could not allocate the bounded stack required to lower source nesting".into())
     })
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -7575,6 +7582,46 @@ fn emit_state_set(ctx: &mut LowerCtx, name: &str, ty: &Type, value: Temp) {
 mod tests {
     use super::*;
     use crate::{parser::parse_test_fragment as parse, semantic::analyze};
+
+    #[test]
+    fn public_lowering_apis_handoff_from_a_small_caller() {
+        let depth = crate::source::MAX_NESTING_DEPTH - 2;
+        let expression = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
+        let source =
+            format!("module StackMargin {{ fn value() {{ let nested = {expression}; }} }}");
+        std::thread::Builder::new()
+            .name("kotodama-small-lowering-caller".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                let program = crate::parser::parse(&source)
+                    .expect("boundary-depth lowering fixture must parse");
+                let typed = crate::semantic::analyze(&program)
+                    .expect("boundary-depth lowering fixture must type-check");
+                let lowered =
+                    lower(&typed).expect("default lowering must use the bounded compiler worker");
+                assert_eq!(lowered.functions.len(), 1);
+                drop(lowered);
+                let lowered =
+                    lower_with_cap(&typed, crate::semantic::COLLECTION_ITERATION_LIMIT as usize)
+                        .expect("capped lowering must use the bounded compiler worker");
+                assert_eq!(lowered.functions.len(), 1);
+                drop(lowered);
+                let lowered = lower_with_cap_and_test_mode(
+                    &typed,
+                    crate::semantic::COLLECTION_ITERATION_LIMIT as usize,
+                    false,
+                )
+                .expect("explicit-mode lowering must use the bounded compiler worker");
+                assert_eq!(lowered.functions.len(), 1);
+                drop(lowered);
+                drop(typed);
+                drop(program);
+            })
+            .expect("spawn small lowering caller")
+            .join()
+            .expect("public lowering APIs must not consume the caller stack");
+    }
+
     #[test]
     fn malformed_typed_member_access_fails_closed_during_lowering() {
         let mut context = LowerCtx::new(Type::Unit, 64, HashMap::new(), HashMap::new());

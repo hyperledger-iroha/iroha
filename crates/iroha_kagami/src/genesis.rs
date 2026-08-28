@@ -8,7 +8,6 @@ mod embed_pop;
 mod generate;
 mod normalize;
 mod npos;
-mod pop;
 mod prepared;
 pub mod profile;
 mod sign;
@@ -19,9 +18,10 @@ mod validate;
 pub use generate::{ConsensusPolicy, generate_default, validate_consensus_mode};
 pub use npos::{ensure_npos_parameters, has_npos_parameters};
 pub use profile::{
-    GenesisProfile, PUBLIC_XOR_ALIAS, ProfileDefaults, TAIRA_XOR_ASSET_DEFINITION_ID,
-    parse_vrf_seed_hex, profile_defaults, profile_requires_npos, profile_uses_public_xor,
-    public_xor_profile_for_chain_id, resolve_vrf_seed,
+    GenesisProfile, PUBLIC_NEXUS_CHAIN_ID, PUBLIC_XOR_ALIAS, ProfileDefaults,
+    TAIRA_XOR_ASSET_DEFINITION_ID, parse_vrf_seed_hex, profile_defaults, profile_requires_npos,
+    profile_uses_public_xor, public_xor_profile_for_chain_id, reject_retired_public_chain_id,
+    resolve_vrf_seed,
 };
 /// Deterministic role used to authorize restricted-dataspace reads at the
 /// universal Torii ingress hop for a private localnet profile.
@@ -42,7 +42,7 @@ fn require_v2_wire_protocol_only(manifest: &RawGenesisTransaction) -> color_eyre
     }
     Ok(())
 }
-#[derive(Debug, Clone, Subcommand)]
+#[derive(Subcommand)]
 pub enum Args {
     Sign(sign::Args),
     Generate(generate::Args),
@@ -50,8 +50,6 @@ pub enum Args {
     Validate(validate::Args),
     /// Verify one exact bound-manifest/signed-genesis/signer/hash bundle
     ValidatePrepared(prepared::Args),
-    /// Produce a BLS PoP (Proof-of-Possession) for a consensus key (BLS-normal)
-    Pop(pop::Args),
     /// Embed one or more PoPs into a genesis JSON manifest (inline `topology` entries carrying `pop_hex`)
     EmbedPop(embed_pop::Args),
     /// Expand a genesis manifest and show the final ordered transactions
@@ -64,7 +62,6 @@ impl<T: Write> RunArgs<T> for Args {
             Args::Generate(args) => args.run(writer),
             Args::Validate(args) => args.run(writer),
             Args::ValidatePrepared(args) => args.run(writer),
-            Args::Pop(args) => args.run(writer),
             Args::EmbedPop(args) => args.run(writer),
             Args::Normalize(args) => args.run(writer),
         }

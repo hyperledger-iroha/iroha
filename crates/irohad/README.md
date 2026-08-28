@@ -293,29 +293,24 @@ To run the Iroha peer binary, you must [generate the keys](#generating-keys) and
 
 ### Generating Keys
 
-We highly recommend you to generate a new key pair for any non-testing deployment. We also recommend using the `Ed25519` algorithm. For convenience, you can use the provided [`kagami`](../iroha_kagami/README.md) tool to generate key pairs. For example,
+Generate a new key pair for every non-testing deployment. Validator consensus
+identities use BLS-normal keys and a Proof-of-Possession; client and transport
+identities typically use Ed25519. The provided
+[`kagami`](../iroha_kagami/README.md) tool writes keys directly into an
+owner-only custody directory. For a validator identity:
 
 ```bash
-cargo run --bin kagami -- crypto
+cargo run --bin kagami -- keys --algorithm bls_normal --pop \
+  --out-dir ./validator-key-custody
 ```
 
-<details> <summary>Expand to see the output</summary>
-
-```bash
-Public key (multihash): "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
-Private key (ed25519): "0311152FAD9308482F51CA2832FDFAB18E1C74F36C6ADB198E3EF0213FE42FD8BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
-```
-
-</details>
-
-To see the command-line options for `kagami`, you must first terminate the arguments passed to `cargo`. For example, run the `kagami` binary with JSON formatting:
-
-```bash
-cargo run --bin kagami -- crypto --json
-```
+Kagami creates a fresh owner-only directory containing `public.key` and
+`private.key`, plus `pop.hex` for this command; it never prints the private key
+to standard output. To see the available options, run
+`cargo run --bin kagami -- keys --help`.
 
 **NOTE**: The `kagami` binary can be run without `cargo` using the `<IROHA REPO ROOT>/target/release/kagami` binary.
-Refer to [generating key pairs with `kagami`](../iroha_kagami/CommandLineHelp.md#kagami-crypto) for more details.
+Refer to [generating key pairs with `kagami`](../iroha_kagami/CommandLineHelp.md#kagami-keys) for more details.
 
 ### Configuration file
 
@@ -354,19 +349,19 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
 
 3. **Provision keys and network settings.**
 
-    - Generate a validator key pair with Kagami and capture it in JSON so the
-      public/private pair can be pasted into the config and genesis manifests:
+    - Generate a validator key pair into a fresh owner-only custody directory:
 
       ```bash
       cargo run --release -p iroha_kagami -- \
-        crypto --json --algorithm ed25519 \
-        --seed "$(uuidgen)" > deploy/peer/validator_keys.json
+        keys --algorithm bls_normal --pop \
+        --out-dir deploy/peer/validator-key-custody
       ```
 
-    - Update `config.toml` with the new `chain`, `public_key`, and
-      `private_key` values, plus the `trusted_peers` you expect in your initial
-      topology. Ensure each peer advertises a unique `network.address`/Torii
-      port pair.
+    - Update `config.toml` with the new `chain` and the canonical records from
+      `validator-key-custody/{public,private}.key`, plus the `trusted_peers` you
+      expect in your initial topology and the matching `pop.hex` entry in
+      `trusted_peers_pop`. Ensure each peer advertises a unique
+      `network.address`/Torii port pair.
 
 4. **Generate and sign the genesis block.**
 

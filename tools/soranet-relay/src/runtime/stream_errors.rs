@@ -140,7 +140,7 @@ enum HandshakeError {
     #[error("capability negotiation failed: {0}")]
     Capability(#[from] CapabilityError),
     #[error(
-        "strict constant-rate transport is unavailable until application payload is carried by the fixed-rate scheduler and DATAGRAM failures close the circuit"
+        "strict constant-rate transport is unavailable while locked Quinn 0.11.9 / quinn-proto 0.11.15 accounts DATAGRAM receive buffering by payload bytes instead of entries"
     )]
     StrictConstantRateUnavailable,
     #[error("invalid client handshake material: {0}")]

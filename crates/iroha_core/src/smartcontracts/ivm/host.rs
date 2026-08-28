@@ -147,6 +147,7 @@ const AXT_PROOF_CACHE_REJECT: &str = "reject";
 const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "sc/",
     "da_ingest_quota_v1/",
+    "faucet_claim_consumed_v1/",
     "merge_execution_batch_applied_",
     "merge_execution_lane_applied_",
     "merge_lane_frontier_v1_",

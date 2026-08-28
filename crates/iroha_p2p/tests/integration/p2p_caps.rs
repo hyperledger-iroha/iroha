@@ -1,5 +1,7 @@
 //! Topic cap enforcement tests. Skips gracefully if sockets are unavailable.
-use iroha_config::parameters::actual::Network as Config;
+use iroha_config::parameters::actual::{
+    Network as Config, SoranetHandshake as ActualSoranetHandshake,
+};
 use iroha_config::parameters::defaults::network::TRUST_GOSSIP;
 use iroha_data_model::prelude::Peer;
 use iroha_futures::supervisor::ShutdownSignal;
@@ -77,6 +79,11 @@ async fn wait_for_consensus_cap_increase(start_cap: u64, timeout: Duration) -> O
     .await
     .ok()
 }
+fn default_soranet_handshake() -> ActualSoranetHandshake {
+    // Keep admission inexpensive so these tests continue to measure frame-cap
+    // behavior. `test_network_config` isolates replay state.
+    super::low_cost_test_soranet_handshake()
+}
 fn make_config(
     addr: &SocketAddr,
     public: &SocketAddr,
@@ -101,7 +108,7 @@ fn make_config(
             addr.clone(),
             public.clone(),
             Duration::from_millis(2000),
-            super::mandatory_test_soranet_handshake(),
+            default_soranet_handshake(),
             TRUST_GOSSIP,
         )
     }

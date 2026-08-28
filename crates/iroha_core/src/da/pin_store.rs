@@ -176,22 +176,21 @@ mod tests {
         >::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([0xD4; 32]),
         ));
-        DaPinIntent {
-            lane_id: LaneId::new(lane),
-            epoch: 1,
-            sequence: seq,
-            storage_ticket: StorageTicketId::new([lane_byte; 32]),
-            manifest_hash: ManifestDigest::new([seq_byte; 32]),
-            alias: alias.map(ToOwned::to_owned),
-            authorization: crate::da::signed_test_ingest_authorization(
-                network_id,
-                &key_pair,
-                LaneId::new(lane),
-                1,
-                seq,
-                1,
-            ),
-        }
+        let authorization = crate::da::signed_test_ingest_authorization(
+            network_id,
+            &key_pair,
+            LaneId::new(lane),
+            1,
+            seq,
+            1,
+        );
+        crate::da::signed_test_pin_intent(
+            authorization,
+            &key_pair,
+            StorageTicketId::new([lane_byte; 32]),
+            ManifestDigest::new([seq_byte; 32]),
+            alias.map(ToOwned::to_owned),
+        )
     }
     fn located(intent: DaPinIntent, height: u64, idx: u32) -> DaPinIntentWithLocation {
         DaPinIntentWithLocation {

@@ -137,6 +137,36 @@ fn fair_transport_ingress_ownership(
         .take_ingress_ownership()
         .expect("real fair ingress attaches certified-response ownership")
 }
+fn bound_leader_wire_ingress_ownership(
+    ingress: &crate::sumeragi::FairV2Ingress,
+    message: wire::ConsensusMessageV2,
+    sender: PeerId,
+) -> FairV2IngressOwnershipEvidence {
+    let expected = BlockMessage::V2(message.clone());
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            expected.clone(),
+            sender,
+        )),
+        Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let mut delivered = ingress
+        .try_recv()
+        .expect("bound leader-wire ingress returns its admitted owner");
+    assert_eq!(delivered.message().encode(), expected.encode());
+    let ownership = delivered
+        .take_ingress_ownership()
+        .expect("bound leader-wire ingress attaches exact ownership");
+    assert!(
+        ownership.leader_wire_token().is_some(),
+        "productive wire must carry its full-roster lifecycle token"
+    );
+    assert!(
+        ownership.leader_wire_runtime_receipt().is_some(),
+        "checked dequeue must durably transfer the leader-wire token to runtime"
+    );
+    ownership
+}
 fn manifest_for_payload(fixture: &Fixture, label: &'static [u8]) -> wire::PayloadManifest {
     let body = label.to_vec();
     let subject = wire::BlockSubject {
@@ -582,7 +612,9 @@ fn full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases
 #[test]
 #[allow(clippy::too_many_lines)]
 fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
-    let mut fixture = ProductionTransportFixture::new();
+    let mut fixture = ProductionTransportFixture::new_with_runtime_queue_config(
+        RuntimeQueueConfig::new(12, 4, 4),
+    );
     fixture.executor.config = EffectQueueConfig::new(2, 4, 1 << 20, 1);
     fixture.executor.outstanding_requests =
         OutstandingCertifiedBodyRequests::new(1).expect("one certified-request slot");
@@ -656,13 +688,22 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         certificate: Some(prepare_b),
     }];
     let initial_queues = fixture.executor.status().runtime_queues;
+    let (_saturation_ingress_directory, saturation_ingress, _saturation_ingress_gate) =
+        fixture.bound_certified_response_ingress();
     for ordinal in 0..initial_queues.normal.capacity {
         let message = fixture
             .signed_normal_proposal(u64::try_from(ordinal).expect("normal saturation ordinal"));
-        assert!(fixture.executor.can_admit_network_message(&message));
+        let sender = fixture.context.roster[ordinal].validator.clone();
+        let ingress_ownership =
+            bound_leader_wire_ingress_ownership(&saturation_ingress, message.clone(), sender);
+        assert!(
+            fixture
+                .executor
+                .can_admit_network_message_with_ingress_ownership(&message, &ingress_ownership)
+        );
         fixture
             .executor
-            .enqueue_network(message)
+            .enqueue_network_with_ingress_ownership(message, ingress_ownership)
             .expect("admit production Normal ingress");
     }
     let progress_reserve = initial_queues
@@ -674,11 +715,22 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         let view = 10_000_u64
             .checked_add(u64::try_from(offset).expect("progress saturation offset"))
             .expect("progress saturation view");
-        let message = fixture.signed_timeout_vote(view);
-        assert!(fixture.executor.can_admit_network_message(&message));
+        let signer = wire::ValidatorIndex::try_from(offset)
+            .expect("four-validator Progress saturation signer");
+        let message = fixture.signed_timeout_vote_from(view, signer);
+        let ingress_ownership = bound_leader_wire_ingress_ownership(
+            &saturation_ingress,
+            message.clone(),
+            fixture.context.roster[offset].validator.clone(),
+        );
+        assert!(
+            fixture
+                .executor
+                .can_admit_network_message_with_ingress_ownership(&message, &ingress_ownership)
+        );
         fixture
             .executor
-            .enqueue_network(message)
+            .enqueue_network_with_ingress_ownership(message, ingress_ownership)
             .expect("admit production Progress ingress");
     }
     let next_work_id_before_b = fixture.executor.next_work_id;
@@ -821,7 +873,10 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         Ok(ProductionIngressTurnPreparation::CapacityWait(_)) => {
             panic!("completion capacity must not depend on saturated Normal/Progress lanes")
         }
-        Err(_) => panic!("the exact A response must publish one Fetch persistence command"),
+        Err(error) => panic!(
+            "the exact A response must publish one Fetch persistence command: {}",
+            error.reason(),
+        ),
     };
     assert_eq!(queued.ordinal(), lifecycle_ordinal);
     planner_io.execute_one_certified_fetch(Arc::clone(&fixture.executor.output_guard));

@@ -1878,6 +1878,11 @@ impl TieredStateBackend {
             world.account_roles
         );
         collect_map!(
+            TieredSegment::SccpRouteLiabilities,
+            SccpRouteLiability,
+            world.sccp_route_liabilities
+        );
+        collect_map!(
             TieredSegment::SccpOutboundPendingMessages,
             SccpOutboundMessage,
             world.sccp_outbound_pending_messages
@@ -2635,7 +2640,7 @@ mod measured_bytes_impls {
             BridgeNativeProtocolProofV1, BridgeProof, BridgeProofPayload, BridgeProofRange,
             BridgeProofRecord, BridgeSccpDestinationProofBackendV1, BridgeSccpDestinationProofV1,
             BridgeTransparentProof, SccpNativeTrustAnchorV1, SccpOutboundMessageKeyV1,
-            SccpOutboundPendingMessageRecordV1, SccpOutboundProofRecordV1,
+            SccpOutboundPendingMessageRecordV1, SccpOutboundProofRecordV1, SccpRouteLiabilityV1,
             sccp::SccpInboundMessageRecordV1,
         },
         common::Owned,
@@ -3412,6 +3417,11 @@ mod measured_bytes_impls {
             size_of::<SccpOutboundProofRecordV1>()
         }
     }
+    impl MeasuredBytes for SccpRouteLiabilityV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<SccpRouteLiabilityV1>()
+        }
+    }
     impl MeasuredBytes for SccpInboundMessageRecordV1 {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<SccpInboundMessageRecordV1>();
@@ -4090,6 +4100,7 @@ enum TieredSegment {
     Roles,
     AccountPermissions,
     AccountRoles,
+    SccpRouteLiabilities,
     SccpOutboundPendingMessages,
     SccpOutboundMessageLocators,
     SccpOutboundMessageIndex,
@@ -4160,6 +4171,7 @@ impl TieredSegment {
             TieredSegment::Roles => "roles",
             TieredSegment::AccountPermissions => "account_permissions",
             TieredSegment::AccountRoles => "account_roles",
+            TieredSegment::SccpRouteLiabilities => "sccp_route_liabilities",
             TieredSegment::SccpOutboundPendingMessages => "sccp_outbound_pending_messages",
             TieredSegment::SccpOutboundMessageLocators => "sccp_outbound_message_locator",
             TieredSegment::SccpOutboundMessageIndex => "sccp_outbound_message_index",
@@ -4241,6 +4253,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "rwas" => TieredSegment::Rwas,
             "roles" => TieredSegment::Roles,
             "account_permissions" => TieredSegment::AccountPermissions,
+            "sccp_route_liabilities" => TieredSegment::SccpRouteLiabilities,
             "sccp_outbound_pending_messages" => TieredSegment::SccpOutboundPendingMessages,
             "sccp_outbound_message_locator" => TieredSegment::SccpOutboundMessageLocators,
             "sccp_outbound_message_index" => TieredSegment::SccpOutboundMessageIndex,
@@ -4453,6 +4466,7 @@ pub(crate) enum TieredKeyHandle {
     Role(iroha_data_model::role::RoleId),
     AccountPermission(iroha_data_model::account::AccountId),
     AccountRole(crate::role::RoleIdWithOwner),
+    SccpRouteLiability(iroha_data_model::bridge::SccpRouteKeyV1),
     SccpOutboundMessage(iroha_data_model::bridge::SccpOutboundMessageKeyV1),
     SccpOutboundMessageLocator([u8; 32]),
     SccpOutboundMessageIndex(iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1),
@@ -4525,6 +4539,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(_) => TieredSegment::Roles,
             TieredKeyHandle::AccountPermission(_) => TieredSegment::AccountPermissions,
             TieredKeyHandle::AccountRole(_) => TieredSegment::AccountRoles,
+            TieredKeyHandle::SccpRouteLiability(_) => TieredSegment::SccpRouteLiabilities,
             TieredKeyHandle::SccpOutboundMessage(_) => TieredSegment::SccpOutboundPendingMessages,
             TieredKeyHandle::SccpOutboundMessageLocator(_) => {
                 TieredSegment::SccpOutboundMessageLocators
@@ -4608,6 +4623,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountPermission(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRole(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::SccpRouteLiability(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::SccpOutboundMessage(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::SccpOutboundMessageLocator(key) => {
                 Ok(norito::codec::Encode::encode(key))
@@ -4713,6 +4729,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
+            TieredKeyHandle::SccpRouteLiability(id) => {
+                fetch!(world.sccp_route_liabilities, id)
+            }
             TieredKeyHandle::SccpOutboundMessage(id) => {
                 fetch!(world.sccp_outbound_pending_messages, id)
             }
@@ -4837,6 +4856,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
+            TieredKeyHandle::SccpRouteLiability(id) => {
+                fetch!(world.sccp_route_liabilities, id)
+            }
             TieredKeyHandle::SccpOutboundMessage(id) => {
                 fetch!(world.sccp_outbound_pending_messages, id)
             }
@@ -4959,6 +4981,14 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::Role(id) => write!(f, "role:{id}"),
             TieredKeyHandle::AccountPermission(id) => write!(f, "account_permission:{id}"),
             TieredKeyHandle::AccountRole(id) => write!(f, "account_role:{id}"),
+            TieredKeyHandle::SccpRouteLiability(id) => write!(
+                f,
+                "sccp_route_liability:{}:{}:{}:{}",
+                id.lane_id.source.profile_key(),
+                id.lane_id.target.profile_key(),
+                id.route_id,
+                id.revision
+            ),
             TieredKeyHandle::SccpOutboundMessage(id) => {
                 write!(
                     f,

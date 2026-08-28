@@ -381,6 +381,72 @@ impl JsonKeyCodec for crate::ram_lfe::RamLfeProgramId {
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
+impl JsonKeyCodec for crate::bridge::SccpRouteKeyV1 {
+    fn encode_json_key(&self, out: &mut String) {
+        let encoded = format!(
+            "sccp-route-v1:{}:{}:{}:{}:{}",
+            self.lane_id.source.profile_key(),
+            self.lane_id.target.profile_key(),
+            self.route_id,
+            self.asset_key,
+            self.revision
+        );
+        json::write_json_string(&encoded, out);
+    }
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        const PREFIX: &str = "sccp-route-v1";
+        let mut parts = encoded.split(':');
+        if parts.next() != Some(PREFIX) {
+            return Err(json::Error::Message(
+                "SCCP route key must use the canonical V1 prefix".into(),
+            ));
+        }
+        let source = parts
+            .next()
+            .and_then(crate::bridge::SccpNetworkV1::from_profile_key)
+            .ok_or_else(|| {
+                json::Error::Message("unknown or non-canonical SCCP source profile".into())
+            })?;
+        let target = parts
+            .next()
+            .and_then(crate::bridge::SccpNetworkV1::from_profile_key)
+            .ok_or_else(|| {
+                json::Error::Message("unknown or non-canonical SCCP target profile".into())
+            })?;
+        let route_id = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("missing SCCP route id".into()))?
+            .to_owned();
+        let asset_key = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("missing SCCP route asset key".into()))?
+            .to_owned();
+        let revision_text = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("missing SCCP route revision".into()))?;
+        if parts.next().is_some() {
+            return Err(json::Error::Message("too many SCCP route key parts".into()));
+        }
+        if revision_text.is_empty()
+            || (revision_text.len() > 1 && revision_text.starts_with('0'))
+            || !revision_text.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(json::Error::Message(
+                "SCCP route revision must be canonical unsigned decimal".into(),
+            ));
+        }
+        let revision = revision_text
+            .parse::<u32>()
+            .map_err(|err| json::Error::Message(err.to_string()))?;
+        crate::bridge::SccpRouteKeyV1::new(
+            crate::bridge::SccpLaneIdV1 { source, target },
+            route_id,
+            asset_key,
+            revision,
+        )
+        .map_err(|err| json::Error::Message(err.to_string()))
+    }
+}
 impl JsonKeyCodec for crate::bridge::sccp::SccpOutboundMessageKeyV1 {
     fn encode_json_key(&self, out: &mut String) {
         let encoded = format!(
@@ -675,6 +741,7 @@ mod tests {
         SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
     };
     use crate::{
+        bridge::SccpRouteKeyV1,
         governance::types::{BallotAttemptId, GovernanceAttemptId, TleKeySessionId},
         musubi::{
             ArchiveId, MusubiInviteIdV1, MusubiMaintainerDirectoryKeyV1, MusubiPackageIdV1,
@@ -770,6 +837,71 @@ mod tests {
             err.to_string().contains("canonical I105"),
             "unexpected error: {err}"
         );
+    }
+    #[test]
+    fn sccp_route_key_json_key_codec_is_canonical_and_collision_free() {
+        let key = SccpRouteKeyV1::new(
+            SccpLaneIdV1 {
+                source: SccpNetworkV1::EthereumMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            "taira_eth_xor".to_owned(),
+            "xor".to_owned(),
+            7,
+        )
+        .expect("valid route key");
+        let mut encoded = String::new();
+        key.encode_json_key(&mut encoded);
+        assert_eq!(
+            encoded,
+            "\"sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:7\""
+        );
+        let mut parser = Parser::new(&encoded);
+        let raw_key = parser.parse_string().expect("parse encoded route key");
+        assert_eq!(
+            SccpRouteKeyV1::decode_json_key(&raw_key).expect("decode canonical route key"),
+            key
+        );
+
+        let left = SccpRouteKeyV1::new(key.lane_id, "ab".to_owned(), "c".to_owned(), key.revision)
+            .expect("valid left collision fixture");
+        let right = SccpRouteKeyV1::new(key.lane_id, "a".to_owned(), "bc".to_owned(), key.revision)
+            .expect("valid right collision fixture");
+        let mut left_encoded = String::new();
+        let mut right_encoded = String::new();
+        left.encode_json_key(&mut left_encoded);
+        right.encode_json_key(&mut right_encoded);
+        assert_ne!(left_encoded, right_encoded);
+    }
+    #[test]
+    fn sccp_route_key_json_key_codec_rejects_aliases_and_malleability() {
+        let hostile = [
+            "ethereum-mainnet:sora-taira:taira_eth_xor:xor:1",
+            "SCCP-ROUTE-V1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:1",
+            "sccp-route-v1:ethereum_mainnet:sora-taira:taira_eth_xor:xor:1",
+            "sccp-route-v1:ethereum-mainnet:sora:taira_eth_xor:xor:1",
+            "sccp-route-v1:unknown:sora-taira:taira_eth_xor:xor:1",
+            "sccp-route-v1:sora-taira:ethereum-mainnet:taira_eth_xor:xor:1",
+            "sccp-route-v1:ethereum-mainnet:bsc-mainnet:taira_eth_xor:xor:1",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:Taira_eth_xor:xor:1",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor-:1",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira:eth:xor:1",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:0",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:01",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:+1",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor: 1",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:4294967296",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:1:trailing",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor:xor:",
+            "sccp-route-v1:ethereum-mainnet:sora-taira:taira_eth_xor",
+            "",
+        ];
+        for encoded in hostile {
+            assert!(
+                SccpRouteKeyV1::decode_json_key(encoded).is_err(),
+                "accepted non-canonical or invalid route key {encoded:?}"
+            );
+        }
     }
     #[test]
     fn sccp_outbound_message_key_json_key_codec_is_canonical() {

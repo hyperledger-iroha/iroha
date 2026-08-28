@@ -3320,6 +3320,7 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
         "queue_plan_selection_and_reservation_fsync",
         "reservation_cleanup_prefixes",
         "pre_kura_direct_reservation_release",
+        "retired_nonproducer_replica_direct_release",
         "producer_kura_activation",
         "startup_generation_crash_cas",
         "startup_generation_recover_cas",
@@ -3902,6 +3903,78 @@ def test_production_trace_certificate_rejects_model_action_inventory_drift(
 
 
 @pytest.mark.parametrize(
+    ("kind", "symbol", "old", "new", "expected"),
+    (
+        (
+            "enum",
+            "ProductionInFlightFirstReleaseReplayStepV1",
+            "ReleaseReservationDirectProofStutter,",
+            "ReleaseReservationDirectProofReplay,",
+            "must define exactly one ReleaseReservationDirectProofStutter variant",
+        ),
+        (
+            "fn",
+            "check_production_in_flight_first_release_replay_step_v1",
+            "projection.action == IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT\n"
+            "                && projection.before == projection.after",
+            "projection.action == IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT\n"
+            "                && projection.before != projection.after",
+            "production operational-correspondence wrapper is incomplete at "
+            "check_production_in_flight_first_release_replay_step_v1",
+        ),
+        (
+            "fn",
+            "check_production_in_flight_first_release_transition",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT\n"
+            "            if projection.before == projection.after",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT\n"
+            "            if projection.before != projection.after",
+            "production operational-correspondence wrapper is incomplete at "
+            "check_production_in_flight_first_release_transition",
+        ),
+    ),
+)
+def test_production_trace_certificate_rejects_direct_release_stutter_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    symbol: str,
+    old: str,
+    new: str,
+    expected: str,
+) -> None:
+    module = load_checker()
+    original_reader = module._bounded_regular_file_bytes
+    operational_path = (
+        ROOT_DIR / "crates/iroha_core/src/sumeragi/v2_core.rs"
+    ).resolve()
+
+    def mutated_operational_reader(path, *args, **kwargs):
+        payload = original_reader(path, *args, **kwargs)
+        if Path(path).resolve() != operational_path:
+            return payload
+        source = payload.decode("utf-8")
+        items = (
+            module.rust_enum_items(source, symbol)
+            if kind == "enum"
+            else module.rust_items(source, symbol)
+        )
+        assert len(items) == 1
+        item = items[0]
+        assert item.source.count(old) == 1
+        mutated_item = item.source.replace(old, new, 1)
+        return source.replace(item.source, mutated_item, 1).encode("utf-8")
+
+    monkeypatch.setattr(
+        module,
+        "_bounded_regular_file_bytes",
+        mutated_operational_reader,
+    )
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+    assert expected in str(failure.value)
+
+
+@pytest.mark.parametrize(
     ("binding_id", "action_tag"),
     (
         (
@@ -3918,6 +3991,10 @@ def test_production_trace_certificate_rejects_model_action_inventory_drift(
         ),
         (
             "pre_kura_direct_reservation_release",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT",
+        ),
+        (
+            "retired_nonproducer_replica_direct_release",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT",
         ),
         (
@@ -4047,6 +4124,7 @@ def test_production_trace_certificate_rejects_each_disconnected_runtime_link(
         "queue_plan_selection_and_reservation_fsync",
         "reservation_cleanup_prefixes",
         "pre_kura_direct_reservation_release",
+        "retired_nonproducer_replica_direct_release",
         "producer_kura_activation",
         "producer_payload_transport_fanout",
         "producer_payload_fanout_queue_fence",
@@ -4639,6 +4717,27 @@ def test_production_trace_certificate_rejects_disconnected_lane_commit_edges(
             "journal.release_batch",
             "journal.disconnected_release_batch",
             "missing authenticated binding",
+        ),
+        (
+            "retired_nonproducer_replica_direct_release",
+            "primary",
+            "self.actor == self.producer",
+            "self.actor == self.actor",
+            "missing authenticated binding",
+        ),
+        (
+            "retired_nonproducer_replica_direct_release",
+            "authorization_source",
+            "replica_fifo_ownership_projection(released_prefix)",
+            "disconnected_replica_fifo_ownership_projection(released_prefix)",
+            "missing canonical authorization source tokens",
+        ),
+        (
+            "retired_nonproducer_replica_direct_release",
+            "commit_sink",
+            "replica_fifo_authorization.covers_queue_barrier(self, barrier)",
+            "replica_fifo_authorization.disconnected_queue_barrier(self, barrier)",
+            "missing canonical commit sink tokens",
         ),
     ),
 )

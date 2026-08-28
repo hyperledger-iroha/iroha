@@ -44,7 +44,14 @@ def _markdown(summary: dict[str, object]) -> str:
     if summary["blocking_capabilities"]:
         lines.extend(("", "## Blocking capabilities", ""))
         lines.extend(f"- `{blocker}`" for blocker in summary["blocking_capabilities"])
-    lines.extend(("", "Solana and TON are outside SCCP V1 and are rejected.", ""))
+    lines.extend(
+        (
+            "",
+            "TON mainnet is mandatory. TON testnet and Solana profiles cannot satisfy "
+            "production readiness.",
+            "",
+        )
+    )
     return "\n".join(lines)
 
 

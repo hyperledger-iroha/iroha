@@ -717,7 +717,8 @@ impl V2EffectServices for ProductionV2Services {
 ///
 /// Payload chunks and request-bound body acquisition traffic return `None`
 /// because their exact task owner, rather than a later certified view, controls
-/// retirement. Beacon partials carry their exact round.
+/// retirement. Height-only recovery requests also return `None`; global
+/// threshold-beacon partials retain their exact round.
 fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRound> {
     let NetworkMessage::SumeragiBlock(envelope) = message else {
         return None;
@@ -745,24 +746,72 @@ fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRou
     }
 }
 impl PendingExactFanout {
-    /// Whether this fanout is one current-height CommitQC discovery attempt.
+    /// Whether this fanout is one reconstructible recovery topology attempt.
     ///
-    /// The discovery tracker, rather than exact output, remains the durable
-    /// source for this request until reducer admission or Decision cancels it.
-    fn is_commit_certificate_acquisition_topology_fanout(&self) -> bool {
-        matches!(&self.rollover_claim, ExactOutputRolloverClaim::GlobalV2(_))
-            && matches!(
-                self.messages.as_slice(),
-                [NetworkMessage::SumeragiBlock(envelope)]
-                    if matches!(
-                        envelope.as_message(),
-                        BlockMessage::V2(message)
-                            if matches!(
-                                &message.payload,
-                                wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-                            )
-                    )
-            )
+    /// Requester trackers reconstruct body, certificate, historical-lane, and
+    /// certified-sidecar requests. The durable lane sources also revisit
+    /// locally authorized autonomous payload/NewView output and historical
+    /// certification. The sidecar stream retries its cumulative Close, while
+    /// immutable Kura history reconstructs historical-lane responses after the
+    /// requester retries. Exact output therefore need not retain an occurrence
+    /// which owns no actor rank.
+    fn is_reconstructible_topology_fanout(&self) -> bool {
+        let reconstructible = match (&self.rollover_claim, self.messages.as_slice()) {
+            (ExactOutputRolloverClaim::GlobalV2(_), [NetworkMessage::SumeragiBlock(envelope)]) => {
+                matches!(
+                    envelope.as_message(),
+                    BlockMessage::V2(message)
+                        if matches!(
+                            &message.payload,
+                            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+                                | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+                        )
+                )
+            }
+            (
+                ExactOutputRolloverClaim::HistoricalLaneRecoveryRequest { .. },
+                [NetworkMessage::SumeragiBlock(envelope)],
+            ) => matches!(
+                envelope.as_message(),
+                BlockMessage::LaneHistoricalRecoveryRequest(_)
+            ),
+            (
+                ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse { .. },
+                [NetworkMessage::SumeragiBlock(envelope)],
+            ) => matches!(
+                envelope.as_message(),
+                BlockMessage::LaneHistoricalRecoveryResponse(_)
+            ),
+            (
+                ExactOutputRolloverClaim::HistoricalLaneCertification { .. },
+                [NetworkMessage::SumeragiBlock(envelope)],
+            ) => matches!(
+                envelope.as_message(),
+                BlockMessage::LaneBlockProposal(_)
+                    | BlockMessage::LaneBlockVote(_)
+                    | BlockMessage::LaneBlockQc(_)
+                    | BlockMessage::LaneBlockCertificate(_)
+            ),
+            (
+                ExactOutputRolloverClaim::AutonomousLane { .. },
+                [NetworkMessage::SumeragiBlock(envelope)],
+            ) => matches!(
+                envelope.as_message(),
+                BlockMessage::LaneExecutablePayload(_)
+                    | BlockMessage::LaneBlockNewViewVote(_)
+                    | BlockMessage::LaneBlockNewViewCertificate(_)
+            ),
+            (
+                ExactOutputRolloverClaim::CertifiedSidecarRequest { .. },
+                [NetworkMessage::CertifiedMergeSidecar(message)],
+            ) => matches!(message.as_ref(), CertifiedMergeSidecarMessage::Request(_)),
+            (
+                ExactOutputRolloverClaim::CertifiedSidecarControl { .. },
+                [NetworkMessage::CertifiedMergeSidecar(message)],
+            ) => matches!(message.as_ref(), CertifiedMergeSidecarMessage::Close(_)),
+            _ => false,
+        };
+        reconstructible
             && self.reply_routes.is_none()
             && self.ingress_ownership.is_none()
             && self

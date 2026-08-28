@@ -14,16 +14,16 @@ cargo build --bin kagami
 
 This places `kagami` in `target/debug/` from the repository root.
 
+Kagami always includes the BLS validator tooling required by Sumeragi v2.
 Optional crypto features come from `iroha_crypto`:
 
 - `--features gost` enables the TC26 GOST R 34.10-2012 parameter sets
-- `--features ml-dsa` enables ML-DSA helpers
-- `--features bls` enables BLS validator tooling
+- `--features sm` enables SM2 tooling
 
 Example:
 
 ```bash
-cargo build --bin kagami --features "bls,gost"
+cargo build --bin kagami --features "gost,sm"
 ```
 
 ## Help
@@ -42,7 +42,7 @@ kagami localnet-wizard
 Existing Sora network / observer peer config, guided:
 
 ```bash
-kagami wizard --profile nexus
+kagami wizard
 ```
 
 Direct disposable localnet, permissioned by default:
@@ -61,7 +61,6 @@ Docker Compose from one authoritative prepared bundle:
 
 ```bash
 kagami localnet \
-  --fresh-random-keys \
   --peers 4 \
   --out-dir ./localnet
 kagami docker \
@@ -72,15 +71,17 @@ kagami docker \
 docker compose -f docker-compose.yml up
 ```
 
+`localnet` uses operating-system-random keys by default and refuses a non-empty
+output directory. Pass `--seed` only for reproducible development fixtures.
+
 Ed25519 or BLS keys:
 
 ```bash
-kagami keys --algorithm ed25519
-kagami keys --out-dir ./key-custody
-kagami keys --algorithm bls_normal --pop --json
+kagami keys --algorithm ed25519 --out-dir ./key-custody
+kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody
 ```
 
-`--out-dir` is the production-oriented form: it creates a mode-`0700`
+`--out-dir` is required: it creates a mode-`0700`
 directory containing newline-terminated `public.key` and owner-only
 `private.key` files, refuses to reuse a non-empty directory, and never prints
 the private key.
@@ -99,8 +100,11 @@ into the output directory.
   custody checks do not traverse platform temporary-directory symlinks
 - Writes genesis, signed genesis, its exact hash, per-peer configs,
   `client.toml`, `start.sh`, `stop.sh`, and a generated guide
-- Generated stop scripts validate pidfiles against the expected peer config
-  path before signalling a live process, so stale or reused pids are left alone.
+- Generic generated stop scripts validate pidfiles against the expected peer
+  config path before signalling a live process. Taira has a stricter
+  first-release path: owner-only `peerN.process.json` identities bind the boot,
+  start time, executable, exact argv/config, and OS ownership/session fields;
+  observation, signaling, and exit waits use held Linux pidfds only.
 
 `kagami wizard`
 - Guided observer-onboarding flow for the existing Sora Nexus network; use
@@ -124,7 +128,8 @@ into the output directory.
   An owner-only `genesis.private_key` is never mounted by generated Compose files
 - Fresh-custody bundles keep directories and lifecycle scripts at `0700`, all
   other files at `0600`, and lifecycle scripts enforce `umask 077` for new
-  logs, pidfiles, and runtime state
+  logs and runtime state. Generic localnets retain pidfiles; Taira emits only
+  exact mode-`0600` process records and rejects legacy pidfiles.
 - Defaults to `permissioned` unless a Sora profile or perf preset requires
   `npos`
 - `--sora-profile nexus` enforces public-dataspace rules and requires `npos`
@@ -181,7 +186,9 @@ into the output directory.
   use its `check` and `down` subcommands
   for inspection and teardown. The low-level `iroha3-taira` Kagami profile
   remains available for manifest generation and verification, targets the live
-  Taira chain id, requires NPoS, and requires `--vrf-seed-hex`.
+  Taira chain id, requires NPoS, and requires `--vrf-seed-hex`. Disposable
+  Taira lifecycle scripts require Linux pidfd/procfs APIs and deliberately have
+  no `ps`, numeric-PID signal, shell-kill, or non-Linux fallback.
 
 See [specs/kagami_profiles.md](../../specs/kagami_profiles.md) for
 the profile-specific defaults.
@@ -191,20 +198,24 @@ the profile-specific defaults.
 Generate BLS validator keys and PoPs:
 
 ```bash
-target/debug/kagami genesis pop --algorithm bls_normal \
-  --seed-hex 5151515151515151515151515151515151515151515151515151515151515151 \
-  --json > popA.json
-target/debug/kagami genesis pop --algorithm bls_normal \
-  --seed-hex 5252525252525252525252525252525252525252525252525252525252525252 \
-  --json > popB.json
+target/debug/kagami keys --algorithm bls_normal --pop --out-dir ./validator-a
+target/debug/kagami keys --algorithm bls_normal --pop --out-dir ./validator-b
+target/debug/kagami keys --algorithm bls_normal --pop --out-dir ./validator-c
+target/debug/kagami keys --algorithm bls_normal --pop --out-dir ./validator-d
 ```
+
+Each directory contains `public.key`, `private.key`, and `pop.hex`; the private
+key is owner-only and is never printed to the terminal.
 
 Generate a genesis JSON:
 
 ```bash
 target/debug/kagami genesis generate \
+  --profile iroha3-dev \
   --ivm-dir ./ivm_libs \
-  --genesis-public-key ed25519:...
+  --genesis-public-key ed25519:... \
+  --consensus-mode permissioned \
+  default
 ```
 
 Sign with topology and PoPs:
@@ -215,12 +226,17 @@ target/debug/kagami genesis sign \
   --topology "$TOPOLOGY_JSON" \
   --peer-pop "$PK_A=$POP_A" \
   --peer-pop "$PK_B=$POP_B" \
+  --peer-pop "$PK_C=$POP_C" \
+  --peer-pop "$PK_D=$POP_D" \
   --private-key-file "$GENESIS_PRIVATE_KEY_FILE" \
   --expected-public-key "$GENESIS_PUBLIC_KEY" \
-  --algorithm ed25519 \
   --out-file genesis.signed.nrt \
   --expected-hash-out genesis.expected_hash
 ```
+
+`TOPOLOGY_JSON` must contain those same four validators at distinct canonical
+addresses. First-release NPoS admission requires an exact `3f + 1` committee,
+so a two-validator signing example is intentionally unsupported.
 
 The one-line `genesis.expected_hash` output is the deployment trust root. It
 carries the exact signed header hash as one canonical checked NetworkId literal.
@@ -248,7 +264,7 @@ identity_public_key  = "ed0120..."
 identity_private_key = "802620..."
 ```
 
-Use `kagami keys --algorithm ed25519` to generate that pair.
+Use `kagami keys --algorithm ed25519 --out-dir ./client-custody` to generate that pair.
 
 ## Advanced Examples
 

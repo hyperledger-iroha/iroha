@@ -21,7 +21,6 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
-import zipfile
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_android_device_lab_slot.py"
@@ -33,9 +32,11 @@ SPEC.loader.exec_module(device_lab)  # type: ignore[misc]
 
 try:
     from scripts.tests import (
+        android_apk_authority_fixtures as _android_apk_fixtures,
         android_attestation_certificate_profile_fixtures as _android_x509_fixtures,
     )
 except ModuleNotFoundError:
+    import android_apk_authority_fixtures as _android_apk_fixtures
     import android_attestation_certificate_profile_fixtures as _android_x509_fixtures
 
 _android_x509_fixtures.bind_device_lab(device_lab)
@@ -170,16 +171,43 @@ def with_read_bytes_failure(target_path: Path, callback):
 
 def with_open_failure(target_path: Path, callback):
     original_open = Path.open
+    original_os_open = os.open
 
     def failing_open(path: Path, *args, **kwargs):
         if path == target_path:
             raise OSError("simulated open failure")
         return original_open(path, *args, **kwargs)
 
+    def failing_os_open(path, flags, *args, **kwargs):
+        try:
+            candidate = Path(path)
+        except TypeError:
+            candidate = None
+        dir_fd = kwargs.get("dir_fd")
+        relative_target = False
+        if candidate == Path(target_path.name) and isinstance(dir_fd, int):
+            try:
+                parent_stat = target_path.parent.stat()
+                opened_parent_stat = os.fstat(dir_fd)
+                relative_target = (
+                    parent_stat.st_dev,
+                    parent_stat.st_ino,
+                ) == (
+                    opened_parent_stat.st_dev,
+                    opened_parent_stat.st_ino,
+                )
+            except OSError:
+                relative_target = False
+        if candidate == target_path or relative_target:
+            raise OSError("simulated open failure")
+        return original_os_open(path, flags, *args, **kwargs)
+
     try:
         Path.open = failing_open
+        os.open = failing_os_open
         return callback()
     finally:
+        os.open = original_os_open
         Path.open = original_open
 
 
@@ -545,267 +573,6 @@ def device_identity_for_family(family: str) -> tuple[str, str]:
     return identity
 
 
-_SIGNED_CANDIDATE_APK_FIXTURE: tuple[bytes, bytes, str] | None = None
-_SIGNED_WALLET_APK_FIXTURE: tuple[bytes, str] | None = None
-
-
-def signed_candidate_apk_fixture() -> tuple[bytes, bytes, str]:
-    global _SIGNED_CANDIDATE_APK_FIXTURE
-    if _SIGNED_CANDIDATE_APK_FIXTURE is not None:
-        return _SIGNED_CANDIDATE_APK_FIXTURE
-    sdk_roots = tuple(
-        dict.fromkeys(
-            Path(value).expanduser()
-            for value in (
-                os.environ.get("ANDROID_SDK_ROOT"),
-                os.environ.get("ANDROID_HOME"),
-                str(Path.home() / "Library" / "Android" / "sdk"),
-            )
-            if value
-        )
-    )
-    authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
-    if authority is None:
-        raise AssertionError("Android authority is not configured")
-    apksigner_command = [
-        os.fspath(authority["java"]["path"]),
-        "-jar",
-        os.fspath(authority["apksigner_jar"]["path"]),
-    ]
-    aapt2 = shutil.which("aapt2")
-    if aapt2 is None:
-        candidates = sorted(
-            candidate
-            for sdk_root in sdk_roots
-            for candidate in (sdk_root / "build-tools").glob("*/aapt2")
-            if candidate.is_file() and os.access(candidate, os.X_OK)
-        )
-        if candidates:
-            aapt2 = str(candidates[-1])
-    android_jars = sorted(
-        candidate
-        for sdk_root in sdk_roots
-        for candidate in (sdk_root / "platforms").glob("android-*/android.jar")
-        if candidate.is_file()
-    )
-    keytool = Path(authority["java"]["path"]).with_name("keytool")
-    if aapt2 is None or not android_jars or not keytool.is_file():
-        raise AssertionError(
-            "candidate APK validator tests require aapt2, android.jar, and keytool"
-        )
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
-        manifest = root / "AndroidManifest.xml"
-        manifest.write_text(
-            '<?xml version="1.0" encoding="utf-8"?>\n'
-            '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
-            'package="org.hyperledger.iroha.candidate.fixture">\n'
-            '  <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35"/>\n'
-            '  <application android:hasCode="false"/>\n'
-            '</manifest>\n',
-            encoding="utf-8",
-        )
-        keystore = root / "candidate-lab-test.p12"
-        subprocess.run(
-            [
-                str(keytool),
-                "-genkeypair",
-                "-alias",
-                "candidate-lab",
-                "-keystore",
-                str(keystore),
-                "-storetype",
-                "PKCS12",
-                "-storepass",
-                "candidate-lab-test",
-                "-keypass",
-                "candidate-lab-test",
-                "-keyalg",
-                "RSA",
-                "-keysize",
-                "2048",
-                "-validity",
-                "3650",
-                "-dname",
-                "CN=Iroha Candidate Lab Test",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        signed_payloads: list[bytes] = []
-        signed_paths: list[Path] = []
-        for label in ("main", "androidTest"):
-            unsigned = root / f"{label}-unsigned.apk"
-            signed = root / f"{label}.apk"
-            subprocess.run(
-                [
-                    aapt2,
-                    "link",
-                    "--manifest",
-                    str(manifest),
-                    "-I",
-                    str(android_jars[-1]),
-                    "-o",
-                    str(unsigned),
-                ],
-                check=True,
-                capture_output=True,
-            )
-            with zipfile.ZipFile(unsigned, "a", compression=zipfile.ZIP_STORED) as archive:
-                archive.writestr("fixture.txt", f"candidate-lab-{label}\n")
-            subprocess.run(
-                [
-                    *apksigner_command,
-                    "sign",
-                    "--min-sdk-version",
-                    "28",
-                    "--ks",
-                    str(keystore),
-                    "--ks-pass",
-                    "pass:candidate-lab-test",
-                    "--key-pass",
-                    "pass:candidate-lab-test",
-                    "--out",
-                    str(signed),
-                    str(unsigned),
-                ],
-                check=True,
-                capture_output=True,
-            )
-            signed_payloads.append(signed.read_bytes())
-            signed_paths.append(signed)
-        certificate_sha256 = device_lab.extract_apk_signing_certificate_sha256(
-            signed_paths[0]
-        )
-        if (
-            device_lab.extract_apk_signing_certificate_sha256(signed_paths[1])
-            != certificate_sha256
-        ):
-            raise AssertionError("candidate APK fixture signers differ")
-        _SIGNED_CANDIDATE_APK_FIXTURE = (
-            signed_payloads[0],
-            signed_payloads[1],
-            certificate_sha256,
-        )
-    return _SIGNED_CANDIDATE_APK_FIXTURE
-
-
-def signed_wallet_apk_fixture() -> tuple[bytes, str]:
-    global _SIGNED_WALLET_APK_FIXTURE
-    if _SIGNED_WALLET_APK_FIXTURE is not None:
-        return _SIGNED_WALLET_APK_FIXTURE
-    authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
-    if authority is None:
-        raise AssertionError("Android authority is not configured")
-    java = authority["java"]["path"]
-    apksigner_jar = authority["apksigner_jar"]["path"]
-    keytool = Path(java).with_name("keytool")
-    sdk_roots = tuple(
-        Path(value).expanduser()
-        for value in (
-            os.environ.get("ANDROID_SDK_ROOT"),
-            os.environ.get("ANDROID_HOME"),
-            str(Path.home() / "Library" / "Android" / "sdk"),
-        )
-        if value
-    )
-    aapt_candidates = sorted(
-        candidate
-        for sdk_root in sdk_roots
-        for candidate in (sdk_root / "build-tools").glob("*/aapt2")
-        if candidate.is_file() and os.access(candidate, os.X_OK)
-    )
-    android_jars = sorted(
-        candidate
-        for sdk_root in sdk_roots
-        for candidate in (sdk_root / "platforms").glob("android-*/android.jar")
-        if candidate.is_file()
-    )
-    if not keytool.is_file() or not aapt_candidates or not android_jars:
-        raise AssertionError("wallet APK fixture requires keytool, aapt2, and android.jar")
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        unsigned = root / "wallet-unsigned.apk"
-        signed = root / "wallet-signed.apk"
-        manifest = root / "AndroidManifest.xml"
-        manifest.write_text(
-            '<?xml version="1.0" encoding="utf-8"?>\n'
-            '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
-            'package="org.hyperledger.iroha.kagemushawallet">\n'
-            '  <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35"/>\n'
-            '  <application android:hasCode="false"/>\n'
-            '</manifest>\n',
-            encoding="utf-8",
-        )
-        subprocess.run(
-            [
-                str(aapt_candidates[-1]),
-                "link",
-                "--manifest",
-                str(manifest),
-                "-I",
-                str(android_jars[-1]),
-                "-o",
-                str(unsigned),
-            ],
-            check=True,
-            capture_output=True,
-        )
-        with zipfile.ZipFile(unsigned, "a", compression=zipfile.ZIP_STORED) as archive:
-            archive.writestr("fixture.txt", "production-wallet-fixture\n")
-        keystore = root / "wallet-test.p12"
-        subprocess.run(
-            [
-                str(keytool),
-                "-genkeypair",
-                "-alias",
-                "wallet",
-                "-keystore",
-                str(keystore),
-                "-storetype",
-                "PKCS12",
-                "-storepass",
-                "wallet-test",
-                "-keypass",
-                "wallet-test",
-                "-keyalg",
-                "RSA",
-                "-keysize",
-                "2048",
-                "-validity",
-                "3650",
-                "-dname",
-                "CN=Iroha Wallet Test",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            [
-                str(java),
-                "-jar",
-                str(apksigner_jar),
-                "sign",
-                "--min-sdk-version",
-                "28",
-                "--ks",
-                str(keystore),
-                "--ks-pass",
-                "pass:wallet-test",
-                "--key-pass",
-                "pass:wallet-test",
-                "--out",
-                str(signed),
-                str(unsigned),
-            ],
-            check=True,
-            capture_output=True,
-        )
-        certificate = device_lab.extract_apk_signing_certificate_sha256(signed)
-        _SIGNED_WALLET_APK_FIXTURE = (signed.read_bytes(), certificate)
-    return _SIGNED_WALLET_APK_FIXTURE
-
-
 def write_candidate_binding_v2(
     slot: Path,
     slot_id: str,
@@ -1022,7 +789,9 @@ def write_candidate_binding_v2(
     native_library_sha256 = hashlib.sha256(
         (slot / native_library_path).read_bytes()
     ).hexdigest()
-    main_apk, test_apk, lab_signing_certificate_sha256 = signed_candidate_apk_fixture()
+    main_apk, test_apk, lab_signing_certificate_sha256 = (
+        _android_apk_fixtures.signed_candidate_apk_fixture(device_lab)
+    )
     lab_apk_path = (
         "evidence/kagemusha-candidate-evidence-lab-DO-NOT-SHIP-"
         f"{candidate_record_sha256}-debug.apk"
@@ -1417,7 +1186,9 @@ def create_slot(
     device_fingerprint = f"{name}/fingerprint"
     os_build_id = f"{name}-build"
     app_package_name = "org.hyperledger.iroha.kagemushawallet"
-    wallet_apk_payload, app_signing_certificate_sha256 = signed_wallet_apk_fixture()
+    wallet_apk_payload, app_signing_certificate_sha256 = (
+        _android_apk_fixtures.signed_wallet_apk_fixture(device_lab)
+    )
     attestation_certificate_chain_path = "attestation/keymint-certificate-chain.pem"
     write_text(
         slot / attestation_certificate_chain_path,
@@ -2073,6 +1844,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         if java is None:
             raise unittest.SkipTest("a Java executable is required")
+        java, apksigner_jar = (
+            _android_apk_fixtures.stage_private_android_authority_tools(
+                authority,
+                java,
+                apksigner_jar,
+            )
+        )
         root_key = authority / "android-attestation-test-root.key"
         root_cert = authority / "android-attestation-test-root.pem"
         subprocess.run(
@@ -2205,10 +1983,97 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_kagemusha_production_evidence_requires_current_v4_bridge(self) -> None:
         self.assertEqual(device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION, 23)
 
-    def test_apk_verifier_executes_the_complete_pinned_java_jar_authority(self) -> None:
-        main_apk, _, certificate_sha256 = signed_candidate_apk_fixture()
+    def test_android_authority_tools_are_private_canonical_files(self) -> None:
         authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
         assert authority is not None
+        paths = (
+            Path(authority["java"]["path"]),
+            Path(authority["java"]["path"]).with_name("keytool"),
+            Path(authority["apksigner_jar"]["path"]),
+        )
+        for path in paths:
+            metadata = path.lstat()
+            self.assertEqual(path, path.resolve(strict=True))
+            self.assertFalse(path.is_symlink())
+            self.assertTrue(stat.S_ISREG(metadata.st_mode))
+            self.assertEqual(metadata.st_uid, os.geteuid())
+            self.assertEqual(metadata.st_nlink, 1)
+            self.assertEqual(metadata.st_mode & 0o022, 0)
+
+    def test_apk_verifier_executes_the_complete_pinned_java_jar_authority(self) -> None:
+        main_apk, _, certificate_sha256 = (
+            _android_apk_fixtures.signed_candidate_apk_fixture(device_lab)
+        )
+        authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
+        assert authority is not None
+        signer_labels = (
+            "Signer #1",
+            "Signer (minSdkVersion=28, maxSdkVersion=2147483647)",
+            "Signer (minSdkVersion=35 (dev release=true), "
+            "maxSdkVersion=2147483647)",
+            "Signer (minSdkVersion=28, "
+            "maxSdkVersion=36 (dev release=true))",
+        )
+        for signer_label in signer_labels:
+            with self.subTest(signer_label=signer_label):
+                with tempfile.TemporaryDirectory() as temporary:
+                    apk = Path(temporary) / "candidate.apk"
+                    apk.write_bytes(main_apk)
+                    completed = subprocess.CompletedProcess(
+                        args=[],
+                        returncode=0,
+                        stdout=(
+                            f"{signer_label} certificate SHA-256 digest: "
+                            f"{certificate_sha256}\n"
+                        ),
+                        stderr="",
+                    )
+                    with (
+                        mock.patch.object(
+                            device_lab.subprocess,
+                            "run",
+                            return_value=completed,
+                        ) as run,
+                        mock.patch.object(
+                            device_lab,
+                            "_read_pinned_authority_file",
+                            wraps=device_lab._read_pinned_authority_file,
+                        ) as authenticate,
+                    ):
+                        measured = device_lab.extract_apk_signing_certificate_sha256(
+                            apk
+                        )
+
+                self.assertEqual(measured, certificate_sha256)
+                command = run.call_args.args[0]
+                self.assertEqual(
+                    command[:3],
+                    [
+                        os.fspath(authority["java"]["path"]),
+                        "-jar",
+                        os.fspath(authority["apksigner_jar"]["path"]),
+                    ],
+                )
+                self.assertEqual(
+                    run.call_args.kwargs["env"],
+                    {
+                        "HOME": "/var/empty",
+                        "LANG": "C",
+                        "LC_ALL": "C",
+                        "PATH": "/usr/bin:/bin",
+                    },
+                )
+                labels = [
+                    call.kwargs["label"] for call in authenticate.call_args_list
+                ]
+                self.assertEqual(labels.count("configured Java executable"), 2)
+                self.assertEqual(labels.count("configured apksigner.jar"), 2)
+
+    def test_apk_verifier_matches_current_signer_across_certificate_labels(self) -> None:
+        main_apk, _, certificate_sha256 = (
+            _android_apk_fixtures.signed_candidate_apk_fixture(device_lab)
+        )
+        unrelated_digest = "ab" * 32
         with tempfile.TemporaryDirectory() as temporary:
             apk = Path(temporary) / "candidate.apk"
             apk.write_bytes(main_apk)
@@ -2216,8 +2081,33 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 args=[],
                 returncode=0,
                 stdout=(
-                    "Signer #1 certificate SHA-256 digest: "
+                    "Source Stamp Signer certificate SHA-256 digest: "
+                    f"{unrelated_digest}\n"
+                    "Current APK signer certificate SHA-256 digest: "
                     f"{certificate_sha256}\n"
+                ),
+                stderr="",
+            )
+            with mock.patch.object(
+                device_lab.subprocess,
+                "run",
+                return_value=completed,
+            ):
+                measured = device_lab.extract_apk_signing_certificate_sha256(apk)
+
+        self.assertEqual(measured, certificate_sha256)
+
+    def test_apk_verifier_rejects_report_without_parsed_current_signer(self) -> None:
+        main_apk, _, _ = _android_apk_fixtures.signed_candidate_apk_fixture(device_lab)
+        with tempfile.TemporaryDirectory() as temporary:
+            apk = Path(temporary) / "candidate.apk"
+            apk.write_bytes(main_apk)
+            completed = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=(
+                    "Source Stamp Signer certificate SHA-256 digest: "
+                    f"{'ab' * 32}\n"
                 ),
                 stderr="",
             )
@@ -2226,32 +2116,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     device_lab.subprocess,
                     "run",
                     return_value=completed,
-                ) as run,
-                mock.patch.object(
-                    device_lab,
-                    "_read_pinned_authority_file",
-                    wraps=device_lab._read_pinned_authority_file,
-                ) as authenticate,
+                ),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "digest differs from parsed signer certificate DER",
+                ),
             ):
-                measured = device_lab.extract_apk_signing_certificate_sha256(apk)
-
-        self.assertEqual(measured, certificate_sha256)
-        command = run.call_args.args[0]
-        self.assertEqual(
-            command[:3],
-            [
-                os.fspath(authority["java"]["path"]),
-                "-jar",
-                os.fspath(authority["apksigner_jar"]["path"]),
-            ],
-        )
-        self.assertEqual(
-            run.call_args.kwargs["env"],
-            {"HOME": "/var/empty", "LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
-        )
-        labels = [call.kwargs["label"] for call in authenticate.call_args_list]
-        self.assertEqual(labels.count("configured Java executable"), 2)
-        self.assertEqual(labels.count("configured apksigner.jar"), 2)
+                device_lab.extract_apk_signing_certificate_sha256(apk)
 
     def test_candidate_bound_v2_slot_passes_exact_inventory_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2961,6 +2832,81 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertTrue(
             any("does not match the KRV4 file" in error for error in errors), errors
+        )
+
+    def test_candidate_artifact_measurement_rejects_regular_file_swap_after_pin(
+        self,
+    ) -> None:
+        original_validate = device_lab._validate_signed_evidence_artifact_for_digest
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                signer = create_test_signer(root / "keys")
+                slot = create_slot(
+                    root / "slots",
+                    "pixel6",
+                    device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                    signer,
+                )
+                binding = json.loads(
+                    (
+                        slot / device_lab.KAGEMUSHA_CANDIDATE_BINDING_ARTIFACT_PATH
+                    ).read_text(encoding="utf-8")
+                )
+                relative = binding["artifact_inventory"][0]["path"]
+                artifact_path = slot / relative
+                replacement_payload = bytearray(artifact_path.read_bytes())
+                replacement_payload[-1] ^= 0x01
+                swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
+
+                def swapping_validate(
+                    slot_path: Path,
+                    candidate_relative: str,
+                    **kwargs: str,
+                ):
+                    nonlocal pinned_artifact, swapped
+                    pin, validate_errors = original_validate(
+                        slot_path,
+                        candidate_relative,
+                        **kwargs,
+                    )
+                    pinned_artifact = pin
+                    if pin is not None and pin.path == artifact_path and not validate_errors and not swapped:
+                        artifact_path.unlink()
+                        artifact_path.write_bytes(replacement_payload)
+                        os.utime(
+                            artifact_path,
+                            ns=(
+                                pin.opened_stat.st_atime_ns,
+                                pin.opened_stat.st_mtime_ns,
+                            ),
+                        )
+                        swapped = True
+                    return pin, validate_errors
+
+                device_lab._validate_signed_evidence_artifact_for_digest = (
+                    swapping_validate
+                )
+                errors: list[str] = []
+                measured = device_lab._candidate_artifact_measurement(
+                    slot,
+                    relative,
+                    errors,
+                )
+        finally:
+            device_lab._validate_signed_evidence_artifact_for_digest = original_validate
+
+        self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        with self.assertRaises(OSError):
+            os.fstat(pinned_artifact.descriptor)
+        self.assertIsNone(measured)
+        self.assertEqual(
+            errors,
+            [f"candidate artifact {relative} changed while being opened"],
         )
 
     def test_candidate_binding_requires_production_capability_to_remain_false(self) -> None:
@@ -5741,6 +5687,37 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             ],
         )
 
+    def test_file_read_snapshot_detects_same_inode_content_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / "artifact.bin"
+            artifact.write_bytes(b"original")
+            original_stat = artifact.lstat()
+            artifact.write_bytes(b"replacement content")
+            replacement_stat = artifact.lstat()
+
+        self.assertEqual(
+            (original_stat.st_dev, original_stat.st_ino),
+            (replacement_stat.st_dev, replacement_stat.st_ino),
+        )
+        self.assertNotEqual(
+            device_lab._file_read_snapshot(original_stat),
+            device_lab._file_read_snapshot(replacement_stat),
+        )
+
+    def test_artifact_read_flags_pin_without_following_or_blocking(self) -> None:
+        read_flags = device_lab._artifact_read_open_flags()
+
+        for flag_name in ("O_CLOEXEC", "O_NOFOLLOW", "O_NONBLOCK"):
+            flag = getattr(os, flag_name, 0)
+            if flag:
+                self.assertEqual(read_flags & flag, flag)
+
+        directory_flags = device_lab._artifact_directory_open_flags()
+        for flag_name in ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK"):
+            flag = getattr(os, flag_name, 0)
+            if flag:
+                self.assertEqual(directory_flags & flag, flag)
+
     def test_manifest_artifact_digest_uses_lstat_before_relative_ancestor_is_symlink_preflight(
         self,
     ) -> None:
@@ -5804,19 +5781,29 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as temp:
                 slot = create_slot(Path(temp), "slot-a")
                 artifact_path = slot / "logs" / "runtime.log"
+                replacement_payload = b"R" * artifact_path.stat().st_size
                 swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
 
                 def swapping_validate(slot_path: Path, relative: str):
-                    nonlocal swapped
-                    artifact, artifact_stat, errors = original_validate(
+                    nonlocal pinned_artifact, swapped
+                    pin, errors = original_validate(
                         slot_path,
                         relative,
                     )
-                    if artifact == artifact_path and not errors and not swapped:
+                    pinned_artifact = pin
+                    if pin is not None and pin.path == artifact_path and not errors and not swapped:
                         artifact_path.unlink()
-                        write_text(artifact_path, "replacement runtime log\n")
+                        artifact_path.write_bytes(replacement_payload)
+                        os.utime(
+                            artifact_path,
+                            ns=(
+                                pin.opened_stat.st_atime_ns,
+                                pin.opened_stat.st_mtime_ns,
+                            ),
+                        )
                         swapped = True
-                    return artifact, artifact_stat, errors
+                    return pin, errors
 
                 device_lab._validate_manifest_artifact_for_digest = swapping_validate
 
@@ -5829,8 +5816,180 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             device_lab._validate_manifest_artifact_for_digest = original_validate
 
         self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        with self.assertRaises(OSError):
+            os.fstat(pinned_artifact.descriptor)
         self.assertIsNone(digest)
-        self.assertEqual(replacement_bytes, b"replacement runtime log\n")
+        self.assertEqual(replacement_bytes, replacement_payload)
+        self.assertEqual(
+            errors,
+            [
+                "sha256sum.txt references artifact changed while being read "
+                "logs/runtime.log"
+            ],
+        )
+
+    def test_manifest_artifact_digest_rejects_in_place_mutation_after_pin(
+        self,
+    ) -> None:
+        original_validate = device_lab._validate_manifest_artifact_for_digest
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                artifact_path = slot / "logs" / "runtime.log"
+                replacement_payload = b"R" * artifact_path.stat().st_size
+                mutated = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
+
+                def mutating_validate(slot_path: Path, relative: str):
+                    nonlocal mutated, pinned_artifact
+                    pin, errors = original_validate(slot_path, relative)
+                    pinned_artifact = pin
+                    if (
+                        pin is not None
+                        and pin.path == artifact_path
+                        and not errors
+                        and not mutated
+                    ):
+                        artifact_path.write_bytes(replacement_payload)
+                        os.utime(
+                            artifact_path,
+                            ns=(
+                                pin.opened_stat.st_atime_ns,
+                                pin.opened_stat.st_mtime_ns,
+                            ),
+                        )
+                        mutated = True
+                    return pin, errors
+
+                device_lab._validate_manifest_artifact_for_digest = mutating_validate
+                digest, errors = device_lab._manifest_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+                replacement_stat = artifact_path.lstat()
+        finally:
+            device_lab._validate_manifest_artifact_for_digest = original_validate
+
+        self.assertTrue(mutated)
+        assert pinned_artifact is not None
+        self.assertEqual(
+            (replacement_stat.st_dev, replacement_stat.st_ino),
+            (
+                pinned_artifact.opened_stat.st_dev,
+                pinned_artifact.opened_stat.st_ino,
+            ),
+        )
+        self.assertTrue(pinned_artifact.closed)
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "sha256sum.txt references artifact changed while being read "
+                "logs/runtime.log"
+            ],
+        )
+
+    def test_manifest_artifact_digest_rejects_ancestor_swap_after_pin(
+        self,
+    ) -> None:
+        original_validate = device_lab._validate_manifest_artifact_for_digest
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                logs_path = slot / "logs"
+                moved_logs_path = slot / "logs-pinned"
+                swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
+
+                def swapping_validate(slot_path: Path, relative: str):
+                    nonlocal pinned_artifact, swapped
+                    pin, errors = original_validate(slot_path, relative)
+                    pinned_artifact = pin
+                    if pin is not None and not errors and not swapped:
+                        logs_path.rename(moved_logs_path)
+                        try:
+                            logs_path.symlink_to(moved_logs_path, target_is_directory=True)
+                        except (NotImplementedError, OSError) as exc:
+                            pin.close()
+                            moved_logs_path.rename(logs_path)
+                            self.skipTest(f"symlinks unavailable: {exc}")
+                        swapped = True
+                    return pin, errors
+
+                device_lab._validate_manifest_artifact_for_digest = swapping_validate
+                digest, errors = device_lab._manifest_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+        finally:
+            device_lab._validate_manifest_artifact_for_digest = original_validate
+
+        self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        for descriptor in (
+            pinned_artifact.descriptor,
+            *pinned_artifact.directory_descriptors,
+        ):
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "sha256sum.txt references artifact changed while being read "
+                "logs/runtime.log"
+            ],
+        )
+
+    def test_manifest_artifact_digest_rejects_slot_parent_swap_after_pin(
+        self,
+    ) -> None:
+        original_validate = device_lab._validate_manifest_artifact_for_digest
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                slots_path = root / "slots"
+                moved_slots_path = root / "slots-pinned"
+                slot = create_slot(slots_path, "slot-a")
+                swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
+
+                def swapping_validate(slot_path: Path, relative: str):
+                    nonlocal pinned_artifact, swapped
+                    pin, errors = original_validate(slot_path, relative)
+                    pinned_artifact = pin
+                    if pin is not None and not errors and not swapped:
+                        slots_path.rename(moved_slots_path)
+                        try:
+                            slots_path.symlink_to(
+                                moved_slots_path,
+                                target_is_directory=True,
+                            )
+                        except (NotImplementedError, OSError) as exc:
+                            pin.close()
+                            moved_slots_path.rename(slots_path)
+                            self.skipTest(f"symlinks unavailable: {exc}")
+                        swapped = True
+                    return pin, errors
+
+                device_lab._validate_manifest_artifact_for_digest = swapping_validate
+                digest, errors = device_lab._manifest_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+        finally:
+            device_lab._validate_manifest_artifact_for_digest = original_validate
+
+        self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        self.assertIsNone(digest)
         self.assertEqual(
             errors,
             [
@@ -6215,18 +6374,20 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     relative: str,
                     label: str,
                     missing_error: str,
+                    unreadable_error: str,
                 ):
                     nonlocal swapped
-                    artifact, artifact_stat, validate_errors = original_validate(
+                    pin, validate_errors = original_validate(
                         slot_path,
                         relative,
                         label,
                         missing_error,
+                        unreadable_error,
                     )
-                    if artifact == runtime_log and not validate_errors and not swapped:
+                    if pin is not None and pin.path == runtime_log and not validate_errors and not swapped:
                         replace_with_symlink(self, runtime_log, target)
                         swapped = True
-                    return artifact, artifact_stat, validate_errors
+                    return pin, validate_errors
 
                 device_lab._validate_metadata_artifact_for_read = swapping_validate
                 errors: list[str] = []
@@ -7510,18 +7671,20 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     relative: str,
                     label: str,
                     missing_error: str,
+                    unreadable_error: str,
                 ):
                     nonlocal swapped
-                    artifact, artifact_stat, errors = original_validate(
+                    pin, errors = original_validate(
                         slot_path,
                         relative,
                         label,
                         missing_error,
+                        unreadable_error,
                     )
-                    if artifact == artifact_path and not errors and not swapped:
+                    if pin is not None and pin.path == artifact_path and not errors and not swapped:
                         replace_with_symlink(self, artifact_path, target)
                         swapped = True
-                    return artifact, artifact_stat, errors
+                    return pin, errors
 
                 device_lab._validate_metadata_artifact_for_read = swapping_validate
 
@@ -7557,26 +7720,38 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 root = Path(temp)
                 slot = create_slot(root, "slot-a")
                 artifact_path = slot / "evidence" / "kagemusha-wallet-release.apk"
+                replacement_payload = b"R" * artifact_path.stat().st_size
                 swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
 
                 def swapping_validate(
                     slot_path: Path,
                     relative: str,
                     label: str,
                     missing_error: str,
+                    unreadable_error: str,
                 ):
-                    nonlocal swapped
-                    artifact, artifact_stat, errors = original_validate(
+                    nonlocal pinned_artifact, swapped
+                    pin, errors = original_validate(
                         slot_path,
                         relative,
                         label,
                         missing_error,
+                        unreadable_error,
                     )
-                    if artifact == artifact_path and not errors and not swapped:
+                    pinned_artifact = pin
+                    if pin is not None and pin.path == artifact_path and not errors and not swapped:
                         artifact_path.unlink()
-                        write_text(artifact_path, "replacement release apk\n")
+                        artifact_path.write_bytes(replacement_payload)
+                        os.utime(
+                            artifact_path,
+                            ns=(
+                                pin.opened_stat.st_atime_ns,
+                                pin.opened_stat.st_mtime_ns,
+                            ),
+                        )
                         swapped = True
-                    return artifact, artifact_stat, errors
+                    return pin, errors
 
                 device_lab._validate_metadata_artifact_for_read = swapping_validate
 
@@ -7591,9 +7766,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             device_lab._validate_metadata_artifact_for_read = original_validate
 
         self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        with self.assertRaises(OSError):
+            os.fstat(pinned_artifact.descriptor)
         self.assertIsNone(payload)
         self.assertIsNone(digest)
-        self.assertEqual(replacement_bytes, b"replacement release apk\n")
+        self.assertEqual(replacement_bytes, replacement_payload)
         self.assertEqual(
             errors,
             [
@@ -10957,19 +11136,30 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as temp:
                 slot = create_slot(Path(temp), "slot-a")
                 artifact_path = slot / "logs" / "runtime.log"
+                replacement_payload = b"R" * artifact_path.stat().st_size
                 swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
 
-                def swapping_validate(slot_path: Path, relative: str):
-                    nonlocal swapped
-                    artifact, artifact_stat, errors = original_validate(
+                def swapping_validate(slot_path: Path, relative: str, **kwargs: str):
+                    nonlocal pinned_artifact, swapped
+                    pin, errors = original_validate(
                         slot_path,
                         relative,
+                        **kwargs,
                     )
-                    if artifact == artifact_path and not errors and not swapped:
+                    pinned_artifact = pin
+                    if pin is not None and pin.path == artifact_path and not errors and not swapped:
                         artifact_path.unlink()
-                        write_text(artifact_path, "replacement runtime log\n")
+                        artifact_path.write_bytes(replacement_payload)
+                        os.utime(
+                            artifact_path,
+                            ns=(
+                                pin.opened_stat.st_atime_ns,
+                                pin.opened_stat.st_mtime_ns,
+                            ),
+                        )
                         swapped = True
-                    return artifact, artifact_stat, errors
+                    return pin, errors
 
                 device_lab._validate_signed_evidence_artifact_for_digest = (
                     swapping_validate
@@ -10984,8 +11174,12 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             device_lab._validate_signed_evidence_artifact_for_digest = original_validate
 
         self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        with self.assertRaises(OSError):
+            os.fstat(pinned_artifact.descriptor)
         self.assertIsNone(digest)
-        self.assertEqual(replacement_bytes, b"replacement runtime log\n")
+        self.assertEqual(replacement_bytes, replacement_payload)
         self.assertEqual(
             errors,
             [
@@ -16682,19 +16876,29 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as temp:
                 slot = create_slot(Path(temp), "pixel8")
                 artifact_path = slot / "logs" / "runtime.log"
+                replacement_payload = b"R" * artifact_path.stat().st_size
                 swapped = False
+                pinned_artifact: device_lab._PinnedArtifact | None = None
 
                 def swapping_validate(slot_path: Path, relative: str):
-                    nonlocal swapped
-                    artifact, artifact_stat, errors = original_validate(
+                    nonlocal pinned_artifact, swapped
+                    pin, errors = original_validate(
                         slot_path,
                         relative,
                     )
-                    if artifact == artifact_path and not errors and not swapped:
+                    pinned_artifact = pin
+                    if pin is not None and pin.path == artifact_path and not errors and not swapped:
                         artifact_path.unlink()
-                        write_text(artifact_path, "replacement runtime log\n")
+                        artifact_path.write_bytes(replacement_payload)
+                        os.utime(
+                            artifact_path,
+                            ns=(
+                                pin.opened_stat.st_atime_ns,
+                                pin.opened_stat.st_mtime_ns,
+                            ),
+                        )
                         swapped = True
-                    return artifact, artifact_stat, errors
+                    return pin, errors
 
                 evidence_signer._validate_slot_artifact_for_digest = swapping_validate
 
@@ -16707,8 +16911,12 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             evidence_signer._validate_slot_artifact_for_digest = original_validate
 
         self.assertTrue(swapped)
+        assert pinned_artifact is not None
+        self.assertTrue(pinned_artifact.closed)
+        with self.assertRaises(OSError):
+            os.fstat(pinned_artifact.descriptor)
         self.assertIsNone(digest)
-        self.assertEqual(replacement_bytes, b"replacement runtime log\n")
+        self.assertEqual(replacement_bytes, replacement_payload)
         self.assertEqual(
             errors,
             ["slot artifact logs/runtime.log changed while being read"],

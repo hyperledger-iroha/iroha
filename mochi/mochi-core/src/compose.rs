@@ -35,6 +35,12 @@ use std::{
     sync::LazyLock,
     time::Duration,
 };
+
+const RAW_DRAFT_JSON_MAX_BYTES_V1: usize = 256 * 1024;
+const RAW_DRAFT_JSON_MAX_NESTING_V1: usize = 32;
+const DRAFT_ARRAY_MAX_ITEMS_V1: usize = 128;
+const DRAFT_TOTAL_MAX_ITEMS_V1: usize = 512;
+const MULTISIG_DRAFT_MAX_DEPTH_V1: usize = 8;
 /// Permission categories used to gate high-level instruction templates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum InstructionPermission {
@@ -324,11 +330,6 @@ static DEVELOPMENT_AUTHORITIES: LazyLock<Vec<SigningAuthority>> = LazyLock::new(
         ),
     ]
 });
-fn default_authority() -> &'static SigningAuthority {
-    DEVELOPMENT_AUTHORITIES
-        .first()
-        .expect("development authorities must not be empty")
-}
 /// Access the bundled development signing authorities.
 #[must_use]
 pub fn development_signing_authorities() -> &'static [SigningAuthority] {
@@ -482,55 +483,6 @@ impl TransactionPreview {
             authority,
         }
     }
-}
-/// Compose an asset quantity mint transaction assigned to the default MOCHI signer.
-///
-/// The helper signs the transaction with the sample Alice key pair so local
-/// deployments have a predictable authority without requiring user input. The
-/// caller supplies the exact genesis-derived network identity.
-///
-/// # Errors
-///
-/// Returns [`ComposeError::InvalidAssetId`] when the supplied identifier cannot
-/// be parsed according to Iroha's asset id rules.
-pub fn mint_quantity_preview(
-    network_id: NetworkId,
-    asset_id: &str,
-    quantity: impl Into<Quantity>,
-) -> Result<TransactionPreview, ComposeError> {
-    let draft = InstructionDraft::MintAsset {
-        asset: parse_asset_id(asset_id)?,
-        quantity: quantity.into(),
-    };
-    compose_preview_with_authority(network_id, &[draft], default_authority())
-}
-/// Compose a transaction preview for an exact network from a list of [`InstructionDraft`] entries.
-///
-/// # Errors
-///
-/// Returns [`ComposeError::EmptyInstructions`] when the provided slice is empty.
-pub fn compose_preview(
-    network_id: NetworkId,
-    drafts: &[InstructionDraft],
-) -> Result<TransactionPreview, ComposeError> {
-    compose_preview_with_authority(network_id, drafts, default_authority())
-}
-/// Compose a transaction preview for an exact network signed by the provided authority.
-///
-/// # Errors
-///
-/// Returns [`ComposeError::EmptyInstructions`] when the provided slice is empty.
-pub fn compose_preview_with_authority(
-    network_id: NetworkId,
-    drafts: &[InstructionDraft],
-    authority: &SigningAuthority,
-) -> Result<TransactionPreview, ComposeError> {
-    compose_preview_with_options(
-        network_id,
-        drafts,
-        authority,
-        &TransactionComposeOptions::default(),
-    )
 }
 /// Compose an exact-network preview while applying the supplied [`TransactionComposeOptions`].
 ///
@@ -712,7 +664,12 @@ impl InstructionDraft {
         mintable: Mintable,
     ) -> Result<Self, ComposeError> {
         let definition = parse_asset_definition_id(definition)?;
-        let name = name.trim();
+        if name.trim() != name {
+            return Err(ComposeError::InvalidAssetDefinitionName {
+                name: name.to_owned(),
+                reason: "asset definition name must not contain surrounding whitespace".to_owned(),
+            });
+        }
         validate_asset_name(name).map_err(|err| ComposeError::InvalidAssetDefinitionName {
             name: name.to_owned(),
             reason: err.to_string(),
@@ -731,8 +688,13 @@ impl InstructionDraft {
     pub fn publish_space_directory_manifest_from_json(
         manifest_json: &str,
     ) -> Result<Self, ComposeError> {
-        let manifest: AssetPermissionManifest =
+        validate_raw_json_input(manifest_json)?;
+        let value: Value =
             json::from_str(manifest_json).map_err(|err| ComposeError::InvalidRawDraft {
+                reason: format!("invalid space directory manifest: {err}"),
+            })?;
+        let manifest: AssetPermissionManifest =
+            json::from_value(value).map_err(|err| ComposeError::InvalidRawDraft {
                 reason: format!("invalid space directory manifest: {err}"),
             })?;
         Ok(Self::PublishSpaceDirectoryManifest { manifest })
@@ -743,10 +705,12 @@ impl InstructionDraft {
     ///
     /// Returns a [`ComposeError`] if the payload fails to decode.
     pub fn register_pin_manifest_from_json(request_json: &str) -> Result<Self, ComposeError> {
-        let request: RegisterPinManifest =
+        validate_raw_json_input(request_json)?;
+        let value: Value =
             json::from_str(request_json).map_err(|err| ComposeError::InvalidRawDraft {
                 reason: format!("invalid pin manifest request: {err}"),
             })?;
+        let request = decode_strict_pin_manifest(&value)?;
         Ok(Self::RegisterPinManifest { request })
     }
     /// Create a chain-global account admission policy draft.
@@ -1089,6 +1053,22 @@ impl InstructionDraft {
     ///
     /// Returns [`ComposeError::InvalidRawDraft`] if the payload is malformed.
     pub fn from_json_value(value: &Value) -> Result<Self, ComposeError> {
+        let mut budget = DraftDecodeBudget::default();
+        Self::from_json_value_with_budget(value, 0, &mut budget)
+    }
+    fn from_json_value_with_budget(
+        value: &Value,
+        multisig_depth: usize,
+        budget: &mut DraftDecodeBudget,
+    ) -> Result<Self, ComposeError> {
+        if multisig_depth > MULTISIG_DRAFT_MAX_DEPTH_V1 {
+            return Err(ComposeError::InvalidRawDraft {
+                reason: format!(
+                    "multisig nesting exceeds the V1 limit of {MULTISIG_DRAFT_MAX_DEPTH_V1}"
+                ),
+            });
+        }
+        budget.consume()?;
         let Value::Object(map) = value else {
             return Err(ComposeError::InvalidRawDraft {
                 reason: "expected object".to_owned(),
@@ -1097,45 +1077,43 @@ impl InstructionDraft {
         let kind = extract_string(map, "kind")?;
         match kind.as_str() {
             "mint_asset" => {
+                require_draft_fields(map, &kind, &["kind", "asset", "quantity"], &[])?;
                 let asset = extract_string(map, "asset")?;
                 let quantity = extract_string(map, "quantity")?;
                 InstructionDraft::mint_from_input(&asset, &quantity)
             }
             "burn_asset" => {
+                require_draft_fields(map, &kind, &["kind", "asset", "quantity"], &[])?;
                 let asset = extract_string(map, "asset")?;
                 let quantity = extract_string(map, "quantity")?;
                 InstructionDraft::burn_from_input(&asset, &quantity)
             }
             "transfer_asset" => {
+                require_draft_fields(
+                    map,
+                    &kind,
+                    &["kind", "asset", "quantity", "destination"],
+                    &[],
+                )?;
                 let asset = extract_string(map, "asset")?;
                 let quantity = extract_string(map, "quantity")?;
                 let destination = extract_string(map, "destination")?;
                 InstructionDraft::transfer_from_input(&asset, &quantity, &destination)
             }
             "register_account" => {
+                require_draft_fields(map, &kind, &["kind", "account"], &[])?;
                 let account = extract_string(map, "account")?;
                 InstructionDraft::register_account_from_input(&account)
             }
             "register_asset_definition" => {
+                require_draft_fields(map, &kind, &["kind", "definition", "name", "mintable"], &[])?;
                 let definition = extract_string(map, "definition")?;
                 let name = extract_string(map, "name")?;
-                let mintable = match map.get("mintable") {
-                    Some(value) => {
-                        let label = match value {
-                            Value::String(label) => label.as_str(),
-                            _ => {
-                                return Err(ComposeError::InvalidRawDraft {
-                                    reason: "mintable must be a string".to_owned(),
-                                });
-                            }
-                        };
-                        parse_mintable_label(label)?
-                    }
-                    None => Mintable::Infinitely,
-                };
+                let mintable = parse_mintable_label(&extract_string(map, "mintable")?)?;
                 InstructionDraft::register_asset_definition_from_input(&definition, &name, mintable)
             }
             "publish_space_directory_manifest" => {
+                require_draft_fields(map, &kind, &["kind", "manifest"], &[])?;
                 let Some(manifest_value) = map.get("manifest") else {
                     return Err(ComposeError::InvalidRawDraft {
                         reason: "field `manifest` is required".to_owned(),
@@ -1148,53 +1126,55 @@ impl InstructionDraft {
                 Ok(InstructionDraft::PublishSpaceDirectoryManifest { manifest })
             }
             "register_pin_manifest" => {
+                require_draft_fields(map, &kind, &["kind", "request"], &[])?;
                 let Some(request_value) = map.get("request") else {
                     return Err(ComposeError::InvalidRawDraft {
                         reason: "field `request` is required".to_owned(),
                     });
                 };
-                let request: RegisterPinManifest = json::from_value(request_value.clone())
-                    .map_err(|err| ComposeError::InvalidRawDraft {
-                        reason: format!("invalid pin manifest request: {err}"),
-                    })?;
+                let request = decode_strict_pin_manifest(request_value)?;
                 Ok(InstructionDraft::RegisterPinManifest { request })
             }
             "account_admission_policy" => {
-                if map.contains_key("domain") {
-                    return Err(ComposeError::InvalidRawDraft {
-                        reason: "field `domain` is not supported; account admission policy is chain-global"
-                            .to_owned(),
-                    });
-                }
+                require_draft_fields(map, &kind, &["kind", "policy"], &[])?;
                 let Some(policy_value) = map.get("policy") else {
                     return Err(ComposeError::InvalidRawDraft {
                         reason: "field `policy` is required".to_owned(),
                     });
                 };
-                let policy: AccountAdmissionPolicy = json::from_value(policy_value.clone())
-                    .map_err(|err| ComposeError::InvalidRawDraft {
-                        reason: format!("invalid account admission policy: {err}"),
-                    })?;
+                let policy = decode_strict_account_admission_policy(policy_value)?;
                 Ok(InstructionDraft::account_admission_policy(policy))
             }
             "grant_role" => {
+                require_draft_fields(map, &kind, &["kind", "role", "account"], &[])?;
                 let role = extract_string(map, "role")?;
                 let account = extract_string(map, "account")?;
                 InstructionDraft::grant_role_from_input(&role, &account)
             }
             "revoke_role" => {
+                require_draft_fields(map, &kind, &["kind", "role", "account"], &[])?;
                 let role = extract_string(map, "role")?;
                 let account = extract_string(map, "account")?;
                 InstructionDraft::revoke_role_from_input(&role, &account)
             }
             "multisig_propose" => {
+                require_draft_fields(
+                    map,
+                    &kind,
+                    &["kind", "account", "instructions"],
+                    &["transaction_ttl_ms"],
+                )?;
                 let account = extract_string(map, "account")?;
                 let Some(instructions_value) = map.get("instructions") else {
                     return Err(ComposeError::InvalidRawDraft {
                         reason: "field `instructions` is required".to_owned(),
                     });
                 };
-                let instructions = drafts_from_json_value(instructions_value)?;
+                let instructions = drafts_from_json_value_with_budget(
+                    instructions_value,
+                    multisig_depth + 1,
+                    budget,
+                )?;
                 if instructions.is_empty() {
                     return Err(ComposeError::InvalidRawDraft {
                         reason: "multisig proposal instructions must not be empty".to_owned(),
@@ -1262,10 +1242,17 @@ fn asset_literal(asset_id: &AssetId) -> String {
     asset_id.to_string()
 }
 fn parse_asset_id(value: &str) -> Result<AssetId, ComposeError> {
-    AssetId::from_str(value).map_err(|err| ComposeError::InvalidAssetId {
+    let parsed = AssetId::from_str(value).map_err(|err| ComposeError::InvalidAssetId {
         asset: value.to_owned(),
         reason: err.reason().into(),
-    })
+    })?;
+    if parsed.to_string() != value {
+        return Err(ComposeError::InvalidAssetId {
+            asset: value.to_owned(),
+            reason: "asset id must use its canonical literal".to_owned(),
+        });
+    }
+    Ok(parsed)
 }
 fn parse_account_id(value: &str) -> Result<AccountId, ComposeError> {
     AccountId::parse_encoded(value).map_err(|err| ComposeError::InvalidAccountId {
@@ -1274,16 +1261,32 @@ fn parse_account_id(value: &str) -> Result<AccountId, ComposeError> {
     })
 }
 fn parse_quantity(value: &str) -> Result<Quantity, ComposeError> {
-    Quantity::from_str(value).map_err(|err| ComposeError::InvalidQuantity {
+    let parsed = Quantity::from_str(value).map_err(|err| ComposeError::InvalidQuantity {
         quantity: value.to_owned(),
         reason: err.to_string(),
-    })
+    })?;
+    if parsed.to_string() != value {
+        return Err(ComposeError::InvalidQuantity {
+            quantity: value.to_owned(),
+            reason: "quantity must use its canonical decimal literal".to_owned(),
+        });
+    }
+    Ok(parsed)
 }
 fn parse_asset_definition_id(value: &str) -> Result<AssetDefinitionId, ComposeError> {
-    AssetDefinitionId::from_str(value).map_err(|err| ComposeError::InvalidAssetDefinitionId {
-        definition: value.to_owned(),
-        reason: err.to_string(),
-    })
+    let parsed = AssetDefinitionId::from_str(value).map_err(|err| {
+        ComposeError::InvalidAssetDefinitionId {
+            definition: value.to_owned(),
+            reason: err.to_string(),
+        }
+    })?;
+    if parsed.to_string() != value {
+        return Err(ComposeError::InvalidAssetDefinitionId {
+            definition: value.to_owned(),
+            reason: "asset definition id must use its canonical literal".to_owned(),
+        });
+    }
+    Ok(parsed)
 }
 fn parse_role_id(value: &str) -> Result<RoleId, ComposeError> {
     RoleId::from_str(value).map_err(|err| ComposeError::InvalidRoleId {
@@ -1302,42 +1305,46 @@ fn extract_string(map: &Map, key: &str) -> Result<String, ComposeError> {
         }),
     }
 }
+fn require_draft_fields(
+    map: &Map,
+    kind: &str,
+    required: &[&str],
+    optional: &[&str],
+) -> Result<(), ComposeError> {
+    if let Some(field) = required.iter().find(|field| !map.contains_key(**field)) {
+        return Err(ComposeError::InvalidRawDraft {
+            reason: format!("instruction kind `{kind}` requires field `{field}`"),
+        });
+    }
+    if let Some(field) = map
+        .keys()
+        .find(|field| !required.contains(&field.as_str()) && !optional.contains(&field.as_str()))
+    {
+        return Err(ComposeError::InvalidRawDraft {
+            reason: format!("instruction kind `{kind}` contains unknown field `{field}`"),
+        });
+    }
+    Ok(())
+}
 fn extract_optional_nonzero_u64(map: &Map, key: &str) -> Result<Option<NonZeroU64>, ComposeError> {
     let Some(value) = map.get(key) else {
         return Ok(None);
     };
     match value {
-        Value::Null => Ok(None),
         Value::Number(number) => {
             let Some(parsed) = number.as_u64() else {
                 return Err(ComposeError::InvalidRawDraft {
-                    reason: format!("field `{key}` must be an unsigned integer"),
+                    reason: format!("field `{key}` must be a positive JSON integer"),
                 });
             };
             NonZeroU64::new(parsed)
                 .ok_or_else(|| ComposeError::InvalidRawDraft {
-                    reason: format!("field `{key}` must be greater than zero"),
-                })
-                .map(Some)
-        }
-        Value::String(text) => {
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                return Ok(None);
-            }
-            let parsed = trimmed
-                .parse::<u64>()
-                .map_err(|_| ComposeError::InvalidRawDraft {
-                    reason: format!("field `{key}` must be an unsigned integer"),
-                })?;
-            NonZeroU64::new(parsed)
-                .ok_or_else(|| ComposeError::InvalidRawDraft {
-                    reason: format!("field `{key}` must be greater than zero"),
+                    reason: format!("field `{key}` must be a positive JSON integer"),
                 })
                 .map(Some)
         }
         _ => Err(ComposeError::InvalidRawDraft {
-            reason: format!("field `{key}` must be an unsigned integer"),
+            reason: format!("field `{key}` must be a positive JSON integer"),
         }),
     }
 }
@@ -1351,37 +1358,36 @@ fn format_mintable(mintable: Mintable) -> String {
     .to_owned()
 }
 fn parse_mintable_label(label: &str) -> Result<Mintable, ComposeError> {
-    let trimmed = label.trim();
-    let lower = trimmed.to_ascii_lowercase();
-    match lower.as_str() {
-        "infinitely" | "infinite" => Ok(Mintable::Infinitely),
-        "once" => Ok(Mintable::Once),
-        "not" => Ok(Mintable::Not),
-        other if other.starts_with("limited") => {
-            let suffix = trimmed["limited".len()..].trim();
-            let value_str = if suffix.starts_with('(') && suffix.ends_with(')') {
-                &suffix[1..suffix.len() - 1]
-            } else if suffix.is_empty() {
+    match label {
+        "Infinitely" => Ok(Mintable::Infinitely),
+        "Once" => Ok(Mintable::Once),
+        "Not" => Ok(Mintable::Not),
+        _ => {
+            let Some(value_str) = label
+                .strip_prefix("Limited(")
+                .and_then(|value| value.strip_suffix(')'))
+            else {
                 return Err(ComposeError::InvalidRawDraft {
-                    reason: "Limited mintable requires a positive token count".to_owned(),
+                    reason: format!("unknown mintable variant `{label}`"),
                 });
-            } else {
-                suffix
             };
-            let tokens =
-                value_str
-                    .trim()
-                    .parse::<u32>()
-                    .map_err(|_| ComposeError::InvalidRawDraft {
-                        reason: format!("invalid Limited token count `{value_str}`"),
-                    })?;
-            Mintable::limited_from_u32(tokens).map_err(|err| ComposeError::InvalidRawDraft {
-                reason: format!("{err}"),
-            })
+            let tokens = value_str
+                .parse::<u32>()
+                .map_err(|_| ComposeError::InvalidRawDraft {
+                    reason: format!("invalid canonical mintable value `{label}`"),
+                })?;
+            let mintable = Mintable::limited_from_u32(tokens).map_err(|err| {
+                ComposeError::InvalidRawDraft {
+                    reason: err.to_string(),
+                }
+            })?;
+            if format_mintable(mintable) != label {
+                return Err(ComposeError::InvalidRawDraft {
+                    reason: format!("invalid canonical mintable value `{label}`"),
+                });
+            }
+            Ok(mintable)
         }
-        other => Err(ComposeError::InvalidRawDraft {
-            reason: format!("unknown mintable variant `{other}`"),
-        }),
     }
 }
 fn apply_mintable(builder: NewAssetDefinition, mintable: Mintable) -> NewAssetDefinition {
@@ -1392,9 +1398,149 @@ fn apply_mintable(builder: NewAssetDefinition, mintable: Mintable) -> NewAssetDe
         other => builder.with_mintable(other),
     }
 }
+#[derive(Debug)]
+struct DraftDecodeBudget {
+    remaining: usize,
+}
+impl Default for DraftDecodeBudget {
+    fn default() -> Self {
+        Self {
+            remaining: DRAFT_TOTAL_MAX_ITEMS_V1,
+        }
+    }
+}
+impl DraftDecodeBudget {
+    fn consume(&mut self) -> Result<(), ComposeError> {
+        self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
+            ComposeError::InvalidRawDraft {
+                reason: format!(
+                    "draft payload exceeds the V1 total-instruction limit of {DRAFT_TOTAL_MAX_ITEMS_V1}"
+                ),
+            }
+        })?;
+        Ok(())
+    }
+}
+fn validate_raw_json_input(input: &str) -> Result<(), ComposeError> {
+    if input.len() > RAW_DRAFT_JSON_MAX_BYTES_V1 {
+        return Err(ComposeError::InvalidRawDraft {
+            reason: format!(
+                "raw draft JSON exceeds the V1 limit of {RAW_DRAFT_JSON_MAX_BYTES_V1} bytes"
+            ),
+        });
+    }
+    let mut nesting = 0_usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for byte in input.bytes() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'{' | b'[' => {
+                nesting = nesting
+                    .checked_add(1)
+                    .ok_or_else(|| ComposeError::InvalidRawDraft {
+                        reason: "raw draft JSON nesting overflowed".to_owned(),
+                    })?;
+                if nesting > RAW_DRAFT_JSON_MAX_NESTING_V1 {
+                    return Err(ComposeError::InvalidRawDraft {
+                        reason: format!(
+                            "raw draft JSON exceeds the V1 nesting limit of {RAW_DRAFT_JSON_MAX_NESTING_V1}"
+                        ),
+                    });
+                }
+            }
+            b'}' | b']' => nesting = nesting.saturating_sub(1),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+fn reject_unknown_object_fields(
+    value: &Value,
+    allowed: &[&str],
+    context: &str,
+) -> Result<(), ComposeError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ComposeError::InvalidRawDraft {
+            reason: format!("{context} must be an object"),
+        })?;
+    if let Some(field) = object
+        .keys()
+        .find(|field| !allowed.contains(&field.as_str()))
+    {
+        return Err(ComposeError::InvalidRawDraft {
+            reason: format!("unknown field `{field}` in {context}"),
+        });
+    }
+    Ok(())
+}
+fn decode_strict_pin_manifest(value: &Value) -> Result<RegisterPinManifest, ComposeError> {
+    reject_unknown_object_fields(
+        value,
+        &["manifest_payload", "alias", "successor_of"],
+        "pin manifest request",
+    )?;
+    if let Some(alias @ Value::Object(_)) = value.as_object().and_then(|object| object.get("alias"))
+    {
+        reject_unknown_object_fields(alias, &["name", "namespace", "proof"], "pin alias")?;
+    }
+    json::from_value(value.clone()).map_err(|err| ComposeError::InvalidRawDraft {
+        reason: format!("invalid pin manifest request: {err}"),
+    })
+}
+fn decode_strict_account_admission_policy(
+    value: &Value,
+) -> Result<AccountAdmissionPolicy, ComposeError> {
+    reject_unknown_object_fields(
+        value,
+        &[
+            "mode",
+            "max_implicit_creations_per_tx",
+            "max_implicit_creations_per_block",
+            "implicit_creation_fee",
+            "min_initial_amounts",
+            "default_role_on_create",
+        ],
+        "account admission policy",
+    )?;
+    let object = value.as_object().expect("validated object");
+    if let Some(mode @ Value::Object(_)) = object.get("mode") {
+        reject_unknown_object_fields(mode, &["mode", "value"], "account admission mode")?;
+    }
+    if let Some(fee @ Value::Object(_)) = object.get("implicit_creation_fee") {
+        reject_unknown_object_fields(
+            fee,
+            &["asset_definition_id", "amount", "destination"],
+            "implicit account creation fee",
+        )?;
+        if let Some(destination @ Value::Object(_)) =
+            fee.as_object().and_then(|fee| fee.get("destination"))
+        {
+            reject_unknown_object_fields(
+                destination,
+                &["destination", "value"],
+                "implicit account fee destination",
+            )?;
+        }
+    }
+    json::from_value(value.clone()).map_err(|err| ComposeError::InvalidRawDraft {
+        reason: format!("invalid account admission policy: {err}"),
+    })
+}
 /// Serialize a list of drafts to a JSON array representation.
 #[must_use]
-pub fn drafts_to_json_value(drafts: &[InstructionDraft]) -> Value {
+fn drafts_to_json_value(drafts: &[InstructionDraft]) -> Value {
     Value::Array(drafts.iter().map(|draft| draft.to_json_value()).collect())
 }
 /// Serialize a list of drafts into a formatted JSON string.
@@ -1414,12 +1560,31 @@ pub fn drafts_to_pretty_json(drafts: &[InstructionDraft]) -> Result<String, Comp
 /// # Errors
 ///
 /// Returns [`ComposeError::InvalidRawDraft`] when the payload is malformed.
-pub fn drafts_from_json_value(value: &Value) -> Result<Vec<InstructionDraft>, ComposeError> {
+fn drafts_from_json_value(value: &Value) -> Result<Vec<InstructionDraft>, ComposeError> {
+    let mut budget = DraftDecodeBudget::default();
+    drafts_from_json_value_with_budget(value, 0, &mut budget)
+}
+fn drafts_from_json_value_with_budget(
+    value: &Value,
+    multisig_depth: usize,
+    budget: &mut DraftDecodeBudget,
+) -> Result<Vec<InstructionDraft>, ComposeError> {
     match value {
-        Value::Array(items) => items
-            .iter()
-            .map(InstructionDraft::from_json_value)
-            .collect(),
+        Value::Array(items) => {
+            if items.len() > DRAFT_ARRAY_MAX_ITEMS_V1 {
+                return Err(ComposeError::InvalidRawDraft {
+                    reason: format!(
+                        "draft array exceeds the V1 limit of {DRAFT_ARRAY_MAX_ITEMS_V1} instructions"
+                    ),
+                });
+            }
+            items
+                .iter()
+                .map(|item| {
+                    InstructionDraft::from_json_value_with_budget(item, multisig_depth, budget)
+                })
+                .collect()
+        }
         _ => Err(ComposeError::InvalidRawDraft {
             reason: "expected array".to_owned(),
         }),
@@ -1431,6 +1596,7 @@ pub fn drafts_from_json_value(value: &Value) -> Result<Vec<InstructionDraft>, Co
 ///
 /// Returns [`ComposeError::InvalidRawDraft`] when the payload fails to decode.
 pub fn drafts_from_json_str(input: &str) -> Result<Vec<InstructionDraft>, ComposeError> {
+    validate_raw_json_input(input)?;
     let value: Value = json::from_str(input).map_err(|err| ComposeError::InvalidRawDraft {
         reason: err.to_string(),
     })?;
@@ -1439,9 +1605,11 @@ pub fn drafts_from_json_str(input: &str) -> Result<Vec<InstructionDraft>, Compos
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         account::{AccountAdmissionMode, admission::ImplicitAccountCreationFee},
         asset::prelude::AssetDefinitionId,
+        block::BlockHeader,
     };
     use iroha_version::Version;
     use std::{
@@ -1469,14 +1637,37 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/../fixtures/composer/draft_pin_manifest.json"
     ));
-    const TEST_NETWORK_ID: &str =
+    const RETIRED_RAW_GENESIS_HASH: &str =
         "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
     fn test_network_id() -> NetworkId {
-        TEST_NETWORK_ID.parse().expect("test network id")
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"mochi-compose-test-network",
+        )))
     }
     fn draft_from_fixture(fixture: &str) -> InstructionDraft {
         let value: Value = json::from_str(fixture).expect("fixture json");
         InstructionDraft::from_json_value(&value).expect("fixture draft")
+    }
+    fn compose_for_test(
+        drafts: &[InstructionDraft],
+        authority: &SigningAuthority,
+    ) -> Result<TransactionPreview, ComposeError> {
+        compose_preview_with_options(
+            test_network_id(),
+            drafts,
+            authority,
+            &TransactionComposeOptions::default(),
+        )
+    }
+    fn compose_with_development_signer_for_test(
+        drafts: &[InstructionDraft],
+    ) -> Result<TransactionPreview, ComposeError> {
+        compose_for_test(
+            drafts,
+            development_signing_authorities()
+                .first()
+                .expect("development signer"),
+        )
     }
     #[test]
     fn mint_preview_produces_summary() {
@@ -1486,7 +1677,8 @@ mod tests {
             .expect("definition id");
         let asset_id = format!("{asset_def}#{account}");
         let network_id = test_network_id();
-        let preview = mint_quantity_preview(network_id, &asset_id, 5_u32).expect("preview");
+        let draft = InstructionDraft::mint_from_input(&asset_id, "5").expect("mint draft");
+        let preview = compose_with_development_signer_for_test(&[draft]).expect("preview");
         assert_eq!(preview.authority(), account);
         assert!(
             !preview.instructions().is_empty(),
@@ -1505,18 +1697,28 @@ mod tests {
         );
     }
     #[test]
-    fn test_network_id_uses_exact_unprefixed_genesis_hash() {
-        assert_eq!(test_network_id().to_string(), TEST_NETWORK_ID);
+    fn test_network_id_uses_canonical_checked_literal() {
+        let network_id = test_network_id();
+        let literal = network_id.to_string();
+        assert_eq!(literal.len(), 74);
+        assert_eq!(
+            literal.parse::<NetworkId>().expect("canonical literal"),
+            network_id
+        );
         assert!(
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            RETIRED_RAW_GENESIS_HASH.parse::<NetworkId>().is_err(),
+            "a bare genesis hash is not a first-release network identity"
+        );
+        assert!(
+            format!("0x{RETIRED_RAW_GENESIS_HASH}")
                 .parse::<NetworkId>()
                 .is_err(),
-            "retired tagged-and-checksummed network id must be rejected"
+            "a hexadecimal compatibility prefix must be rejected"
         );
     }
     #[test]
     fn invalid_asset_id_reports_error() {
-        let err = mint_quantity_preview(test_network_id(), "invalid-format", 1_u32)
+        let err = InstructionDraft::mint_from_input("invalid-format", "1")
             .expect_err("invalid identifiers should produce compose error");
         matches!(err, ComposeError::InvalidAssetId { .. });
     }
@@ -1548,6 +1750,39 @@ mod tests {
         assert!(matches!(error, ComposeError::InvalidQuantity { .. }));
     }
     #[test]
+    fn asset_drafts_reject_noncanonical_literals() {
+        let definition = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let asset_id = AssetId::new(definition.parse().expect("definition id"), ALICE_ID.clone());
+        let asset = asset_literal(&asset_id);
+
+        for invalid in [format!(" {asset}"), format!("{asset}#dataspace:01")] {
+            let error = InstructionDraft::mint_from_input(&invalid, "1")
+                .expect_err("noncanonical asset id must be rejected");
+            assert!(matches!(error, ComposeError::InvalidAssetId { .. }));
+        }
+        for invalid in [" 1 ", "+1", "01", "-0", "1.0"] {
+            let error = InstructionDraft::mint_from_input(&asset, invalid)
+                .expect_err("noncanonical quantity must be rejected");
+            assert!(matches!(error, ComposeError::InvalidQuantity { .. }));
+        }
+        let error = InstructionDraft::register_asset_definition_from_input(
+            &format!(" {definition}"),
+            "rose",
+            Mintable::Once,
+        )
+        .expect_err("noncanonical definition id must be rejected");
+        assert!(matches!(
+            error,
+            ComposeError::InvalidAssetDefinitionId { .. }
+        ));
+        InstructionDraft::register_asset_definition_from_input(
+            definition,
+            " rose ",
+            Mintable::Once,
+        )
+        .expect_err("asset definition name whitespace must not be normalized");
+    }
+    #[test]
     fn burn_draft_parses_inputs() {
         let asset_id = AssetId::new(
             "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap(),
@@ -1564,8 +1799,8 @@ mod tests {
     }
     #[test]
     fn compose_preview_requires_instructions() {
-        let err =
-            compose_preview(test_network_id(), &[]).expect_err("empty instructions should fail");
+        let err = compose_with_development_signer_for_test(&[])
+            .expect_err("empty instructions should fail");
         matches!(err, ComposeError::EmptyInstructions);
     }
     #[test]
@@ -1583,7 +1818,7 @@ mod tests {
             quantity: Quantity::from(3_u32),
             destination: BOB_ID.clone(),
         };
-        let preview = compose_preview(test_network_id(), &[mint, transfer])
+        let preview = compose_with_development_signer_for_test(&[mint, transfer])
             .expect("compose multi instruction");
         assert_eq!(
             preview.instructions().len(),
@@ -1604,7 +1839,7 @@ mod tests {
         )
         .into();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &TEST_NETWORK_ID.parse().expect("canonical test network id"),
+            &test_network_id(),
             &ALICE_ID,
             1,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -1725,6 +1960,175 @@ mod tests {
         assert_eq!(parsed.len(), drafts.len());
         for (expected, actual) in drafts.iter().zip(parsed.iter()) {
             assert_eq!(expected.summary(), actual.summary());
+
+            let mut value = expected.to_json_value();
+            value
+                .as_object_mut()
+                .expect("draft object")
+                .insert("unexpected".to_owned(), Value::Bool(true));
+            let error = InstructionDraft::from_json_value(&value)
+                .expect_err("every first-release draft kind must reject unknown fields");
+            assert!(error.to_string().contains("unknown field `unexpected`"));
+        }
+    }
+    #[test]
+    fn protocol_drafts_reject_unknown_nested_fields() {
+        for (fixture, nested_field) in [
+            (FIXTURE_SPACE_MANIFEST_HANDLE, "manifest"),
+            (FIXTURE_PIN_MANIFEST, "request"),
+            (FIXTURE_ADMISSION_POLICY, "policy"),
+        ] {
+            let mut value: Value = json::from_str(fixture).expect("fixture JSON");
+            value
+                .as_object_mut()
+                .and_then(|object| object.get_mut(nested_field))
+                .and_then(Value::as_object_mut)
+                .expect("nested protocol object")
+                .insert("legacy".to_owned(), Value::Bool(true));
+            InstructionDraft::from_json_value(&value)
+                .expect_err("unknown nested protocol fields must fail closed");
+        }
+
+        let mut value: Value = json::from_str(FIXTURE_ADMISSION_POLICY).expect("policy fixture");
+        value
+            .as_object_mut()
+            .and_then(|object| object.get_mut("policy"))
+            .and_then(Value::as_object_mut)
+            .and_then(|policy| policy.get_mut("implicit_creation_fee"))
+            .and_then(Value::as_object_mut)
+            .expect("implicit creation fee")
+            .insert("legacy".to_owned(), Value::Bool(true));
+        InstructionDraft::from_json_value(&value)
+            .expect_err("unknown nested fee fields must fail closed");
+    }
+    #[test]
+    fn raw_draft_limits_bound_bytes_arrays_totals_and_multisig_depth() {
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
+        let asset = AssetId::new(asset_def, ALICE_ID.clone());
+        let leaf = InstructionDraft::mint_from_input(&asset_literal(&asset), "1")
+            .expect("mint draft")
+            .to_json_value();
+
+        let maximum_array = Value::Array(vec![leaf.clone(); DRAFT_ARRAY_MAX_ITEMS_V1]);
+        assert_eq!(
+            drafts_from_json_value(&maximum_array)
+                .expect("the exact V1 array limit must be accepted")
+                .len(),
+            DRAFT_ARRAY_MAX_ITEMS_V1
+        );
+        let oversized_array = Value::Array(vec![leaf.clone(); DRAFT_ARRAY_MAX_ITEMS_V1 + 1]);
+        drafts_from_json_value(&oversized_array)
+            .expect_err("the first instruction beyond the V1 array limit must fail");
+
+        let account = account_literal(&ALICE_ID);
+        let multisig = |instructions: Vec<Value>| {
+            norito::json!({
+                "kind": "multisig_propose",
+                "account": (account.clone()),
+                "instructions": instructions
+            })
+        };
+        let total_overflow = Value::Array(
+            (0..4)
+                .map(|_| multisig(vec![leaf.clone(); DRAFT_ARRAY_MAX_ITEMS_V1]))
+                .collect(),
+        );
+        let error = drafts_from_json_value(&total_overflow)
+            .expect_err("the total instruction budget must span nested arrays");
+        assert!(error.to_string().contains("total-instruction limit"));
+
+        let mut maximum_depth = leaf.clone();
+        for _ in 0..MULTISIG_DRAFT_MAX_DEPTH_V1 {
+            maximum_depth = multisig(vec![maximum_depth]);
+        }
+        InstructionDraft::from_json_value(&maximum_depth)
+            .expect("the exact V1 multisig nesting limit must be accepted");
+        let excessive_depth = multisig(vec![maximum_depth]);
+        let error = InstructionDraft::from_json_value(&excessive_depth)
+            .expect_err("the first multisig depth beyond the V1 limit must fail");
+        assert!(error.to_string().contains("multisig nesting"));
+
+        let oversized_input = " ".repeat(RAW_DRAFT_JSON_MAX_BYTES_V1 + 1);
+        let error = drafts_from_json_str(&oversized_input)
+            .expect_err("the first byte beyond the V1 JSON limit must fail before parsing");
+        assert!(error.to_string().contains("bytes"));
+        let excessive_json_nesting = "[".repeat(RAW_DRAFT_JSON_MAX_NESTING_V1 + 1);
+        let error = drafts_from_json_str(&excessive_json_nesting)
+            .expect_err("excessive raw JSON nesting must fail before parsing");
+        assert!(error.to_string().contains("nesting limit"));
+    }
+    #[test]
+    fn register_asset_definition_json_requires_canonical_mintable() {
+        let draft = InstructionDraft::register_asset_definition_from_input(
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            "rose",
+            Mintable::Infinitely,
+        )
+        .expect("definition draft");
+        let canonical = draft.to_json_value();
+
+        let mut missing = canonical.clone();
+        missing
+            .as_object_mut()
+            .expect("draft object")
+            .remove("mintable");
+        InstructionDraft::from_json_value(&missing)
+            .expect_err("missing first-release mintable must be rejected");
+
+        for invalid in [
+            "infinite",
+            "infinitely",
+            " Infinitely ",
+            "Limited 2",
+            "Limited(02)",
+        ] {
+            let mut value = canonical.clone();
+            value
+                .as_object_mut()
+                .expect("draft object")
+                .insert("mintable".to_owned(), Value::String(invalid.to_owned()));
+            InstructionDraft::from_json_value(&value)
+                .expect_err("noncanonical mintable spelling must be rejected");
+        }
+    }
+    #[test]
+    fn multisig_json_accepts_only_positive_integer_ttl() {
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
+        let nested = InstructionDraft::mint_from_input(
+            &asset_literal(&AssetId::new(asset_def, ALICE_ID.clone())),
+            "1",
+        )
+        .expect("nested draft");
+        let draft = InstructionDraft::MultisigPropose {
+            account: ALICE_ID.clone(),
+            instructions: vec![nested],
+            transaction_ttl_ms: NonZeroU64::new(1),
+        };
+        let canonical = draft.to_json_value();
+
+        let mut omitted = canonical.clone();
+        omitted
+            .as_object_mut()
+            .expect("draft object")
+            .remove("transaction_ttl_ms");
+        InstructionDraft::from_json_value(&omitted).expect("omitted TTL is canonical absence");
+
+        for invalid in [
+            Value::Null,
+            Value::String("1".to_owned()),
+            Value::from(0_u64),
+        ] {
+            let mut value = canonical.clone();
+            value
+                .as_object_mut()
+                .expect("draft object")
+                .insert("transaction_ttl_ms".to_owned(), invalid);
+            InstructionDraft::from_json_value(&value)
+                .expect_err("TTL must be a positive JSON integer");
         }
     }
     #[test]
@@ -1842,7 +2246,7 @@ mod tests {
         );
         let error = InstructionDraft::from_json_value(&value)
             .expect_err("retired domain-scoped draft must be rejected");
-        assert!(error.to_string().contains("chain-global"));
+        assert!(error.to_string().contains("unknown field `domain`"));
     }
     #[test]
     fn multisig_propose_from_json_requires_instructions() {
@@ -1958,7 +2362,7 @@ mod tests {
             .expect("Bob signer present");
         let draft = InstructionDraft::register_account_from_input(&account_literal(&ALICE_ID))
             .expect("account draft");
-        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
+        let err = compose_for_test(&[draft], bob)
             .expect_err("Bob should not be allowed to register accounts");
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
@@ -1987,7 +2391,7 @@ mod tests {
             None,
         )
         .expect("multisig draft");
-        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
+        let err = compose_for_test(&[draft], bob)
             .expect_err("Bob should not be allowed to propose multisig transactions");
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
@@ -2004,7 +2408,7 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
         let draft = draft_from_fixture(FIXTURE_SPACE_MANIFEST_TOUCH);
-        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
+        let err = compose_for_test(&[draft], bob)
             .expect_err("Bob should not be allowed to publish space directory manifests");
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
@@ -2021,7 +2425,7 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
         let draft = draft_from_fixture(FIXTURE_PIN_MANIFEST);
-        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
+        let err = compose_for_test(&[draft], bob)
             .expect_err("Bob should not be allowed to register pin manifests");
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
@@ -2048,7 +2452,7 @@ mod tests {
 }"#;
         let draft = InstructionDraft::publish_space_directory_manifest_from_json(manifest_json)
             .expect("space directory draft");
-        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
+        let err = compose_for_test(&[draft], bob)
             .expect_err("Bob should not be allowed to publish space directory manifests");
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
@@ -2066,13 +2470,12 @@ mod tests {
             .expect("Bob signer present");
         let pin_manifest_json = r#"{
   "manifest_payload": "TlJUMAAAduKskROcpAXus8dyJtDtlwD5AAAAAAAAAP11VCbJ+r+OAgEBLCQAAAAAAAAAAXEfIGIKrspjqahUS44Ka/oZKH+vxtnoUoM+vR660uOpRn5yCQhxAAAAAAAAAF4FBAEAAAAHBnNvcmFmcwQDc2YxBgUxLjAuMAQAAAEABAAABAAEAAAIAAT//wAACB8AAAAAAAAAJgIAAAAAAAAAERBzb3JhZnMuc2YxQDEuMC4wCwpzb3JhZnMtc2YxCAAAEAAAAAAAIM5QqarfhOV1WSCNOSAWISYv0bGIeuSQylRHDioAFT8nCNwEEAAAAAAAEQIDAAQAAAAACIBRAQAAAAAACQgAAAAAAAAAAAgAAAAAAAAAAAgAAAAAAAAAAA==",
-  "chunk_digest_sha3_256": [7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7],
   "alias": null,
   "successor_of": null
 }"#;
         let draft = InstructionDraft::register_pin_manifest_from_json(pin_manifest_json)
             .expect("pin manifest draft");
-        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
+        let err = compose_for_test(&[draft], bob)
             .expect_err("Bob should not be allowed to register pin manifests");
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {

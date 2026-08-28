@@ -2,7 +2,7 @@
   "status": "Error",
   "code": "SFS-SIG-006",
   "category": "signature",
-  "message": "governance DAG block validation failed: governance DAG block signature validation failed: governance log publisher signature verification failed: signature error: Verification equation was not satisfied",
+  "message": "governance DAG block validation failed: governance DAG block signature validation failed: governance log publisher signature verification failed: signature R is small-order (weak); rejected: Signature verification failed",
   "action": "Regenerate the governance DAG block from canonical log-node bytes, parent linkage, publisher metadata, and governed signature material.",
   "docs_url": "https://docs.iroha.tech/",
   "telemetry_tags": [
@@ -68,7 +68,7 @@
     },
     {
       "key": "validation_error",
-      "value": "governance DAG block signature validation failed: governance log publisher signature verification failed: signature error: Verification equation was not satisfied"
+      "value": "governance DAG block signature validation failed: governance log publisher signature verification failed: signature R is small-order (weak); rejected: Signature verification failed"
     }
   ],
   "inputs": [

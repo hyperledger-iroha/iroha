@@ -1,9 +1,6 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
-
-def test_merge_execution_validation_cache_semantics_survive_digest_refresh(
-    tmp_path: Path,
-) -> None:
+def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_path: Path) -> None:
     """Resealing cannot hide weakened merge-execution cache authority."""
 
     module = load_checker()
@@ -92,7 +89,6 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(
     finally:
         module._PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256.clear()
         module._PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256.update(original_seals)
-
 
 @pytest.mark.parametrize(
     ("relative_path", "region_marker", "old", "new", "error_fragment"),
@@ -2165,7 +2161,7 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "fn v2_ingress_head_can_drain<R: EffectRuntime>(",
             "executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)",
-            "executor.can_admit_network_message(message)",
+            "executor.runtime.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)",
             "effect-executor preflight must preserve the exact fair-ingress carrier into owned runtime capacity admission",
         ),
         (
@@ -2375,7 +2371,6 @@ def test_exact_output_production_source_mutations_fail_closed(
         any(expected_error in error for error in errors)
         for expected_error in expected_errors
     ), errors
-
 
 def _apply_exact_output_non_runtime_extended_mutations(
     tmp_path: Path, module, monkeypatch: pytest.MonkeyPatch
@@ -2792,7 +2787,6 @@ def _apply_exact_output_non_runtime_extended_mutations(
     monkeypatch.setattr(module, "_require_rust_item_token_sha256", lambda *args: None)
     return diagnostics
 
-
 @pytest.mark.parametrize(
     ("item_name", "old", "new", "expected_error"),
     (
@@ -2920,7 +2914,6 @@ def test_lane_predecessor_ordering_mutations_survive_digest_refresh(
         item_name in error and "exact reviewed token digest" in error
         for error in errors
     ), errors
-
 
 @pytest.mark.parametrize(
     ("owner", "old", "new", "expected_error"),

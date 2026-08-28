@@ -18,6 +18,7 @@ import {
 } from "./normalizers.js";
 import { MultisigSpec, MultisigSpecBuilder } from "./multisig.js";
 import { getCurveEntryByPublicKeyMulticodec } from "./curveRegistry.js";
+import { validatePublicKeyForCurve } from "./address.js";
 import {
   createValidationError,
   ValidationErrorCode,
@@ -98,6 +99,8 @@ export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
 export const CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 = 4_096;
 /** Maximum UTF-8 bytes accepted for an asset-transfer availability reason. */
 export const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
+/** Maximum concurrent participants excluding the host in a first-release Kaigi call. */
+export const KAIGI_MAX_PARTICIPANTS_V1 = 4_096;
 /** Maximum relay hops accepted by a first-release Kaigi manifest. */
 export const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 = 8;
 /** Maximum decoded bytes accepted for a first-release Kaigi HPKE public key. */
@@ -826,13 +829,13 @@ function asPositiveKaigiU64(value, name) {
   return normalized;
 }
 
-function asPositiveKaigiU32(value, name) {
+function asKaigiParticipantLimit(value, name) {
   const canonical = normalizeCanonicalU64(value, name);
   const numeric = BigInt(canonical);
-  if (numeric === 0n || numeric > BigInt(UINT32_MAX)) {
+  if (numeric === 0n || numeric > BigInt(KAIGI_MAX_PARTICIPANTS_V1)) {
     fail(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name} must be an integer between 1 and ${UINT32_MAX}`,
+      `${name} must be an integer between 1 and ${KAIGI_MAX_PARTICIPANTS_V1}`,
       name,
     );
   }
@@ -2113,7 +2116,7 @@ function normalizeNewKaigi(options) {
     max_participants:
       maxParticipantsValue === undefined || maxParticipantsValue === null
         ? null
-        : asPositiveKaigiU32(maxParticipantsValue, "call.maxParticipants"),
+        : asKaigiParticipantLimit(maxParticipantsValue, "call.maxParticipants"),
     gas_rate_per_minute: asKaigiU64(
       gasRateValue,
       "call.gasRatePerMinute",
@@ -2584,6 +2587,7 @@ function normalizeManifestPublicKeyLiteral(value, name) {
       name,
     );
   }
+  validatePublicKeyForCurve(entry.id, payload, name);
   const fnHex = bytes.subarray(0, functionCode.nextIndex).toString("hex");
   const lenHex = bytes.subarray(functionCode.nextIndex, digestLength.nextIndex).toString("hex");
   const payloadHex = payload.toString("hex").toUpperCase();

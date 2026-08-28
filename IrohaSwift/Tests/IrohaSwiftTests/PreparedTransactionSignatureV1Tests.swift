@@ -138,6 +138,7 @@ final class PreparedTransactionSignatureV1Tests: XCTestCase {
     let faucetWire = try XCTUnwrap(Data(hexString: faucet.signedTransactionWireHex))
     let inspected = try ToriiCanonicalTransactionDraft.inspectVersionedSignedTransaction(
       faucetWire,
+      expectedAdmissionIntent: .queuePlanSynced,
       context: "prepared faucet golden"
     )
     XCTAssertEqual(faucetVector.networkId, onboardingVector.networkId)

@@ -314,6 +314,7 @@ fi
 (
   cd "${SOURCE_ROOT}"
   GIT_OPTIONAL_LOCKS=0 \
+  IROHA_INTEGRATION_TESTS_SKIP_PREBUILT_STAGE=1 \
   NORITO_SKIP_BINDINGS_SYNC=1 \
     run_cargo run \
       --locked \

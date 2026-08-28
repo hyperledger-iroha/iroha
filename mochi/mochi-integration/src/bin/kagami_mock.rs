@@ -1,12 +1,10 @@
 //! Minimal stand-in for the `kagami` binary used by the MOCHI supervisor integration tests.
 use color_eyre::{Result, eyre::eyre};
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
-use iroha_data_model::{NetworkId, parameter::system::SumeragiConsensusMode};
-use mochi_core::sign_kagami_stub_genesis_from_config;
+use iroha_crypto::{ExposedPrivateKey, KeyPair, PublicKey};
+use iroha_data_model::{NetworkId, parameter::system::SumeragiConsensusMode, prelude::ChainId};
+use mochi_core::{GenesisProfile, sign_kagami_stub_genesis_from_config};
 use mochi_integration::kagami_default_manifest_json;
 use std::{env, fs, path::PathBuf, process};
-const DEFAULT_CHAIN_ID: &str = "mochi-mock-chain";
-const VERSION_OUTPUT: &str = "kagami_mock 3.0.0 test-stub";
 fn main() {
     if let Err(err) = run() {
         eprintln!("kagami_mock: {err:?}");
@@ -16,10 +14,6 @@ fn main() {
 fn run() -> Result<()> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
-        Some("--version") | Some("-V") => {
-            println!("{VERSION_OUTPUT}");
-            Ok(())
-        }
         Some("genesis") => match args.next().as_deref() {
             Some("generate") => generate(args.collect()),
             Some("sign") => sign(args.collect()),
@@ -29,7 +23,7 @@ fn run() -> Result<()> {
         },
         Some("verify") => verify(args.collect()),
         _ => Err(eyre!(
-            "unsupported invocation; expected `kagami --version`, `kagami genesis generate ...`, `kagami genesis sign ...`, or `kagami verify ...`"
+            "unsupported invocation; expected `kagami genesis generate ...`, `kagami genesis sign ...`, or `kagami verify ...`"
         )),
     }
 }
@@ -41,7 +35,6 @@ struct SignArgs {
     expected_hash_out: PathBuf,
     private_key_file: PathBuf,
     config_file: PathBuf,
-    consensus_mode: Option<SumeragiConsensusMode>,
 }
 fn sign(args: Vec<String>) -> Result<()> {
     let parsed = parse_sign_args(&args)?;
@@ -75,7 +68,7 @@ fn sign(args: Vec<String>) -> Result<()> {
         &parsed.manifest_path,
         &parsed.config_file,
         &key_pair,
-        parsed.consensus_mode,
+        None,
     )?;
     fs::write(&parsed.out_file, block.encode_wire()?)?;
     if parsed.bound_manifest_out != parsed.manifest_path {
@@ -98,44 +91,29 @@ fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
     let mut expected_hash_out = None;
     let mut private_key_file = None;
     let mut config_file = None;
-    let mut consensus_mode = None;
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
             "--out-file" => {
-                out_file = Some(PathBuf::from(next_arg_value(
-                    args,
-                    &mut index,
-                    "--out-file",
-                )?));
+                let value = PathBuf::from(next_arg_value(args, &mut index, "--out-file")?);
+                set_once(&mut out_file, "--out-file", value)?;
             }
             "--bound-manifest-out" => {
-                bound_manifest_out = Some(PathBuf::from(next_arg_value(
-                    args,
-                    &mut index,
-                    "--bound-manifest-out",
-                )?));
+                let value =
+                    PathBuf::from(next_arg_value(args, &mut index, "--bound-manifest-out")?);
+                set_once(&mut bound_manifest_out, "--bound-manifest-out", value)?;
             }
             "--expected-hash-out" => {
-                expected_hash_out = Some(PathBuf::from(next_arg_value(
-                    args,
-                    &mut index,
-                    "--expected-hash-out",
-                )?));
+                let value = PathBuf::from(next_arg_value(args, &mut index, "--expected-hash-out")?);
+                set_once(&mut expected_hash_out, "--expected-hash-out", value)?;
             }
             "--private-key-file" => {
-                private_key_file = Some(PathBuf::from(next_arg_value(
-                    args,
-                    &mut index,
-                    "--private-key-file",
-                )?));
+                let value = PathBuf::from(next_arg_value(args, &mut index, "--private-key-file")?);
+                set_once(&mut private_key_file, "--private-key-file", value)?;
             }
             "--config" => {
-                config_file = Some(PathBuf::from(next_arg_value(args, &mut index, "--config")?));
-            }
-            "--consensus-mode" => {
-                let value = next_arg_value(args, &mut index, "--consensus-mode")?;
-                consensus_mode = Some(parse_consensus_mode(value)?);
+                let value = PathBuf::from(next_arg_value(args, &mut index, "--config")?);
+                set_once(&mut config_file, "--config", value)?;
             }
             other => return Err(eyre!("unsupported argument `{other}`")),
         }
@@ -151,9 +129,9 @@ fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
         private_key_file: private_key_file
             .ok_or_else(|| eyre!("missing `--private-key-file` argument"))?,
         config_file: config_file.ok_or_else(|| eyre!("missing `--config` argument"))?,
-        consensus_mode,
     })
 }
+#[derive(Debug)]
 struct GenerateArgs {
     ivm_dir: PathBuf,
     genesis_public_key: String,
@@ -162,21 +140,7 @@ struct GenerateArgs {
 }
 fn generate(args: Vec<String>) -> Result<()> {
     let parsed = parse_generate_args(&args)?;
-    let public_key: PublicKey = match parsed.genesis_public_key.parse() {
-        Ok(key) => key,
-        Err(parse_err) => {
-            let trimmed = parsed.genesis_public_key.trim_start_matches("0x");
-            match PublicKey::from_hex(Algorithm::Ed25519, trimmed) {
-                Ok(key) => key,
-                Err(hex_err) => {
-                    return Err(eyre!(
-                        "invalid genesis public key `{}`: {parse_err}; fallback hex decode failed: {hex_err}",
-                        parsed.genesis_public_key
-                    ));
-                }
-            }
-        }
-    };
+    let public_key = parse_genesis_public_key(&parsed.genesis_public_key)?;
     let manifest = kagami_default_manifest_json(
         &public_key,
         &parsed.ivm_dir,
@@ -186,53 +150,98 @@ fn generate(args: Vec<String>) -> Result<()> {
     println!("{manifest}");
     Ok(())
 }
+fn parse_genesis_public_key(value: &str) -> Result<PublicKey> {
+    value
+        .parse::<PublicKey>()
+        .map_err(|error| eyre!("invalid canonical genesis public key `{value}`: {error}"))
+}
 fn parse_generate_args(args: &[String]) -> Result<GenerateArgs> {
-    let mut ivm_dir = PathBuf::from(".");
+    let mut ivm_dir = None;
     let mut genesis_public_key = None;
-    let mut chain_id = DEFAULT_CHAIN_ID.to_owned();
-    let mut consensus_mode = SumeragiConsensusMode::Permissioned;
+    let mut chain_id = None;
+    let mut consensus_mode = None;
+    let mut profile = None;
+    let mut vrf_seed_hex = None;
+    let mut saw_default = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--ivm-dir" => {
-                let path = next_arg_value(args, &mut index, "--ivm-dir")?;
-                ivm_dir = PathBuf::from(path);
+                let value = PathBuf::from(next_arg_value(args, &mut index, "--ivm-dir")?);
+                set_once(&mut ivm_dir, "--ivm-dir", value)?;
             }
             "--genesis-public-key" => {
-                genesis_public_key =
-                    Some(next_arg_value(args, &mut index, "--genesis-public-key")?.to_owned());
+                let value = next_arg_value(args, &mut index, "--genesis-public-key")?.to_owned();
+                set_once(&mut genesis_public_key, "--genesis-public-key", value)?;
             }
             "--chain-id" => {
-                chain_id = next_arg_value(args, &mut index, "--chain-id")?.to_owned();
+                let raw = next_arg_value(args, &mut index, "--chain-id")?;
+                let parsed = raw
+                    .parse::<ChainId>()
+                    .map_err(|error| eyre!("invalid chain id `{raw}`: {error}"))?;
+                if parsed.to_string() != raw {
+                    return Err(eyre!("chain id must use its canonical spelling"));
+                }
+                set_once(&mut chain_id, "--chain-id", raw.to_owned())?;
             }
             "--consensus-mode" => {
-                consensus_mode =
+                let value =
                     parse_consensus_mode(next_arg_value(args, &mut index, "--consensus-mode")?)?;
+                set_once(&mut consensus_mode, "--consensus-mode", value)?;
             }
-            "--profile" | "--vrf-seed-hex" => {
-                let flag = &args[index];
-                let _ = next_arg_value(args, &mut index, flag)?;
+            "--profile" => {
+                let raw = next_arg_value(args, &mut index, "--profile")?;
+                let value = raw
+                    .parse::<GenesisProfile>()
+                    .map_err(|error| eyre!(error))?;
+                set_once(&mut profile, "--profile", value)?;
             }
-            "default" => break,
+            "--vrf-seed-hex" => {
+                let value = next_arg_value(args, &mut index, "--vrf-seed-hex")?.to_owned();
+                validate_vrf_seed_hex(&value)?;
+                set_once(&mut vrf_seed_hex, "--vrf-seed-hex", value)?;
+            }
+            "default" => {
+                if index + 1 != args.len() {
+                    return Err(eyre!("`default` must be the terminal generate argument"));
+                }
+                saw_default = true;
+                break;
+            }
             other => return Err(eyre!("unsupported argument `{other}`")),
         }
         index += 1;
     }
-    let Some(genesis_public_key) = genesis_public_key else {
-        return Err(eyre!("missing `--genesis-public-key` argument"));
-    };
+    if !saw_default {
+        return Err(eyre!("missing terminal `default` argument"));
+    }
+    validate_profile_seed(profile, vrf_seed_hex.as_deref())?;
     Ok(GenerateArgs {
-        ivm_dir,
-        genesis_public_key,
-        chain_id,
-        consensus_mode,
+        ivm_dir: ivm_dir.ok_or_else(|| eyre!("missing `--ivm-dir` argument"))?,
+        genesis_public_key: genesis_public_key
+            .ok_or_else(|| eyre!("missing `--genesis-public-key` argument"))?,
+        chain_id: chain_id.ok_or_else(|| eyre!("missing `--chain-id` argument"))?,
+        consensus_mode: consensus_mode
+            .ok_or_else(|| eyre!("missing `--consensus-mode` argument"))?,
     })
+}
+fn set_once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<()> {
+    if slot.is_some() {
+        return Err(eyre!("duplicate `{flag}` argument"));
+    }
+    *slot = Some(value);
+    Ok(())
 }
 fn next_arg_value<'a>(args: &'a [String], index: &mut usize, flag: &str) -> Result<&'a str> {
     *index += 1;
-    args.get(*index)
+    let value = args
+        .get(*index)
         .map(String::as_str)
-        .ok_or_else(|| eyre!("{flag} requires a value"))
+        .ok_or_else(|| eyre!("{flag} requires a value"))?;
+    if value.starts_with("--") || value == "default" {
+        return Err(eyre!("{flag} requires a value"));
+    }
+    Ok(value)
 }
 fn parse_consensus_mode(value: &str) -> Result<SumeragiConsensusMode> {
     match value {
@@ -241,50 +250,106 @@ fn parse_consensus_mode(value: &str) -> Result<SumeragiConsensusMode> {
         other => Err(eyre!("unsupported consensus mode `{other}`")),
     }
 }
-fn verify(args: Vec<String>) -> Result<()> {
+#[derive(Debug, PartialEq, Eq)]
+struct VerifyArgs {
+    profile: GenesisProfile,
+    genesis: PathBuf,
+    vrf_seed_hex: Option<String>,
+}
+fn parse_verify_args(args: &[String]) -> Result<VerifyArgs> {
     let mut profile = None;
     let mut genesis = None;
+    let mut vrf_seed_hex = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--profile" => {
-                index += 1;
-                profile = args.get(index).cloned();
+                let raw = next_arg_value(args, &mut index, "--profile")?;
+                let value = raw
+                    .parse::<GenesisProfile>()
+                    .map_err(|error| eyre!(error))?;
+                set_once(&mut profile, "--profile", value)?;
             }
             "--genesis" => {
-                index += 1;
-                genesis = args.get(index).map(PathBuf::from);
+                let value = PathBuf::from(next_arg_value(args, &mut index, "--genesis")?);
+                set_once(&mut genesis, "--genesis", value)?;
             }
             "--vrf-seed-hex" => {
-                index += 1;
+                let value = next_arg_value(args, &mut index, "--vrf-seed-hex")?.to_owned();
+                validate_vrf_seed_hex(&value)?;
+                set_once(&mut vrf_seed_hex, "--vrf-seed-hex", value)?;
             }
             other => return Err(eyre!("unsupported argument `{other}`")),
         }
         index += 1;
     }
-    let Some(profile) = profile else {
-        return Err(eyre!("missing `--profile` argument"));
-    };
-    if genesis.as_ref().map(|path| path.is_file()).unwrap_or(false) {
+    let profile = profile.ok_or_else(|| eyre!("missing `--profile` argument"))?;
+    validate_profile_seed(Some(profile), vrf_seed_hex.as_deref())?;
+    Ok(VerifyArgs {
+        profile,
+        genesis: genesis.ok_or_else(|| eyre!("missing `--genesis` argument"))?,
+        vrf_seed_hex,
+    })
+}
+fn validate_vrf_seed_hex(seed: &str) -> Result<()> {
+    if seed.len() != 64 || !seed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(eyre!("VRF seed must be exactly 32 hexadecimal bytes"));
+    }
+    Ok(())
+}
+fn validate_profile_seed(profile: Option<GenesisProfile>, seed: Option<&str>) -> Result<()> {
+    if profile.is_none() && seed.is_some() {
+        return Err(eyre!("`--vrf-seed-hex` requires `--profile`"));
+    }
+    if profile.is_some_and(GenesisProfile::requires_seed) && seed.is_none() {
+        return Err(eyre!("selected profile requires `--vrf-seed-hex`"));
+    }
+    Ok(())
+}
+fn verify(args: Vec<String>) -> Result<()> {
+    let parsed = parse_verify_args(&args)?;
+    if parsed.genesis.is_file() {
         println!(
             "verified genesis {:?} for profile {}",
-            genesis.unwrap(),
-            profile
+            parsed.genesis, parsed.profile
         );
         return Ok(());
     }
     Err(eyre!(
-        "missing or unreadable genesis path for profile {profile}"
+        "missing or unreadable genesis path for profile {}",
+        parsed.profile
     ))
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::KeyPair;
-    use iroha_data_model::block::decode_framed_signed_block;
+    use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
+    use iroha_data_model::{block::decode_framed_signed_block, peer::PeerId};
+    use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
     use mochi_core::kagami_stub_genesis_policies_from_config;
     use norito::json::Value;
     const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
+
+    fn with_valid_topology(manifest_json: String) -> String {
+        let manifest: RawGenesisTransaction =
+            norito::json::from_str(&manifest_json).expect("decode mock manifest");
+        let topology = (0..4)
+            .map(|_| {
+                let validator = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                    .expect("generate validator key");
+                let pop = bls_normal_pop_prove(validator.private_key())
+                    .expect("generate validator proof of possession");
+                GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
+            })
+            .collect();
+        let manifest = manifest
+            .into_builder()
+            .next_transaction()
+            .set_topology(topology)
+            .build_raw();
+        norito::json::to_json_pretty(&manifest).expect("encode mock manifest")
+    }
+
     fn peer_config(
         chain_id: &str,
         genesis_public_key: &PublicKey,
@@ -339,7 +404,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "--consensus-mode".to_owned(),
             "npos".to_owned(),
             "--vrf-seed-hex".to_owned(),
-            "abcd".to_owned(),
+            "ab".repeat(32),
             "default".to_owned(),
         ];
         let parsed = parse_generate_args(&args).expect("parse mock kagami args");
@@ -347,6 +412,119 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(parsed.genesis_public_key, key_pair.public_key().to_string());
         assert_eq!(parsed.chain_id, "local-chain");
         assert_eq!(parsed.consensus_mode, SumeragiConsensusMode::Npos);
+    }
+    #[test]
+    fn generate_parser_rejects_missing_duplicate_and_trailing_arguments() {
+        let key = KeyPair::random().public_key().to_string();
+        let base = vec![
+            "--ivm-dir".to_owned(),
+            ".".to_owned(),
+            "--genesis-public-key".to_owned(),
+            key,
+            "--chain-id".to_owned(),
+            "strict-chain".to_owned(),
+            "--consensus-mode".to_owned(),
+            "permissioned".to_owned(),
+            "default".to_owned(),
+        ];
+        for flag in [
+            "--ivm-dir",
+            "--genesis-public-key",
+            "--chain-id",
+            "--consensus-mode",
+        ] {
+            let mut missing = base.clone();
+            let index = missing.iter().position(|arg| arg == flag).expect("flag");
+            missing.drain(index..=index + 1);
+            assert!(
+                parse_generate_args(&missing).is_err(),
+                "required generate flag must not default"
+            );
+        }
+        let mut missing_default = base.clone();
+        missing_default.pop();
+        assert!(
+            parse_generate_args(&missing_default).is_err(),
+            "terminal default is required"
+        );
+
+        let mut duplicate = base.clone();
+        duplicate.splice(
+            duplicate.len() - 1..duplicate.len() - 1,
+            ["--chain-id".to_owned(), "strict-chain".to_owned()],
+        );
+        assert!(
+            parse_generate_args(&duplicate).is_err(),
+            "duplicate flags must fail"
+        );
+
+        let mut trailing = base;
+        trailing.push("ignored".to_owned());
+        assert!(
+            parse_generate_args(&trailing).is_err(),
+            "default must be terminal"
+        );
+    }
+    #[test]
+    fn generate_and_verify_parsers_validate_profiles_and_vrf_seeds() {
+        let key = KeyPair::random().public_key().to_string();
+        let generate = |profile: Option<&str>, seed: Option<&str>| {
+            let mut args = vec![
+                "--ivm-dir".to_owned(),
+                ".".to_owned(),
+                "--genesis-public-key".to_owned(),
+                key.clone(),
+                "--chain-id".to_owned(),
+                "strict-chain".to_owned(),
+                "--consensus-mode".to_owned(),
+                "npos".to_owned(),
+            ];
+            if let Some(profile) = profile {
+                args.extend(["--profile".to_owned(), profile.to_owned()]);
+            }
+            if let Some(seed) = seed {
+                args.extend(["--vrf-seed-hex".to_owned(), seed.to_owned()]);
+            }
+            args.push("default".to_owned());
+            args
+        };
+        let valid_seed = "01".repeat(32);
+        parse_generate_args(&generate(Some("iroha3-taira"), Some(&valid_seed)))
+            .expect("Taira profile with canonical seed");
+        assert!(
+            parse_generate_args(&generate(Some("unknown"), None)).is_err(),
+            "unknown profile must fail"
+        );
+        assert!(
+            parse_generate_args(&generate(None, Some(&valid_seed))).is_err(),
+            "seed without profile must fail"
+        );
+        assert!(
+            parse_generate_args(&generate(Some("iroha3-taira"), None)).is_err(),
+            "Taira profile requires seed"
+        );
+        for invalid in ["01".repeat(31), format!("{}gg", "01".repeat(31))] {
+            assert!(
+                parse_generate_args(&generate(Some("iroha3-dev"), Some(&invalid))).is_err(),
+                "invalid seed must fail"
+            );
+        }
+
+        let verify_args = vec![
+            "--profile".to_owned(),
+            "iroha3-taira".to_owned(),
+            "--genesis".to_owned(),
+            "/tmp/genesis.json".to_owned(),
+            "--vrf-seed-hex".to_owned(),
+            valid_seed,
+        ];
+        parse_verify_args(&verify_args).expect("strict verify arguments");
+        let mut missing_seed_value = verify_args;
+        missing_seed_value.pop();
+        assert!(
+            parse_verify_args(&missing_seed_value).is_err(),
+            "verify seed flag must include a value"
+        );
     }
     #[test]
     fn generate_emits_manifest_with_requested_chain_id() {
@@ -387,6 +565,26 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         generate(args).expect("generate manifest via mock kagami");
     }
     #[test]
+    fn genesis_public_key_requires_canonical_encoding() {
+        let canonical = KeyPair::random().public_key().to_string();
+        assert_eq!(
+            parse_genesis_public_key(&canonical)
+                .expect("canonical public key")
+                .to_string(),
+            canonical
+        );
+
+        let raw_hex = canonical
+            .strip_prefix("ed0120")
+            .expect("test key uses canonical Ed25519 prefix");
+        for invalid in [raw_hex.to_owned(), format!("0x{raw_hex}")] {
+            assert!(
+                parse_genesis_public_key(&invalid).is_err(),
+                "raw compatibility encodings must be rejected"
+            );
+        }
+    }
+    #[test]
     fn parse_sign_args_accepts_current_supervisor_flags() {
         let args = vec![
             "/tmp/genesis.json".to_owned(),
@@ -400,8 +598,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "/tmp/genesis.key".to_owned(),
             "--config".to_owned(),
             "/tmp/peer.toml".to_owned(),
-            "--consensus-mode".to_owned(),
-            "permissioned".to_owned(),
         ];
         assert_eq!(
             parse_sign_args(&args).expect("parse mock kagami sign args"),
@@ -412,9 +608,21 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 expected_hash_out: PathBuf::from("/tmp/genesis.expected_hash"),
                 private_key_file: PathBuf::from("/tmp/genesis.key"),
                 config_file: PathBuf::from("/tmp/peer.toml"),
-                consensus_mode: Some(SumeragiConsensusMode::Permissioned),
             }
         );
+        let mut duplicate = args.clone();
+        duplicate.extend([
+            "--out-file".to_owned(),
+            "/tmp/duplicate.signed.nrt".to_owned(),
+        ]);
+        let error = parse_sign_args(&duplicate).expect_err("duplicate sign flag must be rejected");
+        assert!(error.to_string().contains("duplicate"));
+
+        let mut retired = args;
+        retired.extend(["--consensus-mode".to_owned(), "permissioned".to_owned()]);
+        let error = parse_sign_args(&retired)
+            .expect_err("retired sign-time consensus override must be rejected");
+        assert!(error.to_string().contains("unsupported argument"));
     }
     #[test]
     fn sign_publishes_block_before_bound_manifest() {
@@ -426,13 +634,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let private_key = temp.path().join("genesis.key");
         let config = temp.path().join("peer.toml");
         let key_pair = KeyPair::random();
-        let manifest_json = kagami_default_manifest_json(
-            key_pair.public_key(),
-            temp.path(),
-            "mock-sign-chain",
-            SumeragiConsensusMode::Permissioned,
-        )
-        .expect("build manifest");
+        let manifest_json = with_valid_topology(
+            kagami_default_manifest_json(
+                key_pair.public_key(),
+                temp.path(),
+                "mock-sign-chain",
+                SumeragiConsensusMode::Permissioned,
+            )
+            .expect("build manifest"),
+        );
         fs::write(&manifest, manifest_json.as_bytes()).expect("write manifest");
         fs::write(
             &private_key,
@@ -456,18 +666,16 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key.display().to_string(),
             "--config".to_owned(),
             config.display().to_string(),
-            "--consensus-mode".to_owned(),
-            "permissioned".to_owned(),
         ])
         .expect("sign with mock kagami");
-        let wire = fs::read(signed).expect("read signed output");
+        let wire = fs::read(&signed).expect("read signed output");
         let block = decode_framed_signed_block(&wire).expect("decode signed output");
         assert_eq!(
             fs::read(bound).expect("read bound output"),
             manifest_json.as_bytes()
         );
         assert_eq!(
-            fs::read_to_string(expected_hash).expect("read exact hash"),
+            fs::read_to_string(&expected_hash).expect("read exact hash"),
             format!("{}\n", NetworkId::from_genesis_hash(block.hash()))
         );
         let identity_path = expected_hash.to_string_lossy().replace('\\', "\\\\");
@@ -503,13 +711,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let private_key = temp.path().join("genesis.key");
         let config = temp.path().join("peer.toml");
         let key_pair = KeyPair::random();
-        let manifest_json = kagami_default_manifest_json(
-            key_pair.public_key(),
-            temp.path(),
-            "mock-sign-failure-chain",
-            SumeragiConsensusMode::Permissioned,
-        )
-        .expect("build manifest");
+        let manifest_json = with_valid_topology(
+            kagami_default_manifest_json(
+                key_pair.public_key(),
+                temp.path(),
+                "mock-sign-failure-chain",
+                SumeragiConsensusMode::Permissioned,
+            )
+            .expect("build manifest"),
+        );
         fs::write(&manifest, manifest_json).expect("write manifest");
         fs::write(&bound, b"sentinel").expect("write bound sentinel");
         fs::write(
@@ -542,8 +752,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key.display().to_string(),
             "--config".to_owned(),
             config.display().to_string(),
-            "--consensus-mode".to_owned(),
-            "permissioned".to_owned(),
         ])
         .expect_err("missing output parent should fail");
         assert_eq!(
@@ -555,9 +763,5 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             !expected_hash.exists(),
             "expected hash must only publish after the block and bound manifest"
         );
-    }
-    #[test]
-    fn version_probe_reports_program_version() {
-        assert!(VERSION_OUTPUT.contains("3.0.0"));
     }
 }

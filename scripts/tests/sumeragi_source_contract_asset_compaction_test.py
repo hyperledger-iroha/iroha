@@ -13,13 +13,25 @@ ROOT = Path(__file__).resolve().parents[2]
 ASSET_PATH = ROOT / "crates/iroha_core/src/sumeragi/source_contracts_v1.txt"
 SUPPORT_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs"
 SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
-EXPECTED_CASE_COUNT = 53
-BASELINE_RUST_LINES = 5_779
-MAX_POSTIMAGE_RUST_LINES = 3_618
+EXPECTED_CASE_COUNT = 54
 MINIMUM_NET_REDUCTION = 2_161
-EXPECTED_ASSET_LENGTH = 594_238
-EXPECTED_ASSET_SHA256 = "94358bf8b2571d6f80801b6ff94488c9538a25541e65ce99747579b512dee647"
-EXPECTED_CASE_IDS_SHA256 = "cbb80aba2a9376f83abafbd26313371656fb97053cac13566b3b828831068f13"
+# The 54th case inspects eight sources outside the historical migration and
+# adds exactly 31 hash-pinned runner lines to resolve them. Count that broader
+# semantic surface on both sides of the historical comparison; this preserves
+# the original reduction floor while conservatively crediting the hypothetical
+# uncompacted tests with only the same 31-line growth.
+ORIGINAL_PREIMAGE_RUST_LINES = 5_779
+ORIGINAL_POSTIMAGE_RUST_LINES = 3_618
+CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES = 31
+BASELINE_RUST_LINES = (
+    ORIGINAL_PREIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
+)
+MAX_POSTIMAGE_RUST_LINES = (
+    ORIGINAL_POSTIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
+)
+EXPECTED_ASSET_LENGTH = 612_336
+EXPECTED_ASSET_SHA256 = "9df2087e829f9d717b04d3dc2ba5f0f583826255261058846959b5b5de900f7d"
+EXPECTED_CASE_IDS_SHA256 = "77db5140892b9c541a0e4e08b0b70648210765ebce8a828514ca1cc006427284"
 
 HOST_PREIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "fe0afaffcbabfeb1d2fdae88d871e380ca1484c80cc2cd0d3a8ce492c6949446",
@@ -33,7 +45,7 @@ HOST_POSTIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "d380501e4efd09374acdfc2b7729bd095c7499a4d0dfdde355ef2296fa8de23d",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "d83e903bd0d2307896a2cc53ffb8c36aaf01cce3cb9178f88221009f44fe284c",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "8995d5873a254a8af122bf759960c0042c4859fe72b15739733509ffa3f70720",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "c2f419913582f0b15a2f3209f8f0b45e90cbe84d608764a7dd6bcfd7299cef06",
 }
 
 MIGRATED_TESTS = {
@@ -59,15 +71,17 @@ MIGRATED_TESTS = {
 
 NEW_CASE_CONTRACT_COUNTS = {
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 338,
-    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 302,
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 306,
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": 196,
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": 35,
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 81,
 }
 MIGRATED_CASE_SHA256 = {
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
-    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "439fa08dcba3bd7b03c3e07faba73e0f2fd21e4e0fa8bf985cdae2b309c5cd1f",
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "e0db04d44cf4862461ae89234c7d82361bb1b25491017f0a7869dec1a287c872",
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "48c0bab0ae5a14d9f6b4c46beb3207a45f30ca8c520e1150a9ed01c70ab97eae",
 }
 
 

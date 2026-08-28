@@ -21,11 +21,35 @@ use crate::ParameterId;
 /// read through a `limit + 1` reader so growth after the metadata check also
 /// fails closed.
 pub const MAX_TOML_SOURCE_BYTES: u64 = 1024 * 1024;
-/// A source of configuration in TOML format
-#[derive(Debug, Clone)]
+/// A source of configuration in TOML format.
 pub struct TomlSource {
     path: PathBuf,
     table: Table,
+    table_scrubber: Option<fn(&mut Table)>,
+}
+impl std::fmt::Debug for TomlSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TomlSource")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+impl Clone for TomlSource {
+    fn clone(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            table: self.table.clone(),
+            table_scrubber: self.table_scrubber,
+        }
+    }
+}
+impl Drop for TomlSource {
+    fn drop(&mut self) {
+        if let Some(scrub) = self.table_scrubber {
+            scrub(&mut self.table);
+        }
+    }
 }
 /// Error of [`TomlSource::from_file`]
 #[derive(Error, Debug, Copy, Clone, Eq, PartialEq)]
@@ -120,7 +144,23 @@ pub(crate) fn canonical_regular_file_identity(
 impl TomlSource {
     /// Constructor
     pub fn new(path: PathBuf, table: Table) -> Self {
-        Self { path, table }
+        Self {
+            path,
+            table,
+            table_scrubber: None,
+        }
+    }
+    /// Construct a sensitive source whose table is scrubbed before every clone is released.
+    ///
+    /// The scrubber must overwrite all sensitive allocations reachable from the table and must
+    /// not panic. It is retained by [`Clone`] so temporary copies created for configuration
+    /// validation receive the same cleanup policy.
+    pub fn new_sensitive(path: PathBuf, table: Table, table_scrubber: fn(&mut Table)) -> Self {
+        Self {
+            path,
+            table,
+            table_scrubber: Some(table_scrubber),
+        }
     }
     /// Read from a file
     ///
@@ -454,6 +494,11 @@ mod tests {
     };
     use toml::toml;
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+    static SENSITIVE_SOURCE_SCRUBS: AtomicU64 = AtomicU64::new(0);
+    fn scrub_test_table(table: &mut Table) {
+        SENSITIVE_SOURCE_SCRUBS.fetch_add(1, Ordering::Relaxed);
+        table.clear();
+    }
     fn temp_config_dir(label: &str) -> PathBuf {
         let nonce = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
@@ -527,6 +572,22 @@ mod tests {
         let value = source.fetch(&id).unwrap();
         assert_eq!(value, &toml::Value::Integer(42));
         assert_eq!(source[id], toml::Value::Integer(42));
+    }
+    #[test]
+    fn sensitive_source_clones_keep_scrubber_and_debug_redacts_values() {
+        SENSITIVE_SOURCE_SCRUBS.store(0, Ordering::Relaxed);
+        let source = TomlSource::new_sensitive(
+            PathBuf::from("sensitive.toml"),
+            toml! { private_key = "do-not-log" },
+            scrub_test_table,
+        );
+        let debug = format!("{source:?}");
+        assert!(debug.contains("sensitive.toml"));
+        assert!(!debug.contains("do-not-log"));
+        let clone = source.clone();
+        drop(clone);
+        drop(source);
+        assert_eq!(SENSITIVE_SOURCE_SCRUBS.load(Ordering::Relaxed), 2);
     }
     #[test]
     fn create_param_tree() {

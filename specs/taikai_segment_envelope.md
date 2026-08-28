@@ -356,8 +356,6 @@ can verify before delivering segments.
 | `segment_window` | `SegmentWindow` (`first` \| `last`) | Inclusive sequence range covered by this manifest. |
 | `renditions` | `Vec<TaikaiRenditionRouteV1>` | Per-rendition routing records (see below). |
 | `alias_binding` | `TaikaiAliasBinding` | Human-readable anchor (`docs.taikai`, `launch.sora`) plus SoraNS namespace + TTL. |
-| `guard_policy` | `TaikaiGuardPolicy` | Required SoraNet circuits/guard quorum for this stream (lane ids + version). |
-| `metadata` | `ExtraMetadata` | Deterministic extension channel (policy tags, audience caps, sponsor beacons). |
 
 `TaikaiRenditionRouteV1` entries carry:
 
@@ -367,8 +365,6 @@ can verify before delivering segments.
 | `latest_manifest_hash` | `BlobDigest` | Hash from the most recent `DaManifestV1`. |
 | `latest_car` | `TaikaiCarPointer` | CAR digest/CID stamp for the active segment window. |
 | `availability_class` | `TaikaiAvailabilityClass` | `Hot`, `Warm`, or `Cold` replication policy. |
-| `replication_targets` | `Vec<ProviderId>` | Ordered provider IDs responsible for holding the CAR window. |
-| `soranet_circuit` | `GuardDirectoryId` | Canonical circuit/governance lane powering the stream. |
 | `ssm_range` | `RangeInclusive<u64>` | Segment sequences for which SSMs must be available. |
 
 `TaikaiAliasBinding` reuses the existing SoraNS alias proof vocabulary
@@ -494,10 +490,9 @@ review.
 | `car_digest` | `BlobDigest` | CAR digest derived from `TaikaiCarPointer`. |
 | `publisher_account` | `AccountId` | Account responsible for this broadcast window. |
 | `publisher_key` | `PublicKey` | Key used to sign the SSM. |
-| `signature` | `SignatureOf<TaikaiSegmentSigningManifestV1>` | Detached signature covering the fields above. |
+| `signature` | `SignatureOf<TaikaiSegmentSigningBodyV1>` | Detached signature covering the fields above. |
 | `signed_unix_ms` | `u64` | Non-zero millisecond timestamp when the signature was produced. |
-| `alias_proof` | `AliasProofBundleV1` | Proof stapled into `Sora-Proof` headers so operators can trace the alias state. |
-| `metadata` | `ExtraMetadata` | Policy tags (e.g., licensing SKU, region allowlist). |
+| `alias_binding` | `TaikaiAliasBinding` | Alias namespace, name, and proof stapled into `Sora-Proof` headers. |
 
 SSMs bundle the exact bytes that the publisher signed, avoiding opportunistic
 hash recomputation inside Torii or the anchor service. The `alias_proof` field
@@ -588,17 +583,17 @@ matching SSM:
 5. Audit logs record `(manifest_digest, alias_name, ssm_digest)` so the SoraNS
    anchor service and governance panels can trace every broadcast segment.
 
-Torii stamps additional DA metadata during ingest so downstream DA and cache
+Torii stamps additional DA metadata during ingest so downstream DA and proof
 pipelines can react deterministically:
 
 - `taikai.availability_class` — `hot`/`warm`/`cold` derived from the TRM (or the enforced storage class when no TRM is present) so retention overrides remain explicit in the manifest.
 - `da.proof.tier` — PDP/PoTR tier bound to the enforced storage class, letting proof schedulers and dashboards classify Taikai blobs correctly.
-- `taikai.cache_hint` — Norito JSON object carrying `{event, stream, rendition, sequence, payload_len, payload_blake3_hex}` so cache-admission (CAA) emitters can derive deterministic admission/eviction envelopes without re-hashing payloads.
 
-Torii rejects Taikai submissions whose cache hint payload length or digest
-disagree with the canonical CMAF bytes, or whose `da.proof.tier` no longer
-matches the enforced retention class, ensuring downstream CAA emitters and
-PDP/PoTR schedulers consume authenticated hints only.
+Torii rejects Taikai submissions whose `da.proof.tier` no longer matches the
+enforced retention class, ensuring PDP/PoTR schedulers consume authenticated
+metadata only. Taikai V1 does not define `taikai.cache_hint`; viewers retrieve
+segments through the normal bounded multi-provider SoraFS fetch path, without
+a dedicated cache, queue, gossip profile, or cache configuration.
 
 Gateways enforce the same verification steps by running `xtask sorafs alias
 verify --taikai` inside CI. The helper fetches TRMs/SSMs, validates the
@@ -612,15 +607,16 @@ returned by Torii. These hooks block deployment when:
 
 ## Integration Status
 
-- Torii ingest hooks validate Taikai envelopes, SSMs, TRMs, lineage state,
-  cache hints, and proof-tier metadata before spooling the accepted artifacts
-  for SoraNS anchoring.
-- GAR policy inputs for broadcast licensing and metric directives are carried
-  by the current guard policy and telemetry metadata; future GAR revisions can
-  extend those policy documents without changing the v1 envelope layout.
-- Runtime telemetry already exposes deterministic Taikai ingest, viewer,
-  cache, queue, shard, live-edge, and rebuffer metrics. Viewer SDKs consume the
-  same `TaikaiSegmentEnvelopeV1` schema and can add product-specific UX without
+- Torii ingest hooks validate Taikai envelopes, SSMs, TRMs, lineage state, and
+  proof-tier metadata before spooling the accepted artifacts for SoraNS
+  anchoring.
+- Broadcast licensing and metric directives belong in governed GAR policy
+  documents. TRM and SSM V1 do not carry unowned free-form policy fields;
+  future GAR revisions can evolve independently of the envelope layout.
+- Runtime telemetry exposes deterministic Taikai ingest, viewer, live-edge,
+  and rebuffer metrics. There is no Taikai-specific cache dashboard or
+  cache/queue/shard telemetry. Viewer SDKs consume the same
+  `TaikaiSegmentEnvelopeV1` schema and can add product-specific UX without
   changing the canonical envelope.
 
 The current implementation provides the shared data model, schema metadata, CLI

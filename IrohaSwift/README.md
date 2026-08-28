@@ -2,6 +2,16 @@
 
 Swift SDK for the first Hyperledger Iroha 3 release on Apple platforms.
 
+`TairaTestnetProfile` exposes the public Torii origin, address discriminant,
+Digital Shekel, and XOR metadata. Its client factory still requires the current
+deployment's genesis-derived `NetworkId`; the stable chain UUID is not used for
+signing:
+
+```swift
+let networkId = try NetworkId(literal: configuredNetworkIdLiteral)
+let torii = TairaTestnetProfile.makeClient(deployedNetworkId: networkId)
+```
+
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
 - Kagemusha cash models, transaction builders, proof binding helpers, and universal capability discovery through `/v1/offline/readiness`
@@ -191,9 +201,19 @@ scripts/build_norito_xcframework.sh --privacy-production-enabled
 That option passes the existing `privacy-production-enabled` Cargo feature to
 every Apple slice and marks the XCFramework plus its artifact manifest. The
 `Mobile SDK Artifacts` manual workflow exposes the same default-off option.
-The builder always compiles all four slices into the one caller-selected target,
+The builder always compiles all five target libraries into the one caller-selected target,
 uses the root `Cargo.lock`, and fails closed if `xcodebuild` cannot package them.
 There is no skip-build, preserved-target, alternate-lock, or manual-packaging mode.
+
+The Kagemusha pull-request lane preserves that build envelope while avoiding a
+hosted-runner timeout: five isolated macOS jobs each build one attested target
+library, and the sole Swift assembler accepts them only when their independent
+archive digests and exact source, lock, toolchain, SDK, deployment-target, and
+feature attestations all match. The assembler then produces the same three-slice
+XCFramework and authenticated handoff used by the Swift lifecycle consumer.
+Each attestation also retains its runner's Python, Git, and rustup evidence;
+those orchestration tools may differ because they do not enter the hermetic
+Cargo invocation.
 
 CI runs `.github/workflows/mobile_sdk_artifacts.yml` to authenticate the exact
 external Apple artifact, enforce mandatory missing-artifact rejection, run the
@@ -852,6 +872,28 @@ The unsigned payload must carry the closed transaction domain as
 `"domain": {"kind":"network","value":"hash:<64 uppercase hex>#<CRC16>"}`;
 the retired `chain`, `chainId`, and `chain_id` keys and the genesis marker are rejected.
 
+To price that base policy with the execution account's current Hijiri risk,
+request a separate native-Norito quote:
+
+```swift
+let request = try ValidationFeeHijiriQuoteRequestV1(
+    accountId: accountId,
+    qualifyingTransferCount: 2
+)
+let quote = try await torii.postValidationFeeHijiriQuote(
+    request,
+    canonicalAuth: canonicalAuth
+)
+```
+
+The SDK requires bridge ABI 23, signs the exact bounded request, refuses
+redirected, cacheable, encoded, or non-Norito success responses, and exposes
+the 64 KiB-bounded result only after native canonical decoding, request-echo,
+height, hash, and aggregate-Q16 verification. The returned assurance is an
+authenticated same-snapshot evaluation, not an independent state witness;
+transaction admission remains authoritative and rejects a stale policy or
+Hijiri binding.
+
 ### Kotodama contract manifests
 
 `ToriiClient.fetchContractManifest(codeHashHex:)` reads
@@ -876,17 +918,27 @@ retired per-entry `decode_error` shape. A Torii JSON decode failure is instead a
 top-level `ToriiClientError.httpStatus` carrying Torii's stable error envelope.
 
 Wallets must use the two-step detached call flow when the signing key is held by
-the client:
+the client. Build the invocation from a trusted contract artifact and argument
+schema, and commit to the exact final metadata (including deterministic
+`contract_module`/`contract_event_*` entries when the selected contract emits
+them) before asking Torii for signing bytes:
 
 ```swift
+let intent = try ToriiContractCallDraftIntent(
+    invocation: trustedInvocation,       // resolved address, code hash, entrypoint, argument record
+    metadata: exactMergedMetadata
+)
 let draft = try await torii.prepareDetachedContractCall(
     ToriiContractCallRequest(
         authority: authority,
         contractAlias: "bisp::hbl.sbp",
         entrypoint: "spend_to_merchant",
         payload: .object(["amount": .string("750")]),
+        metadata: callerMetadata,
+        draftIntent: intent,
+        creationTimeMs: creationTimeMs,
         transactionTtlMs: 120_000,
-        gasLimit: 500_000
+        feePayment: .authority(chargeLimits: [], gasLimit: 500_000)
     )
 )
 let signature = try signAfterUserPresence(draft.signingMessage)
@@ -902,12 +954,24 @@ let finality = try await torii.waitForDetachedContractCallFinality(
 ```
 
 `ToriiContractCallDraft` retains the normalized request and all resolved
-contract, ABI, entrypoint, gas, sponsor, payload, time, and TTL bindings. Submit
+contract, ABI, entrypoint, argument-record, metadata, gas, sponsor, payload,
+time, and TTL bindings. Unsigned preparation fails closed without the independent
+`ToriiContractCallDraftIntent`; response fields are never accepted as their own
+proof of intent. Submit
 accepts only the public key and detached signature; it fails closed unless the
 returned receipt and queued pipeline status match the draft exactly.
 `waitForDetachedContractCallFinality` then uses the canonical `scope=global`
 pipeline lookup and returns only an applied, globally scoped, state-resolved
 status with a positive block height.
+
+Unsigned typed multisig writes follow the same trust boundary. Supply a
+`ToriiMultisigUnsignedTransactionIntent` containing the configured network, exact
+resolved multisig account and proposal hash, complete instruction executable,
+and exact transaction metadata. The intent stays off wire, and Swift rejects
+unsigned response bytes unless the payload matches it and the client's local
+signing network. The raw Norito `proposeMultisig(noritoBody:)` overload cannot
+independently interpret an opaque DTO, so it accepts submitted responses only;
+use the typed request APIs when external signing is required.
 
 ### Explorer instruction history
 
@@ -1263,7 +1327,8 @@ the application owns reconciliation and any later explicit submission.
 `POST /v1/offline/redeem`, `GET /v1/offline/operations/{operation_id}`, and
 `POST /v1/offline/receiver-lineage`.
 Use `getOfflineCapability()`, `submitKagemushaTopUp`,
-`submitKagemushaRedeem`, `getKagemushaOperationStatus(operationId:)`, and
+`submitKagemushaRedeem`,
+`getKagemushaOperationStatus(operationId:chainDiscriminant:)`, and
 `getKagemushaRecipientRegistrationLineage(query:canonicalAuth:)`.
 `getOfflineCapability()` takes no selector.
 
@@ -1476,14 +1541,14 @@ confidential proofs yet the helper simply returns `nil`, mirroring the Python/JS
 
 ### Configuration snapshots
 
-`getConfiguration()` returns the typed snapshot, including transport defaults for streaming:
+`getConfiguration()` returns the typed snapshot, including the active Norito-RPC transport policy:
 
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
     let snapshot = try await sdk.getConfiguration()
-    if let soranet = snapshot.transport?.streaming?.soranet {
-        print("SoraNet exit:", soranet.exitMultiaddr)
-        print("Provision queue cap:", soranet.provisionQueueCapacity)
+    if let noritoRpc = snapshot.transport?.noritoRpc {
+        print("Norito-RPC stage:", noritoRpc.stage)
+        print("mTLS required:", noritoRpc.requireMtls)
     }
 }
 ```

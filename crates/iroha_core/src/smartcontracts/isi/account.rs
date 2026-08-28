@@ -2165,8 +2165,7 @@ pub mod query {
             state_transaction
                 .world
                 .insert_account_alias_binding(alias.clone(), account_id.clone());
-            state_transaction.world.account_rekey_records.insert(
-                alias.clone(),
+            state_transaction.world.replace_account_rekey_record(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
                     alias.clone(),
                     account_id.clone(),
@@ -2466,9 +2465,7 @@ pub mod query {
             let canonical = AccountRekeyRecord::new(alias.clone(), retired.clone())
                 .repoint_for_account_id_rekey(active.clone())
                 .expect("canonical account-id rekey fixture");
-            stx.world
-                .account_rekey_records
-                .insert(alias.clone(), canonical.clone());
+            stx.world.replace_account_rekey_record(canonical.clone());
             let request = AccountRecoveryRequest::new(
                 alias.clone(),
                 retired.clone(),
@@ -2482,8 +2479,7 @@ pub mod query {
                 recovery_request_matches_current_lineage(&stx, &request, &active)
                     .expect("valid recovery lineage state")
             );
-            stx.world.account_rekey_records.insert(
-                alias.clone(),
+            stx.world.replace_account_rekey_record(
                 AccountRekeyRecord::new(alias.clone(), retired.clone())
                     .reassign_alias_to_account(active.clone())
                     .expect("alias reassignment fixture"),
@@ -2498,9 +2494,7 @@ pub mod query {
             );
             let mut legacy = canonical;
             legacy.transition_provenance.clear();
-            stx.world
-                .account_rekey_records
-                .insert(alias.clone(), legacy);
+            stx.world.replace_account_rekey_record(legacy);
             assert!(
                 ensure_recovery_request_targets_current_lineage(&stx, &request, &active).is_err(),
                 "legacy unspecified history must remain non-authorizing"
@@ -3367,10 +3361,11 @@ pub mod query {
             stx.world.accounts.insert(stored_account_id, stored_value);
             stx.world
                 .insert_account_alias_binding(primary_label.clone(), account_id.clone());
-            stx.world.account_rekey_records.insert(
-                primary_label.clone(),
-                AccountRekeyRecord::new(primary_label.clone(), account_id.clone()),
-            );
+            stx.world
+                .replace_account_rekey_record(AccountRekeyRecord::new(
+                    primary_label.clone(),
+                    account_id.clone(),
+                ));
             stx.apply();
             state_block.commit().unwrap();
             let view = state.view();
@@ -3403,10 +3398,8 @@ pub mod query {
             seed_account_alias_lease(&mut stx, &ALICE_ID, &alias);
             stx.world
                 .insert_account_alias_binding(alias.clone(), ALICE_ID.clone());
-            stx.world.account_rekey_records.insert(
-                alias.clone(),
-                AccountRekeyRecord::new(alias, ALICE_ID.clone()),
-            );
+            stx.world
+                .replace_account_rekey_record(AccountRekeyRecord::new(alias, ALICE_ID.clone()));
             stx.apply();
             state_block.commit().unwrap();
             let aliases =
@@ -3467,10 +3460,11 @@ pub mod query {
             stx.world.accounts.insert(stored_account_id, stored_value);
             stx.world
                 .insert_account_alias_binding(primary_label.clone(), account_id.clone());
-            stx.world.account_rekey_records.insert(
-                primary_label.clone(),
-                AccountRekeyRecord::new(primary_label.clone(), account_id.clone()),
-            );
+            stx.world
+                .replace_account_rekey_record(AccountRekeyRecord::new(
+                    primary_label.clone(),
+                    account_id.clone(),
+                ));
             stx.apply();
             state_block.commit().unwrap();
             let view = state.view();
@@ -3530,10 +3524,11 @@ pub mod query {
             stx.world.accounts.insert(stored_account_id, stored_value);
             stx.world
                 .insert_account_alias_binding(primary_label.clone(), account_id.clone());
-            stx.world.account_rekey_records.insert(
-                primary_label.clone(),
-                AccountRekeyRecord::new(primary_label.clone(), account_id.clone()),
-            );
+            stx.world
+                .replace_account_rekey_record(AccountRekeyRecord::new(
+                    primary_label.clone(),
+                    account_id.clone(),
+                ));
             stx.apply();
             state_block.commit().unwrap();
             let view = state.view();

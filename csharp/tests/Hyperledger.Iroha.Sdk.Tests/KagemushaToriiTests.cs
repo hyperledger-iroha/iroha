@@ -24,7 +24,9 @@ public sealed class KagemushaToriiTests
             Assert.Empty(request.RequestUri.Query);
             return JsonResponse(OfflineCapabilityJson());
         });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
 
         var capability = await client.GetOfflineCapabilityAsync(
             TestContext.Current.CancellationToken);
@@ -67,6 +69,34 @@ public sealed class KagemushaToriiTests
     }
 
     [Fact]
+    public async Task KagemushaReadRoutesRequireExactHttpOk()
+    {
+        using (var handler = new KagemushaHandler(_ =>
+               JsonResponse(OfflineCapabilityJson(), HttpStatusCode.Created)))
+        using (var client = new ToriiClient(
+               new Uri("https://torii.example"),
+               new HttpClient(handler)))
+        {
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                client.GetOfflineCapabilityAsync(TestContext.Current.CancellationToken));
+            Assert.Contains("expected HTTP 200, got 201", error.Message);
+        }
+
+        using (var handler = new KagemushaHandler(_ =>
+               JsonResponse(TopUpStatusJson(), HttpStatusCode.Accepted)))
+        using (var client = new ToriiClient(
+               new Uri("https://torii.example"),
+               new HttpClient(handler)))
+        {
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                client.GetKagemushaOperationStatusAsync(
+                    OperationId,
+                    TestContext.Current.CancellationToken));
+            Assert.Contains("expected HTTP 200, got 202", error.Message);
+        }
+    }
+
+    [Fact]
     public async Task TopUpTransportsAnExternalV4NoritoArchiveWithoutAProverClaim()
     {
         var archive = NoritoArchive(TopUpRequestSchemaName);
@@ -83,7 +113,7 @@ public sealed class KagemushaToriiTests
             response.Headers.TryAddWithoutValidation("Retry-After", "1");
             return response;
         });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = AssuredClient(handler);
         var request = new ToriiKagemushaTopUpRequestV4(OperationId, archive);
 
         archive[4] = 0xff;
@@ -134,7 +164,7 @@ public sealed class KagemushaToriiTests
                 """);
         });
         using var handler = new KagemushaHandler(request => requests.Dequeue()(request));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = AssuredClient(handler);
 
         var reference = await client.SubmitKagemushaRedeemV4Async(
             new ToriiKagemushaRedeemRequestV4(
@@ -246,9 +276,7 @@ public sealed class KagemushaToriiTests
                 }
                 return response;
             });
-            using var client = new ToriiClient(
-                new Uri("https://torii.example"),
-                new HttpClient(handler));
+            using var client = AssuredClient(handler);
 
             await Assert.ThrowsAsync<InvalidDataException>(() =>
                 client.SubmitKagemushaTopUpV4Async(
@@ -264,9 +292,7 @@ public sealed class KagemushaToriiTests
                    response.Headers.TryAddWithoutValidation("Retry-After", ["1", "2"]);
                    return response;
                }))
-        using (var client = new ToriiClient(
-               new Uri("https://torii.example"),
-               new HttpClient(handler)))
+        using (var client = AssuredClient(handler))
         {
             await Assert.ThrowsAsync<InvalidDataException>(() =>
                 client.SubmitKagemushaTopUpV4Async(
@@ -283,9 +309,7 @@ public sealed class KagemushaToriiTests
                    response.Headers.TryAddWithoutValidation("Retry-After", "01");
                    return response;
                }))
-        using (var client = new ToriiClient(
-               new Uri("https://torii.example"),
-               new HttpClient(handler)))
+        using (var client = AssuredClient(handler))
         {
             await Assert.ThrowsAsync<JsonException>(() =>
                 client.SubmitKagemushaTopUpV4Async(
@@ -294,6 +318,30 @@ public sealed class KagemushaToriiTests
                         NoritoArchive(TopUpRequestSchemaName)),
                     TestContext.Current.CancellationToken));
         }
+    }
+
+    [Fact]
+    public async Task KagemushaSubmissionRejectsUnassuredInjectedTransportBeforeDispatch()
+    {
+        var dispatches = 0;
+        using var handler = new KagemushaHandler(_ =>
+        {
+            dispatches += 1;
+            return AcceptedOperationReference(OperationReferenceJson("top_up"));
+        });
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.SubmitKagemushaTopUpV4Async(
+                new ToriiKagemushaTopUpRequestV4(
+                    OperationId,
+                    NoritoArchive(TopUpRequestSchemaName)),
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("one-shot, no-redirect transport", error.Message);
+        Assert.Equal(0, dispatches);
     }
 
     [Fact]
@@ -418,6 +466,13 @@ public sealed class KagemushaToriiTests
             archive.AsSpan(NoritoHeader.EncodedLength + paddingLength));
         return archive;
     }
+
+    private static ToriiClient AssuredClient(HttpMessageHandler handler) =>
+        new(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
     private static byte[] Mutate(byte[] source, Action<byte[]> mutation)
     {

@@ -3,12 +3,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
+ORIGINAL_ARGS=("$@")
 ROSTER="${ROSTER:-${REPO_ROOT}/configs/soranexus/taira/validator_roster.local.toml}"
 OUTPUT="${OUTPUT:-${REPO_ROOT}/dist/taira-edge/taira.sora.org.conf}"
 TARGET_CONF="${TARGET_CONF:-}"
 readonly NGINX_BIN="/usr/sbin/nginx"
 readonly SYSTEM_OWNER_UID=0
 readonly SYSTEM_OWNER_GID=0
+readonly INSTALL_LOCK_BASENAME=".taira-edge-install.lock"
+readonly INSTALL_LOCK_FD=9
 INSTALL=0
 RELOAD=0
 ALIAS_ROUTES=()
@@ -16,33 +19,188 @@ REQUIRED_ALIASES=()
 NGINX_TEST_DIRS=()
 INSTALL_BACKUP_DIR=""
 INSTALL_BACKUP_CONF=""
+INSTALL_BACKUP_CONF_FINGERPRINT=""
 TARGET_CONF_EXISTED=0
 INSTALL_ROLLBACK_NEEDED=0
 BACKED_UP_TARGET_FINGERPRINT="absent"
 INSTALLED_CONF_FINGERPRINT=""
+RENDERED_CONF_FINGERPRINT=""
 
 cleanup_nginx_test_dirs() {
   local path
   for path in "${NGINX_TEST_DIRS[@]:-}"; do
     [[ -n "$path" && -e "$path" ]] && rm -rf "$path"
   done
+  return 0
 }
 
 cleanup_runtime_state() {
   local exit_code=$?
+  local rollback_failed=0
 
   if [[ ${INSTALL_ROLLBACK_NEEDED:-0} -eq 1 ]]; then
-    rollback_installed_conf || true
+    if ! rollback_installed_conf; then
+      rollback_failed=1
+      exit_code=1
+    fi
   fi
   cleanup_nginx_test_dirs
   if [[ -n "${INSTALL_BACKUP_DIR:-}" && -e "$INSTALL_BACKUP_DIR" ]]; then
-    rm -rf "$INSTALL_BACKUP_DIR" || true
+    if [[ $rollback_failed -eq 1 ]]; then
+      echo "retained rollback copy after failed restoration: $INSTALL_BACKUP_CONF" >&2
+    else
+      rm -rf "$INSTALL_BACKUP_DIR" || true
+    fi
   fi
 
   exit "$exit_code"
 }
 
 trap cleanup_runtime_state EXIT
+
+acquire_install_lock_or_reexec() {
+  local lock_path="${target_dir}/${INSTALL_LOCK_BASENAME}"
+  local status
+
+  if [[ "${_TAIRA_EDGE_INSTALL_LOCKED:-0}" == "1" ]]; then
+    if [[ "${_TAIRA_EDGE_INSTALL_LOCK_PATH:-}" != "$lock_path" ]]; then
+      echo "invalid inherited Taira edge installation lock path" >&2
+      return 1
+    fi
+    python3 - "$lock_path" "$INSTALL_LOCK_FD" "$SYSTEM_OWNER_UID" "$SYSTEM_OWNER_GID" <<'PY'
+import fcntl
+import os
+import stat
+import sys
+
+path, descriptor_text, owner_text, group_text = sys.argv[1:]
+descriptor = int(descriptor_text)
+owner = int(owner_text)
+group = int(group_text)
+
+try:
+    path_metadata = os.lstat(path)
+    descriptor_metadata = os.fstat(descriptor)
+except OSError as error:
+    raise SystemExit(f"cannot inspect inherited Taira edge installation lock: {error}") from error
+
+def identity(value):
+    return value.st_dev, value.st_ino
+
+if (
+    not stat.S_ISREG(path_metadata.st_mode)
+    or path_metadata.st_nlink != 1
+    or path_metadata.st_uid != owner
+    or path_metadata.st_gid != group
+    or stat.S_IMODE(path_metadata.st_mode) != 0o600
+    or identity(path_metadata) != identity(descriptor_metadata)
+):
+    raise SystemExit(f"inherited Taira edge installation lock is unsafe: {path}")
+
+try:
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError as error:
+    raise SystemExit(f"inherited Taira edge installation lock is not held: {path}") from error
+PY
+    return
+  fi
+
+  python3 - \
+    "$target_dir" \
+    "$INSTALL_LOCK_BASENAME" \
+    "${BASH_SOURCE[0]}" \
+    "$INSTALL_LOCK_FD" \
+    "$SYSTEM_OWNER_UID" \
+    "$SYSTEM_OWNER_GID" \
+    "${ORIGINAL_ARGS[@]}" <<'PY'
+import fcntl
+import os
+import stat
+import sys
+
+target_dir, lock_name, script, lock_descriptor_text, owner_text, group_text, *args = sys.argv[1:]
+lock_descriptor = int(lock_descriptor_text)
+owner = int(owner_text)
+group = int(group_text)
+target_dir = os.path.abspath(target_dir)
+lock_path = os.path.join(target_dir, lock_name)
+
+directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+try:
+    before = os.lstat(target_dir)
+    directory_descriptor = os.open(target_dir, directory_flags)
+    opened = os.fstat(directory_descriptor)
+    after = os.lstat(target_dir)
+except OSError as error:
+    raise SystemExit(f"cannot inspect target nginx include directory {target_dir}: {error}") from error
+
+def directory_identity(value):
+    return value.st_dev, value.st_ino, value.st_uid, value.st_gid, stat.S_IMODE(value.st_mode)
+
+if (
+    not stat.S_ISDIR(before.st_mode)
+    or directory_identity(before) != directory_identity(opened)
+    or directory_identity(before) != directory_identity(after)
+    or before.st_uid != owner
+    or before.st_gid != group
+    or stat.S_IMODE(before.st_mode) & 0o022
+):
+    raise SystemExit(
+        f"target nginx include directory must be direct, owner-controlled, and non-writable by group/other: {target_dir}"
+    )
+
+lock_flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+created = False
+try:
+    try:
+        descriptor = os.open(lock_name, lock_flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory_descriptor)
+        created = True
+    except FileExistsError:
+        descriptor = os.open(lock_name, lock_flags, dir_fd=directory_descriptor)
+    if created:
+        os.fchown(descriptor, owner, group)
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        os.fsync(directory_descriptor)
+    path_metadata = os.stat(lock_name, dir_fd=directory_descriptor, follow_symlinks=False)
+    descriptor_metadata = os.fstat(descriptor)
+except OSError as error:
+    raise SystemExit(f"cannot open Taira edge installation lock {lock_path}: {error}") from error
+finally:
+    os.close(directory_descriptor)
+
+if (
+    not stat.S_ISREG(path_metadata.st_mode)
+    or path_metadata.st_nlink != 1
+    or path_metadata.st_uid != owner
+    or path_metadata.st_gid != group
+    or stat.S_IMODE(path_metadata.st_mode) != 0o600
+    or (path_metadata.st_dev, path_metadata.st_ino) != (descriptor_metadata.st_dev, descriptor_metadata.st_ino)
+):
+    os.close(descriptor)
+    raise SystemExit(f"Taira edge installation lock is unsafe: {lock_path}")
+
+try:
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError as error:
+    os.close(descriptor)
+    raise SystemExit(f"another Taira edge installation is already running for {target_dir}") from error
+
+if descriptor != lock_descriptor:
+    os.dup2(descriptor, lock_descriptor, inheritable=True)
+    os.close(descriptor)
+else:
+    os.set_inheritable(descriptor, True)
+
+environment = os.environ.copy()
+environment["_TAIRA_EDGE_INSTALL_LOCKED"] = "1"
+environment["_TAIRA_EDGE_INSTALL_LOCK_PATH"] = lock_path
+os.execve("/bin/bash", ["bash", os.path.abspath(script), *args], environment)
+PY
+  status=$?
+  exit "$status"
+}
 
 usage() {
   cat <<'EOF'
@@ -60,7 +218,7 @@ copy it into nginx and do not reload nginx. The validator is pinned to
 edge host after reviewing the rendered config.
 
 For the current Solswap indexer edge binding:
-  bash configs/soranexus/taira/install_taira_edge_nginx_conf.sh \
+  sudo bash configs/soranexus/taira/install_taira_edge_nginx_conf.sh \
     --roster configs/soranexus/taira/validator_roster.local.toml \
     --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
     --require-alias solswap-indexer.sora \
@@ -137,6 +295,27 @@ if [[ -z "$TARGET_CONF" ]]; then
   TARGET_CONF="/etc/nginx/conf.d/taira.conf"
 fi
 
+target_dir="$(dirname -- "$TARGET_CONF")"
+if [[ $INSTALL -eq 1 ]]; then
+  if [[ ! -d "$target_dir" ]]; then
+    echo "target nginx include directory does not exist: $target_dir" >&2
+    exit 1
+  fi
+  if [[ $EUID -ne $SYSTEM_OWNER_UID ]]; then
+    echo "nginx config installation must run as root" >&2
+    exit 1
+  fi
+  target_dir_logical="$(cd -L -- "$target_dir" && pwd -L)"
+  target_dir_physical="$(cd -P -- "$target_dir" && pwd -P)"
+  if [[ -L "$target_dir" || "$target_dir_logical" != "$target_dir_physical" ]]; then
+    echo "target nginx include directory must be direct: $target_dir" >&2
+    exit 1
+  fi
+  TARGET_CONF="${target_dir_physical}/$(basename -- "$TARGET_CONF")"
+  target_dir="$target_dir_physical"
+  acquire_install_lock_or_reexec
+fi
+
 if [[ ! -f "$ROSTER" ]]; then
   echo "roster not found: $ROSTER" >&2
   exit 1
@@ -160,25 +339,34 @@ python3 "${render_args[@]}"
 require_in_rendered_conf() {
   local pattern="$1"
   local message="$2"
+  require_unchanged_rendered_conf
   if ! grep -Eq "$pattern" "$OUTPUT"; then
     echo "rendered nginx config missing ${message}: $OUTPUT" >&2
     exit 1
   fi
+  require_unchanged_rendered_conf
 }
 
 validate_rendered_nginx_conf() {
   local test_dir
   local test_conf
-  local output_abs
   local rendered_include
+  local rendered_snapshot_fingerprint
 
+  require_unchanged_rendered_conf
   test_dir="$(mktemp -d "${TMPDIR:-/tmp}/taira-edge-nginx-test.XXXXXX")"
   NGINX_TEST_DIRS+=("$test_dir")
   test_conf="${test_dir}/nginx.conf"
   rendered_include="${test_dir}/rendered.conf"
-  output_abs="$(cd -- "$(dirname -- "$OUTPUT")" && pwd)/$(basename -- "$OUTPUT")"
 
-  ln -s "$output_abs" "$rendered_include"
+  cp "$OUTPUT" "$rendered_include"
+  chmod 0600 "$rendered_include"
+  require_unchanged_rendered_conf
+  rendered_snapshot_fingerprint="$(stable_file_fingerprint "$rendered_include")"
+  if [[ "$(fingerprint_sha256 "$rendered_snapshot_fingerprint")" != "$(fingerprint_sha256 "$RENDERED_CONF_FINGERPRINT")" ]]; then
+    echo "nginx validation snapshot differs from the rendered config: $OUTPUT" >&2
+    return 1
+  fi
   mkdir -p \
     "${test_dir}/client_body_temp" \
     "${test_dir}/fastcgi_temp" \
@@ -209,6 +397,11 @@ EOF
   require_unchanged_nginx_binary
   "$NGINX_BIN" -t -c "$test_conf" -p "${test_dir}/"
   require_unchanged_nginx_binary
+  require_unchanged_rendered_conf
+  if [[ "$(stable_file_fingerprint "$rendered_include")" != "$rendered_snapshot_fingerprint" ]]; then
+    echo "nginx validation snapshot changed while it was checked: $rendered_include" >&2
+    return 1
+  fi
 }
 
 file_link_count() {
@@ -307,6 +500,16 @@ if snapshot != identity(opened_before) or snapshot != identity(opened_after) or 
 
 print(":".join(str(value) for value in (*snapshot, digest.hexdigest())))
 PY
+}
+
+require_unchanged_rendered_conf() {
+  local current
+
+  current="$(stable_file_fingerprint "$OUTPUT")" || return 1
+  if [[ -z "$RENDERED_CONF_FINGERPRINT" || "$current" != "$RENDERED_CONF_FINGERPRINT" ]]; then
+    echo "rendered nginx config changed after generation: $OUTPUT" >&2
+    return 1
+  fi
 }
 
 fingerprint_sha256() {
@@ -419,6 +622,7 @@ require_expected_target_state() {
 copy_to_target_conf() {
   local source_path="$1"
   local expected_target="${2:-}"
+  local expected_source="${3:-}"
   local candidate=""
   local candidate_fingerprint
   local source_after
@@ -427,6 +631,10 @@ copy_to_target_conf() {
 
   require_safe_regular_file "$source_path" "nginx config source" || return 1
   source_before="$(stable_file_fingerprint "$source_path")" || return 1
+  if [[ -n "$expected_source" && "$source_before" != "$expected_source" ]]; then
+    echo "nginx config source differs from its validated identity: $source_path" >&2
+    return 1
+  fi
   require_expected_target_state "$expected_target" || return 1
 
   candidate="$(mktemp "${target_dir}/.taira-edge-install.XXXXXX")" || return 1
@@ -447,6 +655,7 @@ copy_to_target_conf() {
     return 1
   }
   if [[ "$source_before" != "$source_after" ]] || \
+     [[ -n "$expected_source" && "$source_after" != "$expected_source" ]] || \
      [[ "$(fingerprint_sha256 "$source_after")" != "$(fingerprint_sha256 "$candidate_fingerprint")" ]]; then
     echo "nginx config source changed or was copied inconsistently: $source_path" >&2
     rm -f "$candidate" || true
@@ -460,6 +669,7 @@ copy_to_target_conf() {
     rm -f "$candidate" || true
     return 1
   fi
+  INSTALLED_CONF_FINGERPRINT="$candidate_fingerprint"
   fsync_path "$target_dir" directory || return 1
 
   require_exact_file_metadata "$TARGET_CONF" "installed nginx config" 0644 || return 1
@@ -472,7 +682,7 @@ copy_to_target_conf() {
 }
 
 remove_target_conf() {
-  require_safe_target_leaf || return 1
+  require_expected_target_state "$INSTALLED_CONF_FINGERPRINT" || return 1
   rm -f "$TARGET_CONF"
   fsync_path "$target_dir" directory
 }
@@ -484,6 +694,7 @@ backup_target_conf() {
 
   TARGET_CONF_EXISTED=0
   INSTALL_BACKUP_CONF=""
+  INSTALL_BACKUP_CONF_FINGERPRINT=""
   BACKED_UP_TARGET_FINGERPRINT="absent"
 
   if [[ ! -e "$TARGET_CONF" && ! -L "$TARGET_CONF" ]]; then
@@ -506,11 +717,15 @@ backup_target_conf() {
     return 1
   fi
   BACKED_UP_TARGET_FINGERPRINT="$target_after"
+  INSTALL_BACKUP_CONF_FINGERPRINT="$backup_fingerprint"
 }
 
 restore_target_conf() {
   require_safe_regular_file "$INSTALL_BACKUP_CONF" "nginx config rollback copy" || return 1
-  copy_to_target_conf "$INSTALL_BACKUP_CONF"
+  copy_to_target_conf \
+    "$INSTALL_BACKUP_CONF" \
+    "$INSTALLED_CONF_FINGERPRINT" \
+    "$INSTALL_BACKUP_CONF_FINGERPRINT"
 }
 
 require_unchanged_installed_conf() {
@@ -526,6 +741,13 @@ require_unchanged_installed_conf() {
 }
 
 rollback_installed_conf() {
+  if [[ -z "$INSTALLED_CONF_FINGERPRINT" ]]; then
+    if require_expected_target_state "$BACKED_UP_TARGET_FINGERPRINT"; then
+      return 0
+    fi
+    echo "failed install changed the target before its identity was pinned: $TARGET_CONF" >&2
+    return 1
+  fi
   if [[ $TARGET_CONF_EXISTED -eq 1 ]]; then
     if restore_target_conf; then
       echo "restored previous nginx config: $TARGET_CONF" >&2
@@ -543,6 +765,8 @@ rollback_installed_conf() {
   fi
 }
 
+require_safe_regular_file "$OUTPUT" "rendered nginx config"
+RENDERED_CONF_FINGERPRINT="$(stable_file_fingerprint "$OUTPUT")"
 require_in_rendered_conf 'server_name[[:space:]]+mon\.taira\.sora\.net;' 'Mon apex server block'
 require_in_rendered_conf 'server_name[[:space:]]+\*\.mon\.taira\.sora\.net[[:space:]]+~\^\.\+\\\.mon\\\.taira\\\.sora\\\.net\$;' 'Mon wildcard/regex fallback'
 require_in_rendered_conf 'proxy_next_upstream[[:space:]].*non_idempotent' 'shared-edge retry policy'
@@ -557,7 +781,6 @@ if ((${#REQUIRED_ALIASES[@]} > 0)); then
   done
 fi
 
-target_dir="$(dirname -- "$TARGET_CONF")"
 if [[ -d "$target_dir" ]]; then
   backup_confs=()
   while IFS= read -r path; do
@@ -582,23 +805,11 @@ if [[ -d "$target_dir" ]]; then
   fi
 fi
 
-if [[ $INSTALL -eq 1 && ! -d "$target_dir" ]]; then
-  echo "target nginx include directory does not exist: $target_dir" >&2
-  exit 1
-fi
 if [[ $INSTALL -eq 1 ]]; then
-  if [[ $EUID -ne $SYSTEM_OWNER_UID ]]; then
-    echo "nginx config installation must run as root" >&2
-    exit 1
-  fi
-  target_dir_logical="$(cd -L -- "$target_dir" && pwd -L)"
-  target_dir_physical="$(cd -P -- "$target_dir" && pwd -P)"
-  if [[ -L "$target_dir" || "$target_dir_logical" != "$target_dir_physical" ]]; then
-    echo "target nginx include directory must be direct: $target_dir" >&2
-    exit 1
-  fi
   require_safe_target_directory
-  require_safe_target_leaf
+  if [[ -e "$TARGET_CONF" || -L "$TARGET_CONF" ]]; then
+    require_exact_file_metadata "$TARGET_CONF" "existing target nginx config" 0644
+  fi
 fi
 
 require_safe_nginx_binary
@@ -607,7 +818,10 @@ validate_rendered_nginx_conf
 if [[ $INSTALL -eq 1 ]]; then
   backup_target_conf
   INSTALL_ROLLBACK_NEEDED=1
-  if ! copy_to_target_conf "$OUTPUT" "$BACKED_UP_TARGET_FINGERPRINT"; then
+  if ! copy_to_target_conf \
+    "$OUTPUT" \
+    "$BACKED_UP_TARGET_FINGERPRINT" \
+    "$RENDERED_CONF_FINGERPRINT"; then
     echo "failed to install nginx config candidate: $TARGET_CONF" >&2
     exit 1
   fi

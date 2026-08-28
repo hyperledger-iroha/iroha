@@ -1,5 +1,5 @@
 {
-  "chain": "iroha3-nexus",
+  "chain": "00000000-0000-0000-0000-000000000753",
   "chain_discriminant": 753,
   "consensus_fingerprint": "0x33b78ecd58757d3ec796f1d20ab23093efec4035f8228d4a65143e123adea858",
   "consensus_mode": "Npos",
@@ -121,6 +121,32 @@
           "max_transactions": 512
         },
         "custom": {
+          "iroha:hijiri_parameters_v1": {
+            "id": "iroha:hijiri_parameters_v1",
+            "payload": {
+              "version": 1,
+              "revision": 1,
+              "previous_digest": null,
+              "fee_policy": {
+                "bands": [
+                  {
+                    "max_risk": [
+                      65536
+                    ],
+                    "multiplier": [
+                      65536
+                    ]
+                  }
+                ],
+                "penalty_cap": [
+                  65536
+                ]
+              },
+              "default_account_risk": [
+                0
+              ]
+            }
+          },
           "ivm_gas_limit_per_block": {
             "id": "ivm_gas_limit_per_block",
             "payload": 1680000

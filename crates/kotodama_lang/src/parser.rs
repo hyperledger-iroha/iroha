@@ -209,9 +209,6 @@ impl Drop for PendingExpr {
 }
 struct PendingType(Option<TypeExpr>);
 impl PendingType {
-    fn empty() -> Self {
-        Self(None)
-    }
     fn new(ty: TypeExpr) -> Self {
         Self(Some(ty))
     }
@@ -226,9 +223,6 @@ impl PendingType {
     }
     fn into_inner(mut self) -> TypeExpr {
         self.take()
-    }
-    fn into_option(mut self) -> Option<TypeExpr> {
-        self.0.take()
     }
 }
 impl Drop for PendingType {
@@ -483,8 +477,6 @@ pub(crate) fn parse_with_syntax(
     budget: FrontendBudget,
     tokens: &[Token],
 ) -> GrammarParseOutput {
-    #[cfg(test)]
-    CANONICAL_GRAMMAR_PARSES.with(|count| count.set(count.get().saturating_add(1)));
     let mut parser = CstAstLowerer::new(tokens, source, true, budget);
     let parsed = parser.parse_program();
     let mut errors = std::mem::take(&mut parser.errors);
@@ -601,6 +593,10 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn reset_direct_cst_lowering_count() {
     CANONICAL_GRAMMAR_PARSES.with(|count| count.set(0));
+}
+#[cfg(test)]
+pub(crate) fn record_direct_cst_lowering() {
+    CANONICAL_GRAMMAR_PARSES.with(|count| count.set(count.get().saturating_add(1)));
 }
 #[cfg(test)]
 pub(crate) fn direct_cst_lowering_count() -> usize {
@@ -2031,7 +2027,9 @@ impl<'a> CstAstLowerer<'a> {
             None,
         );
         self.expect(TokenKind::LBrace)?;
-        let mut fields = PendingValues::new(|(_, ty)| crate::ast::drop_type_iterative(ty));
+        let mut fields = PendingValues::new(|(_, ty): (String, TypeExpr)| {
+            crate::ast::drop_type_iterative(ty);
+        });
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             // Allow stray separators.
             if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
@@ -2192,10 +2190,10 @@ impl<'a> CstAstLowerer<'a> {
                 .entry(name.clone())
                 .and_modify(|known| *known = None)
                 .or_insert_with(|| Some(parameter_names));
-            let mut ret_ty = PendingType::empty();
+            let mut ret_ty = None;
             if self.peek(TokenKind::Arrow) {
                 self.bump();
-                ret_ty.replace(self.parse_type_expr()?);
+                ret_ty = Some(PendingType::new(self.parse_type_expr()?));
             }
             // Caller authorization is mandatory for mutating public kotoage
             // and optional for read-only views.
@@ -2271,7 +2269,7 @@ impl<'a> CstAstLowerer<'a> {
             Ok(Item::Function(Function {
                 name,
                 params: params.into_inner(),
-                ret_ty: ret_ty.into_option(),
+                ret_ty: ret_ty.as_mut().map(PendingType::take),
                 body,
                 modifiers,
                 location,
@@ -2344,10 +2342,11 @@ impl<'a> CstAstLowerer<'a> {
             let owner = self.begin_node(AstNodeKind::Statement, statement_start);
             let mutable = self.peek(TokenKind::Var);
             self.bump();
-            let mut ty = PendingType::empty();
-            if self.typed_local_starts_here() {
-                ty.replace(self.parse_type_expr()?);
-            }
+            let mut ty = if self.typed_local_starts_here() {
+                Some(PendingType::new(self.parse_type_expr()?))
+            } else {
+                None
+            };
             // pattern
             let pat = if self.peek(TokenKind::LParen) {
                 self.bump();
@@ -2393,7 +2392,7 @@ impl<'a> CstAstLowerer<'a> {
                 Statement::Let {
                     mutable,
                     pat,
-                    ty: ty.into_option(),
+                    ty: ty.as_mut().map(PendingType::take),
                     value: expr.take(),
                 },
             )))

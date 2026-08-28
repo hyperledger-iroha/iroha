@@ -1,5 +1,5 @@
 //! Tests for the built-in parameter defaults.
-use super::{governance, nexus::fees, oracle, pipeline, queue, torii};
+use super::{governance, network, nexus::fees, oracle, pipeline, queue, torii};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
 #[test]
@@ -48,6 +48,10 @@ fn queue_defaults_allow_two_times_legacy_soak_capacity() {
     assert_eq!(queue::CAPACITY_PER_USER.get(), 16_384);
     assert!(queue::CAPACITY_PER_USER < queue::CAPACITY);
     assert_eq!(queue::MAX_RETAINED_BYTES.get(), 128 * 1024 * 1024);
+}
+#[test]
+fn quic_datagrams_default_fail_closed() {
+    assert!(!network::QUIC_DATAGRAMS_ENABLED);
 }
 #[test]
 fn oracle_custody_defaults_are_public_only_and_not_legacy_seeded() {

@@ -13,6 +13,29 @@ use color_eyre::eyre::{Result, eyre};
     target_os = "redox"
 ))]
 use std::path::Path;
+#[cfg(all(test, unix))]
+/// Creates a named pipe for Unix special-file regression tests.
+#[allow(
+    unsafe_code,
+    reason = "POSIX mkfifo requires FFI; this test-only wrapper validates the C path"
+)]
+pub fn create_fifo_for_test(path: &std::path::Path, mode: libc::mode_t) -> std::io::Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt as _};
+
+    let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "FIFO path contains an interior NUL",
+        )
+    })?;
+    // SAFETY: `path` is a live, NUL-terminated C string and `mode` is passed
+    // directly using the platform's `mode_t` type.
+    if unsafe { libc::mkfifo(path.as_ptr(), mode) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
 #[cfg(all(
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
@@ -183,16 +206,43 @@ mod unix {
         }
         Ok(())
     }
-    pub fn prepare_empty_private_directory(path: &Path) -> Result<()> {
-        reject_symlink_components(path)?;
-        if !path.exists() {
-            let mut builder = DirBuilder::new();
-            builder.mode(PRIVATE_DIRECTORY_MODE);
-            builder
-                .create(path)
-                .wrap_err_with(|| format!("create private directory {}", path.display()))?;
+    fn resolve_private_output_directory(path: &Path) -> Result<PathBuf> {
+        let name = match path.components().next_back() {
+            Some(Component::Normal(name)) => name,
+            _ => {
+                return Err(eyre!(
+                    "private output directory must end in a normal path component: {}",
+                    path.display()
+                ));
+            }
+        };
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let parent = fs::canonicalize(parent).wrap_err_with(|| {
+            format!(
+                "resolve private output directory parent {}",
+                parent.display()
+            )
+        })?;
+        let resolved = parent.join(name);
+        reject_symlink_components(&resolved)?;
+        Ok(resolved)
+    }
+    fn harden_empty_private_directory(path: &Path) -> Result<()> {
+        let lexical = fs::symlink_metadata(path)
+            .wrap_err_with(|| format!("inspect empty private directory {}", path.display()))?;
+        if !lexical.is_dir()
+            || lexical.file_type().is_symlink()
+            || lexical.uid() != current_uid()
+            || lexical.mode() & 0o022 != 0
+        {
+            return Err(eyre!(
+                "private output directory must be an owner-held, non-symlink directory with no group/world write access: {}",
+                path.display()
+            ));
         }
-        validate_private_directory(path)?;
         if fs::read_dir(path)
             .wrap_err_with(|| format!("read private directory {}", path.display()))?
             .next()
@@ -203,7 +253,51 @@ mod unix {
                 path.display()
             ));
         }
+        let opened = File::open(path)
+            .wrap_err_with(|| format!("open empty private directory {}", path.display()))?;
+        let observed = opened
+            .metadata()
+            .wrap_err_with(|| format!("inspect opened directory {}", path.display()))?;
+        if !observed.is_dir()
+            || lexical.dev() != observed.dev()
+            || lexical.ino() != observed.ino()
+            || observed.uid() != current_uid()
+        {
+            return Err(eyre!(
+                "private output directory changed while opening: {}",
+                path.display()
+            ));
+        }
+        fchmod(&opened, Mode::from_raw_mode(PRIVATE_DIRECTORY_MODE as _))
+            .map_err(std::io::Error::from)
+            .wrap_err_with(|| format!("harden private directory {}", path.display()))?;
+        opened
+            .sync_all()
+            .wrap_err_with(|| format!("sync private directory {}", path.display()))?;
+        validate_private_directory(path)?;
+        if fs::read_dir(path)
+            .wrap_err_with(|| format!("recheck private directory {}", path.display()))?
+            .next()
+            .is_some()
+        {
+            return Err(eyre!(
+                "private output directory changed while being hardened: {}",
+                path.display()
+            ));
+        }
         Ok(())
+    }
+    pub fn prepare_empty_private_directory(path: &Path) -> Result<PathBuf> {
+        let path = resolve_private_output_directory(path)?;
+        if !path.exists() {
+            let mut builder = DirBuilder::new();
+            builder.mode(PRIVATE_DIRECTORY_MODE);
+            builder
+                .create(&path)
+                .wrap_err_with(|| format!("create private directory {}", path.display()))?;
+        }
+        harden_empty_private_directory(&path)?;
+        Ok(path)
     }
     #[expect(
         clippy::too_many_lines,
@@ -741,7 +835,7 @@ mod unix {
         let mut options = OpenOptions::new();
         options
             .read(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
         let mut file = options
             .open(path)
             .wrap_err_with(|| format!("open private file {}", path.display()))?;
@@ -802,6 +896,57 @@ mod unix {
             (guard, root)
         }
         #[test]
+        fn private_directory_creation_returns_a_canonical_path_and_rejects_a_final_symlink() {
+            let sandbox = tempfile::tempdir().expect("create private-directory sandbox");
+            let sandbox_root = fs::canonicalize(sandbox.path()).expect("canonicalize sandbox");
+            let actual_parent = sandbox_root.join("actual-parent");
+            fs::create_dir(&actual_parent).expect("create actual parent");
+            let parent_alias = sandbox_root.join("parent-alias");
+            symlink(&actual_parent, &parent_alias).expect("create parent alias");
+
+            let requested = parent_alias.join("custody");
+            let canonical = prepare_empty_private_directory(&requested)
+                .expect("resolve the existing parent before private-directory creation");
+            assert_eq!(canonical, actual_parent.join("custody"));
+            assert_eq!(mode(&canonical), PRIVATE_DIRECTORY_MODE);
+
+            let actual_target = sandbox_root.join("actual-target");
+            fs::create_dir(&actual_target).expect("create final symlink target");
+            set_mode(&actual_target, PRIVATE_DIRECTORY_MODE);
+            let final_alias = sandbox_root.join("final-alias");
+            symlink(&actual_target, &final_alias).expect("create final directory alias");
+            let error = prepare_empty_private_directory(&final_alias)
+                .expect_err("the requested final directory must never be a symlink");
+            assert!(error.to_string().contains("symbolic link"));
+
+            let error = prepare_empty_private_directory(&actual_parent.join(".."))
+                .expect_err("a parent-directory final component must be rejected");
+            assert!(error.to_string().contains("normal path component"));
+        }
+        #[test]
+        fn private_directory_hardens_safe_empty_modes_and_rejects_writable_or_nonempty_roots() {
+            let sandbox = tempfile::tempdir().expect("create private-directory sandbox");
+            let safe = sandbox.path().join("safe-empty");
+            fs::create_dir(&safe).expect("create safe empty directory");
+            set_mode(&safe, 0o755);
+            prepare_empty_private_directory(&safe).expect("harden safe empty directory");
+            assert_eq!(mode(&safe), PRIVATE_DIRECTORY_MODE);
+
+            let writable = sandbox.path().join("writable-empty");
+            fs::create_dir(&writable).expect("create writable empty directory");
+            set_mode(&writable, 0o777);
+            let error = prepare_empty_private_directory(&writable)
+                .expect_err("group/world-writable directory must fail closed");
+            assert!(error.to_string().contains("no group/world write access"));
+
+            let nonempty = sandbox.path().join("nonempty");
+            fs::create_dir(&nonempty).expect("create nonempty directory");
+            fs::write(nonempty.join("existing"), b"occupied").expect("occupy directory");
+            let error = prepare_empty_private_directory(&nonempty)
+                .expect_err("nonempty directory must fail closed");
+            assert!(error.to_string().contains("must be empty"));
+        }
+        #[test]
         fn private_file_roundtrip_accepts_exact_size_limit() {
             let (_root_guard, root) = private_root();
             let path = root.join("exact-limit.secret");
@@ -811,6 +956,15 @@ mod unix {
             assert_eq!(read.len(), MAX_PRIVATE_FILE_BYTES as usize);
             assert_eq!(read.first(), Some(&0xA5));
             assert_eq!(read.last(), Some(&0xA5));
+        }
+        #[test]
+        fn private_file_reader_rejects_fifo_without_waiting_for_a_writer() {
+            let (_root_guard, root) = private_root();
+            let path = root.join("named-pipe.secret");
+            crate::secure_fs::create_fifo_for_test(&path, 0o600)
+                .expect("create private-input FIFO");
+            let error = read_private_file(&path).expect_err("FIFO must not be accepted as a key");
+            assert!(error.to_string().contains("single-link regular data"));
         }
         #[test]
         fn private_file_writer_rejects_size_limit_plus_one_before_creation() {
@@ -1028,7 +1182,7 @@ pub use unix::{
     target_os = "horizon",
     target_os = "redox"
 ))]
-fn unsupported() -> Result<()> {
+fn unsupported<T>() -> Result<T> {
     Err(eyre!(
         "owner-only private artifact operations require a supported Unix platform"
     ))
@@ -1039,7 +1193,7 @@ fn unsupported() -> Result<()> {
     target_os = "horizon",
     target_os = "redox"
 ))]
-pub fn prepare_empty_private_directory(_path: &Path) -> Result<()> {
+pub fn prepare_empty_private_directory(_path: &Path) -> Result<std::path::PathBuf> {
     unsupported()
 }
 #[cfg(any(
@@ -1070,6 +1224,5 @@ pub fn write_private_file_atomic(_path: &Path, _raw: &[u8]) -> Result<()> {
     target_os = "redox"
 ))]
 pub fn read_private_file(_path: &Path) -> Result<Vec<u8>> {
-    unsupported()?;
-    unreachable!()
+    unsupported()
 }

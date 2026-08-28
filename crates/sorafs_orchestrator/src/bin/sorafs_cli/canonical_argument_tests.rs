@@ -543,8 +543,6 @@ fn fetch_summary_records_write_mode_hint() {
         policy_report,
         local_proxy_manifest: None,
         car_verification: None,
-        taikai_cache_stats: None,
-        taikai_cache_queue: None,
     };
     let summary = build_fetch_summary(
         "deadbeef",

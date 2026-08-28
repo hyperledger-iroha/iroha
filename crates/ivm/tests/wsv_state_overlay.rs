@@ -147,7 +147,7 @@ fn overlay_restores_snapshot_on_rollback() {
             .expect("host present")
             .downcast_mut::<WsvHost>()
             .expect("WsvHost");
-        assert!(host.restore(snapshot.as_ref()));
+        host.restore(snapshot.as_ref()).expect("restore checkpoint");
         IVMHost::finish_tx(host).expect("finish_tx after restore");
         let stored = host
             .wsv
@@ -181,7 +181,7 @@ fn checkpoint_restore_flushes_persisted_wsv_state() {
         MockWorldStateView::with_state_store(persist_path.clone()).expect("reload updated state");
     let stored = reloaded.sc_get("counter").expect("updated persisted state");
     assert_eq!(stored, b"9");
-    assert!(host.restore(snapshot.as_ref()));
+    host.restore(snapshot.as_ref()).expect("restore checkpoint");
     let stored = host.wsv.sc_get("counter").expect("restored host state");
     assert_eq!(stored, b"1");
     let reloaded =
@@ -218,11 +218,10 @@ fn checkpoint_restore_persistence_failure_is_reported_without_panicking() {
 
     fs::remove_dir_all(&store_dir).expect("remove state store directory");
     fs::write(&store_dir, b"block parent directory creation").expect("install blocker file");
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        host.restore(snapshot.as_ref())
-    }));
-
-    assert!(matches!(outcome, Ok(false)));
+    assert_eq!(
+        host.restore(snapshot.as_ref()),
+        Err(ivm::VMError::NoritoInvalid)
+    );
     assert_eq!(host.wsv.sc_get("counter"), Some(b"1".to_vec()));
     assert_eq!(host.caller, original_caller);
     let _ = fs::remove_dir_all(&tmp_dir);

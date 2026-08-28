@@ -334,6 +334,159 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         ),
     },
     {
+        "id": "retired_nonproducer_replica_direct_release",
+        "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+        "impl": "AutonomousLaneReleaseProjectionContext",
+        "symbol": "replica_fifo_ownership_projection",
+        "model_actions": ("ReleaseReservationDirect",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "self.actor == self.producer",
+            "released_prefix > selected_count",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE",
+            "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED",
+            "actor: self.actor",
+            "checked.into_projection()",
+        ),
+        "checked_transition_source": {
+            "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+            "impl": "AutonomousLaneReleaseProjectionContext",
+            "symbol": "replica_fifo_ownership_projection",
+            "required_tokens": (
+                "ProductionInFlightFirstReleaseTransitionProjection",
+                "self.actor == self.producer",
+                "released_prefix > selected_count",
+                "IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE",
+                "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED",
+                "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT",
+                "actor: self.actor",
+                "check_production_in_flight_first_release_transition",
+                "checked.into_projection()",
+            ),
+            "ordered_tokens": (
+                "let (before_reservation, before_fifo) = if released_prefix == 0",
+                "let before = self.state_with_fifo(",
+                "let after = self.state_with_fifo(",
+                "let projection = ProductionInFlightFirstReleaseTransitionProjection {",
+                "check_production_in_flight_first_release_transition(projection)",
+                ".map(|checked| checked.into_projection())",
+            ),
+            "transition_projection_count": 2,
+        },
+        "authorization_source": {
+            "path": "crates/iroha_core/src/kura/autonomous_release_authority.rs",
+            "impl": "Kura",
+            "symbol": "authorize_autonomous_nonqueue_replica_claim_release",
+            "required_tokens": (
+                "record.retirement.as_ref() != Some(retirement)",
+                "retirement.matches_payload(payload)",
+                "local_peer == &payload.producer",
+                "read_current_autonomous_lane_block_record_self_context_locked",
+                "read_autonomous_lifecycle_cursor_for_terminal_outcome_locked",
+                "binding.local_validator_identity()",
+                "signed_actor != context.actor",
+                "signed_actor == context.producer",
+                "binding.reservation_group_binding() != context.reservation_group",
+                "pending_prefix != context.reservation_group.reservation_count",
+                "replica_fifo_ownership_projection(released_prefix)",
+                "AutonomousNonQueueReplicaClaimReleaseAuthorization",
+            ),
+            "ordered_tokens": (
+                "record.retirement.as_ref() != Some(retirement)",
+                "let Some(local_peer) = self.local_peer_id.get() else",
+                "if local_peer == &payload.producer",
+                "read_current_autonomous_lane_block_record_self_context_locked(",
+                "read_autonomous_lifecycle_cursor_for_terminal_outcome_locked",
+                "let (_, signed_actor) = binding.local_validator_identity()",
+                "autonomous_lane_entrypoint_claim_release_progress_locked(payload, retirement)",
+                "if pending_prefix != context.reservation_group.reservation_count",
+                ".replica_fifo_ownership_projection(released_prefix)",
+                "Ok(Some(AutonomousNonQueueReplicaClaimReleaseAuthorization {",
+            ),
+        },
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/queue.rs",
+            "impl": "Queue",
+            "symbol": "authenticate_autonomous_nonqueue_replica_fifo_ownership",
+            "required_tokens": (
+                "AutonomousNonQueueReplicaClaimReleaseAuthorization",
+                "authenticate_release_queue_fifo_ownership_locked",
+                "authorization.fifo_projection()",
+                "check_production_in_flight_first_release_transition",
+                "checked.into_projection() != projection",
+                "begin_durability_transition_locked",
+                "DurableAutonomousNonQueueReplicaFifoAuthorization",
+            ),
+            "ordered_tokens": (
+                "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock()",
+                "let _queue_guard = self.push_remove_lock.lock()",
+                "self.authenticate_release_queue_fifo_ownership_locked(&store, &barrier, false)",
+                "let projection = *authorization.fifo_projection()",
+                "check_production_in_flight_first_release_transition(projection)",
+                "if checked.into_projection() != projection",
+                "begin_durability_transition_locked(",
+                "Ok(DurableAutonomousNonQueueReplicaFifoAuthorization {",
+            ),
+        },
+        "supporting_sources": (
+            {
+                "role": "move-only Kura replica claim finalizer",
+                "path": "crates/iroha_core/src/kura/autonomous_release_authority.rs",
+                "impl": "Kura",
+                "symbol": "finalize_autonomous_nonqueue_replica_claim_release",
+                "required_tokens": (
+                    "authorization_for_kura(&barrier)",
+                    "matches_exact_durable_source",
+                    "signed_actor != context.actor",
+                    "signed_actor == context.producer",
+                    "binding.reservation_group_binding() != context.reservation_group",
+                    "pending_prefix != context.reservation_group.reservation_count",
+                    "finalize_autonomous_lane_entrypoint_claim_release_with_mode_locked",
+                    "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo",
+                    "require_autonomous_lane_entrypoint_claims_released_locked",
+                    "Ok(authorization)",
+                ),
+                "ordered_tokens": (
+                    "let barrier = retirement.queue_release_barrier()",
+                    "authorization.authorization_for_kura(&barrier)",
+                    "read_autonomous_lane_block_attempt_record_locked(",
+                    "read_autonomous_lifecycle_cursor_for_terminal_outcome_locked",
+                    "kura_authorization.matches_exact_durable_source(",
+                    "autonomous_lane_entrypoint_claim_release_progress_locked(payload, retirement)",
+                    "if pending_prefix != context.reservation_group.reservation_count",
+                    "finalize_autonomous_lane_entrypoint_claim_release_with_mode_locked(",
+                    "AutonomousLaneClaimReleaseAuthorizationMode::ReplicaFifo",
+                    "require_autonomous_lane_entrypoint_claims_released_locked(payload, retirement)",
+                    "Ok(authorization)",
+                ),
+            },
+        ),
+        "commit_sink": {
+            "path": "crates/iroha_core/src/queue.rs",
+            "impl": "Queue",
+            "symbol": "finalize_lane_reservation_release_barrier_with_replica_fifo_authorization",
+            "required_tokens": (
+                "DurableAutonomousNonQueueReplicaFifoAuthorization",
+                "replica_fifo_authorization.covers_queue_barrier(self, barrier)",
+                "LaneQueueReleaseFinalizationGate::from_authorization",
+                "finalize_lane_reservation_release_barrier_inner(barrier, gate, true)",
+                "terminal_evidence",
+                "LaneQueueReleaseCompletionResult",
+            ),
+            "ordered_tokens": (
+                "replica_fifo_authorization.covers_queue_barrier(self, barrier)",
+                "LaneQueueReleaseFinalizationGate::from_authorization(",
+                "finalize_lane_reservation_release_barrier_inner(barrier, gate, true)",
+                "terminal_evidence.ok_or_else",
+                "Ok(LaneQueueReleaseCompletionResult {",
+            ),
+        },
+    },
+    {
         "id": "producer_kura_activation",
         "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "impl": "V2LaneWorkAdapter",
@@ -403,7 +556,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
     },
     {
         "id": "startup_generation_crash_cas",
-        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
         "impl": None,
         "symbol": "check_production_in_flight_first_release_crash_transition",
         "model_actions": ("Crash",),
@@ -417,7 +570,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "check_derived_production_in_flight_first_release_transition",
         ),
         "checked_transition_source": {
-            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
             "impl": None,
             "symbol": "check_derived_production_in_flight_first_release_transition",
             "required_tokens": (
@@ -521,7 +674,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
     },
     {
         "id": "startup_generation_recover_cas",
-        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
         "impl": None,
         "symbol": "check_production_in_flight_first_release_recover_transition",
         "model_actions": ("Recover",),
@@ -532,7 +685,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "check_derived_production_in_flight_first_release_transition",
         ),
         "checked_transition_source": {
-            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
             "impl": None,
             "symbol": "check_derived_production_in_flight_first_release_transition",
             "required_tokens": (
@@ -636,7 +789,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
     },
     {
         "id": "startup_snapshot_recovery_authorization",
-        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
         "impl": None,
         "symbol": "check_production_in_flight_first_release_recover_reservation_snapshot_transition",
         "model_actions": ("RecoverReservationSnapshot",),
@@ -649,7 +802,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "before,",
         ),
         "checked_transition_source": {
-            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
             "impl": None,
             "symbol": "check_derived_production_in_flight_first_release_transition",
             "required_tokens": (
@@ -815,7 +968,9 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                     "lifecycle_process_generation.clone",
                 ),
                 "ordered_tokens": (
-                    "let (pending, control) = reconcile_pending_lane_startup(",
+                    "let (pending, control) = if emergency_fast {",
+                    "(pending, PendingCanonicalRecoveryControlV1::Complete)",
+                    "} else { reconcile_pending_lane_startup(",
                     "lifecycle_process_generation.as_ref(),",
                     "let mut prepared = pending.prepare_lane_recovery(",
                     "V2LaneWorkAdapter::new_with_output_guard_and_transport(",
@@ -969,7 +1124,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
     },
     {
         "id": "startup_local_kura_custody_rehydration_cas",
-        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
         "impl": None,
         "symbol": "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition",
         "model_actions": ("RehydrateLocalKuraCustody",),
@@ -984,7 +1139,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "check_derived_production_in_flight_first_release_transition",
         ),
         "checked_transition_source": {
-            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
             "impl": None,
             "symbol": "check_derived_production_in_flight_first_release_transition",
             "required_tokens": (
@@ -1108,7 +1263,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "lane_work_effect_key",
         ),
         "checked_transition_source": {
-            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
             "impl": None,
             "symbol": "check_derived_production_in_flight_first_release_transition",
             "required_tokens": (
@@ -1134,7 +1289,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "supporting_sources": (
             {
                 "role": "action-specific FanoutFromProducer constructor",
-                "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
                 "impl": None,
                 "symbol": "check_production_in_flight_first_release_fanout_from_producer_transition",
                 "required_tokens": (
@@ -1217,7 +1372,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "lane_work_effect_key",
         ),
         "checked_transition_source": {
-            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
             "impl": None,
             "symbol": "check_derived_production_in_flight_first_release_transition",
             "required_tokens": (
@@ -1243,7 +1398,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "supporting_sources": (
             {
                 "role": "action-specific FanoutFromProducer constructor",
-                "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
                 "impl": None,
                 "symbol": "check_production_in_flight_first_release_fanout_from_producer_transition",
                 "required_tokens": (
@@ -1326,7 +1481,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "lane_work_effect_key",
         ),
         "checked_transition_source": {
-            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
             "impl": None,
             "symbol": "check_derived_production_in_flight_first_release_transition",
             "required_tokens": (
@@ -1352,7 +1507,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "supporting_sources": (
             {
                 "role": "action-specific FanoutFromProducer constructor",
-                "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
                 "impl": None,
                 "symbol": "check_production_in_flight_first_release_fanout_from_producer_transition",
                 "required_tokens": (
@@ -1442,7 +1597,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "lane_work_effect_key",
         ),
         "checked_transition_source": {
-            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
             "impl": None,
             "symbol": "check_derived_production_in_flight_first_release_transition",
             "required_tokens": (
@@ -1468,7 +1623,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "supporting_sources": (
             {
                 "role": "action-specific ServeLateBody constructor",
-                "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
                 "impl": None,
                 "symbol": "check_production_in_flight_first_release_serve_late_body_transition",
                 "required_tokens": (
@@ -1821,7 +1976,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "write_all(bytes)",
                 "sync_all",
                 "persist(path)",
-                "symlink_metadata(path)",
+                "secure_file_metadata::from_path(path)",
                 "sync_dir(parent)",
             ),
         },
@@ -2970,7 +3125,9 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
             "V2LaneWorkAdapter::new_with_output_guard_and_transport",
         ),
         "ordered_tokens": (
-            "let (pending, control) = reconcile_pending_lane_startup(",
+            "let (pending, control) = if emergency_fast {",
+            "(pending, PendingCanonicalRecoveryControlV1::Complete)",
+            "} else { reconcile_pending_lane_startup(",
             "let mut prepared = pending.prepare_lane_recovery(",
             "V2LaneWorkAdapter::new_with_output_guard_and_transport(",
         ),

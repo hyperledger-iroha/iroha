@@ -78,22 +78,22 @@ async fn submit_vpn_receipt_requires_operator_and_client_voucher() {
     app.vpn_sessions.clear();
     let response = handle_submit_vpn_receipt(app.clone(), &method, &uri, &headers, body.as_ref())
         .await
-        .expect("settled")
+        .expect("settlement prepared")
         .into_response();
     assert_eq!(response.status(), StatusCode::CREATED);
-    let settled: VpnReceiptResponseDto = read_json(response).await;
-    assert_eq!(settled.status, "settled");
-    assert_eq!(settled.receipt_source, "relay");
-    assert_eq!(settled.earned_fee, earned_fee);
+    let pending: VpnReceiptResponseDto = read_json(response).await;
+    assert_eq!(pending.status, "settlement_pending");
+    assert_eq!(pending.receipt_source, "relay");
+    assert_eq!(pending.earned_fee, earned_fee);
     assert_eq!(
-        settled.refunded_fee,
+        pending.refunded_fee,
         session
             .lease_fee
             .checked_sub(&earned_fee)
             .expect("fixture earned fee does not exceed lease fee")
     );
-    assert_eq!(settled.lease_id_hex, hex::encode(active_record.lease_id));
-    let settle_instruction = settled
+    assert_eq!(pending.lease_id_hex, hex::encode(active_record.lease_id));
+    let settle_instruction = pending
         .settle_lease_instruction
         .as_ref()
         .expect("native settle instruction");
@@ -111,8 +111,13 @@ async fn submit_vpn_receipt_requires_operator_and_client_voucher() {
     assert_eq!(settle.relay_receipt, receipt);
     assert_eq!(settle.client_voucher, voucher);
     assert_eq!(app.vpn_sessions.len(), 0);
-    assert!(!app.vpn_used_payments.contains_key(&session.payment_tx_hash));
+    assert!(app.vpn_receipts.get(&user).is_none());
+    assert_eq!(
+        wsv_lease_record_by_id(&app, &active_record.lease_id)
+            .expect("active lease remains consensus-owned")
+            .status,
+        VpnLeaseStatusV1::Active
+    );
     let runtime = lock_vpn_runtime(&app);
-    assert!(!runtime.session_ids_by_account.contains_key(&user));
     assert!(runtime.settling_session_ids.is_empty());
 }

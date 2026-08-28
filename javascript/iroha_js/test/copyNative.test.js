@@ -1605,6 +1605,8 @@ test("required-export probe rejects missing strict boundary symbols", (t) => {
     "privacyValidateExact12CapabilityManifestV1",
     "blockProofsVerifyAuthenticatedV1",
     "inspectSorafsOrderbookSubmissionForDiscriminantV1",
+    "validationFeeHijiriQuoteRequestV1",
+    "validationFeeVerifyHijiriQuoteResponseV1",
     "verifySorafsOrderbookSubmissionReceiptV1",
   ]) {
     const fixture = path.join(root, `${missing}.cjs`);

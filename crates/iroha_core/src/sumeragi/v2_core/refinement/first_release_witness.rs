@@ -32,10 +32,10 @@ macro_rules! production_in_flight_first_release_witness_binding_body {
             && $witness.action == $projection.action
             && $witness.actor == $projection.actor
             && $witness.target == $projection.target
-            && $witness.source_identity.word0 == 0xfadfd6bdc5b95767u64
-            && $witness.source_identity.word1 == 0x65cff17d1daba165u64
-            && $witness.source_identity.word2 == 0x5b35cd66f9614617u64
-            && $witness.source_identity.word3 == 0x03e54552334f660cu64
+            && $witness.source_identity.word0 == 0x2a743bb211d4b36fu64
+            && $witness.source_identity.word1 == 0x587cdd65bffc84c9u64
+            && $witness.source_identity.word2 == 0xe822a45b2c7c7115u64
+            && $witness.source_identity.word3 == 0x0a0ae281fb6f8598u64
     }};
 }
 

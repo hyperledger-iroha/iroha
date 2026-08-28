@@ -54,6 +54,9 @@ FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256_HEX = (
 PUBLIC_SIGNAL_SCHEMA_HASH_HEX = (
     "7567439f41173d6745a3d51923cb70371acc7d66f23cefb4100d6d5d7a432cbb"
 )
+BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH_HEX = (
+    "a4db9f6aac0ecd22ac107bfdafbf30dd01087147517efe285d345f3f1182b874"
+)
 SORA_TAIRA_CHAIN_ID_HASH_HEX = (
     "cf1cfc0f57b0bfa4c21882a9870317a1f4812f86533897095e3944be34c5bba7"
 )
@@ -72,6 +75,7 @@ RELEASE_CIRCUIT_IDS = (
     "sccp-sora-taira-to-ethereum-mainnet-groth16-bn254-v1",
     "sccp-sora-taira-to-bsc-mainnet-groth16-bn254-v1",
     "sccp-sora-taira-to-tron-mainnet-groth16-bn254-v1",
+    "sccp-sora-taira-to-ton-mainnet-groth16-bls12381-v1",
 )
 _SIGNAL_BINDING_CIRCUIT = (
     Path(__file__).resolve().parents[1]
@@ -155,7 +159,19 @@ PROFILE_ORDER = (
     "ethereum-mainnet",
     "bsc-mainnet",
     "tron-mainnet",
+    "ton-mainnet",
 )
+
+PROOF_CURVES = (
+    "bn254",
+    "bn254",
+    "bn254",
+    "bls12-381",
+)
+
+if len(PROFILE_ORDER) != len(PROOF_CURVES):
+    raise RuntimeError("SCCP release profile and proof-curve inventories diverged")
+PROOF_CURVE_BY_PROFILE = dict(zip(PROFILE_ORDER, PROOF_CURVES))
 
 HUB_CHAIN_IDS = {"sora-taira": taira_constants.CHAIN_ID}
 SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION = 4
@@ -273,6 +289,7 @@ PROFILE_DOMAINS = {
     "ethereum-mainnet": 1,
     "bsc-mainnet": 2,
     "tron-mainnet": 5,
+    "ton-mainnet": 4,
 }
 
 UNAVAILABLE_INBOUND_REASONS = {
@@ -288,6 +305,7 @@ EXPECTED_INBOUND_STATUS = {
     "ethereum-mainnet": "verified",
     "bsc-mainnet": "verified",
     "tron-mainnet": "verified",
+    "ton-mainnet": "verified",
 }
 
 EXPECTED_OUTBOUND_STATUS = {profile: "verified" for profile in PROFILE_ORDER}
@@ -352,16 +370,88 @@ _HEX_RE = re.compile(r"^[0-9a-f]+$")
 _SENSITIVE_RE = re.compile(
     r"(?:"
     r"private[\s._-]*key|secret[\s._-]*key|seed[\s._-]*phrase|"
-    r"recovery[\s._-]*phrase|mnemonic|bearer[\s._-]+[a-z0-9]|"
-    r"authorization[\s._-]*(?::|=)|password[\s._-]*(?::|=)|"
-    r"client[\s._-]*secret|(?:api|access|refresh)[\s._-]*(?:key|token)[\s._-]*(?::|=)"
+    r"recovery[\s._-]*phrase|mnemonic|client[\s._-]*secret|"
+    r"bearer[\s._-]+[^\s,;]+|"
+    r"(?:authorization|proxy[\s._-]*authorization|password|passphrase)"
+    r"[\s\"'._-]*(?::|=)|"
+    r"(?:api|access|refresh|session|auth)[\s._-]*(?:key|token)"
+    r"[\s\"'._-]*(?::|=)"
     r")",
     re.IGNORECASE,
 )
-_BASE64_TOKEN_RE = re.compile(
-    rb"(?<![A-Za-z0-9+/=])(?:[A-Za-z0-9+/]{4}){4,}"
-    rb"(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?(?![A-Za-z0-9+/=])"
+_CREDENTIAL_ASSIGNMENT_RE = re.compile(
+    r"(?<![a-z0-9])(?:"
+    r"password|passphrase|private[\s._-]*key|secret[\s._-]*key|"
+    r"client[\s._-]*secret|api[\s._-]*key|access[\s._-]*key|"
+    r"(?:access|refresh|session|auth|bearer)[\s._-]*token|token|secret"
+    r")(?![a-z0-9])[\s\"']*(?::|=)[\s\"']*\S",
+    re.IGNORECASE,
 )
+_CREDENTIAL_JSON_KEYS = frozenset(
+    {
+        "accesstoken",
+        "accesskey",
+        "apikey",
+        "authorization",
+        "authtoken",
+        "bearertoken",
+        "clientsecret",
+        "cookie",
+        "credential",
+        "credentials",
+        "mnemonic",
+        "passphrase",
+        "password",
+        "privatekey",
+        "proxyauthorization",
+        "recoveryphrase",
+        "refreshtoken",
+        "secret",
+        "secretkey",
+        "seedphrase",
+        "sessiontoken",
+        "token",
+    }
+)
+_PEM_PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN[ -]+(?:RSA[ -]+|EC[ -]+|DSA[ -]+|OPENSSH[ -]+)?PRIVATE[ -]+KEY-----",
+    re.IGNORECASE,
+)
+_CREDENTIAL_HEADER_RE = re.compile(
+    r"(?im)^(?:authorization|proxy-authorization|x-api-key|x-auth-token|"
+    r"x-iroha-signature|cookie|set-cookie)\s*:\s*\S"
+)
+_CONCRETE_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"(?:AKIA|ASIA)[A-Z0-9]{16}|"
+    r"github_pat_[A-Za-z0-9_]{20,}|"
+    r"gh[pousr]_[A-Za-z0-9]{20,}|"
+    r"xox[baprs]-[A-Za-z0-9-]{10,}|"
+    r"AIza[0-9A-Za-z_-]{30,}|"
+    r"sk_live_[0-9A-Za-z]{16,}|"
+    r"npm_[0-9A-Za-z]{20,}|"
+    r"pypi-[0-9A-Za-z_-]{20,}"
+    r")(?![A-Za-z0-9])"
+)
+_URL_USERINFO_RE = re.compile(r"(?i)\bhttps?://[^/@\s:]+:[^/@\s]+@")
+_JSON_KEY_RE = re.compile(r'"((?:\\.|[^"\\])*)"\s*:')
+_JSON_ESCAPE_RE = re.compile(r'\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})')
+_BASE64_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9+/_=-])([A-Za-z0-9+/_-]{8,}={0,2})"
+    r"(?![A-Za-z0-9+/_=-])"
+)
+_JWT_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{2,})\."
+    r"([A-Za-z0-9_-]{2,})(?:\.([A-Za-z0-9_-]{2,}))?"
+    r"(?![A-Za-z0-9_-])"
+)
+_HEX_TOKEN_RE = re.compile(r"(?<![0-9A-Fa-f])([0-9A-Fa-f]{12,})(?![0-9A-Fa-f])")
+_SECRET_SCAN_MAX_DEPTH = 8
+_SECRET_SCAN_MAX_VARIANTS = 128
+_SECRET_SCAN_MAX_ADDITIONAL_BYTES = 64 * 1024 * 1024
+_SECRET_SCAN_ABSOLUTE_DECODED_BYTES = 1024 * 1024 * 1024
+_SECRET_SCAN_MAX_TOKEN_CHARS = 2 * 1024 * 1024
+_SECRET_SCAN_MAX_DECODED_TOKENS = 32_768
 _SAFE_VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){2}(?:[-+][A-Za-z0-9.-]+)?$")
 _UNAVAILABLE_REASON_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -420,6 +510,7 @@ def semantic_proof_profile_hash(
     circuit_artifact_sha256: bytes,
     witness_generator_sha256: bytes,
     public_signal_schema_hash: bytes,
+    proof_curve: str = "bn254",
 ) -> bytes:
     """Derive the exact governed V1 semantic-profile hash."""
 
@@ -435,8 +526,14 @@ def semantic_proof_profile_hash(
         _fail("semantic proof profile commitments must each be exactly 32 bytes")
     if any(not any(commitment) for commitment in commitments) or len(set(commitments)) != 3:
         _fail("semantic proof profile commitments must be nonzero and role-distinct")
+    if proof_curve == "bn254":
+        curve_tag = 0
+    elif proof_curve == "bls12-381":
+        curve_tag = 1
+    else:
+        _fail("semantic proof curve must be exactly bn254 or bls12-381")
     canonical = (
-        b"\x01\x00\x01"
+        bytes((1, curve_tag, 1))
         + circuit_artifact_sha256
         + witness_generator_sha256
         + public_signal_schema_hash
@@ -540,6 +637,10 @@ def public_error(error: BaseException) -> str:
     """Return a bounded error message with common secret shapes redacted."""
 
     text = unicodedata.normalize("NFKC", str(error))
+    try:
+        reject_secret_material(text.encode("utf-8", "replace"), label="public error")
+    except SccpReleaseError:
+        return "SCCP release error contained redacted credential material"
     text = re.sub(r"(?i)(?:https?://)[^/@\s]+@", "https://<redacted>@", text)
     text = _SENSITIVE_RE.sub("<redacted>", text)
     # Errors are embedded after a fixed CLI prefix. Keep them on one physical
@@ -646,6 +747,7 @@ def require_canonical_json_file(data: bytes, value: Any, *, label: str) -> None:
 def _safe_relative_parts(value: Any, *, label: str) -> tuple[str, ...]:
     if type(value) is not str or not value or len(value.encode("utf-8", "strict")) > 240:
         _fail(f"{label} must be a bounded relative POSIX path")
+    reject_secret_material(value.encode("utf-8"), label="public artifact path")
     if value != value.strip() or "\\" in value or any(ord(ch) < 0x20 for ch in value):
         _fail(f"{label} must be a canonical relative POSIX path")
     path = PurePosixPath(value)
@@ -1096,43 +1198,204 @@ def _canonical_base64(value: Any, *, label: str, decoded_length: int) -> bytes:
     return decoded
 
 
+def _secret_scan_failure(*, encoded: bool = False) -> None:
+    qualifier = "encoded " if encoded else ""
+    _fail(f"SCCP public material contains {qualifier}forbidden credential material")
+
+
+def _secret_scan_limit() -> None:
+    _fail("SCCP public material exceeds the bounded secret-scan decoding limits")
+
+
+def _without_format_characters(value: str) -> str:
+    return "".join(ch for ch in value if unicodedata.category(ch) != "Cf")
+
+
+def _decode_json_escapes(value: str) -> str:
+    def decode(match: re.Match[str]) -> str:
+        try:
+            return json.loads('"' + match.group(0) + '"')
+        except (ValueError, TypeError):
+            return match.group(0)
+
+    return _JSON_ESCAPE_RE.sub(decode, value)
+
+
+def _canonical_credential_key(value: str) -> str:
+    normalized = _without_format_characters(unicodedata.normalize("NFKC", value))
+    return "".join(ch for ch in normalized.casefold() if ch.isalnum())
+
+
+def _contains_credential_json_key(value: str) -> bool:
+    for match in _JSON_KEY_RE.finditer(value):
+        raw = match.group(1)
+        try:
+            key = json.loads('"' + raw + '"')
+        except (ValueError, TypeError):
+            key = _decode_json_escapes(raw)
+        if type(key) is str and _canonical_credential_key(key) in _CREDENTIAL_JSON_KEYS:
+            return True
+    return False
+
+
+def _contains_secret_marker(value: str) -> bool:
+    return bool(
+        _SENSITIVE_RE.search(value)
+        or _CREDENTIAL_ASSIGNMENT_RE.search(value)
+        or _contains_credential_json_key(value)
+        or _PEM_PRIVATE_KEY_RE.search(value)
+        or _CREDENTIAL_HEADER_RE.search(value)
+        or _CONCRETE_TOKEN_RE.search(value)
+        or _URL_USERINFO_RE.search(value)
+    )
+
+
+def _printable_decoded_text(value: bytes) -> str | None:
+    try:
+        text = value.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        return None
+    if not text or any(
+        not (ch.isprintable() or ch in "\r\n\t")
+        for ch in text
+    ):
+        return None
+    return text
+
+
+def _decode_base64_token(token: str, *, urlsafe: bool) -> str | None:
+    if len(token) > _SECRET_SCAN_MAX_TOKEN_CHARS:
+        _secret_scan_limit()
+    if len(token) % 4 == 1:
+        return None
+    unpadded = token.rstrip("=")
+    if "=" in unpadded:
+        return None
+    padded = unpadded + "=" * (-len(unpadded) % 4)
+    try:
+        decoded = base64.b64decode(
+            padded.encode("ascii"),
+            altchars=b"-_" if urlsafe else None,
+            validate=True,
+        )
+    except (binascii.Error, ValueError):
+        return None
+    return _printable_decoded_text(decoded)
+
+
+def _decoded_token_variants(value: str) -> Iterable[str]:
+    decoded_tokens = 0
+    for match in _JWT_TOKEN_RE.finditer(value):
+        for token in (part for part in match.groups() if part is not None):
+            decoded = _decode_base64_token(token, urlsafe=True)
+            if decoded is not None:
+                decoded_tokens += 1
+                if decoded_tokens > _SECRET_SCAN_MAX_DECODED_TOKENS:
+                    _secret_scan_limit()
+                yield decoded
+    for match in _BASE64_TOKEN_RE.finditer(value):
+        token = match.group(1)
+        urlsafe = "-" in token or "_" in token
+        decoded = _decode_base64_token(token, urlsafe=urlsafe)
+        if decoded is not None:
+            decoded_tokens += 1
+            if decoded_tokens > _SECRET_SCAN_MAX_DECODED_TOKENS:
+                _secret_scan_limit()
+            yield decoded
+    for match in _HEX_TOKEN_RE.finditer(value):
+        token = match.group(1)
+        if len(token) > _SECRET_SCAN_MAX_TOKEN_CHARS:
+            _secret_scan_limit()
+        if len(token) % 2:
+            continue
+        decoded = _printable_decoded_text(bytes.fromhex(token))
+        if decoded is not None:
+            decoded_tokens += 1
+            if decoded_tokens > _SECRET_SCAN_MAX_DECODED_TOKENS:
+                _secret_scan_limit()
+            yield decoded
+
+
 def _secret_scan_variants(data: bytes, *, label: str) -> Iterable[str]:
+    del label  # Diagnostics intentionally never interpolate untrusted identifiers.
     text = data.decode("utf-8", "ignore")
-    variants: set[str] = set()
     pending = [(text, 0)]
+    seen: set[bytes] = set()
+    decoded_bytes = 0
+    decoded_byte_limit = min(
+        _SECRET_SCAN_ABSOLUTE_DECODED_BYTES,
+        max(
+            len(data) + _SECRET_SCAN_MAX_ADDITIONAL_BYTES,
+            len(data) * 4,
+        ),
+    )
     while pending:
         current, depth = pending.pop()
-        if current in variants:
+        encoded = current.encode("utf-8", "surrogatepass")
+        identity = hashlib.sha256(encoded).digest()
+        if identity in seen:
             continue
-        variants.add(current)
-        if len(variants) > 32:
-            _fail(f"{label} uses excessively nested public encodings")
-        transformed = {
-            urllib.parse.unquote(current),
-            html.unescape(current),
-            unicodedata.normalize("NFKC", current),
-        }
+        seen.add(identity)
+        decoded_bytes += len(encoded)
+        if (
+            len(seen) > _SECRET_SCAN_MAX_VARIANTS
+            or decoded_bytes > decoded_byte_limit
+        ):
+            _secret_scan_limit()
+        yield current
+
+        transformed: set[str] = set()
+        if "%" in current:
+            transformed.add(urllib.parse.unquote(current))
+            transformed.add(urllib.parse.unquote_plus(current))
+        if "&" in current and ";" in current:
+            transformed.add(html.unescape(current))
+        if "\\" in current:
+            transformed.add(_decode_json_escapes(current))
+            try:
+                decoded_json = json.loads(current)
+                _json_shape(decoded_json)
+                transformed.add(
+                    json.dumps(
+                        decoded_json,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                )
+            except (SccpReleaseError, TypeError, ValueError, RecursionError):
+                pass
+        if any(ord(ch) > 0x7F for ch in current):
+            transformed.add(unicodedata.normalize("NFKC", current))
+            transformed.add(_without_format_characters(current))
+        transformed.update(_decoded_token_variants(current))
         transformed.discard(current)
-        if transformed and depth >= 8:
-            _fail(f"{label} uses excessively nested public encodings")
-        pending.extend((item, depth + 1) for item in transformed if item not in variants)
-    return variants
+        transformed.discard("")
+        unseen = [
+            item
+            for item in transformed
+            if hashlib.sha256(item.encode("utf-8", "surrogatepass")).digest()
+            not in seen
+        ]
+        if unseen and depth >= _SECRET_SCAN_MAX_DEPTH:
+            _secret_scan_limit()
+        pending.extend((item, depth + 1) for item in unseen)
 
 
 def reject_secret_material(data: bytes, *, label: str) -> None:
-    """Reject public artifacts that contain common credential material markers."""
+    """Reject bounded recursively encoded concrete credential material.
 
+    The scan deliberately has no entropy rule: public hashes, public keys,
+    signatures, and proofs remain admissible unless their decoded text contains
+    a concrete credential key, assignment, header, PEM marker, or token prefix.
+    """
+
+    first = True
     for variant in _secret_scan_variants(data, label=label):
-        if _SENSITIVE_RE.search(variant):
-            _fail(f"{label} contains forbidden credential material")
-    for token in _BASE64_TOKEN_RE.findall(data):
-        try:
-            decoded = base64.b64decode(token, validate=True)
-        except (binascii.Error, ValueError):
-            continue
-        for variant in _secret_scan_variants(decoded, label=label):
-            if _SENSITIVE_RE.search(variant):
-                _fail(f"{label} contains encoded forbidden credential material")
+        if _contains_secret_marker(variant):
+            _secret_scan_failure(encoded=not first)
+        first = False
 
 
 def validate_trust_policy_bytes(
@@ -1145,6 +1408,7 @@ def validate_trust_policy_bytes(
     test policy schema.
     """
 
+    reject_secret_material(data, label="release trust policy")
     value = parse_json_bytes(data, label="release trust policy", maximum=MAX_TRUST_POLICY_BYTES)
     require_canonical_json_file(data, value, label="release trust policy")
     policy = _require_object(
@@ -1165,6 +1429,20 @@ def validate_trust_policy_bytes(
     if policy["schema"] != expected_schema or policy["environment"] != expected_environment:
         _fail("release trust policy schema/environment is not valid for this entrypoint")
     _require_id(policy["policy_id"], label="release trust policy policy_id")
+    # Retired fixtures should fail at their authoritative consensus-version
+    # boundary even when the current policy schema has gained required fields.
+    # This preflight does not make a legacy policy acceptable: every current
+    # production field and cardinality is still checked below.
+    raw_proof_systems = policy["proof_systems"]
+    if type(raw_proof_systems) is list:
+        for raw_proof in raw_proof_systems:
+            if type(raw_proof) is not dict:
+                continue
+            raw_anchor = raw_proof.get("sora_finality_anchor")
+            if type(raw_anchor) is dict and raw_anchor.get("protocol_version") != (
+                SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION
+            ):
+                _fail("SORA anchor protocol_version is not the authoritative wire revision")
     roles = _require_list(policy["roles"], label="release trust policy roles", length=2)
     keys: set[str] = set()
     signer_ids: set[str] = set()
@@ -1285,6 +1563,7 @@ def validate_trust_policy_bytes(
             keys=(
                 "counterparty_profile",
                 "circuit_id",
+                "proof_curve",
                 "semantics",
                 "circuit_artifact_sha256_hex",
                 "witness_generator_sha256_hex",
@@ -1306,6 +1585,11 @@ def validate_trust_policy_bytes(
         circuit_id = _require_id(proof["circuit_id"], label="proof-system circuit_id")
         if circuit_id != RELEASE_CIRCUIT_IDS[index]:
             _fail("proof system must use the exact profile-specific SCCP circuit id")
+        proof_curve = _require_string(
+            proof["proof_curve"], label="proof-system proof_curve", maximum=16
+        )
+        if proof_curve != PROOF_CURVES[index]:
+            _fail("proof system curve does not match its exact production profile")
         if any(
             marker in circuit_id
             for marker in ("smoke", "test", "signal-binding", "labeled-signal")
@@ -1333,12 +1617,20 @@ def validate_trust_policy_bytes(
         circuit_artifact = bytes.fromhex(proof["circuit_artifact_sha256_hex"])
         witness_generator = bytes.fromhex(proof["witness_generator_sha256_hex"])
         public_signal_schema = bytes.fromhex(proof["public_signal_schema_hash_hex"])
-        if public_signal_schema.hex() != PUBLIC_SIGNAL_SCHEMA_HASH_HEX:
+        expected_signal_schema = (
+            BLS12381_PUBLIC_SIGNAL_SCHEMA_HASH_HEX
+            if proof_curve == "bls12-381"
+            else PUBLIC_SIGNAL_SCHEMA_HASH_HEX
+        )
+        if public_signal_schema.hex() != expected_signal_schema:
             _fail("proof system uses a different public-signal schema")
         if circuit_artifact.hex() == FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256_HEX:
             _fail("labeled-signal-only circuit is forbidden in release policy")
         profile_hash = semantic_proof_profile_hash(
-            circuit_artifact, witness_generator, public_signal_schema
+            circuit_artifact,
+            witness_generator,
+            public_signal_schema,
+            proof_curve,
         )
         if profile_hash.hex() != proof["semantic_proof_profile_hash_hex"]:
             _fail("semantic proof profile hash does not match its commitments")
@@ -1451,7 +1743,6 @@ def validate_trust_policy_bytes(
                 circuit_policy_signing_payload(proof, report_hash),
             ):
                 _fail("proof-system audit has an invalid detached signature")
-    reject_secret_material(data, label="release trust policy")
     return policy, data
 
 
@@ -1827,7 +2118,11 @@ def _production_semantic_inventory_metadata(
     for path in semantic_paths:
         kind = artifact_by_path[path]["kind"]
         counts[kind] = counts.get(kind, 0) + 1
-    if counts.get("circuit-audit-report") != len(PROFILE_ORDER) * len(CIRCUIT_AUDITOR_ROLES):
+    expected_audit_reports = sum(
+        len(proof["audit_attestations"])
+        for proof in trust_policy["proof_systems"]
+    )
+    if counts.get("circuit-audit-report") != expected_audit_reports:
         _fail("production evidence must contain exactly two independent audit reports per profile")
     for _, kind, _ in SEMANTIC_ARTIFACT_ROLES:
         if not 1 <= counts.get(kind, 0) <= len(PROFILE_ORDER):
@@ -1857,6 +2152,7 @@ def _validate_honest_proof_claim(
             "source_profile",
             "target_profile",
             "target_domain",
+            "proof_curve",
             "route_revision",
             "message_id_hex",
             "payload_hash_hex",
@@ -1876,6 +2172,8 @@ def _validate_honest_proof_claim(
     )
     if claim["source_profile"] != "sora-taira" or claim["target_profile"] != profile:
         _fail("honest proof claim selects the wrong source or destination profile")
+    if claim["proof_curve"] != proof_system["proof_curve"]:
+        _fail("honest proof claim selects the wrong proof curve")
     if _require_int(
         claim["target_domain"], label="honest proof target_domain", maximum=2**32 - 1
     ) != PROFILE_DOMAINS[profile]:
@@ -1940,6 +2238,7 @@ def _validate_circuit_audit_report(
             "auditor_id",
             "counterparty_profile",
             "circuit_id",
+            "proof_curve",
             "semantics",
             "artifacts",
             "honest_proof_claim",
@@ -1951,6 +2250,7 @@ def _validate_circuit_audit_report(
         or report["auditor_id"] != auditor_id
         or report["counterparty_profile"] != profile
         or report["circuit_id"] != proof_system["circuit_id"]
+        or report["proof_curve"] != proof_system["proof_curve"]
         or tuple(report["semantics"]) != REQUIRED_SEMANTICS
     ):
         _fail("circuit audit report scope does not match its trusted policy role")
@@ -2007,8 +2307,8 @@ def verify_production_semantic_artifacts(
     """Verify closed audited semantic manifests before production signatures count.
 
     Circuit, witness, and proof bytes remain opaque here. The authenticated Rust
-    validator performs canonical decoding and BN254 pairing verification of each
-    honest proof after these byte hashes and independent reports agree.
+    validator performs canonical curve-specific decoding and pairing verification
+    of each honest proof after these byte hashes and independent reports agree.
     """
 
     if trust_policy["environment"] != "production":
@@ -2171,10 +2471,10 @@ def validate_test_fixture_evidence_signing_candidate(
         label="unsigned release evidence",
         keys=_UNSIGNED_EVIDENCE_KEYS,
     )
-    _validate_evidence_body(evidence, trust_policy)
     reject_secret_material(
         canonical_json_bytes(evidence), label="unsigned release evidence"
     )
+    _validate_evidence_body(evidence, trust_policy)
     return evidence
 
 
@@ -2188,9 +2488,9 @@ def validate_evidence(
         label="release evidence",
         keys=(*_UNSIGNED_EVIDENCE_KEYS, "provenance"),
     )
+    reject_secret_material(canonical_json_bytes(evidence), label="release evidence")
     _validate_evidence_body(evidence, trust_policy)
     _validate_provenance(evidence["provenance"], evidence, trust_policy)
-    reject_secret_material(canonical_json_bytes(evidence), label="release evidence")
     return evidence
 
 
@@ -2463,6 +2763,7 @@ def derive_validator_identity(
         _fail("canonical Rust validator identity wrote unexpected stderr")
     if not stdout.endswith(b"\n") or stdout.count(b"\n") != 1:
         _fail("canonical Rust validator identity must emit exactly one JSON line")
+    reject_secret_material(stdout, label="Rust validator identity")
     value = parse_json_bytes(
         stdout[:-1],
         label="Rust validator identity",
@@ -2530,6 +2831,7 @@ def verify_rust_release_signatures(
         _fail(f"canonical Rust release signature validation failed: {detail}")
     if stderr or not stdout.endswith(b"\n") or stdout.count(b"\n") != 1:
         _fail("canonical Rust release signature validator emitted invalid output")
+    reject_secret_material(stdout, label="Rust release signature receipt")
     value = parse_json_bytes(
         stdout[:-1],
         label="Rust release signature receipt",
@@ -2558,12 +2860,20 @@ def verify_rust_release_signatures(
         or receipt["release_id"] != evidence["release_id"]
         or receipt["policy_sha256_hex"] != sha256_hex(trust_policy_bytes)
         or receipt["evidence_sha256_hex"] != sha256_hex(evidence_bytes)
-        or receipt["release_signatures_verified"] != len(PROVENANCE_ROLES)
+        or receipt["release_signatures_verified"] != len(trust_policy["roles"])
         or receipt["circuit_audit_signatures_verified"]
-        != len(PROFILE_ORDER) * len(CIRCUIT_AUDITOR_ROLES)
-        or receipt["destination_attestors_validated"] != len(PROFILE_ORDER)
+        != sum(
+            len(proof["audit_attestations"])
+            for proof in trust_policy["proof_systems"]
+        )
+        or receipt["destination_attestors_validated"]
+        != len(trust_policy["destination_attestors"])
         or receipt["distinct_trust_identities"]
-        != len(PROVENANCE_ROLES) + len(PROFILE_ORDER) + len(CIRCUIT_AUDITOR_ROLES)
+        != (
+            len(trust_policy["roles"])
+            + len(trust_policy["destination_attestors"])
+            + len(trust_policy["circuit_auditors"])
+        )
     ):
         _fail("Rust release signature receipt does not match exact trusted inputs")
     if sha256_hex(_read_validator_executable(validator_path)) != executable_hash:
@@ -2593,8 +2903,15 @@ def verify_rust_semantic_proofs(
     if len(semantic_records) != len(PROFILE_ORDER):
         _fail("production semantic proof validation requires every launch profile")
     artifact_by_path = {entry["path"]: entry for entry in evidence["artifacts"]}
+    proof_system_by_profile = {
+        proof["counterparty_profile"]: proof
+        for proof in trust_policy["proof_systems"]
+    }
     receipts: list[dict[str, Any]] = []
     for expected_profile, proof_path, audited_claim in semantic_records:
+        proof_system = proof_system_by_profile.get(expected_profile)
+        if proof_system is None:
+            _fail("semantic proof record has no exact policy profile")
         metadata = artifact_by_path.get(proof_path)
         if metadata is None or metadata["kind"] != "honest-proof":
             _fail("audited honest proof is absent from signed evidence")
@@ -2617,6 +2934,7 @@ def verify_rust_semantic_proofs(
             _fail(f"canonical Rust semantic proof validation failed: {detail}")
         if stderr or not stdout.endswith(b"\n") or stdout.count(b"\n") != 1:
             _fail("canonical Rust semantic proof validator emitted invalid output")
+        reject_secret_material(stdout, label="Rust semantic proof receipt")
         value = parse_json_bytes(
             stdout[:-1],
             label="Rust semantic proof receipt",
@@ -2636,6 +2954,7 @@ def verify_rust_semantic_proofs(
                 "evidence_sha256_hex",
                 "proof_artifact_path",
                 "proof_artifact_sha256_hex",
+                "proof_curve",
                 "canonical_norito_verified",
                 "pairing_verified",
                 "claim",
@@ -2650,6 +2969,7 @@ def verify_rust_semantic_proofs(
             or receipt["evidence_sha256_hex"] != sha256_hex(evidence_bytes)
             or receipt["proof_artifact_path"] != proof_path
             or receipt["proof_artifact_sha256_hex"] != metadata["sha256_hex"]
+            or receipt["proof_curve"] != proof_system["proof_curve"]
             or receipt["canonical_norito_verified"] is not True
             or receipt["pairing_verified"] is not True
             or receipt["claim"] != audited_claim
@@ -2707,6 +3027,7 @@ def _validate_rust_receipt(
             "route_revision",
             "verifying_key_sha256_hex",
             "semantic_circuit_id",
+            "proof_curve",
             "circuit_artifact_sha256_hex",
             "witness_generator_sha256_hex",
             "public_signal_schema_hash_hex",
@@ -2819,6 +3140,7 @@ def _validate_rust_receipt(
         "route_revision",
         "verifying_key_sha256_hex",
         "semantic_circuit_id",
+        "proof_curve",
         "circuit_artifact_sha256_hex",
         "witness_generator_sha256_hex",
         "public_signal_schema_hash_hex",
@@ -2844,6 +3166,8 @@ def _validate_rust_receipt(
         ]
         if circuit_id != expected_circuit_id:
             _fail("Rust receipt selected the wrong profile-specific semantic circuit")
+        if receipt["proof_curve"] != PROOF_CURVE_BY_PROFILE[lane["counterparty_profile"]]:
+            _fail("Rust receipt selected the wrong profile-specific proof curve")
         for field in (
             "destination_statement_sha256_hex",
             "destination_finality_block_hash_hex",
@@ -2938,6 +3262,7 @@ def verify_rust_lane_evidence(
             _fail("canonical Rust lane validator wrote unexpected stderr")
         if not stdout.endswith(b"\n") or stdout.count(b"\n") != 1:
             _fail("canonical Rust lane validator must emit exactly one JSON line")
+        reject_secret_material(stdout, label="Rust lane validation receipt")
         value = parse_json_bytes(
             stdout[:-1],
             label="Rust lane validation receipt",
@@ -2958,6 +3283,7 @@ def verify_rust_lane_evidence(
                 and (
                     receipt["destination_attestor_id"] != attestor["attestor_id"]
                     or receipt["semantic_circuit_id"] != proof_system["circuit_id"]
+                    or receipt["proof_curve"] != proof_system["proof_curve"]
                     or receipt["circuit_artifact_sha256_hex"]
                     != proof_system["circuit_artifact_sha256_hex"]
                     or receipt["witness_generator_sha256_hex"]
@@ -3082,6 +3408,7 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
             "bundle_root_hash_hex",
         ),
     )
+    reject_secret_material(canonical_json_bytes(index), label="bundle index")
     if index["schema"] != BUNDLE_SCHEMA:
         _fail(f"bundle index schema must be exactly {BUNDLE_SCHEMA}")
     _require_id(index["release_id"], label="bundle release_id")
@@ -3358,12 +3685,34 @@ def readiness_summary(evidence: Mapping[str, Any], *, bundle_root_hash: str | No
 
     lanes = []
     blockers: list[str] = []
-    for lane in evidence["lanes"]:
-        profile = lane["counterparty_profile"]
+    supplied_lanes = evidence.get("lanes")
+    if type(supplied_lanes) is not list:
+        supplied_lanes = []
+        blockers.append("lane-inventory:missing:requires:exact-production-profiles")
+    lane_by_profile: dict[str, Mapping[str, Any]] = {}
+    for lane in supplied_lanes:
+        if type(lane) is not dict:
+            blockers.append("lane-inventory:malformed:requires:exact-production-profiles")
+            continue
+        profile = lane.get("counterparty_profile")
+        if profile not in PROFILE_ORDER:
+            blockers.append(f"lane-inventory:unexpected:{profile}")
+            continue
+        if profile in lane_by_profile:
+            blockers.append(f"{profile}:duplicate:requires:one")
+            continue
+        lane_by_profile[profile] = lane
+    for profile in PROFILE_ORDER:
         expected_inbound = EXPECTED_INBOUND_STATUS[profile]
         expected_outbound = EXPECTED_OUTBOUND_STATUS[profile]
-        inbound = lane["inbound_status"]
-        outbound = lane["outbound_status"]
+        lane = lane_by_profile.get(profile)
+        if lane is None:
+            inbound = "missing"
+            outbound = "missing"
+            blockers.append(f"{profile}:missing:requires:present")
+        else:
+            inbound = lane.get("inbound_status", "missing")
+            outbound = lane.get("outbound_status", "missing")
         if inbound != expected_inbound:
             blockers.append(f"{profile}:inbound:{inbound}:requires:{expected_inbound}")
         if outbound != expected_outbound:

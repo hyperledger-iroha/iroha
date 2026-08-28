@@ -1301,10 +1301,23 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
         BTreeSet::from([retired_request_hash]),
         "completion publishes one exact cancellation identity"
     );
-    assert_eq!(
-        apply_retired_historical_recovery_requests(&mut adapter, &services)
-            .expect("cancel service-owned retry before reopening actor admission"),
-        1
+    assert!(
+        !reconcile_terminal_lane_output_handoffs(
+            LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+                .decided_lane_recovery_permit()
+                .expect("settled Apply mints terminal handoff authority"),
+            &mut adapter,
+            &services,
+            1,
+        )
+        .expect("cancel the retired service-owned retry before sampling exact output"),
+        "a retired historical request must clear the terminal exact-output gate"
+    );
+    assert!(
+        !services
+            .has_pending_exact_output()
+            .expect("inspect the terminal gate while actor admission remains blocked"),
+        "cancellation must release actor-backpressured exact-output ownership"
     );
     block_actor.store(false, Ordering::Release);
     assert!(

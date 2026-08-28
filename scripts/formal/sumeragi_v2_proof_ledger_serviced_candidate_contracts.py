@@ -1971,6 +1971,52 @@ self.finish_dispatched_step(
     require_item_order(
         "runtime",
         runtime_items,
+        "step",
+        (
+            """
+let (work, next_schedule) = self.schedule.select(
+    arbitration.timeout_due,
+    arbitration.periodic_timer_due,
+    arbitration.fifo_ready,
+);
+""",
+            "if work == ScheduledWork::Fifo",
+            "self.ordinary_view_blocked_progress_authorization()",
+            """
+if let Some(authorization) = authorization
+    && let Some(step) = self.dispatch_one_pacemaker_progress(
+        now,
+        Some((arbitration.clone(), authorization)),
+    )?
+{
+    return Ok(step);
+}
+""",
+            "self.schedule = next_schedule;",
+        ),
+        "ordinary blocked-view service must consume only a selected FIFO turn and fall through before normal schedule mutation when no release exists",
+    )
+    require_item_order(
+        "runtime",
+        runtime_items,
+        "dispatch_one_pacemaker_progress",
+        (
+            "let view_release_target = ordinary_view_escape.as_ref()",
+            "driver.pacemaker_progress_blocked_target_view(&queued.command)",
+            "view_release_target.is_some_and(|target_view|",
+            "driver.pacemaker_progress_releases_view_block(&queued.command, target_view)",
+            "ordinary_view_escape_selected, None",
+            "let Some((command, candidate)) = selected else { return Ok(None); };",
+            "self.schedule = next_schedule;",
+            "RuntimeQueueSelectionKind::OrdinaryViewProgress",
+            "if ordinary_view_escape_selected && (retry_unadmitted || retained_deferred_ingress)",
+            "arbitration.view_blocked_progress_authorization = Some(authorization);",
+        ),
+        "blocked-view dispatch must filter exact release work, avoid no-candidate mutation, consume ordinary schedule debt, reject retries, and retain authorization",
+    )
+    require_item_order(
+        "runtime",
+        runtime_items,
         "finish_dispatched_step",
         (
             """
@@ -2163,6 +2209,83 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         "runtime",
         _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256,
     )
+    ordinary_view_release_regression = runtime_regressions.get(
+        "ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc"
+    )
+    for sequence, description in (
+        (
+            """
+assert!(
+    tc_scheduler.view_blocked_progress_authorization.is_some(),
+    "ordinary TC bypass must retain its exact blocked-PrepareQC authorization"
+);
+assert!(tc_scheduler.fifo_owed_before);
+assert!(!tc_scheduler.fifo_owed_after);
+assert!(!runtime.schedule.fifo_owed);
+assert_eq!(runtime.ingress.next_class, CommandClass::Normal);
+""",
+            "ordinary TC release must consume FIFO debt, rotate class service, and retain authorization",
+        ),
+        (
+            """
+assert_eq!(normal_debt_after, normal_debt_before + 1);
+let RuntimeSelectedCandidateOwnership::Exact(tc_candidate) = &tc_scheduler.candidate else {
+    panic!("ordinary TC bypass must retain its exact queue candidate")
+};
+assert_eq!(
+    tc_candidate.selection_seal.kind,
+    RuntimeQueueSelectionKind::OrdinaryViewProgress
+);
+assert_eq!(tc_scheduler.validate_exact(), Ok(()));
+""",
+            "ordinary TC release must accrue exactly one fair debt unit and validate its dedicated selection seal",
+        ),
+        (
+            """
+authorization.target_view = selected_view;
+authorization.projection_hash =
+    runtime_view_blocked_progress_authorization_projection_hash(authorization);
+forged_target.projection_hash = runtime_scheduler_projection_hash(&forged_target);
+assert!(
+    forged_target.validate_exact().is_err(),
+    "scheduler evidence must reject a target view which cannot unblock the retained QC"
+);
+""",
+            "coherently rehashed non-future authorization must fail exact validation",
+        ),
+        (
+            """
+assert_eq!(normal_scheduler.selected, RuntimeSelectedOwnerKind::Fifo);
+assert_eq!(normal_scheduler.validate_exact(), Ok(()));
+assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
+assert_eq!(runtime.queued_commands(), 2);
+""",
+            "the skipped unowned Normal class must receive the next ordinary FIFO turn without fabricating a route terminal",
+        ),
+        (
+            """
+assert_eq!(runtime.queued_commands(), 1);
+assert!(matches!(
+    runtime.ingress.commands.front().map(|queued| &queued.command),
+    Some(AdapterCommand::Authenticated(message))
+        if matches!(
+            message.payload(),
+            wire::ConsensusMessageV2Payload::QuorumCertificate(remaining)
+                if remaining == &intervening_certificate
+        )
+));
+""",
+            "the later future PrepareQC must remain the sole queued owner after the newly unblocked PrepareQC runs",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["runtime"],
+            ordinary_view_release_regression,
+            sequence,
+            description,
+            errors,
+        )
     _require_rust_token_sequence(
         paths["runtime"],
         runtime_regressions.get(
@@ -2711,11 +2834,19 @@ assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, fa
         effects_path,
         drain,
         """
-if matches!(&owned.effect, AdapterEffect::Apply { .. })
-    && (self.pending_runner_decision_cleanup.is_some()
-        || !self.pending_durable_validate_admissions.is_empty()
-        || self.pending_live_wal_sign_admission.is_some()
-        || !self.pending_lifecycle_output_admissions.is_empty())
+let released_validation_will_apply = match &owned.effect {
+    AdapterEffect::ValidateBody { round, subject, .. } => self
+        .published_lifecycle_validate_retry_markers
+        .get(&(*round, *subject))
+        .is_some_and(|marker| {
+            !marker.owns_live_lifecycle_row()
+                && marker.latest_statement.phase() == Some(wire::GlobalPhase::Commit)
+        }),
+    _ => false,
+};
+if (matches!(&owned.effect, AdapterEffect::Apply { .. })
+    || released_validation_will_apply)
+    && self.decision_apply_dispatch_barrier_is_occupied()
 {
     break;
 }

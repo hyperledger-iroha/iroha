@@ -158,7 +158,6 @@ META = {
     "crates/iroha_cli/src/commands/connect.rs": ("fixtures", "connect", "json", "test-json-fixture"),
     "crates/iroha_config/examples/sumeragi_v2_context_hash.rs": ("templates", "sumeragi-v2-context", "toml.in", "example-config-template"),
     "xtask/src/sns.rs": ("fixtures", "sns-dashboard", "json", "test-json-fixture"),
-    "xtask/src/sorafs.rs": ("fixtures", "taikai-cache", "json", "test-json-fixture"),
     "crates/iroha_data_model/tests/query_json_envelope.rs": ("fixtures", "query-envelope", "json", "test-json-fixture"),
     "crates/build-support/src/bin/clippy_inventory.rs": ("fixtures", "clippy-inventory", "jsonl", "test-json-lines-fixture"),
     "crates/norito/tests/cross_language.rs": ("fixtures", "cross-language-schema", "json", "test-json-fixture"),

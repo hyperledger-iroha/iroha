@@ -45,15 +45,20 @@ import org.hyperledger.iroha.android.alias.ResolvedAccountAliasV1;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.model.ContractInvocation;
+import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.FeeChargeKind;
 import org.hyperledger.iroha.android.model.FeeChargeLimit;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.norito.MultisigDraftTestFixtures;
+import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.nexus.UaidBindingsQuery;
 import org.hyperledger.iroha.android.nexus.UaidBindingsResponse;
@@ -71,6 +76,8 @@ import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
+import org.hyperledger.iroha.android.validationfee.ValidationFeeHijiriQuoteRequestV1;
+import org.hyperledger.iroha.android.validationfee.ValidationFeeHijiriQuoteV1;
 import org.hyperledger.iroha.android.sorafs.AnonymityPolicy;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchOptions;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
@@ -95,6 +102,10 @@ public final class HttpClientTransportTests {
   private static final NetworkId OTHER_NETWORK_ID =
       NetworkId.parse(
           "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22");
+  private static final String CONTRACT_BUYER_PAYLOAD_DIGEST_HEX =
+      "1a2bca00c0768c41d68cf221ca3bdad238de9009a821cf8c9d9c2cd767f5893b";
+  private static final String CONTRACT_INPUT_PAYLOAD_DIGEST_HEX =
+      "1de11ee478ddf0a3c7d27838af5e8bf430fa8d91ae945f9b2b312b25bff621dc";
 
   private static FeePaymentIntent feePayment(final Long gasLimit) {
     return FeePaymentIntent.authority(Collections.emptyList(), gasLimit);
@@ -163,11 +174,13 @@ public final class HttpClientTransportTests {
     verifierKeyDraftRejectsSemanticSubstitutionBeforeSigning();
     verifierKeyDraftRequiresLocalSigningContextBeforeRequest();
     callContractRequestParsesResponse();
+    contractCallUnsignedDraftRejectsRehashedSubstitution();
     contractCallBoundaryConsumesSharedRustArgumentRecordFixture();
     callContractRejectsInvalidEntrypointOrGas();
     callContractResponseRequiresOperationReceipt();
     contractAndMultisigTransactionHashesRequireIrohaHashOfMarker();
     proposeMultisigRequestParsesResponse();
+    multisigUnsignedDraftRejectsRehashedSubstitution();
     proposeMultisigRejectsAdversarialRequestShapes();
     multisigResponseParserRejectsMalformedFields();
     multisigResponseParserBindsAbi22DraftFields();
@@ -2501,6 +2514,376 @@ public final class HttpClientTransportTests {
     assert wrongMediaRejected : "fee quote must reject a non-JSON success response media type";
   }
 
+  static void validationFeeHijiriQuotePostsExactSignedNoritoAndRejectsHostileMetadata()
+      throws Exception {
+    final String quotedAccount = TestAccountIds.ed25519Authority(0x51);
+    final String signatoryAccount = TestAccountIds.ed25519Authority(0x52);
+    final ValidationFeeHijiriQuoteRequestV1 quoteRequest =
+        new ValidationFeeHijiriQuoteRequestV1(quotedAccount, 2);
+    final byte[] requestNorito = new byte[] {1, 3, 3, 7};
+    final byte[] responseNorito = new byte[] {9, 8, 7, 6};
+    final byte[][] verified = new byte[2][];
+    final AtomicInteger verificationCount = new AtomicInteger();
+    final class VerificationObserved extends RuntimeException {}
+    final HttpClientTransport.ValidationFeeHijiriQuoteCodec codec =
+        new HttpClientTransport.ValidationFeeHijiriQuoteCodec() {
+          @Override
+          public byte[] encode(final ValidationFeeHijiriQuoteRequestV1 request) {
+            assert request == quoteRequest : "the exact typed quote request must reach the codec";
+            return requestNorito.clone();
+          }
+
+          @Override
+          public ValidationFeeHijiriQuoteV1 verify(
+              final byte[] response, final byte[] request) {
+            verified[0] = response.clone();
+            verified[1] = request.clone();
+            verificationCount.incrementAndGet();
+            throw new VerificationObserved();
+          }
+        };
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(
+            200,
+            responseNorito,
+            "ok",
+            Map.of(
+                "Content-Type", List.of("application/x-norito"),
+                "Content-Encoding", List.of("identity"),
+                "Cache-Control", List.of("private, no-store")));
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        canonicalAuth(
+            signatoryAccount, keyPair, 1_700_000_000_123L, "hijiri-quote-1");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor, signedClientConfig("https://torii.example/api"));
+
+    boolean verifierReached = false;
+    try {
+      transport.postValidationFeeHijiriQuote(quoteRequest, auth, codec).join();
+    } catch (final CompletionException error) {
+      verifierReached = error.getCause() instanceof VerificationObserved;
+    }
+    assert verifierReached : "native response verification must run after exact transport checks";
+    assert Arrays.equals(responseNorito, verified[0])
+        : "the exact response bytes must reach native verification";
+    assert Arrays.equals(requestNorito, verified[1])
+        : "native verification must receive the exact signed request bytes";
+
+    final TransportRequest sent = executor.lastRequest();
+    assert "POST".equals(sent.method()) : "Hijiri quote must use POST";
+    assert "https://torii.example/api/v1/validation-fee/hijiri/quote"
+        .equals(sent.uri().toString()) : "Hijiri quote URI mismatch";
+    assert Arrays.equals(requestNorito, sent.body()) : "Hijiri quote request body changed";
+    assert List.of("application/x-norito").equals(sent.headers().get("Content-Type"))
+        : "Hijiri quote Content-Type must be exact native Norito";
+    assert List.of("application/x-norito").equals(sent.headers().get("Accept"))
+        : "Hijiri quote Accept must be exact native Norito";
+    assert List.of("identity").equals(sent.headers().get("Accept-Encoding"))
+        : "Hijiri quote must forbid response content codings";
+    assert List.of("no-store").equals(sent.headers().get("Cache-Control"))
+        : "Hijiri quote requests must not be stored";
+    assert Long.valueOf(ValidationFeeHijiriQuoteV1.MAX_RESPONSE_BYTES)
+        .equals(sent.maximumResponseBytes()) : "Hijiri quote response bound mismatch";
+    assert sent.replayPolicy()
+            == org.hyperledger.iroha.android.client.transport.RequestReplayPolicy.ONE_SHOT
+        : "account-signed Hijiri quote requests must be one-shot";
+    assert CanonicalRequestSigningTestSupport.canonicalAccountHeader(signatoryAccount)
+        .equals(sent.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0))
+        : "a direct multisig signatory account must remain eligible for server authorization";
+    assertCanonicalSignature(
+        sent, keyPair.getPublic(), 1_700_000_000_123L, "hijiri-quote-1");
+
+    final HttpClientTransport.ValidationFeeHijiriQuoteCodec oversizedCodec =
+        new HttpClientTransport.ValidationFeeHijiriQuoteCodec() {
+          @Override
+          public byte[] encode(final ValidationFeeHijiriQuoteRequestV1 request) {
+            return new byte[ValidationFeeHijiriQuoteRequestV1.MAX_REQUEST_BYTES + 1];
+          }
+
+          @Override
+          public ValidationFeeHijiriQuoteV1 verify(
+              final byte[] response, final byte[] request) {
+            throw new AssertionError("oversized request must fail before verification");
+          }
+        };
+    expectIllegalArgument(
+        () -> transport.postValidationFeeHijiriQuote(quoteRequest, auth, oversizedCodec),
+        "oversized native Hijiri quote request must fail before dispatch");
+    assert executor.lastRequest() == sent : "oversized request must not be dispatched";
+
+    final StubResponseExecutor insecureExecutor =
+        new StubResponseExecutor(200, responseNorito, "ok", Map.of());
+    final HttpClientTransport insecureTransport =
+        HttpClientTransport.withExecutor(
+            insecureExecutor, signedClientConfig("http://torii.example"));
+    expectIllegalState(
+        () -> insecureTransport.postValidationFeeHijiriQuote(quoteRequest, auth, codec),
+        "Hijiri validation-fee quotes must require HTTPS");
+    assert insecureExecutor.lastRequest() == null
+        : "an insecure Hijiri quote request must fail before dispatch";
+
+    final StubResponseExecutor rejectHeaderExecutor =
+        new StubResponseExecutor(
+            200,
+            responseNorito,
+            "ok",
+            Map.of(
+                "Content-Type", List.of("application/x-norito"),
+                "Cache-Control", List.of("private, no-store"),
+                "x-iroha-reject-code", List.of("validation_fee_state_inconsistent")));
+    final HttpClientTransport rejectHeaderTransport =
+        HttpClientTransport.withExecutor(
+            rejectHeaderExecutor, signedClientConfig("https://torii.example"));
+    boolean rejectHeaderFailedClosed = false;
+    try {
+      rejectHeaderTransport.postValidationFeeHijiriQuote(quoteRequest, auth, codec).join();
+    } catch (final CompletionException error) {
+      rejectHeaderFailedClosed =
+          error.getCause() instanceof IllegalStateException
+              && error.getCause().getMessage().contains("x-iroha-reject-code");
+    }
+    assert rejectHeaderFailedClosed
+        : "a successful Hijiri quote carrying a reject code must fail closed";
+    assert verificationCount.get() == 1
+        : "hostile response metadata must be rejected before native verification";
+
+    final StubResponseExecutor emptyRejectHeaderExecutor =
+        new StubResponseExecutor(
+            200,
+            responseNorito,
+            "ok",
+            Map.of(
+                "Content-Type", List.of("application/x-norito"),
+                "Cache-Control", List.of("private, no-store"),
+                "x-iroha-reject-code", List.of()));
+    boolean emptyRejectHeaderFailedClosed = false;
+    try {
+      HttpClientTransport.withExecutor(
+              emptyRejectHeaderExecutor, signedClientConfig("https://torii.example"))
+          .postValidationFeeHijiriQuote(quoteRequest, auth, codec)
+          .join();
+    } catch (final CompletionException error) {
+      emptyRejectHeaderFailedClosed =
+          error.getCause() instanceof IllegalStateException
+              && error.getCause().getMessage().contains("x-iroha-reject-code");
+    }
+    assert emptyRejectHeaderFailedClosed
+        : "a present empty Hijiri quote reject-code header must fail closed";
+    assert verificationCount.get() == 1
+        : "an empty reject-code header must fail before native verification";
+
+    final StubResponseExecutor compressedExecutor =
+        new StubResponseExecutor(
+            200,
+            responseNorito,
+            "ok",
+            Map.of(
+                "Content-Type", List.of("application/x-norito"),
+                "Content-Encoding", List.of("gzip"),
+                "Cache-Control", List.of("private, no-store")));
+    boolean compressionFailedClosed = false;
+    try {
+      HttpClientTransport.withExecutor(
+              compressedExecutor, signedClientConfig("https://torii.example"))
+          .postValidationFeeHijiriQuote(quoteRequest, auth, codec)
+          .join();
+    } catch (final CompletionException error) {
+      compressionFailedClosed =
+          error.getCause() instanceof IllegalStateException
+              && error.getCause().getMessage().contains("absent or identity");
+    }
+    assert compressionFailedClosed : "compressed Hijiri quote responses must fail closed";
+    assert verificationCount.get() == 1
+        : "compressed responses must be rejected before native verification";
+
+    final StubResponseExecutor cacheableExecutor =
+        new StubResponseExecutor(
+            200,
+            responseNorito,
+            "ok",
+            Map.of("Content-Type", List.of("application/x-norito")));
+    boolean cacheableFailedClosed = false;
+    try {
+      HttpClientTransport.withExecutor(
+              cacheableExecutor, signedClientConfig("https://torii.example"))
+          .postValidationFeeHijiriQuote(quoteRequest, auth, codec)
+          .join();
+    } catch (final CompletionException error) {
+      cacheableFailedClosed =
+          error.getCause() instanceof IllegalStateException
+              && error.getCause().getMessage().contains("private and no-store");
+    }
+    assert cacheableFailedClosed : "cacheable Hijiri quote responses must fail closed";
+    assert verificationCount.get() == 1
+        : "cacheable responses must be rejected before native verification";
+
+    final StubResponseExecutor contradictoryCacheExecutor =
+        new StubResponseExecutor(
+            200,
+            responseNorito,
+            "ok",
+            Map.of(
+                "Content-Type", List.of("application/x-norito"),
+                "Cache-Control", List.of("private, no-store, public")));
+    boolean contradictoryCacheFailedClosed = false;
+    try {
+      HttpClientTransport.withExecutor(
+              contradictoryCacheExecutor, signedClientConfig("https://torii.example"))
+          .postValidationFeeHijiriQuote(quoteRequest, auth, codec)
+          .join();
+    } catch (final CompletionException error) {
+      contradictoryCacheFailedClosed =
+          error.getCause() instanceof IllegalStateException
+              && error.getCause().getMessage().contains("private and no-store");
+    }
+    assert contradictoryCacheFailedClosed
+        : "contradictory public Hijiri quote caching must fail closed";
+    assert verificationCount.get() == 1
+        : "contradictory cache metadata must be rejected before native verification";
+
+    for (final String parameterizedPublic :
+        List.of("public=max-age", "PUBLIC = \"Set-Cookie\"")) {
+      final StubResponseExecutor parameterizedPublicCacheExecutor =
+          new StubResponseExecutor(
+              200,
+              responseNorito,
+              "ok",
+              Map.of(
+                  "Content-Type", List.of("application/x-norito"),
+                  "Cache-Control", List.of("private, no-store, " + parameterizedPublic)));
+      boolean parameterizedPublicCacheFailedClosed = false;
+      try {
+        HttpClientTransport.withExecutor(
+                parameterizedPublicCacheExecutor,
+                signedClientConfig("https://torii.example"))
+            .postValidationFeeHijiriQuote(quoteRequest, auth, codec)
+            .join();
+      } catch (final CompletionException error) {
+        parameterizedPublicCacheFailedClosed =
+            error.getCause() instanceof IllegalStateException
+                && error.getCause().getMessage().contains("private and no-store");
+      }
+      assert parameterizedPublicCacheFailedClosed
+          : "parameterized public Hijiri quote caching must fail closed";
+      assert verificationCount.get() == 1
+          : "parameterized public cache metadata must fail before native verification";
+    }
+
+    final StubResponseExecutor[] hostileProvenance = {
+      new StubResponseExecutor(
+          200,
+          responseNorito,
+          "ok",
+          Map.of(
+              "Content-Type", List.of("application/x-norito"),
+              "Cache-Control", List.of("private, no-store")),
+          null,
+          false,
+          false),
+      new StubResponseExecutor(
+          200,
+          responseNorito,
+          "ok",
+          Map.of(
+              "Content-Type", List.of("application/x-norito"),
+              "Cache-Control", List.of("private, no-store")),
+          URI.create("https://redirect.example/hijiri/quote"),
+          false,
+          true),
+      new StubResponseExecutor(
+          200,
+          responseNorito,
+          "ok",
+          Map.of(
+              "Content-Type", List.of("application/x-norito"),
+              "Cache-Control", List.of("private, no-store")),
+          null,
+          true,
+          true)
+    };
+    for (final StubResponseExecutor hostileProvenanceExecutor : hostileProvenance) {
+      boolean provenanceFailedClosed = false;
+      try {
+        HttpClientTransport.withExecutor(
+                hostileProvenanceExecutor, signedClientConfig("https://torii.example"))
+            .postValidationFeeHijiriQuote(quoteRequest, auth, codec)
+            .join();
+      } catch (final CompletionException error) {
+        provenanceFailedClosed =
+            error.getCause() instanceof IllegalStateException
+                && error.getCause()
+                    .getMessage()
+                    .contains("exact signed URL without redirects");
+      }
+      assert provenanceFailedClosed
+          : "missing, changed, or redirected Hijiri quote provenance must fail closed";
+      assert verificationCount.get() == 1
+          : "hostile response provenance must fail before native verification";
+    }
+
+    final Map<String, List<String>> exactErrorHeaders =
+        Map.of(
+            "Content-Type", List.of("application/x-norito"),
+            "Content-Encoding", List.of("identity"),
+            "Cache-Control", List.of("private, no-store"));
+    final StubResponseExecutor[] hostileErrors = {
+      new StubResponseExecutor(
+          503,
+          new byte[] {1},
+          "unavailable",
+          Map.of("Cache-Control", List.of("private, no-store"))),
+      new StubResponseExecutor(
+          503,
+          new byte[] {1},
+          "unavailable",
+          Map.of(
+              "Content-Type", List.of("application/x-norito"),
+              "Content-Encoding", List.of("gzip"),
+              "Cache-Control", List.of("private, no-store"))),
+      new StubResponseExecutor(
+          503,
+          new byte[] {1},
+          "unavailable",
+          Map.of("Content-Type", List.of("application/x-norito"))),
+      new StubResponseExecutor(
+          503,
+          new byte[ValidationFeeHijiriQuoteV1.MAX_RESPONSE_BYTES + 1],
+          "unavailable",
+          exactErrorHeaders),
+      new StubResponseExecutor(
+          503,
+          new byte[] {1},
+          "unavailable",
+          Map.of(
+              "Content-Type", List.of("application/x-norito"),
+              "Content-Encoding", List.of("identity"),
+              "Cache-Control", List.of("private, no-store"),
+              "Content-Length", List.of("2")))
+    };
+    final String[] hostileErrorMessages = {
+      "Content-Type", "absent or identity", "private and no-store", "response exceeds", "Content-Length"
+    };
+    for (int index = 0; index < hostileErrors.length; index++) {
+      boolean failedBeforeStatus = false;
+      try {
+        HttpClientTransport.withExecutor(
+                hostileErrors[index], signedClientConfig("https://torii.example"))
+            .postValidationFeeHijiriQuote(quoteRequest, auth, codec)
+            .join();
+      } catch (final CompletionException error) {
+        failedBeforeStatus =
+            error.getCause() instanceof IllegalStateException
+                && error.getCause().getMessage().contains(hostileErrorMessages[index]);
+      }
+      assert failedBeforeStatus
+          : "Hijiri quote error response policy must be validated before status handling";
+      assert verificationCount.get() == 1
+          : "hostile error responses must fail before native verification";
+    }
+  }
+
   private static void feePaymentJsonRequiresExplicitNullableGasLimit() {
     final Object missingGas =
         JsonParser.parse("{\"payer\":\"authority\",\"value\":{\"charge_limits\":[]}}");
@@ -3634,92 +4017,81 @@ public final class HttpClientTransportTests {
         : "missing local signing context must fail before network I/O";
   }
 
-  private static void callContractRequestParsesResponse() {
+  private static void callContractRequestParsesResponse() throws Exception {
+    final String authority = TestAccountIds.ed25519Authority(0x26);
     final String contractAddress =
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
-    final byte[] transactionPayload =
-        transactionWithPayload((byte) 0x07, 1_712_345_678_901L, 5_000L).encodedPayload();
-    final String transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload);
-    final String signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
+    final byte[] codeHash = new byte[32];
+    Arrays.fill(codeHash, (byte) 0x44);
+    codeHash[codeHash.length - 1] |= 1;
+    final ContractInvocation invocation =
+        new ContractInvocation(
+            contractAddress, codeHash, "contribute", new byte[] {9, 8, 7, 6});
+    final Map<String, JsonValue> metadata =
+        Map.of("caller_note", JsonValue.string("invoice-42"));
+    final ContractCallDraftIntent draftIntent =
+        new ContractCallDraftIntent(invocation, metadata);
+    final FeePaymentIntent requestedFee = feePayment(5_000L);
+    final FeePaymentIntent quotedFee =
+        FeePaymentIntent.authority(
+            List.of(
+                new FeeChargeLimit(
+                    FeeChargeKind.NEXUS, TestAssetDefinitionIds.PRIMARY, "3")),
+            5_000L);
+    final long creationTimeMs = 1_712_345_678_901L;
+    final TransactionPayload preparedPayload =
+        TransactionPayload.builder()
+            .setNetworkId(VERIFYING_KEY_NETWORK_ID)
+            .setAuthority(authority)
+            .setCreationTimeMs(creationTimeMs)
+            .setExecutable(Executable.contractCall(invocation))
+            .setFeePayment(quotedFee)
+            .setMetadata(metadata)
+            .build();
+    final byte[] transactionPayload = encodeTransactionPayload(preparedPayload);
+    final String transactionPayloadB64 =
+        Base64.getEncoder().encodeToString(transactionPayload);
+    final String signingMessageB64 =
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
+    final Map<String, Object> contractPayload = new LinkedHashMap<>();
+    contractPayload.put("payment_amount", 1L);
+    contractPayload.put("buyer", "alice");
+    final byte[] responseBody =
+        contractCallDraftJson(
+            preparedPayload, draftIntent, quotedFee, "router::universal");
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             200,
-            ("{"
-                    + "\"ok\":true,"
-                    + "\"submitted\":false,"
-                    + "\"dataspace\":\"router\","
-                    + "\"code_hash_hex\":\""
-                    + "44".repeat(32)
-                    + "\","
-                    + "\"abi_hash_hex\":\""
-                    + "55".repeat(32)
-                    + "\","
-                    + "\"creation_time_ms\":1712345678901,"
-                    + "\"contract_address\":\""
-                    + contractAddress
-                    + "\","
-                    + "\"entrypoint\":\"contribute\","
-                    + "\"transaction_ttl_ms\":60000,"
-                    + "\"transaction_payload_b64\":\"" + transactionPayloadB64 + "\","
-                    + "\"signing_message_b64\":\""
-                    + signingMessageB64
-                    + "\","
-                    + "\"operation_receipt\":{"
-                    + "\"operation_kind\":\"contract_call\","
-                    + "\"status\":\"pending_signature\","
-                    + "\"transport\":\"torii\","
-                    + "\"dataspace\":\"router\","
-                    + "\"contract_alias\":\"router::universal\","
-                    + "\"contract_address\":\""
-                    + contractAddress
-                    + "\","
-                    + "\"code_hash_hex\":\""
-                    + "44".repeat(32)
-                    + "\","
-                    + "\"abi_hash_hex\":\""
-                    + "55".repeat(32)
-                    + "\","
-                    + "\"entrypoint\":\"contribute\","
-                    + "\"gas_limit\":5000,\"gas_used\":17,"
-                    + "\"fee_payment\":{\"payer\":\"authority\","
-                    + "\"value\":{\"charge_limits\":[],\"gas_limit\":5000}},"
-                    + "\"payload_digest_hex\":\""
-                    + "88".repeat(32)
-                    + "\"}}")
-                .getBytes(StandardCharsets.UTF_8),
+            responseBody,
             "ok");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
-    final Map<String, Object> contractPayload = new LinkedHashMap<>();
-    contractPayload.put("buyer", "alice");
-    contractPayload.put("payment_amount", 1L);
-
+            executor, signedClientConfig("https://torii.example/api"));
     final ContractCallResponse response =
         transport
             .prepareContractCall(
-                "alice",
-                feePayment(5000L),
+                authority,
+                requestedFee,
                 null,
                 "router::universal",
                 "contribute",
-                contractPayload)
+                contractPayload,
+                draftIntent)
             .join();
 
     assert response.ok() : "Call response should be successful";
     assert !response.submitted() : "Call draft must not be submitted";
     assert "router".equals(response.dataspace()) : "Call dataspace mismatch";
     assert "contribute".equals(response.entrypoint()) : "Entrypoint mismatch";
-    assert Long.valueOf(60_000L).equals(response.transactionTtlMs())
-        : "transaction_ttl_ms mismatch";
+    assert response.transactionTtlMs() == null : "transaction_ttl_ms must remain unselected";
     assert response.entrypointHashHex() == null : "draft entrypoint hash must be absent";
     assert response.pipelineStatus() == null : "draft must not include pipeline status";
     assert "contract_call".equals(response.operationReceipt().operationKind())
         : "operation kind mismatch";
     assert Long.valueOf(5_000L).equals(response.operationReceipt().gasLimit())
         : "operation gas limit mismatch";
-    assert "88".repeat(32).equals(response.operationReceipt().payloadDigestHex())
+    assert CONTRACT_BUYER_PAYLOAD_DIGEST_HEX.equals(
+            response.operationReceipt().payloadDigestHex())
         : "payload digest mismatch";
     assert transactionPayloadB64.equals(response.transactionPayloadB64()) : "transaction_payload_b64 mismatch";
     assert signingMessageB64.equals(response.signingMessageB64())
@@ -3732,7 +4104,7 @@ public final class HttpClientTransportTests {
     @SuppressWarnings("unchecked")
     final Map<String, Object> payload =
         (Map<String, Object>) JsonParser.parse(readBody(request));
-    assert "alice".equals(payload.get("authority")) : "Call authority mismatch";
+    assert authority.equals(payload.get("authority")) : "Call authority mismatch";
     assert !payload.containsKey("private_key")
         : "contract call preparation must not contain private signing material";
     assert !payload.containsKey("gas_limit") : "legacy gas_limit must be absent";
@@ -3751,6 +4123,371 @@ public final class HttpClientTransportTests {
     assert "alice".equals(requestPayload.get("buyer")) : "Nested buyer mismatch";
     assert Long.valueOf(1L).equals(((Number) requestPayload.get("payment_amount")).longValue())
         : "Nested payment_amount mismatch";
+
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseCallResponse(
+                new String(responseBody, StandardCharsets.UTF_8)
+                    .replace(
+                        CONTRACT_BUYER_PAYLOAD_DIGEST_HEX,
+                        CONTRACT_BUYER_PAYLOAD_DIGEST_HEX.toUpperCase(Locale.ROOT))
+                    .getBytes(StandardCharsets.UTF_8)),
+        "contract payload digest must be exact canonical lowercase hex");
+  }
+
+  private static void contractCallUnsignedDraftRejectsRehashedSubstitution() {
+    final String authority = TestAccountIds.ed25519Authority(0x26);
+    final String contractAddress =
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+    final byte[] codeHash = new byte[32];
+    Arrays.fill(codeHash, (byte) 0x66);
+    codeHash[codeHash.length - 1] |= 1;
+    final ContractInvocation invocation =
+        new ContractInvocation(contractAddress, codeHash, "bound", new byte[] {1, 3, 5});
+    final ContractCallDraftIntent intent =
+        new ContractCallDraftIntent(
+            invocation, Map.of("caller_metadata", JsonValue.string("trusted")));
+    final FeePaymentIntent requestedFee = feePayment(77L);
+    final Map<String, Object> request =
+        HttpClientTransport.buildContractCallDraftPayload(
+            authority,
+            requestedFee,
+            contractAddress,
+            null,
+            "bound",
+            Map.of("input", 1L));
+    final TransactionPayload canonical =
+        TransactionPayload.builder()
+            .setNetworkId(VERIFYING_KEY_NETWORK_ID)
+            .setAuthority(authority)
+            .setCreationTimeMs(1_712_345_678_902L)
+            .setExecutable(Executable.contractCall(invocation))
+            .setFeePayment(requestedFee)
+            .setMetadata(intent.metadata())
+            .build();
+    HttpClientTransport.validateContractCallDraft(
+        contractCallResponseForTest(canonical, intent, requestedFee, null),
+        request,
+        VERIFYING_KEY_NETWORK_ID,
+        intent);
+
+    final ContractInvocation substitutedInvocation =
+        new ContractInvocation(contractAddress, codeHash, "bound", new byte[] {2, 4, 6});
+    final List<TransactionPayload> rehashedSubstitutions =
+        List.of(
+            canonical.toBuilder().setNetworkId(OTHER_NETWORK_ID).build(),
+            canonical
+                .toBuilder()
+                .setAuthority(TestAccountIds.ed25519Authority(0x27))
+                .build(),
+            canonical
+                .toBuilder()
+                .setExecutable(Executable.contractCall(substitutedInvocation))
+                .build(),
+            canonical
+                .toBuilder()
+                .setMetadata(Map.of("caller_metadata", JsonValue.string("substituted")))
+                .build(),
+            canonical.toBuilder().setTimeToLiveMs(99L).build(),
+            canonical.toBuilder().setNonce(9L).build(),
+            canonical
+                .toBuilder()
+                .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
+                .build(),
+            canonical.toBuilder().setAttachments(Collections.emptyList()).build());
+    for (final TransactionPayload substituted : rehashedSubstitutions) {
+      expectIllegalState(
+          () ->
+              HttpClientTransport.validateContractCallDraft(
+                  contractCallResponseForTest(substituted, intent, requestedFee, null),
+                  request,
+                  VERIFYING_KEY_NETWORK_ID,
+                  intent),
+          "rehashed contract-call draft substitution must fail closed");
+    }
+
+    final String codeHashHex = hexBytes(codeHash);
+    final String abiHashHex = "55".repeat(32);
+    final String otherContractAddress =
+        "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
+    final ContractOperationReceipt canonicalReceipt =
+        contractCallReceiptForTest(
+            requestedFee,
+            null,
+            "router",
+            contractAddress,
+            codeHashHex,
+            abiHashHex,
+            "bound",
+            requestedFee.gasLimit());
+    final List<ContractCallResponse> targetAndReceiptSubstitutions =
+        List.of(
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                abiHashHex,
+                otherContractAddress,
+                "bound",
+                canonicalReceipt),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                "77".repeat(32),
+                abiHashHex,
+                contractAddress,
+                "bound",
+                canonicalReceipt),
+            contractCallResponseForTest(
+                canonical,
+                "other",
+                codeHashHex,
+                abiHashHex,
+                contractAddress,
+                "bound",
+                canonicalReceipt),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                "99".repeat(32),
+                contractAddress,
+                "bound",
+                canonicalReceipt),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                abiHashHex,
+                contractAddress,
+                "other_entrypoint",
+                canonicalReceipt),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                abiHashHex,
+                contractAddress,
+                "bound",
+                contractCallReceiptForTest(
+                    requestedFee,
+                    null,
+                    "router",
+                    otherContractAddress,
+                    codeHashHex,
+                    abiHashHex,
+                    "bound",
+                    requestedFee.gasLimit())),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                abiHashHex,
+                contractAddress,
+                "bound",
+                contractCallReceiptForTest(
+                    requestedFee,
+                    null,
+                    "router",
+                    contractAddress,
+                    "77".repeat(32),
+                    abiHashHex,
+                    "bound",
+                    requestedFee.gasLimit())),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                abiHashHex,
+                contractAddress,
+                "bound",
+                contractCallReceiptForTest(
+                    requestedFee,
+                    "unexpected::alias",
+                    "router",
+                    contractAddress,
+                    codeHashHex,
+                    abiHashHex,
+                    "bound",
+                    requestedFee.gasLimit())),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                abiHashHex,
+                contractAddress,
+                "bound",
+                contractCallReceiptForTest(
+                    requestedFee,
+                    null,
+                    "other",
+                    contractAddress,
+                    codeHashHex,
+                    abiHashHex,
+                    "bound",
+                    requestedFee.gasLimit())),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                abiHashHex,
+                contractAddress,
+                "bound",
+                contractCallReceiptForTest(
+                    requestedFee,
+                    null,
+                    "router",
+                    contractAddress,
+                    codeHashHex,
+                    "99".repeat(32),
+                    "bound",
+                    requestedFee.gasLimit())),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                abiHashHex,
+                contractAddress,
+                "bound",
+                contractCallReceiptForTest(
+                    requestedFee,
+                    null,
+                    "router",
+                    contractAddress,
+                    codeHashHex,
+                    abiHashHex,
+                    "other_entrypoint",
+                    requestedFee.gasLimit())),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                abiHashHex,
+                contractAddress,
+                "bound",
+                contractCallReceiptForTest(
+                    requestedFee,
+                    null,
+                    "remote",
+                    "router",
+                    contractAddress,
+                    codeHashHex,
+                    abiHashHex,
+                    "bound",
+                    requestedFee.gasLimit(),
+                    null)),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                abiHashHex,
+                contractAddress,
+                "bound",
+                contractCallReceiptForTest(
+                    requestedFee,
+                    null,
+                    "torii",
+                    "router",
+                    contractAddress,
+                    codeHashHex,
+                    abiHashHex,
+                    "bound",
+                    requestedFee.gasLimit(),
+                    1L)),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                abiHashHex,
+                contractAddress,
+                "bound",
+                contractCallReceiptForTest(
+                    requestedFee,
+                    null,
+                    "router",
+                    contractAddress,
+                    codeHashHex,
+                    abiHashHex,
+                    "bound",
+                    requestedFee.gasLimit() + 1L)),
+            contractCallResponseForTest(
+                canonical,
+                "router",
+                codeHashHex,
+                abiHashHex,
+                contractAddress,
+                "bound",
+                contractCallReceiptForTest(
+                    requestedFee,
+                    null,
+                    "torii",
+                    "router",
+                    contractAddress,
+                    codeHashHex,
+                    abiHashHex,
+                    "bound",
+                    requestedFee.gasLimit(),
+                    null,
+                    "44".repeat(32))));
+    for (final ContractCallResponse substituted : targetAndReceiptSubstitutions) {
+      expectIllegalState(
+          () ->
+              HttpClientTransport.validateContractCallDraft(
+                  substituted, request, VERIFYING_KEY_NETWORK_ID, intent),
+          "contract-call selector or receipt substitution must fail closed");
+    }
+
+    final Map<String, Object> aliasRequest =
+        HttpClientTransport.buildContractCallDraftPayload(
+            authority,
+            requestedFee,
+            null,
+            "router::universal",
+            "bound",
+            Map.of("input", 1L));
+    for (final String substitutedAlias : Arrays.asList(null, "other::alias")) {
+      final ContractOperationReceipt substitutedReceipt =
+          contractCallReceiptForTest(
+              requestedFee,
+              substitutedAlias,
+              "router",
+              contractAddress,
+              codeHashHex,
+              abiHashHex,
+              "bound",
+              requestedFee.gasLimit());
+      expectIllegalState(
+          () ->
+              HttpClientTransport.validateContractCallDraft(
+                  contractCallResponseForTest(
+                      canonical,
+                      "router",
+                      codeHashHex,
+                      abiHashHex,
+                      contractAddress,
+                      "bound",
+                      substitutedReceipt),
+                  aliasRequest,
+                  VERIFYING_KEY_NETWORK_ID,
+                  intent),
+          "contract-call receipt must preserve the requested alias exactly");
+    }
+
+    final CapturingExecutor executor = new CapturingExecutor();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor, signedClientConfig("https://torii.example"));
+    expectIllegalState(
+        () ->
+            transport.prepareContractCall(
+                authority,
+                requestedFee,
+                contractAddress,
+                null,
+                "bound",
+                Map.of("input", 1L)),
+        "unsigned contract-call preparation without trusted intent must fail closed");
+    assert executor.lastRequest == null : "missing contract intent must fail before dispatch";
   }
 
   private static void contractCallBoundaryConsumesSharedRustArgumentRecordFixture()
@@ -3808,64 +4545,69 @@ public final class HttpClientTransportTests {
         : "Java must not expose a parallel argument-record encoder";
   }
 
-  private static void proposeMultisigRequestParsesResponse() {
-    final byte[] instructionBytes = new byte[] {1, 2, 3, 4};
-    final String proposalId = "aa".repeat(32);
+  private static void proposeMultisigRequestParsesResponse() throws Exception {
     final String multisigAccountId = TestAccountIds.ed25519Authority(0x37);
+    final String signerAccountId = TestAccountIds.ed25519Authority(0x26);
+    final InstructionBox transfer =
+        TransferWirePayloadEncoder.encodeAssetTransfer(
+            TestAssetDefinitionIds.PRIMARY + "#" + signerAccountId,
+            "2",
+            TestAccountIds.ed25519Authority(0x38));
+    final byte[] instructionBytes = NoritoJavaCodecAdapter.encodeInstructionBox(transfer);
     final long creationTimeMs = 1_700_000_000_008L;
-    final byte[] transactionPayload =
-        transactionWithPayload((byte) 0x08, creationTimeMs, 1L).encodedPayload();
-    final String transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload);
-    final String signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
+    final FeePaymentIntent requestedFee = FeePaymentIntent.authority(Collections.emptyList(), 1L);
+    final FeePaymentIntent quotedFee =
+        FeePaymentIntent.authority(
+            List.of(
+                new FeeChargeLimit(
+                    FeeChargeKind.NEXUS, TestAssetDefinitionIds.PRIMARY, "3")),
+            1L);
+    final MultisigProposeRequest proposeRequest =
+        MultisigProposeRequest.builder()
+            .setFeePayment(requestedFee)
+            .setMultisigAccountId(multisigAccountId)
+            .setSignerAccountId(signerAccountId)
+            .addInstructionBytes(instructionBytes)
+            .setCreationTimeMs(creationTimeMs)
+            .setMemo("QR invoice 42")
+            .setValidationFeePolicyVersion(7L)
+            .setValidationFeePolicyHash("AB".repeat(32))
+            .setValidationFeeHijiriFeeQuoteHash(repeatText("CD", 32))
+            .setValidationFeeInstructionIndex(1L)
+            .setValidationFeeTransferEntryIndex(2L)
+            .build();
+    final List<byte[]> proposalInstructions =
+        NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(proposeRequest);
+    final String proposalId =
+        hexBytes(NoritoJavaCodecAdapter.hashCanonicalInstructionBoxes(proposalInstructions));
+    final TransactionPayload preparedPayload =
+        TransactionPayload.builder()
+            .setNetworkId(VERIFYING_KEY_NETWORK_ID)
+            .setAuthority(signerAccountId)
+            .setCreationTimeMs(creationTimeMs)
+            .setExecutable(
+                MultisigDraftTestFixtures.proposalExecutable(
+                    multisigAccountId, proposalInstructions, false))
+            .setFeePayment(quotedFee)
+            .setMetadata(multisigMetadataForTest(proposeRequest))
+            .build();
+    final byte[] transactionPayload = encodeTransactionPayload(preparedPayload);
+    final String transactionPayloadB64 =
+        Base64.getEncoder().encodeToString(transactionPayload);
+    final String signingMessageB64 =
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             200,
-            ("{"
-                    + "\"ok\":true,"
-                    + "\"resolved_multisig_account_id\":\""
-                    + multisigAccountId
-                    + "\","
-                    + "\"submitted\":false,"
-                    + "\"proposal_id\":\""
-                    + proposalId
-                    + "\","
-                    + "\"instructions_hash\":\""
-                    + proposalId
-                    + "\","
-                    + "\"tx_hash_hex\":null,"
-                    + "\"executed_tx_hash_hex\":null,"
-                    + "\"creation_time_ms\":" + creationTimeMs + ","
-                    + "\"fee_payment\":{\"payer\":\"authority\","
-                    + "\"value\":{\"charge_limits\":[],\"gas_limit\":1}},"
-                    + "\"transaction_payload_b64\":\"" + transactionPayloadB64 + "\","
-                    + "\"signing_message_b64\":\""
-                    + signingMessageB64
-                    + "\"}")
-                .getBytes(StandardCharsets.UTF_8),
+            multisigDraftJson(
+                multisigAccountId, proposalId, preparedPayload, quotedFee),
             "ok");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+            executor, signedClientConfig("https://torii.example/api"));
 
     final MultisigResponse response =
-        transport
-            .proposeMultisig(
-                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
-                    .setMultisigAccountAlias("cbdc@banka")
-                    .setSignerAccountId("alice")
-                    .addInstructionBytes(instructionBytes)
-                    .setPublicKeyHex(
-                        "0X" + VALID_ED25519_PUBLIC_KEY_HEX.toUpperCase(Locale.ROOT))
-                    .setCreationTimeMs(creationTimeMs)
-                    .setMemo("QR invoice 42")
-                    .setValidationFeePolicyVersion(7L)
-                    .setValidationFeePolicyHash("AB".repeat(32))
-                    .setValidationFeeHijiriFeeQuoteHash(repeatText("CD", 32))
-                    .setValidationFeeInstructionIndex(1L)
-                    .setValidationFeeTransferEntryIndex(2L)
-                    .build())
-            .join();
+        transport.proposeMultisig(proposeRequest).join();
 
     assert response.ok() : "Multisig response should be successful";
     assert multisigAccountId.equals(response.resolvedMultisigAccountId())
@@ -3873,8 +4615,7 @@ public final class HttpClientTransportTests {
     assert Boolean.FALSE.equals(response.submitted()) : "submitted mismatch";
     assert proposalId.equals(response.instructionsHash()) : "instructions_hash mismatch";
     assert response.feePayment().equals(
-        org.hyperledger.iroha.android.model.FeePaymentIntent.authority(
-            java.util.Collections.emptyList(), 1L)) : "fee_payment mismatch";
+        quotedFee) : "fee_payment mismatch";
     assert Long.valueOf(creationTimeMs).equals(response.creationTimeMs())
         : "creation_time_ms mismatch";
     assert transactionPayloadB64.equals(response.transactionPayloadB64()) : "transaction_payload_b64 mismatch";
@@ -3890,11 +4631,12 @@ public final class HttpClientTransportTests {
     @SuppressWarnings("unchecked")
     final Map<String, Object> payload =
         (Map<String, Object>) JsonParser.parse(readBody(request));
-    assert "cbdc@banka".equals(payload.get("multisig_account_alias"))
-        : "multisig_account_alias mismatch";
-    assert "alice".equals(payload.get("signer_account_id")) : "signer_account_id mismatch";
-    assert VALID_ED25519_PUBLIC_KEY_HEX.equals(payload.get("public_key_hex"))
-        : "public_key_hex mismatch";
+    assert multisigAccountId.equals(payload.get("multisig_account_id"))
+        : "multisig_account_id mismatch";
+    assert !payload.containsKey("multisig_account_alias")
+        : "multisig_account_alias must be absent";
+    assert signerAccountId.equals(payload.get("signer_account_id"))
+        : "signer_account_id mismatch";
     assert !payload.containsKey("fee_sponsor") : "legacy fee_sponsor must be absent";
     assert payload.containsKey("fee_payment") : "typed fee payment must be present";
     assert "QR invoice 42".equals(payload.get("memo")) : "memo mismatch";
@@ -3928,6 +4670,116 @@ public final class HttpClientTransportTests {
       failed = true;
     }
     assert failed : "Empty instruction bytes should be rejected";
+  }
+
+  private static void multisigUnsignedDraftRejectsRehashedSubstitution() throws Exception {
+    final String multisigAccountId = TestAccountIds.ed25519Authority(0x41);
+    final String signerAccountId = TestAccountIds.ed25519Authority(0x42);
+    final InstructionBox transfer =
+        TransferWirePayloadEncoder.encodeAssetTransfer(
+            TestAssetDefinitionIds.PRIMARY + "#" + signerAccountId,
+            "1",
+            TestAccountIds.ed25519Authority(0x43));
+    final byte[] instructionBytes = NoritoJavaCodecAdapter.encodeInstructionBox(transfer);
+    final FeePaymentIntent requestedFee = FeePaymentIntent.authority(Collections.emptyList(), 9L);
+    final FeePaymentIntent quotedFee =
+        FeePaymentIntent.authority(
+            List.of(
+                new FeeChargeLimit(
+                    FeeChargeKind.NEXUS, TestAssetDefinitionIds.PRIMARY, "5")),
+            9L);
+    final MultisigProposeRequest request =
+        MultisigProposeRequest.builder()
+            .setMultisigAccountId(multisigAccountId)
+            .setSignerAccountId(signerAccountId)
+            .addInstructionBytes(instructionBytes)
+            .setCreationTimeMs(1_700_000_000_111L)
+            .setFeePayment(requestedFee)
+            .setMemo("bound memo")
+            .setValidationFeePolicyVersion(11L)
+            .setValidationFeePolicyHash("ab".repeat(32))
+            .setValidationFeeHijiriFeeQuoteHash("cd".repeat(32))
+            .setValidationFeeInstructionIndex(0L)
+            .build();
+    final List<byte[]> proposalInstructions =
+        NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(request);
+    final String proposalId =
+        hexBytes(NoritoJavaCodecAdapter.hashCanonicalInstructionBoxes(proposalInstructions));
+    final TransactionPayload canonical =
+        TransactionPayload.builder()
+            .setNetworkId(VERIFYING_KEY_NETWORK_ID)
+            .setAuthority(signerAccountId)
+            .setCreationTimeMs(request.creationTimeMs())
+            .setExecutable(
+                MultisigDraftTestFixtures.proposalExecutable(
+                    multisigAccountId, proposalInstructions, true))
+            .setFeePayment(quotedFee)
+            .setMetadata(multisigMetadataForTest(request))
+            .build();
+    HttpClientTransport.validateMultisigResponse(
+        multisigResponseForTest(
+            multisigAccountId, proposalId, canonical, quotedFee),
+        request,
+        VERIFYING_KEY_NETWORK_ID);
+
+    final List<TransactionPayload> rehashedSubstitutions =
+        List.of(
+            canonical.toBuilder().setNetworkId(OTHER_NETWORK_ID).build(),
+            canonical
+                .toBuilder()
+                .setAuthority(TestAccountIds.ed25519Authority(0x44))
+                .build(),
+            canonical.toBuilder().setExecutable(Executable.instructions(List.of(transfer))).build(),
+            canonical
+                .toBuilder()
+                .setMetadata(Map.of("memo", JsonValue.string("substituted")))
+                .build(),
+            canonical.toBuilder().setTimeToLiveMs(1L).build(),
+            canonical.toBuilder().setNonce(3L).build(),
+            canonical
+                .toBuilder()
+                .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
+                .build(),
+            canonical.toBuilder().setAttachments(Collections.emptyList()).build());
+    for (final TransactionPayload substituted : rehashedSubstitutions) {
+      expectIllegalState(
+          () ->
+              HttpClientTransport.validateMultisigResponse(
+                  multisigResponseForTest(
+                      multisigAccountId, proposalId, substituted, quotedFee),
+                  request,
+                  VERIFYING_KEY_NETWORK_ID),
+          "rehashed multisig draft substitution must fail closed");
+    }
+
+    final MultisigProposeRequest aliasRequest =
+        MultisigProposeRequest.builder()
+            .setMultisigAccountAlias("treasury@universal")
+            .setSignerAccountId(signerAccountId)
+            .addInstructionBytes(instructionBytes)
+            .setCreationTimeMs(canonical.creationTimeMs())
+            .setFeePayment(requestedFee)
+            .build();
+    final List<byte[]> aliasInstructions =
+        NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(aliasRequest);
+    final String aliasProposalId =
+        hexBytes(NoritoJavaCodecAdapter.hashCanonicalInstructionBoxes(aliasInstructions));
+    final TransactionPayload aliasPayload =
+        canonical
+            .toBuilder()
+            .setExecutable(
+                MultisigDraftTestFixtures.proposalExecutable(
+                    multisigAccountId, aliasInstructions, false))
+            .setMetadata(Collections.emptyMap())
+            .build();
+    expectIllegalState(
+        () ->
+            HttpClientTransport.validateMultisigResponse(
+                multisigResponseForTest(
+                    multisigAccountId, aliasProposalId, aliasPayload, quotedFee),
+                aliasRequest,
+                VERIFYING_KEY_NETWORK_ID),
+        "unsigned alias-selected multisig draft must require trusted local resolution");
   }
 
   private static void proposeMultisigRejectsAdversarialRequestShapes() {
@@ -6952,6 +7804,9 @@ public final class HttpClientTransportTests {
 
   private static final class StubResponseExecutor implements HttpTransportExecutor {
     private final TransportResponse response;
+    private final URI finalUriOverride;
+    private final boolean redirected;
+    private final boolean includeProvenance;
     private TransportRequest lastRequest;
     private StubResponseExecutor(final int statusCode, final byte[] body) {
       this(statusCode, body, "accepted");
@@ -6965,7 +7820,20 @@ public final class HttpClientTransportTests {
         final byte[] body,
         final String message,
         final Map<String, List<String>> headers) {
+      this(statusCode, body, message, headers, null, false, true);
+    }
+    private StubResponseExecutor(
+        final int statusCode,
+        final byte[] body,
+        final String message,
+        final Map<String, List<String>> headers,
+        final URI finalUriOverride,
+        final boolean redirected,
+        final boolean includeProvenance) {
       this.response = new TransportResponse(statusCode, body, message, headers);
+      this.finalUriOverride = finalUriOverride;
+      this.redirected = redirected;
+      this.includeProvenance = includeProvenance;
     }
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
@@ -6973,7 +7841,18 @@ public final class HttpClientTransportTests {
       if (isCapabilitiesRequest(request)) {
         return CompletableFuture.completedFuture(compatibleCapabilitiesResponse());
       }
-      return CompletableFuture.completedFuture(response);
+      if (!includeProvenance) {
+        return CompletableFuture.completedFuture(response);
+      }
+      final URI finalUri = finalUriOverride == null ? request.uri() : finalUriOverride;
+      return CompletableFuture.completedFuture(
+          new TransportResponse(
+              response.statusCode(),
+              response.body(),
+              response.message(),
+              response.headers(),
+              finalUri,
+              redirected));
     }
     TransportRequest lastRequest() {
       return lastRequest;
@@ -7040,6 +7919,275 @@ public final class HttpClientTransportTests {
   }
 
   private static int aliasCounter = 0;
+
+  private static byte[] contractCallDraftJson(
+      final TransactionPayload payload,
+      final ContractCallDraftIntent intent,
+      final FeePaymentIntent feePayment,
+      final String contractAlias) {
+    final byte[] encodedPayload = encodeTransactionPayload(payload);
+    final Map<String, Object> receipt = new LinkedHashMap<>();
+    receipt.put("operation_kind", "contract_call");
+    receipt.put("status", "pending_signature");
+    receipt.put("transport", "torii");
+    receipt.put("dataspace", "router");
+    receipt.put("contract_alias", contractAlias);
+    receipt.put("contract_address", intent.invocation().contractAddress());
+    receipt.put("code_hash_hex", hexBytes(intent.invocation().expectedCodeHash()));
+    receipt.put("abi_hash_hex", "55".repeat(32));
+    receipt.put("tx_hash_hex", null);
+    receipt.put("entrypoint", intent.invocation().entrypoint());
+    receipt.put("entrypoint_hash_hex", null);
+    receipt.put("gas_limit", feePayment.gasLimit());
+    receipt.put("gas_used", null);
+    receipt.put("fee_payment", feePayment.toJsonMap());
+    receipt.put("payload_digest_hex", CONTRACT_BUYER_PAYLOAD_DIGEST_HEX);
+    final Map<String, Object> root = new LinkedHashMap<>();
+    root.put("ok", true);
+    root.put("submitted", false);
+    root.put("dataspace", "router");
+    root.put("code_hash_hex", hexBytes(intent.invocation().expectedCodeHash()));
+    root.put("abi_hash_hex", "55".repeat(32));
+    root.put("creation_time_ms", payload.creationTimeMs());
+    root.put("contract_address", intent.invocation().contractAddress());
+    root.put("tx_hash_hex", null);
+    root.put("pipeline_status", null);
+    root.put("entrypoint", intent.invocation().entrypoint());
+    root.put("transaction_ttl_ms", null);
+    root.put("entrypoint_hash_hex", null);
+    root.put("transaction_payload_b64", Base64.getEncoder().encodeToString(encodedPayload));
+    root.put(
+        "signing_message_b64",
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(encodedPayload)));
+    root.put("operation_receipt", receipt);
+    return JsonEncoder.encode(root).getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static ContractCallResponse contractCallResponseForTest(
+      final TransactionPayload payload,
+      final ContractCallDraftIntent intent,
+      final FeePaymentIntent feePayment,
+      final String contractAlias) {
+    final String codeHash = hexBytes(intent.invocation().expectedCodeHash());
+    final ContractOperationReceipt receipt =
+        contractCallReceiptForTest(
+            feePayment,
+            contractAlias,
+            "router",
+            intent.invocation().contractAddress(),
+            codeHash,
+            "55".repeat(32),
+            intent.invocation().entrypoint(),
+            feePayment.gasLimit());
+    return contractCallResponseForTest(
+        payload,
+        "router",
+        codeHash,
+        "55".repeat(32),
+        intent.invocation().contractAddress(),
+        intent.invocation().entrypoint(),
+        receipt);
+  }
+
+  private static ContractCallResponse contractCallResponseForTest(
+      final TransactionPayload payload,
+      final String dataspace,
+      final String codeHash,
+      final String abiHash,
+      final String contractAddress,
+      final String entrypoint,
+      final ContractOperationReceipt receipt) {
+    final byte[] encodedPayload = encodeTransactionPayload(payload);
+    return new ContractCallResponse(
+        true,
+        false,
+        dataspace,
+        codeHash,
+        abiHash,
+        payload.creationTimeMs(),
+        contractAddress,
+        null,
+        null,
+        entrypoint,
+        null,
+        null,
+        Base64.getEncoder().encodeToString(encodedPayload),
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(encodedPayload)),
+        receipt);
+  }
+
+  private static ContractOperationReceipt contractCallReceiptForTest(
+      final FeePaymentIntent feePayment,
+      final String contractAlias,
+      final String dataspace,
+      final String contractAddress,
+      final String codeHash,
+      final String abiHash,
+      final String entrypoint,
+      final Long gasLimit) {
+    return contractCallReceiptForTest(
+        feePayment,
+        contractAlias,
+        "torii",
+        dataspace,
+        contractAddress,
+        codeHash,
+        abiHash,
+        entrypoint,
+        gasLimit,
+        null);
+  }
+
+  private static ContractOperationReceipt contractCallReceiptForTest(
+      final FeePaymentIntent feePayment,
+      final String contractAlias,
+      final String transport,
+      final String dataspace,
+      final String contractAddress,
+      final String codeHash,
+      final String abiHash,
+      final String entrypoint,
+      final Long gasLimit,
+      final Long gasUsed) {
+    return contractCallReceiptForTest(
+        feePayment,
+        contractAlias,
+        transport,
+        dataspace,
+        contractAddress,
+        codeHash,
+        abiHash,
+        entrypoint,
+        gasLimit,
+        gasUsed,
+        CONTRACT_INPUT_PAYLOAD_DIGEST_HEX);
+  }
+
+  private static ContractOperationReceipt contractCallReceiptForTest(
+      final FeePaymentIntent feePayment,
+      final String contractAlias,
+      final String transport,
+      final String dataspace,
+      final String contractAddress,
+      final String codeHash,
+      final String abiHash,
+      final String entrypoint,
+      final Long gasLimit,
+      final Long gasUsed,
+      final String payloadDigestHex) {
+    return new ContractOperationReceipt(
+        "contract_call",
+        "pending_signature",
+        transport,
+        dataspace,
+        contractAlias,
+        contractAddress,
+        codeHash,
+        abiHash,
+        null,
+        entrypoint,
+        null,
+        gasLimit,
+        gasUsed,
+        feePayment,
+        payloadDigestHex);
+  }
+
+  private static byte[] multisigDraftJson(
+      final String multisigAccountId,
+      final String proposalId,
+      final TransactionPayload payload,
+      final FeePaymentIntent feePayment) {
+    final byte[] encodedPayload = encodeTransactionPayload(payload);
+    final Map<String, Object> root = new LinkedHashMap<>();
+    root.put("ok", true);
+    root.put("resolved_multisig_account_id", multisigAccountId);
+    root.put("submitted", false);
+    root.put("proposal_id", proposalId);
+    root.put("instructions_hash", proposalId);
+    root.put("tx_hash_hex", null);
+    root.put("executed_tx_hash_hex", null);
+    root.put("creation_time_ms", payload.creationTimeMs());
+    root.put("fee_payment", feePayment.toJsonMap());
+    root.put("transaction_payload_b64", Base64.getEncoder().encodeToString(encodedPayload));
+    root.put(
+        "signing_message_b64",
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(encodedPayload)));
+    return JsonEncoder.encode(root).getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static MultisigResponse multisigResponseForTest(
+      final String multisigAccountId,
+      final String proposalId,
+      final TransactionPayload payload,
+      final FeePaymentIntent feePayment) {
+    final byte[] encodedPayload = encodeTransactionPayload(payload);
+    return new MultisigResponse(
+        true,
+        multisigAccountId,
+        false,
+        proposalId,
+        proposalId,
+        null,
+        null,
+        payload.creationTimeMs(),
+        feePayment,
+        Base64.getEncoder().encodeToString(encodedPayload),
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(encodedPayload)));
+  }
+
+  private static Map<String, JsonValue> multisigMetadataForTest(
+      final MultisigProposeRequest request) {
+    final Map<String, JsonValue> metadata = new LinkedHashMap<>();
+    if (request.memo() != null) {
+      metadata.put("memo", JsonValue.string(request.memo().trim()));
+    }
+    if (request.validationFeePolicyVersion() != null) {
+      metadata.put(
+          "validation_fee_policy_version",
+          JsonValue.number(request.validationFeePolicyVersion()));
+      metadata.put(
+          "validation_fee_policy_hash",
+          JsonValue.string(request.validationFeePolicyHash().trim().toLowerCase(Locale.ROOT)));
+      if (request.validationFeeHijiriFeeQuoteHash() != null) {
+        metadata.put(
+            "validation_fee_hijiri_fee_quote_hash",
+            JsonValue.string(
+                request.validationFeeHijiriFeeQuoteHash().trim().toLowerCase(Locale.ROOT)));
+      }
+      if (request.validationFeeInstructionIndex() != null) {
+        metadata.put(
+            "validation_fee_instruction_index",
+            JsonValue.number(request.validationFeeInstructionIndex()));
+      }
+      if (request.validationFeeTransferEntryIndex() != null) {
+        metadata.put(
+            "validation_fee_transfer_entry_index",
+            JsonValue.number(request.validationFeeTransferEntryIndex()));
+      }
+    }
+    return metadata;
+  }
+
+  private static byte[] encodeTransactionPayload(final TransactionPayload payload) {
+    final Integer discriminant = AccountAddress.detectI105Discriminant(payload.authority());
+    if (discriminant == null) {
+      throw new IllegalArgumentException("test transaction authority must be canonical I105");
+    }
+    try {
+      return new NoritoJavaCodecAdapter(discriminant).encodeTransaction(payload);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("Failed to encode test transaction payload", ex);
+    }
+  }
+
+  private static String hexBytes(final byte[] bytes) {
+    final StringBuilder output = new StringBuilder(bytes.length * 2);
+    for (final byte value : bytes) {
+      output.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+    }
+    return output.toString();
+  }
 
   private static SignedTransaction transactionWithPayload(final byte fillValue) {
     return transactionWithPayload(

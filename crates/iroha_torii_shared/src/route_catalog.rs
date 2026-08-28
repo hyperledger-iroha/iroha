@@ -2414,7 +2414,7 @@ pub mod telemetry {
         ASSET_HOLDERS_QUERY,
     ];
 }
-/// Consensus evidence, SCCP, VRF, finality, and Sumeragi introspection routes.
+/// Consensus evidence, SCCP, finality, and Sumeragi introspection routes.
 pub mod sumeragi {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
@@ -2724,7 +2724,8 @@ pub mod runtime_governance {
     pub const NODE_PROJECTION_CHECKPOINT_PLAN: RouteDescriptor = app_operator_post(
         "operator.node.query_projection.checkpoint_plan",
         "/v1/node/query/projection/checkpoint/plan",
-    );
+    )
+    .with_effect(RouteEffect::ExpensiveCompute);
     /// Publish a rebuilt query-projection checkpoint.
     pub const NODE_PROJECTION_CHECKPOINT_PUBLISH: RouteDescriptor = app_operator_post(
         "operator.node.query_projection.checkpoint_publish",

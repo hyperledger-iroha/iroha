@@ -1021,6 +1021,7 @@ Ok(())
 Ok(
     self.pending_work() == self.pending_lifecycle_output_admissions.len()
         && successor_debt_is_exact
+        && self.pending_runner_decision_cleanup.is_none()
         && self.recovered_decision_fetch_request_index_is_exact_and_empty()
         && self.parked_effect_batch.is_none()
         && self.finality_completion.is_none()
@@ -1138,6 +1139,7 @@ let lineage_owner_is_exact = match authority.lineage() {
         """
 if self.pending_work() != self.pending_lifecycle_output_admissions.len()
     || !successor_outputs_are_exact
+    || self.pending_runner_decision_cleanup.is_some()
     || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
     || self.retained_effect_batch.is_some()
     || self.parked_effect_batch.is_some()
@@ -1183,6 +1185,7 @@ assert!(
         && self.finality_completion.is_none()
         && self.pending_work() == self.pending_lifecycle_output_admissions.len()
         && successor_outputs_are_exact
+        && self.pending_runner_decision_cleanup.is_none()
         && self.recovered_decision_fetch_request_index_is_exact_and_empty()
         && pending_recovery_is_exact
         && dispatch_key.matches_height_context(&self.context)
@@ -1219,6 +1222,9 @@ self.finality_completion = Some(FinalityCompletion {
         "drain_retained_effect_batch",
         errors,
     )
+    _effect_capacity_apply_dispatch_barrier_source_fidelity_errors(
+        effects_path, source, generic_executor_context, errors
+    )
     _require_rust_token_sequence(
         effects_path,
         drain_effects,
@@ -1249,11 +1255,19 @@ if let (
         effects_path,
         drain_effects,
         """
-if matches!(&owned.effect, AdapterEffect::Apply { .. })
-    && (self.pending_runner_decision_cleanup.is_some()
-        || !self.pending_durable_validate_admissions.is_empty()
-        || self.pending_live_wal_sign_admission.is_some()
-        || !self.pending_lifecycle_output_admissions.is_empty())
+let released_validation_will_apply = match &owned.effect {
+    AdapterEffect::ValidateBody { round, subject, .. } => self
+        .published_lifecycle_validate_retry_markers
+        .get(&(*round, *subject))
+        .is_some_and(|marker| {
+            !marker.owns_live_lifecycle_row()
+                && marker.latest_statement.phase() == Some(wire::GlobalPhase::Commit)
+        }),
+    _ => false,
+};
+if (matches!(&owned.effect, AdapterEffect::Apply { .. })
+    || released_validation_will_apply)
+    && self.decision_apply_dispatch_barrier_is_occupied()
 {
     break;
 }
@@ -1283,6 +1297,7 @@ self.finality_completion.is_some()
     && self.pending_runner_decision_cleanup.is_none()
     && self.live_lifecycle_decision_apply.is_none()
     && self.live_lifecycle_validate_successor.is_none()
+    && self.pending_released_lifecycle_validate_apply.is_none()
     && self.retained_effect_batch.is_none()
     && self.parked_effect_batch.is_none()
 """,

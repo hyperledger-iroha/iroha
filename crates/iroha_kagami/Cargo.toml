@@ -50,38 +50,15 @@ libc = "0.2.177"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [features]
-default = ["bls"]
 dev-tools = []
-bls = ["iroha_crypto/bls"]
 gost = ["iroha_crypto/gost"]
 sm = ["iroha_crypto/sm"]
-# Enable codec subcommands that depend on exhaustive Norito conversions.
-codec = []
-
-## No build script is required anymore.
-## Previously, a heavy build.rs generated sample binaries by depending on
-## iroha_data_model and norito at build time, which slowed down or appeared to
-## hang during "building the model". The samples are pre-generated and checked in.
 
 [[bin]]
 name = "kagami"
 path = "src/main.rs"
 
 [[bin]]
-name = "iroha_onboarding_token_hash"
-path = "src/bin/iroha_onboarding_token_hash.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
-name = "pk3_genesis_binding_verify"
-path = "src/bin/pk3_genesis_binding_verify.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
 name = "iroha_authenticated_tool_controller"
 path = "src/bin/iroha_authenticated_tool_controller.rs"
 required-features = ["dev-tools"]
-
-[[example]]
-name = "codec_samples"
-path = "samples/codec/generate.rs"

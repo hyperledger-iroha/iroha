@@ -1452,8 +1452,12 @@ public extension KagemushaRecursiveSpend {
             throw KagemushaRecursiveSpendError.proofBackendUnavailable
         }
     }
+}
 
-    static func initSpendV4(
+extension KagemushaRecursiveSpend {
+    /// Initializes a recursive-spend branch with the exact installed V4
+    /// artifact generation bound by the request.
+    public static func initSpendV4(
         request: KagemushaRecursiveSpendInitLocalRequestV4,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendInitResultV4 {
@@ -1479,7 +1483,9 @@ public extension KagemushaRecursiveSpend {
         }
     }
 
-    static func appendSpendV4(
+    /// Appends a receiver-authorized payment, and optional change, to the V4
+    /// recursive-spend branch bound to the installed artifact generation.
+    public static func appendSpendV4(
         request: KagemushaRecursiveSpendAppendLocalRequestV4,
         signedRecipientRequest: KagemushaVerifiedRecipientPaymentRequest,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
@@ -1511,7 +1517,7 @@ public extension KagemushaRecursiveSpend {
 
     /// Resumes an append whose secret-bearing local carrier was committed in
     /// encrypted wallet state before process death.
-    static func appendSpendV4(
+    public static func appendSpendV4(
         persistedRequest: KagemushaRecursiveSpendPersistedAppendLocalRequestV4,
         signedRecipientRequest: KagemushaVerifiedRecipientPaymentRequest,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
@@ -1544,7 +1550,9 @@ public extension KagemushaRecursiveSpend {
         }
     }
 
-    static func verifySpendV4(
+    /// Verifies an incoming V4 recursive-spend payment against the exact
+    /// installed artifact generation bound by the request.
+    public static func verifySpendV4(
         request: KagemushaRecursiveSpendVerifyLocalRequestV4,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendVerifyResultV4 {
@@ -1569,7 +1577,9 @@ public extension KagemushaRecursiveSpend {
         }
     }
 
-    static func buildRedeemV4(
+    /// Builds the canonical V4 redemption result with the selected installed
+    /// artifact generation.
+    public static func buildRedeemV4(
         request: KagemushaRecursiveSpendRedeemLocalRequestV4,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendRedeemBuildResultV4 {

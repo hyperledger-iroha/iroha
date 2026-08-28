@@ -933,15 +933,6 @@ fn validate_plan_commitment(
     Ok(())
 }
 fn validate_musubi_plan_memory(plan: &CarBuildPlan) -> Result<(), CacheError> {
-    if plan
-        .chunks
-        .iter()
-        .any(|chunk| chunk.taikai_segment_hint.is_some())
-    {
-        return Err(CacheError::InvalidPlan(
-            "Musubi V1 CAR plans must not carry Taikai segment hints".to_owned(),
-        ));
-    }
     let retained = retained_plan_heap_bytes(plan).ok_or_else(|| {
         CacheError::InvalidPlan("retained CAR plan heap accounting overflow".to_owned())
     })?;
@@ -2990,7 +2981,6 @@ mod tests {
             offset: *offset,
             length: u32::try_from(length).expect("SF1 chunk length fits u32"),
             digest: [0_u8; 32],
-            taikai_segment_hint: None,
         });
         *offset += u64::try_from(length).expect("registered chunk length fits u64");
     }
@@ -3058,27 +3048,6 @@ mod tests {
         assert!(matches!(
             error,
             CacheError::InvalidPlan(reason) if reason.contains("retained CAR plan requires")
-        ));
-    }
-    #[test]
-    fn taikai_hint_plan_is_rejected_before_archive_bytes_are_read() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let fixture = fixture(&temp, "taikai-plan");
-        let mut plan = fixture.car.plan().clone();
-        plan.chunks[0].taikai_segment_hint = Some(sorafs_car::TaikaiSegmentHint {
-            event: "event".to_owned(),
-            stream: "stream".to_owned(),
-            rendition: "rendition".to_owned(),
-            sequence: 0,
-            payload_len: None,
-            payload_digest: None,
-        });
-        let error = cache(&temp)
-            .install(&fixture.commitment, &plan, Cursor::new(Vec::<u8>::new()))
-            .expect_err("Musubi plan hints must fail before the empty reader is consumed");
-        assert!(matches!(
-            error,
-            CacheError::InvalidPlan(reason) if reason.contains("Taikai segment hints")
         ));
     }
     #[cfg(unix)]

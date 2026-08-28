@@ -20,6 +20,7 @@ on:
       - "scripts/check_mobile_sdk_artifact_pin_commit.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/norito_bridge_source_seal.py"
+      - "scripts/norito_bridge_apple_slice_handoff.py"
       - "scripts/package_mobile_sdk_artifacts.sh"
       - "scripts/run_mobile_hermetic_command.py"
       - "crates/connect_norito_bridge/**"
@@ -59,9 +60,9 @@ on:
       - "fixtures/sorafs_orchestrator/multi_peer_parity_v1/**"
       - "integration_tests/tests/native_escrow.rs"
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
-      - "scripts/check_native_sdk_abi22_artifact.py"
+      - "scripts/check_native_sdk_abi23_artifact.py"
       - "scripts/compute_workspace_source_manifest.py"
-      - "scripts/tests/check_native_sdk_abi22_artifact_test.py"
+      - "scripts/tests/check_native_sdk_abi23_artifact_test.py"
       - "scripts/tests/check_sorafs_python_native_sdk_evidence_contract.sh"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "scripts/check_sorafs_release_automation.py"
@@ -167,7 +168,7 @@ jobs:
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
       - name: Run exact Python 3.12 ABI-23 native reference parity
         env:
-          SORAFS_PYTHON_SDK_EVIDENCE_DIR: ${{ runner.temp }}/iroha-sorafs-python-native-abi22-evidence
+          SORAFS_PYTHON_SDK_EVIDENCE_DIR: ${{ runner.temp }}/iroha-sorafs-python-native-abi23-evidence
           SORAFS_PYTHON_SDK_PYTHON_BIN: python3
         run: bash ci/check_sorafs_python_native_sdk.sh
       - name: Run Rust, Python, JavaScript, and Swift fixture parity
@@ -176,8 +177,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sorafs-python-native-abi22-${{ github.run_id }}
-          path: ${{ runner.temp }}/iroha-sorafs-python-native-abi22-evidence/python-native-abi22.json
+          name: sorafs-python-native-abi23-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-sorafs-python-native-abi23-evidence/python-native-abi23.json
           if-no-files-found: error
           retention-days: 30
       - name: Upload parity evidence
@@ -294,16 +295,16 @@ jobs:
           cargo build --locked --release -p connect_norito_bridge --target "$target"
           native_dir="$RUNNER_TEMP/sorafs-csharp-native"
           artifact="$native_dir/libconnect_norito_bridge.so"
-          manifest="$native_dir/native-sdk-abi22.json"
+          manifest="$native_dir/native-sdk-abi23.json"
           mkdir -p "$native_dir"
           cp "target/$target/release/libconnect_norito_bridge.so" "$artifact"
-          python3 -I scripts/check_native_sdk_abi22_artifact.py record \
+          python3 -I scripts/check_native_sdk_abi23_artifact.py record \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE" \
             --sdk csharp \
             --target "$target"
-          python3 -I scripts/check_native_sdk_abi22_artifact.py verify \
+          python3 -I scripts/check_native_sdk_abi23_artifact.py verify \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE"

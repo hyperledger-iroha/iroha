@@ -78,8 +78,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             source.index('bash "${APPLE_ARTIFACT_CHECKER}" --apple-only'),
             source.index('"${SWIFT_BIN}" test'),
         )
-        blocker = "external-lock requalification"
-        self.assertIn(blocker, source)
+        self.assertNotIn("external-lock requalification", source)
         for invocation in (
             'DEVELOPER_DIR="$(xcode-select -p)"',
             "xcodebuild -version",
@@ -87,9 +86,21 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"${SWIFTC_BIN}" --version',
             '"${SWIFT_BIN}" test',
         ):
-            self.assertLess(source.index(blocker), source.index(invocation))
+            self.assertIn(invocation, source)
 
-    def test_swift_requalification_blocker_stops_direct_execution(self) -> None:
+    def test_swift_builder_binds_the_frozen_external_release_lock(self) -> None:
+        source = read("scripts/build_norito_xcframework.sh")
+        for marker in (
+            'CARGO_LOCKFILE="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-$ROOT_DIR/Cargo.lock}"',
+            '[[ -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]',
+            '"$CARGO_LOCKFILE" == "$ROOT_DIR/Cargo.lock"',
+            '"cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"',
+            'Privacy release builds require the distinct authenticated cd9e Cargo.lock',
+            '-Z unstable-options --lockfile-path "$CARGO_LOCKFILE"',
+        ):
+            self.assertIn(marker, source)
+
+    def test_swift_authenticated_external_lock_allows_execution(self) -> None:
         source = read("ci/check_privacy_swift_sdk.sh")
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve()
@@ -105,13 +116,14 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             fake_python = tools / "python"
             fake_python.write_text(
                 "#!/usr/bin/env bash\n"
-                f'[[ "${{!#}}" == "{tracked}" ]] && echo "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f" || echo "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"\n',
+                f'[[ "${{!#}}" == "{tracked}" ]] && echo "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7" || echo "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"\n',
                 encoding="utf-8",
             )
             (tools / "uname").write_text("#!/usr/bin/env bash\necho Darwin\n", encoding="utf-8")
             tool_stub = (
                 '#!/usr/bin/env bash\necho "${0##*/}" >>"$PRIVACY_TEST_LOG"\n'
                 '[[ "${0##*/}" == xcode-select ]] && echo /Applications/Xcode.app/Contents/Developer\n'
+                'exit 0\n'
             )
             for name in ("xcode-select", "xcodebuild", "swiftc", "swift"):
                 (tools / name).write_text(tool_stub, encoding="utf-8")
@@ -139,17 +151,29 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             result = subprocess.run(
                 ["bash", str(gate)], env=environment, text=True, capture_output=True
             )
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("external-lock requalification", result.stderr)
-            self.assertFalse(log.exists(), "blocker allowed artifact/Xcode execution")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = log.read_text(encoding="utf-8")
+            self.assertIn("xcode-select", calls)
+            self.assertIn("artifact-checker", calls)
+            self.assertIn("swiftc", calls)
+            self.assertIn("swift", calls)
 
-            marker = source.index("external-lock requalification")
-            exit_at = source.index("exit 1", marker)
-            gate.write_text(source[:exit_at] + ": # negative control" + source[exit_at + 6 :], encoding="utf-8")
+            release.write_text("wrong release\n", encoding="utf-8")
+            fake_python.write_text(
+                "#!/usr/bin/env bash\n"
+                f'[[ "${{!#}}" == "{tracked}" ]] && echo "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7" || echo "'
+                + ("0" * 64)
+                + '"\n',
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o700)
+            log.unlink()
             result = subprocess.run(
                 ["bash", str(gate)], env=environment, text=True, capture_output=True
             )
-            self.assertIn("xcode-select", log.read_text(encoding="utf-8"))
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("external Cargo.lock is not the frozen release lock", result.stderr)
+            self.assertFalse(log.exists(), "invalid lock allowed artifact/Xcode execution")
 
     def test_package_manifest_requires_the_external_artifact(self) -> None:
         source = read("IrohaSwift/Package.swift")
@@ -225,13 +249,95 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         checker_job = workflow_job(workflow, "checker-self-test")
         apple_job = workflow_job(workflow, "apple-mobile-sdk")
         android_job = workflow_job(workflow, "android-mobile-sdk")
-        self.assertIn('APPLE_PRIVACY_PRODUCTION_ENABLED: "false"', workflow)
-        self.assertIn('ANDROID_PRIVACY_PRODUCTION_ENABLED: "false"', workflow)
-        self.assertIn('PRIVACY_PRODUCTION_ENABLED: "false"', apple_job)
-        self.assertIn('PRIVACY_PRODUCTION_ENABLED: "false"', android_job)
+        publisher_job = workflow_job(workflow, "publish-release-assets")
+        self.assertNotIn("APPLE_PRIVACY_PRODUCTION_ENABLED", workflow)
+        self.assertNotIn("ANDROID_PRIVACY_PRODUCTION_ENABLED", workflow)
+        production_binding = (
+            "PRIVACY_PRODUCTION_ENABLED: "
+            "${{ needs.authorize-mobile-production.outputs.production }}"
+        )
+        self.assertIn(production_binding, apple_job)
+        self.assertIn(production_binding, android_job)
+        self.assertIn(
+            'MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION: "1"',
+            apple_job,
+        )
+        self.assertIn(
+            "-PrequireKagemushaProductionAuthorization=true",
+            android_job,
+        )
         self.assertNotIn("PRIVACY_PRODUCTION_ENABLED: ${{ env.", workflow)
         self.assertNotIn("inputs.privacy_production_enabled", workflow)
         self.assertNotIn("github.ref_type == 'tag' ||", workflow)
+        self.assertIn("Verify and enable only the Apple production build", apple_job)
+        self.assertIn("Verify and enable only the Android production build", android_job)
+        self.assertIn('echo "PRIVACY_PRODUCTION_ENABLED=true" >> "$GITHUB_ENV"', apple_job)
+        self.assertIn('echo "PRIVACY_PRODUCTION_ENABLED=true" >> "$GITHUB_ENV"', android_job)
+        self.assertIn("gh attestation verify", apple_job)
+        self.assertIn("gh attestation verify", android_job)
+        self.assertIn(
+            '-PkagemushaProductionAuthorizationSha256="$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256"',
+            android_job,
+        )
+        self.assertIn("verify-pair", publisher_job)
+        self.assertGreaterEqual(publisher_job.count("gh attestation verify"), 2)
+        self.assertIn("verify-apple-artifact", publisher_job)
+        self.assertIn("verify-android-artifact", publisher_job)
+        self.assertIn(
+            "package_inventory_sha256: "
+            "${{ steps.verify-apple-package.outputs.package_inventory_sha256 }}",
+            apple_job,
+        )
+        self.assertIn(
+            "package_inventory_sha256: "
+            "${{ steps.verify-android-package.outputs.package_inventory_sha256 }}",
+            android_job,
+        )
+        self.assertIn("Bind every Apple package byte to this build job", apple_job)
+        self.assertIn("Bind every Android package byte to this build job", android_job)
+        self.assertIn("APPLE_BUILD_PACKAGE_INVENTORY_SHA256", publisher_job)
+        self.assertIn("ANDROID_BUILD_PACKAGE_INVENTORY_SHA256", publisher_job)
+        self.assertEqual(publisher_job.count("verify-release-inventory"), 3)
+        self.assertIn("--phase artifacts", publisher_job)
+        self.assertEqual(publisher_job.count("--phase final"), 2)
+        self.assertIn(
+            '--release-root "$GITHUB_WORKSPACE/release-assets"', publisher_job
+        )
+        self.assertIn(
+            '--archive "$release_root/NoritoBridge-${RELEASE_TAG}.xcframework.zip"',
+            publisher_job,
+        )
+        self.assertIn(
+            '--archive "$release_root/iroha-mobile-sdk-android-${RELEASE_TAG}.zip"',
+            publisher_job,
+        )
+        self.assertNotIn('--manifest "release-assets/', publisher_job)
+        self.assertIn(
+            "release asset bytes changed after final verification", publisher_job
+        )
+        self.assertLess(
+            publisher_job.index("Reverify both authorizations"),
+            publisher_job.index('gh release create "$GITHUB_REF_NAME"'),
+        )
+
+        apple_builder = read("scripts/build_norito_xcframework.sh")
+        self.assertIn(
+            "MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION:-0",
+            apple_builder,
+        )
+        self.assertIn(
+            "official production build requires a verified Kagemusha authorization digest",
+            apple_builder,
+        )
+        android_builder = read("kotlin/client-android/build.gradle.kts")
+        self.assertIn(
+            'gradleProperty("requireKagemushaProductionAuthorization").orNull ?: "false"',
+            android_builder,
+        )
+        self.assertIn(
+            "official production build requires a verified Kagemusha authorization digest",
+            android_builder,
+        )
         for trigger in (
             "ci/check_swift_pod_bridge.sh",
             "scripts/check_swift_pod_bridge.sh",
@@ -257,12 +363,15 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             checker_job.index("Reject a noncanonical release tag before setup or build"),
             checker_job.index("actions/setup-python@"),
         )
-        tag_precedence = (
-            'if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then\n'
-            '            version="${GITHUB_REF_NAME}"\n'
-            '          elif [[ -n "$input_version" ]]; then'
+        production_version_precedence = (
+            'if [[ "$authorized_production" == "true" ]]; then\n'
+            '            [[ "$authorized_release_tag" =~ '
+            '^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.'
+            '(0|[1-9][0-9]*)$ ]]\n'
+            '            version="$authorized_release_tag"\n'
+            '          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then'
         )
-        self.assertEqual(workflow.count(tag_precedence), 2)
+        self.assertEqual(workflow.count(production_version_precedence), 2)
         self.assertEqual(
             workflow.count(
                 're.fullmatch(rb"(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.'
@@ -327,12 +436,14 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             "scripts/build_norito_xcframework.sh",
             "scripts/check_mobile_sdk_artifact_pin_commit.py",
             "scripts/exec_with_file_lock.py",
+            "scripts/norito_bridge_apple_slice_handoff.py",
             "scripts/norito_bridge_source_seal.py",
             "scripts/package_mobile_sdk_artifacts.sh",
             "scripts/run_mobile_hermetic_command.py",
             "scripts/render_norito_bridge_podspec.py",
             "scripts/tests/package_mobile_sdk_artifacts_test.py",
             "scripts/tests/render_norito_bridge_podspec_test.py",
+            "scripts/tests/norito_bridge_apple_slice_handoff_test.py",
             "scripts/tests/norito_bridge_source_seal_test.py",
             "scripts/update_norito_bridge_swift_pins.py",
             "scripts/validate_norito_bridge_xcframework.py",
@@ -353,7 +464,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"1.93.1-aarch64-apple-darwin"',
             "aarch64-apple-ios-sim",
             "x86_64-apple-darwin",
-            "cargo fetch --locked",
+            'RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"',
             "MOBILE_SDK_APPLE_ARTIFACT_DIR",
             "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1",
             "MOBILE_SDK_SWIFT_SCRATCH_DIR",

@@ -53,7 +53,6 @@ impl GreenElement {
     }
 }
 /// Immutable concrete syntax node.
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GreenNode {
     /// Node kind.
     pub kind: SyntaxKind,
@@ -62,6 +61,112 @@ pub struct GreenNode {
     /// Lossless children in source order.
     pub children: Vec<GreenElement>,
 }
+impl Clone for GreenNode {
+    fn clone(&self) -> Self {
+        enum Pending<'a> {
+            Element(&'a GreenElement),
+            Node(&'a GreenNode),
+            Finish {
+                kind: SyntaxKind,
+                range: TextRange,
+                children: usize,
+            },
+        }
+
+        let mut pending = vec![Pending::Node(self)];
+        let mut values = Vec::new();
+        while let Some(operation) = pending.pop() {
+            match operation {
+                Pending::Element(GreenElement::Token(token)) => {
+                    values.push(GreenElement::Token(*token));
+                }
+                Pending::Element(GreenElement::Node(node)) => {
+                    let node = node.as_ref();
+                    pending.push(Pending::Finish {
+                        kind: node.kind,
+                        range: node.range,
+                        children: node.children.len(),
+                    });
+                    pending.extend(node.children.iter().rev().map(Pending::Element));
+                }
+                Pending::Node(node) => {
+                    pending.push(Pending::Finish {
+                        kind: node.kind,
+                        range: node.range,
+                        children: node.children.len(),
+                    });
+                    pending.extend(node.children.iter().rev().map(Pending::Element));
+                }
+                Pending::Finish {
+                    kind,
+                    range,
+                    children,
+                } => {
+                    let start = values.len().saturating_sub(children);
+                    let children = values.split_off(start);
+                    values.push(GreenElement::Node(Box::new(Self {
+                        kind,
+                        range,
+                        children,
+                    })));
+                }
+            }
+        }
+        let GreenElement::Node(root) = values.pop().expect("syntax traversal produces one root")
+        else {
+            unreachable!("syntax root is always a node")
+        };
+        *root
+    }
+}
+impl std::fmt::Debug for GreenNode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut node_count = 1_usize;
+        let mut token_count = 0_usize;
+        let mut pending = self.children.iter().collect::<Vec<_>>();
+        while let Some(element) = pending.pop() {
+            match element {
+                GreenElement::Node(node) => {
+                    node_count = node_count.saturating_add(1);
+                    pending.extend(node.children.iter());
+                }
+                GreenElement::Token(_) => token_count = token_count.saturating_add(1),
+            }
+        }
+        formatter
+            .debug_struct("GreenNode")
+            .field("kind", &self.kind)
+            .field("range", &self.range)
+            .field("children", &self.children.len())
+            .field("descendant_nodes", &node_count)
+            .field("descendant_tokens", &token_count)
+            .finish()
+    }
+}
+impl PartialEq for GreenNode {
+    fn eq(&self, other: &Self) -> bool {
+        let mut pending = vec![(self, other)];
+        while let Some((left, right)) = pending.pop() {
+            if left.kind != right.kind
+                || left.range != right.range
+                || left.children.len() != right.children.len()
+            {
+                return false;
+            }
+            for (left, right) in left.children.iter().zip(&right.children) {
+                match (left, right) {
+                    (GreenElement::Token(left), GreenElement::Token(right)) if left == right => {}
+                    (GreenElement::Node(left), GreenElement::Node(right)) => {
+                        pending.push((left, right));
+                    }
+                    _ => return false,
+                }
+            }
+        }
+        true
+    }
+}
+impl Eq for GreenNode {}
 impl GreenNode {
     pub(crate) fn new(kind: SyntaxKind, fallback: u32, children: Vec<GreenElement>) -> Self {
         let first = children
@@ -210,6 +315,27 @@ mod tests {
             .expect("spawn small-stack CST worker")
             .join()
             .expect("small-stack CST worker");
+    }
+
+    #[test]
+    fn public_child_collection_clone_is_spawn_free() {
+        let leaf = || {
+            GreenElement::Node(Box::new(GreenNode::new(
+                SyntaxKind::Ident,
+                0,
+                vec![GreenElement::Token(GreenToken::source(
+                    SyntaxKind::Ident,
+                    TextRange::new(0, 1),
+                ))],
+            )))
+        };
+        let children = std::iter::repeat_with(leaf)
+            .take(16_384)
+            .collect::<Vec<_>>();
+        crate::session::reset_compiler_worker_spawn_count();
+        let cloned = children.clone();
+        assert_eq!(children, cloned);
+        assert_eq!(crate::session::compiler_worker_spawn_count(), 0);
     }
 }
 impl<'tree> Iterator for GreenTokenIter<'tree> {

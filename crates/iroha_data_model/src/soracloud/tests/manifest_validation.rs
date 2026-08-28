@@ -117,6 +117,7 @@ fn service_validate_rejects_duplicate_binding_names() {
             expected_schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
         },
         replicas: NonZeroU16::new(2).expect("nonzero"),
+        placement_targets: BTreeSet::new(),
         route: Some(SoraRouteTargetV1 {
             host: "wallet.sora".to_string(),
             path_prefix: "/".to_string(),
@@ -654,6 +655,7 @@ fn deployment_bundle_validate_accepts_inrou_http_service_without_login_surface()
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.rollout.canary_percent = 0;
     service.replicas = NonZeroU16::new(1).expect("nonzero");
+    service.placement_targets = sample_inrou_placement_targets(service.replicas.get());
     service.container.manifest_hash = container_hash;
     service.state_bindings.clear();
     service.handlers.clear();
@@ -668,6 +670,107 @@ fn deployment_bundle_validate_accepts_inrou_http_service_without_login_surface()
         bundle.validate_for_admission().is_ok(),
         "Inrou http services must not require an SSH access path"
     );
+}
+#[test]
+fn admitted_inrou_bundle_requires_identity_bound_targets_for_every_replica() {
+    let (mut bundle, _) = sample_hosted_active_bundle_and_deployment();
+    bundle.service.placement_targets.clear();
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("admitted Inrou bundles must not omit operator-preseed targets");
+    assert_soracloud_invalid_field(error, "service.placement_targets");
+
+    bundle.service.placement_targets = sample_inrou_placement_targets(2);
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("one identity-bound target per replica is required");
+    assert_soracloud_invalid_field(error, "service.placement_targets");
+}
+#[test]
+fn non_inrou_bundle_rejects_placement_targets() {
+    let container = sample_container();
+    let mut service = sample_service(vec![sample_binding("session")]);
+    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+    service.placement_targets = sample_inrou_placement_targets(service.replicas.get());
+    let error = SoraDeploymentBundleV1 {
+        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        container,
+        service,
+    }
+    .validate_for_admission()
+    .expect_err("placement targets are an Inrou-only admission surface");
+    assert_soracloud_invalid_field(error, "service.placement_targets");
+}
+#[test]
+fn inrou_placement_target_accepts_independent_validator_and_consensus_keys() {
+    let target = SoraInrouPlacementTargetV1 {
+        validator_account_id: sample_account_id(0x91),
+        peer_id: sample_bls_peer_id(0xB1),
+    };
+    target
+        .validate()
+        .expect("Taira's validator account signer and BLS consensus peer are distinct key roles");
+
+    let mut malformed_peer = target.clone();
+    malformed_peer.peer_id = "not-a-canonical-peer".to_owned();
+    let error = malformed_peer
+        .validate()
+        .expect_err("noncanonical peers must fail data-model validation");
+    assert_soracloud_invalid_field(error, "peer_id");
+
+    let members = [0x92_u8, 0x93]
+        .into_iter()
+        .map(|seed| {
+            crate::account::MultisigMember::new(
+                sample_ed25519_keypair(seed).public_key().clone(),
+                1,
+            )
+            .expect("valid multisig member")
+        })
+        .collect();
+    let policy = crate::account::MultisigPolicy::new(2, members).expect("valid multisig policy");
+    let multisig = SoraInrouPlacementTargetV1 {
+        validator_account_id: AccountId::new_multisig(policy),
+        peer_id: sample_bls_peer_id(0xB2),
+    };
+    let error = multisig
+        .validate()
+        .expect_err("validator placement identities must remain single-signatory");
+    assert_soracloud_invalid_field(error, "validator_account_id");
+}
+#[test]
+fn service_manifest_rejects_reused_inrou_target_identities() {
+    let mut service = sample_service(Vec::new());
+    let first = SoraInrouPlacementTargetV1 {
+        validator_account_id: sample_account_id(0x94),
+        peer_id: sample_bls_peer_id(0xB4),
+    };
+    service.placement_targets = BTreeSet::from([
+        first.clone(),
+        SoraInrouPlacementTargetV1 {
+            validator_account_id: first.validator_account_id,
+            peer_id: sample_bls_peer_id(0xB5),
+        },
+    ]);
+    let error = service
+        .validate()
+        .expect_err("one validator account must not alias multiple preseed targets");
+    assert_soracloud_invalid_field(error, "placement_targets");
+
+    service.placement_targets = BTreeSet::from([
+        SoraInrouPlacementTargetV1 {
+            validator_account_id: sample_account_id(0x95),
+            peer_id: first.peer_id.clone(),
+        },
+        SoraInrouPlacementTargetV1 {
+            validator_account_id: sample_account_id(0x96),
+            peer_id: first.peer_id,
+        },
+    ]);
+    let error = service
+        .validate()
+        .expect_err("one peer must not alias multiple preseed targets");
+    assert_soracloud_invalid_field(error, "placement_targets");
 }
 #[test]
 fn deployment_bundle_admission_accepts_exact_inrou_lifecycle_grace_ceiling() {
@@ -685,6 +788,7 @@ fn deployment_bundle_admission_accepts_exact_inrou_lifecycle_grace_ceiling() {
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.rollout.canary_percent = 0;
     service.replicas = NonZeroU16::new(1).expect("nonzero");
+    service.placement_targets = sample_inrou_placement_targets(service.replicas.get());
     service.container.manifest_hash = container_hash;
     service.state_bindings.clear();
     service.handlers.clear();
@@ -719,6 +823,7 @@ fn deployment_bundle_admission_rejects_inrou_lifecycle_grace_above_ceiling_only(
         service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
         service.rollout.canary_percent = 0;
         service.replicas = NonZeroU16::new(1).expect("nonzero");
+        service.placement_targets = sample_inrou_placement_targets(service.replicas.get());
         service.container.manifest_hash = container_hash;
         service.state_bindings.clear();
         service.handlers.clear();
@@ -784,6 +889,7 @@ fn deployment_bundle_validate_accepts_replica_private_inrou_http_service() {
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.rollout.canary_percent = 0;
     service.replicas = NonZeroU16::new(3).expect("nonzero");
+    service.placement_targets = sample_inrou_placement_targets(service.replicas.get());
     service.container.manifest_hash = container_hash;
     service.state_bindings.clear();
     service.handlers.clear();
@@ -810,6 +916,7 @@ fn deployment_bundle_rejects_inrou_canary_state_split() {
     let mut service = sample_service(Vec::new());
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.rollout.canary_percent = 25;
+    service.placement_targets = sample_inrou_placement_targets(service.replicas.get());
     service.container.manifest_hash = container_hash;
     service.state_bindings.clear();
     service.handlers.clear();
@@ -1414,7 +1521,7 @@ fn assert_inrou_published_artifact_field_is_required(published: &Value, field: &
     let error = norito::json::from_value::<SoraInrouManifestV1>(value)
         .expect_err("first-release published-artifact fields must not be omitted");
     assert!(
-        matches!(&error, json::Error::Message(message) if message == &format!("missing field `{field}`")),
+        matches!(&error, json::Error::MissingField { field: missing } if missing == field),
         "missing published-artifact `{field}` reported the wrong error: {error:?}"
     );
 }
@@ -1788,6 +1895,7 @@ fn deployment_bundle_validate_rejects_http_service_without_data_lease_volume() {
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.rollout.canary_percent = 0;
     service.replicas = NonZeroU16::new(2).expect("nonzero");
+    service.placement_targets = sample_inrou_placement_targets(service.replicas.get());
     service.container.manifest_hash = container_hash;
     service.state_bindings.clear();
     service.handlers.clear();
@@ -1821,6 +1929,7 @@ fn deployment_bundle_validate_accepts_http_service_with_confidential_data_lease(
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.rollout.canary_percent = 0;
     service.replicas = NonZeroU16::new(2).expect("nonzero");
+    service.placement_targets = sample_inrou_placement_targets(service.replicas.get());
     service.container.manifest_hash = container_hash;
     service.state_bindings.clear();
     service.handlers.clear();
@@ -1876,6 +1985,7 @@ fn deployment_bundle_validate_rejects_unknown_http_service_quota_class() {
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.rollout.canary_percent = 0;
     service.replicas = NonZeroU16::new(1).expect("nonzero");
+    service.placement_targets = sample_inrou_placement_targets(service.replicas.get());
     service.container.manifest_hash = container_hash;
     service.state_bindings.clear();
     service.handlers.clear();
@@ -1905,6 +2015,7 @@ fn deployment_bundle_validate_rejects_http_service_resources_over_quota_class_ca
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.rollout.canary_percent = 0;
     service.replicas = NonZeroU16::new(1).expect("nonzero");
+    service.placement_targets = sample_inrou_placement_targets(service.replicas.get());
     service.container.manifest_hash = container_hash;
     service.state_bindings.clear();
     service.handlers.clear();
@@ -1933,6 +2044,7 @@ fn deployment_bundle_validate_rejects_unenforceable_inrou_resource_units() {
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.rollout.canary_percent = 0;
     service.replicas = NonZeroU16::new(1).expect("nonzero");
+    service.placement_targets = sample_inrou_placement_targets(service.replicas.get());
     service.container.manifest_hash = container_hash;
     service.state_bindings.clear();
     service.handlers.clear();
@@ -2293,6 +2405,7 @@ fn sample_hosted_active_bundle_and_deployment()
     let mut service = sample_service(Vec::new());
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.rollout.canary_percent = 0;
+    service.placement_targets = sample_inrou_placement_targets(service.replicas.get());
     service.container.manifest_hash = Hash::new(Encode::encode(&container));
     service.state_bindings.clear();
     service.handlers.clear();
@@ -2853,16 +2966,15 @@ fn inrou_host_capability_record_validate_rejects_noncanonical_peer_id() {
     );
 }
 #[test]
-fn inrou_host_capability_record_rejects_peer_from_another_account() {
+fn inrou_host_capability_record_accepts_independent_consensus_peer() {
     let mut capability = sample_inrou_host_capability_record();
-    capability.peer_id = sample_peer_id(0xD2);
-    let error = capability
+    capability.peer_id = sample_bls_peer_id(0xD2);
+    capability
         .validate()
-        .expect_err("a canonical peer belonging to another account must fail");
-    assert_soracloud_invalid_field(error, "peer_id");
+        .expect("the authoritative validator record, not key derivation, binds account and peer");
     assert!(
-        !capability.can_host_replicas_at(capability.advertised_at_ms),
-        "mismatched account/peer attribution must never remain placement-eligible"
+        capability.can_host_replicas_at(capability.advertised_at_ms),
+        "a separately canonical consensus peer remains placement-eligible"
     );
 }
 #[test]
@@ -2875,13 +2987,12 @@ fn inrou_service_placement_record_validate_rejects_duplicate_slots() {
     assert_soracloud_invalid_field(error, "placements");
 }
 #[test]
-fn inrou_service_placement_record_rejects_peer_from_another_account() {
+fn inrou_service_placement_record_accepts_independent_consensus_peer() {
     let mut placement = sample_inrou_service_placement_record();
-    placement.placements[0].peer_id = sample_peer_id(0xD2);
-    let error = placement
+    placement.placements[0].peer_id = sample_bls_peer_id(0xD2);
+    placement
         .validate()
-        .expect_err("a placed peer belonging to another validator account must fail");
-    assert_soracloud_invalid_field(error, "peer_id");
+        .expect("placement records carry the independently authoritative consensus peer");
 }
 #[test]
 fn inrou_replica_runtime_state_validate_rejects_missing_peer_id() {
@@ -2899,13 +3010,12 @@ fn inrou_replica_runtime_state_validate_rejects_missing_peer_id() {
     ));
 }
 #[test]
-fn inrou_replica_runtime_state_rejects_peer_from_another_account() {
+fn inrou_replica_runtime_state_accepts_independent_consensus_peer() {
     let mut runtime_state = sample_inrou_replica_runtime_state();
-    runtime_state.peer_id = sample_peer_id(0xD2);
-    let error = runtime_state
+    runtime_state.peer_id = sample_bls_peer_id(0xD2);
+    runtime_state
         .validate()
-        .expect_err("an Inrou runtime peer belonging to another account must fail");
-    assert_soracloud_invalid_field(error, "peer_id");
+        .expect("runtime state carries the peer bound by the active validator record");
 }
 zero_prehash_field_rejection_test! {
     inrou_replica_runtime_state_validate_rejects_zero_prehash_digest_sentinels,
@@ -3629,7 +3739,7 @@ fn runtime_receipt_validate_rejects_invalid_host_attribution() {
     assert_soracloud_invalid_field(error, "peer_id");
 }
 #[test]
-fn deterministic_validator_host_requires_canonical_account_peer_binding() {
+fn deterministic_validator_host_accepts_independently_canonical_account_and_peer() {
     let mut receipt = sample_runtime_receipt();
     receipt.execution_host = Some(SoraRuntimeDeterministicValidatorHostV1 {
         lane_id: LaneId::SINGLE,
@@ -3644,11 +3754,10 @@ fn deterministic_validator_host_requires_canonical_account_peer_binding() {
         .execution_host
         .as_mut()
         .expect("fixture carries deterministic-validator attribution");
-    host.peer_id = sample_peer_id(172);
-    let error = receipt
+    host.peer_id = sample_bls_peer_id(172);
+    receipt
         .validate()
-        .expect_err("a syntactically valid peer from another account must be rejected");
-    assert_soracloud_invalid_field(error, "peer_id");
+        .expect("the ledger validator record, not account-key derivation, binds the peer");
 }
 zero_prehash_field_rejection_test! {
     runtime_receipt_validate_rejects_zero_prehash_digest_sentinels,

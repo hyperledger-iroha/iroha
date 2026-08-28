@@ -331,8 +331,16 @@ impl<'a> FastFromJson<'a> for NetworkUpdate {
             w.expect_colon_resync()?;
             match kh {
                 x if x == kh_lane_profile && w.last_key() == "lane_profile" => {
-                    let label = w.parse_string_ref_inline(arena)?.to_string();
-                    lane_profile = Some(base::LaneProfile::from_label(&label));
+                    let label = w.parse_string_ref_inline(arena)?;
+                    let label = match label {
+                        json::StrRef::Borrowed(label) | json::StrRef::Owned(label) => label,
+                    };
+                    lane_profile =
+                        Some(base::LaneProfile::parse_label(label).ok_or_else(|| {
+                            NoritoError::Message(
+                                "lane_profile must be exactly `core` or `home`".into(),
+                            )
+                        })?);
                 }
                 x if x == kh_require && w.last_key() == "require_sm_handshake_match" => {
                     require_sm_handshake_match = Some(w.parse_bool_inline()?);
@@ -577,11 +585,6 @@ impl FastJsonWrite for SoranetHandshakePowUpdate {
                 out.push(',');
             }
         };
-        if let Some(value) = self.required {
-            field(out);
-            out.push_str("\"required\":");
-            out.push_str(if value { "true" } else { "false" });
-        }
         if let Some(value) = self.difficulty {
             field(out);
             out.push_str("\"difficulty\":");
@@ -623,9 +626,6 @@ impl FastJsonWrite for SoranetHandshakePowUpdate {
 impl FastJsonWrite for SoranetHandshakePowSummary {
     fn write_json(&self, out: &mut String) {
         out.push('{');
-        out.push_str("\"required\":");
-        out.push_str(if self.required { "true" } else { "false" });
-        out.push(',');
         out.push_str("\"difficulty\":");
         let _ = write!(out, "{}", self.difficulty);
         out.push(',');
@@ -643,11 +643,9 @@ impl FastJsonWrite for SoranetHandshakePowSummary {
         out.push(',');
         out.push_str("\"inbound_verify_capacity\":");
         let _ = write!(out, "{}", self.inbound_verify_capacity);
-        if let Some(puzzle) = &self.puzzle {
-            out.push(',');
-            out.push_str("\"puzzle\":");
-            puzzle.write_json(out);
-        }
+        out.push(',');
+        out.push_str("\"puzzle\":");
+        self.puzzle.write_json(out);
         out.push('}');
     }
 }
@@ -792,7 +790,7 @@ pub struct ConfigGetDTO {
     pub consensus: Consensus,
     /// Read-only confidential verification gas schedule committed by the ZK policy.
     pub confidential_gas: ConfidentialGas,
-    /// Transport-specific configuration summary (Norito-RPC, streaming).
+    /// Transport-specific configuration summary.
     pub transport: Transport,
     /// Nexus-specific configuration snapshot.
     pub nexus: Nexus,
@@ -836,8 +834,6 @@ pub struct ConfidentialGas {
 pub struct Transport {
     /// Norito-RPC rollout summary.
     pub norito_rpc: NoritoRpcSummary,
-    /// Streaming transport summary (e.g., `SoraNet` bridge defaults).
-    pub streaming: StreamingTransportSummary,
 }
 /// Nexus configuration summary exposed via the client API.
 #[derive(Debug, Clone, Copy)]
@@ -869,36 +865,6 @@ pub struct NoritoRpcSummary {
     /// Number of tokens currently allowlisted for canary access.
     pub canary_allowlist_size: usize,
 }
-/// Streaming transport summary exposed to clients.
-#[derive(Debug, Clone)]
-pub struct StreamingTransportSummary {
-    /// Default `SoraNet` bridge metadata applied to streaming routes.
-    pub soranet: SoranetStreamingSummary,
-}
-/// `SoraNet` streaming bridge defaults surfaced via the configuration endpoint.
-#[derive(Debug, Clone)]
-pub struct SoranetStreamingSummary {
-    /// Whether `SoraNet` provisioning for streaming routes is enabled.
-    pub enabled: bool,
-    /// Label used when opening `SoraNet` circuits for Norito streaming.
-    pub stream_tag: String,
-    /// Exit relay multiaddr used when manifests omit explicit routing metadata.
-    pub exit_multiaddr: String,
-    /// Optional padding budget (milliseconds) applied to low-latency circuits.
-    pub padding_budget_ms: Option<u16>,
-    /// Access posture enforced by exits (`read-only` vs `authenticated`).
-    pub access_kind: String,
-    /// GAR category implied by the configured access posture.
-    pub gar_category: String,
-    /// Domain-separated salt used to derive blinded channel identifiers.
-    pub channel_salt: String,
-    /// Filesystem spool where privacy-route updates are staged for exit relays.
-    pub provision_spool_dir: String,
-    /// Segment window (inclusive) used when provisioning privacy routes.
-    pub provision_window_segments: u64,
-    /// Maximum number of queued privacy-route provisioning jobs.
-    pub provision_queue_capacity: u64,
-}
 impl From<&'_ base::Root> for ConfigGetDTO {
     fn from(value: &'_ base::Root) -> Self {
         Self {
@@ -908,19 +874,15 @@ impl From<&'_ base::Root> for ConfigGetDTO {
             queue: (&value.queue).into(),
             consensus: Consensus::from(&value.sumeragi),
             confidential_gas: (&value.confidential.gas).into(),
-            transport: Transport::from_config(&value.torii.transport, &value.streaming.soranet),
+            transport: Transport::from_config(&value.torii.transport),
             nexus: Nexus::from(&value.nexus),
         }
     }
 }
 impl Transport {
-    fn from_config(
-        transport: &'_ base::ToriiTransport,
-        soranet: &'_ base::StreamingSoranet,
-    ) -> Self {
+    fn from_config(transport: &'_ base::ToriiTransport) -> Self {
         Self {
             norito_rpc: NoritoRpcSummary::from(&transport.norito_rpc),
-            streaming: StreamingTransportSummary::from(soranet),
         }
     }
 }
@@ -948,36 +910,6 @@ impl From<&'_ base::NoritoRpcTransport> for NoritoRpcSummary {
             stage: value.stage.label().to_string(),
             require_mtls: value.require_mtls,
             canary_allowlist_size: value.allowed_clients.len(),
-        }
-    }
-}
-impl From<&'_ base::StreamingSoranet> for StreamingTransportSummary {
-    fn from(value: &'_ base::StreamingSoranet) -> Self {
-        Self {
-            soranet: SoranetStreamingSummary::from(value),
-        }
-    }
-}
-impl From<&'_ base::StreamingSoranet> for SoranetStreamingSummary {
-    fn from(value: &'_ base::StreamingSoranet) -> Self {
-        let access_kind = value.access_kind.as_str().to_string();
-        let gar_category = match value.access_kind {
-            base::StreamingSoranetAccessKind::Authenticated => {
-                "stream.norito.authenticated".to_string()
-            }
-            base::StreamingSoranetAccessKind::ReadOnly => "stream.norito.read_only".to_string(),
-        };
-        Self {
-            enabled: value.enabled,
-            stream_tag: "norito-stream".to_string(),
-            exit_multiaddr: value.exit_multiaddr.clone(),
-            padding_budget_ms: value.padding_budget_ms,
-            access_kind,
-            gar_category,
-            channel_salt: value.channel_salt.clone(),
-            provision_spool_dir: value.provision_spool_dir.to_string_lossy().into_owned(),
-            provision_window_segments: value.provision_window_segments,
-            provision_queue_capacity: value.provision_queue_capacity,
         }
     }
 }
@@ -1028,9 +960,6 @@ impl FastJsonWrite for Transport {
         out.push('{');
         out.push_str("\"norito_rpc\":");
         self.norito_rpc.write_json(out);
-        out.push(',');
-        out.push_str("\"streaming\":");
-        self.streaming.write_json(out);
         out.push('}');
     }
 }
@@ -1074,60 +1003,6 @@ impl FastJsonWrite for NoritoRpcSummary {
         out.push(',');
         out.push_str("\"canary_allowlist_size\":");
         let _ = write!(out, "{}", self.canary_allowlist_size);
-        out.push('}');
-    }
-}
-impl FastJsonWrite for StreamingTransportSummary {
-    fn write_json(&self, out: &mut String) {
-        out.push('{');
-        out.push_str("\"soranet\":");
-        self.soranet.write_json(out);
-        out.push('}');
-    }
-}
-impl FastJsonWrite for SoranetStreamingSummary {
-    fn write_json(&self, out: &mut String) {
-        out.push('{');
-        out.push_str("\"enabled\":");
-        let _ = write!(out, "{}", self.enabled);
-        out.push(',');
-        out.push_str("\"stream_tag\":\"");
-        out.push_str(&self.stream_tag);
-        out.push('"');
-        out.push(',');
-        out.push_str("\"exit_multiaddr\":\"");
-        out.push_str(&self.exit_multiaddr);
-        out.push('"');
-        out.push(',');
-        out.push_str("\"padding_budget_ms\":");
-        match self.padding_budget_ms {
-            Some(value) => {
-                let _ = write!(out, "{value}");
-            }
-            None => out.push_str("null"),
-        }
-        out.push(',');
-        out.push_str("\"access_kind\":\"");
-        out.push_str(&self.access_kind);
-        out.push('"');
-        out.push(',');
-        out.push_str("\"gar_category\":\"");
-        out.push_str(&self.gar_category);
-        out.push('"');
-        out.push(',');
-        out.push_str("\"channel_salt\":\"");
-        out.push_str(&self.channel_salt);
-        out.push('"');
-        out.push(',');
-        out.push_str("\"provision_spool_dir\":\"");
-        out.push_str(&self.provision_spool_dir);
-        out.push('"');
-        out.push(',');
-        out.push_str("\"provision_window_segments\":");
-        let _ = write!(out, "{}", self.provision_window_segments);
-        out.push(',');
-        out.push_str("\"provision_queue_capacity\":");
-        let _ = write!(out, "{}", self.provision_queue_capacity);
         out.push('}');
     }
 }
@@ -1195,18 +1070,13 @@ impl<'a> FastFromJson<'a> for Transport {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
         let kh_nr = norito::json::key_hash_const("norito_rpc");
-        let kh_streaming = norito::json::key_hash_const("streaming");
         let mut norito_rpc: Option<NoritoRpcSummary> = None;
-        let mut streaming: Option<StreamingTransportSummary> = None;
         while !w.peek_object_end()? {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
             match kh {
                 x if x == kh_nr && w.last_key() == "norito_rpc" => {
                     norito_rpc = Some(NoritoRpcSummary::parse(w, arena)?);
-                }
-                x if x == kh_streaming && w.last_key() == "streaming" => {
-                    streaming = Some(StreamingTransportSummary::parse(w, arena)?);
                 }
                 _ => w.skip_value()?,
             }
@@ -1216,7 +1086,6 @@ impl<'a> FastFromJson<'a> for Transport {
         Ok(Self {
             norito_rpc: norito_rpc
                 .ok_or_else(|| NoritoError::Message("missing norito_rpc".into()))?,
-            streaming: streaming.ok_or_else(|| NoritoError::Message("missing streaming".into()))?,
         })
     }
 }
@@ -1264,131 +1133,6 @@ impl<'a> FastFromJson<'a> for NoritoRpcSummary {
             stage: stage.ok_or_else(|| NoritoError::Message("missing stage".into()))?,
             require_mtls: require_mtls.unwrap_or(false),
             canary_allowlist_size: allow_size.unwrap_or(0),
-        })
-    }
-}
-impl<'a> FastFromJson<'a> for StreamingTransportSummary {
-    fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
-        w.expect_object_start()?;
-        let kh_soranet = norito::json::key_hash_const("soranet");
-        let mut soranet: Option<SoranetStreamingSummary> = None;
-        while !w.peek_object_end()? {
-            let kh = w.read_key_hash()?;
-            w.expect_colon_resync()?;
-            match kh {
-                x if x == kh_soranet && w.last_key() == "soranet" => {
-                    soranet = Some(SoranetStreamingSummary::parse(w, arena)?);
-                }
-                _ => w.skip_value()?,
-            }
-            let _ = w.consume_comma_if_present()?;
-        }
-        w.expect_object_end()?;
-        Ok(Self {
-            soranet: soranet.ok_or_else(|| NoritoError::Message("missing soranet".into()))?,
-        })
-    }
-}
-impl<'a> FastFromJson<'a> for SoranetStreamingSummary {
-    fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
-        w.expect_object_start()?;
-        let kh_enabled = norito::json::key_hash_const("enabled");
-        let kh_stream_tag = norito::json::key_hash_const("stream_tag");
-        let kh_exit = norito::json::key_hash_const("exit_multiaddr");
-        let kh_padding = norito::json::key_hash_const("padding_budget_ms");
-        let kh_access = norito::json::key_hash_const("access_kind");
-        let kh_gar = norito::json::key_hash_const("gar_category");
-        let kh_salt = norito::json::key_hash_const("channel_salt");
-        let kh_spool = norito::json::key_hash_const("provision_spool_dir");
-        let kh_window = norito::json::key_hash_const("provision_window_segments");
-        let kh_queue = norito::json::key_hash_const("provision_queue_capacity");
-        let mut enabled: Option<bool> = None;
-        let mut stream_tag: Option<String> = None;
-        let mut exit_multiaddr: Option<String> = None;
-        let mut padding_budget_ms: Option<Option<u16>> = None;
-        let mut access_kind: Option<String> = None;
-        let mut gar_category: Option<String> = None;
-        let mut channel_salt: Option<String> = None;
-        let mut provision_spool_dir: Option<String> = None;
-        let mut provision_window_segments: Option<u64> = None;
-        let mut provision_queue_capacity: Option<u64> = None;
-        while !w.peek_object_end()? {
-            let kh = w.read_key_hash()?;
-            w.expect_colon_resync()?;
-            match kh {
-                x if x == kh_enabled && w.last_key() == "enabled" => {
-                    enabled = Some(w.parse_bool_inline()?);
-                }
-                x if x == kh_stream_tag && w.last_key() == "stream_tag" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    stream_tag = Some(sref.to_string());
-                }
-                x if x == kh_exit && w.last_key() == "exit_multiaddr" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    exit_multiaddr = Some(sref.to_string());
-                }
-                x if x == kh_padding && w.last_key() == "padding_budget_ms" => {
-                    w.skip_ws();
-                    let bytes = w.input().as_bytes();
-                    let cursor = w.raw_pos();
-                    if cursor + 4 <= bytes.len() && &bytes[cursor..cursor + 4] == b"null" {
-                        w.sync_to_raw(cursor + 4);
-                        padding_budget_ms = Some(None);
-                    } else {
-                        let raw = w.parse_u64_inline()?;
-                        let converted = u16::try_from(raw).map_err(|_| {
-                            NoritoError::Message("padding_budget_ms exceeds u16".into())
-                        })?;
-                        padding_budget_ms = Some(Some(converted));
-                    }
-                }
-                x if x == kh_access && w.last_key() == "access_kind" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    access_kind = Some(sref.to_string());
-                }
-                x if x == kh_gar && w.last_key() == "gar_category" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    gar_category = Some(sref.to_string());
-                }
-                x if x == kh_salt && w.last_key() == "channel_salt" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    channel_salt = Some(sref.to_string());
-                }
-                x if x == kh_spool && w.last_key() == "provision_spool_dir" => {
-                    let sref = w.parse_string_ref_inline(arena)?;
-                    provision_spool_dir = Some(sref.to_string());
-                }
-                x if x == kh_window && w.last_key() == "provision_window_segments" => {
-                    provision_window_segments = Some(w.parse_u64_inline()?);
-                }
-                x if x == kh_queue && w.last_key() == "provision_queue_capacity" => {
-                    provision_queue_capacity = Some(w.parse_u64_inline()?);
-                }
-                _ => w.skip_value()?,
-            }
-            let _ = w.consume_comma_if_present()?;
-        }
-        w.expect_object_end()?;
-        Ok(Self {
-            enabled: enabled.ok_or_else(|| NoritoError::Message("missing enabled".into()))?,
-            stream_tag: stream_tag
-                .ok_or_else(|| NoritoError::Message("missing stream_tag".into()))?,
-            exit_multiaddr: exit_multiaddr
-                .ok_or_else(|| NoritoError::Message("missing exit_multiaddr".into()))?,
-            padding_budget_ms: padding_budget_ms
-                .ok_or_else(|| NoritoError::Message("missing padding_budget_ms".into()))?,
-            access_kind: access_kind
-                .ok_or_else(|| NoritoError::Message("missing access_kind".into()))?,
-            gar_category: gar_category
-                .ok_or_else(|| NoritoError::Message("missing gar_category".into()))?,
-            channel_salt: channel_salt
-                .ok_or_else(|| NoritoError::Message("missing channel_salt".into()))?,
-            provision_spool_dir: provision_spool_dir
-                .ok_or_else(|| NoritoError::Message("missing provision_spool_dir".into()))?,
-            provision_window_segments: provision_window_segments
-                .ok_or_else(|| NoritoError::Message("missing provision_window_segments".into()))?,
-            provision_queue_capacity: provision_queue_capacity
-                .ok_or_else(|| NoritoError::Message("missing provision_queue_capacity".into()))?,
         })
     }
 }
@@ -1484,7 +1228,8 @@ fn finalize_network(
         transaction_gossip_resend_ticks: tx_gossip_resend_ticks.ok_or_else(|| {
             NoritoError::Message("missing transaction_gossip_resend_ticks".into())
         })?,
-        soranet_handshake: soranet_handshake.unwrap_or_default(),
+        soranet_handshake: soranet_handshake
+            .ok_or_else(|| NoritoError::Message("missing network.soranet_handshake".into()))?,
         soranet_privacy: soranet_privacy_summary.unwrap_or_default(),
         soranet_vpn: soranet_vpn_summary.unwrap_or_default(),
         lane_profile: lane_profile.unwrap_or(base::LaneProfile::Core),
@@ -1632,8 +1377,16 @@ impl<'a> FastFromJson<'a> for Network {
                     soranet_vpn_summary = Some(SoranetVpnSummary::parse(w, arena)?);
                 }
                 x if x == kh_lane_profile && w.last_key() == "lane_profile" => {
-                    let label = w.parse_string_ref_inline(arena)?.to_string();
-                    lane_profile = Some(base::LaneProfile::from_label(&label));
+                    let label = w.parse_string_ref_inline(arena)?;
+                    let label = match label {
+                        json::StrRef::Borrowed(label) | json::StrRef::Owned(label) => label,
+                    };
+                    lane_profile =
+                        Some(base::LaneProfile::parse_label(label).ok_or_else(|| {
+                            NoritoError::Message(
+                                "lane_profile must be exactly `core` or `home`".into(),
+                            )
+                        })?);
                 }
                 x if x == kh_require_sm_match && w.last_key() == "require_sm_handshake_match" => {
                     require_sm_handshake_match = Some(w.parse_bool_inline()?);
@@ -2773,8 +2526,6 @@ impl From<&'_ base::SoranetVpn> for SoranetVpnSummary {
 /// Summary of the proof-of-work admission settings.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SoranetHandshakePowSummary {
-    /// Indicates whether `PoW` tickets are required.
-    pub required: bool,
     /// Required difficulty in leading zero bits.
     pub difficulty: u8,
     /// Maximum allowed ticket future skew in seconds.
@@ -2787,20 +2538,19 @@ pub struct SoranetHandshakePowSummary {
     pub outbound_mint_capacity: usize,
     /// Maximum concurrent remote Argon2 ticket verifications.
     pub inbound_verify_capacity: usize,
-    /// Optional Argon2 puzzle parameters.
-    pub puzzle: Option<SoranetHandshakePuzzleSummary>,
+    /// Mandatory Argon2 puzzle parameters.
+    pub puzzle: SoranetHandshakePuzzleSummary,
 }
 impl From<&'_ base::SoranetPow> for SoranetHandshakePowSummary {
     fn from(value: &'_ base::SoranetPow) -> Self {
         Self {
-            required: true,
             difficulty: value.difficulty,
             max_future_skew_secs: value.max_future_skew.as_secs(),
             min_ticket_ttl_secs: value.min_ticket_ttl.as_secs(),
             ticket_ttl_secs: value.ticket_ttl.as_secs(),
             outbound_mint_capacity: value.outbound_mint_capacity.get(),
             inbound_verify_capacity: value.inbound_verify_capacity.get(),
-            puzzle: Some(SoranetHandshakePuzzleSummary::from(value.puzzle)),
+            puzzle: SoranetHandshakePuzzleSummary::from(value.puzzle),
         }
     }
 }
@@ -2825,8 +2575,10 @@ impl From<base::SoranetPuzzle> for SoranetHandshakePuzzleSummary {
 }
 impl<'a> FastFromJson<'a> for SoranetHandshakePuzzleSummary {
     fn parse(w: &mut TapeWalker<'a>, _arena: &mut Arena) -> Result<Self, NoritoError> {
-        let mut summary = Self::default();
         w.expect_object_start()?;
+        let mut memory_kib = None;
+        let mut time_cost = None;
+        let mut lanes = None;
         let kh_memory = norito::json::key_hash_const("memory_kib");
         let kh_time = norito::json::key_hash_const("time_cost");
         let kh_lanes = norito::json::key_hash_const("lanes");
@@ -2835,23 +2587,46 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePuzzleSummary {
             w.expect_colon_resync()?;
             match kh {
                 x if x == kh_memory && w.last_key() == "memory_kib" => {
-                    summary.memory_kib = u32::try_from(w.parse_u64_inline()?)
-                        .map_err(|_| NoritoError::Message("u32 overflow".into()))?;
+                    memory_kib = Some(
+                        u32::try_from(w.parse_u64_inline()?)
+                            .map_err(|_| NoritoError::Message("u32 overflow".into()))?,
+                    );
                 }
                 x if x == kh_time && w.last_key() == "time_cost" => {
-                    summary.time_cost = u32::try_from(w.parse_u64_inline()?)
-                        .map_err(|_| NoritoError::Message("u32 overflow".into()))?;
+                    time_cost = Some(
+                        u32::try_from(w.parse_u64_inline()?)
+                            .map_err(|_| NoritoError::Message("u32 overflow".into()))?,
+                    );
                 }
                 x if x == kh_lanes && w.last_key() == "lanes" => {
-                    summary.lanes = u32::try_from(w.parse_u64_inline()?)
-                        .map_err(|_| NoritoError::Message("u32 overflow".into()))?;
+                    lanes = Some(
+                        u32::try_from(w.parse_u64_inline()?)
+                            .map_err(|_| NoritoError::Message("u32 overflow".into()))?,
+                    );
                 }
-                _ => w.skip_value()?,
+                _ => {
+                    return Err(NoritoError::Message(format!(
+                        "unknown field `{}` in SoraNet handshake puzzle summary",
+                        w.last_key()
+                    )));
+                }
             }
             let _ = w.consume_comma_if_present()?;
         }
         w.expect_object_end()?;
-        Ok(summary)
+        Ok(Self {
+            memory_kib: memory_kib.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing memory_kib in SoraNet handshake puzzle summary".into(),
+                )
+            })?,
+            time_cost: time_cost.ok_or_else(|| {
+                NoritoError::Message("missing time_cost in SoraNet handshake puzzle summary".into())
+            })?,
+            lanes: lanes.ok_or_else(|| {
+                NoritoError::Message("missing lanes in SoraNet handshake puzzle summary".into())
+            })?,
+        })
     }
 }
 impl JsonDeserialize for SoranetHandshakePuzzleSummary {
@@ -2876,8 +2651,6 @@ impl SoranetHandshakePuzzleSummary {
 /// Partial update directive for Argon2 puzzle parameters.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SoranetHandshakePuzzleUpdate {
-    /// Toggle the puzzle requirement.
-    pub enabled: Option<bool>,
     /// Override memory cost (KiB).
     pub memory_kib: Option<u32>,
     /// Override time cost (iterations).
@@ -2896,11 +2669,6 @@ impl SoranetHandshakePuzzleUpdate {
                 out.push(',');
             }
         };
-        if let Some(enabled) = self.enabled {
-            emit(out);
-            out.push_str("\"enabled\":");
-            out.push_str(if enabled { "true" } else { "false" });
-        }
         if let Some(memory) = self.memory_kib {
             emit(out);
             out.push_str("\"memory_kib\":");
@@ -2923,11 +2691,9 @@ fn parse_soranet_puzzle_update(
     w: &mut TapeWalker<'_>,
 ) -> Result<SoranetHandshakePuzzleUpdate, NoritoError> {
     w.expect_object_start()?;
-    let mut enabled = None;
     let mut memory_kib = None;
     let mut time_cost = None;
     let mut lanes = None;
-    let kh_enabled = norito::json::key_hash_const("enabled");
     let kh_memory = norito::json::key_hash_const("memory_kib");
     let kh_time = norito::json::key_hash_const("time_cost");
     let kh_lanes = norito::json::key_hash_const("lanes");
@@ -2935,9 +2701,6 @@ fn parse_soranet_puzzle_update(
         let kh = w.read_key_hash()?;
         w.expect_colon_resync()?;
         match kh {
-            x if x == kh_enabled && w.last_key() == "enabled" => {
-                enabled = Some(w.parse_bool_inline()?);
-            }
             x if x == kh_memory && w.last_key() == "memory_kib" => {
                 memory_kib = Some(
                     u32::try_from(w.parse_u64_inline()?)
@@ -2956,13 +2719,17 @@ fn parse_soranet_puzzle_update(
                         .map_err(|_| NoritoError::Message("u32 overflow".into()))?,
                 );
             }
-            _ => w.skip_value()?,
+            _ => {
+                return Err(NoritoError::Message(format!(
+                    "unknown field `{}` in SoraNet handshake puzzle update",
+                    w.last_key()
+                )));
+            }
         }
         let _ = w.consume_comma_if_present()?;
     }
     w.expect_object_end()?;
     Ok(SoranetHandshakePuzzleUpdate {
-        enabled,
         memory_kib,
         time_cost,
         lanes,
@@ -2997,8 +2764,6 @@ pub struct SoranetHandshakeUpdate {
 /// Partial update DTO for `PoW` admission configuration.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SoranetHandshakePowUpdate {
-    /// Override the required flag.
-    pub required: Option<bool>,
     /// Override difficulty.
     pub difficulty: Option<u8>,
     /// Override future skew.
@@ -3017,7 +2782,6 @@ pub struct SoranetHandshakePowUpdate {
 impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
-        let mut required = None;
         let mut difficulty = None;
         let mut max_future_skew = None;
         let mut min_ticket_ttl = None;
@@ -3025,7 +2789,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
         let mut outbound_mint_capacity = None;
         let mut inbound_verify_capacity = None;
         let mut puzzle = None;
-        let kh_required = norito::json::key_hash_const("required");
         let kh_difficulty = norito::json::key_hash_const("difficulty");
         let kh_max_future_skew = norito::json::key_hash_const("max_future_skew_secs");
         let kh_min_ticket_ttl = norito::json::key_hash_const("min_ticket_ttl_secs");
@@ -3037,9 +2800,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
             match kh {
-                x if x == kh_required && w.last_key() == "required" => {
-                    required = Some(w.parse_bool_inline()?);
-                }
                 x if x == kh_difficulty && w.last_key() == "difficulty" => {
                     difficulty = Some(
                         u8::try_from(w.parse_u64_inline()?)
@@ -3072,20 +2832,48 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
                 x if x == kh_puzzle && w.last_key() == "puzzle" => {
                     puzzle = Some(SoranetHandshakePuzzleSummary::parse(w, arena)?);
                 }
-                _ => w.skip_value()?,
+                _ => {
+                    return Err(NoritoError::Message(format!(
+                        "unknown field `{}` in SoraNet handshake PoW summary",
+                        w.last_key()
+                    )));
+                }
             }
             let _ = w.consume_comma_if_present()?;
         }
         w.expect_object_end()?;
         Ok(Self {
-            required: required.unwrap_or(false),
-            difficulty: difficulty.unwrap_or(0),
-            max_future_skew_secs: max_future_skew.unwrap_or(0),
-            min_ticket_ttl_secs: min_ticket_ttl.unwrap_or(0),
-            ticket_ttl_secs: ticket_ttl.unwrap_or(0),
-            outbound_mint_capacity: outbound_mint_capacity.unwrap_or(0),
-            inbound_verify_capacity: inbound_verify_capacity.unwrap_or(0),
-            puzzle,
+            difficulty: difficulty.ok_or_else(|| {
+                NoritoError::Message("missing difficulty in SoraNet handshake PoW summary".into())
+            })?,
+            max_future_skew_secs: max_future_skew.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing max_future_skew_secs in SoraNet handshake PoW summary".into(),
+                )
+            })?,
+            min_ticket_ttl_secs: min_ticket_ttl.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing min_ticket_ttl_secs in SoraNet handshake PoW summary".into(),
+                )
+            })?,
+            ticket_ttl_secs: ticket_ttl.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing ticket_ttl_secs in SoraNet handshake PoW summary".into(),
+                )
+            })?,
+            outbound_mint_capacity: outbound_mint_capacity.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing outbound_mint_capacity in SoraNet handshake PoW summary".into(),
+                )
+            })?,
+            inbound_verify_capacity: inbound_verify_capacity.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing inbound_verify_capacity in SoraNet handshake PoW summary".into(),
+                )
+            })?,
+            puzzle: puzzle.ok_or_else(|| {
+                NoritoError::Message("missing puzzle: mandatory SoraNet puzzle summary".into())
+            })?,
         })
     }
 }
@@ -3098,7 +2886,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         let _ = arena;
         w.expect_object_start()?;
-        let mut required = None;
         let mut difficulty = None;
         let mut max_future_skew = None;
         let mut min_ticket_ttl = None;
@@ -3106,7 +2893,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
         let mut outbound_mint_capacity = None;
         let mut inbound_verify_capacity = None;
         let mut puzzle = None;
-        let kh_required = norito::json::key_hash_const("required");
         let kh_difficulty = norito::json::key_hash_const("difficulty");
         let kh_max_future_skew = norito::json::key_hash_const("max_future_skew_secs");
         let kh_min_ticket_ttl = norito::json::key_hash_const("min_ticket_ttl_secs");
@@ -3118,9 +2904,6 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
             match kh {
-                x if x == kh_required && w.last_key() == "required" => {
-                    required = Some(w.parse_bool_inline()?);
-                }
                 x if x == kh_difficulty && w.last_key() == "difficulty" => {
                     difficulty = Some(
                         u8::try_from(w.parse_u64_inline()?)
@@ -3153,13 +2936,17 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
                 x if x == kh_puzzle && w.last_key() == "puzzle" => {
                     puzzle = Some(parse_soranet_puzzle_update(w)?);
                 }
-                _ => w.skip_value()?,
+                _ => {
+                    return Err(NoritoError::Message(format!(
+                        "unknown field `{}` in SoraNet handshake PoW update",
+                        w.last_key()
+                    )));
+                }
             }
             let _ = w.consume_comma_if_present()?;
         }
         w.expect_object_end()?;
         Ok(Self {
-            required,
             difficulty,
             max_future_skew_secs: max_future_skew,
             min_ticket_ttl_secs: min_ticket_ttl,
@@ -3327,13 +3114,31 @@ impl<'a> FastFromJson<'a> for SoranetHandshakeSummary {
         }
         w.expect_object_end()?;
         Ok(Self {
-            descriptor_commit_hex: descriptor_commit_hex.unwrap_or_default(),
-            client_capabilities_hex: client_capabilities_hex.unwrap_or_default(),
-            relay_capabilities_hex: relay_capabilities_hex.unwrap_or_default(),
-            kem_id: kem_id.unwrap_or(0),
-            sig_id: sig_id.unwrap_or(0),
+            descriptor_commit_hex: descriptor_commit_hex.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing descriptor_commit_hex in SoraNet handshake summary".into(),
+                )
+            })?,
+            client_capabilities_hex: client_capabilities_hex.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing client_capabilities_hex in SoraNet handshake summary".into(),
+                )
+            })?,
+            relay_capabilities_hex: relay_capabilities_hex.ok_or_else(|| {
+                NoritoError::Message(
+                    "missing relay_capabilities_hex in SoraNet handshake summary".into(),
+                )
+            })?,
+            kem_id: kem_id.ok_or_else(|| {
+                NoritoError::Message("missing kem_id in SoraNet handshake summary".into())
+            })?,
+            sig_id: sig_id.ok_or_else(|| {
+                NoritoError::Message("missing sig_id in SoraNet handshake summary".into())
+            })?,
             resume_hash_hex,
-            pow: pow.unwrap_or_default(),
+            pow: pow.ok_or_else(|| {
+                NoritoError::Message("missing pow in SoraNet handshake summary".into())
+            })?,
         })
     }
 }
@@ -3372,11 +3177,46 @@ mod test {
             parse_via_fast(parser)
         }
     }
+    fn complete_soranet_puzzle_summary_value() -> json::Value {
+        norito::json!({
+            "memory_kib": 65_536,
+            "time_cost": 2,
+            "lanes": 1,
+        })
+    }
+    fn complete_soranet_pow_summary_value() -> json::Value {
+        norito::json!({
+            "difficulty": 6,
+            "max_future_skew_secs": 300,
+            "min_ticket_ttl_secs": 30,
+            "ticket_ttl_secs": 300,
+            "outbound_mint_capacity": 3,
+            "inbound_verify_capacity": 3,
+            "puzzle": (complete_soranet_puzzle_summary_value()),
+        })
+    }
+    fn complete_soranet_handshake_summary_value() -> json::Value {
+        norito::json!({
+            "descriptor_commit_hex": "00",
+            "client_capabilities_hex": "00",
+            "relay_capabilities_hex": "00",
+            "kem_id": 1,
+            "sig_id": 1,
+            "resume_hash_hex": null,
+            "pow": (complete_soranet_pow_summary_value()),
+        })
+    }
+    fn json_without_object_field(mut value: json::Value, field: &str) -> String {
+        let removed = value
+            .as_object_mut()
+            .expect("test JSON value must be an object")
+            .remove(field);
+        assert!(removed.is_some(), "test JSON object is missing `{field}`");
+        json::to_json(&value).expect("serialize test JSON value")
+    }
     #[test]
     #[allow(clippy::too_many_lines)]
     fn snapshot_serialized_form() {
-        let soranet_streaming =
-            StreamingTransportSummary::from(&base::StreamingSoranet::from_defaults());
         let soranet_vpn = SoranetVpnSummary::from(&base::SoranetVpn::default());
         let value = ConfigGetDTO {
             public_key: KeyPair::try_from_seed(vec![1, 2, 3], <_>::default())
@@ -3412,18 +3252,17 @@ mod test {
                     sig_id: 1,
                     resume_hash_hex: None,
                     pow: SoranetHandshakePowSummary {
-                        required: true,
                         difficulty: iroha_crypto::soranet::puzzle::DEFAULT_DIFFICULTY,
                         max_future_skew_secs: 300,
                         min_ticket_ttl_secs: 30,
                         ticket_ttl_secs: 300,
                         outbound_mint_capacity: 3,
                         inbound_verify_capacity: 3,
-                        puzzle: Some(SoranetHandshakePuzzleSummary {
+                        puzzle: SoranetHandshakePuzzleSummary {
                             memory_kib: 64 * 1024,
                             time_cost: 2,
                             lanes: 1,
-                        }),
+                        },
                     },
                 },
                 soranet_privacy: SoranetPrivacySummary {
@@ -3463,7 +3302,6 @@ mod test {
                     require_mtls: true,
                     canary_allowlist_size: 2,
                 },
-                streaming: soranet_streaming,
             },
             nexus: Nexus {
                 axt: Axt {
@@ -3509,14 +3347,17 @@ mod test {
                 sig_id: Some(11),
                 resume_hash_hex: Some(ResumeHashDirective::Set("deadbeef".to_string())),
                 pow: Some(SoranetHandshakePowUpdate {
-                    required: Some(true),
                     difficulty: Some(4),
                     max_future_skew_secs: Some(900),
                     min_ticket_ttl_secs: Some(45),
                     ticket_ttl_secs: Some(120),
                     outbound_mint_capacity: Some(2),
                     inbound_verify_capacity: Some(3),
-                    puzzle: None,
+                    puzzle: Some(SoranetHandshakePuzzleUpdate {
+                        memory_kib: Some(32 * 1024),
+                        time_cost: Some(2),
+                        lanes: Some(1),
+                    }),
                 }),
             }),
             transport: None,
@@ -3537,16 +3378,188 @@ mod test {
             Some(ResumeHashDirective::Set("deadbeef".to_string()))
         );
         let pow = handshake.pow.expect("pow update should be present");
-        assert_eq!(pow.required, Some(true));
         assert_eq!(pow.difficulty, Some(4));
         assert_eq!(pow.max_future_skew_secs, Some(900));
         assert_eq!(pow.min_ticket_ttl_secs, Some(45));
         assert_eq!(pow.ticket_ttl_secs, Some(120));
         assert_eq!(pow.outbound_mint_capacity, Some(2));
         assert_eq!(pow.inbound_verify_capacity, Some(3));
+        let puzzle = pow.puzzle.expect("puzzle update should roundtrip");
+        assert_eq!(puzzle.memory_kib, Some(32 * 1024));
+        assert_eq!(puzzle.time_cost, Some(2));
+        assert_eq!(puzzle.lanes, Some(1));
         let network = parsed.network.expect("network update should roundtrip");
         assert_eq!(network.require_sm_handshake_match, Some(false));
         assert_eq!(network.require_sm_openssl_preview_match, Some(true));
+    }
+    #[test]
+    fn network_snapshot_requires_soranet_handshake() {
+        let payload = norito::json!({
+            "chain_discriminant": 0,
+            "block_gossip_size": 10,
+            "block_gossip_period_ms": 5_000,
+            "transaction_gossip_size": 512,
+            "transaction_gossip_period_ms": 1_000,
+            "transaction_gossip_resend_ticks": 1,
+        });
+        let payload = json::to_json(&payload).expect("serialize network snapshot");
+
+        let error = json::from_json::<Network>(&payload)
+            .expect_err("network snapshot must include SoraNet handshake summary");
+
+        assert!(
+            error
+                .to_string()
+                .contains("missing network.soranet_handshake"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn soranet_handshake_snapshot_requires_pow() {
+        let payload = json_without_object_field(complete_soranet_handshake_summary_value(), "pow");
+
+        let error = json::from_json::<SoranetHandshakeSummary>(&payload)
+            .expect_err("SoraNet handshake snapshot must include PoW summary");
+
+        assert!(
+            error
+                .to_string()
+                .contains("missing pow in SoraNet handshake summary"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn soranet_handshake_summary_requires_every_non_null_scalar_field() {
+        for field in [
+            "descriptor_commit_hex",
+            "client_capabilities_hex",
+            "relay_capabilities_hex",
+            "kem_id",
+            "sig_id",
+        ] {
+            let payload =
+                json_without_object_field(complete_soranet_handshake_summary_value(), field);
+
+            let error = json::from_json::<SoranetHandshakeSummary>(&payload)
+                .expect_err("incomplete SoraNet handshake summary must be rejected");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("missing {field} in SoraNet handshake summary")),
+                "unexpected error for missing `{field}`: {error}"
+            );
+        }
+    }
+    #[test]
+    fn soranet_pow_summary_requires_every_scalar_field() {
+        for field in [
+            "difficulty",
+            "max_future_skew_secs",
+            "min_ticket_ttl_secs",
+            "ticket_ttl_secs",
+            "outbound_mint_capacity",
+            "inbound_verify_capacity",
+        ] {
+            let payload = json_without_object_field(complete_soranet_pow_summary_value(), field);
+
+            let error = json::from_json::<SoranetHandshakePowSummary>(&payload)
+                .expect_err("incomplete SoraNet PoW summary must be rejected");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("missing {field} in SoraNet handshake PoW summary")),
+                "unexpected error for missing `{field}`: {error}"
+            );
+        }
+    }
+    #[test]
+    fn soranet_puzzle_summary_requires_every_field() {
+        for field in ["memory_kib", "time_cost", "lanes"] {
+            let payload = json_without_object_field(complete_soranet_puzzle_summary_value(), field);
+
+            let error = json::from_json::<SoranetHandshakePuzzleSummary>(&payload)
+                .expect_err("incomplete SoraNet puzzle summary must be rejected");
+
+            assert!(
+                error.to_string().contains(&format!(
+                    "missing {field} in SoraNet handshake puzzle summary"
+                )),
+                "unexpected error for missing `{field}`: {error}"
+            );
+        }
+    }
+    #[test]
+    fn soranet_pow_update_rejects_retired_required_field() {
+        let error = norito::json::from_json::<SoranetHandshakePowUpdate>(r#"{"required":false}"#)
+            .expect_err("the retired PoW switch must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `required` in SoraNet handshake PoW update"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn soranet_puzzle_update_rejects_retired_enabled_field() {
+        let error = norito::json::from_json::<SoranetHandshakePuzzleUpdate>(r#"{"enabled":false}"#)
+            .expect_err("the retired puzzle switch must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `enabled` in SoraNet handshake puzzle update"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn soranet_pow_summary_rejects_retired_required_field() {
+        let error = norito::json::from_json::<SoranetHandshakePowSummary>(r#"{"required":true}"#)
+            .expect_err("the retired PoW summary shape must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `required` in SoraNet handshake PoW summary"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn soranet_puzzle_summary_rejects_retired_enabled_field() {
+        let error = norito::json::from_json::<SoranetHandshakePuzzleSummary>(
+            r#"{"memory_kib":65536,"time_cost":2,"lanes":1,"enabled":true}"#,
+        )
+        .expect_err("the puzzle summary must reject unknown fields");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `enabled` in SoraNet handshake puzzle summary"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn mandatory_soranet_pow_is_exposed_in_client_summary() {
+        let pow = base::SoranetPow::default();
+
+        let summary = SoranetHandshakePowSummary::from(&pow);
+
+        let puzzle = summary.puzzle;
+        assert_eq!(puzzle.memory_kib, pow.puzzle.memory_kib.get());
+        assert_eq!(puzzle.time_cost, pow.puzzle.time_cost.get());
+        assert_eq!(puzzle.lanes, pow.puzzle.lanes.get());
+    }
+    #[test]
+    fn soranet_pow_summary_requires_puzzle_parameters() {
+        let payload = json_without_object_field(complete_soranet_pow_summary_value(), "puzzle");
+        let error = norito::json::from_json::<SoranetHandshakePowSummary>(&payload)
+            .expect_err("mandatory puzzle summary must be present");
+        assert!(
+            error.to_string().contains("missing puzzle"),
+            "unexpected error: {error}"
+        );
     }
     #[test]
     fn config_update_rejects_confidential_gas_override() {

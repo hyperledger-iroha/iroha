@@ -114,6 +114,145 @@ pub(crate) struct StatefulAdmission {
     pub(crate) sequence_to_commit: Option<u64>,
     /// Exact signed validation-fee value to credit only after complete execution succeeds.
     pub(crate) validation_fee_credit: Option<crate::validation_fee::ValidationFeeCredit>,
+    /// Consensus-owned faucet claim record to persist only after complete execution succeeds.
+    pub(crate) faucet_claim_to_commit: Option<(StatePath, Vec<u8>)>,
+}
+
+const FAUCET_CLAIM_CONSUMED_STATE_PREFIX_V1: &str = "faucet_claim_consumed_v1/";
+const FAUCET_CLAIM_CONSUMED_KEY_DOMAIN_V1: &[u8] = b"iroha.faucet.claim.consumed.key.v1\0";
+
+#[derive(Debug, Clone, norito::codec::Decode, norito::codec::Encode)]
+struct FaucetClaimConsumptionRecordV1 {
+    marker_version: u64,
+    authority: AccountId,
+    semantic_hash: [u8; 32],
+    first_transaction_hash: HashOf<SignedTransaction>,
+}
+
+/// Parse the signature-bound consensus faucet marker and derive its authority-scoped state key.
+pub(crate) fn faucet_claim_consumption_marker(
+    tx: &SignedTransaction,
+) -> Result<Option<(StatePath, [u8; 32])>, ValidationFail> {
+    let Some(version) = tx
+        .metadata()
+        .get(iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY)
+    else {
+        return Ok(None);
+    };
+    let version = version.clone().try_into_any_norito::<u64>().map_err(|_| {
+        ValidationFail::NotPermitted(
+            "faucet claim marker version must be an unsigned integer".to_owned(),
+        )
+    })?;
+    if version != iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1 {
+        return Err(ValidationFail::NotPermitted(format!(
+            "unsupported faucet claim marker version {version}"
+        )));
+    }
+    let operation = tx
+        .metadata()
+        .get(iroha_data_model::transaction::PREPARED_OPERATION_METADATA_KEY)
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "faucet claim marker requires prepared-operation metadata".to_owned(),
+            )
+        })?
+        .clone()
+        .try_into_any_norito::<String>()
+        .map_err(|_| {
+            ValidationFail::NotPermitted(
+                "faucet claim prepared-operation metadata must be a string".to_owned(),
+            )
+        })?;
+    if operation != iroha_data_model::transaction::PREPARED_FAUCET_OPERATION {
+        return Err(ValidationFail::NotPermitted(
+            "faucet claim marker belongs to a non-faucet prepared operation".to_owned(),
+        ));
+    }
+    let semantic_hash = tx
+        .metadata()
+        .get(iroha_data_model::transaction::PREPARED_SEMANTIC_HASH_METADATA_KEY)
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "faucet claim marker requires semantic-hash metadata".to_owned(),
+            )
+        })?
+        .clone()
+        .try_into_any_norito::<String>()
+        .map_err(|_| {
+            ValidationFail::NotPermitted(
+                "faucet claim semantic-hash metadata must be a string".to_owned(),
+            )
+        })?;
+    if semantic_hash.len() != Hash::LENGTH * 2
+        || !semantic_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(ValidationFail::NotPermitted(
+            "faucet claim semantic hash must be canonical lowercase hexadecimal".to_owned(),
+        ));
+    }
+    let semantic_hash: [u8; 32] = hex::decode(semantic_hash)
+        .map_err(|_| {
+            ValidationFail::NotPermitted("faucet claim semantic hash is malformed".to_owned())
+        })?
+        .try_into()
+        .map_err(|_| {
+            ValidationFail::NotPermitted("faucet claim semantic hash is malformed".to_owned())
+        })?;
+    let authority = norito::codec::Encode::encode(tx.authority());
+    let key_hash = Hash::new_from_chunks(&[
+        FAUCET_CLAIM_CONSUMED_KEY_DOMAIN_V1,
+        authority.as_slice(),
+        semantic_hash.as_slice(),
+    ]);
+    let path = format!(
+        "{FAUCET_CLAIM_CONSUMED_STATE_PREFIX_V1}{}",
+        hex::encode(key_hash.as_ref())
+    )
+    .parse()
+    .expect("canonical faucet claim key is a valid state path");
+    Ok(Some((path, semantic_hash)))
+}
+
+fn staged_faucet_claim_consumption(
+    tx: &SignedTransaction,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<Option<(StatePath, Vec<u8>)>, ValidationFail> {
+    let Some((path, semantic_hash)) = faucet_claim_consumption_marker(tx)? else {
+        return Ok(None);
+    };
+    if state_transaction
+        .world
+        .smart_contract_state
+        .get(&path)
+        .is_some()
+    {
+        return Err(ValidationFail::NotPermitted(
+            "faucet claim was already consumed".to_owned(),
+        ));
+    }
+    let record = FaucetClaimConsumptionRecordV1 {
+        marker_version: iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1,
+        authority: tx.authority().clone(),
+        semantic_hash,
+        first_transaction_hash: tx.hash(),
+    };
+    Ok(Some((path, norito::codec::Encode::encode(&record))))
+}
+
+/// Commit a previously admitted faucet claim into the same transactional state overlay.
+pub(crate) fn commit_faucet_claim_consumption(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    admission: &StatefulAdmission,
+) {
+    if let Some((path, record)) = admission.faucet_claim_to_commit.as_ref() {
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(path.clone(), record.clone());
+    }
 }
 #[derive(Debug, Clone, norito::codec::Decode, norito::codec::Encode)]
 struct PendingSealedTransactionCommitment {
@@ -2754,11 +2893,14 @@ impl StateBlock<'_> {
             telemetry_handle,
             &lane_assignment,
         )?;
+        let faucet_claim_to_commit = staged_faucet_claim_consumption(tx, state_transaction)
+            .map_err(TransactionRejectionReason::Validation)?;
         Ok(StatefulAdmission {
             authority,
             allow_unregistered_authority,
             sequence_to_commit,
             validation_fee_credit,
+            faucet_claim_to_commit,
         })
     }
     /// Validate/apply a transaction atomically, returning its entrypoint hash and execution result.
@@ -2983,7 +3125,7 @@ impl StateBlock<'_> {
         }
         let admission =
             Self::validate_stateful_admission(tx.as_ref(), state_transaction, routing_decision)?;
-        let authority = admission.authority;
+        let authority = admission.authority.clone();
         let allow_unregistered_authority = admission.allow_unregistered_authority;
         match tx.as_ref().instructions() {
             Executable::ContractCall(call) => {
@@ -3059,6 +3201,7 @@ impl StateBlock<'_> {
                 .tx_sequences
                 .insert(authority.clone(), seq);
         }
+        commit_faucet_claim_consumption(state_transaction, &admission);
         Ok(trigger_sequence)
     }
     fn validate_sealed_transaction_commitment(
@@ -9254,6 +9397,25 @@ pub mod tests {
         }
     }
     #[test]
+    fn validate_ivm_cache_retention_limit_does_not_change_admission() {
+        let baseline = ivm::ivm_cache::cache_limits();
+        let _cache_limits = ivm::ivm_cache::CacheLimitsGuard::new(baseline);
+        let mut fixture = IvmAdmissionFixture::new();
+        let mut pipeline = fixture.state.pipeline.clone();
+        pipeline.ivm_cache_max_decoded_ops = 1;
+        pipeline.ivm_max_decoded_instructions = 4;
+        pipeline.ivm_max_decoded_bytes =
+            iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES;
+        fixture.state.set_pipeline(pipeline);
+
+        let result =
+            fixture.validate_program(minimal_ivm_program_with_instruction_count(1, 1_000, 4));
+        assert!(
+            result.is_ok(),
+            "a process-local cache retention ceiling must not reject valid bytecode: {result:?}"
+        );
+    }
+    #[test]
     fn validate_ivm_decoded_byte_limit_enforced() {
         let mut fixture = IvmAdmissionFixture::new();
         let mut pipeline = fixture.state.pipeline.clone();
@@ -12060,6 +12222,226 @@ pub mod tests {
             .clone()
             .expect("descriptor-routed lane transaction should pass");
     }
+    fn faucet_marker_metadata(semantic_hash: &str) -> Metadata {
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
+                .parse()
+                .expect("marker version metadata key"),
+            Json::new(iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1),
+        );
+        metadata.insert(
+            iroha_data_model::transaction::PREPARED_OPERATION_METADATA_KEY
+                .parse()
+                .expect("operation metadata key"),
+            Json::new(iroha_data_model::transaction::PREPARED_FAUCET_OPERATION.to_owned()),
+        );
+        metadata.insert(
+            iroha_data_model::transaction::PREPARED_SEMANTIC_HASH_METADATA_KEY
+                .parse()
+                .expect("semantic hash metadata key"),
+            Json::new(semantic_hash.to_owned()),
+        );
+        metadata
+    }
+
+    fn marked_test_transaction(
+        authority: AccountId,
+        keypair: &KeyPair,
+        semantic_hash: &str,
+        instruction: InstructionBox,
+    ) -> SignedTransaction {
+        TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(faucet_marker_metadata(semantic_hash))
+        .with_instructions([instruction])
+        .sign(keypair.private_key())
+    }
+
+    #[test]
+    fn faucet_claim_marker_is_authority_scoped_and_consumed_once() {
+        let chain: ChainId = "faucet-claim-consumed-once".parse().expect("chain id");
+        let (faucet, faucet_keypair) = gen_account_in("faucet");
+        let (other, other_keypair) = gen_account_in("other-faucet");
+        let world = World::with(
+            [],
+            [
+                Account::new(faucet.clone()).build(&faucet),
+                Account::new(other.clone()).build(&other),
+            ],
+            [],
+        );
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain,
+        );
+        let semantic_hash = "ab".repeat(Hash::LENGTH);
+        let first = marked_test_transaction(
+            faucet.clone(),
+            &faucet_keypair,
+            &semantic_hash,
+            Log::new(Level::INFO, "first faucet transfer fixture".to_owned()).into(),
+        );
+        let marker_path = faucet_claim_consumption_marker(&first)
+            .expect("valid marker")
+            .expect("marker present")
+            .0;
+        let first_hash = first.hash();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_, first_result) = block.validate_transaction(
+            AcceptedTransaction::new_unchecked(Cow::Owned(first)),
+            &mut ivm_cache,
+        );
+        first_result.expect("first authority-scoped claim succeeds");
+        assert!(
+            block.world.smart_contract_state.get(&marker_path).is_some(),
+            "successful execution persists its claim marker"
+        );
+        block.commit().expect("commit first faucet marker block");
+        assert!(
+            state
+                .view()
+                .world()
+                .smart_contract_state
+                .get(&marker_path)
+                .is_some(),
+            "claim marker must survive the transaction overlay commit"
+        );
+        let snapshot = norito::json::to_value(&state).expect("serialize marker-bearing state");
+        let restarted = crate::state::deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json(snapshot)
+        .expect("restore marker-bearing state");
+        assert!(
+            restarted
+                .view()
+                .world()
+                .smart_contract_state
+                .get(&marker_path)
+                .is_some(),
+            "claim marker must survive snapshot restore"
+        );
+        let replay_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut replay_block = restarted.block(replay_header);
+
+        let duplicate = marked_test_transaction(
+            faucet.clone(),
+            &faucet_keypair,
+            &semantic_hash,
+            Log::new(Level::INFO, "different signed transaction".to_owned()).into(),
+        );
+        assert_ne!(duplicate.hash(), first_hash);
+        let (_, duplicate_result) = replay_block.validate_transaction(
+            AcceptedTransaction::new_unchecked(Cow::Owned(duplicate)),
+            &mut ivm_cache,
+        );
+        assert!(
+            matches!(
+                &duplicate_result,
+                Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                    message
+                ))) if message == "faucet claim was already consumed"
+            ),
+            "same authority and semantic claim must fail deterministically: {duplicate_result:?}"
+        );
+
+        let other_tx = marked_test_transaction(
+            other,
+            &other_keypair,
+            &semantic_hash,
+            Log::new(Level::INFO, "independent faucet authority".to_owned()).into(),
+        );
+        let other_path = faucet_claim_consumption_marker(&other_tx)
+            .expect("valid other marker")
+            .expect("other marker present")
+            .0;
+        assert_ne!(marker_path, other_path);
+        let (_, other_result) = replay_block.validate_transaction(
+            AcceptedTransaction::new_unchecked(Cow::Owned(other_tx)),
+            &mut ivm_cache,
+        );
+        other_result.expect("another authority cannot be pre-consumed");
+    }
+
+    #[test]
+    fn failed_faucet_transaction_does_not_burn_claim_marker() {
+        let chain: ChainId = "failed-faucet-claim-rolls-back".parse().expect("chain id");
+        let (faucet, faucet_keypair) = gen_account_in("faucet");
+        let world = World::with([], [Account::new(faucet.clone()).build(&faucet)], []);
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain,
+        );
+        let semantic_hash = "cd".repeat(Hash::LENGTH);
+        let failing = marked_test_transaction(
+            faucet.clone(),
+            &faucet_keypair,
+            &semantic_hash,
+            CustomInstruction::new(Json::new(())).into(),
+        );
+        let marker_path = faucet_claim_consumption_marker(&failing)
+            .expect("valid marker")
+            .expect("marker present")
+            .0;
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_, failure) = block.validate_transaction(
+            AcceptedTransaction::new_unchecked(Cow::Owned(failing)),
+            &mut ivm_cache,
+        );
+        assert!(failure.is_err(), "custom instruction fixture must fail");
+        assert!(
+            block.world.smart_contract_state.get(&marker_path).is_none(),
+            "failed execution must drop its staged marker"
+        );
+
+        let retry = marked_test_transaction(
+            faucet,
+            &faucet_keypair,
+            &semantic_hash,
+            Log::new(Level::INFO, "corrected faucet transfer fixture".to_owned()).into(),
+        );
+        let (_, retry_result) = block.validate_transaction(
+            AcceptedTransaction::new_unchecked(Cow::Owned(retry)),
+            &mut ivm_cache,
+        );
+        retry_result.expect("corrected transaction consumes the unburned claim");
+        assert!(block.world.smart_contract_state.get(&marker_path).is_some());
+    }
+
+    #[test]
+    fn faucet_claim_marker_metadata_fails_closed() {
+        let (authority, keypair) = gen_account_in("faucet");
+        let mut malformed = faucet_marker_metadata(&"AB".repeat(Hash::LENGTH));
+        let tx = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(core::mem::take(&mut malformed))
+        .with_instructions([Log::new(Level::INFO, "malformed marker".to_owned())])
+        .sign(keypair.private_key());
+        assert!(matches!(
+            faucet_claim_consumption_marker(&tx),
+            Err(ValidationFail::NotPermitted(message))
+                if message.contains("canonical lowercase hexadecimal")
+        ));
+    }
+
     include!("tx/lane_manifest_privacy_registry_test.rs");
     /// Lightweight end-to-end harness for exercising transaction, trigger, and block flow in tests.
     pub struct Sandbox {

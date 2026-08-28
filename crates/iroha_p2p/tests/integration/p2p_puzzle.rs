@@ -32,7 +32,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for EmptyMsg {
     }
 }
 fn puzzle_handshake(difficulty: u8, memory_kib: u32) -> ActualSoranetHandshake {
-    let mut handshake = super::mandatory_test_soranet_handshake();
+    let mut handshake = super::low_cost_test_soranet_handshake();
     handshake.pow.difficulty = difficulty;
     handshake.pow.max_future_skew = Duration::from_secs(300);
     handshake.pow.min_ticket_ttl = Duration::from_secs(60);
@@ -84,7 +84,7 @@ async fn assert_exact_peers_connect(
     .expect("online peers channel closed while waiting for required-puzzle handshake");
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn matching_required_puzzle_parameters_connect() {
+async fn matching_mandatory_puzzle_parameters_connect() {
     if super::skip_if_no_tcp_bind() {
         return;
     }
@@ -93,15 +93,15 @@ async fn matching_required_puzzle_parameters_connect() {
     let addresses = std::array::from_fn::<_, 4, _>(|_| socket_addr!(127.0.0.1: {next_port()}));
     // Exercise the real Argon2 admission path with a small but valid memory
     // cost so the positive case remains reliable on loaded CI workers.
-    let handshake = puzzle_handshake(1, 4 * 1024);
-    assert_eq!(handshake.pow.puzzle.memory_kib.get(), 4 * 1024);
     let shutdown = ShutdownSignal::new();
     let mut networks = Vec::with_capacity(key_pairs.len());
     let mut children = Vec::with_capacity(key_pairs.len());
     for (index, (key_pair, address)) in key_pairs.iter().zip(&addresses).enumerate() {
+        let handshake = puzzle_handshake(1, 4 * 1024);
+        assert_eq!(handshake.pow.puzzle.memory_kib.get(), 4 * 1024);
         let (network, child) = NetworkHandle::<EmptyMsg>::start(
             super::p2p_identity_keys(key_pair.clone()),
-            config(address.clone(), handshake.clone()),
+            config(address.clone(), handshake),
             chain,
             None,
             None,

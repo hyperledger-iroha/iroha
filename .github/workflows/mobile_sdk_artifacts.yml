@@ -12,6 +12,8 @@ on:
       - "scripts/render_norito_bridge_podspec.py"
       - "scripts/tests/render_norito_bridge_podspec_test.py"
       - "scripts/tests/norito_bridge_source_seal_test.py"
+      - "scripts/norito_bridge_apple_slice_handoff.py"
+      - "scripts/tests/norito_bridge_apple_slice_handoff_test.py"
       - "scripts/tests/package_mobile_sdk_artifacts_test.py"
       - "scripts/update_norito_bridge_swift_pins.py"
       - "scripts/tests/update_norito_bridge_swift_pins_test.py"
@@ -39,6 +41,8 @@ on:
       - "scripts/deploy_localnet.sh"
       - "scripts/tests/deploy_localnet_test.py"
       - "scripts/package_mobile_sdk_artifacts.sh"
+      - "scripts/kagemusha_mobile_production_authorization.py"
+      - "scripts/tests/kagemusha_mobile_production_authorization_test.py"
       - "scripts/check_sorafs_release_automation.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
       - "IrohaSwift/**"
@@ -70,9 +74,9 @@ on:
       - "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json"
       - "integration_tests/tests/native_escrow.rs"
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
-      - "scripts/check_native_sdk_abi22_artifact.py"
+      - "scripts/check_native_sdk_abi23_artifact.py"
       - "scripts/compute_workspace_source_manifest.py"
-      - "scripts/tests/check_native_sdk_abi22_artifact_test.py"
+      - "scripts/tests/check_native_sdk_abi23_artifact_test.py"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "roadmap.md"
       - "specs/sorafs/v1_closure_ledger.md"
@@ -89,6 +93,14 @@ on:
         description: "Artifact version override; defaults to tag, PR number, or commit."
         required: false
         type: string
+      promotion_run_id:
+        description: "Protected Kagemusha promotion run id; requires its exact attempt."
+        required: false
+        type: string
+      promotion_run_attempt:
+        description: "Protected Kagemusha promotion run attempt; requires its exact run id."
+        required: false
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -102,10 +114,6 @@ env:
   ANDROID_PLATFORM_PACKAGE: platforms;android-35
   ANDROID_BUILD_TOOLS_PACKAGE: build-tools;35.0.0
   ANDROID_NDK_VERSION: 28.0.12674087
-  # TODO: enable each platform only after its own protected, source-bound
-  # Kagemusha promotion receipt is authenticated by this workflow.
-  APPLE_PRIVACY_PRODUCTION_ENABLED: "false"
-  ANDROID_PRIVACY_PRODUCTION_ENABLED: "false"
 
 jobs:
   checker-self-test:
@@ -146,13 +154,15 @@ jobs:
       - name: Shell syntax
         run: bash -n ci/check_kagemusha_candidate_android_lab.sh ci/check_kagemusha_jvm_native_bridge.sh ci/check_swift_pod_bridge.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/check_swift_pod_bridge.sh scripts/deploy_localnet.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh scripts/tests/mobile_sdk_python312_contract.sh
       - name: Python syntax
-        run: PYTHONPYCACHEPREFIX="$RUNNER_TEMP/mobile-sdk-pycache" python3 -I -S -B -m py_compile scripts/archive_norito_xcframework.py scripts/tests/archive_norito_xcframework_test.py scripts/render_norito_bridge_podspec.py scripts/tests/render_norito_bridge_podspec_test.py scripts/tests/norito_bridge_source_seal_test.py scripts/tests/package_mobile_sdk_artifacts_test.py scripts/update_norito_bridge_swift_pins.py scripts/tests/update_norito_bridge_swift_pins_test.py scripts/validate_norito_bridge_xcframework.py scripts/tests/validate_norito_bridge_xcframework_test.py scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/check_native_sdk_abi22_artifact.py scripts/tests/check_native_sdk_abi22_artifact_test.py scripts/exec_with_file_lock.py scripts/tests/exec_with_file_lock_test.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py
+        run: PYTHONPYCACHEPREFIX="$RUNNER_TEMP/mobile-sdk-pycache" python3 -I -S -B -m py_compile scripts/archive_norito_xcframework.py scripts/tests/archive_norito_xcframework_test.py scripts/render_norito_bridge_podspec.py scripts/tests/render_norito_bridge_podspec_test.py scripts/tests/norito_bridge_source_seal_test.py scripts/norito_bridge_apple_slice_handoff.py scripts/tests/norito_bridge_apple_slice_handoff_test.py scripts/tests/package_mobile_sdk_artifacts_test.py scripts/update_norito_bridge_swift_pins.py scripts/tests/update_norito_bridge_swift_pins_test.py scripts/validate_norito_bridge_xcframework.py scripts/tests/validate_norito_bridge_xcframework_test.py scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/check_native_sdk_abi23_artifact.py scripts/tests/check_native_sdk_abi23_artifact_test.py scripts/exec_with_file_lock.py scripts/tests/exec_with_file_lock_test.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py scripts/kagemusha_mobile_production_authorization.py scripts/tests/kagemusha_mobile_production_authorization_test.py
       - name: Deterministic NoritoBridge archive owner fixtures
         run: python3 -I -S -B scripts/tests/archive_norito_xcframework_test.py
       - name: NoritoBridge CocoaPods spec renderer fixtures
         run: python3 -I -S -B scripts/tests/render_norito_bridge_podspec_test.py
       - name: NoritoBridge source seal fixtures
         run: python3 -I -S -B scripts/tests/norito_bridge_source_seal_test.py
+      - name: NoritoBridge Apple slice handoff fixtures
+        run: python3 -I -S -B scripts/tests/norito_bridge_apple_slice_handoff_test.py
       - name: Atomic mobile SDK package publisher fixtures
         run: python3 -I -S -B scripts/tests/package_mobile_sdk_artifacts_test.py
       - name: NoritoBridge Swift pin owner fixtures
@@ -162,9 +172,11 @@ jobs:
       - name: Shared output lock fixtures
         run: python3 -I -S -B scripts/tests/exec_with_file_lock_test.py
       - name: Host native ABI-23 artifact checker fixtures
-        run: python3 -B -m pytest -q scripts/tests/check_native_sdk_abi22_artifact_test.py
+        run: python3 -B -m pytest -q scripts/tests/check_native_sdk_abi23_artifact_test.py
       - name: Android app native archive authenticator fixtures
         run: python3 -I -B scripts/tests/check_android_app_native_archive_test.py
+      - name: Kagemusha mobile production authorization fixtures
+        run: python3 -I -S -B scripts/tests/kagemusha_mobile_production_authorization_test.py
       - name: Kotlin production reflection guard
         run: scripts/check_kotlin_no_reflection.sh
       - name: Candidate Android lab isolation contract
@@ -174,13 +186,122 @@ jobs:
       - name: Mobile Python 3.12 contract
         run: bash scripts/tests/mobile_sdk_python312_contract.sh
 
-  apple-mobile-sdk:
+  authorize-mobile-production:
     needs: checker-self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      production: ${{ steps.resolve.outputs.production }}
+      promotion_run_id: ${{ steps.resolve.outputs.promotion_run_id }}
+      promotion_run_attempt: ${{ steps.resolve.outputs.promotion_run_attempt }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Resolve one exact protected promotion run
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_PROMOTION_RUN_ID: ${{ inputs.promotion_run_id }}
+          REQUESTED_PROMOTION_RUN_ATTEMPT: ${{ inputs.promotion_run_attempt }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -Eeuo pipefail
+          echo "production=false" >> "$GITHUB_OUTPUT"
+          release_version="$(<IrohaSwift/VERSION)"
+          [[ "$release_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          release_tag="v${release_version}"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          if [[ -n "$REQUESTED_PROMOTION_RUN_ID" || -n "$REQUESTED_PROMOTION_RUN_ATTEMPT" ]]; then
+            [[ "$REQUESTED_PROMOTION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$REQUESTED_PROMOTION_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+            if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$release_tag" ]]; then
+              echo "an authorized manual build must use the canonical release tag version" >&2
+              exit 1
+            fi
+            promotion_run_id="$REQUESTED_PROMOTION_RUN_ID"
+            promotion_run_attempt="$REQUESTED_PROMOTION_RUN_ATTEMPT"
+          elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            runs="$RUNNER_TEMP/kagemusha-promotion-runs.json"
+            gh api --method GET \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/promote_kagemusha_v4.yml/runs" \
+              -f branch=main -f event=workflow_dispatch -f status=success -f per_page=100 \
+              > "$runs"
+            read -r promotion_run_id promotion_run_attempt < <(
+              python3 -I -S -B - "$runs" "$GITHUB_SHA" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          matches = sorted(
+              (
+                  (run.get("id"), run.get("run_attempt"))
+                  for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == sys.argv[2]
+                  and run.get("head_branch") == "main"
+                  and run.get("event") == "workflow_dispatch"
+                  and run.get("status") == "completed"
+                  and run.get("conclusion") == "success"
+                  and run.get("path") == ".github/workflows/promote_kagemusha_v4.yml"
+              ),
+              reverse=True,
+          )
+          if not matches or type(matches[0][0]) is not int or type(matches[0][1]) is not int:
+              raise SystemExit("no successful protected promotion run matches this release commit")
+          print(*matches[0])
+          PY
+            )
+          else
+            exit 0
+          fi
+          run_metadata="$RUNNER_TEMP/kagemusha-promotion-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$promotion_run_id" > "$run_metadata"
+          python3 -I -S -B - \
+            "$run_metadata" "$promotion_run_id" "$promotion_run_attempt" "$GITHUB_SHA" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          run = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected = {
+              "id": int(sys.argv[2]),
+              "run_attempt": int(sys.argv[3]),
+              "head_sha": sys.argv[4],
+              "head_branch": "main",
+              "event": "workflow_dispatch",
+              "status": "completed",
+              "conclusion": "success",
+              "path": ".github/workflows/promote_kagemusha_v4.yml",
+          }
+          if any(run.get(field) != value for field, value in expected.items()):
+              raise SystemExit("selected promotion run metadata does not match this release")
+          PY
+          echo "production=true" >> "$GITHUB_OUTPUT"
+          echo "promotion_run_id=$promotion_run_id" >> "$GITHUB_OUTPUT"
+          echo "promotion_run_attempt=$promotion_run_attempt" >> "$GITHUB_OUTPUT"
+
+  apple-mobile-sdk:
+    needs: [checker-self-test, authorize-mobile-production]
     runs-on: macos-14
     timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      authorization_sha256: ${{ steps.verify-apple-authorization.outputs.authorization_sha256 }}
+      package_inventory_sha256: ${{ steps.verify-apple-package.outputs.package_inventory_sha256 }}
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      PRIVACY_PRODUCTION_ENABLED: "false"
+      MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION: "1"
+      PRIVACY_PRODUCTION_ENABLED: ${{ needs.authorize-mobile-production.outputs.production }}
+      KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256: ""
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -192,6 +313,63 @@ jobs:
           mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
           [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
           echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - name: Download the exact Apple production authorization
+        if: needs.authorize-mobile-production.outputs.production == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: kagemusha-mobile-apple-production-authorization-${{ needs.authorize-mobile-production.outputs.promotion_run_id }}-${{ needs.authorize-mobile-production.outputs.promotion_run_attempt }}
+          path: ${{ runner.temp }}/kagemusha-mobile-apple-authorization
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.authorize-mobile-production.outputs.promotion_run_id }}
+      - name: Verify and enable only the Apple production build
+        id: verify-apple-authorization
+        if: needs.authorize-mobile-production.outputs.production == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_RUN_ID: ${{ needs.authorize-mobile-production.outputs.promotion_run_id }}
+          PROMOTION_RUN_ATTEMPT: ${{ needs.authorize-mobile-production.outputs.promotion_run_attempt }}
+          RELEASE_TAG: ${{ needs.authorize-mobile-production.outputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/kagemusha-mobile-apple-authorization"
+          authorization="$root/apple-production-authorization-v1.json"
+          report="$root/kagami-release-verification-report.json"
+          bundle="$root/github-attestations/provenance-1.json"
+          test -z "$(find "$root" -type l -print -quit)"
+          test "$(find "$root" -type f | wc -l | tr -d '[:space:]')" = 3
+          test -f "$authorization" && test -f "$report" && test -f "$bundle"
+          gh attestation verify "$authorization" \
+            --repo "$GITHUB_REPOSITORY" \
+            --bundle "$bundle" \
+            --cert-identity \
+              "https://github.com/hyperledger-iroha/iroha/.github/workflows/promote_kagemusha_v4.yml@refs/heads/main" \
+            --cert-oidc-issuer "https://token.actions.githubusercontent.com"
+          workflow_ref="hyperledger-iroha/iroha/.github/workflows/promote_kagemusha_v4.yml@refs/heads/main"
+          promotion_id="$(
+            printf '%s\0%s\0%s\0%s\0%s\0%s\0' \
+              iroha.kagemusha.github-promotion-run.v1 \
+              "$GITHUB_REPOSITORY" "$workflow_ref" "$GITHUB_SHA" \
+              "$PROMOTION_RUN_ID" "$PROMOTION_RUN_ATTEMPT" \
+              | shasum -a 256 | awk '{print $1}'
+          )"
+          authorization_sha256="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B \
+            scripts/kagemusha_mobile_production_authorization.py verify \
+            --platform apple \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$workflow_ref" \
+            --workflow-sha "$GITHUB_SHA" \
+            --source-sha "$GITHUB_SHA" \
+            --run-id "$PROMOTION_RUN_ID" \
+            --run-attempt "$PROMOTION_RUN_ATTEMPT" \
+            --promotion-id "$promotion_id" \
+            --release-tag "$RELEASE_TAG" \
+            --authorization "$authorization" \
+            --release-verification-report "$report")"
+          [[ "$authorization_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "PRIVACY_PRODUCTION_ENABLED=true" >> "$GITHUB_ENV"
+          echo "KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256=$authorization_sha256" >> "$GITHUB_ENV"
+          echo "authorization_sha256=$authorization_sha256" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: 1.93.1
@@ -201,7 +379,12 @@ jobs:
       - name: Resolve artifact version
         run: |
           input_version="${{ github.event.inputs.version }}"
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+          authorized_production="${{ needs.authorize-mobile-production.outputs.production }}"
+          authorized_release_tag="${{ needs.authorize-mobile-production.outputs.release_tag }}"
+          if [[ "$authorized_production" == "true" ]]; then
+            [[ "$authorized_release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+            version="$authorized_release_tag"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             version="${GITHUB_REF_NAME}"
           elif [[ -n "$input_version" ]]; then
             version="$input_version"
@@ -358,6 +541,29 @@ jobs:
             --package-path "$consumer" \
             --disable-automatic-resolution \
             --scratch-path "$RUNNER_TEMP/norito-bridge-archive-consumer-build"
+      - name: Bind every Apple package byte to this build job
+        id: verify-apple-package
+        if: needs.authorize-mobile-production.outputs.production == 'true'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.authorize-mobile-production.outputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          package_inventory_sha256="$(
+            "$MOBILE_SDK_PYTHON_BINARY" -I -S -B \
+              scripts/kagemusha_mobile_production_authorization.py \
+              verify-apple-artifact \
+              --archive "$MOBILE_SDK_PACKAGE_OUT_DIR/NoritoBridge-${RELEASE_TAG}.xcframework.zip" \
+              --manifest "$MOBILE_SDK_PACKAGE_OUT_DIR/NoritoBridge-${RELEASE_TAG}.artifacts.json" \
+              --podspec "$MOBILE_SDK_PACKAGE_OUT_DIR/NoritoBridge-${RELEASE_TAG#v}.podspec" \
+              --checksums "$MOBILE_SDK_PACKAGE_OUT_DIR/SHA256SUMS-apple-${RELEASE_TAG}.txt" \
+              --package-manifest "$MOBILE_SDK_PACKAGE_OUT_DIR/mobile-sdk-apple-${RELEASE_TAG}.artifacts.json" \
+              --release-tag "$RELEASE_TAG" \
+              --source-sha "$GITHUB_SHA" \
+              --authorization-sha256 "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256"
+          )"
+          [[ "$package_inventory_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "package_inventory_sha256=$package_inventory_sha256" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: mobile-sdk-apple-${{ env.MOBILE_SDK_VERSION }}
@@ -366,13 +572,20 @@ jobs:
           retention-days: 14
 
   android-mobile-sdk:
-    needs: checker-self-test
+    needs: [checker-self-test, authorize-mobile-production]
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      authorization_sha256: ${{ steps.verify-android-authorization.outputs.authorization_sha256 }}
+      package_inventory_sha256: ${{ steps.verify-android-package.outputs.package_inventory_sha256 }}
     env:
       IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      PRIVACY_PRODUCTION_ENABLED: "false"
+      PRIVACY_PRODUCTION_ENABLED: ${{ needs.authorize-mobile-production.outputs.production }}
+      KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256: ""
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -384,6 +597,63 @@ jobs:
           mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
           [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
           echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - name: Download the exact Android production authorization
+        if: needs.authorize-mobile-production.outputs.production == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: kagemusha-mobile-android-production-authorization-${{ needs.authorize-mobile-production.outputs.promotion_run_id }}-${{ needs.authorize-mobile-production.outputs.promotion_run_attempt }}
+          path: ${{ runner.temp }}/kagemusha-mobile-android-authorization
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.authorize-mobile-production.outputs.promotion_run_id }}
+      - name: Verify and enable only the Android production build
+        id: verify-android-authorization
+        if: needs.authorize-mobile-production.outputs.production == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_RUN_ID: ${{ needs.authorize-mobile-production.outputs.promotion_run_id }}
+          PROMOTION_RUN_ATTEMPT: ${{ needs.authorize-mobile-production.outputs.promotion_run_attempt }}
+          RELEASE_TAG: ${{ needs.authorize-mobile-production.outputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/kagemusha-mobile-android-authorization"
+          authorization="$root/android-production-authorization-v1.json"
+          report="$root/kagami-release-verification-report.json"
+          bundle="$root/github-attestations/provenance-1.json"
+          test -z "$(find "$root" -type l -print -quit)"
+          test "$(find "$root" -type f | wc -l | tr -d '[:space:]')" = 3
+          test -f "$authorization" && test -f "$report" && test -f "$bundle"
+          gh attestation verify "$authorization" \
+            --repo "$GITHUB_REPOSITORY" \
+            --bundle "$bundle" \
+            --cert-identity \
+              "https://github.com/hyperledger-iroha/iroha/.github/workflows/promote_kagemusha_v4.yml@refs/heads/main" \
+            --cert-oidc-issuer "https://token.actions.githubusercontent.com"
+          workflow_ref="hyperledger-iroha/iroha/.github/workflows/promote_kagemusha_v4.yml@refs/heads/main"
+          promotion_id="$(
+            printf '%s\0%s\0%s\0%s\0%s\0%s\0' \
+              iroha.kagemusha.github-promotion-run.v1 \
+              "$GITHUB_REPOSITORY" "$workflow_ref" "$GITHUB_SHA" \
+              "$PROMOTION_RUN_ID" "$PROMOTION_RUN_ATTEMPT" \
+              | sha256sum | awk '{print $1}'
+          )"
+          authorization_sha256="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B \
+            scripts/kagemusha_mobile_production_authorization.py verify \
+            --platform android \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$workflow_ref" \
+            --workflow-sha "$GITHUB_SHA" \
+            --source-sha "$GITHUB_SHA" \
+            --run-id "$PROMOTION_RUN_ID" \
+            --run-attempt "$PROMOTION_RUN_ATTEMPT" \
+            --promotion-id "$promotion_id" \
+            --release-tag "$RELEASE_TAG" \
+            --authorization "$authorization" \
+            --release-verification-report "$report")"
+          [[ "$authorization_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "PRIVACY_PRODUCTION_ENABLED=true" >> "$GITHUB_ENV"
+          echo "KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256=$authorization_sha256" >> "$GITHUB_ENV"
+          echo "authorization_sha256=$authorization_sha256" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
         with:
           distribution: temurin
@@ -397,7 +667,12 @@ jobs:
       - name: Resolve artifact version
         run: |
           input_version="${{ github.event.inputs.version }}"
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+          authorized_production="${{ needs.authorize-mobile-production.outputs.production }}"
+          authorized_release_tag="${{ needs.authorize-mobile-production.outputs.release_tag }}"
+          if [[ "$authorized_production" == "true" ]]; then
+            [[ "$authorized_release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+            version="$authorized_release_tag"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             version="${GITHUB_REF_NAME}"
           elif [[ -n "$input_version" ]]; then
             version="$input_version"
@@ -518,6 +793,8 @@ jobs:
           -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon"
           :client-android:buildNativeLibs
           -PprivacyProductionEnabled="$PRIVACY_PRODUCTION_ENABLED"
+          -PrequireKagemushaProductionAuthorization=true
+          -PkagemushaProductionAuthorizationSha256="$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256"
       - name: Test, lint, publish, and build Android SDK artifacts
         working-directory: kotlin
         run: |
@@ -527,6 +804,8 @@ jobs:
             -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR" \
             -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon" \
             -PprivacyProductionEnabled="$PRIVACY_PRODUCTION_ENABLED" \
+            -PrequireKagemushaProductionAuthorization=true \
+            -PkagemushaProductionAuthorizationSha256="$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" \
             -PirohaSdkVersion="$MOBILE_SDK_MAVEN_VERSION" \
             -PirohaSdkRepoDir="$MOBILE_SDK_ANDROID_MAVEN_REPO_DIR" \
             :client-android:testDebugUnitTest \
@@ -563,6 +842,27 @@ jobs:
         run: bash scripts/check_mobile_sdk_artifacts.sh --android-only --require-built-android
       - name: Package Android mobile SDK artifact
         run: bash scripts/package_mobile_sdk_artifacts.sh --android --version "$MOBILE_SDK_VERSION"
+      - name: Bind every Android package byte to this build job
+        id: verify-android-package
+        if: needs.authorize-mobile-production.outputs.production == 'true'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.authorize-mobile-production.outputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          package_inventory_sha256="$(
+            "$MOBILE_SDK_PYTHON_BINARY" -I -S -B \
+              scripts/kagemusha_mobile_production_authorization.py \
+              verify-android-artifact \
+              --archive "$MOBILE_SDK_PACKAGE_OUT_DIR/iroha-mobile-sdk-android-${RELEASE_TAG}.zip" \
+              --checksums "$MOBILE_SDK_PACKAGE_OUT_DIR/SHA256SUMS-android-${RELEASE_TAG}.txt" \
+              --package-manifest "$MOBILE_SDK_PACKAGE_OUT_DIR/mobile-sdk-android-${RELEASE_TAG}.artifacts.json" \
+              --release-tag "$RELEASE_TAG" \
+              --source-sha "$GITHUB_SHA" \
+              --authorization-sha256 "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256"
+          )"
+          [[ "$package_inventory_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "package_inventory_sha256=$package_inventory_sha256" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: mobile-sdk-android-${{ env.MOBILE_SDK_VERSION }}
@@ -571,21 +871,181 @@ jobs:
           retention-days: 14
 
   publish-release-assets:
-    if: github.ref_type == 'tag' && github.repository == 'hyperledger-iroha/iroha'
-    needs: [apple-mobile-sdk, android-mobile-sdk]
+    if: >-
+      github.ref_type == 'tag' &&
+      github.repository == 'hyperledger-iroha/iroha' &&
+      needs.authorize-mobile-production.outputs.production == 'true'
+    needs: [authorize-mobile-production, apple-mobile-sdk, android-mobile-sdk]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: mobile-sdk-*
           path: release-assets
           merge-multiple: true
+      - name: Download the exact Apple production authorization again
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: kagemusha-mobile-apple-production-authorization-${{ needs.authorize-mobile-production.outputs.promotion_run_id }}-${{ needs.authorize-mobile-production.outputs.promotion_run_attempt }}
+          path: ${{ runner.temp }}/publish-apple-authorization
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.authorize-mobile-production.outputs.promotion_run_id }}
+      - name: Download the exact Android production authorization again
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: kagemusha-mobile-android-production-authorization-${{ needs.authorize-mobile-production.outputs.promotion_run_id }}-${{ needs.authorize-mobile-production.outputs.promotion_run_attempt }}
+          path: ${{ runner.temp }}/publish-android-authorization
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.authorize-mobile-production.outputs.promotion_run_id }}
+      - name: Reverify both authorizations and production artifacts before publication
+        id: reverify-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_BUILD_AUTHORIZATION_SHA256: ${{ needs.apple-mobile-sdk.outputs.authorization_sha256 }}
+          APPLE_BUILD_PACKAGE_INVENTORY_SHA256: ${{ needs.apple-mobile-sdk.outputs.package_inventory_sha256 }}
+          ANDROID_BUILD_AUTHORIZATION_SHA256: ${{ needs.android-mobile-sdk.outputs.authorization_sha256 }}
+          ANDROID_BUILD_PACKAGE_INVENTORY_SHA256: ${{ needs.android-mobile-sdk.outputs.package_inventory_sha256 }}
+          PROMOTION_RUN_ID: ${{ needs.authorize-mobile-production.outputs.promotion_run_id }}
+          PROMOTION_RUN_ATTEMPT: ${{ needs.authorize-mobile-production.outputs.promotion_run_attempt }}
+          RELEASE_TAG: ${{ needs.authorize-mobile-production.outputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          apple_root="$RUNNER_TEMP/publish-apple-authorization"
+          android_root="$RUNNER_TEMP/publish-android-authorization"
+          apple="$apple_root/apple-production-authorization-v1.json"
+          android="$android_root/android-production-authorization-v1.json"
+          apple_report="$apple_root/kagami-release-verification-report.json"
+          android_report="$android_root/kagami-release-verification-report.json"
+          apple_bundle="$apple_root/github-attestations/provenance-1.json"
+          android_bundle="$android_root/github-attestations/provenance-1.json"
+          release_root="$GITHUB_WORKSPACE/release-assets"
+          python3 -I -S -B scripts/kagemusha_mobile_production_authorization.py \
+            verify-release-inventory \
+            --release-root "$release_root" \
+            --release-tag "$RELEASE_TAG" \
+            --phase artifacts >/dev/null
+          for root in "$apple_root" "$android_root"; do
+            test -z "$(find "$root" -type l -print -quit)"
+            test "$(find "$root" -type f | wc -l | tr -d '[:space:]')" = 3
+          done
+          for path in \
+            "$apple" "$android" "$apple_report" "$android_report" \
+            "$apple_bundle" "$android_bundle"; do
+            test -f "$path"
+            test ! -L "$path"
+          done
+          certificate_identity="https://github.com/hyperledger-iroha/iroha/.github/workflows/promote_kagemusha_v4.yml@refs/heads/main"
+          gh attestation verify "$apple" \
+            --repo "$GITHUB_REPOSITORY" \
+            --bundle "$apple_bundle" \
+            --cert-identity "$certificate_identity" \
+            --cert-oidc-issuer "https://token.actions.githubusercontent.com"
+          gh attestation verify "$android" \
+            --repo "$GITHUB_REPOSITORY" \
+            --bundle "$android_bundle" \
+            --cert-identity "$certificate_identity" \
+            --cert-oidc-issuer "https://token.actions.githubusercontent.com"
+          workflow_ref="hyperledger-iroha/iroha/.github/workflows/promote_kagemusha_v4.yml@refs/heads/main"
+          promotion_id="$(
+            printf '%s\0%s\0%s\0%s\0%s\0%s\0' \
+              iroha.kagemusha.github-promotion-run.v1 \
+              "$GITHUB_REPOSITORY" "$workflow_ref" "$GITHUB_SHA" \
+              "$PROMOTION_RUN_ID" "$PROMOTION_RUN_ATTEMPT" \
+              | sha256sum | awk '{print $1}'
+          )"
+          pair="$RUNNER_TEMP/kagemusha-mobile-authorization-pair.json"
+          python3 -I -S -B scripts/kagemusha_mobile_production_authorization.py \
+            verify-pair \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$workflow_ref" \
+            --workflow-sha "$GITHUB_SHA" \
+            --source-sha "$GITHUB_SHA" \
+            --run-id "$PROMOTION_RUN_ID" \
+            --run-attempt "$PROMOTION_RUN_ATTEMPT" \
+            --promotion-id "$promotion_id" \
+            --release-tag "$RELEASE_TAG" \
+            --apple-authorization "$apple" \
+            --android-authorization "$android" \
+            --apple-release-verification-report "$apple_report" \
+            --android-release-verification-report "$android_report" \
+            > "$pair"
+          python3 -I -S -B - \
+            "$pair" "$APPLE_BUILD_AUTHORIZATION_SHA256" \
+            "$ANDROID_BUILD_AUTHORIZATION_SHA256" <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          pair = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected = {
+              "apple_authorization_sha256": sys.argv[2],
+              "android_authorization_sha256": sys.argv[3],
+          }
+          if any(re.fullmatch(r"[0-9a-f]{64}", value) is None for value in expected.values()):
+              raise SystemExit("mobile build authorization outputs are missing")
+          if any(pair.get(field) != value for field, value in expected.items()):
+              raise SystemExit("mobile artifacts were not built from the reverified authorizations")
+          PY
+          apple_package_inventory_sha256="$(
+            python3 -I -S -B scripts/kagemusha_mobile_production_authorization.py \
+              verify-apple-artifact \
+              --archive "$release_root/NoritoBridge-${RELEASE_TAG}.xcframework.zip" \
+              --manifest "$release_root/NoritoBridge-${RELEASE_TAG}.artifacts.json" \
+              --podspec "$release_root/NoritoBridge-${RELEASE_TAG#v}.podspec" \
+              --checksums "$release_root/SHA256SUMS-apple-${RELEASE_TAG}.txt" \
+              --package-manifest "$release_root/mobile-sdk-apple-${RELEASE_TAG}.artifacts.json" \
+              --release-tag "$RELEASE_TAG" \
+              --source-sha "$GITHUB_SHA" \
+              --authorization-sha256 "$APPLE_BUILD_AUTHORIZATION_SHA256"
+          )"
+          android_package_inventory_sha256="$(
+            python3 -I -S -B scripts/kagemusha_mobile_production_authorization.py \
+              verify-android-artifact \
+              --archive "$release_root/iroha-mobile-sdk-android-${RELEASE_TAG}.zip" \
+              --checksums "$release_root/SHA256SUMS-android-${RELEASE_TAG}.txt" \
+              --package-manifest "$release_root/mobile-sdk-android-${RELEASE_TAG}.artifacts.json" \
+              --release-tag "$RELEASE_TAG" \
+              --source-sha "$GITHUB_SHA" \
+              --authorization-sha256 "$ANDROID_BUILD_AUTHORIZATION_SHA256"
+          )"
+          [[ "$APPLE_BUILD_PACKAGE_INVENTORY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$ANDROID_BUILD_PACKAGE_INVENTORY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$apple_package_inventory_sha256" == "$APPLE_BUILD_PACKAGE_INVENTORY_SHA256" ]]
+          [[ "$android_package_inventory_sha256" == "$ANDROID_BUILD_PACKAGE_INVENTORY_SHA256" ]]
+          install -m 0444 "$apple" \
+            release-assets/kagemusha-apple-production-authorization-v1.json
+          install -m 0444 "$apple_report" \
+            release-assets/kagemusha-apple-release-verification-report-v1.json
+          install -m 0444 "$apple_bundle" \
+            release-assets/kagemusha-apple-github-attestation-v1.json
+          install -m 0444 "$android" \
+            release-assets/kagemusha-android-production-authorization-v1.json
+          install -m 0444 "$android_report" \
+            release-assets/kagemusha-android-release-verification-report-v1.json
+          install -m 0444 "$android_bundle" \
+            release-assets/kagemusha-android-github-attestation-v1.json
+          release_inventory_sha256="$(
+            python3 -I -S -B scripts/kagemusha_mobile_production_authorization.py \
+              verify-release-inventory \
+              --release-root "$release_root" \
+              --release-tag "$RELEASE_TAG" \
+              --phase final
+          )"
+          [[ "$release_inventory_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "release_inventory_sha256=$release_inventory_sha256" >> "$GITHUB_OUTPUT"
       - name: Publish mobile SDK release assets
         env:
+          EXPECTED_RELEASE_INVENTORY_SHA256: ${{ steps.reverify-release.outputs.release_inventory_sha256 }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
@@ -607,6 +1067,18 @@ jobs:
             echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${pod_version}" >&2
             exit 1
           fi
+          observed_release_inventory_sha256="$(
+            python3 -I -S -B scripts/kagemusha_mobile_production_authorization.py \
+              verify-release-inventory \
+              --release-root "$GITHUB_WORKSPACE/release-assets" \
+              --release-tag "$GITHUB_REF_NAME" \
+              --phase final
+          )"
+          [[ "$EXPECTED_RELEASE_INVENTORY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$observed_release_inventory_sha256" == "$EXPECTED_RELEASE_INVENTORY_SHA256" ]] || {
+            echo "release asset bytes changed after final verification" >&2
+            exit 1
+          }
           candidate_inventory="$(
             find release-assets -maxdepth 1 -type f -print | sort |
               while IFS= read -r candidate; do

@@ -47,7 +47,7 @@ Options:
   --phase NAME     Run one phase. Repeatable; comma-separated names are accepted.
   --dry-run        Print selected phase commands without executing them.
   --log-dir DIR    Run each selected phase in its own corridor invocation and
-                   tee strict phase transcripts to DIR/<phase>.log.
+                   securely publish owner-only phase logs and manifests in DIR.
   --list           Print available phases and exit.
   -h, --help       Show this help.
 
@@ -1864,9 +1864,11 @@ phase_contract_smoke() {
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check scripts/contract_tvm_smoke.mjs
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test scripts/tests/contract_tvm_receipts_test.mjs
   run_cmd bash -n scripts/sccp_evm_contract_smoke.sh
+  run_cmd bash -n scripts/sccp_ton_contract_build.sh
   run_cmd bash -n scripts/contract_tvm_runner.sh
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
   run_cmd bash scripts/sccp_evm_contract_smoke.sh
+  run_cmd bash scripts/sccp_ton_contract_build.sh
 }
 
 phase_tvm_contract_smoke() {
@@ -1980,13 +1982,15 @@ phase_runtime_api() {
 
 run_with_log_dir() {
   local phase
-  mkdir -p "$LOG_DIR"
   while IFS= read -r phase; do
     [[ -n "$phase" ]] || continue
-    bash "$ROOT/scripts/check_sccp_production_corridor.sh" \
-      --phase "$phase" 2>&1 | tee "$LOG_DIR/$phase.log"
+    "$SCCP_CORRIDOR_PYTHON_BIN" "$ROOT/scripts/sccp_phase_log_runner.py" \
+      --log-dir "$LOG_DIR" \
+      --phase "$phase" \
+      -- \
+      bash "$ROOT/scripts/check_sccp_production_corridor.sh" --phase "$phase"
   done < <(selected_phases)
-  printf '\nSCCP production corridor logs written to %s\n' "$LOG_DIR"
+  printf '\nSCCP production corridor logs and manifests written to %s\n' "$LOG_DIR"
 }
 
 main() {

@@ -9,15 +9,7 @@
 #![allow(unexpected_cfgs)]
 use blake3::{Hash, Hasher};
 #[cfg(feature = "manifest")]
-use iroha_data_model::{
-    da::{
-        manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
-        types::{BlobClass, ExtraMetadata, MetadataEncryption, MetadataVisibility},
-    },
-    name::Name,
-};
-#[cfg(feature = "manifest")]
-use norito::json::{self, Value};
+use iroha_data_model::da::manifest::{ChunkCommitment, ChunkRole, DaManifestV1};
 use norito::{NoritoDeserialize, NoritoSerialize};
 pub use sorafs_chunker;
 use sorafs_chunker::{ChunkDigest, ChunkProfile};
@@ -34,8 +26,6 @@ use std::fs::OpenOptions;
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
-#[cfg(feature = "manifest")]
-use std::str::FromStr;
 use std::{
     collections::{BTreeMap, HashSet},
     convert::TryFrom,
@@ -950,30 +940,12 @@ pub struct FilePlan {
     pub chunk_count: usize,
     pub size: u64,
 }
-/// Hint describing the Taikai segment a chunk belongs to.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TaikaiSegmentHint {
-    /// Taikai event identifier (Name literal encoded as a UTF-8 string).
-    pub event: String,
-    /// Stream identifier within the event.
-    pub stream: String,
-    /// Rendition identifier for the ladder rung.
-    pub rendition: String,
-    /// Segment sequence number within the rendition.
-    pub sequence: u64,
-    /// Total payload length in bytes, when provided by the ingest metadata.
-    pub payload_len: Option<u64>,
-    /// BLAKE3 digest of the payload, when provided by the ingest metadata.
-    pub payload_digest: Option<[u8; 32]>,
-}
 /// Chunk entry used by [`CarBuildPlan`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CarChunk {
     pub offset: u64,
     pub length: u32,
     pub digest: [u8; 32],
-    /// Optional Taikai segment hint carried alongside the chunk metadata.
-    pub taikai_segment_hint: Option<TaikaiSegmentHint>,
 }
 const CAR_CHUNK_LENGTH_LIMIT: u32 = u32::MAX;
 // Keep a single untrusted plan entry from requesting a multi-gigabyte allocation. Canonical
@@ -1195,20 +1167,6 @@ fn build_canonical_pdp_tree(payload: &[u8]) -> Result<Option<PdpMerkleTreeV1>, P
     builder.update(payload)?;
     builder.finish().map(Some)
 }
-#[cfg(feature = "manifest")]
-const META_TAIKAI_EVENT_ID: &str = "taikai.event_id";
-#[cfg(feature = "manifest")]
-const META_TAIKAI_STREAM_ID: &str = "taikai.stream_id";
-#[cfg(feature = "manifest")]
-const META_TAIKAI_RENDITION_ID: &str = "taikai.rendition_id";
-#[cfg(feature = "manifest")]
-const META_TAIKAI_SEGMENT_SEQUENCE: &str = "taikai.segment.sequence";
-#[cfg(feature = "manifest")]
-const META_TAIKAI_CACHE_HINT: &str = "taikai.cache_hint";
-#[cfg(feature = "manifest")]
-const TAIKAI_NAME_MAX_BYTES: usize = 255;
-#[cfg(feature = "manifest")]
-const TAIKAI_CACHE_HINT_MAX_BYTES: usize = 4 * 1024;
 /// Errors emitted when deriving a [`CarBuildPlan`] from a DA manifest.
 #[cfg(feature = "manifest")]
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -1262,17 +1220,6 @@ pub enum PlanFromManifestError {
     /// Manifest chunk-layout arithmetic exceeded supported integer bounds.
     #[error("manifest chunk layout overflow while computing {0}")]
     ChunkLayoutOverflow(&'static str),
-    /// Manifest omitted a required Taikai metadata field.
-    #[error("manifest missing required Taikai metadata `{0}`")]
-    MissingTaikaiMetadata(&'static str),
-    /// Manifest contained an invalid Taikai metadata field.
-    #[error("manifest contained invalid Taikai metadata `{field}`: {reason}")]
-    InvalidTaikaiMetadata {
-        /// The metadata key that failed validation.
-        field: &'static str,
-        /// Description of why validation failed.
-        reason: String,
-    },
     /// Manifest-derived plan storage exceeded the production planning heap ceiling.
     #[error(
         "manifest-derived CAR plan requires at least {estimated} bytes of heap; maximum is {limit}"
@@ -1336,8 +1283,7 @@ pub fn build_plan_from_da_manifest(
     };
     let data_chunk_count = preflight_da_manifest_chunks(manifest, chunk_size)?;
     let payload_digest = Hash::from(*manifest.blob_hash.as_ref());
-    let taikai_hint = taikai_segment_hint_from_manifest(manifest)?;
-    preflight_manifest_plan_heap(data_chunk_count, taikai_hint.as_ref())?;
+    preflight_manifest_plan_heap(data_chunk_count)?;
     let mut chunks = Vec::new();
     try_reserve_manifest(
         &mut chunks,
@@ -1353,10 +1299,6 @@ pub fn build_plan_from_da_manifest(
             offset: chunk.offset,
             length: chunk.length,
             digest: *chunk.commitment.as_ref(),
-            taikai_segment_hint: taikai_hint
-                .as_ref()
-                .map(try_clone_taikai_hint_for_manifest)
-                .transpose()?,
         });
     }
     let mut path = Vec::new();
@@ -1412,42 +1354,8 @@ fn try_owned_manifest_string(
     Ok(owned)
 }
 #[cfg(feature = "manifest")]
-fn try_clone_taikai_hint_for_manifest(
-    hint: &TaikaiSegmentHint,
-) -> Result<TaikaiSegmentHint, PlanFromManifestError> {
-    Ok(TaikaiSegmentHint {
-        event: try_owned_manifest_string(&hint.event, "Taikai event hint clone")?,
-        stream: try_owned_manifest_string(&hint.stream, "Taikai stream hint clone")?,
-        rendition: try_owned_manifest_string(&hint.rendition, "Taikai rendition hint clone")?,
-        sequence: hint.sequence,
-        payload_len: hint.payload_len,
-        payload_digest: hint.payload_digest,
-    })
-}
-#[cfg(feature = "manifest")]
-fn preflight_manifest_plan_heap(
-    chunk_count: usize,
-    hint: Option<&TaikaiSegmentHint>,
-) -> Result<(), PlanFromManifestError> {
-    let hint_bytes = match hint {
-        Some(hint) => hint
-            .event
-            .len()
-            .checked_add(hint.stream.len())
-            .and_then(|bytes| bytes.checked_add(hint.rendition.len()))
-            .ok_or(PlanFromManifestError::EstimatedPlanHeapLimitExceeded {
-                estimated: usize::MAX,
-                limit: DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES,
-            })?,
-        None => 0,
-    };
-    let per_chunk = std::mem::size_of::<CarChunk>()
-        .checked_add(hint_bytes)
-        .ok_or(PlanFromManifestError::EstimatedPlanHeapLimitExceeded {
-            estimated: usize::MAX,
-            limit: DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES,
-        })?;
-    let estimated = per_chunk
+fn preflight_manifest_plan_heap(chunk_count: usize) -> Result<(), PlanFromManifestError> {
+    let estimated = std::mem::size_of::<CarChunk>()
         .checked_mul(chunk_count)
         .and_then(|bytes| bytes.checked_add(std::mem::size_of::<FilePlan>()))
         .and_then(|bytes| bytes.checked_add(std::mem::size_of::<String>()))
@@ -1649,339 +1557,6 @@ fn validate_da_manifest_chunk(
     Ok(())
 }
 #[cfg(feature = "manifest")]
-fn parse_canonical_taikai_sequence(raw: &str) -> Result<u64, PlanFromManifestError> {
-    if raw.is_empty()
-        || raw.len() > 20
-        || !raw.bytes().all(|byte| byte.is_ascii_digit())
-        || (raw.len() > 1 && raw.starts_with('0'))
-    {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_SEGMENT_SEQUENCE,
-            reason: "sequence must be canonical unsigned decimal without whitespace, sign, or leading zeroes"
-                .into(),
-        });
-    }
-    raw.parse::<u64>()
-        .map_err(|err| PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_SEGMENT_SEQUENCE,
-            reason: err.to_string(),
-        })
-}
-/// Extract a Taikai segment hint from a manifest when the blob class indicates a Taikai segment.
-#[cfg(feature = "manifest")]
-pub fn taikai_segment_hint_from_manifest(
-    manifest: &DaManifestV1,
-) -> Result<Option<TaikaiSegmentHint>, PlanFromManifestError> {
-    if manifest.blob_class != BlobClass::TaikaiSegment {
-        return Ok(None);
-    }
-    let metadata = &manifest.metadata;
-    let event = parse_taikai_name(metadata, META_TAIKAI_EVENT_ID)?;
-    let stream = parse_taikai_name(metadata, META_TAIKAI_STREAM_ID)?;
-    let rendition = parse_taikai_name(metadata, META_TAIKAI_RENDITION_ID)?;
-    let sequence_raw = read_taikai_metadata_field(metadata, META_TAIKAI_SEGMENT_SEQUENCE)?;
-    let sequence = parse_canonical_taikai_sequence(sequence_raw)?;
-    let cache_hint = decode_taikai_cache_hint(metadata)?;
-    let mut hint = TaikaiSegmentHint {
-        event: try_owned_manifest_string(event.as_ref(), "Taikai event hint")?,
-        stream: try_owned_manifest_string(stream.as_ref(), "Taikai stream hint")?,
-        rendition: try_owned_manifest_string(rendition.as_ref(), "Taikai rendition hint")?,
-        sequence,
-        payload_len: None,
-        payload_digest: None,
-    };
-    if let Some(cache_hint) = cache_hint {
-        hint.payload_len = cache_hint.payload_len;
-        hint.payload_digest = cache_hint.payload_digest;
-    }
-    Ok(Some(hint))
-}
-/// Derive a Taikai segment hint from a stored SoraFS manifest (metadata-based).
-///
-/// Returns `Ok(None)` when no Taikai metadata keys are present; otherwise validates the fields and
-/// surfaces the same errors as [`taikai_segment_hint_from_manifest`].
-#[cfg(feature = "manifest")]
-pub fn taikai_segment_hint_from_sorafs_manifest(
-    manifest: &SorafsManifestV1,
-) -> Result<Option<TaikaiSegmentHint>, PlanFromManifestError> {
-    fn lookup<'a>(
-        manifest: &'a SorafsManifestV1,
-        key: &'static str,
-    ) -> Result<Option<&'a str>, PlanFromManifestError> {
-        let mut matches = manifest.metadata.iter().filter(|entry| entry.key == key);
-        let value = matches.next().map(|entry| entry.value.as_str());
-        if matches.next().is_some() {
-            return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-                field: key,
-                reason: "metadata field must occur at most once".into(),
-            });
-        }
-        Ok(value)
-    }
-    let Some(event_raw) = lookup(manifest, META_TAIKAI_EVENT_ID)? else {
-        return Ok(None);
-    };
-    let stream_raw = lookup(manifest, META_TAIKAI_STREAM_ID)?.ok_or(
-        PlanFromManifestError::MissingTaikaiMetadata(META_TAIKAI_STREAM_ID),
-    )?;
-    let rendition_raw = lookup(manifest, META_TAIKAI_RENDITION_ID)?.ok_or(
-        PlanFromManifestError::MissingTaikaiMetadata(META_TAIKAI_RENDITION_ID),
-    )?;
-    let sequence_raw = lookup(manifest, META_TAIKAI_SEGMENT_SEQUENCE)?.ok_or(
-        PlanFromManifestError::MissingTaikaiMetadata(META_TAIKAI_SEGMENT_SEQUENCE),
-    )?;
-    let event = parse_taikai_name_value(event_raw, META_TAIKAI_EVENT_ID)?;
-    let stream = parse_taikai_name_value(stream_raw, META_TAIKAI_STREAM_ID)?;
-    let rendition = parse_taikai_name_value(rendition_raw, META_TAIKAI_RENDITION_ID)?;
-    let sequence = parse_canonical_taikai_sequence(sequence_raw)?;
-    let cache_hint = decode_taikai_cache_hint_from_sorafs_manifest(manifest)?;
-    let mut hint = TaikaiSegmentHint {
-        event: try_owned_manifest_string(event.as_ref(), "Taikai event hint")?,
-        stream: try_owned_manifest_string(stream.as_ref(), "Taikai stream hint")?,
-        rendition: try_owned_manifest_string(rendition.as_ref(), "Taikai rendition hint")?,
-        sequence,
-        payload_len: None,
-        payload_digest: None,
-    };
-    if let Some(cache_hint) = cache_hint {
-        hint.payload_len = cache_hint.payload_len;
-        hint.payload_digest = cache_hint.payload_digest;
-    }
-    Ok(Some(hint))
-}
-#[cfg(feature = "manifest")]
-fn parse_taikai_name(
-    metadata: &ExtraMetadata,
-    key: &'static str,
-) -> Result<Name, PlanFromManifestError> {
-    let raw = read_taikai_metadata_field(metadata, key)?;
-    parse_taikai_name_value(raw, key)
-}
-#[cfg(feature = "manifest")]
-fn parse_taikai_name_value(raw: &str, key: &'static str) -> Result<Name, PlanFromManifestError> {
-    if raw.len() > TAIKAI_NAME_MAX_BYTES {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: key,
-            reason: format!("name exceeds {TAIKAI_NAME_MAX_BYTES} UTF-8 bytes"),
-        });
-    }
-    let name = Name::from_str(raw).map_err(|err| PlanFromManifestError::InvalidTaikaiMetadata {
-        field: key,
-        reason: err.to_string(),
-    })?;
-    if name.as_ref() != raw {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: key,
-            reason: "name must use its exact canonical Unicode representation".into(),
-        });
-    }
-    Ok(name)
-}
-#[cfg(feature = "manifest")]
-fn read_taikai_metadata_field<'a>(
-    metadata: &'a ExtraMetadata,
-    key: &'static str,
-) -> Result<&'a str, PlanFromManifestError> {
-    let mut matches = metadata.items.iter().filter(|entry| entry.key == key);
-    let entry = matches
-        .next()
-        .ok_or(PlanFromManifestError::MissingTaikaiMetadata(key))?;
-    if matches.next().is_some() {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: key,
-            reason: "metadata field must occur exactly once".into(),
-        });
-    }
-    if entry.visibility != MetadataVisibility::Public {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: key,
-            reason: "metadata must be public".into(),
-        });
-    }
-    if !matches!(entry.encryption, MetadataEncryption::None) {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: key,
-            reason: "metadata must be unencrypted".into(),
-        });
-    }
-    std::str::from_utf8(&entry.value).map_err(|err| PlanFromManifestError::InvalidTaikaiMetadata {
-        field: key,
-        reason: err.to_string(),
-    })
-}
-#[cfg(feature = "manifest")]
-#[derive(Debug, Default)]
-struct CacheHintFields {
-    payload_len: Option<u64>,
-    payload_digest: Option<[u8; 32]>,
-}
-#[cfg(feature = "manifest")]
-fn decode_taikai_cache_hint(
-    metadata: &ExtraMetadata,
-) -> Result<Option<CacheHintFields>, PlanFromManifestError> {
-    let mut matches = metadata
-        .items
-        .iter()
-        .filter(|entry| entry.key == META_TAIKAI_CACHE_HINT);
-    let Some(entry) = matches.next() else {
-        return Ok(None);
-    };
-    if matches.next().is_some() {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: "metadata field must occur at most once".into(),
-        });
-    }
-    if entry.visibility != MetadataVisibility::Public {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: "metadata must be public".into(),
-        });
-    }
-    if !matches!(entry.encryption, MetadataEncryption::None) {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: "metadata must be unencrypted".into(),
-        });
-    }
-    let raw = std::str::from_utf8(&entry.value).map_err(|err| {
-        PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: format!("invalid UTF-8: {err}"),
-        }
-    })?;
-    if raw.len() > TAIKAI_CACHE_HINT_MAX_BYTES {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: format!("cache hint exceeds {TAIKAI_CACHE_HINT_MAX_BYTES} UTF-8 bytes"),
-        });
-    }
-    let value: Value =
-        json::from_str(raw).map_err(|err| PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: format!("invalid JSON: {err}"),
-        })?;
-    let hint_obj = value
-        .as_object()
-        .ok_or(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: "cache hint must be a JSON object".into(),
-        })?;
-    let payload_len = hint_obj
-        .get("payload_len")
-        .map(|value| {
-            value
-                .as_u64()
-                .ok_or(PlanFromManifestError::InvalidTaikaiMetadata {
-                    field: META_TAIKAI_CACHE_HINT,
-                    reason: "payload_len must be an unsigned integer".into(),
-                })
-        })
-        .transpose()?;
-    let payload_digest = match hint_obj.get("payload_blake3_hex") {
-        Some(Value::String(hex)) => Some(decode_digest_hex_hint(hex)?),
-        Some(Value::Null) | None => None,
-        Some(_) => {
-            return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-                field: META_TAIKAI_CACHE_HINT,
-                reason: "payload_blake3_hex must be a hex string".into(),
-            });
-        }
-    };
-    Ok(Some(CacheHintFields {
-        payload_len,
-        payload_digest,
-    }))
-}
-#[cfg(feature = "manifest")]
-fn decode_taikai_cache_hint_from_sorafs_manifest(
-    manifest: &SorafsManifestV1,
-) -> Result<Option<CacheHintFields>, PlanFromManifestError> {
-    let mut matches = manifest
-        .metadata
-        .iter()
-        .filter(|entry| entry.key == META_TAIKAI_CACHE_HINT);
-    let Some(entry) = matches.next() else {
-        return Ok(None);
-    };
-    if matches.next().is_some() {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: "metadata field must occur at most once".into(),
-        });
-    }
-    if entry.value.len() > TAIKAI_CACHE_HINT_MAX_BYTES {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: format!("cache hint exceeds {TAIKAI_CACHE_HINT_MAX_BYTES} UTF-8 bytes"),
-        });
-    }
-    let value: Value = json::from_str(entry.value.as_str()).map_err(|err| {
-        PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: format!("invalid JSON: {err}"),
-        }
-    })?;
-    let hint_obj = value
-        .as_object()
-        .ok_or(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: "cache hint must be a JSON object".into(),
-        })?;
-    let payload_len = hint_obj
-        .get("payload_len")
-        .map(|value| {
-            value
-                .as_u64()
-                .ok_or(PlanFromManifestError::InvalidTaikaiMetadata {
-                    field: META_TAIKAI_CACHE_HINT,
-                    reason: "payload_len must be an unsigned integer".into(),
-                })
-        })
-        .transpose()?;
-    let payload_digest = match hint_obj.get("payload_blake3_hex") {
-        Some(Value::String(hex)) => Some(decode_digest_hex_hint(hex)?),
-        Some(Value::Null) | None => None,
-        Some(_) => {
-            return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-                field: META_TAIKAI_CACHE_HINT,
-                reason: "payload_blake3_hex must be a hex string".into(),
-            });
-        }
-    };
-    Ok(Some(CacheHintFields {
-        payload_len,
-        payload_digest,
-    }))
-}
-#[cfg(feature = "manifest")]
-fn decode_digest_hex_hint(hex: &str) -> Result<[u8; 32], PlanFromManifestError> {
-    if hex.len() != 64 {
-        return Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: "payload_blake3_hex must be 64 hex characters".into(),
-        });
-    }
-    let mut bytes = [0u8; 32];
-    for (idx, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
-        let hi = decode_hex_nibble_hint(chunk[0])?;
-        let lo = decode_hex_nibble_hint(chunk[1])?;
-        bytes[idx] = (hi << 4) | lo;
-    }
-    Ok(bytes)
-}
-#[cfg(feature = "manifest")]
-fn decode_hex_nibble_hint(byte: u8) -> Result<u8, PlanFromManifestError> {
-    match byte {
-        b'0'..=b'9' => Ok(byte - b'0'),
-        b'a'..=b'f' => Ok(byte - b'a' + 10),
-        b'A'..=b'F' => Ok(byte - b'A' + 10),
-        _ => Err(PlanFromManifestError::InvalidTaikaiMetadata {
-            field: META_TAIKAI_CACHE_HINT,
-            reason: "payload_blake3_hex contains non-hex characters".into(),
-        }),
-    }
-}
 /// Specification for fetching a chunk from storage or remote peers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkFetchSpec {
@@ -1993,8 +1568,6 @@ pub struct ChunkFetchSpec {
     pub length: u32,
     /// Expected BLAKE3-256 digest of the chunk contents.
     pub digest: [u8; 32],
-    /// Optional Taikai segment hint propagated from the ingest manifest.
-    pub taikai_segment_hint: Option<TaikaiSegmentHint>,
 }
 /// Canonical chunk store used during SoraFS node ingestion.
 ///
@@ -4902,16 +4475,6 @@ fn try_clone_logical_path(path: &[String]) -> Result<Vec<String>, CarPlanError> 
     }
     Ok(clone)
 }
-fn try_clone_taikai_hint(hint: &TaikaiSegmentHint) -> Result<TaikaiSegmentHint, CarPlanError> {
-    Ok(TaikaiSegmentHint {
-        event: try_owned_plan_string(&hint.event, "Taikai event hint")?,
-        stream: try_owned_plan_string(&hint.stream, "Taikai stream hint")?,
-        rendition: try_owned_plan_string(&hint.rendition, "Taikai rendition hint")?,
-        sequence: hint.sequence,
-        payload_len: hint.payload_len,
-        payload_digest: hint.payload_digest,
-    })
-}
 fn checked_plan_payload_add(total: usize, additional: usize) -> Result<usize, CarPlanError> {
     total
         .checked_add(additional)
@@ -6490,7 +6053,6 @@ fn append_file_chunks(
             offset,
             length,
             digest: blake3::hash(&data[boundary.offset..end]).into(),
-            taikai_segment_hint: None,
         });
     }
     Ok(())
@@ -6704,7 +6266,7 @@ impl CarBuildPlan {
     /// chunk downloads while verifying digests and payload offsets deterministically.
     pub fn try_chunk_fetch_specs(&self) -> Result<Vec<ChunkFetchSpec>, CarPlanError> {
         self.validate()?;
-        let mut estimated = self
+        let estimated = self
             .chunks
             .len()
             .checked_mul(std::mem::size_of::<ChunkFetchSpec>())
@@ -6713,19 +6275,6 @@ impl CarBuildPlan {
                 estimated: usize::MAX,
                 limit: DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES,
             })?;
-        for chunk in &self.chunks {
-            if let Some(hint) = &chunk.taikai_segment_hint {
-                estimated = estimated
-                    .checked_add(hint.event.len())
-                    .and_then(|bytes| bytes.checked_add(hint.stream.len()))
-                    .and_then(|bytes| bytes.checked_add(hint.rendition.len()))
-                    .ok_or(CarPlanError::EstimatedHeapLimitExceeded {
-                        context: "chunk fetch specifications",
-                        estimated: usize::MAX,
-                        limit: DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES,
-                    })?;
-            }
-        }
         if estimated > DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES
             || estimated > isize::MAX as usize
         {
@@ -6743,11 +6292,6 @@ impl CarBuildPlan {
                 offset: chunk.offset,
                 length: chunk.length,
                 digest: chunk.digest,
-                taikai_segment_hint: chunk
-                    .taikai_segment_hint
-                    .as_ref()
-                    .map(try_clone_taikai_hint)
-                    .transpose()?,
             });
         }
         Ok(specs)
@@ -6939,13 +6483,11 @@ mod tests {
             offset: 0,
             length: 4,
             digest: [1; 32],
-            taikai_segment_hint: None,
         };
         let second = CarChunk {
             offset: 4,
             length: 4,
             digest: [2; 32],
-            taikai_segment_hint: None,
         };
         let digest = compute_chunk_plan_digest_sha3(&[first.clone(), second.clone()]);
         let repeated = compute_chunk_plan_digest_sha3(&[first.clone(), second.clone()]);
@@ -6958,7 +6500,6 @@ mod tests {
                 offset: 4,
                 length: 4,
                 digest: [2; 32],
-                taikai_segment_hint: None,
             },
         ]);
         assert_eq!(digest, repeated);
@@ -7067,157 +6608,9 @@ mod tests {
             plan.chunks[0].digest,
             *manifest.chunks[0].commitment.as_ref()
         );
-        let hint = plan.chunks[0]
-            .taikai_segment_hint
-            .as_ref()
-            .expect("taikai hint present");
-        assert_eq!(hint.event, "demo-event");
-        assert_eq!(hint.stream, "primary-stream");
-        assert_eq!(hint.rendition, "main-1080p");
-        assert_eq!(hint.sequence, 42);
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].chunk_count, 1);
         assert_eq!(plan.files[0].size, manifest.total_size);
-    }
-    #[cfg(feature = "manifest")]
-    #[test]
-    fn build_plan_from_da_manifest_uses_cache_hint_metadata() {
-        use iroha_data_model::da::types::MetadataVisibility;
-        let mut manifest = sample_manifest();
-        let payload_digest = [0xAB; 32];
-        let cache_hint = format!(
-            "{{\"event\":\"demo-event\",\"stream\":\"primary-stream\",\"rendition\":\"main-1080p\",\"sequence\":42,\"payload_len\":4096,\"payload_blake3_hex\":\"{}\"}}",
-            "ab".repeat(32)
-        );
-        manifest
-            .metadata
-            .items
-            .push(iroha_data_model::da::types::MetadataEntry::new(
-                META_TAIKAI_CACHE_HINT,
-                cache_hint.into_bytes(),
-                MetadataVisibility::Public,
-            ));
-        let plan = build_plan_from_da_manifest(&manifest).expect("plan from manifest");
-        let hint = plan.chunks[0]
-            .taikai_segment_hint
-            .as_ref()
-            .expect("hint present");
-        assert_eq!(hint.payload_len, Some(4096));
-        assert_eq!(hint.payload_digest, Some(payload_digest));
-    }
-    #[cfg(feature = "manifest")]
-    #[test]
-    fn build_plan_from_da_manifest_errors_on_missing_taikai_metadata() {
-        let mut manifest = sample_manifest();
-        manifest
-            .metadata
-            .items
-            .retain(|entry| entry.key != "taikai.segment.sequence");
-        let err = build_plan_from_da_manifest(&manifest).expect_err("missing metadata rejected");
-        assert_eq!(
-            err,
-            PlanFromManifestError::MissingTaikaiMetadata("taikai.segment.sequence")
-        );
-    }
-    #[cfg(feature = "manifest")]
-    #[test]
-    fn build_plan_from_da_manifest_errors_on_encrypted_taikai_metadata() {
-        use iroha_data_model::da::types::MetadataEncryption;
-        let mut manifest = sample_manifest();
-        if let Some(entry) = manifest
-            .metadata
-            .items
-            .iter_mut()
-            .find(|entry| entry.key == META_TAIKAI_EVENT_ID)
-        {
-            entry.encryption = MetadataEncryption::ChaCha20Poly1305(Default::default());
-        } else {
-            panic!("taikai event id metadata entry missing");
-        }
-        let err = build_plan_from_da_manifest(&manifest).expect_err("encrypted metadata rejected");
-        assert!(matches!(
-            err,
-            PlanFromManifestError::InvalidTaikaiMetadata { field, .. }
-            if field == META_TAIKAI_EVENT_ID
-        ));
-    }
-    #[cfg(feature = "manifest")]
-    #[test]
-    fn taikai_sequence_requires_exact_canonical_unsigned_decimal() {
-        for invalid in [
-            "",
-            " 42",
-            "42 ",
-            "+42",
-            "-1",
-            "00",
-            "042",
-            "4_2",
-            "18446744073709551616",
-        ] {
-            assert!(matches!(
-                parse_canonical_taikai_sequence(invalid),
-                Err(PlanFromManifestError::InvalidTaikaiMetadata {
-                    field: META_TAIKAI_SEGMENT_SEQUENCE,
-                    ..
-                })
-            ));
-        }
-        assert_eq!(parse_canonical_taikai_sequence("0").expect("zero"), 0);
-        assert_eq!(
-            parse_canonical_taikai_sequence("18446744073709551615").expect("u64 max"),
-            u64::MAX
-        );
-        let mut manifest = sample_manifest();
-        let sequence = manifest
-            .metadata
-            .items
-            .iter_mut()
-            .find(|entry| entry.key == META_TAIKAI_SEGMENT_SEQUENCE)
-            .expect("sequence metadata");
-        sequence.value = b" 42".to_vec();
-        assert!(matches!(
-            build_plan_from_da_manifest(&manifest),
-            Err(PlanFromManifestError::InvalidTaikaiMetadata {
-                field: META_TAIKAI_SEGMENT_SEQUENCE,
-                ..
-            })
-        ));
-    }
-    #[cfg(feature = "manifest")]
-    #[test]
-    fn taikai_metadata_rejects_duplicate_and_oversized_fields() {
-        let mut duplicate = sample_manifest();
-        let event = duplicate
-            .metadata
-            .items
-            .iter()
-            .find(|entry| entry.key == META_TAIKAI_EVENT_ID)
-            .expect("event metadata")
-            .clone();
-        duplicate.metadata.items.push(event);
-        assert!(matches!(
-            build_plan_from_da_manifest(&duplicate),
-            Err(PlanFromManifestError::InvalidTaikaiMetadata {
-                field: META_TAIKAI_EVENT_ID,
-                ..
-            })
-        ));
-        let mut oversized = sample_manifest();
-        let event = oversized
-            .metadata
-            .items
-            .iter_mut()
-            .find(|entry| entry.key == META_TAIKAI_EVENT_ID)
-            .expect("event metadata");
-        event.value = vec![b'a'; TAIKAI_NAME_MAX_BYTES + 1];
-        assert!(matches!(
-            build_plan_from_da_manifest(&oversized),
-            Err(PlanFromManifestError::InvalidTaikaiMetadata {
-                field: META_TAIKAI_EVENT_ID,
-                ..
-            })
-        ));
     }
     #[cfg(feature = "manifest")]
     #[test]
@@ -7372,19 +6765,9 @@ mod tests {
     }
     #[cfg(feature = "manifest")]
     #[test]
-    fn manifest_plan_heap_estimate_rejects_multiplicative_hint_bombs() {
-        let hint = TaikaiSegmentHint {
-            event: "e".repeat(1024),
-            stream: "s".repeat(1024),
-            rendition: "r".repeat(1024),
-            ..TaikaiSegmentHint::default()
-        };
+    fn manifest_plan_heap_estimate_rejects_overflow() {
         assert!(matches!(
-            preflight_manifest_plan_heap(CAR_PLAN_MAX_CHUNKS, Some(&hint)),
-            Err(PlanFromManifestError::EstimatedPlanHeapLimitExceeded { .. })
-        ));
-        assert!(matches!(
-            preflight_manifest_plan_heap(usize::MAX, None),
+            preflight_manifest_plan_heap(usize::MAX),
             Err(PlanFromManifestError::EstimatedPlanHeapLimitExceeded { .. })
         ));
     }
@@ -7634,7 +7017,6 @@ mod tests {
             offset: u64::MAX - 1,
             length: 4,
             digest: [0; 32],
-            taikai_segment_hint: None,
         });
         plan.content_length = u64::MAX;
         let error = reject_before_io(&plan);
@@ -8771,13 +8153,11 @@ mod tests {
                     offset: 0,
                     length: 1,
                     digest,
-                    taikai_segment_hint: None,
                 },
                 CarChunk {
                     offset: 1,
                     length: 7,
                     digest,
-                    taikai_segment_hint: None,
                 },
             ];
             plan.files[0].chunk_count = 2;

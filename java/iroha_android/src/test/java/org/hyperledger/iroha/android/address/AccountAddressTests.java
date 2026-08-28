@@ -18,6 +18,7 @@ import org.hyperledger.iroha.android.client.RamLfeProgramPolicySummary;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKey;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
+import org.hyperledger.iroha.android.crypto.SignatureAdmission;
 import org.hyperledger.iroha.android.testing.SimpleJson;
 import org.hyperledger.iroha.android.tx.MultisigSignature;
 import org.hyperledger.iroha.norito.Varint;
@@ -90,6 +91,32 @@ public final class AccountAddressTests {
     for (final Object entry : vectors) {
       validateStrictEd25519AdmissionVector(asMap(entry, "vectors[]", "<vector>"));
     }
+    final byte[] validEd25519Key = validEd25519Key();
+    MultisigSignature.fromCurveId(
+        0x01,
+        validEd25519Key,
+        nonzeroMlDsaKey(SignatureAdmission.ED25519_SIGNATURE_LENGTH));
+    expectInvalidEd25519Signature(
+        "short Ed25519 signature",
+        () ->
+            MultisigSignature.fromCurveId(
+                0x01,
+                validEd25519Key,
+                nonzeroMlDsaKey(SignatureAdmission.ED25519_SIGNATURE_LENGTH - 1)));
+    expectInvalidEd25519Signature(
+        "long Ed25519 signature",
+        () ->
+            MultisigSignature.fromCurveId(
+                0x01,
+                validEd25519Key,
+                nonzeroMlDsaKey(SignatureAdmission.ED25519_SIGNATURE_LENGTH + 1)));
+    expectInvalidEd25519Signature(
+        "all-zero Ed25519 signature",
+        () ->
+            MultisigSignature.fromCurveId(
+                0x01,
+                validEd25519Key,
+                new byte[SignatureAdmission.ED25519_SIGNATURE_LENGTH]));
     validateOutputOpeningPublicKeyJsonTypes();
 
     final byte[] secpKey = new byte[33];
@@ -156,7 +183,11 @@ public final class AccountAddressTests {
           : name + ": leading Unicode whitespace accepted";
       assert Arrays.equals(
           compact,
-          MultisigSignature.fromCurveId(0x01, key, new byte[64]).publicKeyNoritoPayload())
+          MultisigSignature.fromCurveId(
+                  0x01,
+                  key,
+                  nonzeroMlDsaKey(SignatureAdmission.ED25519_SIGNATURE_LENGTH))
+              .publicKeyNoritoPayload())
           : name + ": multisig signature public-key encoding mismatch";
       assert decodedLiteral != null : name + ": valid multihash key rejected";
       assert decodedCompact != null : name + ": valid compact key rejected";
@@ -426,6 +457,18 @@ public final class AccountAddressTests {
       return;
     }
     throw new AssertionError(name + ": invalid ML-DSA-65 public key was accepted");
+  }
+
+  private static void expectInvalidEd25519Signature(
+      final String name, final CheckedRunnable action) throws Exception {
+    try {
+      action.run();
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("Ed25519 signature")
+          : name + ": unexpected signature error " + ex.getMessage();
+      return;
+    }
+    throw new AssertionError(name + ": invalid Ed25519 signature was accepted");
   }
 
   private static void expectInvalidPublicKeyLiteral(
@@ -773,6 +816,23 @@ public final class AccountAddressTests {
           AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
           () -> AccountAddress.fromCanonicalBytes(shortSingleCanonical));
 
+      for (int version = 1; version <= 0b111; version++) {
+        final byte[] reserved = Arrays.copyOf(shortSingleCanonical, shortSingleCanonical.length);
+        reserved[0] = (byte) ((version << 5) | 0x02);
+        expectAddressError(
+            "reserved address header version " + version,
+            AccountAddress.AccountAddressErrorCode.INVALID_HEADER_VERSION,
+            () -> AccountAddress.fromCanonicalBytes(reserved));
+      }
+      for (final int normVersion : new int[] {0, 2, 3}) {
+        final byte[] reserved = Arrays.copyOf(shortSingleCanonical, shortSingleCanonical.length);
+        reserved[0] = (byte) (normVersion << 1);
+        expectAddressError(
+            "reserved address normalization version " + normVersion,
+            AccountAddress.AccountAddressErrorCode.INVALID_NORM_VERSION,
+            () -> AccountAddress.fromCanonicalBytes(reserved));
+      }
+
       final String i105 = address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
       final AccountAddress i105RoundTrip =
           AccountAddress.fromI105(i105, AccountAddress.DEFAULT_I105_DISCRIMINANT);
@@ -793,9 +853,14 @@ public final class AccountAddressTests {
       assert Arrays.equals(valid, compactPayload.keyBytes());
 
       final MultisigSignature directSignature =
-          MultisigSignature.fromCurveId(0x02, valid, new byte[] {0x01});
+          MultisigSignature.fromCurveId(
+              0x02,
+              valid,
+              nonzeroMlDsaKey(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH));
       final MultisigSignature literalSignature =
-          MultisigSignature.fromPublicKeyLiteral(literal, new byte[] {0x02});
+          MultisigSignature.fromPublicKeyLiteral(
+              literal,
+              nonzeroMlDsaKey(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH));
       assert Arrays.equals(valid, directSignature.publicKey());
       assert Arrays.equals(valid, literalSignature.publicKey());
 
@@ -865,7 +930,32 @@ public final class AccountAddressTests {
             : name + ": compact decoder accepted key";
         expectInvalidMlDsaKey(
             name + " multisig signature",
-            () -> MultisigSignature.fromCurveId(0x02, invalid, new byte[] {0x01}));
+            () ->
+                MultisigSignature.fromCurveId(
+                    0x02,
+                    invalid,
+                    nonzeroMlDsaKey(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH)));
+      }
+
+      final String[] invalidSignatureNames = {
+        "1 byte", "64 bytes", "3308 bytes", "3310 bytes", "all-zero"
+      };
+      final byte[][] invalidSignatures = {
+        nonzeroMlDsaKey(1),
+        nonzeroMlDsaKey(64),
+        nonzeroMlDsaKey(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH - 1),
+        nonzeroMlDsaKey(SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH + 1),
+        new byte[SignatureAdmission.ML_DSA_65_SIGNATURE_LENGTH],
+      };
+      for (int index = 0; index < invalidSignatures.length; index++) {
+        final String name = "ML-DSA-65 signature " + invalidSignatureNames[index];
+        final byte[] invalidSignature = invalidSignatures[index];
+        expectInvalidMlDsaKey(
+            name + " direct",
+            () -> MultisigSignature.fromCurveId(0x02, valid, invalidSignature));
+        expectInvalidMlDsaKey(
+            name + " literal",
+            () -> MultisigSignature.fromPublicKeyLiteral(literal, invalidSignature));
       }
 
       for (final int shortExtendedLength : new int[] {0, 32, 255}) {

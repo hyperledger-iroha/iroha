@@ -1,8 +1,5 @@
 use iroha_config::parameters::{
-    actual::{
-        LaneProfile, Network, RelayMode, SoranetHandshake, SoranetPrivacy, SoranetPuzzle,
-        SoranetVpn,
-    },
+    actual::{LaneProfile, Network, RelayMode, SoranetHandshake, SoranetPrivacy, SoranetVpn},
     defaults::network as network_defaults,
 };
 use iroha_config_base::WithOrigin;
@@ -21,6 +18,18 @@ use std::{
     time::Duration,
 };
 
+/// Build a low-cost fixture for the mandatory SoraNet admission handshake.
+fn low_cost_test_soranet_handshake() -> SoranetHandshake {
+    let mut handshake = SoranetHandshake::default();
+    handshake.pow.difficulty = 1;
+    handshake.pow.puzzle.memory_kib =
+        NonZeroU32::new(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB)
+            .expect("minimum puzzle memory is non-zero");
+    handshake.pow.puzzle.time_cost = NonZeroU32::new(1).unwrap();
+    handshake.pow.puzzle.lanes = NonZeroU32::new(1).unwrap();
+    handshake
+}
+
 /// Build the exact fully populated baseline shared by P2P integration cases.
 ///
 /// Callers use struct update syntax for case-specific deviations, keeping the
@@ -36,18 +45,16 @@ fn test_network_config(
     mut soranet_handshake: SoranetHandshake,
     trust_gossip: bool,
 ) -> Network {
-    static NEXT_REPLAY_LEDGER: AtomicU64 = AtomicU64::new(0);
-    static REPLAY_LEDGER_DIRECTORY: OnceLock<std::path::PathBuf> = OnceLock::new();
-    let ledger_id = NEXT_REPLAY_LEDGER.fetch_add(1, Ordering::Relaxed);
-    let replay_directory = REPLAY_LEDGER_DIRECTORY.get_or_init(|| {
-        tempfile::Builder::new()
-            .prefix("iroha-p2p-test-revocations-")
-            .tempdir()
-            .expect("private P2P test replay-ledger directory")
-            .keep()
-    });
-    let replay_path = replay_directory.join(format!("ledger-{ledger_id}.norito"));
-    soranet_handshake.pow.revocation_store_path = replay_path.to_string_lossy().into_owned().into();
+    static REPLAY_DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+    static NEXT_REPLAY_STORE: AtomicU64 = AtomicU64::new(0);
+    let replay_dir = REPLAY_DIR.get_or_init(|| tempfile::tempdir().expect("test replay dir"));
+    let store_id = NEXT_REPLAY_STORE.fetch_add(1, Ordering::Relaxed);
+    soranet_handshake.pow.revocation_store_path = replay_dir
+        .path()
+        .join(format!("revocations-{store_id}.norito"))
+        .to_string_lossy()
+        .into_owned()
+        .into();
     Network {
         address: WithOrigin::inline(address),
         public_address: WithOrigin::inline(public_address),
@@ -61,6 +68,8 @@ fn test_network_config(
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        preauth_timeout: network_defaults::PREAUTH_TIMEOUT,
+        preauth_max_connections_per_ip: network_defaults::PREAUTH_MAX_CONNECTIONS_PER_IP,
         reply_writer_flush_timeout: network_defaults::REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: network_defaults::CONNECT_STARTUP_DELAY,
         dial_timeout: network_defaults::DIAL_TIMEOUT,
@@ -78,6 +87,10 @@ fn test_network_config(
         p2p_proxy: None,
         p2p_proxy_required: false,
         p2p_no_proxy: Vec::new(),
+        outbound_dial_allow_cidrs: Vec::new(),
+        outbound_dial_deny_cidrs: Vec::new(),
+        outbound_dial_allow_dns_suffixes: Vec::new(),
+        outbound_dial_deny_dns_suffixes: Vec::new(),
         p2p_proxy_tls_verify: true,
         p2p_proxy_tls_pinned_cert_der_base64: None,
         happy_eyeballs_stagger: Duration::from_millis(100),
@@ -152,20 +165,6 @@ fn test_network_config(
         max_frame_bytes_other: 262_144,
         quic_max_idle_timeout: None,
     }
-}
-
-/// Mandatory, minimum-cost admission policy for integration cases whose focus
-/// is independent of puzzle parameter negotiation.
-fn mandatory_test_soranet_handshake() -> SoranetHandshake {
-    let mut handshake = SoranetHandshake::default();
-    handshake.pow.difficulty = 1;
-    handshake.pow.puzzle = SoranetPuzzle::new(
-        NonZeroU32::new(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB)
-            .expect("minimum puzzle memory is non-zero"),
-        NonZeroU32::new(1).expect("minimum puzzle time cost is non-zero"),
-        NonZeroU32::new(1).expect("minimum puzzle lane count is non-zero"),
-    );
-    handshake
 }
 
 fn test_network_id(seed: &str) -> NetworkId {

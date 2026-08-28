@@ -5,8 +5,8 @@
     clippy::needless_pass_by_value
 )]
 use crate::boilerplate;
-#[cfg(test)]
-use crate::soranet_handshake_runtime::runtime_from_handshake_without_admission_for_test;
+#[cfg(feature = "quic")]
+use crate::preauth::DeadlineElapsed;
 use crate::{
     Broadcast, Error, NetworkMessage, OnlinePeers, P2pIdentityKeys, Post, Priority, RelayRole,
     UpdatePeers, UpdateTopology, UpdateTrustedPeers,
@@ -17,6 +17,7 @@ use crate::{
         handles::{PeerHandle, RecoverPostError, connected_from, connecting},
         message::*,
     },
+    preauth::{PreauthDeadline, PreauthSourceGate, canonical_remote_ip},
     sampler::LogSampler,
     soranet_handshake_runtime::{SoranetHandshakeRuntime, runtime_from_handshake},
 };
@@ -36,6 +37,8 @@ use norito::{
     codec::{Decode, Encode},
     core as ncore,
 };
+#[cfg(test)]
+use std::net::IpAddr;
 use std::net::ToSocketAddrs;
 #[cfg(feature = "quic")]
 use std::sync::OnceLock;
@@ -43,7 +46,6 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt::Debug,
     io,
-    net::IpAddr,
     sync::{
         Arc, Mutex, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -60,9 +62,35 @@ fn test_network_id(seed: &str) -> NetworkId {
     )))
 }
 #[cfg(test)]
+fn low_cost_test_soranet_handshake() -> ActualSoranetHandshake {
+    let mut handshake = ActualSoranetHandshake::default();
+    handshake.pow.difficulty = 1;
+    handshake.pow.puzzle.memory_kib =
+        std::num::NonZeroU32::new(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB)
+            .expect("minimum puzzle memory is non-zero");
+    handshake.pow.puzzle.time_cost = std::num::NonZeroU32::new(1).unwrap();
+    handshake.pow.puzzle.lanes = std::num::NonZeroU32::new(1).unwrap();
+    handshake
+}
+#[cfg(test)]
+fn test_soranet_handshake_config() -> ActualSoranetHandshake {
+    static REPLAY_DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    static NEXT_REPLAY_STORE: AtomicU64 = AtomicU64::new(0);
+    let replay_dir =
+        REPLAY_DIR.get_or_init(|| tempfile::tempdir().expect("test SoraNet replay directory"));
+    let store_id = NEXT_REPLAY_STORE.fetch_add(1, Ordering::Relaxed);
+    let mut handshake = low_cost_test_soranet_handshake();
+    handshake.pow.revocation_store_path = replay_dir
+        .path()
+        .join(format!("ticket_revocations_{store_id}.norito"))
+        .to_string_lossy()
+        .into_owned()
+        .into();
+    handshake
+}
+#[cfg(test)]
 fn test_soranet_handshake_runtime() -> Arc<SoranetHandshakeRuntime> {
-    runtime_from_handshake_without_admission_for_test(ActualSoranetHandshake::default())
-        .expect("test SoraNet handshake runtime")
+    runtime_from_handshake(test_soranet_handshake_config()).expect("test SoraNet handshake runtime")
 }
 #[cfg(feature = "quic")]
 static NEXT_QUIC_CONN_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -318,96 +346,11 @@ fn bind_reusable_tcp_listener_addr(addr: std::net::SocketAddr) -> io::Result<Tcp
     socket.listen(TCP_LISTEN_BACKLOG)?;
     TcpListener::from_std(socket.into())
 }
+mod admission;
 #[cfg(test)]
 #[path = "network/tcp_listener_bind_tests.rs"]
 mod tcp_listener_bind_tests;
-// Simple CIDR (IPv4/IPv6) representation for ACLs.
-#[derive(Clone, Debug)]
-struct IpNet {
-    kind: IpKind,
-}
-#[derive(Clone, Debug)]
-enum IpKind {
-    V4 { net: u32, mask: u32 },
-    V6 { net: [u8; 16], bits: u8 },
-}
-fn parse_cidr(s: &str) -> Option<IpNet> {
-    if let Some((ip, bits_str)) = s.split_once('/') {
-        let bits: u8 = bits_str.parse().ok()?;
-        if let Ok(v4) = ip.parse::<std::net::Ipv4Addr>() {
-            if bits > 32 {
-                return None;
-            }
-            let n = u32::from(v4);
-            let mask = if bits == 0 {
-                0
-            } else {
-                u32::MAX << (32 - bits)
-            };
-            return Some(IpNet {
-                kind: IpKind::V4 {
-                    net: n & mask,
-                    mask,
-                },
-            });
-        }
-        if let Ok(v6) = ip.parse::<std::net::Ipv6Addr>() {
-            if bits > 128 {
-                return None;
-            }
-            let mut net = [0u8; 16];
-            net.copy_from_slice(&v6.octets());
-            let full_bytes = (bits / 8) as usize;
-            let rem_bits = bits % 8;
-            if full_bytes < 16 {
-                if rem_bits == 0 {
-                    for b in net.iter_mut().skip(full_bytes) {
-                        *b = 0;
-                    }
-                } else {
-                    for b in net.iter_mut().skip(full_bytes + 1) {
-                        *b = 0;
-                    }
-                    let mask = 0xFFu8 << (8 - rem_bits);
-                    net[full_bytes] &= mask;
-                }
-            }
-            return Some(IpNet {
-                kind: IpKind::V6 { net, bits },
-            });
-        }
-    }
-    None
-}
-fn parse_cidrs(list: &[String]) -> Vec<IpNet> {
-    list.iter().filter_map(|s| parse_cidr(s)).collect()
-}
-fn cidr_contains(nets: &[IpNet], ip: std::net::IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let x = u32::from(v4);
-            nets.iter().any(|n| match &n.kind {
-                IpKind::V4 { net, mask } => (x & mask) == *net,
-                _ => false,
-            })
-        }
-        IpAddr::V6(v6) => {
-            let x = v6.octets();
-            nets.iter().any(|n| match &n.kind {
-                IpKind::V6 { net, bits } => {
-                    let full = (*bits / 8) as usize;
-                    let rem = *bits % 8;
-                    (full == 0 || x[..full] == net[..full])
-                        && (rem == 0 || {
-                            let mask = 0xFFu8 << (8 - rem);
-                            (x[full] & mask) == (net[full] & mask)
-                        })
-                }
-                _ => false,
-            })
-        }
-    }
-}
+use admission::*;
 fn relay_role_from_mode(mode: iroha_config::parameters::actual::RelayMode) -> RelayRole {
     match mode {
         iroha_config::parameters::actual::RelayMode::Hub => RelayRole::Hub,
@@ -489,6 +432,8 @@ static ACCEPT_IP_THROTTLED: AtomicU64 = AtomicU64::new(0);
 static INCOMING_CAP_REJECTS: AtomicU64 = AtomicU64::new(0);
 /// Count of accepted connections dropped due to `max_total_connections` cap.
 static TOTAL_CAP_REJECTS: AtomicU64 = AtomicU64::new(0);
+/// Count of accepted connections dropped due to the concurrent pre-auth source cap.
+static PREAUTH_SOURCE_CAP_REJECTS: AtomicU64 = AtomicU64::new(0);
 /// Count of low-priority post messages throttled by per-peer token buckets.
 static LOW_THROTTLED_POSTS: AtomicU64 = AtomicU64::new(0);
 /// Count of low-priority broadcast deliveries throttled per peer.
@@ -608,7 +553,6 @@ struct RelayMessage<T> {
     origin: PeerId,
     target: RelayTarget,
     ttl: u8,
-    priority: Priority,
     origin_signature: Vec<u8>,
     payload: T,
 }
@@ -638,7 +582,6 @@ impl<T: Encode> RelayMessage<T> {
         key_pair: &KeyPair,
         target: RelayTarget,
         ttl: u8,
-        priority: Priority,
         payload: T,
     ) -> Result<Self, iroha_crypto::error::Error> {
         let origin = PeerId::from(key_pair.public_key().clone());
@@ -646,7 +589,7 @@ impl<T: Encode> RelayMessage<T> {
         if let RelayTarget::Direct(target) = &target {
             ensure_relay_node_identity(target)?;
         }
-        let digest = relay_origin_signature_digest(&origin, &target, priority, &payload);
+        let digest = relay_origin_signature_digest(&origin, &target, &payload);
         let origin_signature = Signature::try_new(key_pair.private_key(), digest.as_ref())?
             .payload()
             .to_vec();
@@ -654,23 +597,16 @@ impl<T: Encode> RelayMessage<T> {
             origin,
             target,
             ttl,
-            priority,
             origin_signature,
             payload,
         })
     }
-    fn new_signed(
-        key_pair: &KeyPair,
-        target: RelayTarget,
-        ttl: u8,
-        priority: Priority,
-        payload: T,
-    ) -> Self {
-        Self::try_new(key_pair, target, ttl, priority, payload)
+    fn new_signed(key_pair: &KeyPair, target: RelayTarget, ttl: u8, payload: T) -> Self {
+        Self::try_new(key_pair, target, ttl, payload)
             .expect("a validated local P2P key pair must sign relay-origin material")
     }
     #[cfg(test)]
-    fn new(origin: PeerId, target: RelayTarget, ttl: u8, priority: Priority, payload: T) -> Self {
+    fn new(origin: PeerId, target: RelayTarget, ttl: u8, payload: T) -> Self {
         ensure_relay_node_identity(&origin).expect("test relay origin must be BLS-normal");
         if let RelayTarget::Direct(target) = &target {
             ensure_relay_node_identity(target).expect("test relay target must be BLS-normal");
@@ -680,7 +616,6 @@ impl<T: Encode> RelayMessage<T> {
             origin,
             target,
             ttl,
-            priority,
             origin_signature,
             payload,
         }
@@ -696,8 +631,7 @@ impl<T: Encode> RelayMessage<T> {
                 self.origin_signature.len()
             )));
         }
-        let digest =
-            relay_origin_signature_digest(&self.origin, &self.target, self.priority, &self.payload);
+        let digest = relay_origin_signature_digest(&self.origin, &self.target, &self.payload);
         Signature::try_from_bytes(&self.origin_signature)?
             .verify(self.origin.public_key(), digest.as_ref())
     }
@@ -729,21 +663,16 @@ fn ensure_relay_node_identity(origin: &PeerId) -> Result<(), iroha_crypto::error
 fn relay_origin_signature_digest<T: Encode>(
     origin: &PeerId,
     target: &RelayTarget,
-    priority: Priority,
     payload: &T,
 ) -> Hash {
     let origin = origin.encode();
     let target = target.encode();
-    let priority = priority.encode();
     let payload = payload.encode();
     let origin_len = u64::try_from(origin.len())
         .expect("an in-memory relay origin length must fit u64")
         .to_le_bytes();
     let target_len = u64::try_from(target.len())
         .expect("an in-memory relay target length must fit u64")
-        .to_le_bytes();
-    let priority_len = u64::try_from(priority.len())
-        .expect("an in-memory relay priority length must fit u64")
         .to_le_bytes();
     let payload_len = u64::try_from(payload.len())
         .expect("an in-memory relay payload length must fit u64")
@@ -754,8 +683,6 @@ fn relay_origin_signature_digest<T: Encode>(
         &origin,
         &target_len,
         &target,
-        &priority_len,
-        &priority,
         &payload_len,
         &payload,
     ])
@@ -767,11 +694,8 @@ fn relay_origin_signature_digest<T: Encode>(
 pub fn data_frame_wire_len<T: Encode + Clone>(
     origin: &PeerId,
     target: Option<&PeerId>,
-    ttl: u8,
-    priority: message::Priority,
     payload: &T,
 ) -> usize {
-    let _ = (ttl, priority);
     data_frame_wire_len_from_payload_len::<T>(origin, target, payload.encoded_len())
 }
 fn checked_len_prefixed(payload_len: usize, flags: u8) -> Option<usize> {
@@ -824,13 +748,11 @@ fn relay_message_wire_payload_len(direct: bool, payload_len: usize, flags: u8) -
     let origin_len = peer_id_wire_len_from_raw_key_bytes(RELAY_NODE_PUBLIC_KEY_BYTES, flags)?;
     let target_len = relay_target_wire_len(direct.then_some(RELAY_NODE_PUBLIC_KEY_BYTES), flags)?;
     let ttl_len = core::mem::size_of::<u8>();
-    let priority_len = core::mem::size_of::<u32>();
     let origin_signature_len = byte_sequence_wire_len(RELAY_ORIGIN_SIGNATURE_BYTES)?;
     let field_lens = [
         origin_len,
         target_len,
         ttl_len,
-        priority_len,
         origin_signature_len,
         payload_len,
     ];
@@ -849,17 +771,11 @@ fn relay_message_wire_payload_len(direct: bool, payload_len: usize, flags: u8) -
             .try_fold(offsets_len, usize::checked_add);
     }
     // The hybrid packed relay bitset marks every field except the fixed-width TTL.
-    let size_header_len = [
-        origin_len,
-        target_len,
-        priority_len,
-        origin_signature_len,
-        payload_len,
-    ]
-    .into_iter()
-    .try_fold(0usize, |total, field_len| {
-        total.checked_add(ncore::len_prefix_len_with_flags(field_len, flags))
-    })?;
+    let size_header_len = [origin_len, target_len, origin_signature_len, payload_len]
+        .into_iter()
+        .try_fold(0usize, |total, field_len| {
+            total.checked_add(ncore::len_prefix_len_with_flags(field_len, flags))
+        })?;
     field_lens
         .into_iter()
         .try_fold(1usize.checked_add(size_header_len)?, usize::checked_add)
@@ -918,12 +834,12 @@ pub fn data_frame_wire_len_from_payload_len<T>(
 }
 type WireMessage<T> = RelayMessage<T>;
 fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore::Error> {
-    const FIELD_COUNT: usize = 6;
+    const FIELD_COUNT: usize = 5;
     const PAYLOAD_FIELD_INDEX: usize = FIELD_COUNT - 1;
     // Hybrid packed RelayMessage fields needing explicit sizes are origin,
-    // target, priority, origin signature, and payload. TTL is the sole
-    // one-byte fixed field.
-    const EXPECTED_FIELD_BITSET: u8 = 0b0011_1011;
+    // target, origin signature, and payload. TTL is the sole one-byte fixed
+    // field.
+    const EXPECTED_FIELD_BITSET: u8 = 0b0001_1011;
     if flags & ncore::header_flags::PACKED_STRUCT == 0 {
         let mut remaining = payload;
         for index in 0..FIELD_COUNT {
@@ -991,7 +907,7 @@ fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore
     if bitset != EXPECTED_FIELD_BITSET {
         return Err(ncore::Error::LengthMismatch);
     }
-    let mut field_sizes = [0_usize; 5];
+    let mut field_sizes = [0_usize; 4];
     for field_size in &mut field_sizes {
         let (size, used) = ncore::read_len_from_slice_with_flags(size_headers, flags)?;
         *field_size = size;
@@ -1003,10 +919,9 @@ fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore
         .checked_add(field_sizes[1])
         .and_then(|offset| offset.checked_add(core::mem::size_of::<u8>()))
         .and_then(|offset| offset.checked_add(field_sizes[2]))
-        .and_then(|offset| offset.checked_add(field_sizes[3]))
         .ok_or(ncore::Error::LengthMismatch)?;
     let payload_end = payload_start
-        .checked_add(field_sizes[4])
+        .checked_add(field_sizes[3])
         .ok_or(ncore::Error::LengthMismatch)?;
     if payload_end != size_headers.len() {
         return Err(ncore::Error::LengthMismatch);
@@ -1021,7 +936,7 @@ impl<T: message::ClassifyTopic> message::ClassifyTopic for RelayMessage<T> {
         self.payload.topic()
     }
     fn priority(&self) -> message::Priority {
-        self.priority
+        self.payload.topic().scheduling_priority()
     }
     fn subscriber_route(&self) -> message::SubscriberRoute {
         self.payload.subscriber_route()
@@ -3464,6 +3379,28 @@ impl ActorProgressSource {
             class,
         })
     }
+    fn for_admitted_payload<T: message::ClassifyTopic>(
+        payload: &AdmittedNetworkPayload<T>,
+    ) -> Option<Self> {
+        match payload {
+            AdmittedNetworkPayload::Unsigned(message) => Self::for_message(message),
+            AdmittedNetworkPayload::Signed(frame) => {
+                let RelayTarget::Direct(target) = &frame.target else {
+                    // Reliable broadcasts acquire an explicit target source
+                    // before actor admission.
+                    return None;
+                };
+                let class = ActorProgressClass::for_route(
+                    frame.payload.topic(),
+                    frame.payload.subscriber_route(),
+                )?;
+                Some(Self {
+                    target: Some(target.clone()),
+                    class,
+                })
+            }
+        }
+    }
     #[cfg(test)]
     fn test() -> Self {
         Self {
@@ -5014,414 +4951,8 @@ impl Drop for NetworkActorProgressLease {
         state.retained_by_source.remove(&self.source);
     }
 }
-enum NetworkActorLease {
-    Ordinary(NetworkActorByteLease),
-    Progress(NetworkActorProgressLease),
-}
-impl NetworkActorLease {
-    fn bytes(&self) -> usize {
-        match self {
-            Self::Ordinary(lease) => lease.bytes,
-            Self::Progress(lease) => lease.bytes,
-        }
-    }
-    fn progress_source(&self) -> Option<&ActorProgressSource> {
-        match self {
-            Self::Ordinary(_) => None,
-            Self::Progress(lease) => Some(&lease.source),
-        }
-    }
-}
-impl From<NetworkActorByteLease> for NetworkActorLease {
-    fn from(lease: NetworkActorByteLease) -> Self {
-        Self::Ordinary(lease)
-    }
-}
-impl From<NetworkActorProgressLease> for NetworkActorLease {
-    fn from(lease: NetworkActorProgressLease) -> Self {
-        Self::Progress(lease)
-    }
-}
-/// One peer-writer occurrence retained by the network actor until flush.
-struct PendingWriterFlush {
-    receiver: tokio::sync::oneshot::Receiver<()>,
-}
-/// Linearize an exact reply's pending writer flush before a destructive exit.
-///
-/// Closing the receiver and polling it immediately gives the peer writer and
-/// network actor one deterministic boundary: a flush published before the
-/// close remains observable, while a writer which loses the close race cannot
-/// publish success afterwards. Topology traffic has no exact target and never
-/// enters this fence.
-fn exact_reply_flush_wins_terminal_fence(
-    pending_flush_acks: &mut HashMap<PeerId, PendingWriterFlush>,
-    exact_target: Option<&PeerId>,
-) -> bool {
-    let Some(exact_target) = exact_target else {
-        return false;
-    };
-    let Some(mut pending) = pending_flush_acks.remove(exact_target) else {
-        return false;
-    };
-    pending.receiver.close();
-    matches!(pending.receiver.try_recv(), Ok(()))
-}
-/// Immutable lifetime of one exact actor-owned reply occurrence.
-#[derive(Clone, Copy, Debug)]
-struct ExactReplyWriterDeadline {
-    admitted_at: tokio::time::Instant,
-    timeout: Duration,
-}
-impl ExactReplyWriterDeadline {
-    fn expired_at(self, now: tokio::time::Instant) -> bool {
-        now.checked_duration_since(self.admitted_at)
-            .is_some_and(|elapsed| elapsed >= self.timeout)
-    }
-}
-fn scaled_reply_writer_flush_timeout(base: Duration, attempt: u8) -> Duration {
-    let mut timeout = base;
-    for _ in 0..attempt {
-        let Some(doubled) = timeout.checked_mul(2) else {
-            return Duration::MAX;
-        };
-        timeout = doubled;
-    }
-    timeout
-}
-struct AdmittedNetworkMessage<T> {
-    message: Option<NetworkMessage<T>>,
-    byte_lease: NetworkActorLease,
-    /// Exact actor-published topology tenure for a reliable target delivery.
-    /// Best-effort traffic and budget-only test fixtures carry no membership.
-    progress_authority: Option<ProgressDeliveryAuthority>,
-    /// Snapshot of broadcast targets that have not yet acquired downstream
-    /// ownership. `None` means the first dispatch has not observed topology;
-    /// `Some(empty)` is a completed fanout.
-    remaining_broadcast_targets: Option<VecDeque<PeerId>>,
-    /// Per-target peer-writer completions that have not yet observed a
-    /// successful full write and flush.
-    ///
-    /// Receivers stay inside the same opaque actor item as the original
-    /// message and actor lease.  A closed receiver moves its target back to
-    /// the retry cursor; a pending receiver cannot be mistaken for delivery.
-    /// An exact reply also retains its immutable writer deadline and
-    /// connection so timeout retirement cannot affect a replacement.
-    pending_flush_acks: HashMap<PeerId, PendingWriterFlush>,
-    /// Adaptive timeout generation for an exact reply; topology traffic has none.
-    reply_writer_timeout_attempt: Option<u8>,
-    /// Fixed on first actor dispatch, before any peer-writer admission attempt.
-    reply_writer_deadline: Option<ExactReplyWriterDeadline>,
-    /// Process-local completion owned by the caller which admitted this exact
-    /// reply occurrence. Only a fully observed peer-writer flush consumes it
-    /// successfully. A ready writer flush wins each terminal close-and-poll
-    /// fence; cancellation or drop otherwise closes the caller's receiver.
-    reply_flush_ack: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
-}
-impl<T> AdmittedNetworkMessage<T> {
-    fn new(message: NetworkMessage<T>, byte_lease: impl Into<NetworkActorLease>) -> Self {
-        let byte_lease = byte_lease.into();
-        let _ = byte_lease.bytes();
-        Self {
-            message: Some(message),
-            byte_lease,
-            progress_authority: None,
-            remaining_broadcast_targets: None,
-            pending_flush_acks: HashMap::new(),
-            reply_writer_timeout_attempt: None,
-            reply_writer_deadline: None,
-            reply_flush_ack: None,
-        }
-    }
-    fn new_targeted_broadcast(
-        message: NetworkMessage<T>,
-        byte_lease: NetworkActorProgressLease,
-        authority: ProgressDeliveryAuthority,
-    ) -> Self {
-        debug_assert!(matches!(message, NetworkMessage::Broadcast(_)));
-        let ProgressDeliveryAuthority::Topology(membership) = &authority else {
-            unreachable!("reliable broadcasts require topology authority")
-        };
-        debug_assert_eq!(byte_lease.source.target.as_ref(), Some(&membership.peer_id));
-        Self {
-            message: Some(message),
-            byte_lease: byte_lease.into(),
-            remaining_broadcast_targets: Some(VecDeque::from([membership.peer_id.clone()])),
-            progress_authority: Some(authority),
-            pending_flush_acks: HashMap::new(),
-            reply_writer_timeout_attempt: None,
-            reply_writer_deadline: None,
-            reply_flush_ack: None,
-        }
-    }
-    fn new_targeted_post(
-        message: NetworkMessage<T>,
-        byte_lease: NetworkActorProgressLease,
-        authority: ProgressDeliveryAuthority,
-        reply_writer_timeout_attempt: Option<u8>,
-        reply_flush_ack: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
-    ) -> Self {
-        debug_assert!(matches!(message, NetworkMessage::Post(_)));
-        debug_assert_eq!(
-            byte_lease.source.target.as_ref(),
-            Some(authority.source_target())
-        );
-        debug_assert_eq!(
-            reply_writer_timeout_attempt.is_some(),
-            matches!(&authority, ProgressDeliveryAuthority::Reply(_))
-        );
-        Self {
-            message: Some(message),
-            byte_lease: byte_lease.into(),
-            progress_authority: Some(authority),
-            remaining_broadcast_targets: None,
-            pending_flush_acks: HashMap::new(),
-            reply_writer_timeout_attempt,
-            reply_writer_deadline: None,
-            reply_flush_ack,
-        }
-    }
-    fn cancelled_progress_authority(&self) -> bool {
-        self.progress_authority
-            .as_ref()
-            .is_some_and(|authority| !authority.is_active())
-    }
-    /// Publish a ready exact-reply flush before this actor item is dropped.
-    ///
-    /// This is the terminal-drop counterpart of dispatch's destructive-exit
-    /// fence. It is intentionally a no-op for topology-authorized traffic.
-    fn publish_ready_exact_reply_before_terminal_drop(&mut self) -> bool {
-        let Self {
-            progress_authority,
-            pending_flush_acks,
-            reply_flush_ack,
-            ..
-        } = self;
-        let exact_target = progress_authority.as_ref().and_then(|authority| {
-            let ProgressDeliveryAuthority::Reply(route) = authority else {
-                return None;
-            };
-            Some(route.semantic_target())
-        });
-        if !exact_reply_flush_wins_terminal_fence(pending_flush_acks, exact_target) {
-            return false;
-        }
-        if let Some(reply_flush_ack) = reply_flush_ack.take() {
-            let _ = reply_flush_ack.send(NetworkReplyFlushCompletion::Flushed);
-        }
-        true
-    }
-    fn progress_source(&self) -> Option<&ActorProgressSource> {
-        self.byte_lease.progress_source()
-    }
-    fn into_parts(self) -> (NetworkMessage<T>, NetworkActorLease) {
-        let Self {
-            mut message,
-            byte_lease,
-            ..
-        } = self;
-        (
-            message
-                .take()
-                .expect("admitted network message must be consumed exactly once"),
-            byte_lease,
-        )
-    }
-    fn into_dispatch_parts(
-        self,
-    ) -> (
-        NetworkMessage<T>,
-        NetworkActorLease,
-        Option<VecDeque<PeerId>>,
-        HashMap<PeerId, PendingWriterFlush>,
-        Option<ProgressDeliveryAuthority>,
-        Option<u8>,
-        Option<ExactReplyWriterDeadline>,
-        Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
-    ) {
-        let Self {
-            mut message,
-            byte_lease,
-            remaining_broadcast_targets,
-            pending_flush_acks,
-            progress_authority,
-            reply_writer_timeout_attempt,
-            reply_writer_deadline,
-            reply_flush_ack,
-        } = self;
-        (
-            message
-                .take()
-                .expect("admitted network message must be consumed exactly once"),
-            byte_lease,
-            remaining_broadcast_targets,
-            pending_flush_acks,
-            progress_authority,
-            reply_writer_timeout_attempt,
-            reply_writer_deadline,
-            reply_flush_ack,
-        )
-    }
-    /// Retain the same admitted owner after an incomplete writer-dispatch attempt.
-    ///
-    /// This is not a capability reconstruction boundary: every tenure-bound
-    /// authority and reply completion sender is moved out by
-    /// [`Self::into_dispatch_parts`] and returned here unchanged.
-    fn retain_after_dispatch_attempt(
-        message: NetworkMessage<T>,
-        byte_lease: NetworkActorLease,
-        remaining_broadcast_targets: Option<VecDeque<PeerId>>,
-        pending_flush_acks: HashMap<PeerId, PendingWriterFlush>,
-        progress_authority: Option<ProgressDeliveryAuthority>,
-        reply_writer_timeout_attempt: Option<u8>,
-        reply_writer_deadline: Option<ExactReplyWriterDeadline>,
-        reply_flush_ack: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
-    ) -> Self {
-        Self {
-            message: Some(message),
-            byte_lease,
-            progress_authority,
-            remaining_broadcast_targets,
-            pending_flush_acks,
-            reply_writer_timeout_attempt,
-            reply_writer_deadline,
-            reply_flush_ack,
-        }
-    }
-    #[cfg(test)]
-    fn into_inner(self) -> NetworkMessage<T> {
-        self.into_parts().0
-    }
-}
-/// Source-isolated reliable actor backlog.
-///
-/// The scheduler deliberately stores the admitted owner as one opaque item.
-/// Target cursors (and, once the peer writer exposes them, flush
-/// acknowledgements) therefore remain part of the same retryable ownership
-/// record rather than being duplicated into another queue.
-struct ReliableActorPending<T> {
-    by_source: HashMap<ActorProgressSource, VecDeque<AdmittedNetworkMessage<T>>>,
-    ready_sources: VecDeque<ActorProgressSource>,
-    ready_members: HashSet<ActorProgressSource>,
-    len: usize,
-    max_items: usize,
-}
-impl<T> ReliableActorPending<T> {
-    /// Release every retained item through the exact-reply terminal fence.
-    fn release_all_with_terminal_fence(&mut self) -> usize {
-        let released = self.len;
-        for entries in self.by_source.values_mut() {
-            for entry in entries {
-                entry.publish_ready_exact_reply_before_terminal_drop();
-            }
-        }
-        self.by_source.clear();
-        self.ready_sources.clear();
-        self.ready_members.clear();
-        self.len = 0;
-        released
-    }
-}
-impl<T> Drop for ReliableActorPending<T> {
-    fn drop(&mut self) {
-        let _ = self.release_all_with_terminal_fence();
-    }
-}
-impl<T: message::ClassifyTopic> ReliableActorPending<T> {
-    fn new(max_items: usize) -> Self {
-        Self {
-            by_source: HashMap::new(),
-            ready_sources: VecDeque::new(),
-            ready_members: HashSet::new(),
-            len: 0,
-            max_items,
-        }
-    }
-    fn source(message: &AdmittedNetworkMessage<T>) -> ActorProgressSource {
-        message
-            .progress_source()
-            .cloned()
-            .or_else(|| {
-                message
-                    .message
-                    .as_ref()
-                    .and_then(ActorProgressSource::for_message)
-            })
-            .expect("reliable actor backlog accepts only semantic-progress messages")
-    }
-    fn push_back(&mut self, message: AdmittedNetworkMessage<T>) {
-        assert!(
-            self.len < self.max_items,
-            "reliable actor backlog exceeded its checked admission geometry"
-        );
-        let source = Self::source(&message);
-        let entries = self.by_source.entry(source.clone()).or_default();
-        entries.push_back(message);
-        self.len = self
-            .len
-            .checked_add(1)
-            .expect("bounded reliable actor item count cannot overflow");
-        if self.ready_members.insert(source.clone()) {
-            self.ready_sources.push_back(source);
-        }
-    }
-    fn pop_front(&mut self) -> Option<(ActorProgressSource, AdmittedNetworkMessage<T>)> {
-        while let Some(source) = self.ready_sources.pop_front() {
-            self.ready_members.remove(&source);
-            let Some(mut entries) = self.by_source.remove(&source) else {
-                continue;
-            };
-            let Some(message) = entries.pop_front() else {
-                continue;
-            };
-            self.len = self
-                .len
-                .checked_sub(1)
-                .expect("reliable actor backlog count must match its queues");
-            if !entries.is_empty() {
-                self.by_source.insert(source.clone(), entries);
-                self.ready_members.insert(source.clone());
-                self.ready_sources.push_back(source.clone());
-            }
-            return Some((source, message));
-        }
-        None
-    }
-    fn retry_back(&mut self, source: ActorProgressSource, message: AdmittedNetworkMessage<T>) {
-        assert_eq!(
-            source,
-            Self::source(&message),
-            "reliable actor retry must preserve its admission source"
-        );
-        self.push_back(message);
-    }
-    fn len(&self) -> usize {
-        self.len
-    }
-    /// Release reliable target deliveries whose exact topology tenure was cancelled.
-    fn release_cancelled_targets(&mut self) -> usize {
-        let mut released = 0usize;
-        self.by_source.retain(|_source, entries| {
-            entries.retain_mut(|entry| {
-                if !entry.cancelled_progress_authority() {
-                    return true;
-                }
-                entry.publish_ready_exact_reply_before_terminal_drop();
-                released = released.saturating_add(1);
-                false
-            });
-            !entries.is_empty()
-        });
-        self.len = self
-            .len
-            .checked_sub(released)
-            .expect("released target deliveries must match reliable backlog ownership");
-        self.ready_sources
-            .retain(|source| self.by_source.contains_key(source));
-        self.ready_members
-            .retain(|source| self.by_source.contains_key(source));
-        released
-    }
-}
+mod reliable_actor;
+use reliable_actor::*;
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TopicFrameCaps {
     consensus: usize,
@@ -5524,7 +5055,7 @@ fn progress_ticket_request_digest<T: Pload>(message: &NetworkMessage<T>) -> Hash
         }
     }
 }
-fn defer_high_priority_network_message<T: Pload>(
+fn defer_high_priority_network_message<T: Pload + Sync>(
     sender: net_channel::Sender<AdmittedNetworkMessage<T>>,
     message: AdmittedNetworkMessage<T>,
     broadcast: bool,
@@ -5827,6 +5358,10 @@ pub fn incoming_cap_reject_count() -> u64 {
 /// Returns the number of connections rejected by the total connections cap.
 pub fn total_cap_reject_count() -> u64 {
     TOTAL_CAP_REJECTS.load(Ordering::Relaxed)
+}
+/// Returns the number of connections rejected by the concurrent pre-auth source cap.
+pub fn preauth_source_cap_reject_count() -> u64 {
+    PREAUTH_SOURCE_CAP_REJECTS.load(Ordering::Relaxed)
 }
 /// Returns the number of low-priority post messages dropped by per-peer throttle.
 pub fn low_post_throttled_count() -> u64 {
@@ -6161,298 +5696,6 @@ pub fn inc_post_overflow_for_test(priority_high: bool, topic: message::Topic, n:
     }
 }
 // LogSampler is provided by crate::sampler
-/// A coarse bucket key for IPs used for throttling.
-/// The prefix length used to derive the bucket is stored alongside the masked address.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct IpBucketKey([u8; 16], u8);
-fn ip_bucket_key(ip: std::net::IpAddr, prefix_v4_bits: u8, prefix_v6_bits: u8) -> IpBucketKey {
-    match ip {
-        IpAddr::V4(v4) => {
-            let bits = prefix_v4_bits.min(32);
-            let raw = u32::from_be_bytes(v4.octets());
-            let masked = if bits == 0 {
-                0
-            } else {
-                raw & (!0u32 << (32 - bits))
-            };
-            let mut key = [0u8; 16];
-            key[..4].copy_from_slice(&masked.to_be_bytes());
-            IpBucketKey(key, bits)
-        }
-        IpAddr::V6(v6) => {
-            let bits = prefix_v6_bits.min(128);
-            let raw = u128::from_be_bytes(v6.octets());
-            let masked = if bits == 0 {
-                0
-            } else {
-                raw & (!0u128 << (128 - bits))
-            };
-            IpBucketKey(masked.to_be_bytes(), bits)
-        }
-    }
-}
-/// Simple token-bucket limiter for accepts.
-#[derive(Debug, Clone)]
-struct TokenBucket {
-    tokens: f64,
-    last_refill: tokio::time::Instant,
-    rate_per_sec: f64,
-    burst: f64,
-}
-impl TokenBucket {
-    fn new(rate_per_sec: f64, burst: f64) -> Self {
-        let now = tokio::time::Instant::now();
-        let tokens = burst;
-        Self {
-            tokens,
-            last_refill: now,
-            rate_per_sec,
-            burst,
-        }
-    }
-    fn allow(&mut self) -> bool {
-        self.allow_at(tokio::time::Instant::now())
-    }
-    fn allow_at(&mut self, now: tokio::time::Instant) -> bool {
-        let elapsed = now
-            .saturating_duration_since(self.last_refill)
-            .as_secs_f64();
-        self.last_refill = now;
-        self.tokens = elapsed
-            .mul_add(self.rate_per_sec, self.tokens)
-            .min(self.burst);
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
-            true
-        } else {
-            false
-        }
-    }
-    /// Allow consuming an arbitrary amount from the bucket.
-    fn allow_n(&mut self, amount: f64) -> bool {
-        self.allow_n_at(amount, tokio::time::Instant::now())
-    }
-    /// Allow consuming an arbitrary amount from the bucket at a specific instant.
-    fn allow_n_at(&mut self, amount: f64, now: tokio::time::Instant) -> bool {
-        let elapsed = now
-            .saturating_duration_since(self.last_refill)
-            .as_secs_f64();
-        self.last_refill = now;
-        self.tokens = elapsed
-            .mul_add(self.rate_per_sec, self.tokens)
-            .min(self.burst);
-        if self.tokens >= amount {
-            self.tokens -= amount;
-            true
-        } else {
-            false
-        }
-    }
-    fn update_shape(&mut self, rate_per_sec: f64, burst: f64) {
-        self.rate_per_sec = rate_per_sec;
-        self.burst = burst;
-        self.tokens = self.tokens.min(self.burst);
-    }
-}
-#[derive(Debug, Clone)]
-struct AcceptBucket {
-    bucket: TokenBucket,
-    last_seen: tokio::time::Instant,
-}
-impl AcceptBucket {
-    fn new(rate_per_sec: f64, burst: f64, now: tokio::time::Instant) -> Self {
-        Self {
-            bucket: TokenBucket::new(rate_per_sec, burst),
-            last_seen: now,
-        }
-    }
-    fn allow(&mut self, now: tokio::time::Instant) -> bool {
-        self.last_seen = now;
-        self.bucket.allow_at(now)
-    }
-    fn update_shape(&mut self, rate_per_sec: f64, burst: f64) {
-        self.bucket.update_shape(rate_per_sec, burst);
-    }
-}
-#[derive(Clone, Copy, Debug)]
-struct AcceptThrottleParams {
-    prefix_rate_per_sec: Option<f64>,
-    prefix_burst: Option<f64>,
-    prefix_v4_bits: u8,
-    prefix_v6_bits: u8,
-    ip_rate_per_sec: Option<f64>,
-    ip_burst: Option<f64>,
-    max_buckets: usize,
-    bucket_idle: Duration,
-}
-impl AcceptThrottleParams {
-    fn new(
-        prefix_rate_per_sec: Option<f64>,
-        prefix_burst: Option<f64>,
-        prefix_v4_bits: u8,
-        prefix_v6_bits: u8,
-        ip_rate_per_sec: Option<f64>,
-        ip_burst: Option<f64>,
-        max_buckets: usize,
-        bucket_idle: Duration,
-    ) -> Self {
-        Self {
-            prefix_rate_per_sec,
-            prefix_burst,
-            prefix_v4_bits,
-            prefix_v6_bits,
-            ip_rate_per_sec,
-            ip_burst,
-            max_buckets: max_buckets.max(1),
-            bucket_idle,
-        }
-    }
-}
-fn evict_oldest_bucket(map: &mut HashMap<IpBucketKey, AcceptBucket>) -> bool {
-    let Some(oldest_key) = map
-        .iter()
-        .min_by_key(|(_, entry)| entry.last_seen)
-        .map(|(k, _)| *k)
-    else {
-        return false;
-    };
-    map.remove(&oldest_key);
-    true
-}
-fn prune_accept_buckets(
-    buckets: &mut HashMap<IpBucketKey, AcceptBucket>,
-    max_buckets: usize,
-    bucket_idle: Duration,
-    now: tokio::time::Instant,
-) -> usize {
-    let mut evicted = 0;
-    if bucket_idle != Duration::ZERO {
-        let before = buckets.len();
-        buckets.retain(|_, entry| now.saturating_duration_since(entry.last_seen) < bucket_idle);
-        evicted += before.saturating_sub(buckets.len());
-    }
-    while buckets.len() > max_buckets {
-        if !evict_oldest_bucket(buckets) {
-            break;
-        }
-        evicted += 1;
-    }
-    evicted
-}
-fn consume_accept_bucket(
-    buckets: &mut HashMap<IpBucketKey, AcceptBucket>,
-    key: IpBucketKey,
-    rate_per_sec: f64,
-    burst: f64,
-    params: &AcceptThrottleParams,
-    now: tokio::time::Instant,
-) -> (bool, bool, usize) {
-    let existed = buckets.contains_key(&key);
-    let mut evicted = 0;
-    if !existed && buckets.len() >= params.max_buckets && evict_oldest_bucket(buckets) {
-        evicted += 1;
-    }
-    let entry = buckets
-        .entry(key)
-        .or_insert_with(|| AcceptBucket::new(rate_per_sec, burst, now));
-    entry.update_shape(rate_per_sec, burst);
-    (entry.allow(now), existed, evicted)
-}
-fn update_accept_bucket_gauge(
-    prefix_buckets: &HashMap<IpBucketKey, AcceptBucket>,
-    ip_buckets: &HashMap<IpBucketKey, AcceptBucket>,
-) {
-    ACCEPT_BUCKETS_CURRENT.store(
-        (prefix_buckets.len() + ip_buckets.len()) as u64,
-        Ordering::Relaxed,
-    );
-}
-/// Evaluate IP gating rules and accept throttle buckets (prefix then per-IP).
-fn allow_ip_with_policy(
-    allow_nets: &[IpNet],
-    deny_nets: &[IpNet],
-    allowlist_only: bool,
-    params: AcceptThrottleParams,
-    prefix_buckets: &mut HashMap<IpBucketKey, AcceptBucket>,
-    ip_buckets: &mut HashMap<IpBucketKey, AcceptBucket>,
-    ip: std::net::IpAddr,
-) -> bool {
-    if cidr_contains(deny_nets, ip) {
-        return false;
-    }
-    let allowlist_present = !allow_nets.is_empty();
-    let allowlisted = cidr_contains(allow_nets, ip);
-    if allowlist_present && !allowlisted {
-        return false;
-    }
-    let now = tokio::time::Instant::now();
-    let evicted = prune_accept_buckets(prefix_buckets, params.max_buckets, params.bucket_idle, now)
-        + prune_accept_buckets(ip_buckets, params.max_buckets, params.bucket_idle, now);
-    if evicted > 0 {
-        ACCEPT_BUCKET_EVICTIONS.fetch_add(evicted as u64, Ordering::Relaxed);
-    }
-    if allowlisted {
-        update_accept_bucket_gauge(prefix_buckets, ip_buckets);
-        return true;
-    }
-    if allowlist_only && allowlist_present {
-        update_accept_bucket_gauge(prefix_buckets, ip_buckets);
-        return true;
-    }
-    if let Some(rate) = params.prefix_rate_per_sec {
-        let burst = params.prefix_burst.unwrap_or_else(|| rate.max(1.0));
-        let (allow, existed, evicted) = consume_accept_bucket(
-            prefix_buckets,
-            ip_bucket_key(ip, params.prefix_v4_bits, params.prefix_v6_bits),
-            rate,
-            burst,
-            &params,
-            now,
-        );
-        if evicted > 0 {
-            ACCEPT_BUCKET_EVICTIONS.fetch_add(evicted as u64, Ordering::Relaxed);
-        }
-        if existed {
-            ACCEPT_PREFIX_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
-        } else {
-            ACCEPT_PREFIX_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
-        }
-        if allow {
-            ACCEPT_PREFIX_ALLOWED.fetch_add(1, Ordering::Relaxed);
-        } else {
-            ACCEPT_PREFIX_THROTTLED.fetch_add(1, Ordering::Relaxed);
-            ACCEPT_THROTTLED.fetch_add(1, Ordering::Relaxed);
-            update_accept_bucket_gauge(prefix_buckets, ip_buckets);
-            return false;
-        }
-    } else {
-        ACCEPT_PREFIX_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
-    }
-    if let Some(rate) = params.ip_rate_per_sec {
-        let burst = params.ip_burst.unwrap_or_else(|| rate.max(1.0));
-        let (allow, _, evicted) = consume_accept_bucket(
-            ip_buckets,
-            ip_bucket_key(ip, 32, 128),
-            rate,
-            burst,
-            &params,
-            now,
-        );
-        if evicted > 0 {
-            ACCEPT_BUCKET_EVICTIONS.fetch_add(evicted as u64, Ordering::Relaxed);
-        }
-        if allow {
-            ACCEPT_IP_ALLOWED.fetch_add(1, Ordering::Relaxed);
-        } else {
-            ACCEPT_IP_THROTTLED.fetch_add(1, Ordering::Relaxed);
-            ACCEPT_THROTTLED.fetch_add(1, Ordering::Relaxed);
-            update_accept_bucket_gauge(prefix_buckets, ip_buckets);
-            return false;
-        }
-    }
-    update_accept_bucket_gauge(prefix_buckets, ip_buckets);
-    true
-}
 /// Filter for peer-message subscriptions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SubscriberFilter {
@@ -6885,6 +6128,33 @@ fn validate_encrypted_frame_cap(max_frame_bytes: usize) -> Result<(), Error> {
 fn invalid_transport_geometry(message: impl Into<String>) -> Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into()).into()
 }
+
+const QUIC_DATAGRAM_DEPENDENCY_BLOCK_REASON: &str = "network.quic_datagrams_enabled=true is unavailable with locked quinn-proto 0.11.15: \
+its receive queue charges only DATAGRAM payload bytes, so zero-length frames consume no configured \
+budget and can grow the private VecDeque before application polling; upgrade quinn-proto to \
+0.11.17 or later before re-enabling DATAGRAM";
+
+const QUIC_DEPENDENCY_BLOCK_REASON: &str = "network.quic_enabled=true is unavailable with locked quinn-proto 0.11.15: \
+released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly and \
+connection-ID retirement in addition to DATAGRAM accounting; upgrade the lockfile to 0.11.17 or \
+later and requalify QUIC before re-enabling it";
+
+fn validate_shipping_quic_policy(configured: bool) -> Result<bool, Error> {
+    if configured {
+        return Err(invalid_transport_geometry(QUIC_DEPENDENCY_BLOCK_REASON));
+    }
+    Ok(false)
+}
+
+fn validate_shipping_quic_datagram_policy(configured: bool) -> Result<bool, Error> {
+    if configured {
+        return Err(invalid_transport_geometry(
+            QUIC_DATAGRAM_DEPENDENCY_BLOCK_REASON,
+        ));
+    }
+    Ok(false)
+}
+
 #[derive(Debug)]
 struct AbortOnDropTask {
     handle: Option<tokio::task::JoinHandle<()>>,
@@ -7258,7 +6528,7 @@ fn network_actor_byte_budget(
         .into()
     })
 }
-impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
+impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// Maximum independent authenticated reply sources reserved by this actor.
     #[must_use]
     pub const fn reply_route_source_capacity(&self) -> usize {
@@ -7482,6 +6752,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             relay_ttl,
             soranet_handshake,
             idle_timeout,
+            preauth_timeout,
             reply_writer_flush_timeout,
             connect_startup_delay,
             dial_timeout,
@@ -7509,12 +6780,17 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             p2p_proxy,
             p2p_proxy_required,
             p2p_no_proxy,
+            outbound_dial_allow_cidrs,
+            outbound_dial_deny_cidrs,
+            outbound_dial_allow_dns_suffixes,
+            outbound_dial_deny_dns_suffixes,
             p2p_proxy_tls_verify,
             p2p_proxy_tls_pinned_cert_der_base64,
             happy_eyeballs_stagger: config_happy_eyeballs_stagger,
             addr_ipv6_first,
             max_incoming,
             max_total_connections,
+            preauth_max_connections_per_ip,
             accept_rate_per_ip_per_sec,
             accept_burst_per_ip,
             max_accept_buckets,
@@ -7556,13 +6832,22 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         mut initial_validator_dial_roster: HashSet<PeerId>,
         shutdown_signal: ShutdownSignal,
     ) -> Result<(Self, Child), Error> {
+        // Reject vulnerable QUIC before listener or dialer sockets are created.
+        // Returning the validated values also keeps every downstream
+        // capability, transport, and actor configuration on the same
+        // fail-closed branch.
+        let quic_enabled = validate_shipping_quic_policy(quic_enabled)?;
+        let quic_datagrams_enabled =
+            validate_shipping_quic_datagram_policy(quic_datagrams_enabled)?;
+        let (allow_nets, deny_nets) =
+            parse_acl_cidrs(&allow_cidrs, &deny_cidrs).map_err(invalid_transport_geometry)?;
         let P2pIdentityKeys {
             node: key_pair,
             soranet_transport,
         } = identity_keys;
-        // This is the first startup preflight because QUIC and TCP listener setup below may bind
-        // sockets. It prevents a sender from reaching encryption with a frame length that the
-        // deterministic contiguous-buffer limit cannot represent.
+        // Continue startup preflight before QUIC or TCP listener setup can bind
+        // sockets. This prevents a sender from reaching encryption with a frame
+        // length that the deterministic contiguous-buffer limit cannot represent.
         let topic_frame_caps = TopicFrameCaps {
             consensus: max_frame_bytes_consensus,
             control: max_frame_bytes_control,
@@ -7591,6 +6876,12 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             iroha_config::parameters::defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS,
             core::num::NonZeroUsize::get,
         );
+        crate::preauth::PreauthDeadline::from_now(preauth_timeout).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "network.preauth_timeout_ms cannot be represented by the monotonic clock",
+            )
+        })?;
         let authenticated_source_credit_capacity = inbound_source_credit_capacity(
             p2p_subscriber_queue_cap.get(),
             max_total_connections,
@@ -7726,6 +7017,12 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         // Parse before any proxy-policy early return so the credential-bearing
         // source URL is scrubbed on both success and error paths.
         let proxy_policy = crate::transport::ProxyPolicy::from_config(p2p_proxy, p2p_no_proxy)?;
+        let outbound_dial_policy = Arc::new(crate::dial_policy::OutboundDialPolicy::from_config(
+            outbound_dial_allow_cidrs,
+            outbound_dial_deny_cidrs,
+            outbound_dial_allow_dns_suffixes,
+            outbound_dial_deny_dns_suffixes,
+        )?);
         let proxy_is_https = proxy_policy.uses_https_proxy();
         if p2p_proxy_required {
             if !proxy_policy.is_configured() {
@@ -7904,6 +7201,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                     )
                 })?;
         let preauth_capacity = Arc::new(Semaphore::new(max_total_connections));
+        let preauth_source_gate = Arc::new(PreauthSourceGate::new(preauth_max_connections_per_ip));
         let mut listener_tasks = Vec::new();
         #[cfg(feature = "quic")]
         if quic_enabled {
@@ -7917,6 +7215,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 public_address.value().clone(),
                 service_message_sender.clone(),
                 idle_timeout,
+                preauth_timeout,
                 quic_max_idle_timeout,
                 quic_datagrams_enabled,
                 quic_datagram_max_payload_bytes,
@@ -7937,6 +7236,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 relay_role,
                 quic_flow_control,
                 quic_max_incoming,
+                Arc::clone(&preauth_source_gate),
                 Arc::clone(&preauth_capacity),
                 shutdown_signal.clone(),
             )
@@ -7951,6 +7251,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             public_address.value().clone(),
             service_message_sender.clone(),
             idle_timeout,
+            preauth_timeout,
             network_id.clone(),
             consensus_caps.clone(),
             confidential_caps.clone(),
@@ -7972,6 +7273,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             max_frame_bytes,
             soranet_runtime.clone(),
             relay_role,
+            Arc::clone(&preauth_source_gate),
             Arc::clone(&preauth_capacity),
             shutdown_signal.clone(),
         )
@@ -8004,6 +7306,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             relay_mode,
             relay_hub_addresses,
             relay_hub_peer: None,
+            relay_hub_candidates: HashSet::new(),
             relay_trusted_peers: HashSet::new(),
             relay_ttl,
             trust_gossip_config,
@@ -8090,14 +7393,15 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             quic_datagram_max_payload_bytes,
             local_scion_supported,
             proxy_policy,
+            outbound_dial_policy,
             proxy_tls_verify: p2p_proxy_tls_verify,
             proxy_tls_pinned_cert_der,
             quic_dialer,
             allowlist_only,
             allow_keys: allow_keys.into_iter().collect(),
             deny_keys: deny_keys.into_iter().collect(),
-            allow_nets: parse_cidrs(&allow_cidrs),
-            deny_nets: parse_cidrs(&deny_cidrs),
+            allow_nets,
+            deny_nets,
             retry_backoff: HashMap::new(),
             pending_connects: Vec::new(),
             deferred_send_queue: DeferredPeerFrameQueue::new_with_total(
@@ -8119,6 +7423,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             incoming_pending: HashSet::new(),
             incoming_active: HashSet::new(),
             terminating_connections: HashSet::new(),
+            protocol_rejected_connections: HashSet::new(),
             max_incoming: max_incoming.map(core::num::NonZeroUsize::get),
             max_total_connections: Some(max_total_connections),
             accept_params,
@@ -9393,16 +8698,9 @@ mod accept_stream_tests {
     use super::*;
     use crate::peer::test_support::{SpawnPath, snapshot};
     use iroha_config::parameters::actual::{
-        LaneProfile, Network as NetCfg, RelayMode, SoranetHandshake as ActualSoranetHandshake,
-        SoranetPow, SoranetPrivacy as ActualSoranetPrivacy,
+        LaneProfile, Network as NetCfg, RelayMode, SoranetPrivacy as ActualSoranetPrivacy,
     };
-    use iroha_crypto::{
-        KeyPair,
-        encryption::ChaCha20Poly1305,
-        soranet::handshake::{
-            DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-        },
-    };
+    use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
     use iroha_data_model::peer::{Peer, PeerId};
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
@@ -9548,34 +8846,21 @@ mod accept_stream_tests {
         }
     }
     fn base_cfg() -> NetCfg {
+        let soranet_handshake = test_soranet_handshake_config();
         NetCfg {
             address: iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             public_address: iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:0)),
             relay_mode: RelayMode::Disabled,
             relay_hub_addresses: Vec::new(),
             relay_ttl: iroha_config::parameters::defaults::network::RELAY_TTL,
-            soranet_handshake: ActualSoranetHandshake {
-                descriptor_commit: iroha_config_base::WithOrigin::inline(
-                    DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
-                ),
-                client_capabilities: iroha_config_base::WithOrigin::inline(
-                    DEFAULT_CLIENT_CAPABILITIES.to_vec(),
-                ),
-                relay_capabilities: iroha_config_base::WithOrigin::inline(
-                    DEFAULT_RELAY_CAPABILITIES.to_vec(),
-                ),
-                trust_gossip: true,
-                kem_id: 1,
-                sig_id: 1,
-                resume_hash: None,
-                pow: SoranetPow::default(),
-            },
+            soranet_handshake,
             soranet_privacy: ActualSoranetPrivacy::default(),
             soranet_vpn: iroha_config::parameters::actual::SoranetVpn::default(),
             lane_profile: LaneProfile::Core,
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout: std::time::Duration::from_millis(200),
+            preauth_timeout: iroha_config::parameters::defaults::network::PREAUTH_TIMEOUT,
             reply_writer_flush_timeout:
                 iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
@@ -9609,6 +8894,10 @@ mod accept_stream_tests {
             p2p_proxy: None,
             p2p_proxy_required: false,
             p2p_no_proxy: vec![],
+            outbound_dial_allow_cidrs: vec![],
+            outbound_dial_deny_cidrs: vec![],
+            outbound_dial_allow_dns_suffixes: vec![],
+            outbound_dial_deny_dns_suffixes: vec![],
             p2p_proxy_tls_verify: true,
             p2p_proxy_tls_pinned_cert_der_base64: None,
             p2p_queue_cap_high: core::num::NonZeroUsize::new(128).unwrap(),
@@ -9652,6 +8941,8 @@ mod accept_stream_tests {
             addr_ipv6_first: false,
             max_incoming: None,
             max_total_connections: None,
+            preauth_max_connections_per_ip:
+                iroha_config::parameters::defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
             accept_rate_per_ip_per_sec: None,
             accept_burst_per_ip: None,
             max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
@@ -9695,6 +8986,38 @@ mod accept_stream_tests {
             super::validate_encrypted_frame_cap(crate::MAX_ENCRYPTED_FRAME_BYTES + 1),
             Err(Error::FrameTooLarge)
         ));
+    }
+    #[test]
+    fn shipped_quic_datagram_policy_is_disabled_and_rejects_enablement() {
+        assert!(
+            !iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
+            "the shipping configuration must not advertise a Quinn DATAGRAM receive queue"
+        );
+        assert!(!validate_shipping_quic_datagram_policy(false).unwrap());
+        let error = validate_shipping_quic_datagram_policy(true)
+            .expect_err("explicit DATAGRAM enablement must fail before binding sockets");
+        let Error::Io(error) = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        let reason = error.to_string();
+        assert!(reason.contains("quinn-proto 0.11.15"));
+        assert!(reason.contains("zero-length frames"));
+        assert!(reason.contains("0.11.17"));
+    }
+    #[test]
+    fn shipped_quic_policy_rejects_vulnerable_locked_dependency() {
+        let error = validate_shipping_quic_policy(true)
+            .expect_err("vulnerable Quinn must fail before binding sockets");
+        let Error::Io(error) = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        let reason = error.to_string();
+        assert!(reason.contains("quinn-proto 0.11.15"));
+        assert!(reason.contains("remote memory exhaustion"));
+        assert!(reason.contains("0.11.17"));
+        assert!(!validate_shipping_quic_policy(false).unwrap());
     }
     #[test]
     fn network_actor_budget_uses_exact_encrypted_stream_geometry() {
@@ -9889,6 +9212,20 @@ mod accept_stream_tests {
         assert_start_invalid_input(key_pair, cfg).await;
     }
     #[tokio::test(flavor = "current_thread")]
+    async fn start_rejects_malformed_outbound_dial_cidr_before_binding() {
+        let key_pair = test_node_key_pair();
+        let mut cfg = base_cfg();
+        cfg.outbound_dial_deny_cidrs = vec!["192.0.2.0/33".to_owned()];
+        assert_start_invalid_input(key_pair, cfg).await;
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_rejects_malformed_outbound_dial_dns_suffix_before_binding() {
+        let key_pair = test_node_key_pair();
+        let mut cfg = base_cfg();
+        cfg.outbound_dial_allow_dns_suffixes = vec!["bad..example".to_owned()];
+        assert_start_invalid_input(key_pair, cfg).await;
+    }
+    #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_https_proxy_without_pin() {
         let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
@@ -9941,7 +9278,7 @@ mod accept_stream_tests {
     }
     #[cfg(feature = "quic")]
     #[tokio::test(flavor = "current_thread")]
-    async fn requested_quic_listener_bind_failure_aborts_startup() {
+    async fn start_rejects_vulnerable_quic_before_listener_binding() {
         let blocker = match std::net::UdpSocket::bind("127.0.0.1:0") {
             Ok(socket) => socket,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
@@ -9955,12 +9292,11 @@ mod accept_stream_tests {
         cfg.quic_enabled = true;
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
 
-        if let Ok((_handle, _child)) =
-            start_test_network(test_node_key_pair(), cfg, shutdown.clone()).await
-        {
-            shutdown.send();
-            panic!("requested QUIC listener failure must not downgrade startup to TLS-only");
-        }
+        let started = start_test_network(test_node_key_pair(), cfg, shutdown).await;
+        assert!(
+            matches!(started, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput),
+            "vulnerable Quinn must be rejected before reaching the occupied UDP listener"
+        );
     }
     #[tokio::test(flavor = "current_thread")]
     async fn connect_peer_propagates_frame_cap() {
@@ -10005,6 +9341,582 @@ mod accept_stream_tests {
             "expected connecting spawn to record configured cap"
         );
     }
+    #[tokio::test(flavor = "current_thread")]
+    async fn tls_listener_closes_silent_transport_at_absolute_preauth_deadline() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio::{io::AsyncReadExt as _, sync::mpsc};
+
+        let key_pair = test_node_key_pair();
+        let network_id = test_network_id("preauth-deadline-test-chain");
+        let soranet_transport_key_pair = Arc::new(test_transport_key_pair());
+        let soranet_transport_certificate = crate::peer::create_soranet_transport_certificate_v5(
+            &key_pair,
+            Arc::clone(&soranet_transport_key_pair),
+            Arc::new(test_relay_authentication_key_pair()),
+            &network_id,
+        )
+        .expect("test transport certificate");
+        let cancellations = Arc::new(AtomicUsize::new(0));
+        let observed_cancellations = Arc::clone(&cancellations);
+        let (service_tx, mut service_rx) =
+            mpsc::channel::<super::ServiceMessage<super::WireMessage<Dummy>>>(8);
+        tokio::spawn(async move {
+            while let Some(message) = service_rx.recv().await {
+                match message {
+                    super::ServiceMessage::InboundAsk { reply, .. } => {
+                        let _ = reply.send(true);
+                    }
+                    super::ServiceMessage::InboundCancelled(_) => {
+                        observed_cancellations.fetch_add(1, Ordering::Relaxed);
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("tcp bind failed: {e:?}"),
+        };
+        let addr = std_listener.local_addr().unwrap();
+        drop(std_listener);
+        let shutdown = ShutdownSignal::new();
+        let listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
+            addr,
+            Arc::new(key_pair),
+            soranet_transport_key_pair,
+            soranet_transport_certificate,
+            socket_addr!(127.0.0.1:1_337),
+            service_tx,
+            Duration::from_secs(5),
+            Duration::from_millis(150),
+            network_id,
+            None,
+            None,
+            None,
+            8,
+            OutboundFrameQueueLimits::default(),
+            OutboundPostByteBudgets::default(),
+            crate::peer::InboundFrameByteBudgets::default(),
+            TlsListenerOptions {
+                peer_capabilities: TlsPeerCapabilities {
+                    trust_gossip: true,
+                    quic_datagrams_enabled: false,
+                    quic_datagram_max_payload_bytes: 0,
+                    local_scion_supported: true,
+                },
+                tcp_nodelay: true,
+                tcp_keepalive: None,
+            },
+            59_999,
+            test_soranet_handshake_runtime(),
+            RelayRole::Disabled,
+            Arc::new(PreauthSourceGate::new(
+                iroha_config::parameters::defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
+            )),
+            Arc::new(Semaphore::new(1)),
+            shutdown.clone(),
+        )
+        .await
+        .expect("start TLS listener");
+
+        let mut raw = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect silent client");
+        let mut byte = [0_u8; 1];
+        match tokio::time::timeout(Duration::from_secs(2), raw.read(&mut byte)).await {
+            Ok(Ok(0) | Err(_)) => {}
+            other => panic!("silent transport outlived its absolute pre-auth deadline: {other:?}"),
+        }
+        for _ in 0..20 {
+            if cancellations.load(Ordering::Relaxed) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            cancellations.load(Ordering::Relaxed),
+            1,
+            "the expired transport must release exactly one inbound reservation"
+        );
+        shutdown.send();
+        tokio::time::timeout(Duration::from_secs(2), listener_task.join())
+            .await
+            .expect("TLS listener must stop after shutdown");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn tls_source_gate_precedes_global_capacity_and_deadline_releases_it() {
+        use std::{net::Ipv4Addr, num::NonZeroUsize, sync::Arc};
+        use tokio::{io::AsyncReadExt as _, sync::mpsc};
+
+        let key_pair = test_node_key_pair();
+        let network_id = test_network_id("preauth-source-gate-test-chain");
+        let soranet_transport_key_pair = Arc::new(test_transport_key_pair());
+        let soranet_transport_certificate = crate::peer::create_soranet_transport_certificate_v5(
+            &key_pair,
+            Arc::clone(&soranet_transport_key_pair),
+            Arc::new(test_relay_authentication_key_pair()),
+            &network_id,
+        )
+        .expect("test transport certificate");
+        let (service_tx, mut service_rx) =
+            mpsc::channel::<super::ServiceMessage<super::WireMessage<Dummy>>>(1);
+        let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("tcp bind failed: {e:?}"),
+        };
+        let addr = std_listener.local_addr().expect("listener address");
+        drop(std_listener);
+        let source_gate = Arc::new(PreauthSourceGate::new(NonZeroUsize::new(1).unwrap()));
+        let held_source = source_gate
+            .try_acquire(IpAddr::V4(Ipv4Addr::LOCALHOST))
+            .expect("pre-existing source reservation");
+        let global_capacity = Arc::new(Semaphore::new(1));
+        let shutdown = ShutdownSignal::new();
+        let listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
+            addr,
+            Arc::new(key_pair),
+            soranet_transport_key_pair,
+            soranet_transport_certificate,
+            socket_addr!(127.0.0.1:1_337),
+            service_tx,
+            Duration::from_secs(5),
+            Duration::from_millis(150),
+            network_id,
+            None,
+            None,
+            None,
+            8,
+            OutboundFrameQueueLimits::default(),
+            OutboundPostByteBudgets::default(),
+            crate::peer::InboundFrameByteBudgets::default(),
+            TlsListenerOptions {
+                peer_capabilities: TlsPeerCapabilities {
+                    trust_gossip: true,
+                    quic_datagrams_enabled: false,
+                    quic_datagram_max_payload_bytes: 0,
+                    local_scion_supported: true,
+                },
+                tcp_nodelay: true,
+                tcp_keepalive: None,
+            },
+            59_999,
+            test_soranet_handshake_runtime(),
+            RelayRole::Disabled,
+            Arc::clone(&source_gate),
+            Arc::clone(&global_capacity),
+            shutdown.clone(),
+        )
+        .await
+        .expect("start TLS listener");
+
+        let mut rejected = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect source-capped client");
+        let mut byte = [0_u8; 1];
+        match tokio::time::timeout(Duration::from_secs(2), rejected.read(&mut byte)).await {
+            Ok(Ok(0) | Err(_)) => {}
+            other => panic!("source-capped transport was not closed: {other:?}"),
+        }
+        assert_eq!(
+            global_capacity.available_permits(),
+            1,
+            "source rejection must happen before global capacity acquisition"
+        );
+        assert!(service_rx.try_recv().is_err());
+
+        drop(held_source);
+        let global_owner = Arc::clone(&global_capacity)
+            .acquire_owned()
+            .await
+            .expect("global capacity");
+        let mut capacity_waiter = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect capacity waiter");
+        for _ in 0..20 {
+            if source_gate.active_for(IpAddr::V4(Ipv4Addr::LOCALHOST)) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            source_gate.active_for(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            1,
+            "accepted transport must own the source gate while waiting for global capacity"
+        );
+        match tokio::time::timeout(Duration::from_secs(2), capacity_waiter.read(&mut byte)).await {
+            Ok(Ok(0) | Err(_)) => {}
+            other => panic!("capacity waiter outlived its absolute deadline: {other:?}"),
+        }
+        assert_eq!(
+            source_gate.active_for(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            0,
+            "deadline teardown must release the source reservation"
+        );
+        assert!(service_rx.try_recv().is_err());
+
+        drop(global_owner);
+        shutdown.send();
+        tokio::time::timeout(Duration::from_secs(2), listener_task.join())
+            .await
+            .expect("TLS listener must stop after shutdown");
+    }
+
+    #[cfg(feature = "quic")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn tls_and_quic_share_source_gate_and_release_deadline_ownership() {
+        use std::{
+            net::{IpAddr, Ipv4Addr},
+            num::NonZeroUsize,
+            sync::{
+                Arc, Mutex,
+                atomic::{AtomicUsize, Ordering},
+            },
+        };
+        use tokio::{
+            io::AsyncReadExt as _,
+            sync::{Notify, mpsc},
+        };
+
+        let key_pair = test_node_key_pair();
+        let network_id = test_network_id("shared-preauth-source-gate-test-chain");
+        let soranet_transport_key_pair = Arc::new(test_transport_key_pair());
+        let soranet_transport_certificate = crate::peer::create_soranet_transport_certificate_v5(
+            &key_pair,
+            Arc::clone(&soranet_transport_key_pair),
+            Arc::new(test_relay_authentication_key_pair()),
+            &network_id,
+        )
+        .expect("test transport certificate");
+        let inbound_asks = Arc::new(AtomicUsize::new(0));
+        let observed_inbound_asks = Arc::clone(&inbound_asks);
+        let admitted_conn_ids = Arc::new(Mutex::new(Vec::new()));
+        let observed_admitted_conn_ids = Arc::clone(&admitted_conn_ids);
+        let cancelled_conn_ids = Arc::new(Mutex::new(Vec::new()));
+        let observed_cancelled_conn_ids = Arc::clone(&cancelled_conn_ids);
+        let release_first_admission = Arc::new(Notify::new());
+        let observed_release_first_admission = Arc::clone(&release_first_admission);
+        let (service_tx, mut service_rx) =
+            mpsc::channel::<super::ServiceMessage<super::WireMessage<Dummy>>>(8);
+        tokio::spawn(async move {
+            let mut first_admission = true;
+            while let Some(message) = service_rx.recv().await {
+                match message {
+                    super::ServiceMessage::InboundAsk { conn_id, reply, .. } => {
+                        observed_inbound_asks.fetch_add(1, Ordering::Relaxed);
+                        observed_admitted_conn_ids
+                            .lock()
+                            .expect("admitted connection record")
+                            .push(conn_id);
+                        if first_admission {
+                            first_admission = false;
+                            observed_release_first_admission.notified().await;
+                        }
+                        let _ = reply.send(true);
+                    }
+                    super::ServiceMessage::InboundCancelled(conn_id) => {
+                        observed_cancelled_conn_ids
+                            .lock()
+                            .expect("cancelled connection record")
+                            .push(conn_id);
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let tcp = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("tcp bind failed: {error:?}"),
+        };
+        let tls_addr = tcp.local_addr().expect("TLS listener address");
+        drop(tcp);
+        let udp = match std::net::UdpSocket::bind("127.0.0.1:0") {
+            Ok(socket) => socket,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("udp bind failed: {error:?}"),
+        };
+        let quic_addr = udp.local_addr().expect("QUIC listener address");
+        drop(udp);
+
+        let preauth_timeout = Duration::from_secs(3);
+        let source_gate = Arc::new(PreauthSourceGate::new(NonZeroUsize::new(1).unwrap()));
+        let global_capacity = Arc::new(Semaphore::new(1));
+        let shutdown = ShutdownSignal::new();
+        let tls_listener = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
+            tls_addr,
+            Arc::new(key_pair.clone()),
+            Arc::clone(&soranet_transport_key_pair),
+            Arc::clone(&soranet_transport_certificate),
+            socket_addr!(127.0.0.1:1_337),
+            service_tx.clone(),
+            Duration::from_secs(5),
+            preauth_timeout,
+            network_id.clone(),
+            None,
+            None,
+            None,
+            8,
+            OutboundFrameQueueLimits::default(),
+            OutboundPostByteBudgets::default(),
+            crate::peer::InboundFrameByteBudgets::default(),
+            TlsListenerOptions {
+                peer_capabilities: TlsPeerCapabilities {
+                    trust_gossip: true,
+                    quic_datagrams_enabled: false,
+                    quic_datagram_max_payload_bytes: 0,
+                    local_scion_supported: true,
+                },
+                tcp_nodelay: true,
+                tcp_keepalive: None,
+            },
+            59_999,
+            test_soranet_handshake_runtime(),
+            RelayRole::Disabled,
+            Arc::clone(&source_gate),
+            Arc::clone(&global_capacity),
+            shutdown.clone(),
+        )
+        .await
+        .expect("start TLS listener");
+        let quic_listener = start_quic_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
+            &quic_addr,
+            Arc::new(key_pair),
+            soranet_transport_key_pair,
+            soranet_transport_certificate,
+            socket_addr!(127.0.0.1:4_321),
+            service_tx,
+            Duration::from_secs(5),
+            preauth_timeout,
+            None,
+            false,
+            0,
+            0,
+            0,
+            network_id,
+            None,
+            None,
+            None,
+            8,
+            OutboundFrameQueueLimits::default(),
+            OutboundPostByteBudgets::default(),
+            crate::peer::InboundFrameByteBudgets::default(),
+            true,
+            59_999,
+            test_soranet_handshake_runtime(),
+            true,
+            RelayRole::Disabled,
+            crate::transport::quic::FlowControlConfig {
+                max_encrypted_frame_bytes: 59_999,
+                max_total_connections: 1,
+                process_budget_bytes: 4 * crate::transport::quic::FLOW_CONTROL_GRANULE_BYTES,
+            },
+            1,
+            Arc::clone(&source_gate),
+            Arc::clone(&global_capacity),
+            shutdown.clone(),
+        )
+        .await
+        .expect("start QUIC listener");
+
+        let mut silent_tls = tokio::net::TcpStream::connect(tls_addr)
+            .await
+            .expect("connect silent TLS client");
+        let localhost = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        for _ in 0..40 {
+            if source_gate.active_for(localhost) == 1 && inbound_asks.load(Ordering::Relaxed) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            source_gate.active_for(localhost),
+            1,
+            "silent TLS transport must retain the shared source reservation"
+        );
+        assert_eq!(
+            inbound_asks.load(Ordering::Relaxed),
+            1,
+            "the TLS transport must reach actor admission before stalling"
+        );
+
+        let mut endpoint = quinn::Endpoint::client("127.0.0.1:0".parse().unwrap())
+            .expect("create QUIC client endpoint");
+        let mut crypto = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
+            .with_no_client_auth();
+        crypto.alpn_protocols = vec![crate::transport::quic::P2P_ALPN.to_vec()];
+        let mut client_config = quinn::ClientConfig::new(Arc::new(
+            quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+                .expect("configure rustls for quinn"),
+        ));
+        client_config.transport_config(Arc::new(quinn::TransportConfig::default()));
+        endpoint.set_default_client_config(client_config);
+
+        assert_eq!(
+            global_capacity.available_permits(),
+            0,
+            "the admitted TLS transport must already own global pre-auth capacity",
+        );
+        let rejected = endpoint
+            .connect(quic_addr, "iroha-quic")
+            .expect("start source-capped QUIC connection");
+        assert!(
+            matches!(
+                tokio::time::timeout(Duration::from_secs(1), rejected).await,
+                Ok(Err(_))
+            ),
+            "QUIC source rejection must precede the unavailable global capacity"
+        );
+        assert_eq!(
+            inbound_asks.load(Ordering::Relaxed),
+            1,
+            "a source-capped QUIC attempt must not consume actor admission"
+        );
+        assert_eq!(
+            source_gate.active_for(localhost),
+            1,
+            "rejecting QUIC must not release the TLS owner's reservation"
+        );
+        assert!(
+            cancelled_conn_ids
+                .lock()
+                .expect("cancelled connection record")
+                .is_empty(),
+            "source rejection must not cancel the admitted TLS reservation"
+        );
+        release_first_admission.notify_one();
+        let mut byte = [0_u8; 1];
+        match tokio::time::timeout(Duration::from_secs(4), silent_tls.read(&mut byte)).await {
+            Ok(Ok(0) | Err(_)) => {}
+            other => panic!("silent TLS transport outlived its pre-auth deadline: {other:?}"),
+        }
+        for _ in 0..40 {
+            if source_gate.active_for(localhost) == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            source_gate.active_for(localhost),
+            0,
+            "TLS deadline teardown must release shared source ownership"
+        );
+        for _ in 0..40 {
+            if cancelled_conn_ids
+                .lock()
+                .expect("cancelled connection record")
+                .len()
+                == 1
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let tls_conn_id = admitted_conn_ids
+            .lock()
+            .expect("admitted connection record")[0];
+        assert_eq!(
+            cancelled_conn_ids
+                .lock()
+                .expect("cancelled connection record")
+                .as_slice(),
+            &[tls_conn_id],
+            "TLS deadline must cancel exactly its admitted reservation"
+        );
+
+        let admitted = endpoint
+            .connect(quic_addr, "iroha-quic")
+            .expect("start QUIC connection after TLS timeout");
+        let connection = tokio::time::timeout(Duration::from_secs(2), admitted)
+            .await
+            .expect("QUIC admission must complete before the pre-auth deadline")
+            .expect("QUIC source must be admitted after TLS releases it");
+        let (mut send, _recv) = connection
+            .open_bi()
+            .await
+            .expect("open required QUIC stream");
+        send.write_all(b"I")
+            .await
+            .expect("send incomplete application preface");
+        for _ in 0..40 {
+            if inbound_asks.load(Ordering::Relaxed) == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            inbound_asks.load(Ordering::Relaxed),
+            2,
+            "released ownership must admit the next QUIC transport"
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            source_gate.active_for(localhost),
+            1,
+            "silent QUIC application authentication must retain source ownership"
+        );
+        assert_eq!(
+            cancelled_conn_ids
+                .lock()
+                .expect("cancelled connection record")
+                .len(),
+            1,
+            "admitted QUIC ownership must not cancel before its deadline"
+        );
+        for _ in 0..100 {
+            if source_gate.active_for(localhost) == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            source_gate.active_for(localhost),
+            0,
+            "QUIC pre-auth deadline must release source ownership"
+        );
+        for _ in 0..40 {
+            if cancelled_conn_ids
+                .lock()
+                .expect("cancelled connection record")
+                .len()
+                == 2
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let cancelled = cancelled_conn_ids
+            .lock()
+            .expect("cancelled connection record")
+            .clone();
+        let admitted = admitted_conn_ids
+            .lock()
+            .expect("admitted connection record")
+            .clone();
+        assert_eq!(
+            cancelled, admitted,
+            "each admitted deadline path must cancel its exact reservation once"
+        );
+
+        connection.close(0u32.into(), b"done");
+        endpoint.close(0u32.into(), b"done");
+        shutdown.send();
+        tokio::time::timeout(Duration::from_secs(2), tls_listener.join())
+            .await
+            .expect("TLS listener must stop after shutdown");
+        tokio::time::timeout(Duration::from_secs(2), quic_listener.join())
+            .await
+            .expect("QUIC listener must stop after shutdown");
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn tls_listener_requires_exact_p2p_alpn_and_propagates_frame_cap() {
         use std::sync::Arc;
@@ -10051,6 +9963,7 @@ mod accept_stream_tests {
             socket_addr!(127.0.0.1:1_337),
             service_tx,
             Duration::from_secs(1),
+            Duration::from_secs(1),
             network_id,
             None,
             None,
@@ -10072,6 +9985,9 @@ mod accept_stream_tests {
             max_frame_bytes,
             soranet.clone(),
             RelayRole::Disabled,
+            Arc::new(PreauthSourceGate::new(
+                iroha_config::parameters::defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
+            )),
             Arc::new(Semaphore::new(1)),
             shutdown,
         )
@@ -10214,7 +10130,6 @@ mod accept_stream_tests {
                     peer.id().clone(),
                     RelayTarget::Direct(network.self_id.clone()),
                     DEFAULT_RELAY_TTL,
-                    Priority::High,
                     payload.clone(),
                 ),
                 within_cap_wire_len,
@@ -10233,7 +10148,6 @@ mod accept_stream_tests {
                 peer.id().clone(),
                 RelayTarget::Direct(network.self_id.clone()),
                 DEFAULT_RELAY_TTL,
-                Priority::High,
                 payload,
             ),
             oversized_wire_len,
@@ -10251,7 +10165,7 @@ mod accept_stream_tests {
     }
     #[cfg(feature = "quic")]
     #[tokio::test(flavor = "current_thread")]
-    async fn quic_listener_propagates_frame_cap() {
+    async fn dormant_quic_listener_disables_datagram_transport() {
         use std::sync::Arc;
         use tokio::sync::mpsc;
         let baseline = snapshot().len();
@@ -10266,6 +10180,8 @@ mod accept_stream_tests {
         )
         .expect("test transport certificate");
         let max_frame_bytes = 61_111usize;
+        let datagram_max_payload_bytes = 1_200usize;
+        let datagram_buffer_bytes = 64 * 1024;
         let inbound_asks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed_inbound_asks = Arc::clone(&inbound_asks);
         let (service_tx, mut service_rx) =
@@ -10293,12 +10209,13 @@ mod accept_stream_tests {
             soranet_transport_certificate,
             socket_addr!(127.0.0.1:4_321),
             service_tx,
-            Duration::from_secs(1),
+            Duration::from_secs(5),
+            Duration::from_secs(5),
             None,
             false,
-            0,
-            0,
-            0,
+            datagram_max_payload_bytes,
+            datagram_buffer_bytes,
+            datagram_buffer_bytes,
             network_id,
             None,
             None,
@@ -10318,6 +10235,9 @@ mod accept_stream_tests {
                 process_budget_bytes: 4 * crate::transport::quic::FLOW_CONTROL_GRANULE_BYTES,
             },
             1,
+            Arc::new(PreauthSourceGate::new(
+                iroha_config::parameters::defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
+            )),
             Arc::new(Semaphore::new(1)),
             ShutdownSignal::new(),
         )
@@ -10342,7 +10262,11 @@ mod accept_stream_tests {
             quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
                 .expect("failed to configure rustls for quinn"),
         ));
-        client_config.transport_config(Arc::new(quinn::TransportConfig::default()));
+        let mut transport = quinn::TransportConfig::default();
+        transport
+            .datagram_receive_buffer_size(Some(datagram_buffer_bytes))
+            .datagram_send_buffer_size(datagram_buffer_bytes);
+        client_config.transport_config(Arc::new(transport));
         endpoint.set_default_client_config(client_config);
         let connecting = match endpoint.connect(addr, "iroha-quic") {
             Ok(conn) => conn,
@@ -10358,9 +10282,14 @@ mod accept_stream_tests {
                 return;
             }
         };
-        if connection.open_bi().await.is_err() {
-            return;
-        }
+        let (mut send_hi, _recv_hi) = match connection.open_bi().await {
+            Ok(streams) => streams,
+            Err(_) => return,
+        };
+        send_hi
+            .write_all(b"I")
+            .await
+            .expect("open the server's required high-priority stream");
         let mut observed = false;
         for _ in 0..20 {
             if snapshot()
@@ -10373,7 +10302,13 @@ mod accept_stream_tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        connection.close(0u32.into(), b"done");
+        let error = connection
+            .send_datagram(bytes::Bytes::from_static(b"probe"))
+            .expect_err("the dormant listener must advertise no DATAGRAM receive support");
+        assert!(
+            matches!(error, quinn::SendDatagramError::UnsupportedByPeer),
+            "unexpected disabled-DATAGRAM error: {error:?}"
+        );
         endpoint.close(0u32.into(), b"done");
         assert!(
             observed,
@@ -10581,6 +10516,7 @@ async fn start_quic_listener<T, E>(
     public_address: iroha_primitives::addr::SocketAddr,
     service_message_sender: tokio::sync::mpsc::Sender<crate::peer::message::ServiceMessage<T>>,
     idle_timeout: std::time::Duration,
+    preauth_timeout: std::time::Duration,
     quic_max_idle_timeout: Option<std::time::Duration>,
     quic_datagrams_enabled: bool,
     quic_datagram_max_payload_bytes: usize,
@@ -10601,6 +10537,7 @@ async fn start_quic_listener<T, E>(
     relay_role: RelayRole,
     flow_control: crate::transport::quic::FlowControlConfig,
     endpoint_max_incoming: usize,
+    preauth_source_gate: Arc<PreauthSourceGate>,
     preauth_capacity: Arc<Semaphore>,
     shutdown_signal: ShutdownSignal,
 ) -> Result<AbortOnDropTask, Error>
@@ -10697,14 +10634,45 @@ where
                 }
                 continue;
             }
+            let remote = incoming.remote_address();
+            let Some(preauth_deadline) = PreauthDeadline::from_now(preauth_timeout) else {
+                iroha_logger::error!(
+                    %remote,
+                    "Configured pre-authentication timeout is not representable"
+                );
+                continue;
+            };
+            let Some(source_permit) = preauth_source_gate.try_acquire(remote.ip()) else {
+                PREAUTH_SOURCE_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
+                iroha_logger::debug!(
+                    %remote,
+                    source_ip = %canonical_remote_ip(remote.ip()),
+                    cap = preauth_source_gate.max_per_ip(),
+                    "Dropping unauthenticated QUIC connection due to concurrent source cap"
+                );
+                continue;
+            };
             // Address validation must precede both actor admission and any
             // reservation/cryptographic capacity ownership.
             let permit = tokio::select! {
                 () = shutdown_signal.receive() => break,
                 () = service_message_sender.closed() => break,
-                permit = Arc::clone(&preauth_capacity).acquire_owned() => {
-                    let Ok(permit) = permit else { break };
-                    permit
+                permit = preauth_deadline.run(
+                    None,
+                    Arc::clone(&preauth_capacity).acquire_owned(),
+                ) => {
+                    match permit {
+                        Ok(Ok(permit)) => permit,
+                        Ok(Err(_)) => break,
+                        Err(_) => {
+                            iroha_logger::warn!(
+                                %remote,
+                                timeout = ?preauth_timeout,
+                                "QUIC connection exhausted its pre-authentication deadline while waiting for capacity"
+                            );
+                            continue;
+                        }
+                    }
                 }
             };
             let service_message_sender = service_message_sender.clone();
@@ -10726,7 +10694,6 @@ where
             let trust_gossip_config = trust_gossip_config;
             let transport_binding = transport_binding;
             children.spawn(async move {
-                let remote = incoming.remote_address();
                 let conn_id = id_alloc.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let mut reservation =
                     InboundReservationGuard::new(conn_id, service_message_sender.clone());
@@ -10737,13 +10704,15 @@ where
                     reply: tx,
                 };
                 if !matches!(
-                    tokio::time::timeout(idle_timeout, service_message_sender.send(ask)).await,
+                    preauth_deadline
+                        .run(Some(idle_timeout), service_message_sender.send(ask))
+                        .await,
                     Ok(Ok(()))
                 ) {
                     iroha_logger::debug!(%remote, "Network did not accept QUIC InboundAsk in time");
                     return;
                 }
-                let allow = match tokio::time::timeout(idle_timeout, rx).await {
+                let allow = match preauth_deadline.run(Some(idle_timeout), rx).await {
                     Ok(Ok(allow)) => allow,
                     _ => return,
                 };
@@ -10762,7 +10731,10 @@ where
                         return;
                     }
                 };
-                let new_conn = match tokio::time::timeout(idle_timeout, connecting).await {
+                let new_conn = match preauth_deadline
+                    .run(Some(idle_timeout), connecting)
+                    .await
+                {
                     Ok(Ok(conn)) => conn,
                     Ok(Err(e)) => {
                         iroha_logger::warn!(%e, %remote, "QUIC handshake failed");
@@ -10773,11 +10745,17 @@ where
                         return;
                     }
                 };
-                let (send_hi, recv_hi) = match tokio::time::timeout(
-                    idle_timeout,
-                    new_conn.accept_bi(),
-                )
-                .await
+                let datagram_ingress = quic_datagrams_enabled.then(|| {
+                    crate::peer::QuicDatagramIngress::spawn(
+                        new_conn.clone(),
+                        quic_datagram_max_payload_bytes
+                            .min(max_frame_bytes)
+                            .min(crate::MAX_ENCRYPTED_FRAME_BYTES),
+                    )
+                });
+                let (send_hi, recv_hi) = match preauth_deadline
+                    .run(Some(idle_timeout), new_conn.accept_bi())
+                    .await
                 {
                     Ok(Ok((send, recv))) => (send, recv),
                     Ok(Err(e)) => {
@@ -10793,18 +10771,27 @@ where
                         return;
                     }
                 };
-                let low = tokio::time::timeout(
-                    std::time::Duration::from_millis(200),
-                    new_conn.accept_bi(),
-                )
-                .await;
+                let low = preauth_deadline
+                    .run(
+                        Some(std::time::Duration::from_millis(200)),
+                        new_conn.accept_bi(),
+                    )
+                    .await;
                 let (send_low, recv_low) = match low {
                     Ok(Ok((s, r))) => (Some(s), Some(r)),
                     Ok(Err(e)) => {
                         iroha_logger::debug!(%e, %remote, "Failed to accept low-priority QUIC stream; continuing with single stream");
                         (None, None)
                     }
-                    Err(_) => (None, None),
+                    Err(DeadlineElapsed::Stage) => (None, None),
+                    Err(DeadlineElapsed::Absolute) => {
+                        iroha_logger::warn!(
+                            %remote,
+                            timeout = ?preauth_timeout,
+                            "QUIC connection exhausted its pre-authentication deadline while waiting for the optional stream"
+                        );
+                        return;
+                    }
                 };
                 let soranet_policy = match soranet_handshake.snapshot() {
                     Ok(policy) => policy,
@@ -10818,6 +10805,7 @@ where
                     }
                 };
                 let trust_gossip = trust_gossip_config && soranet_policy.trust_gossip();
+                let (auth_completion, auth_receiver) = preauth_deadline.completion_channel();
                 let peer_task = connected_from::<T, E>(
                     public_address,
                     key_pair,
@@ -10830,11 +10818,13 @@ where
                         recv_hi,
                         send_low,
                         recv_low,
+                        datagram_ingress,
                         Some(remote),
                         transport_binding,
                     ),
                     service_message_sender,
                     idle_timeout,
+                    auth_completion,
                     network_id,
                     consensus_caps,
                     confidential_caps,
@@ -10851,8 +10841,21 @@ where
                     quic_datagrams_enabled,
                     quic_datagram_max_payload_bytes,
                 );
+                let peer_task = AbortOnDropTask::new(peer_task);
+                if !preauth_deadline
+                    .wait_for_authentication(auth_receiver)
+                    .await
+                {
+                    iroha_logger::warn!(
+                        %remote,
+                        timeout = ?preauth_timeout,
+                        "QUIC peer did not authenticate before its pre-authentication deadline"
+                    );
+                    return;
+                }
+                drop(source_permit);
                 reservation.disarm();
-                AbortOnDropTask::new(peer_task).join().await;
+                peer_task.join().await;
             });
         }
         endpoint.close(0u32.into(), b"listener shutdown");
@@ -10912,6 +10915,7 @@ mod quic_tests {
             socket_addr!(127.0.0.1:1337),
             tx,
             std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(1),
             None,
             false,
             0,
@@ -10936,6 +10940,9 @@ mod quic_tests {
                 process_budget_bytes: 4 * crate::transport::quic::FLOW_CONTROL_GRANULE_BYTES,
             },
             1,
+            Arc::new(PreauthSourceGate::new(
+                iroha_config::parameters::defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
+            )),
             Arc::new(Semaphore::new(1)),
             shutdown.clone(),
         )
@@ -10983,6 +10990,7 @@ async fn start_tls_listener<T, E>(
     public_address: iroha_primitives::addr::SocketAddr,
     service_message_sender: tokio::sync::mpsc::Sender<crate::peer::message::ServiceMessage<T>>,
     idle_timeout: std::time::Duration,
+    preauth_timeout: std::time::Duration,
     network_id: iroha_data_model::NetworkId,
     consensus_caps: Option<crate::ConsensusHandshakeCaps>,
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -10995,6 +11003,7 @@ async fn start_tls_listener<T, E>(
     max_frame_bytes: usize,
     soranet_handshake: Arc<SoranetHandshakeRuntime>,
     relay_role: RelayRole,
+    preauth_source_gate: Arc<PreauthSourceGate>,
     preauth_capacity: Arc<Semaphore>,
     shutdown_signal: ShutdownSignal,
 ) -> Result<AbortOnDropTask, Error>
@@ -11040,20 +11049,50 @@ where
         iroha_logger::info!(addr=%addr, "TLS listener started");
         loop {
             while children.try_join_next().is_some() {}
-            let permit = tokio::select! {
-                () = shutdown_signal.receive() => break,
-                () = service_message_sender.closed() => break,
-                permit = Arc::clone(&preauth_capacity).acquire_owned() => {
-                    let Ok(permit) = permit else { break };
-                    permit
-                }
-            };
             let (tcp, remote) = tokio::select! {
                 () = shutdown_signal.receive() => break,
                 () = service_message_sender.closed() => break,
                 accepted = listener.accept() => {
                     let Ok(accepted) = accepted else { break };
                     accepted
+                }
+            };
+            let Some(preauth_deadline) = PreauthDeadline::from_now(preauth_timeout) else {
+                iroha_logger::error!(
+                    %remote,
+                    "Configured pre-authentication timeout is not representable"
+                );
+                continue;
+            };
+            let Some(source_permit) = preauth_source_gate.try_acquire(remote.ip()) else {
+                PREAUTH_SOURCE_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
+                iroha_logger::debug!(
+                    %remote,
+                    source_ip = %canonical_remote_ip(remote.ip()),
+                    cap = preauth_source_gate.max_per_ip(),
+                    "Dropping unauthenticated TLS connection due to concurrent source cap"
+                );
+                continue;
+            };
+            let permit = tokio::select! {
+                () = shutdown_signal.receive() => break,
+                () = service_message_sender.closed() => break,
+                permit = preauth_deadline.run(
+                    None,
+                    Arc::clone(&preauth_capacity).acquire_owned(),
+                ) => {
+                    match permit {
+                        Ok(Ok(permit)) => permit,
+                        Ok(Err(_)) => break,
+                        Err(_) => {
+                            iroha_logger::warn!(
+                                %remote,
+                                timeout = ?preauth_timeout,
+                                "TLS connection exhausted its pre-authentication deadline while waiting for capacity"
+                            );
+                            continue;
+                        }
+                    }
                 }
             };
             let service_message_sender = service_message_sender.clone();
@@ -11089,13 +11128,15 @@ where
                     reply: tx,
                 };
                 if !matches!(
-                    tokio::time::timeout(idle_timeout, service_message_sender.send(ask)).await,
+                    preauth_deadline
+                        .run(Some(idle_timeout), service_message_sender.send(ask))
+                        .await,
                     Ok(Ok(()))
                 ) {
                     iroha_logger::debug!(%remote, "Network did not accept TLS InboundAsk in time");
                     return;
                 }
-                let allow = match tokio::time::timeout(idle_timeout, rx).await {
+                let allow = match preauth_deadline.run(Some(idle_timeout), rx).await {
                     Ok(Ok(allow)) => allow,
                     _ => return,
                 };
@@ -11107,7 +11148,10 @@ where
                 // `incoming_pending` is now the exact max-total owner.
                 drop(permit);
                 crate::transport::apply_tcp_socket_options(&tcp, tcp_nodelay, tcp_keepalive);
-                match tokio::time::timeout(idle_timeout, acceptor.accept(tcp)).await {
+                match preauth_deadline
+                    .run(Some(idle_timeout), acceptor.accept(tcp))
+                    .await
+                {
                     Ok(Ok(tls_stream)) => {
                         if tls_stream.get_ref().1.alpn_protocol()
                             != Some(crate::transport::P2P_ALPN)
@@ -11131,6 +11175,8 @@ where
                         };
                         let trust_gossip = trust_gossip_config && soranet_policy.trust_gossip();
                         let (read_half, write_half) = tokio::io::split(tls_stream);
+                        let (auth_completion, auth_receiver) =
+                            preauth_deadline.completion_channel();
                         let peer_task = connected_from::<T, E>(
                             public_address,
                             key_pair,
@@ -11144,6 +11190,7 @@ where
                             ),
                             service_message_sender,
                             idle_timeout,
+                            auth_completion,
                             network_id,
                             consensus_caps,
                             confidential_caps.clone(),
@@ -11160,8 +11207,21 @@ where
                             quic_datagrams_enabled,
                             quic_datagram_max_payload_bytes,
                         );
+                        let peer_task = AbortOnDropTask::new(peer_task);
+                        if !preauth_deadline
+                            .wait_for_authentication(auth_receiver)
+                            .await
+                        {
+                            iroha_logger::warn!(
+                                %remote,
+                                timeout = ?preauth_timeout,
+                                "TLS peer did not authenticate before its pre-authentication deadline"
+                            );
+                            return;
+                        }
+                        drop(source_permit);
                         reservation.disarm();
-                        AbortOnDropTask::new(peer_task).join().await;
+                        peer_task.join().await;
                     }
                     Ok(Err(e)) => {
                         iroha_logger::warn!(%e, %remote, "TLS accept failed");
@@ -11203,7 +11263,13 @@ struct NetworkBase<T: Pload, E: Enc> {
     relay_hub_addresses: Vec<SocketAddr>,
     /// Hub peer id resolved from topology/address book (spoke mode).
     relay_hub_peer: Option<PeerId>,
-    /// Trusted relay peers derived from `relay_hub_addresses` and peer address mapping.
+    /// Dial candidates whose advertised address matches `relay_hub_addresses`.
+    ///
+    /// Address gossip is sufficient to schedule an exact-id dial, but is not
+    /// authority to relay traffic until that dial authenticates the expected
+    /// identity.
+    relay_hub_candidates: HashSet<PeerId>,
+    /// Authenticated relay hub identities proven by an exact outbound dial.
     ///
     /// Peers in this set are allowed to send frames where `origin != incoming_peer_id`
     /// (i.e., forwarded/relayed frames).
@@ -11368,6 +11434,8 @@ struct NetworkBase<T: Pload, E: Enc> {
     local_scion_supported: bool,
     /// Proxy policy applied to outbound TCP dials.
     proxy_policy: crate::transport::ProxyPolicy,
+    /// Operator admission policy applied to every outbound logical and resolved target.
+    outbound_dial_policy: Arc<crate::dial_policy::OutboundDialPolicy>,
     /// Whether to verify TLS certificates when dialing an `https://` proxy.
     proxy_tls_verify: bool,
     /// Optional pinned end-entity certificate for `https://` proxies (DER).
@@ -11414,6 +11482,11 @@ struct NetworkBase<T: Pload, E: Enc> {
     /// These remain part of total-cap accounting because their authenticated
     /// source-reserve ownership can still be alive until task teardown finishes.
     terminating_connections: HashSet<ConnectionId>,
+    /// Exact authenticated connection tenures rejected for a protocol violation.
+    ///
+    /// Entries remain until the tenure's delivery-drain fence completes so
+    /// already queued frames cannot repeat expensive validation work.
+    protocol_rejected_connections: HashSet<ConnectionId>,
     /// Optional cap on number of incoming connections
     max_incoming: Option<usize>,
     /// Optional cap on total number of connections
@@ -11453,6 +11526,14 @@ struct NetworkBase<T: Pload, E: Enc> {
     _encryptor: core::marker::PhantomData<E>,
 }
 impl<T: Pload, E: Enc> NetworkBase<T, E> {
+    fn reserve_incoming_pending(&mut self, conn_id: ConnectionId) -> bool {
+        self.incoming_pending.insert(conn_id)
+    }
+
+    fn release_incoming_pending(&mut self, conn_id: ConnectionId) -> bool {
+        self.incoming_pending.remove(&conn_id)
+    }
+
     /// Revoke every actor-owned reply tenure and every caller-held waiter
     /// authorized by those tenures.
     ///
@@ -11509,8 +11590,9 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 remote_addr,
                 reply,
             } => {
+                let remote_ip = canonical_remote_ip(remote_addr.ip());
                 // Apply the same caps and per-IP throttle to TLS and QUIC accepts.
-                let allow = if self.exceeds_caps() {
+                let allow = if self.exceeds_ordinary_connection_cap() {
                     TOTAL_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
                     iroha_logger::warn!(addr=%remote_addr, "Dropping unauthenticated connection due to total connections cap");
                     false
@@ -11518,26 +11600,24 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                     INCOMING_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
                     iroha_logger::warn!(addr=%remote_addr, "Dropping unauthenticated connection due to max_incoming cap");
                     false
-                } else if !self.allow_ip(remote_addr.ip()) {
-                    ACCEPT_THROTTLED.fetch_add(1, Ordering::Relaxed);
-                    iroha_logger::debug!(addr=%remote_addr, "Dropping authenticated transport connection due to per-IP throttle");
+                } else if !self.allow_ip(remote_ip) {
+                    // Token-bucket rejection is counted inside `allow_ip_with_policy` exactly
+                    // once; ACL rejection is policy enforcement, not throttling telemetry.
+                    iroha_logger::debug!(addr=%remote_addr, "Dropping unauthenticated connection due to IP policy or accept throttle");
                     false
                 } else {
-                    true
+                    self.reserve_incoming_pending(conn_id)
                 };
-                if allow {
-                    self.incoming_pending.insert(conn_id);
-                }
                 if reply.send(allow).is_err() && allow {
                     // The request future was cancelled after admission but
                     // before it could construct its cancellation guard.
-                    self.incoming_pending.remove(&conn_id);
+                    self.release_incoming_pending(conn_id);
                 }
             }
             ServiceMessage::InboundCancelled(conn_id) => {
                 // Idempotent and deliberately limited to pre-authentication
                 // state: a delayed duplicate must not de-account a live peer.
-                self.incoming_pending.remove(&conn_id);
+                self.release_incoming_pending(conn_id);
             }
         }
     }
@@ -11600,9 +11680,14 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             });
         }
         let (topic, route) = match &message {
-            NetworkMessage::Post(post) => (post.data.topic(), post.data.subscriber_route()),
-            NetworkMessage::Broadcast(broadcast) => {
+            AdmittedNetworkPayload::Unsigned(NetworkMessage::Post(post)) => {
+                (post.data.topic(), post.data.subscriber_route())
+            }
+            AdmittedNetworkPayload::Unsigned(NetworkMessage::Broadcast(broadcast)) => {
                 (broadcast.data.topic(), broadcast.data.subscriber_route())
+            }
+            AdmittedNetworkPayload::Signed(frame) => {
+                (frame.payload.topic(), frame.payload.subscriber_route())
             }
         };
         let reliable_progress = is_reliable_progress_route(topic, route);
@@ -11650,7 +11735,13 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             .is_some_and(|route| completed_targets.contains(route.semantic_target()));
         if exact_reply_flushed {
             debug_assert!(reliable_progress);
-            debug_assert!(matches!(&message, NetworkMessage::Post(_)));
+            debug_assert!(match &message {
+                AdmittedNetworkPayload::Unsigned(NetworkMessage::Post(_)) => true,
+                AdmittedNetworkPayload::Signed(frame) => {
+                    matches!(&frame.target, RelayTarget::Direct(_))
+                }
+                AdmittedNetworkPayload::Unsigned(NetworkMessage::Broadcast(_)) => false,
+            });
             if let Some(reply_flush_ack) = reply_flush_ack {
                 let _ = reply_flush_ack.send(NetworkReplyFlushCompletion::Flushed);
             }
@@ -11711,7 +11802,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             }
         }
         if !reliable_progress {
-            match message {
+            match message.into_network() {
                 NetworkMessage::Post(post) => self.post(post),
                 NetworkMessage::Broadcast(broadcast) => self.broadcast(broadcast),
             }
@@ -11752,46 +11843,40 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             drop(actor_lease);
             return Ok(());
         }
-        let transferred = match &message {
-            NetworkMessage::Post(post) => {
+        let message = message.materialize(&self.key_pair, self.relay_ttl);
+        let frame = Arc::clone(message.signed_frame());
+        let transferred = match &frame.target {
+            RelayTarget::Direct(peer_id) => {
                 debug_assert!(
-                    retry_targets.is_empty() || retry_targets == [post.peer_id.clone()],
+                    retry_targets.is_empty() || retry_targets == [peer_id.clone()],
                     "a direct actor post owns exactly one writer acknowledgement"
                 );
-                if completed_targets.contains(&post.peer_id) {
+                if completed_targets.contains(peer_id) {
                     true
-                } else if pending_flush_acks.contains_key(&post.peer_id) {
+                } else if pending_flush_acks.contains_key(peer_id) {
                     false
                 } else {
                     let delivery_peer = match progress_authority.as_ref() {
                         Some(ProgressDeliveryAuthority::Reply(route)) => {
-                            debug_assert_eq!(route.semantic_target(), &post.peer_id);
+                            debug_assert_eq!(route.semantic_target(), peer_id);
                             route.tenure.delivery_peer.clone()
                         }
                         Some(ProgressDeliveryAuthority::Topology(_)) | None => self
-                            .relay_route_for_unconnected_post_target(&post.peer_id)
-                            .unwrap_or_else(|| post.peer_id.clone()),
+                            .relay_route_for_unconnected_post_target(peer_id)
+                            .unwrap_or_else(|| peer_id.clone()),
                     };
-                    let frame = RelayMessage::new_signed(
-                        &self.key_pair,
-                        RelayTarget::Direct(post.peer_id.clone()),
-                        self.relay_ttl,
-                        post.priority,
-                        post.data.clone(),
-                    );
                     let exact_reply = matches!(
                         progress_authority.as_ref(),
                         Some(ProgressDeliveryAuthority::Reply(_))
                     );
                     match self.post_reliable_actor_frame_to_writer(
                         &delivery_peer,
-                        frame,
+                        frame.as_ref(),
                         topic,
                         exact_reply,
                     ) {
                         ReliableWriterAttempt::Awaiting(receiver) => {
-                            let replaced =
-                                pending_flush_acks.insert(post.peer_id.clone(), receiver);
+                            let replaced = pending_flush_acks.insert(peer_id.clone(), receiver);
                             debug_assert!(replaced.is_none());
                             false
                         }
@@ -11799,7 +11884,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                     }
                 }
             }
-            NetworkMessage::Broadcast(broadcast) => {
+            RelayTarget::Broadcast => {
                 if !retry_targets.is_empty() {
                     let remaining = remaining_broadcast_targets.get_or_insert_with(VecDeque::new);
                     for target in retry_targets {
@@ -11820,15 +11905,12 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                         if pending_flush_acks.contains_key(&target) {
                             continue;
                         }
-                        let frame = RelayMessage::new_signed(
-                            &self.key_pair,
-                            RelayTarget::Broadcast,
-                            self.relay_ttl,
-                            broadcast.priority,
-                            broadcast.data.clone(),
-                        );
-                        match self.post_reliable_actor_frame_to_writer(&target, frame, topic, false)
-                        {
+                        match self.post_reliable_actor_frame_to_writer(
+                            &target,
+                            frame.as_ref(),
+                            topic,
+                            false,
+                        ) {
                             ReliableWriterAttempt::Awaiting(receiver) => {
                                 let replaced = pending_flush_acks.insert(target, receiver);
                                 debug_assert!(replaced.is_none());
@@ -12499,11 +12581,21 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         self.accept_staged_reply_source_authority(prior, transition);
     }
     fn apply_reply_source_acl(&mut self, acl: message::UpdateAcl) {
+        let (allow_nets, deny_nets) = match parse_acl_cidrs(&acl.allow_cidrs, &acl.deny_cidrs) {
+            Ok(nets) => nets,
+            Err(error) => {
+                iroha_logger::error!(
+                    %error,
+                    "Rejected malformed runtime reply-source ACL without changing applied state"
+                );
+                return;
+            }
+        };
         self.allowlist_only = acl.allowlist_only;
         self.allow_keys = acl.allow_keys.into_iter().collect();
         self.deny_keys = acl.deny_keys.into_iter().collect();
-        self.allow_nets = parse_cidrs(&acl.allow_cidrs);
-        self.deny_nets = parse_cidrs(&acl.deny_cidrs);
+        self.allow_nets = allow_nets;
+        self.deny_nets = deny_nets;
         self.requested_topology.retain(|peer_id| {
             let key = peer_id.public_key();
             !self.deny_keys.contains(key) && (!self.allowlist_only || self.allow_keys.contains(key))
@@ -12512,6 +12604,22 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             let key = peer_id.public_key();
             !self.deny_keys.contains(key) && (!self.allowlist_only || self.allow_keys.contains(key))
         });
+        let deny_keys = &self.deny_keys;
+        let allow_keys = &self.allow_keys;
+        let allowlist_only = self.allowlist_only;
+        let identity_allowed = |peer_id: &PeerId| {
+            let key = peer_id.public_key();
+            !deny_keys.contains(key) && (!allowlist_only || allow_keys.contains(key))
+        };
+        self.relay_trusted_peers.retain(identity_allowed);
+        self.refresh_relay_hub_candidates();
+        if self
+            .relay_hub_peer
+            .as_ref()
+            .is_some_and(|peer_id| !self.relay_trusted_peers.contains(peer_id))
+        {
+            self.relay_hub_peer = None;
+        }
     }
     fn apply_reply_source_consensus_caps(&mut self, consensus_caps: ConsensusCapsSnapshot) {
         let reconnect =
@@ -12688,15 +12796,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             });
             !by_address.is_empty()
         });
-        // Recompute the set of peers allowed to relay frames (origin mismatch).
-        self.relay_trusted_peers.clear();
-        if !self.relay_hub_addresses.is_empty() {
-            for (pid, addr) in &self.current_peers_addresses {
-                if self.configured_hub_matches(addr) {
-                    self.relay_trusted_peers.insert(pid.clone());
-                }
-            }
-        }
+        // Address publication grants dial capability only. Relay authority is
+        // retained solely for identities previously proven by an exact
+        // outbound configured-hub dial.
+        self.refresh_relay_hub_candidates();
         // Apply address updates immediately to reduce startup latency and
         // speed up recovery after gossip/DNS refresh. This keeps connection
         // attempts responsive instead of waiting for the periodic tick.
@@ -12762,11 +12865,11 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             if !self.pending_reply_source_allows(id) {
                 continue;
             }
-            if !self.current_topology.contains(id) && !self.relay_trusted_peers.contains(id) {
+            if !self.current_topology.contains(id) && !self.is_relay_hub_dial_identity(id) {
                 continue;
             }
             // Skip already connected or already connecting for the same address
-            if self.peers.contains_key(id)
+            if (self.peers.contains_key(id) && !self.requires_relay_hub_proof(id))
                 || self
                     .connecting_peers
                     .values()
@@ -12840,6 +12943,21 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 || (addr.port() == hub_addr.port() && addr.host_str() == hub_addr.host_str())
         })
     }
+    fn refresh_relay_hub_candidates(&mut self) {
+        let candidates = if self.relay_hub_addresses.is_empty() {
+            HashSet::new()
+        } else {
+            self.current_peers_addresses
+                .iter()
+                .filter(|(peer_id, address)| {
+                    self.configured_hub_matches(address)
+                        && self.projected_reply_source_acl_allows(peer_id)
+                })
+                .map(|(peer_id, _)| peer_id.clone())
+                .collect()
+        };
+        self.relay_hub_candidates = candidates;
+    }
     fn refresh_relay_hub_peer(&mut self, _now: tokio::time::Instant) {
         let relay_hub_peer = self.verified_relay_hub_peer();
         let topology =
@@ -12851,6 +12969,38 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     }
     fn is_configured_hub_peer(&self, peer: &Peer, relay_role: RelayRole) -> bool {
         matches!(relay_role, RelayRole::Hub) && self.relay_trusted_peers.contains(peer.id())
+    }
+    fn is_relay_hub_dial_identity(&self, peer_id: &PeerId) -> bool {
+        self.relay_hub_candidates.contains(peer_id) || self.relay_trusted_peers.contains(peer_id)
+    }
+    fn requires_relay_hub_proof(&self, peer_id: &PeerId) -> bool {
+        self.relay_hub_candidates.contains(peer_id) && !self.relay_trusted_peers.contains(peer_id)
+    }
+    fn is_exact_relay_hub_dial_target(&self, peer: &Peer) -> bool {
+        matches!(
+            self.relay_mode,
+            iroha_config::parameters::actual::RelayMode::Spoke
+                | iroha_config::parameters::actual::RelayMode::Assist
+        ) && self.is_relay_hub_dial_identity(peer.id())
+            && self.configured_hub_matches(peer.address())
+            && self.is_configured_dial_target(peer)
+    }
+    fn reserves_relay_hub_slot(&self) -> bool {
+        if !matches!(
+            self.relay_mode,
+            iroha_config::parameters::actual::RelayMode::Spoke
+                | iroha_config::parameters::actual::RelayMode::Assist
+        ) || self.relay_hub_addresses.is_empty()
+        {
+            return false;
+        }
+        let authenticated_hub = self.peers.iter().any(|(peer_id, peer)| {
+            matches!(peer.relay_role, RelayRole::Hub) && self.relay_trusted_peers.contains(peer_id)
+        });
+        let exact_hub_dial_inflight = self.connecting_peers.iter().any(|(conn_id, peer)| {
+            self.outbound_connections.contains(conn_id) && self.is_exact_relay_hub_dial_target(peer)
+        });
+        !authenticated_hub && !exact_hub_dial_inflight
     }
     fn hub_handle(&mut self) -> Option<(&PeerId, &RefPeer<WireMessage<T>>)> {
         self.refresh_relay_hub_peer(tokio::time::Instant::now());
@@ -13221,11 +13371,11 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     fn post_reliable_actor_frame_to_writer(
         &mut self,
         peer_id: &PeerId,
-        frame: RelayMessage<T>,
+        frame: &RelayMessage<T>,
         topic: message::Topic,
         exact_reply: bool,
     ) -> ReliableWriterAttempt {
-        if !message::ClassifyTopic::is_outbound_allowed(&frame) {
+        if !message::ClassifyTopic::is_outbound_allowed(frame) {
             iroha_logger::error!(
                 peer = %peer_id,
                 ?topic,
@@ -13249,11 +13399,14 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             Self::record_trust_gossip_skip(peer_id, TrustDirection::Outbound, reason);
             return ReliableWriterAttempt::Retry;
         }
-        let is_high = matches!(frame.priority, Priority::High);
+        let is_high = matches!(message::ClassifyTopic::priority(frame), Priority::High);
         let is_consensus = is_consensus_topic(topic);
         let conn_id = ref_peer.conn_id;
         let p2p_addr = ref_peer.p2p_addr.clone();
-        match ref_peer.handle.post_recover_with_flush_ack(frame) {
+        // Clone only after every route/session/capability preflight passes.
+        // Missing-session retries therefore touch only the actor's `Arc` and
+        // never allocate another relay envelope.
+        match ref_peer.handle.post_recover_with_flush_ack(frame.clone()) {
             Ok(receiver) => {
                 if is_consensus {
                     iroha_logger::debug!(
@@ -13323,7 +13476,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             );
             return false;
         }
-        let is_high = matches!(frame.priority, Priority::High);
+        let is_high = matches!(message::ClassifyTopic::priority(&frame), Priority::High);
         let is_consensus = is_consensus_topic(topic);
         let is_progress = is_reliable_progress_route(
             topic,
@@ -13563,7 +13716,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         let id = failed.id();
         if !self.has_configured_dial_identity(id)
             || !self.pending_reply_source_allows(id)
-            || (!self.current_topology.contains(id) && !self.relay_trusted_peers.contains(id))
+            || (!self.current_topology.contains(id) && !self.is_relay_hub_dial_identity(id))
             || self.peers.contains_key(id)
             || self
                 .connecting_peers
@@ -13697,7 +13850,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             if !self.pending_reply_source_allows(&id) {
                 continue;
             }
-            if !self.current_topology.contains(&id) && !self.relay_trusted_peers.contains(&id) {
+            if !self.current_topology.contains(&id) && !self.is_relay_hub_dial_identity(&id) {
                 continue;
             }
             if !self.is_configured_dial_target(&peer) {
@@ -13707,7 +13860,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 self.reset_backoff_addr(&id, &addr);
                 continue;
             }
-            if self.peers.contains_key(&id) {
+            if self.peers.contains_key(&id) && !self.requires_relay_hub_proof(&id) {
                 // A pending standby or Happy-Eyeballs attempt became obsolete
                 // when either direction authenticated. Dropping it here avoids
                 // a permanent 50 ms reschedule loop and leaves future reconnects
@@ -13724,7 +13877,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 self.pending_connects.push((not_before, peer));
                 continue;
             }
-            if self.exceeds_caps() {
+            if self.exceeds_outbound_connection_cap(&peer) {
                 // Outbound handshakes consume the same finite process slot as
                 // accepted inbound and established connections. Keep the due
                 // peer scheduled instead of spawning pre-authentication work
@@ -13779,7 +13932,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         }
     }
     fn connect_peer(&mut self, peer: &Peer) -> bool {
-        if self.exceeds_caps() {
+        if self.exceeds_outbound_connection_cap(peer) {
             return false;
         }
         let soranet_policy = match self.soranet_handshake.snapshot() {
@@ -13838,6 +13991,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             self.proxy_tls_verify,
             self.proxy_tls_pinned_cert_der.clone(),
             self.proxy_policy.clone(),
+            Arc::clone(&self.outbound_dial_policy),
             self.quic_dialer.clone(),
             self.quic_datagrams_enabled,
             self.quic_datagram_max_payload_bytes,
@@ -13846,7 +14000,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         true
     }
     fn mark_connection_terminating(&mut self, conn_id: ConnectionId) {
-        self.incoming_pending.remove(&conn_id);
+        self.release_incoming_pending(conn_id);
         self.incoming_active.remove(&conn_id);
         if let Some(tenure) = self.reply_route_tenures.get(&conn_id) {
             tenure.mark_draining();
@@ -13893,12 +14047,46 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     fn finish_reply_route_tenure(&mut self, conn_id: ConnectionId) -> usize {
         let Some(tenure) = self.reply_route_tenures.remove(&conn_id) else {
             self.terminating_connections.remove(&conn_id);
+            self.protocol_rejected_connections.remove(&conn_id);
             return 0;
         };
         tenure.cancel();
         self.terminating_connections.remove(&conn_id);
+        self.protocol_rejected_connections.remove(&conn_id);
         self.network_actor_progress_budget
             .cancel_reply_route(&tenure)
+    }
+    fn reject_protocol_tenure(
+        &mut self,
+        peer_id: &PeerId,
+        connection_id: Option<ConnectionId>,
+        reason: &'static str,
+    ) {
+        let Some(connection_id) = connection_id else {
+            iroha_logger::warn!(peer = %peer_id, reason, "Dropping protocol violation without an exact tenure");
+            return;
+        };
+        let owns_tenure = self
+            .reply_route_tenures
+            .get(&connection_id)
+            .is_some_and(|tenure| &tenure.delivery_peer == peer_id)
+            || self
+                .peers
+                .get(peer_id)
+                .is_some_and(|current| current.conn_id == connection_id);
+        if !owns_tenure {
+            iroha_logger::warn!(peer = %peer_id, connection_id, reason, "Dropping protocol violation with mismatched tenure ownership");
+            return;
+        }
+        self.protocol_rejected_connections.insert(connection_id);
+        if self
+            .peers
+            .get(peer_id)
+            .is_some_and(|current| current.conn_id == connection_id)
+        {
+            iroha_logger::warn!(peer = %peer_id, connection_id, reason, "Disconnecting exact peer tenure after protocol violation");
+            self.disconnect_peer(peer_id);
+        }
     }
     fn disconnect_peer(&mut self, peer_id: &PeerId) {
         let peer = match self.peers.remove(peer_id) {
@@ -13959,9 +14147,14 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             trust_gossip,
         }: Connected<WireMessage<T>>,
     ) {
-        self.connecting_peers.remove(&connection_id);
+        let dial_target = self.connecting_peers.remove(&connection_id);
+        let proven_outbound_hub = matches!(relay_role, RelayRole::Hub)
+            && self.outbound_connections.contains(&connection_id)
+            && dial_target.as_ref().is_some_and(|target| {
+                target.id() == peer.id() && self.configured_hub_matches(target.address())
+            });
         let _ = self.retry_pending_reply_source_authority();
-        let configured_hub = self.is_configured_hub_peer(&peer, relay_role);
+        let configured_hub = self.is_configured_hub_peer(&peer, relay_role) || proven_outbound_hub;
         if configured_hub
             && self
                 .pending_configured_hub_source
@@ -14043,10 +14236,16 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             self.reject_authenticated_tenure(connection_id, ready_peer_handle, peer_message_sender);
             return;
         }
+        if proven_outbound_hub {
+            // Authentication of the exact locally configured dial target pins
+            // hub identity for this process/config generation. Mutable address
+            // gossip cannot revoke or grant this authority.
+            self.relay_trusted_peers.insert(peer.id().clone());
+        }
         if matches!(
             self.relay_mode,
             iroha_config::parameters::actual::RelayMode::Spoke
-        ) && !self.is_configured_hub_peer(&peer, relay_role)
+        ) && !configured_hub
         {
             iroha_logger::warn!(
                 peer=%peer.id(),
@@ -14058,7 +14257,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         }
         //  Insert peer if peer not in peers yet or replace peer if it's disambiguator value is smaller than new one (simultaneous connections resolution rule)
         match self.peers.get(peer.id()) {
-            Some(peer) if peer.disambiguator > disambiguator => {
+            Some(peer) if peer.disambiguator > disambiguator && !proven_outbound_hub => {
                 iroha_logger::debug!(
                     "Peer is disconnected due to simultaneous connection resolution policy"
                 );
@@ -14194,7 +14393,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         self.reset_backoff_addr(peer.id(), peer.address());
         self.last_active
             .insert(peer.id().clone(), tokio::time::Instant::now());
-        if self.incoming_pending.remove(&connection_id) {
+        if self.release_incoming_pending(connection_id) {
             self.incoming_active.insert(connection_id);
         }
         if configured_hub_candidate {
@@ -14345,12 +14544,13 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             }
         } else {
             self.terminating_connections.remove(&conn_id);
+            self.protocol_rejected_connections.remove(&conn_id);
         }
         // An inbound handshake is still recorded in `incoming_pending` until
         // `peer_connected` accepts it into the active set.  Rejections after
         // authentication report `Some(peer)`, so clean both inbound sets
         // independently of how far the connection progressed.
-        self.incoming_pending.remove(&conn_id);
+        self.release_incoming_pending(conn_id);
         self.incoming_active.remove(&conn_id);
         // Remove the terminating attempt before retry reconciliation so the
         // shared replacement check only observes other in-flight owners.
@@ -14374,13 +14574,13 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                         &self.online_peer_capabilities_sender,
                         peer.id(),
                     );
+                    self.clear_low_buckets(peer.id());
                 }
             }
             // A current configured identity remains eligible even when the
             // terminated tenure was inbound. Arbitrary inbound identities are
             // excluded by the current address-authority snapshot.
             self.schedule_retry_for_terminated_peer(&peer);
-            self.clear_low_buckets(peer.id());
         } else if let Some(pending_peer) = pending_connect_peer {
             // Pre-handshake failures are retryable only for locally initiated
             // attempts. The shared helper then revalidates current identity,
@@ -14427,7 +14627,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 &self.key_pair,
                 RelayTarget::Direct(peer_id),
                 relay_ttl,
-                priority,
                 data,
             );
             return self.send_frame_to_peer(&hub_id, frame, topic);
@@ -14450,7 +14649,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             &self.key_pair,
             RelayTarget::Direct(peer_id.clone()),
             relay_ttl,
-            priority,
             data,
         );
         let relay_fallback = fallback_hub.zip(fallback_payload).map(|(hub_id, payload)| {
@@ -14471,7 +14669,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                     origin,
                     target,
                     ttl: relay_ttl,
-                    priority,
                     origin_signature,
                     payload,
                 };
@@ -14643,12 +14840,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     /// it. Failed targets rotate to the tail so one unavailable peer cannot
     /// starve the rest of the snapshot, while successful targets are removed
     /// permanently and are never duplicated by a later retry.
-    fn try_broadcast_remaining(
-        &mut self,
-        data: &T,
-        priority: Priority,
-        remaining: &mut VecDeque<PeerId>,
-    ) -> bool {
+    fn try_broadcast_remaining(&mut self, data: &T, remaining: &mut VecDeque<PeerId>) -> bool {
         let topic = data.topic();
         let attempts = remaining.len();
         if attempts == 0 {
@@ -14658,7 +14850,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             &self.key_pair,
             RelayTarget::Broadcast,
             self.relay_ttl,
-            priority,
             data.clone(),
         ));
         for attempt in 0..attempts {
@@ -14729,13 +14920,23 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             self.peers.keys().cloned().collect()
         };
         let mut remaining = peers;
-        self.try_broadcast_remaining(data, *priority, &mut remaining)
+        self.try_broadcast_remaining(data, &mut remaining)
     }
     fn broadcast(&mut self, broadcast: Broadcast<T>) {
         let _ = self.try_broadcast(&broadcast);
     }
     async fn peer_message(&mut self, msg: PeerMessage<WireMessage<T>>) {
         iroha_logger::trace!(peer=%msg.peer, "Received peer message");
+        if msg.connection_id().is_some_and(|connection_id| {
+            self.protocol_rejected_connections.contains(&connection_id)
+        }) {
+            iroha_logger::debug!(
+                peer = %msg.peer,
+                connection_id = ?msg.connection_id(),
+                "Dropping frame queued by a protocol-rejected connection tenure"
+            );
+            return;
+        }
         let topic = msg.payload.payload.topic();
         let route = msg.payload.payload.subscriber_route();
         let size_bytes = msg.payload_bytes;
@@ -14800,32 +15001,14 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         if size_bytes > cap {
             iroha_logger::warn!(peer=%msg.peer, topic=?topic, size=size_bytes, cap=cap, "Dropping inbound message exceeding topic cap");
             record_inbound_cap_violation(topic);
-            if let Some(ref_peer) = self.peers.remove(&peer_id) {
-                ref_peer.handle.request_termination();
-                self.deferred_send_queue
-                    .release_retired_tenure_binding(&peer_id, ref_peer.conn_id);
-                self.mark_connection_terminating(ref_peer.conn_id);
-                self.peer_reputations.record_disconnected(&peer_id);
-                Self::remove_online_peer(
-                    &self.online_peers_sender,
-                    &self.online_peer_capabilities_sender,
-                    &peer_id,
-                );
-                self.last_active.remove(&peer_id);
-                self.clear_low_buckets(&peer_id);
-            } else {
-                self.last_active.remove(&peer_id);
-                self.clear_low_buckets(&peer_id);
-            }
+            self.reject_protocol_tenure(&peer_id, msg.connection_id(), "topic frame cap exceeded");
             return;
         }
-        self.last_active
-            .insert(peer_id.clone(), tokio::time::Instant::now());
         let incoming_peer = msg.peer.clone();
         let origin = msg.payload.origin.clone();
         let target = msg.payload.target.clone();
-        let ttl = msg.payload.ttl;
-        let priority = msg.payload.priority;
+        let ttl = msg.payload.ttl.min(self.relay_ttl);
+        let priority = topic.scheduling_priority();
         // Most peers must send frames where `origin` matches their peer id. We only accept
         // relayed frames (origin mismatch) from explicitly trusted relay peers.
         let allow_origin_mismatch = match self.relay_mode {
@@ -14845,6 +15028,11 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 origin = %origin,
                 "dropping relay frame with mismatched origin"
             );
+            self.reject_protocol_tenure(
+                &peer_id,
+                msg.connection_id(),
+                "unauthorized relay origin mismatch",
+            );
             return;
         }
         if let Err(error) = msg.payload.verify_origin_signature() {
@@ -14853,6 +15041,11 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 origin = %origin,
                 %error,
                 "dropping relay frame with invalid end-to-end origin signature"
+            );
+            self.reject_protocol_tenure(
+                &peer_id,
+                msg.connection_id(),
+                "invalid relay origin signature",
             );
             return;
         }
@@ -14890,6 +15083,8 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             iroha_logger::debug!(peer=%incoming_peer, "Dropping relay frame with expired ttl");
             return;
         }
+        self.last_active
+            .insert(peer_id.clone(), tokio::time::Instant::now());
         let deliver_local = matches!(&target, RelayTarget::Broadcast)
             || matches!(&target, RelayTarget::Direct(id) if id == &self.self_id);
         // Forward first (only borrows `payload`) so we can move it into the local-delivery
@@ -15302,6 +15497,28 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             .saturating_add(self.terminating_connections.len());
         total >= max_total
     }
+    /// Whether an ordinary connection would consume the relay-hub proof slot.
+    fn exceeds_ordinary_connection_cap(&self) -> bool {
+        let Some(max_total) = self.max_total_connections else {
+            return false;
+        };
+        let ordinary_limit = max_total.saturating_sub(usize::from(self.reserves_relay_hub_slot()));
+        let total = self
+            .peers
+            .len()
+            .saturating_add(self.connecting_peers.len())
+            .saturating_add(self.incoming_pending.len())
+            .saturating_add(self.terminating_connections.len());
+        total >= ordinary_limit
+    }
+    /// Whether an outbound target has exhausted the capacity available to it.
+    fn exceeds_outbound_connection_cap(&self, peer: &Peer) -> bool {
+        if self.is_exact_relay_hub_dial_target(peer) {
+            self.exceeds_caps()
+        } else {
+            self.exceeds_ordinary_connection_cap()
+        }
+    }
     /// Whether incoming cap is exceeded.
     fn exceeds_incoming_cap(&self) -> bool {
         let Some(max_in) = self.max_incoming else {
@@ -15476,6 +15693,31 @@ mod tests {
                 Self::Lane => message::ProgressReconstruction::Retransmit,
                 Self::Control => message::ProgressReconstruction::Exact,
             }
+        }
+    }
+    #[test]
+    fn semantic_topics_define_local_scheduler_priority() {
+        use message::{Priority, Topic};
+
+        for topic in [
+            Topic::ConsensusSafety,
+            Topic::Consensus,
+            Topic::ConsensusChunk,
+            Topic::ConsensusPayload,
+            Topic::Control,
+        ] {
+            assert_eq!(topic.scheduling_priority(), Priority::High);
+        }
+        for topic in [
+            Topic::BlockSync,
+            Topic::TxGossip,
+            Topic::TxGossipRestricted,
+            Topic::PeerGossip,
+            Topic::TrustGossip,
+            Topic::Health,
+            Topic::Other,
+        ] {
+            assert_eq!(topic.scheduling_priority(), Priority::Low);
         }
     }
     #[test]
@@ -15667,12 +15909,11 @@ mod tests {
         };
     }
     macro_rules! direct_frame {
-        ($origin:expr, $target:expr, $priority:expr, $payload:expr $(,)?) => {
+        ($origin:expr, $target:expr, $payload:expr $(,)?) => {
             RelayMessage::new(
                 $origin,
                 RelayTarget::Direct(($target).clone()),
                 DEFAULT_RELAY_TTL,
-                $priority,
                 $payload,
             )
         };
@@ -15802,6 +16043,50 @@ mod tests {
             .try_reserve(1, false)
             .expect("fresh test actor budget must admit one byte");
         AdmittedNetworkMessage::new(message, lease)
+    }
+    fn admitted_with_exact_actor_bytes<T: Pload + message::ClassifyTopic>(
+        network: &NetworkBase<T, ChaCha20Poly1305>,
+        message: NetworkMessage<T>,
+    ) -> (
+        AdmittedNetworkMessage<T>,
+        Arc<NetworkActorByteBudget>,
+        usize,
+    ) {
+        let topic = match &message {
+            NetworkMessage::Post(post) => post.data.topic(),
+            NetworkMessage::Broadcast(broadcast) => broadcast.data.topic(),
+        };
+        let plaintext_frame_bytes =
+            outbound_actor_message_wire_bytes(&message, &network.self_id, network.relay_ttl)
+                .expect("test message must have canonical actor wire geometry");
+        let topic_cap = match topic {
+            message::Topic::ConsensusSafety | message::Topic::Control => network.cap_control,
+            message::Topic::Consensus => network.cap_consensus,
+            message::Topic::ConsensusPayload
+            | message::Topic::ConsensusChunk
+            | message::Topic::BlockSync => network.cap_block_sync,
+            message::Topic::TxGossip | message::Topic::TxGossipRestricted => network.cap_tx_gossip,
+            message::Topic::PeerGossip | message::Topic::TrustGossip => network.cap_peer_gossip,
+            message::Topic::Health => network.cap_health,
+            message::Topic::Other => network.cap_other,
+        };
+        assert!(
+            plaintext_frame_bytes <= topic_cap,
+            "test message must fit its production topic cap"
+        );
+        let retained_bytes =
+            crate::frame_queue_charge_for::<ChaCha20Poly1305>(plaintext_frame_bytes)
+                .expect("test message must have a bounded stream charge");
+        let budget = NetworkActorByteBudget::new(retained_bytes, 0)
+            .expect("one exact test actor owner must fit");
+        let lease = budget
+            .try_reserve(retained_bytes, false)
+            .expect("exact test actor bytes must be available");
+        (
+            AdmittedNetworkMessage::new(message, lease),
+            budget,
+            retained_bytes,
+        )
     }
     #[test]
     fn connect_attempt_jitter_is_stable_and_bounded() {
@@ -16176,13 +16461,8 @@ mod tests {
         let (tx, _rx) = peer_message_channel::<DummyMsg>(cap);
         let peer = test_peer(socket_addr!(127.0.0.1:0));
         let origin = random_peer_id();
-        let payload = RelayMessage::new(
-            origin,
-            RelayTarget::Broadcast,
-            DEFAULT_RELAY_TTL,
-            Priority::High,
-            DummyMsg,
-        );
+        let payload =
+            RelayMessage::new(origin, RelayTarget::Broadcast, DEFAULT_RELAY_TTL, DummyMsg);
         let msg = PeerMessage::new(peer, payload, 1);
         assert!(
             tx.try_send(msg.try_clone_retained().expect("synthetic clone"))
@@ -16333,7 +16613,6 @@ mod tests {
                     &source_key_pair,
                     RelayTarget::Direct(local_target.clone()),
                     DEFAULT_RELAY_TTL,
-                    Priority::High,
                     SafetyMsg(1),
                 ),
                 1,
@@ -16354,7 +16633,6 @@ mod tests {
                     &source_key_pair,
                     RelayTarget::Direct(local_target),
                     DEFAULT_RELAY_TTL,
-                    Priority::High,
                     SafetyMsg(2),
                 ),
                 1,
@@ -17902,24 +18180,14 @@ mod tests {
             .lock()
             .expect("deferred send test lock poisoned")
     }
-    fn dummy_relay_frame(
-        origin: PeerId,
-        target: &PeerId,
-        priority: Priority,
-    ) -> WireMessage<DummyMsg> {
-        relay_frame(origin, target, priority, DummyMsg)
+    fn dummy_relay_frame(origin: PeerId, target: &PeerId) -> WireMessage<DummyMsg> {
+        relay_frame(origin, target, DummyMsg)
     }
-    fn relay_frame<T: Pload>(
-        origin: PeerId,
-        target: &PeerId,
-        priority: Priority,
-        payload: T,
-    ) -> WireMessage<T> {
+    fn relay_frame<T: Pload>(origin: PeerId, target: &PeerId, payload: T) -> WireMessage<T> {
         RelayMessage::new(
             origin,
             RelayTarget::Direct(target.clone()),
             DEFAULT_RELAY_TTL,
-            priority,
             payload,
         )
     }
@@ -18045,6 +18313,12 @@ mod tests {
             );
         }
     }
+    fn reserve_test_incoming<T: Pload>(
+        network: &mut NetworkBase<T, ChaCha20Poly1305>,
+        conn_id: ConnectionId,
+    ) {
+        assert!(network.reserve_incoming_pending(conn_id));
+    }
     #[allow(clippy::too_many_lines)]
     fn bare_network() -> Option<NetworkBase<DummyMsg, ChaCha20Poly1305>> {
         bare_network_with::<DummyMsg>()
@@ -18054,20 +18328,23 @@ mod tests {
         let Some(mut network) = bare_network() else {
             return;
         };
-        let replay_dir = tempfile::tempdir().expect("temporary replay-ledger directory");
-        let replay_path = replay_dir.path().join("revocations.norito");
-        let mut initial_handshake = ActualSoranetHandshake::default();
-        initial_handshake.pow.revocation_store_path =
-            replay_path.to_string_lossy().into_owned().into();
-        network.soranet_handshake =
-            runtime_from_handshake(initial_handshake.clone()).expect("mandatory test runtime");
         let initial = network
             .soranet_handshake
             .snapshot()
             .expect("initial handshake policy");
+        let replay_state_path = network
+            .soranet_handshake
+            .replay_state_path_for_tests()
+            .to_string_lossy()
+            .into_owned();
+        let compatible_config = || {
+            let mut handshake = test_soranet_handshake_config();
+            handshake.pow.revocation_store_path = replay_state_path.clone().into();
+            handshake
+        };
         let initial_capacity = initial.puzzle_work_capacities().0;
         let changed_capacity = if initial_capacity.get() == 1 { 2 } else { 1 };
-        let mut rejected = initial_handshake.clone();
+        let mut rejected = compatible_config();
         rejected.pow.outbound_mint_capacity =
             std::num::NonZeroUsize::new(changed_capacity).expect("non-zero capacity");
         let (rejected_response, rejected_result) = oneshot::channel();
@@ -18091,7 +18368,7 @@ mod tests {
                 .expect("policy after rejection")
         ));
 
-        let mut accepted = initial_handshake;
+        let mut accepted = compatible_config();
         accepted.pow.difficulty = 6;
         let (accepted_response, accepted_result) = oneshot::channel();
         network.handle_soranet_handshake_update(message::UpdateHandshake {
@@ -18106,7 +18383,7 @@ mod tests {
             .soranet_handshake
             .snapshot()
             .expect("policy after acceptance");
-        assert_eq!(active.pow_parameters().difficulty(), 6);
+        assert_eq!(active.puzzle_parameters().difficulty(), 6);
         assert!(!Arc::ptr_eq(&initial, &active));
     }
     fn bare_network_with<T: Pload + message::ClassifyTopic>()
@@ -18163,6 +18440,7 @@ mod tests {
                 relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
                 relay_hub_addresses: Vec::new(),
                 relay_hub_peer: None,
+                relay_hub_candidates: HashSet::new(),
                 relay_trusted_peers: HashSet::new(),
                 relay_ttl: DEFAULT_RELAY_TTL,
                 trust_gossip_config: true,
@@ -18251,6 +18529,7 @@ mod tests {
                 quic_dialer: None,
                 local_scion_supported: false,
                 proxy_policy: crate::transport::ProxyPolicy::disabled(),
+                outbound_dial_policy: Arc::new(crate::dial_policy::OutboundDialPolicy::default()),
                 proxy_tls_verify: true,
                 proxy_tls_pinned_cert_der: None,
                 allowlist_only: false,
@@ -18273,6 +18552,7 @@ mod tests {
                 incoming_pending: HashSet::new(),
                 incoming_active: HashSet::new(),
                 terminating_connections: HashSet::new(),
+                protocol_rejected_connections: HashSet::new(),
                 max_incoming: None,
                 max_total_connections: None,
                 accept_params: AcceptThrottleParams::new(
@@ -18482,7 +18762,7 @@ mod tests {
         let conn_id = 73;
         let peer = test_peer(socket_addr!(127.0.0.1:12073));
         network.max_total_connections = Some(1);
-        network.incoming_pending.insert(conn_id);
+        reserve_test_incoming(&mut network, conn_id);
         assert!(
             network.exceeds_caps(),
             "pending handshake must consume the cap"
@@ -18908,7 +19188,7 @@ mod tests {
         network.peer_reputations.record_connected(peer.id());
         network.incoming_active.insert(old_conn_id);
         network.outbound_connections.insert(old_conn_id);
-        network.incoming_pending.insert(new_conn_id);
+        reserve_test_incoming(&mut network, new_conn_id);
         let semantic_origin = random_peer_id();
         let old_reply_tenure = test_reply_tenure(
             &network.reply_route_owner,
@@ -18973,7 +19253,7 @@ mod tests {
         else {
             panic!("old reply fixture must retain one exact waiter");
         };
-        let deferred = dummy_relay_frame(network.self_id.clone(), peer.id(), Priority::High);
+        let deferred = dummy_relay_frame(network.self_id.clone(), peer.id());
         let deferred_outcome = defer_frame!(
             network.deferred_send_queue,
             peer.id(),
@@ -19036,6 +19316,12 @@ mod tests {
         assert!(!network.incoming_active.contains(&old_conn_id));
         assert!(network.incoming_active.contains(&new_conn_id));
         assert!(network.exceeds_caps());
+        network
+            .low_buckets
+            .insert(peer.id().clone(), TokenBucket::new(1.0, 1.0));
+        network
+            .low_bytes_buckets
+            .insert(peer.id().clone(), TokenBucket::new(1.0, 1.0));
         network.peer_terminated(Terminated {
             peer: Some(peer.clone()),
             conn_id: old_conn_id,
@@ -19061,6 +19347,8 @@ mod tests {
             network.retry_backoff.is_empty(),
             "a retired outbound connection must not reintroduce backoff while its replacement is live"
         );
+        assert!(network.low_buckets.contains_key(peer.id()));
+        assert!(network.low_bytes_buckets.contains_key(peer.id()));
         assert!(!network.exceeds_caps());
         network.peer_terminated(Terminated {
             peer: Some(peer.clone()),
@@ -19075,6 +19363,8 @@ mod tests {
         );
         assert!(!network.reply_route_tenures.contains_key(&new_conn_id));
         assert_eq!(network.peer_reputations.score(peer.id()), 0);
+        assert!(!network.low_buckets.contains_key(peer.id()));
+        assert!(!network.low_bytes_buckets.contains_key(peer.id()));
         drop((old_reply_waiter, old_reply_lease));
     }
     #[tokio::test(flavor = "current_thread")]
@@ -19095,7 +19385,7 @@ mod tests {
         let old_conn_id = 87;
         let new_conn_id = 88;
         let old_delivery_drain = Arc::new(InboundDeliveryDrain::new());
-        network.incoming_pending.insert(old_conn_id);
+        reserve_test_incoming(&mut network, old_conn_id);
         let (old_handle, old_receivers) = test_wire_peer_handle::<DummyMsg>(1);
         let (old_sender_tx, mut old_sender_rx) = tokio::sync::oneshot::channel();
         network.peer_connected(Connected {
@@ -19119,7 +19409,7 @@ mod tests {
                 .expect("accepted connection installs its reply tenure"),
         );
         let old_route = NetworkReplyRoute::new(peer.id().clone(), old_tenure, 0);
-        let frame = dummy_relay_frame(peer.id().clone(), peer.id(), Priority::High);
+        let frame = dummy_relay_frame(peer.id().clone(), peer.id());
         let mut delivered = PeerMessage::new_for_connection(peer.clone(), frame, 1, old_conn_id);
         assert!(
             old_senders
@@ -19134,7 +19424,7 @@ mod tests {
         let (_origin, _authenticated_via, _payload, _bytes, retained_route, receiver_guard) =
             delivered.into_parts_with_reply_route();
         let retained_route = retained_route.expect("final consumer preserves its exact route");
-        network.incoming_pending.insert(new_conn_id);
+        reserve_test_incoming(&mut network, new_conn_id);
         connect_test_peer!(network, peer, new_conn_id, 1, Disabled => _new_receivers, _new_sender_rx);
         assert!(old_receivers.termination_requested());
         assert!(retained_route.is_active());
@@ -19285,7 +19575,7 @@ mod tests {
         );
         network.current_topology.insert(peer.id().clone());
         let old_conn_id = 177;
-        network.incoming_pending.insert(old_conn_id);
+        reserve_test_incoming(&mut network, old_conn_id);
         let (old_handle, old_receivers) = test_wire_peer_handle::<DummyMsg>(1);
         let (old_sender_tx, mut old_sender_rx) = tokio::sync::oneshot::channel();
         let old_delivery_drain = Arc::new(InboundDeliveryDrain::new());
@@ -19305,7 +19595,7 @@ mod tests {
             .expect("first authenticated connection receives its dispatch owners");
         let mut retained_old_message = PeerMessage::new(
             peer.clone(),
-            dummy_relay_frame(network.self_id.clone(), peer.id(), Priority::High),
+            dummy_relay_frame(network.self_id.clone(), peer.id()),
             1,
         );
         assert!(
@@ -19325,7 +19615,7 @@ mod tests {
         drop(old_senders);
         old_delivery_drain.close_producer();
         let new_conn_id = 178;
-        network.incoming_pending.insert(new_conn_id);
+        reserve_test_incoming(&mut network, new_conn_id);
         let (new_handle, _new_receivers) = test_wire_peer_handle::<DummyMsg>(1);
         let (new_sender_tx, mut new_sender_rx) = tokio::sync::oneshot::channel();
         let new_delivery_drain = Arc::new(InboundDeliveryDrain::new());
@@ -19349,7 +19639,7 @@ mod tests {
             .expect("replacement receives the PeerId-keyed dispatch owner");
         let mut replacement_message = PeerMessage::new(
             peer.clone(),
-            dummy_relay_frame(network.self_id.clone(), peer.id(), Priority::High),
+            dummy_relay_frame(network.self_id.clone(), peer.id()),
             1,
         );
         assert!(
@@ -19384,7 +19674,7 @@ mod tests {
             peer_key_pair.public_key().clone(),
         );
         network.max_total_connections = Some(1);
-        network.incoming_pending.insert(conn_id);
+        reserve_test_incoming(&mut network, conn_id);
         // An empty permissioned topology rejects an untrusted authenticated observer.
         connect_test_peer!(
             network,
@@ -19434,7 +19724,7 @@ mod tests {
         });
         let peer = test_peer(socket_addr!(127.0.0.1:12081));
         let first_conn_id = 81;
-        network.incoming_pending.insert(first_conn_id);
+        reserve_test_incoming(&mut network, first_conn_id);
         connect_test_peer!(network, peer, first_conn_id, 0, Disabled => first_receivers, mut first_receiver);
         assert!(first_receivers.termination_requested());
         assert!(matches!(
@@ -19452,7 +19742,7 @@ mod tests {
                 .install_protected_sources(HashSet::new())
         );
         let second_conn_id = 82;
-        network.incoming_pending.insert(second_conn_id);
+        reserve_test_incoming(&mut network, second_conn_id);
         connect_test_peer!(network, peer, second_conn_id, 1, Disabled => second_receivers, mut second_receiver);
         assert!(second_receiver.try_recv().is_ok());
         assert!(!second_receivers.termination_requested());
@@ -19469,7 +19759,7 @@ mod tests {
             Some(HashSet::from([peer.id().clone()])),
         );
         network.current_topology.insert(peer.id().clone());
-        network.incoming_pending.insert(conn_id);
+        reserve_test_incoming(&mut network, conn_id);
         let (handle, receivers) = test_wire_peer_handle::<DummyMsg>(1);
         let (peer_message_sender, peer_message_receiver) = tokio::sync::oneshot::channel();
         drop(peer_message_receiver);
@@ -19513,7 +19803,7 @@ mod tests {
             .peer_reputations
             .set_trusted(&HashSet::from([hub.id().clone()]));
         let conn_id = 2_093;
-        network.incoming_pending.insert(conn_id);
+        reserve_test_incoming(&mut network, conn_id);
         connect_test_peer!(network, hub, conn_id, 0, Hub => receivers, mut peer_message_receiver);
         assert!(matches!(
             peer_message_receiver.try_recv(),
@@ -19540,7 +19830,7 @@ mod tests {
                     .expect("churn address"),
                 random_node_key_pair().public_key().clone(),
             );
-            network.incoming_pending.insert(conn_id);
+            reserve_test_incoming(&mut network, conn_id);
             connect_test_peer!(network, peer, conn_id, 0, Disabled => receivers, _peer_message_receiver);
             assert!(receivers.termination_requested());
             network.peer_terminated(Terminated {
@@ -19584,7 +19874,7 @@ mod tests {
                     .expect("churn address"),
                 random_node_key_pair().public_key().clone(),
             );
-            network.incoming_pending.insert(conn_id);
+            reserve_test_incoming(&mut network, conn_id);
             connect_test_peer!(network, peer, conn_id, 0, Disabled => receivers, peer_message_receiver);
             assert!(network.peers.contains_key(peer.id()));
             assert!(!receivers.termination_requested());
@@ -19629,7 +19919,6 @@ mod tests {
                 &peer_key_pair,
                 RelayTarget::Broadcast,
                 DEFAULT_RELAY_TTL,
-                Priority::Low,
                 DummyMsg,
             )
         };
@@ -19673,7 +19962,6 @@ mod tests {
             &peer_key_pair,
             RelayTarget::Broadcast,
             DEFAULT_RELAY_TTL,
-            Priority::High,
             DeferredProgressMsg::Lane(9),
         );
         network
@@ -20037,9 +20325,10 @@ mod tests {
         network.relay_trusted_peers = HashSet::from([hub_a.id().clone(), hub_b.id().clone()]);
         network.relay_hub_peer = Some(hub_a.id().clone());
         network.current_topology = HashSet::from([hub_a.id().clone()]);
-        network
-            .current_peers_addresses
-            .push((hub_b.id().clone(), hub_b.address().clone()));
+        network.current_peers_addresses.extend([
+            (hub_a.id().clone(), hub_a.address().clone()),
+            (hub_b.id().clone(), hub_b.address().clone()),
+        ]);
         let hub_a_conn_id = 3_111;
         let (hub_a_handle, _hub_a_receivers) = test_wire_peer_handle::<DummyMsg>(1);
         insert_dummy_ref_peer(
@@ -20083,7 +20372,7 @@ mod tests {
         assert!(!network.peers.contains_key(hub_a.id()));
         assert!(network.is_configured_hub_peer(&hub_b, RelayRole::Hub));
         let first_b_conn_id = 3_112;
-        network.incoming_pending.insert(first_b_conn_id);
+        reserve_test_incoming(&mut network, first_b_conn_id);
         connect_test_peer!(network, hub_b, first_b_conn_id, 0, Hub => first_b_receivers, mut first_b_receiver);
         assert!(first_b_receivers.termination_requested());
         assert!(matches!(
@@ -20113,7 +20402,7 @@ mod tests {
         });
         assert!(network.retry_backoff.contains_key(hub_b.id()));
         let replayed_a_conn_id = 3_114;
-        network.incoming_pending.insert(replayed_a_conn_id);
+        reserve_test_incoming(&mut network, replayed_a_conn_id);
         connect_test_peer!(network, hub_a, replayed_a_conn_id, 1, Hub => replayed_a_receivers, mut replayed_a_receiver);
         assert!(replayed_a_receivers.termination_requested());
         assert!(matches!(
@@ -20144,7 +20433,7 @@ mod tests {
                 .protected_source_geometry_fits()
         );
         let second_b_conn_id = 3_113;
-        network.incoming_pending.insert(second_b_conn_id);
+        reserve_test_incoming(&mut network, second_b_conn_id);
         connect_test_peer!(network, hub_b, second_b_conn_id, 1, Hub => second_b_receivers, mut second_b_receiver);
         assert!(second_b_receiver.try_recv().is_ok());
         assert!(!second_b_receivers.termination_requested());
@@ -20307,6 +20596,178 @@ mod tests {
         assert!(network.pending_connects.is_empty());
         assert!(network.connecting_peers.is_empty());
     }
+    #[tokio::test]
+    async fn reserved_hub_slot_allows_proof_beside_untrusted_inbound_incumbent() {
+        let_test_network!(network);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        network.max_total_connections = Some(2);
+        let hub = test_peer(socket_addr!(127.0.0.1:45686));
+        network.relay_hub_addresses.push(hub.address().clone());
+        network
+            .current_peers_addresses
+            .push((hub.id().clone(), hub.address().clone()));
+        network.relay_hub_candidates.insert(hub.id().clone());
+        let (handle, _receivers) = test_wire_peer_handle::<DummyMsg>(1);
+        insert_dummy_ref_peer(
+            &mut network,
+            hub.id().clone(),
+            hub.address().clone(),
+            94,
+            handle,
+        );
+        network
+            .pending_connects
+            .push((tokio::time::Instant::now(), hub.clone()));
+        assert!(network.reserves_relay_hub_slot());
+
+        network.process_pending_connects();
+
+        assert!(network.pending_connects.is_empty());
+        assert!(network.exceeds_caps());
+        assert!(network.connecting_peers.values().any(|candidate| {
+            candidate.id() == hub.id() && candidate.address() == hub.address()
+        }));
+        assert!(network.outbound_connections.iter().any(|connection_id| {
+            network
+                .connecting_peers
+                .get(connection_id)
+                .is_some_and(|candidate| candidate == &hub)
+        }));
+    }
+    #[test]
+    fn physically_saturated_cap_retains_unproven_hub_proof_for_retry() {
+        let_test_network!(network);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        network.max_total_connections = Some(1);
+        let hub = test_peer(socket_addr!(127.0.0.1:45687));
+        network.relay_hub_addresses.push(hub.address().clone());
+        network
+            .current_peers_addresses
+            .push((hub.id().clone(), hub.address().clone()));
+        network.relay_hub_candidates.insert(hub.id().clone());
+        let (handle, _receivers) = test_wire_peer_handle::<DummyMsg>(1);
+        insert_dummy_ref_peer(
+            &mut network,
+            hub.id().clone(),
+            hub.address().clone(),
+            95,
+            handle,
+        );
+        network
+            .pending_connects
+            .push((tokio::time::Instant::now(), hub.clone()));
+
+        network.process_pending_connects();
+
+        assert!(network.connecting_peers.is_empty());
+        assert!(network.pending_connects.iter().any(|(_, candidate)| {
+            candidate.id() == hub.id() && candidate.address() == hub.address()
+        }));
+    }
+    #[test]
+    fn configured_hub_reserves_single_slot_before_candidate_discovery() {
+        let_test_network!(network);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        network.max_total_connections = Some(1);
+        network
+            .relay_hub_addresses
+            .push(socket_addr!(127.0.0.1:45688));
+        assert!(network.reserves_relay_hub_slot());
+        assert!(network.exceeds_ordinary_connection_cap());
+
+        let conn_id = 96;
+        let (reply, mut response) = tokio::sync::oneshot::channel();
+        network.handle_service_message(ServiceMessage::InboundAsk {
+            conn_id,
+            remote_addr: "127.0.0.1:45689".parse().expect("remote address"),
+            reply,
+        });
+        assert!(!response.try_recv().expect("admission response"));
+        assert!(!network.incoming_pending.contains(&conn_id));
+
+        let ordinary = test_peer(socket_addr!(127.0.0.1:45690));
+        network.current_topology.insert(ordinary.id().clone());
+        network
+            .current_peers_addresses
+            .push((ordinary.id().clone(), ordinary.address().clone()));
+        network
+            .pending_connects
+            .push((tokio::time::Instant::now(), ordinary.clone()));
+        network.process_pending_connects();
+        assert!(network.connecting_peers.is_empty());
+        assert!(network.pending_connects.iter().any(|(_, candidate)| {
+            candidate.id() == ordinary.id() && candidate.address() == ordinary.address()
+        }));
+    }
+    #[tokio::test]
+    async fn exact_hub_dial_spends_reserved_single_slot() {
+        let_test_network!(network);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Spoke;
+        network.max_total_connections = Some(1);
+        let hub = test_peer(socket_addr!(127.0.0.1:45691));
+        network.relay_hub_addresses.push(hub.address().clone());
+        network
+            .current_peers_addresses
+            .push((hub.id().clone(), hub.address().clone()));
+        network.relay_hub_candidates.insert(hub.id().clone());
+        let wrong_address = Peer::new(socket_addr!(127.0.0.1:45692), hub.id().clone());
+        assert!(network.is_exact_relay_hub_dial_target(&hub));
+        assert!(!network.is_exact_relay_hub_dial_target(&wrong_address));
+        network
+            .pending_connects
+            .push((tokio::time::Instant::now(), hub.clone()));
+
+        network.process_pending_connects();
+
+        assert!(network.exceeds_caps());
+        assert!(!network.reserves_relay_hub_slot());
+        assert!(
+            network
+                .connecting_peers
+                .values()
+                .any(|candidate| candidate == &hub)
+        );
+        assert!(network.outbound_connections.iter().any(|connection_id| {
+            network
+                .connecting_peers
+                .get(connection_id)
+                .is_some_and(|candidate| candidate == &hub)
+        }));
+    }
+    #[test]
+    fn only_authenticated_or_exact_outbound_hub_occupies_reservation() {
+        let_test_network!(network);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        let hub = test_peer(socket_addr!(127.0.0.1:45693));
+        network.relay_hub_addresses.push(hub.address().clone());
+        network
+            .current_peers_addresses
+            .push((hub.id().clone(), hub.address().clone()));
+        network.relay_hub_candidates.insert(hub.id().clone());
+        let (handle, _receivers) = test_wire_peer_handle::<DummyMsg>(1);
+        insert_dummy_ref_peer(
+            &mut network,
+            hub.id().clone(),
+            hub.address().clone(),
+            97,
+            handle,
+        );
+        network
+            .peers
+            .get_mut(hub.id())
+            .expect("inserted peer")
+            .relay_role = RelayRole::Hub;
+        assert!(network.reserves_relay_hub_slot());
+
+        network.relay_trusted_peers.insert(hub.id().clone());
+        assert!(!network.reserves_relay_hub_slot());
+        network.relay_trusted_peers.clear();
+        network.peers.clear();
+        network.connecting_peers.insert(98, hub.clone());
+        assert!(network.reserves_relay_hub_slot());
+        network.outbound_connections.insert(98);
+        assert!(!network.reserves_relay_hub_slot());
+    }
     #[test]
     fn process_pending_connects_never_exceeds_the_total_inflight_cap() {
         let_test_network!(network);
@@ -20394,9 +20855,9 @@ mod tests {
         let_deferred_queue_clock!(peer_id, now);
         let mut queue =
             DeferredPeerFrameQueue::<DummyMsg>::new(8, usize::MAX, Duration::from_secs(1));
-        let frame_one = direct_frame!(peer_id.clone(), peer_id, Priority::Low, DummyMsg,);
-        let frame_two = direct_frame!(peer_id.clone(), peer_id, Priority::High, DummyMsg,);
-        let frame_three = direct_frame!(peer_id.clone(), peer_id, Priority::Low, DummyMsg,);
+        let frame_one = direct_frame!(peer_id.clone(), peer_id, DummyMsg,);
+        let frame_two = direct_frame!(peer_id.clone(), peer_id, DummyMsg,);
+        let frame_three = direct_frame!(peer_id.clone(), peer_id, DummyMsg,);
         let outcome_one = defer_frame!(queue, peer_id, frame_one, Other, Some(11), now);
         let outcome_two = defer_frame!(queue, peer_id, frame_two, Other, Some(12), now, 1);
         let outcome_three = defer_frame!(queue, peer_id, frame_three, Other, None, now, 2);
@@ -20439,7 +20900,7 @@ mod tests {
         let_deferred_queue_clock!(peer_id, now);
         let mut queue =
             DeferredPeerFrameQueue::<RouteMsg>::new(1, usize::MAX, Duration::from_secs(1));
-        let frame = || direct_frame!(peer_id.clone(), peer_id, Priority::High, RouteMsg::Lane,);
+        let frame = || direct_frame!(peer_id.clone(), peer_id, RouteMsg::Lane,);
         let _ = defer_frame!(queue, peer_id, frame(), ConsensusSafety, Some(100), now);
         for connection_id in 1..=8 {
             let outcome = defer_frame!(
@@ -20492,7 +20953,7 @@ mod tests {
         let_deferred_queue_clock!(peer_id, now);
         let mut queue =
             DeferredPeerFrameQueue::<RouteMsg>::new(6, usize::MAX, Duration::from_secs(1));
-        let frame = || direct_frame!(peer_id.clone(), peer_id, Priority::High, RouteMsg::Lane,);
+        let frame = || direct_frame!(peer_id.clone(), peer_id, RouteMsg::Lane,);
         let admitted_bulk = (0..64)
             .filter(|connection_id| {
                 defer_frame!(
@@ -20529,7 +20990,7 @@ mod tests {
     #[test]
     fn deferred_safety_cannot_borrow_the_ordinary_progress_reserve() {
         let_deferred_queue_clock!(peer_id, now);
-        let frame = || direct_frame!(peer_id.clone(), peer_id, Priority::High, DummyMsg,);
+        let frame = || direct_frame!(peer_id.clone(), peer_id, DummyMsg,);
         let wire_bytes = crate::peer::checked_data_message_wire_len(&frame())
             .expect("test frame wire length must be representable");
         let total_bytes = wire_bytes
@@ -20573,7 +21034,7 @@ mod tests {
         let_deferred_queue_clock!(peer_id, now);
         let mut queue =
             DeferredPeerFrameQueue::<DummyMsg>::new(1, usize::MAX, Duration::from_secs(1));
-        let frame = || direct_frame!(peer_id.clone(), peer_id, Priority::Low, DummyMsg,);
+        let frame = || direct_frame!(peer_id.clone(), peer_id, DummyMsg,);
         assert!(defer_frame!(queue, peer_id, frame(), Other, Some(1), now).enqueued);
         let safety = defer_frame!(queue, peer_id, frame(), ConsensusSafety, Some(2), now, 1);
         assert!(safety.enqueued);
@@ -20595,7 +21056,7 @@ mod tests {
         let_deferred_queue_clock!(peer_id, now);
         let mut queue =
             DeferredPeerFrameQueue::<DummyMsg>::new(1, usize::MAX, Duration::from_secs(1));
-        let frame = || direct_frame!(peer_id.clone(), peer_id, Priority::High, DummyMsg,);
+        let frame = || direct_frame!(peer_id.clone(), peer_id, DummyMsg,);
         assert!(defer_frame!(queue, peer_id, frame(), ConsensusSafety, Some(1), now).enqueued);
         assert!(
             !defer_frame!(queue, peer_id, frame(), TxGossip, Some(2), now, 1).enqueued,
@@ -20613,13 +21074,13 @@ mod tests {
         let_deferred_queue_clock!(peer_id, now);
         let mut queue =
             DeferredPeerFrameQueue::<DummyMsg>::new(16, usize::MAX, Duration::from_secs(1));
-        let frame = |priority| direct_frame!(peer_id.clone(), peer_id, priority, DummyMsg,);
+        let frame = || direct_frame!(peer_id.clone(), peer_id, DummyMsg,);
         for generation in 1..=8 {
             assert!(
                 defer_frame!(
                     queue,
                     peer_id,
-                    frame(Priority::High),
+                    frame(),
                     ConsensusSafety,
                     Some(generation),
                     now,
@@ -20628,18 +21089,7 @@ mod tests {
                 .enqueued
             );
         }
-        assert!(
-            defer_frame!(
-                queue,
-                peer_id,
-                frame(Priority::High),
-                BlockSync,
-                Some(99),
-                now,
-                9
-            )
-            .enqueued
-        );
+        assert!(defer_frame!(queue, peer_id, frame(), BlockSync, Some(99), now, 9).enqueued);
         let (mut ordered, expired) = queue.take_peer(&peer_id, now + Duration::from_millis(10));
         assert_eq!(expired, 0);
         assert_eq!(
@@ -20669,8 +21119,7 @@ mod tests {
         let retained_peer = random_peer_id();
         let removed_peer = random_peer_id();
         let origin = network.self_id.clone();
-        let frame_for =
-            |peer_id: &PeerId| direct_frame!(origin.clone(), peer_id, Priority::High, DummyMsg,);
+        let frame_for = |peer_id: &PeerId| direct_frame!(origin.clone(), peer_id, DummyMsg,);
         let now = tokio::time::Instant::now();
         let _ = defer_frame!(
             network.deferred_send_queue,
@@ -20729,7 +21178,7 @@ mod tests {
         let_deferred_queue_clock!(peer_id, now);
         let mut queue =
             DeferredPeerFrameQueue::<DummyMsg>::new(2, usize::MAX, Duration::from_millis(5));
-        let mk_frame = || direct_frame!(peer_id.clone(), peer_id, Priority::Low, DummyMsg,);
+        let mk_frame = || direct_frame!(peer_id.clone(), peer_id, DummyMsg,);
         let outcome_one = defer_frame!(queue, peer_id, mk_frame(), Other, Some(1), now);
         let outcome_two = defer_frame!(queue, peer_id, mk_frame(), Other, Some(2), now, 1);
         let outcome_three = defer_frame!(queue, peer_id, mk_frame(), Other, Some(3), now, 2);
@@ -20763,7 +21212,7 @@ mod tests {
         let_deferred_queue_clock!(peer_id, now);
         let mut queue =
             DeferredPeerFrameQueue::<RouteMsg>::new(3, usize::MAX, Duration::from_millis(5));
-        let frame = direct_frame!(peer_id.clone(), peer_id, Priority::High, RouteMsg::Lane,);
+        let frame = direct_frame!(peer_id.clone(), peer_id, RouteMsg::Lane,);
         assert!(defer_frame!(queue, peer_id, frame, Consensus, Some(7), now).enqueued);
         let (retained, expired) = queue.take_peer(&peer_id, now + Duration::from_secs(60));
         assert_eq!(expired, 0);
@@ -20781,9 +21230,8 @@ mod tests {
     #[test]
     fn deferred_queue_byte_cap_drops_oldest_and_rejects_oversized_newest() {
         let_deferred_queue_clock!(peer_id, now);
-        let mk_frame = |body_len: usize| {
-            direct_frame!(peer_id.clone(), peer_id, Priority::Low, vec![7; body_len],)
-        };
+        let mk_frame =
+            |body_len: usize| direct_frame!(peer_id.clone(), peer_id, vec![7; body_len],);
         let sample_frame = mk_frame(32);
         let sample_bytes =
             crate::frame_queue_charge(crate::peer::data_message_wire_len(&sample_frame))
@@ -20868,7 +21316,7 @@ mod tests {
     #[test]
     fn deferred_safety_and_progress_share_one_exact_peer_cap_without_eviction() {
         let_deferred_queue_clock!(peer_id, now);
-        let frame = || direct_frame!(peer_id.clone(), peer_id, Priority::High, DummyMsg,);
+        let frame = || direct_frame!(peer_id.clone(), peer_id, DummyMsg,);
         let frame_bytes = crate::frame_queue_charge(
             crate::peer::checked_data_message_wire_len(&frame())
                 .expect("count deferred-frame fixture"),
@@ -20910,7 +21358,7 @@ mod tests {
         let peers: Vec<_> = (0..3).map(|_| random_peer_id()).collect();
         let origin = random_peer_id();
         let target = peers[0].clone();
-        let frame = || direct_frame!(origin.clone(), target, Priority::Low, DummyMsg,);
+        let frame = || direct_frame!(origin.clone(), target, DummyMsg,);
         let frame_bytes = crate::frame_queue_charge(
             crate::peer::checked_data_message_wire_len(&frame()).expect("count deferred fixture"),
         )
@@ -20960,7 +21408,7 @@ mod tests {
         let peers: Vec<_> = (0..7).map(|_| random_peer_id()).collect();
         let origin = random_peer_id();
         let target = peers[0].clone();
-        let frame = || direct_frame!(origin.clone(), target, Priority::High, DummyMsg,);
+        let frame = || direct_frame!(origin.clone(), target, DummyMsg,);
         let frame_bytes = crate::frame_queue_charge(
             crate::peer::checked_data_message_wire_len(&frame()).expect("count deferred fixture"),
         )
@@ -21018,7 +21466,7 @@ mod tests {
     fn deferred_aggregate_lease_survives_take_restore_and_releases_on_ttl() {
         let _guard = deferred_send_test_guard();
         let peer = random_peer_id();
-        let frame = direct_frame!(peer.clone(), peer, Priority::Low, DummyMsg,);
+        let frame = direct_frame!(peer.clone(), peer, DummyMsg,);
         let frame_bytes = crate::frame_queue_charge(
             crate::peer::checked_data_message_wire_len(&frame).expect("count deferred fixture"),
         )
@@ -21064,7 +21512,7 @@ mod tests {
         );
         let deferred_before = deferred_send_enqueued_count();
         let reconnect_before = session_reconnect_total();
-        let frame = direct_frame!(network.self_id.clone(), peer_id, Priority::Low, DummyMsg,);
+        let frame = direct_frame!(network.self_id.clone(), peer_id, DummyMsg,);
         assert!(
             network.send_frame_to_peer(&peer_id, frame, message::Topic::Other),
             "frame should be deferred when peer session is missing"
@@ -21095,7 +21543,7 @@ mod tests {
     fn unknown_peer_cannot_allocate_deferred_queue_state() {
         let_deferred_test_network!(network);
         let peer_id = random_peer_id();
-        let frame = direct_frame!(network.self_id.clone(), peer_id, Priority::Low, DummyMsg,);
+        let frame = direct_frame!(network.self_id.clone(), peer_id, DummyMsg,);
         assert!(
             !network.send_frame_to_peer(&peer_id, frame, message::Topic::Other),
             "a target outside the admitted topology must be rejected"
@@ -21115,7 +21563,6 @@ mod tests {
         let frame = direct_frame!(
             network.self_id.clone(),
             peer_id,
-            Priority::High,
             DeferredProgressMsg::Lane(1),
         );
         assert!(!network.send_frame_to_peer(&peer_id, frame, message::Topic::Consensus));
@@ -21140,7 +21587,7 @@ mod tests {
         );
         let deferred_before = deferred_send_enqueued_count();
         let reconnect_before = session_reconnect_total();
-        let frame = direct_frame!(network.self_id.clone(), peer_id, Priority::High, DummyMsg,);
+        let frame = direct_frame!(network.self_id.clone(), peer_id, DummyMsg,);
         assert!(
             network.send_frame_to_peer(&peer_id, frame, message::Topic::Consensus),
             "bounded admission should retain missing-session consensus progress"
@@ -21182,22 +21629,12 @@ mod tests {
                 (now + Duration::from_secs(1), Duration::from_millis(25)),
             )]),
         );
-        let lane = direct_frame!(
-            network.self_id.clone(),
-            peer_id,
-            Priority::High,
-            RouteMsg::Lane,
-        );
+        let lane = direct_frame!(network.self_id.clone(), peer_id, RouteMsg::Lane,);
         assert!(
             network.send_frame_to_peer(&peer_id, lane, message::Topic::Consensus),
             "consensus traffic is reliable progress"
         );
-        let control = direct_frame!(
-            network.self_id.clone(),
-            peer_id,
-            Priority::High,
-            RouteMsg::Control,
-        );
+        let control = direct_frame!(network.self_id.clone(), peer_id, RouteMsg::Control,);
         assert!(
             !network.send_frame_to_peer(&peer_id, control, message::Topic::Control),
             "general control must stay lossy when no authenticated session exists"
@@ -21236,7 +21673,6 @@ mod tests {
         let occupied = direct_frame!(
             network.self_id.clone(),
             peer_id,
-            Priority::High,
             DeferredProgressMsg::Chunk(1),
         );
         assert!(
@@ -21841,7 +22277,6 @@ mod tests {
             .post(direct_frame!(
                 network.self_id.clone(),
                 semantic_target,
-                Priority::High,
                 DeferredProgressMsg::Lane(1),
             ))
             .expect("prefill the cap-one peer-writer queue");
@@ -21928,7 +22363,6 @@ mod tests {
             .post(direct_frame!(
                 network.self_id.clone(),
                 peer_id,
-                Priority::High,
                 DeferredProgressMsg::Lane(1),
             ))
             .expect("prefill the topology peer-writer queue");
@@ -22265,6 +22699,208 @@ mod tests {
         assert_eq!(pending.len(), 1);
     }
     #[test]
+    fn admitted_reliable_payload_materializes_once_and_reuses_its_allocation() {
+        let key_pair = random_node_key_pair();
+        let unsigned = AdmittedNetworkPayload::from_network(NetworkMessage::Broadcast(Broadcast {
+            data: DeferredProgressMsg::Lane(40),
+            priority: Priority::High,
+        }));
+
+        let first_state = unsigned.materialize(&key_pair, 8);
+        let first = Arc::clone(first_state.signed_frame());
+        let signature_allocation = first.origin_signature.as_ptr();
+        let second_state = first_state.materialize(&key_pair, 8);
+        let second = second_state.signed_frame();
+
+        // A repeated `new_signed` call would necessarily create a distinct
+        // live relay allocation and signature buffer while `first` is held.
+        // These pointer checks therefore pin the retry materialization count
+        // to one without adding production-only instrumentation.
+        assert!(Arc::ptr_eq(&first, second));
+        assert_eq!(Arc::strong_count(&first), 2);
+        assert_eq!(second.origin_signature.as_ptr(), signature_allocation);
+        assert!(matches!(&second.target, RelayTarget::Broadcast));
+        second
+            .verify_origin_signature()
+            .expect("the one retained envelope remains validly signed");
+    }
+    #[test]
+    fn reliable_direct_retry_reuses_the_signed_envelope_allocation() {
+        let_deferred_test_network!(network, DeferredProgressMsg);
+        let target = random_peer_id();
+        let (admitted, actor_budget, retained_bytes) = admitted_with_exact_actor_bytes(
+            &network,
+            NetworkMessage::Post(Post {
+                data: DeferredProgressMsg::Lane(41),
+                peer_id: target.clone(),
+                priority: Priority::High,
+            }),
+        );
+
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("an unavailable direct target must retain actor ownership");
+        let first = Arc::clone(
+            retained
+                .message
+                .as_ref()
+                .expect("first dispatch retains one payload")
+                .signed_frame(),
+        );
+        let signature_allocation = first.origin_signature.as_ptr();
+        let retained = network
+            .dispatch_reliable_actor_message(retained)
+            .expect_err("the unavailable direct target must remain retryable");
+        let second = retained
+            .message
+            .as_ref()
+            .expect("retry retains the payload")
+            .signed_frame();
+
+        assert!(Arc::ptr_eq(&first, second));
+        assert_eq!(second.origin_signature.as_ptr(), signature_allocation);
+        assert!(matches!(&second.target, RelayTarget::Direct(peer) if peer == &target));
+        second
+            .verify_origin_signature()
+            .expect("the retained direct envelope remains validly signed");
+        assert_eq!(
+            actor_budget.retained(),
+            NetworkActorRetainedBytes {
+                total: retained_bytes,
+                ordinary: retained_bytes,
+            }
+        );
+    }
+    #[test]
+    fn reliable_broadcast_retry_reuses_the_signed_envelope_allocation() {
+        let_deferred_test_network!(network, DeferredProgressMsg);
+        let blocked_peer = random_peer_id();
+        network.current_topology = HashSet::from([blocked_peer]);
+        let (admitted, actor_budget, retained_bytes) = admitted_with_exact_actor_bytes(
+            &network,
+            NetworkMessage::Broadcast(Broadcast {
+                data: DeferredProgressMsg::Lane(42),
+                priority: Priority::High,
+            }),
+        );
+
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("an unavailable target must retain the reliable broadcast");
+        let first = Arc::clone(
+            retained
+                .message
+                .as_ref()
+                .expect("first dispatch retains one payload")
+                .signed_frame(),
+        );
+        let signature_allocation = first.origin_signature.as_ptr();
+        first
+            .verify_origin_signature()
+            .expect("cached envelope remains validly signed");
+
+        let retained = network
+            .dispatch_reliable_actor_message(retained)
+            .expect_err("the same unavailable target must remain retryable");
+        let second = retained
+            .message
+            .as_ref()
+            .expect("retry retains the payload")
+            .signed_frame();
+
+        assert!(Arc::ptr_eq(&first, second));
+        assert_eq!(second.origin_signature.as_ptr(), signature_allocation);
+        assert!(matches!(&second.target, RelayTarget::Broadcast));
+        assert_eq!(
+            actor_budget.retained(),
+            NetworkActorRetainedBytes {
+                total: retained_bytes,
+                ordinary: retained_bytes,
+            }
+        );
+    }
+    #[test]
+    fn reliable_hub_routed_retry_reuses_the_signed_envelope_allocation() {
+        let_deferred_test_network!(network, DeferredProgressMsg);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Spoke;
+        let hub = random_peer_id();
+        let hub_addr = socket_addr!(127.0.0.1:45712);
+        let target = random_peer_id();
+        let_deferred_peer!(mut hub_receivers = &mut network; hub.clone(), hub_addr.clone(), 112; capacity 2);
+        network.relay_hub_addresses.push(hub_addr.clone());
+        network
+            .current_peers_addresses
+            .push((hub.clone(), hub_addr));
+        network.relay_trusted_peers.insert(hub.clone());
+        network.current_topology.insert(hub.clone());
+        network
+            .peers
+            .get_mut(&hub)
+            .expect("connected relay hub")
+            .relay_role = RelayRole::Hub;
+        network.relay_hub_peer = Some(hub.clone());
+        let (admitted, actor_budget, retained_bytes) = admitted_with_exact_actor_bytes(
+            &network,
+            NetworkMessage::Post(Post {
+                data: DeferredProgressMsg::Lane(43),
+                peer_id: target.clone(),
+                priority: Priority::High,
+            }),
+        );
+
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("hub writer admission still awaits its flush");
+        let first = Arc::clone(
+            retained
+                .message
+                .as_ref()
+                .expect("hub-routed dispatch retains one payload")
+                .signed_frame(),
+        );
+        let signature_allocation = first.origin_signature.as_ptr();
+        let first_delivery = hub_receivers
+            .try_recv_any()
+            .expect("the unconnected target must route through the live hub");
+        assert!(matches!(
+            &first_delivery.target,
+            RelayTarget::Direct(peer) if peer == &target
+        ));
+        assert_eq!(first_delivery.origin_signature, first.origin_signature);
+
+        let retained = network
+            .dispatch_reliable_actor_message(retained)
+            .expect_err("a closed first writer completion must retry through the hub");
+        let second = retained
+            .message
+            .as_ref()
+            .expect("hub retry retains the payload")
+            .signed_frame();
+        assert!(Arc::ptr_eq(&first, second));
+        assert_eq!(second.origin_signature.as_ptr(), signature_allocation);
+        assert_eq!(
+            actor_budget.retained(),
+            NetworkActorRetainedBytes {
+                total: retained_bytes,
+                ordinary: retained_bytes,
+            }
+        );
+
+        let retry_delivery = hub_receivers
+            .try_recv_any_and_acknowledge_flush()
+            .expect("the retry must keep the same semantic target through the hub");
+        assert!(matches!(
+            &retry_delivery.target,
+            RelayTarget::Direct(peer) if peer == &target
+        ));
+        assert_eq!(retry_delivery.origin_signature, first.origin_signature);
+        assert!(network.dispatch_reliable_actor_message(retained).is_ok());
+        assert_eq!(
+            actor_budget.retained(),
+            NetworkActorRetainedBytes::default()
+        );
+    }
+    #[test]
     fn actor_broadcast_retry_targets_only_failed_peers() {
         let_deferred_test_network!(network, DeferredProgressMsg);
         let blocked_peer = random_peer_id();
@@ -22281,7 +22917,6 @@ mod tests {
                 direct_frame!(
                     network.self_id.clone(),
                     blocked_peer,
-                    Priority::High,
                     DeferredProgressMsg::Lane(1),
                 ),
                 Consensus,
@@ -22939,7 +23574,7 @@ mod tests {
         let peer_addr = socket_addr!(127.0.0.1:45682);
         let (handle, mut receivers) = test_wire_peer_handle::<DummyMsg>(4);
         insert_dummy_ref_peer(&mut network, peer_id.clone(), peer_addr, 7, handle);
-        let frame = dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High);
+        let frame = dummy_relay_frame(network.self_id.clone(), &peer_id);
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
@@ -22954,7 +23589,7 @@ mod tests {
             "successful flush should remove the peer queue"
         );
         let received = receivers
-            .try_recv_high_control()
+            .try_recv_other()
             .expect("unbound frame should be sent to the current peer session");
         assert_eq!(received.origin, network.self_id);
         match received.target {
@@ -22969,7 +23604,7 @@ mod tests {
         let peer_addr = socket_addr!(127.0.0.1:45683);
         let (handle, mut receivers) = test_wire_peer_handle::<DummyMsg>(4);
         insert_dummy_ref_peer(&mut network, peer_id.clone(), peer_addr, 8, handle);
-        let frame = dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High);
+        let frame = dummy_relay_frame(network.self_id.clone(), &peer_id);
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
@@ -22997,7 +23632,6 @@ mod tests {
                 direct_frame!(
                     network.self_id.clone(),
                     peer_id,
-                    Priority::High,
                     DeferredProgressMsg::Lane(7),
                 ),
                 Consensus,
@@ -23022,18 +23656,14 @@ mod tests {
         let peer_addr = socket_addr!(127.0.0.1:45684);
         let (handle, _receivers) = test_wire_peer_handle::<DummyMsg>(1);
         handle
-            .post(dummy_relay_frame(
-                network.self_id.clone(),
-                &peer_id,
-                Priority::High,
-            ))
+            .post(dummy_relay_frame(network.self_id.clone(), &peer_id))
             .expect("test peer queue prefill should succeed");
         insert_dummy_ref_peer(&mut network, peer_id.clone(), peer_addr, 9, handle);
         let now = tokio::time::Instant::now();
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High),
+            dummy_relay_frame(network.self_id.clone(), &peer_id),
             Other,
             None,
             now
@@ -23041,7 +23671,7 @@ mod tests {
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High),
+            dummy_relay_frame(network.self_id.clone(), &peer_id),
             Other,
             None,
             now,
@@ -23056,12 +23686,10 @@ mod tests {
             .by_peer
             .get(&peer_id)
             .expect("backpressure should keep deferred entries for retry");
-        let priorities: Vec<Priority> = entries.iter().map(|entry| entry.frame.priority).collect();
         let connection_bindings: Vec<Option<ConnectionId>> = entries
             .iter()
             .map(|entry| entry.bound_connection_id)
             .collect();
-        assert_eq!(priorities, vec![Priority::High, Priority::High]);
         assert_eq!(connection_bindings, vec![None, None]);
     }
     #[test]
@@ -23074,7 +23702,6 @@ mod tests {
             .post(relay_frame(
                 network.self_id.clone(),
                 &peer_id,
-                Priority::High,
                 DeferredProgressMsg::Safety(0),
             ))
             .expect("test safety lane prefill should succeed");
@@ -23087,7 +23714,6 @@ mod tests {
                 relay_frame(
                     network.self_id.clone(),
                     &peer_id,
-                    Priority::High,
                     DeferredProgressMsg::Safety(1),
                 ),
                 ConsensusSafety,
@@ -23103,7 +23729,6 @@ mod tests {
                 relay_frame(
                     network.self_id.clone(),
                     &peer_id,
-                    Priority::High,
                     DeferredProgressMsg::BlockSync(2),
                 ),
                 BlockSync,
@@ -23118,7 +23743,7 @@ mod tests {
             DeferredFlushOutcome::Backpressured(10)
         );
         assert!(matches!(
-            receivers.try_recv_high_control(),
+            receivers.try_recv_block_sync(),
             Ok(RelayMessage {
                 payload: DeferredProgressMsg::BlockSync(2),
                 ..
@@ -23163,17 +23788,13 @@ mod tests {
         let peer_addr = socket_addr!(127.0.0.1:45685);
         let (handle, _receivers) = test_wire_peer_handle::<DummyMsg>(1);
         handle
-            .post(dummy_relay_frame(
-                network.self_id.clone(),
-                &peer_id,
-                Priority::High,
-            ))
+            .post(dummy_relay_frame(network.self_id.clone(), &peer_id))
             .expect("test peer queue prefill should succeed");
         insert_dummy_ref_peer(&mut network, peer_id.clone(), peer_addr, 55, handle);
         assert!(
             network.send_frame_to_peer(
                 &peer_id,
-                dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High),
+                dummy_relay_frame(network.self_id.clone(), &peer_id),
                 message::Topic::Other,
             ),
             "full live peer queue should defer the retry"
@@ -23197,25 +23818,21 @@ mod tests {
         let peer_addr = socket_addr!(127.0.0.1:45696);
         let (handle, mut receivers) = test_wire_peer_handle::<DummyMsg>(1);
         handle
-            .post(dummy_relay_frame(
-                network.self_id.clone(),
-                &peer_id,
-                Priority::High,
-            ))
+            .post(dummy_relay_frame(network.self_id.clone(), &peer_id))
             .expect("test peer queue prefill should succeed");
         insert_dummy_ref_peer(&mut network, peer_id.clone(), peer_addr, 56, handle);
         assert!(network.send_frame_to_peer(
             &peer_id,
-            dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High),
+            dummy_relay_frame(network.self_id.clone(), &peer_id),
             message::Topic::Other,
         ));
         assert!(network.deferred_send_queue.retry_members.contains(&peer_id));
         let _prefill = receivers
-            .try_recv_high_control()
+            .try_recv_other()
             .expect("draining the peer lane should open capacity");
         network.retry_deferred_frames();
         assert!(
-            receivers.try_recv_high_control().is_ok(),
+            receivers.try_recv_other().is_ok(),
             "the retry clock must deliver retained work without another outbound post"
         );
         assert!(!network.deferred_send_queue.by_peer.contains_key(&peer_id));
@@ -23233,7 +23850,7 @@ mod tests {
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High),
+            dummy_relay_frame(network.self_id.clone(), &peer_id),
             Other,
             None,
             tokio::time::Instant::now()
@@ -23250,7 +23867,7 @@ mod tests {
         );
     }
     #[test]
-    fn send_frame_to_peer_flushes_queued_frame_before_current_frame() {
+    fn send_frame_to_peer_flushes_queued_frame_and_sends_current_frame() {
         let_deferred_test_network!(network);
         let peer_id = random_peer_id();
         let peer_addr = socket_addr!(127.0.0.1:45690);
@@ -23259,7 +23876,7 @@ mod tests {
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::Low),
+            dummy_relay_frame(network.self_id.clone(), &peer_id),
             Other,
             None,
             tokio::time::Instant::now()
@@ -23267,7 +23884,7 @@ mod tests {
         assert!(
             network.send_frame_to_peer(
                 &peer_id,
-                dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High),
+                dummy_relay_frame(network.self_id.clone(), &peer_id),
                 message::Topic::Other,
             ),
             "current frame should be posted after queued frames flush"
@@ -23276,14 +23893,12 @@ mod tests {
             !network.deferred_send_queue.by_peer.contains_key(&peer_id),
             "successful send should leave no deferred queue"
         );
-        let first = receivers
+        receivers
             .try_recv_other()
-            .expect("queued frame should be posted first");
-        let second = receivers
-            .try_recv_high_control()
-            .expect("current frame should be posted after queued frame");
-        assert!(matches!(first.priority, Priority::Low));
-        assert!(matches!(second.priority, Priority::High));
+            .expect("queued frame should be posted");
+        receivers
+            .try_recv_other()
+            .expect("current frame should be posted");
         assert!(matches!(receivers.try_recv_any(), Err(TryRecvError::Empty)));
     }
     #[test]
@@ -23293,18 +23908,14 @@ mod tests {
         let peer_addr = socket_addr!(127.0.0.1:45691);
         let (handle, _receivers) = test_wire_peer_handle::<DummyMsg>(1);
         handle
-            .post(dummy_relay_frame(
-                network.self_id.clone(),
-                &peer_id,
-                Priority::High,
-            ))
+            .post(dummy_relay_frame(network.self_id.clone(), &peer_id))
             .expect("test peer queue prefill should succeed");
         insert_dummy_ref_peer(&mut network, peer_id.clone(), peer_addr, 93, handle);
         let now = tokio::time::Instant::now();
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::Low),
+            dummy_relay_frame(network.self_id.clone(), &peer_id),
             Other,
             None,
             now
@@ -23312,7 +23923,7 @@ mod tests {
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::Low),
+            dummy_relay_frame(network.self_id.clone(), &peer_id),
             Other,
             None,
             now,
@@ -23321,7 +23932,7 @@ mod tests {
         assert!(
             network.send_frame_to_peer(
                 &peer_id,
-                dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High),
+                dummy_relay_frame(network.self_id.clone(), &peer_id),
                 message::Topic::Other,
             ),
             "current frame should be deferred when deferred flush hits backpressure"
@@ -23335,9 +23946,7 @@ mod tests {
             .iter()
             .map(|entry| entry.bound_connection_id)
             .collect();
-        let priorities: Vec<Priority> = entries.iter().map(|entry| entry.frame.priority).collect();
-        assert_eq!(connection_bindings, vec![None, Some(93)]);
-        assert_eq!(priorities, vec![Priority::Low, Priority::High]);
+        assert_eq!(connection_bindings, vec![None, None, Some(93)]);
     }
     #[test]
     fn send_frame_to_peer_defers_current_frame_after_deferred_flush_closes_session() {
@@ -23364,7 +23973,7 @@ mod tests {
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::Low),
+            dummy_relay_frame(network.self_id.clone(), &peer_id),
             Other,
             Some(94),
             tokio::time::Instant::now()
@@ -23372,7 +23981,7 @@ mod tests {
         assert!(
             network.send_frame_to_peer(
                 &peer_id,
-                dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High),
+                dummy_relay_frame(network.self_id.clone(), &peer_id),
                 message::Topic::Other,
             ),
             "current frame should be deferred after flush removes a closed session"
@@ -23392,13 +24001,6 @@ mod tests {
                 .iter()
                 .all(|entry| entry.bound_connection_id.is_none())
         );
-        assert_eq!(
-            entries
-                .iter()
-                .map(|entry| entry.frame.priority)
-                .collect::<Vec<_>>(),
-            vec![Priority::Low, Priority::High]
-        );
         assert!(
             !network.pending_connects.is_empty(),
             "closed-session flush should schedule reconnect work"
@@ -23412,7 +24014,7 @@ mod tests {
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::Low),
+            dummy_relay_frame(network.self_id.clone(), &peer_id),
             Other,
             None,
             now
@@ -23420,7 +24022,7 @@ mod tests {
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High),
+            dummy_relay_frame(network.self_id.clone(), &peer_id),
             Other,
             Some(77),
             now,
@@ -23460,7 +24062,7 @@ mod tests {
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::Low),
+            dummy_relay_frame(network.self_id.clone(), &peer_id),
             Other,
             Some(88),
             now
@@ -23468,7 +24070,7 @@ mod tests {
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High),
+            dummy_relay_frame(network.self_id.clone(), &peer_id),
             Other,
             Some(88),
             now,
@@ -23528,7 +24130,7 @@ mod tests {
         assert!(
             network.send_frame_to_peer(
                 &peer_id,
-                dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High),
+                dummy_relay_frame(network.self_id.clone(), &peer_id),
                 message::Topic::Other,
             ),
             "closed live peer should defer the retry for a future session"
@@ -23565,12 +24167,7 @@ mod tests {
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            relay_frame(
-                network.self_id.clone(),
-                &peer_id,
-                Priority::Low,
-                TopicMsg::Trust,
-            ),
+            relay_frame(network.self_id.clone(), &peer_id, TopicMsg::Trust,),
             TrustGossip,
             None,
             tokio::time::Instant::now()
@@ -23602,12 +24199,7 @@ mod tests {
         let _ = defer_frame!(
             network.deferred_send_queue,
             peer_id,
-            relay_frame(
-                network.self_id.clone(),
-                &peer_id,
-                Priority::Low,
-                TopicMsg::Trust,
-            ),
+            relay_frame(network.self_id.clone(), &peer_id, TopicMsg::Trust,),
             TrustGossip,
             None,
             tokio::time::Instant::now()
@@ -23635,12 +24227,7 @@ mod tests {
         assert!(
             !network.send_frame_to_peer(
                 &peer_id,
-                relay_frame(
-                    network.self_id.clone(),
-                    &peer_id,
-                    Priority::High,
-                    TopicMsg::Trust,
-                ),
+                relay_frame(network.self_id.clone(), &peer_id, TopicMsg::Trust,),
                 message::Topic::TrustGossip,
             ),
             "live trust-gossip send should be skipped when peer lacks capability"
@@ -23667,11 +24254,7 @@ mod tests {
         let peer_addr = socket_addr!(127.0.0.1:45695);
         let (handle, _receivers) = test_wire_peer_handle::<DummyMsg>(1);
         handle
-            .post(dummy_relay_frame(
-                network.self_id.clone(),
-                &peer_id,
-                Priority::High,
-            ))
+            .post(dummy_relay_frame(network.self_id.clone(), &peer_id))
             .expect("test peer queue prefill should succeed");
         insert_dummy_ref_peer(&mut network, peer_id.clone(), peer_addr.clone(), 97, handle);
         network.current_topology.insert(peer_id.clone());
@@ -23692,7 +24275,7 @@ mod tests {
         assert!(
             network.send_frame_to_peer(
                 &peer_id,
-                dummy_relay_frame(network.self_id.clone(), &peer_id, Priority::High),
+                dummy_relay_frame(network.self_id.clone(), &peer_id),
                 message::Topic::Other,
             ),
             "overflow disconnect policy should defer the retry for a future session"
@@ -23727,7 +24310,7 @@ mod tests {
         assert!(
             !network.send_frame_to_peer(
                 &self_id,
-                dummy_relay_frame(network.self_id.clone(), &self_id, Priority::Low),
+                dummy_relay_frame(network.self_id.clone(), &self_id),
                 message::Topic::Other,
             ),
             "self-directed direct frames should not be sent"
@@ -23770,10 +24353,9 @@ mod tests {
             priority: Priority::High,
         });
         let received = hub_receivers
-            .try_recv_high_control()
+            .try_recv_other()
             .expect("unconnected target should be routed through the hub");
         assert_eq!(received.origin, network.self_id);
-        assert!(matches!(received.priority, Priority::High));
         match received.target {
             RelayTarget::Direct(target) => assert_eq!(target, target_id),
             RelayTarget::Broadcast => panic!("expected direct relay target"),
@@ -23856,19 +24438,18 @@ mod tests {
         });
         for received in [
             receivers_one
-                .try_recv_high_control()
+                .try_recv_other()
                 .expect("first peer should receive broadcast"),
             receivers_two
-                .try_recv_high_control()
+                .try_recv_other()
                 .expect("second peer should receive broadcast"),
         ] {
             assert_eq!(received.origin, network.self_id);
-            assert!(matches!(received.priority, Priority::High));
             assert!(matches!(received.target, RelayTarget::Broadcast));
         }
     }
     #[test]
-    fn forward_broadcast_skips_incoming_peer_and_forwards_to_others() {
+    fn forwarded_low_topic_uses_semantic_priority_for_egress() {
         let_deferred_test_network!(network);
         let incoming_peer = test_peer(socket_addr!(127.0.0.1:45701));
         let other_id = random_peer_id();
@@ -23894,8 +24475,12 @@ mod tests {
             &origin_key_pair,
             RelayTarget::Broadcast,
             DEFAULT_RELAY_TTL,
-            Priority::Low,
             DummyMsg,
+        );
+        assert_eq!(
+            message::ClassifyTopic::priority(&relay),
+            Priority::Low,
+            "relay egress priority must come from payload semantics"
         );
         network.forward_broadcast(
             &incoming_peer,
@@ -23909,7 +24494,11 @@ mod tests {
         ));
         let received = other_receivers
             .try_recv_other()
-            .expect("broadcast should be forwarded to peers other than the sender");
+            .expect("low-semantic relay should use the low egress lane");
+        assert!(matches!(
+            other_receivers.try_recv_high_control(),
+            Err(TryRecvError::Empty)
+        ));
         assert_eq!(received.origin, origin);
         assert!(matches!(received.target, RelayTarget::Broadcast));
         assert_eq!(received.ttl, DEFAULT_RELAY_TTL - 1);
@@ -23934,7 +24523,6 @@ mod tests {
             &origin_key_pair,
             RelayTarget::Direct(incoming_peer.id().clone()),
             DEFAULT_RELAY_TTL,
-            Priority::High,
             DummyMsg,
         );
         network.forward_direct(
@@ -23995,7 +24583,7 @@ mod tests {
         );
     }
     #[test]
-    fn spoke_startup_dials_only_trusted_hub_and_selects_after_authenticated_hub_role() {
+    fn spoke_startup_grants_hub_authority_only_after_exact_outbound_dial() {
         let_test_network!(network);
         network.relay_mode = iroha_config::parameters::actual::RelayMode::Spoke;
         replace_test_authenticated_source_geometry(&mut network, 1, Some(HashSet::new()));
@@ -24008,12 +24596,14 @@ mod tests {
         ]));
         assert!(network.relay_hub_peer.is_none());
         assert!(network.current_topology.is_empty());
+        assert!(network.relay_hub_candidates.contains(hub.id()));
+        assert!(!network.relay_trusted_peers.contains(hub.id()));
         assert!(
             network
                 .pending_connects
                 .iter()
                 .any(|(_, candidate)| candidate == &hub),
-            "address resolution should schedule the configured trusted hub"
+            "address resolution should schedule the configured hub candidate"
         );
         assert!(
             network
@@ -24027,7 +24617,7 @@ mod tests {
             Some(HashSet::new())
         );
         let arbitrary_conn_id = 45_708;
-        network.incoming_pending.insert(arbitrary_conn_id);
+        reserve_test_incoming(&mut network, arbitrary_conn_id);
         connect_test_peer!(network, arbitrary, arbitrary_conn_id, 0, Hub => arbitrary_receivers, mut arbitrary_receiver);
         assert!(arbitrary_receivers.termination_requested());
         assert!(matches!(
@@ -24040,7 +24630,7 @@ mod tests {
             Some(HashSet::new())
         );
         let wrong_role_conn_id = 45_709;
-        network.incoming_pending.insert(wrong_role_conn_id);
+        reserve_test_incoming(&mut network, wrong_role_conn_id);
         connect_test_peer!(network, hub, wrong_role_conn_id, 0, Spoke => wrong_role_receivers, mut wrong_role_receiver);
         assert!(wrong_role_receivers.termination_requested());
         assert!(matches!(
@@ -24048,17 +24638,45 @@ mod tests {
             Err(tokio::sync::oneshot::error::TryRecvError::Closed)
         ));
         assert!(network.relay_hub_peer.is_none());
+        let inbound_hub_conn_id = 45_710;
+        reserve_test_incoming(&mut network, inbound_hub_conn_id);
+        connect_test_peer!(network, hub, inbound_hub_conn_id, 1, Hub => inbound_hub_receivers, mut inbound_hub_receiver);
+        assert!(inbound_hub_receivers.termination_requested());
+        assert!(matches!(
+            inbound_hub_receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
+        assert!(
+            !network.relay_trusted_peers.contains(hub.id()),
+            "an inbound-first identity must not gain authority from address gossip"
+        );
         let hub_conn_id = 45_710;
-        network.incoming_pending.insert(hub_conn_id);
+        let hub_conn_id = hub_conn_id + 1;
+        network.connecting_peers.insert(hub_conn_id, hub.clone());
+        network.outbound_connections.insert(hub_conn_id);
         connect_test_peer!(network, hub, hub_conn_id, 1, Hub => hub_receivers, mut hub_receiver);
         assert!(hub_receiver.try_recv().is_ok());
         assert!(!hub_receivers.termination_requested());
+        assert!(network.relay_trusted_peers.contains(hub.id()));
         assert_eq!(network.relay_hub_peer, Some(hub.id().clone()));
         assert_eq!(network.current_topology, HashSet::from([hub.id().clone()]));
         assert_eq!(
             network.inbound_frame_byte_budgets.protected_sources(),
             Some(HashSet::from([hub.id().clone()]))
         );
+
+        let refreshed_address = socket_addr!(127.0.0.1:45709);
+        network
+            .set_current_peers_addresses(UpdatePeers(vec![(hub.id().clone(), refreshed_address)]));
+        assert!(
+            !network.relay_hub_candidates.contains(hub.id()),
+            "a refreshed non-hub address must not remain an unproven dial candidate"
+        );
+        assert!(
+            network.relay_trusted_peers.contains(hub.id()),
+            "address gossip must not revoke authority established by an exact authenticated dial"
+        );
+        assert_eq!(network.relay_hub_peer, Some(hub.id().clone()));
     }
     #[test]
     fn configured_hub_detection_prefers_trusted_peer_allowlist() {
@@ -24078,10 +24696,105 @@ mod tests {
             "non-hub relay roles should not be treated as configured hubs"
         );
     }
+    #[test]
+    fn malformed_runtime_acl_cidr_update_preserves_all_applied_state() {
+        let_test_network!(network);
+        let retained = random_peer_id();
+        let denied = random_peer_id();
+        let replacement = random_peer_id();
+        network.requested_topology = HashSet::from([retained.clone()]);
+        network.current_topology = HashSet::from([retained.clone()]);
+        network.relay_trusted_peers = HashSet::from([retained.clone()]);
+        network.apply_reply_source_acl(message::UpdateAcl {
+            allowlist_only: true,
+            allow_keys: vec![retained.public_key().clone()],
+            deny_keys: vec![denied.public_key().clone()],
+            allow_cidrs: vec!["10.0.0.0/8".to_owned()],
+            deny_cidrs: vec!["10.1.0.0/16".to_owned()],
+        });
+
+        let expected_allow_keys = network.allow_keys.clone();
+        let expected_deny_keys = network.deny_keys.clone();
+        let expected_requested_topology = network.requested_topology.clone();
+        let expected_current_topology = network.current_topology.clone();
+        let expected_relay_trusted_peers = network.relay_trusted_peers.clone();
+        for malformed in [
+            message::UpdateAcl {
+                allowlist_only: false,
+                allow_keys: vec![replacement.public_key().clone()],
+                deny_keys: vec![retained.public_key().clone()],
+                allow_cidrs: vec!["192.0.2.0/33".to_owned()],
+                deny_cidrs: vec!["192.0.2.0/24".to_owned()],
+            },
+            message::UpdateAcl {
+                allowlist_only: false,
+                allow_keys: vec![replacement.public_key().clone()],
+                deny_keys: vec![retained.public_key().clone()],
+                allow_cidrs: vec!["192.0.2.0/24".to_owned()],
+                deny_cidrs: vec!["2001:db8::/129".to_owned()],
+            },
+        ] {
+            network.apply_reply_source_acl(malformed);
+
+            assert!(network.allowlist_only);
+            assert_eq!(network.allow_keys, expected_allow_keys);
+            assert_eq!(network.deny_keys, expected_deny_keys);
+            let applied_acl_allows = |ip| {
+                allow_ip_with_policy(
+                    &network.allow_nets,
+                    &network.deny_nets,
+                    network.allowlist_only,
+                    default_accept_params(),
+                    &mut HashMap::new(),
+                    &mut HashMap::new(),
+                    ip,
+                )
+            };
+            assert!(applied_acl_allows(IpAddr::from([10, 2, 3, 4])));
+            assert!(!applied_acl_allows(IpAddr::from([10, 1, 2, 3])));
+            assert!(!applied_acl_allows(IpAddr::from([192, 0, 2, 1])));
+            assert_eq!(network.requested_topology, expected_requested_topology);
+            assert_eq!(network.current_topology, expected_current_topology);
+            assert_eq!(network.relay_trusted_peers, expected_relay_trusted_peers);
+        }
+    }
+    #[test]
+    fn acl_revoked_hub_address_cannot_recreate_a_dial_candidate() {
+        let_test_network!(network);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        let hub = test_peer(socket_addr!(127.0.0.1:45710));
+        network.relay_hub_addresses.push(hub.address().clone());
+        network.apply_reply_source_acl(message::UpdateAcl {
+            deny_keys: vec![hub.id().public_key().clone()],
+            ..message::UpdateAcl::default()
+        });
+
+        network.set_current_peers_addresses(UpdatePeers(vec![(
+            hub.id().clone(),
+            hub.address().clone(),
+        )]));
+
+        assert!(!network.relay_hub_candidates.contains(hub.id()));
+        assert!(!network.relay_trusted_peers.contains(hub.id()));
+        assert!(
+            network
+                .pending_connects
+                .iter()
+                .all(|(_, candidate)| candidate.id() != hub.id())
+        );
+
+        network.apply_reply_source_acl(message::UpdateAcl::default());
+
+        assert!(
+            network.relay_hub_candidates.contains(hub.id()),
+            "broadening the ACL should immediately restore the configured hub dial identity"
+        );
+    }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn peer_message_hub_forwards_direct_frame_with_decremented_ttl() {
         let_test_network!(network, DummyMsg);
         network.relay_role = RelayRole::Hub;
+        network.relay_ttl = 3;
         let incoming_key_pair = random_node_key_pair();
         let incoming_peer = Peer::new(
             socket_addr!(127.0.0.1:45707),
@@ -24102,19 +24815,24 @@ mod tests {
                 RelayMessage::new_signed(
                     &incoming_key_pair,
                     RelayTarget::Direct(target_id.clone()),
-                    3,
-                    Priority::High,
+                    u8::MAX,
                     DummyMsg,
                 ),
                 1,
             ))
             .await;
         let forwarded = target_receivers
-            .try_recv_high_control()
+            .try_recv_other()
             .expect("hub should forward direct relay frame to target");
+        assert!(matches!(
+            target_receivers.try_recv_high_control(),
+            Err(TryRecvError::Empty)
+        ));
         assert_eq!(forwarded.origin, *incoming_peer.id());
-        assert_eq!(forwarded.ttl, 2);
-        assert!(matches!(forwarded.priority, Priority::High));
+        assert_eq!(
+            forwarded.ttl, 2,
+            "inbound hop metadata must be clamped to the local relay limit before forwarding"
+        );
         match forwarded.target {
             RelayTarget::Direct(target) => assert_eq!(target, target_id),
             RelayTarget::Broadcast => panic!("expected direct relay target"),
@@ -24145,7 +24863,6 @@ mod tests {
                     &incoming_key_pair,
                     RelayTarget::Direct(target_id),
                     0,
-                    Priority::Low,
                     DummyMsg,
                 ),
                 1,
@@ -24183,13 +24900,7 @@ mod tests {
         network
             .peer_message(PeerMessage::new(
                 incoming_peer.clone(),
-                RelayMessage::new_signed(
-                    &incoming_key_pair,
-                    RelayTarget::Broadcast,
-                    2,
-                    Priority::Low,
-                    DummyMsg,
-                ),
+                RelayMessage::new_signed(&incoming_key_pair, RelayTarget::Broadcast, 2, DummyMsg),
                 1,
             ))
             .await;
@@ -24239,7 +24950,7 @@ mod tests {
         let mut accepted = 0usize;
         let mut rejected = 0usize;
         for _ in 0..attempts {
-            let frame = direct_frame!(network.self_id.clone(), peer_id, Priority::High, DummyMsg,);
+            let frame = direct_frame!(network.self_id.clone(), peer_id, DummyMsg,);
             if network.send_frame_to_peer(&peer_id, frame, message::Topic::Consensus) {
                 accepted = accepted.saturating_add(1);
             } else {
@@ -24267,7 +24978,7 @@ mod tests {
             );
         }
         for topic in [message::Topic::BlockSync, message::Topic::ConsensusSafety] {
-            let frame = direct_frame!(network.self_id.clone(), peer_id, Priority::High, DummyMsg,);
+            let frame = direct_frame!(network.self_id.clone(), peer_id, DummyMsg,);
             assert!(
                 network.send_frame_to_peer(&peer_id, frame, topic),
                 "the count ranks reserved from the lane flood must admit {topic:?}"
@@ -24289,7 +25000,7 @@ mod tests {
                 .chain(network.deferred_send_queue.safety_by_peer[&peer_id].iter())
                 .all(|entry| entry.bound_connection_id.is_none())
         );
-        let overflow = direct_frame!(network.self_id.clone(), peer_id, Priority::High, DummyMsg,);
+        let overflow = direct_frame!(network.self_id.clone(), peer_id, DummyMsg,);
         assert!(
             !network.send_frame_to_peer(&peer_id, overflow, message::Topic::Consensus),
             "no progress class may exceed the full aggregate count owner"
@@ -24343,7 +25054,7 @@ mod tests {
     fn cidr_allowlist_enforced_when_present() {
         let ip = IpAddr::from([10, 0, 0, 1]);
         let other = IpAddr::from([10, 0, 1, 1]);
-        let allow = parse_cidrs(&vec!["10.0.0.0/24".to_string()]);
+        let allow = parse_cidrs(&["10.0.0.0/24".to_string()]).expect("valid test CIDR");
         let mut prefix = HashMap::new();
         let mut ip_buckets = HashMap::new();
         assert!(
@@ -24373,7 +25084,7 @@ mod tests {
     }
     #[test]
     fn ipv6_cidr_byte_boundary_is_respected() {
-        let allow = parse_cidrs(&vec!["2001:db8::/64".to_string()]);
+        let allow = parse_cidrs(&["2001:db8::/64".to_string()]).expect("valid test CIDR");
         let inside: IpAddr = "2001:db8::1".parse().expect("valid IPv6");
         let outside: IpAddr = "2001:db8:0:1::1".parse().expect("valid IPv6");
         let mut prefix = HashMap::new();
@@ -24467,7 +25178,7 @@ mod tests {
     }
     #[test]
     fn allowlist_bypasses_throttle_state() {
-        let allow = parse_cidrs(&vec!["10.1.0.0/24".to_string()]);
+        let allow = parse_cidrs(&["10.1.0.0/24".to_string()]).expect("valid test CIDR");
         let ip = IpAddr::from([10, 1, 0, 9]);
         let mut prefix = HashMap::new();
         let mut ip_buckets = HashMap::new();
@@ -24561,12 +25272,7 @@ mod tests {
             network.trust_gossip = false;
         }
         let peer = Peer::new(peer_addr, random_node_key_pair().public_key().clone());
-        let payload = direct_frame!(
-            peer.id().clone(),
-            network.self_id,
-            Priority::Low,
-            TrustGossipMsg,
-        );
+        let payload = direct_frame!(peer.id().clone(), network.self_id, TrustGossipMsg,);
         let msg = PeerMessage::new(peer, payload, 1);
         let before = trust_skip_count("recv", reason);
         network.peer_message(msg).await;
@@ -24601,13 +25307,66 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(1);
         network.subscribe_to_peers_messages(Subscriber::new(tx, SubscriberFilter::All, 1));
         let incoming_peer = test_peer(socket_addr!(127.0.0.1:202));
+        let connection_id = 20_200;
+        let (handle, receivers) = test_wire_peer_handle::<DummyMsg>(1);
+        insert_dummy_ref_peer(
+            &mut network,
+            incoming_peer.id().clone(),
+            incoming_peer.address().clone(),
+            connection_id,
+            handle,
+        );
         let origin = random_peer_id();
-        let payload = direct_frame!(origin, network.self_id, Priority::Low, DummyMsg,);
-        let msg = PeerMessage::new(incoming_peer, payload, 1);
+        let payload = direct_frame!(origin, network.self_id, DummyMsg,);
+        let msg = PeerMessage::new(incoming_peer.clone(), payload, 1);
         network.peer_message(msg).await;
         assert!(
             matches!(rx.try_recv(), Err(TryRecvError::Empty)),
             "mismatched origin should be dropped when not relaying from the hub"
+        );
+        assert!(network.peers.contains_key(incoming_peer.id()));
+        assert!(
+            !receivers.termination_requested(),
+            "a legacy message without exact tenure must not evict a healthy connection"
+        );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn peer_message_quarantines_exact_tenure_on_mismatched_origin() {
+        let_test_network!(network, DummyMsg);
+        let incoming_peer = test_peer(socket_addr!(127.0.0.1:20_201));
+        let connection_id = 20_201;
+        let (handle, receivers) = test_wire_peer_handle::<DummyMsg>(1);
+        insert_dummy_ref_peer(
+            &mut network,
+            incoming_peer.id().clone(),
+            incoming_peer.address().clone(),
+            connection_id,
+            handle,
+        );
+        network.reply_route_tenures.insert(
+            connection_id,
+            test_reply_tenure(
+                &network.reply_route_owner,
+                incoming_peer.id().clone(),
+                connection_id,
+                0,
+            ),
+        );
+        let payload = direct_frame!(random_peer_id(), network.self_id, DummyMsg,);
+        network
+            .peer_message(PeerMessage::new_for_connection(
+                incoming_peer.clone(),
+                payload,
+                1,
+                connection_id,
+            ))
+            .await;
+        assert!(receivers.termination_requested());
+        assert!(!network.peers.contains_key(incoming_peer.id()));
+        assert!(
+            network
+                .protocol_rejected_connections
+                .contains(&connection_id)
         );
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -24628,7 +25387,6 @@ mod tests {
             &origin_key_pair,
             RelayTarget::Direct(network.self_id.clone()),
             DEFAULT_RELAY_TTL,
-            Priority::Low,
             DummyMsg,
         )
         .forwarded_with_ttl(DEFAULT_RELAY_TTL - 1);
@@ -24657,7 +25415,6 @@ mod tests {
             &hub_key_pair,
             RelayTarget::Direct(network.self_id.clone()),
             DEFAULT_RELAY_TTL,
-            Priority::Low,
             DummyMsg,
         );
         forged.origin = random_peer_id();
@@ -24669,15 +25426,149 @@ mod tests {
             "a selected hub must not acquire semantic-origin signing authority"
         );
     }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn invalid_origin_signature_quarantines_and_disconnects_exact_tenure() {
+        let_test_network!(network, SafetyMsg);
+        let signer = random_node_key_pair();
+        let peer = Peer::new(socket_addr!(127.0.0.1:20_301), signer.public_key().clone());
+        let connection_id = 20_301;
+        let (handle, receivers) = test_wire_peer_handle::<SafetyMsg>(4);
+        insert_ref_peer(
+            &mut network,
+            peer.id().clone(),
+            peer.address().clone(),
+            connection_id,
+            handle,
+            true,
+        );
+        network.reply_route_tenures.insert(
+            connection_id,
+            test_reply_tenure(
+                &network.reply_route_owner,
+                peer.id().clone(),
+                connection_id,
+                0,
+            ),
+        );
+        network
+            .last_active
+            .insert(peer.id().clone(), tokio::time::Instant::now());
+        let (tx, mut rx) = mpsc::channel(2);
+        network.subscribe_to_peers_messages(Subscriber::new(tx, SubscriberFilter::All, 2));
+
+        let mut forged = RelayMessage::new_signed(
+            &signer,
+            RelayTarget::Direct(network.self_id.clone()),
+            DEFAULT_RELAY_TTL,
+            SafetyMsg(7),
+        );
+        forged.payload = SafetyMsg(8);
+        network
+            .peer_message(PeerMessage::new_for_connection(
+                peer.clone(),
+                forged,
+                1,
+                connection_id,
+            ))
+            .await;
+
+        assert!(receivers.termination_requested());
+        assert!(!network.peers.contains_key(peer.id()));
+        assert!(!network.last_active.contains_key(peer.id()));
+        assert!(
+            network
+                .protocol_rejected_connections
+                .contains(&connection_id)
+        );
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+
+        let valid = RelayMessage::new_signed(
+            &signer,
+            RelayTarget::Direct(network.self_id.clone()),
+            DEFAULT_RELAY_TTL,
+            SafetyMsg(9),
+        );
+        network
+            .peer_message(PeerMessage::new_for_connection(
+                peer,
+                valid,
+                1,
+                connection_id,
+            ))
+            .await;
+        assert!(
+            matches!(rx.try_recv(), Err(TryRecvError::Empty)),
+            "queued frames from the rejected tenure must bypass validation and delivery"
+        );
+
+        network.finish_reply_route_tenure(connection_id);
+        assert!(
+            !network
+                .protocol_rejected_connections
+                .contains(&connection_id)
+        );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn invalid_signature_from_replaced_tenure_does_not_disconnect_replacement() {
+        let_test_network!(network, SafetyMsg);
+        let signer = random_node_key_pair();
+        let peer = Peer::new(socket_addr!(127.0.0.1:20_302), signer.public_key().clone());
+        let old_connection_id = 20_302;
+        let replacement_connection_id = 20_303;
+        let (replacement_handle, replacement_receivers) = test_wire_peer_handle::<SafetyMsg>(4);
+        insert_ref_peer(
+            &mut network,
+            peer.id().clone(),
+            peer.address().clone(),
+            replacement_connection_id,
+            replacement_handle,
+            true,
+        );
+        network.reply_route_tenures.insert(
+            old_connection_id,
+            test_reply_tenure(
+                &network.reply_route_owner,
+                peer.id().clone(),
+                old_connection_id,
+                0,
+            ),
+        );
+
+        let mut forged = RelayMessage::new_signed(
+            &signer,
+            RelayTarget::Direct(network.self_id.clone()),
+            DEFAULT_RELAY_TTL,
+            SafetyMsg(7),
+        );
+        forged.payload = SafetyMsg(8);
+        network
+            .peer_message(PeerMessage::new_for_connection(
+                peer.clone(),
+                forged,
+                1,
+                old_connection_id,
+            ))
+            .await;
+
+        assert!(
+            network
+                .protocol_rejected_connections
+                .contains(&old_connection_id)
+        );
+        assert_eq!(
+            network.peers.get(peer.id()).map(|current| current.conn_id),
+            Some(replacement_connection_id)
+        );
+        assert!(!replacement_receivers.termination_requested());
+    }
     #[test]
-    fn relay_origin_signature_binds_payload_target_and_priority_but_not_ttl() {
+    fn relay_origin_signature_binds_payload_and_target_but_not_ttl() {
         let origin_key_pair = random_node_key_pair();
         let target = random_peer_id();
         let frame = RelayMessage::new_signed(
             &origin_key_pair,
             RelayTarget::Direct(target),
             DEFAULT_RELAY_TTL,
-            Priority::High,
             TamperableMsg { tag: 7 },
         );
         frame
@@ -24693,9 +25584,6 @@ mod tests {
         let mut target_tampered = frame.clone();
         target_tampered.target = RelayTarget::Broadcast;
         assert!(target_tampered.verify_origin_signature().is_err());
-        let mut priority_tampered = frame;
-        priority_tampered.priority = Priority::Low;
-        assert!(priority_tampered.verify_origin_signature().is_err());
     }
     #[test]
     fn relay_routes_unconnected_spoke_posts_via_configured_hub() {
@@ -25251,6 +26139,28 @@ pub mod message {
         Other,
     }
     impl Topic {
+        /// Return the local scheduler class for this semantic topic.
+        ///
+        /// This mapping is the sole scheduler authority for relayed payloads, so
+        /// authenticated peers cannot promote gossip or other bulk traffic into
+        /// the consensus/control queues.
+        pub(crate) const fn scheduling_priority(self) -> Priority {
+            match self {
+                Topic::ConsensusSafety
+                | Topic::Consensus
+                | Topic::ConsensusChunk
+                | Topic::ConsensusPayload
+                | Topic::Control => Priority::High,
+                Topic::BlockSync
+                | Topic::TxGossip
+                | Topic::TxGossipRestricted
+                | Topic::PeerGossip
+                | Topic::TrustGossip
+                | Topic::Health
+                | Topic::Other => Priority::Low,
+            }
+        }
+
         /// Whether this topic may be delivered as best-effort traffic.
         ///
         /// Best-effort topics may use QUIC DATAGRAM when available; reliable topics
@@ -25283,7 +26193,10 @@ pub mod message {
         fn topic(&self) -> Topic {
             Topic::Other
         }
-        /// Return the explicit delivery priority carried by the message.
+        /// Return the locally trusted delivery priority for scheduling.
+        ///
+        /// Envelope implementations must derive this from their nested payload
+        /// semantics.
         fn priority(&self) -> Priority {
             Priority::Low
         }
@@ -25583,20 +26496,13 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             .or_insert_with(|| TokenBucket::new(rate, burst))
             .allow_n(bytes as f64)
     }
-    fn post_low(
-        &mut self,
-        Post {
-            data,
-            peer_id,
-            priority,
-        }: Post<T>,
-    ) {
+    fn post_low(&mut self, Post { data, peer_id, .. }: Post<T>) {
         iroha_logger::trace!(peer=%peer_id, "Post message (low)");
         let topic = data.topic();
         let relay_ttl = self.relay_ttl;
         let key_pair = Arc::clone(&self.key_pair);
         let frame_for = |target: RelayTarget| {
-            RelayMessage::new_signed(&key_pair, target, relay_ttl, priority, data.clone())
+            RelayMessage::new_signed(&key_pair, target, relay_ttl, data.clone())
         };
         let send_with_throttle = |this: &mut Self, target_id: &PeerId, frame: RelayMessage<T>| {
             if !this.low_allow(target_id) {
@@ -25638,7 +26544,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             }
         }
     }
-    fn broadcast_low(&mut self, Broadcast { data, priority }: Broadcast<T>) {
+    fn broadcast_low(&mut self, Broadcast { data, .. }: Broadcast<T>) {
         iroha_logger::trace!("Broadcast message (low)");
         let topic = data.topic();
         let peers: Vec<PeerId> = self.peers.keys().cloned().collect();
@@ -25647,7 +26553,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 &self.key_pair,
                 RelayTarget::Broadcast,
                 self.relay_ttl,
-                priority,
                 data.clone(),
             );
             let size_bytes = norito::codec::Encode::encode(&frame).len();

@@ -11,7 +11,7 @@ FROZEN_LOCK_SHA256 = (
     "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
 )
 TRACKED_ROOT_LOCK_SHA256 = (
-    "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
+    "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7"
 )
 
 
@@ -86,8 +86,8 @@ def test_privacy_jvm_gate_builds_and_authenticates_native_abi23() -> None:
     assert '[[ "${RUSTC_VERSION}" == rustc\\ 1.93.1\\ * ]]' in gate
     assert '"${CARGO_BIN}" build --locked -p connect_norito_bridge --lib' in gate
     assert 'export NORITO_SKIP_BINDINGS_SYNC=1' in gate
-    assert gate.count('"${ABI22_CHECKER}" verify') == 6
-    assert gate.count('"${ABI22_CHECKER}" record') == 2
+    assert gate.count('"${ABI23_CHECKER}" verify') == 6
+    assert gate.count('"${ABI23_CHECKER}" record') == 2
     assert '--sdk c-jni' in gate
     assert '--source-root "${ROOT_DIR}"' in gate
     assert 'export IROHA_NATIVE_LIBRARY_PATH="${NATIVE_LIBRARY_DIR}"' in gate
@@ -96,9 +96,9 @@ def test_privacy_jvm_gate_builds_and_authenticates_native_abi23() -> None:
     assert 'PRIVACY_JVM_NATIVE_EXPORT_DIR' in gate
 
     build = gate.index('"${CARGO_BIN}" build --locked')
-    record = gate.index('"${ABI22_CHECKER}" record')
+    record = gate.index('"${ABI23_CHECKER}" record')
     tests = gate.index('./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test')
-    final_verify = gate.rindex('"${ABI22_CHECKER}" verify')
+    final_verify = gate.rindex('"${ABI23_CHECKER}" verify')
     assert build < record < tests < final_verify
     assert 'install -m 600 "${SELECTED_CARGO_LOCK}" "${ROOT_DIR}/Cargo.lock"' not in gate
     assert 'install -m 400 "${SELECTED_CARGO_LOCK}"' in gate
@@ -118,7 +118,7 @@ def test_privacy_jvm_workflow_provisions_exact_native_build_lane() -> None:
     assert "actions/upload-artifact@" in job
     assert "PRIVACY_JVM_NATIVE_EXPORT_DIR:" in job
     for dependency in (
-        "scripts/check_native_sdk_abi22_artifact.py",
+        "scripts/check_native_sdk_abi23_artifact.py",
         "scripts/compute_workspace_source_manifest.py",
         "scripts/tests/check_privacy_jvm_native_gate_test.py",
     ):
@@ -131,9 +131,9 @@ def test_csharp_lane_consumes_the_same_authenticated_native_bytes() -> None:
     assert "needs: privacy_jvm_sdk_tests" in job
     assert 'IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE: "1"' in job
     assert "actions/download-artifact@" in job
-    assert "privacy-jvm-native-abi22-${{ github.sha }}" in job
-    assert "native-sdk-abi22-csharp.json" in job
-    assert job.count("check_native_sdk_abi22_artifact.py verify") == 2
+    assert "privacy-jvm-native-abi23-${{ github.sha }}" in job
+    assert "native-sdk-abi23-csharp.json" in job
+    assert job.count("check_native_sdk_abi23_artifact.py verify") == 2
     assert FROZEN_LOCK_SHA256 in job
     assert TRACKED_ROOT_LOCK_SHA256 in job
     assert 'install -m 600 "$input/Cargo.lock" Cargo.lock' not in job
@@ -161,17 +161,20 @@ def test_javascript_lane_builds_and_executes_real_napi_abi23() -> None:
     assert "actions/download-artifact@" in job
     assert FROZEN_LOCK_SHA256 in job
     assert TRACKED_ROOT_LOCK_SHA256 in job
-    assert "not yet requalified" in job
+    assert "not yet requalified" not in job
     assert "install -m 600" not in job
-    assert "cargo fetch --locked" in job
+    assert (
+        'RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked --lockfile-path '
+        '"$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"'
+    ) in job
     assert "run: ci/check_privacy_js_sdk.sh" in job
 
     gate = read("ci/check_privacy_js_sdk.sh")
     assert f'FROZEN_CARGO_LOCK_SHA256="{FROZEN_LOCK_SHA256}"' in gate
     assert 'scripts/build-native.mjs' in gate
     assert 'scripts/copy-native.mjs' in gate
-    assert gate.count('"${ABI22_CHECKER}" verify') == 2
-    assert '"${ABI22_CHECKER}" record' in gate
+    assert gate.count('"${ABI23_CHECKER}" verify') == 2
+    assert '"${ABI23_CHECKER}" record' in gate
     assert '--sdk node' in gate
     assert 'test/privacyNative.integration.test.js' in gate
     assert 'export IROHA_JS_NATIVE_DIR=' in gate
@@ -190,8 +193,8 @@ def test_javascript_lane_builds_and_executes_real_napi_abi23() -> None:
 def test_python_lane_authenticates_and_executes_real_pyo3_abi23() -> None:
     gate = read("ci/check_privacy_python_sdk.sh")
     assert f'FROZEN_CARGO_LOCK_SHA256="{FROZEN_LOCK_SHA256}"' in gate
-    assert '"${ABI22_CHECKER}" record' in gate
-    assert gate.count('"${ABI22_CHECKER}" verify') == 2
+    assert '"${ABI23_CHECKER}" record' in gate
+    assert gate.count('"${ABI23_CHECKER}" verify') == 2
     assert '--sdk python' in gate
     assert '--python "${VENV_DIR}/bin/python"' in gate
     assert 'materialize_workspace_lock_for_native_evidence' not in gate
@@ -227,12 +230,15 @@ def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi23() ->
     assert "actions/download-artifact@" in job
     assert FROZEN_LOCK_SHA256 in job
     assert TRACKED_ROOT_LOCK_SHA256 in job
-    assert "not yet requalified" in job
+    assert "not yet requalified" not in job
     assert "install -m 600" not in job
     assert "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" in job
     assert "NORITO_BRIDGE_OUT_DIR=" in job
     assert "NORITO_BRIDGE_BUILD_DIR=" in job
-    assert "cargo fetch --locked" in job
+    assert (
+        'RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked --lockfile-path '
+        '"$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"'
+    ) in job
     assert "chmod -R a-w" in job
     assert "scripts/build_norito_xcframework.sh" in job
     assert "run: ci/check_privacy_swift_sdk.sh" in job

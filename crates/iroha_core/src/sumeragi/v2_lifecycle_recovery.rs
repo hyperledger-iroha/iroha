@@ -1620,79 +1620,73 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
                 "autonomous lifecycle payload remained cursorless after bootstrap recovery"
                     .to_owned()
             })?;
+            let binding = cursor.binding();
+            let (_, local_actor) = binding.local_validator_identity();
+            if local_actor != binding.producer_actor_projection() {
+                let descriptor = &payload.origin_proposal.descriptor;
+                if let Some(retired_attempt) = kura
+                    .read_autonomous_lane_retired_attempt(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
+                        descriptor.proposal_height,
+                        payload.network_id,
+                        payload.epoch,
+                    )
+                    .map_err(|error| {
+                        lifecycle_error("retired replica attempt read failed", error)
+                    })?
+                {
+                    let expected_retirement =
+                        crate::kura::AutonomousLaneSlotRetirementV1::from_payload(payload);
+                    if retired_attempt.artifact.executable_payload != *payload
+                        || retired_attempt.retirement != expected_retirement
+                    {
+                        return Err(
+                            "autonomous lifecycle retired replica attempt changed its exact payload or retirement"
+                                .to_owned(),
+                        );
+                    }
+                    let cursor_read = kura
+                        .read_autonomous_lifecycle_cursor(payload, binding, process_generation)
+                        .map_err(|error| {
+                            lifecycle_error("retired replica cursor reacquisition failed", error)
+                        })?;
+                    if initial_queue_quarantine {
+                        recover_autonomous_lane_replica_with_queue_disposition(
+                            kura,
+                            queue,
+                            &retired_attempt.retirement,
+                            cursor_read,
+                            &receipt,
+                            &snapshot,
+                            payload.network_id,
+                            payload.epoch,
+                        )
+                    } else {
+                        retire_autonomous_lane_replica_with_queue_disposition(
+                            kura,
+                            queue,
+                            &retired_attempt.retirement,
+                            cursor_read,
+                            payload.network_id,
+                            payload.epoch,
+                        )
+                    }
+                    .map_err(|error| {
+                        lifecycle_error("retired replica release completion failed", error)
+                    })?;
+                    continue;
+                }
+            }
             require_local_producer_queue_owner(payload, cursor, &current_queue_groups)?;
-            let mut recovered = recover_one_attempt(
+            if recover_one_attempt(
                 kura,
                 process_generation,
                 key_pair,
                 local_peer,
                 payload,
-                cursor.binding(),
-            )?;
-            let (_, local_actor) = cursor.binding().local_validator_identity();
-            if local_actor != cursor.binding().producer_actor_projection() {
-                let retirement = crate::kura::AutonomousLaneSlotRetirementV1::from_payload(payload);
-                match kura
-                    .read_autonomous_lane_slot_retirement(
-                        identity.lane_id,
-                        identity.lane_block_height,
-                        payload.network_id,
-                        payload.epoch,
-                    )
-                    .map_err(|error| lifecycle_error("replica retirement readback failed", error))?
-                {
-                    Some(existing) if existing == retirement => {
-                        let current_read = kura
-                            .read_autonomous_lifecycle_cursor(
-                                payload,
-                                cursor.binding(),
-                                process_generation,
-                            )
-                            .map_err(|error| {
-                                lifecycle_error("recovered replica cursor read failed", error)
-                            })?;
-                        if current_read.cursor().is_none() {
-                            return Err(
-                                "retired autonomous replica lost its signed lifecycle cursor"
-                                    .to_owned(),
-                            );
-                        }
-                        if initial_queue_quarantine {
-                            recover_autonomous_lane_replica_with_queue_disposition(
-                                kura,
-                                queue,
-                                &retirement,
-                                current_read,
-                                &receipt,
-                                &snapshot,
-                                payload.network_id,
-                                payload.epoch,
-                            )
-                        } else {
-                            retire_autonomous_lane_replica_with_queue_disposition(
-                                kura,
-                                queue,
-                                &retirement,
-                                current_read,
-                                payload.network_id,
-                                payload.epoch,
-                            )
-                        }
-                        .map_err(|error| {
-                            lifecycle_error("replica retirement completion failed", error)
-                        })?;
-                        recovered = true;
-                    }
-                    Some(_) => {
-                        return Err(
-                            "retired autonomous replica conflicts with its exact payload"
-                                .to_owned(),
-                        );
-                    }
-                    None => {}
-                }
-            }
-            if recovered {
+                binding,
+            )? {
                 recovered_attempts = recovered_attempts.saturating_add(1);
             }
         }

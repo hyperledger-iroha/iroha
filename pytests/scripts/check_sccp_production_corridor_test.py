@@ -282,6 +282,8 @@ def test_contract_phase_contains_only_direct_contract_smoke() -> None:
     assert "node --test scripts/tests/contract_tvm_receipts_test.mjs" in trace
     assert "node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js" in trace
     assert "bash scripts/sccp_evm_contract_smoke.sh" in trace
+    assert "bash -n scripts/sccp_ton_contract_build.sh" in trace
+    assert "bash scripts/sccp_ton_contract_build.sh" in trace
     for retired in RETIRED_STEMS:
         assert retired not in trace
 
@@ -308,9 +310,11 @@ def test_retired_operator_surface_is_physically_absent() -> None:
     allowed = {
         "sccp_all_lanes_evidence.py",
         "sccp_evm_contract_smoke.sh",
+        "sccp_ton_contract_build.sh",
         "sccp_release_bundle.py",
         "sccp_release_common.py",
         "sccp_release_fixture.py",
+        "sccp_phase_log_runner.py",
         "sccp_release_readiness_report.py",
         "sccp_verify_release_bundle.py",
     }
@@ -379,12 +383,25 @@ def test_python_workflow_installs_hash_locked_sdk_dependencies() -> None:
     assert "pip install --upgrade pip pytest" not in job
 
 
-def test_contract_workflow_installs_pinned_test_dependencies_first() -> None:
+def test_contract_workflow_installs_pinned_test_dependencies_and_acton_first() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     job = workflow_job(workflow, "contract-smoke")
     install = "python3 -m pip install -r scripts/requirements.txt"
     corridor = "bash scripts/check_sccp_production_corridor.sh --phase contract-smoke"
+    acton_url = (
+        "https://github.com/ton-blockchain/acton/releases/download/"
+        "v${ACTON_VERSION}/acton-x86_64-unknown-linux-gnu.tar.gz"
+    )
+    for required in (
+        "ACTON_VERSION: 1.1.0",
+        "c2e640eacbb5b6ece1c343cab2ab6d2db74643d0706777aad181ed7e6e1bfc16",
+        acton_url,
+        "sha256sum --check --strict",
+        "acton 1.1.0 (9cf4d1f 2026-05-22)",
+    ):
+        assert required in job
     assert install in job
+    assert job.index(acton_url) < job.index(corridor)
     assert job.index(install) < job.index(corridor)
     assert '"scripts/requirements.txt"' in workflow
 
@@ -473,6 +490,7 @@ def test_workflow_path_filters_cover_release_trust_and_fixture_inputs() -> None:
         '"scripts/check_mobile_sdk_artifacts.sh"',
         '"scripts/check_mobile_sdk_artifact_pin_commit.py"',
         '"scripts/exec_with_file_lock.py"',
+        '"scripts/norito_bridge_apple_slice_handoff.py"',
         '"scripts/norito_bridge_source_seal.py"',
         '"scripts/run_mobile_hermetic_command.py"',
         '"scripts/update_norito_bridge_swift_pins.py"',

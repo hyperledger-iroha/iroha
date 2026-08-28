@@ -65,10 +65,12 @@ directory entry.
 - Relays MUST abort the handshake (and emit downgrade telemetry) if they cannot echo a required capability.
 - Every first-release NK2/NK3 handshake negotiates a PQ KEM. A missing, unsupported, or mismatched required `snnet.pqkem` echo aborts and raises downgrade telemetry; there is no classical-only compatibility path.
 - Absence of `snnet.constant_rate` triggers a downgrade when clients request SNNet‑17A constant-rate transport. Fixture `snnet-cap-006-constant-rate` captures the warning slug and transcript hash; use it for regression in SDK harnesses.
-- The current relay advertises only best-effort constant-rate cover. It rejects an enabled strict
-  configuration and rejects any strict result again during live handshake preflight; it never
-  converts strict to best-effort. Strict advertisement remains reserved until real payload uses the
-  fixed-rate scheduler and DATAGRAM support and send failures are circuit-fatal.
+- The current shipping relay rejects QUIC endpoint creation while the lockfile
+  resolves vulnerable quinn-proto 0.11.15, so it advertises no live
+  constant-rate mode. It independently rejects an enabled strict configuration
+  and any strict result during dormant handshake preflight; it never converts
+  strict to best-effort. Activation requires quinn-proto 0.11.17 or later plus
+  final end-to-end qualification of every payload consumer.
 
 ## Change control
 

@@ -10,6 +10,9 @@ import java.util.Objects;
 /** Typed builder for {@code CreateKaigi} instructions. */
 public final class CreateKaigiInstruction implements InstructionTemplate {
 
+  /** Maximum concurrent participants excluding the host in Kaigi V1. */
+  public static final int MAX_PARTICIPANTS_V1 = 4_096;
+
   private static final String ACTION = "CreateKaigi";
   private static final java.util.Set<String> ALLOWED_ARGUMENTS =
       KaigiInstructionUtils.argumentSet(
@@ -389,8 +392,12 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
     }
 
     public Builder setMaxParticipants(final Integer maxParticipants) {
-      if (maxParticipants != null && maxParticipants == 0) {
-        throw new IllegalArgumentException("maxParticipants must be greater than zero when provided");
+      if (maxParticipants != null
+          && (maxParticipants < 1 || maxParticipants > MAX_PARTICIPANTS_V1)) {
+        throw new IllegalArgumentException(
+            "maxParticipants must be between 1 and "
+                + MAX_PARTICIPANTS_V1
+                + " when provided");
       }
       this.maxParticipants = maxParticipants;
       return this;

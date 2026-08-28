@@ -37,8 +37,9 @@ MOBILE_SDK_ALLOW_DIRTY_SOURCE=1) permits a local integration artifact only when
 its manifest dirty bit and exact dependency-closure fingerprint match.
 MOBILE_SDK_APPLE_ARTIFACT_DIR may point Apple validation at a staged artifact
 directory; it defaults to <root>/dist.
-Apple source authentication always binds <root>/Cargo.lock. Alternate lockfiles
-are not part of the first-release artifact contract.
+Apple source authentication binds <root>/Cargo.lock by default. Privacy release
+lanes may select the exact authenticated external release lock through
+IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH.
 Source authentication requires Python 3.12, exact Rust 1.93.1 RUSTC/RUSTDOC,
 and an explicit canonical writable CARGO_TARGET_DIR outside the Iroha source
 tree. The reviewed envelope uses CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0,
@@ -124,7 +125,7 @@ if [[ -n "${MOBILE_SDK_APPLE_CARGO_LOCK_PATH+x}" ]]; then
   echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_APPLE_CARGO_LOCK_PATH is not part of the first-release artifact contract" >&2
   exit 64
 fi
-APPLE_CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+APPLE_CARGO_LOCKFILE="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-$ROOT_DIR/Cargo.lock}"
 
 resolve_trusted_python312() {
   local candidate canonical
@@ -560,6 +561,7 @@ PRIVACY_COMPILED_PROFILE_C_SYMBOLS=(
 )
 
 PARLIAMENT_TIMED_OVN_C_SYMBOLS=(
+  connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1
   connect_norito_parliament_timed_ovn_verify_casting_proof_v1
   connect_norito_parliament_timed_ovn_registration_from_proof_v1
   connect_norito_parliament_timed_ovn_ballot_from_proof_v1
@@ -585,6 +587,8 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_sorafs_reference_validate_governance_dag_head_chain_json
   connect_norito_validation_fee_current_policy_proof_request_v1
   connect_norito_validation_fee_current_policy_proof_verify_v1
+  connect_norito_validation_fee_hijiri_quote_request_v1
+  connect_norito_validation_fee_hijiri_quote_response_verify_v1
   "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}"
   "${KAGEMUSHA_C_SYMBOLS[@]}"
 )
@@ -668,10 +672,17 @@ VALIDATION_FEE_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeBridgeAbiVersion
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeEncodeCurrentPolicyProofRequestV1
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeVerifyCurrentPolicyProofV1
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1
+  Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1
+  Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1
 )
 
 PARLIAMENT_TIMED_OVN_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofPageV1
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofV1
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeRegistrationFromProofV1
   Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBallotFromProofV1
@@ -2368,7 +2379,9 @@ common = {
     "CARGO_INCREMENTAL",
     "CARGO_NET_OFFLINE",
     "CARGO_TARGET_DIR",
+    "CONNECT_NORITO_SOURCE_REVISION",
     "HOME",
+    "IROHA_GIT_COMMIT_HASH",
     "LANG",
     "LC_ALL",
     "NORITO_SKIP_BINDINGS_SYNC",
@@ -2378,6 +2391,7 @@ common = {
     "RUSTDOC",
     "RUSTUP_HOME",
     "TMPDIR",
+    "VERGEN_GIT_SHA",
 }
 expected_profiles = {
     "apple-ios-device": sorted(
@@ -2546,6 +2560,7 @@ PY
 
     require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*23([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 23"
     require_regex "$manifest" '"source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge source commit"
+    require_regex "$manifest" '"embedded_source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge embedded source commit"
     require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
     require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
     require_regex "$manifest" '"cargo_lock_sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' "NoritoBridge selected Cargo lock hash"
@@ -2689,6 +2704,20 @@ PY
       )" || true
       if [[ "$source_relationship" != "direct" && "$source_relationship" != "pin-parent" ]]; then
         fail "NoritoBridge artifact source commit is neither HEAD nor its authenticated pin-only parent"
+      fi
+      local manifest_embedded_commit expected_embedded_commit
+      manifest_embedded_commit="$(
+        manifest_json_value "$manifest" embedded_source_commit 2>/dev/null || true
+      )"
+      expected_embedded_commit="$(
+        run_isolated_checker_python \
+          "$ROOT_DIR/scripts/check_mobile_sdk_artifact_pin_commit.py" \
+          --root "$ROOT_DIR" \
+          --print-embedded-source-commit \
+          2>/dev/null
+      )" || true
+      if [[ "$manifest_embedded_commit" != "$expected_embedded_commit" ]]; then
+        fail "NoritoBridge artifact embedded source commit does not match checkout"
       fi
       source_dirty=false
       if [[ -n "$(bridge_source_status)" ]]; then
@@ -3159,6 +3188,7 @@ with archive:
         "cargo_locked",
         "privacy_production_enabled",
         "cargo_features",
+        "kagemusha_production_authorization_sha256",
         "build_environment",
         "source_commit",
         "source_tree_dirty",
@@ -3189,6 +3219,14 @@ with archive:
             "client-android native provenance cargo_features must be exactly "
             f"{expected_features}"
         )
+    authorization = manifest["kagemusha_production_authorization_sha256"]
+    if authorization is not None and (
+        not production
+        or not isinstance(authorization, str)
+        or not sha256_pattern.fullmatch(authorization)
+        or authorization == "0" * 64
+    ):
+        fail("client-android native provenance Kagemusha production authorization is invalid")
     build_environment = manifest["build_environment"]
     expected_build_environment_fields = {
         "schema",

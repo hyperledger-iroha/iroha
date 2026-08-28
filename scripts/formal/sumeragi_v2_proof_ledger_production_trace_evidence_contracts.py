@@ -629,17 +629,27 @@ def _production_trace_extraction_source_snapshot(
                     )
 
     core_relative = "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    post_carrier_relative = (
+        "crates/iroha_core/src/sumeragi/v2_core/refinement/"
+        "post_carrier_transition.rs"
+    )
     core_items: list[dict[str, Any]] = []
-    for symbol in (
-        "check_production_in_flight_first_release_transition",
-        "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition",
-        "production_in_flight_first_release_transition_kernel",
-        "production_in_flight_first_release_witness_binding_kernel",
-        "production_in_flight_first_release_terminal_owner",
+    for relative, symbol in (
+        (
+            post_carrier_relative,
+            "check_production_in_flight_first_release_transition",
+        ),
+        (
+            post_carrier_relative,
+            "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition",
+        ),
+        (core_relative, "production_in_flight_first_release_transition_kernel"),
+        (core_relative, "production_in_flight_first_release_witness_binding_kernel"),
+        (post_carrier_relative, "production_in_flight_first_release_terminal_owner"),
     ):
         item = _production_trace_unique_function(
             root_dir=root_dir,
-            relative=core_relative,
+            relative=relative,
             symbol=symbol,
             impl_name=None,
             errors=errors,
@@ -647,7 +657,7 @@ def _production_trace_extraction_source_snapshot(
         if item is not None:
             core_items.append(
                 _production_trace_rust_item_entry(
-                    path=core_relative, kind="fn", symbol=symbol, item=item
+                    path=relative, kind="fn", symbol=symbol, item=item
                 )
             )
     _core_path, core_source = _read_reviewed_rust_source(
@@ -995,6 +1005,13 @@ def _production_trace_extraction_source_snapshot(
             "projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
             "projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
             "projection.before != projection.after",
+            "ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter",
+            "projection.action == IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT",
+            "ProductionInFlightFirstReleaseReplayStepV1::"
+            "ReleaseReservationDirectProofStutter => { "
+            "projection.action == "
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT "
+            "&& projection.before == projection.after }",
             "ProductionInFlightFirstReleaseReplayStepV1::RecoverReservationSnapshotStutter",
             "projection.before == projection.after",
             "ProductionInFlightFirstReleaseReplayStepV1::RepairPostCarrierEvidenceStutter",
@@ -1003,6 +1020,12 @@ def _production_trace_extraction_source_snapshot(
             "checked.with_first_release_witness(witness)",
         ),
         "check_production_in_flight_first_release_transition": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT",
+            "ProductionInFlightFirstReleaseReplayStepV1::ReleaseReservationDirectProofStutter",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT "
+            "if projection.before == projection.after => { "
+            "ProductionInFlightFirstReleaseReplayStepV1::"
+            "ReleaseReservationDirectProofStutter }",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
             "ProductionInFlightFirstReleaseReplayStepV1::RecoverReservationSnapshotStutter",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
@@ -1055,6 +1078,7 @@ def _production_trace_extraction_source_snapshot(
         replay_enum_tokens = rust_code_tokens(replay_enums[0].source)
         for variant in (
             "ComposedNext",
+            "ReleaseReservationDirectProofStutter",
             "RecoverReservationSnapshotStutter",
             "RepairPostCarrierEvidenceStutter",
         ):

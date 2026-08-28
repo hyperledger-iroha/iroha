@@ -151,28 +151,6 @@ final class SorafsOrchestratorParityTests: XCTestCase {
         XCTAssertFalse(emptyJSON.contains("write_mode"))
     }
 
-    func testGatewayOptionsEncodingIncludesTaikaiCache() throws {
-        let cache = SorafsTaikaiCacheOptions(
-            hotCapacityBytes: 8_388_608,
-            hotRetentionSecs: 45,
-            warmCapacityBytes: 33_554_432,
-            warmRetentionSecs: 180,
-            coldCapacityBytes: 268_435_456,
-            coldRetentionSecs: 3_600,
-            qos: SorafsTaikaiCacheQosOptions(
-                priorityRateBps: 83_886_080,
-                standardRateBps: 41_943_040,
-                bulkRateBps: 12_582_912,
-                burstMultiplier: 4
-            )
-        )
-        let options = SorafsGatewayFetchOptions(taikaiCache: cache)
-        let json = try options.jsonString()
-        XCTAssertTrue(json.contains("\"taikai_cache\""))
-        XCTAssertTrue(json.contains("\"burst_multiplier\":4"))
-        XCTAssertTrue(json.contains("\"hot_capacity_bytes\":8388608"))
-    }
-
     private func encodeJSONString<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

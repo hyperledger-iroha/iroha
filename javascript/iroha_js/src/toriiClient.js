@@ -56,6 +56,7 @@ import {
   ValidationErrorCode,
   ValidationError,
 } from "./validationError.js";
+import { KAIGI_MAX_PARTICIPANTS_V1 } from "./instructionBuilders.js";
 import {
   assertNonBlankString,
   normalizeTransactionStatusScope,
@@ -106,10 +107,33 @@ import { NetworkId, networkIdBytes } from "./networkId.js";
 import { generateConnectSid, validateConnectSessionResponseIdentity } from "./connectSession.js";
 import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
+import { contractPayloadDigestHex } from "./contractPayload.js";
 import {
   createToriiGovernanceNormalizers,
   VERIFYING_KEY_PRIVATE_KEY_FIELDS,
 } from "./toriiGovernanceNormalizers.js";
+import {
+  PARLIAMENT_ATTEMPT_DRAFT_PATH_V1,
+  PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
+  PARLIAMENT_TRANSITION_DRAFT_PATH_V1,
+  buildParliamentAttemptDraftRequestV1,
+  buildParliamentTransitionDraftRequestV1,
+  encodeParliamentTimedOvnCastingProofRequestV1,
+  normalizeParliamentAttemptDraftResponseV1,
+  normalizeParliamentAttemptReadResponseV1,
+  normalizeParliamentTimedOvnCastingContextResponseV1,
+  normalizeParliamentTlePartialReleaseShareV1,
+  normalizeParliamentTleReleaseContextResponseV1,
+  normalizeParliamentTransitionDraftResponseV1,
+  parliamentAttemptReadPathV1,
+  parliamentTimedOvnCastingContextReadPathV1,
+  parliamentTimedOvnCastingProofPathV1,
+  parliamentTlePartialReleasePathV1,
+  parliamentTleReleaseContextReadPathV1,
+  validateParliamentTimedOvnCastingProofResponseFrameV1,
+} from "./parliamentApiV1.js";
 import { createSubscriptionResponseNormalizers } from "./subscriptionResponses.js";
 import {
   decodeExactSoracloudJsonResponse,
@@ -141,11 +165,13 @@ import {
   getCurveEntryByPublicKeyMulticodec,
 } from "./curveRegistry.js";
 import {
+  noritoEncodeFeePaymentIntentArchive,
   noritoEncodeSorafsBillingAcknowledgementProofV1,
   noritoEncodeMultisigProposeRequest,
   noritoEncodeTransactionPayloadBatch,
   validateNoritoFrame,
 } from "./norito.js";
+import { inspectCanonicalTransactionPayloadBindings } from "./transactionCodec.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 import {
   normalizeKagemushaOperationId,
@@ -220,6 +246,7 @@ const VERIFYING_KEY_CLIENT_URL = new URL(
   import.meta.url,
 ).href;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
+const KAGEMUSHA_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
 const FEE_QUOTE_JSON_MAX_BYTES = 64 * 1024;
 const FEE_SPONSOR_PROGRAM_JSON_MAX_BYTES = 64 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
@@ -293,6 +320,15 @@ const responseStatusTextGetter =
     ? null
     : (Object.getOwnPropertyDescriptor(Response.prototype, "statusText")?.get ??
       null);
+const responseUrlGetter =
+  typeof Response === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(Response.prototype, "url")?.get ?? null);
+const responseRedirectedGetter =
+  typeof Response === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(Response.prototype, "redirected")?.get ??
+      null);
 const headersGet =
   typeof Headers === "undefined" ? null : Headers.prototype.get;
 const readableStreamGetReader =
@@ -354,8 +390,10 @@ const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES =
   SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024;
 const SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME =
   "iroha_sccp::TairaSccpMessageProofV1";
-const SCCP_PROOF_REQUEST_NORITO_TYPE_NAME =
-  "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
+const SCCP_PROOF_REQUEST_NORITO_TYPE_NAMES = Object.freeze([
+  "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
+  "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1",
+]);
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -721,6 +759,83 @@ function responseStatusTextWithoutUserGetter(response) {
   return descriptor && "value" in descriptor && typeof descriptor.value === "string"
     ? descriptor.value
     : null;
+}
+
+function responseUrlWithoutUserGetter(response) {
+  let url;
+  if (responseUrlGetter !== null) {
+    try {
+      url = responseUrlGetter.call(response);
+    } catch {
+      // Custom fetch responses may expose an own data property instead.
+    }
+  }
+  if (url === undefined) {
+    const descriptor = Object.getOwnPropertyDescriptor(response, "url");
+    if (!descriptor || !("value" in descriptor)) {
+      throw new TypeError("Torii response URL must be an own data property");
+    }
+    url = descriptor.value;
+  }
+  if (typeof url !== "string" || url.length === 0) {
+    throw new TypeError("Torii response URL must be a non-empty string");
+  }
+  return url;
+}
+
+function responseRedirectedWithoutUserGetter(response) {
+  let redirected;
+  if (responseRedirectedGetter !== null) {
+    try {
+      redirected = responseRedirectedGetter.call(response);
+    } catch {
+      // Custom fetch responses may expose an own data property instead.
+    }
+  }
+  if (redirected === undefined) {
+    const descriptor = Object.getOwnPropertyDescriptor(response, "redirected");
+    if (!descriptor || !("value" in descriptor)) {
+      throw new TypeError("Torii response redirected flag must be an own data property");
+    }
+    redirected = descriptor.value;
+  }
+  if (typeof redirected !== "boolean") {
+    throw new TypeError("Torii response redirected flag must be a boolean");
+  }
+  return redirected;
+}
+
+function splitCacheControlDirectives(value) {
+  const directives = [];
+  let directiveStart = 0;
+  let inQuotedString = false;
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inQuotedString && character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === '"') {
+      inQuotedString = !inQuotedString;
+      continue;
+    }
+    if (!inQuotedString && character === ",") {
+      directives.push(value.slice(directiveStart, index));
+      directiveStart = index + 1;
+    }
+  }
+
+  if (inQuotedString || escaped) {
+    return null;
+  }
+  directives.push(value.slice(directiveStart));
+  return directives;
 }
 
 function ignoreCancellationResult(result) {
@@ -1601,16 +1716,19 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/offline/readiness", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      redirect: "error",
     });
     await this._expectStatus(response, [200]);
     requireKagemushaJsonContentType(
       this._getHeader(response, "content-type"),
       "Offline capability response",
     );
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new TypeError("Offline capability response must contain JSON");
-    }
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      "Offline capability response",
+      { signal },
+    );
     return normalizeOfflineStatus(payload);
   }
 
@@ -1647,17 +1765,19 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/offline/operations/${canonicalId}`,
-      { headers: JSON_ACCEPT_HEADERS, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal, redirect: "error" },
     );
     await this._expectStatus(response, [200]);
     requireKagemushaJsonContentType(
       this._getHeader(response, "content-type"),
       "Kagemusha operation status response",
     );
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new TypeError("Kagemusha operation status response must contain JSON");
-    }
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      "Kagemusha operation status response",
+      { signal },
+    );
     return normalizeKagemushaOperationStatus(payload, canonicalId);
   }
 
@@ -1676,6 +1796,7 @@ export class ToriiClient {
       },
       body: Buffer.from(normalized.norito),
       signal,
+      redirect: "error",
     });
     await this._expectStatus(response, [202]);
     requireKagemushaJsonContentType(
@@ -1684,10 +1805,12 @@ export class ToriiClient {
     );
     const location = this._getHeader(response, "location");
     const retryAfter = this._getHeader(response, "retry-after");
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new TypeError("Kagemusha operation reference response must contain JSON");
-    }
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
+      "Kagemusha operation reference response",
+      { signal },
+    );
     return normalizeKagemushaOperationReference(payload, {
       expectedOperationId: normalized.operationId,
       expectedKind: kind,
@@ -3137,6 +3260,146 @@ export class ToriiClient {
       { signal, plainObjects: true },
     );
     return validateFeeQuoteForDraft(payload, body, "fee quote response");
+  }
+
+  /**
+   * Request one same-snapshot, next-height Hijiri validation-fee quote.
+   * Request and response bytes remain native Norito; the native verifier binds
+   * the returned account, transfer count, arithmetic, hashes, and successor
+   * height to the exact request archive before this method returns.
+   */
+  async quoteValidationFeeHijiri(
+    accountId,
+    qualifyingTransferCount,
+    options,
+  ) {
+    const {
+      VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
+      VALIDATION_FEE_HIJIRI_QUOTE_PATH,
+      encodeValidationFeeHijiriQuoteRequestV1,
+      verifyValidationFeeHijiriQuoteResponseV1,
+    } = await loadToriiOptionalModule();
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      options,
+      "quoteValidationFeeHijiri",
+    );
+    if (new URL(this._baseUrl).protocol.toLowerCase() !== "https:") {
+      throw new Error(
+        "Hijiri validation-fee quote requests require an HTTPS Torii base URL",
+      );
+    }
+    const requestNorito = encodeValidationFeeHijiriQuoteRequestV1(
+      accountId,
+      qualifyingTransferCount,
+    );
+    const response = await this._request(
+      "POST",
+      VALIDATION_FEE_HIJIRI_QUOTE_PATH,
+      {
+        headers: {
+          "Content-Type": APPLICATION_NORITO,
+          "Content-Encoding": "identity",
+          Accept: APPLICATION_NORITO,
+          "Accept-Encoding": "identity",
+          "Cache-Control": "no-store",
+        },
+        body: requestNorito,
+        signal,
+        canonicalAuth,
+      },
+    );
+    const expectedResponseUrl = new URL(
+      VALIDATION_FEE_HIJIRI_QUOTE_PATH,
+      `${this._baseUrl}/`,
+    ).toString();
+    let responseUrl;
+    let responseRedirected;
+    try {
+      responseUrl = responseUrlWithoutUserGetter(response);
+      responseRedirected = responseRedirectedWithoutUserGetter(response);
+    } catch (error) {
+      cancelResponseBodyBestEffort(
+        response,
+        "Hijiri validation-fee quote rejected unreadable redirect metadata",
+      );
+      throw error;
+    }
+    if (responseRedirected || responseUrl !== expectedResponseUrl) {
+      const error = new TypeError(
+        "Hijiri validation-fee quote response must come from the exact signed URL without redirects",
+      );
+      cancelResponseBodyBestEffort(response, error);
+      throw error;
+    }
+    const responseStatus = responseStatusWithoutUserGetter(response);
+    if (
+      responseStatus === 200 &&
+      this._getHeader(response, "x-iroha-reject-code") !== null
+    ) {
+      const error = new TypeError(
+        "successful Hijiri validation-fee quote carried a rejection code",
+      );
+      await cancelSccpResponseBody(response, error);
+      throw error;
+    }
+    const contentType = this._getHeader(response, "content-type") ?? "";
+    if (contentType.trim().toLowerCase() !== APPLICATION_NORITO) {
+      const error = new TypeError(
+        "Hijiri validation-fee quote response must use exact application/x-norito",
+      );
+      await cancelSccpResponseBody(response, error);
+      throw error;
+    }
+    const contentEncoding = this._getHeader(response, "content-encoding");
+    if (
+      contentEncoding !== null &&
+      contentEncoding.trim().toLowerCase() !== "identity"
+    ) {
+      const error = new TypeError(
+        "Hijiri validation-fee quote response Content-Encoding must be identity",
+      );
+      await cancelSccpResponseBody(response, error);
+      throw error;
+    }
+    const cacheControlDirectives = splitCacheControlDirectives(
+      this._getHeader(response, "cache-control") ?? "",
+    );
+    const cacheControl = new Set(
+      (cacheControlDirectives ?? [])
+        .map((directive) => directive.trim().toLowerCase())
+        .filter(Boolean),
+    );
+    const cacheControlNames = new Set(
+      [...cacheControl].map((token) => token.split("=", 1)[0].trim()),
+    );
+    if (
+      cacheControlDirectives === null ||
+      !cacheControl.has("private") ||
+      !cacheControl.has("no-store") ||
+      cacheControlNames.has("public")
+    ) {
+      const error = new TypeError(
+        "Hijiri validation-fee quote response must remain private and no-store and must not be public",
+      );
+      await cancelSccpResponseBody(response, error);
+      throw error;
+    }
+    const { bytes: responseBytes } = await this._readBoundedResponseBytes(
+      response,
+      VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
+      "Hijiri validation-fee quote",
+      { signal },
+    );
+    const responseNorito = Buffer.from(responseBytes);
+    if (responseStatus !== 200) {
+      throw new Error(
+        `Hijiri validation-fee quote returned unexpected status ${responseStatus}; expected 200`,
+      );
+    }
+    return verifyValidationFeeHijiriQuoteResponseV1(
+      responseNorito,
+      requestNorito,
+    );
   }
 
   /**
@@ -6614,10 +6877,11 @@ export class ToriiClient {
 
   /**
    * Fetch one query-free, state-derived Groth16 prover request by message id.
-   * Native responses are preflighted as canonical uncompressed Norito frames
-   * bound to `SccpGroth16Bn254ProofRequestV1`. This lightweight client returns
-   * the opaque frame and does not decode its embedded message id; callers that
-   * need independent path-to-payload binding must decode the returned typed value.
+   * Native responses are preflighted as canonical uncompressed concrete Norito
+   * frames bound to either `SccpGroth16Bn254ProofRequestV1` or
+   * `SccpTonGroth16Bls12381ProofRequestV1`. This lightweight client returns the
+   * opaque frame and does not decode its embedded message id; callers that need
+   * independent path-to-payload binding must decode the returned typed value.
    * @param {string} messageId
    * @param {{format?: "json" | "norito", signal?: AbortSignal}} [options]
    * @returns {Promise<object | Uint8Array>}
@@ -6645,7 +6909,7 @@ export class ToriiClient {
         response,
         "SCCP proof request",
         SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES,
-        SCCP_PROOF_REQUEST_NORITO_TYPE_NAME,
+        SCCP_PROOF_REQUEST_NORITO_TYPE_NAMES,
       );
     }
     const { normalizeSccpProofRequest } = await loadToriiOptionalModule();
@@ -7552,6 +7816,60 @@ export class ToriiClient {
       { signal },
     );
     return normalizeParliamentTimedOvnCastingContextResponseV1(payload, ballotAttemptId);
+  }
+
+  /** Transport one bounded finality-bound casting-proof page for native verification. */
+  async getParliamentTimedOvnCastingProofPageV1(
+    ballotAttemptId,
+    trustedCheckpointHeight,
+    options,
+  ) {
+    const context = "getParliamentTimedOvnCastingProofPageV1";
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const path = parliamentTimedOvnCastingProofPathV1(ballotAttemptId);
+    const body = encodeParliamentTimedOvnCastingProofRequestV1(trustedCheckpointHeight);
+    const response = await this._request("POST", path, {
+      headers: {
+        "Content-Type": APPLICATION_NORITO,
+        Accept: APPLICATION_NORITO,
+        "Accept-Encoding": "identity",
+      },
+      body,
+      canonicalAuth,
+      disableRetries: true,
+      redirect: "error",
+      signal,
+    });
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
+      responseLabel: `${context} response`,
+      signal,
+    });
+
+    let contentType;
+    let contentEncoding;
+    try {
+      contentType = this._getHeader(response, "content-type");
+      contentEncoding = this._getHeader(response, "content-encoding");
+    } catch (error) {
+      cancelResponseBodyBestEffort(response, `${context} rejected unreadable headers`);
+      throw error;
+    }
+    if (contentType !== APPLICATION_NORITO) {
+      cancelResponseBodyBestEffort(response, `${context} rejected non-Norito bytes`);
+      throw new TypeError(`${context} must use exactly ${APPLICATION_NORITO}`);
+    }
+    if (contentEncoding !== null && contentEncoding.toLowerCase() !== "identity") {
+      cancelResponseBodyBestEffort(response, `${context} rejected transformed bytes`);
+      throw new TypeError(`${context} Content-Encoding must be identity`);
+    }
+    const { bytes } = await this._readBoundedResponseBytes(
+      response,
+      PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
+      context,
+      { signal },
+    );
+    return validateParliamentTimedOvnCastingProofResponseFrameV1(bytes);
   }
 
   /** Fetch one Core-authorized bounded public Parliament TLE release context. */
@@ -9112,6 +9430,28 @@ export class ToriiClient {
   async prepareContractCall(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "prepareContractCall");
     const payload = normalizeContractCallRequest(request);
+    const draftIntent = normalizeContractCallDraftIntent(
+      request,
+      "prepareContractCall",
+    );
+    if (
+      payload.contract_address !== undefined
+      && payload.contract_address !== draftIntent.contractAddress
+    ) {
+      throw new TypeError(
+        "prepareContractCall draftIntent.contractAddress must match the requested address",
+      );
+    }
+    const requestPayloadDigest = contractPayloadDigestHex(payload.payload);
+    if (draftIntent.payloadDigestHex !== requestPayloadDigest) {
+      throw new TypeError(
+        "prepareContractCall draftIntent.payloadDigestHex must match the exact request payload",
+      );
+    }
+    requireLocalDraftSigningContext(
+      this._localSigningContext,
+      "prepareContractCall",
+    );
     const response = await this._request("POST", "/v1/contracts/call", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
@@ -9122,7 +9462,12 @@ export class ToriiClient {
     if (!body) {
       throw new Error("contract call endpoint returned no payload");
     }
-    return normalizeContractCallDraftResponse(body, payload);
+    return normalizeContractCallDraftResponse(
+      body,
+      payload,
+      draftIntent,
+      this._localSigningContext,
+    );
   }
 
   /**
@@ -9477,12 +9822,23 @@ export class ToriiClient {
   async proposeMultisig(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "proposeMultisig");
     const payload = normalizeMultisigProposeRequest(request);
+    // Complete native request validation before consulting the off-wire trust
+    // intent so malformed instruction archives fail before any network I/O.
+    const requestBody = noritoEncodeMultisigProposeRequest(payload);
+    const draftIntent = normalizeLocalTransactionDraftIntent(
+      request,
+      "proposeMultisig",
+      payload.signature_b64 === undefined,
+    );
+    if (draftIntent !== null) {
+      requireLocalDraftSigningContext(this._localSigningContext, "proposeMultisig");
+    }
     const response = await this._request("POST", "/v1/multisig/propose", {
       headers: {
         "Content-Type": "application/x-norito",
         Accept: APPLICATION_JSON,
       },
-      body: noritoEncodeMultisigProposeRequest(payload),
+      body: requestBody,
       signal,
     });
     await this._expectStatus(response, [200, 202]);
@@ -9490,7 +9846,13 @@ export class ToriiClient {
     if (!body) {
       throw new Error("multisig propose endpoint returned no payload");
     }
-    return normalizeMultisigContractCallResponse(body, "multisig propose response");
+    return validateMultisigResponseRequestBinding(
+      normalizeMultisigContractCallResponse(body, "multisig propose response"),
+      payload,
+      "multisig propose response",
+      draftIntent,
+      this._localSigningContext,
+    );
   }
 
   /**
@@ -9502,6 +9864,17 @@ export class ToriiClient {
   async proposeMultisigContractCall(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "proposeMultisigContractCall");
     const payload = normalizeMultisigContractCallProposeRequest(request);
+    const draftIntent = normalizeLocalTransactionDraftIntent(
+      request,
+      "proposeMultisigContractCall",
+      payload.signature_b64 === undefined,
+    );
+    if (draftIntent !== null) {
+      requireLocalDraftSigningContext(
+        this._localSigningContext,
+        "proposeMultisigContractCall",
+      );
+    }
     const response = await this._request("POST", "/v1/contracts/call/multisig/propose", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
@@ -9512,9 +9885,15 @@ export class ToriiClient {
     if (!body) {
       throw new Error("multisig contract propose endpoint returned no payload");
     }
-    return normalizeMultisigContractCallResponse(
-      body,
+    return validateMultisigResponseRequestBinding(
+      normalizeMultisigContractCallResponse(
+        body,
+        "multisig contract propose response",
+      ),
+      payload,
       "multisig contract propose response",
+      draftIntent,
+      this._localSigningContext,
     );
   }
 
@@ -9527,6 +9906,17 @@ export class ToriiClient {
   async approveMultisigContractCall(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "approveMultisigContractCall");
     const payload = normalizeMultisigContractCallApproveRequest(request);
+    const draftIntent = normalizeLocalTransactionDraftIntent(
+      request,
+      "approveMultisigContractCall",
+      payload.signature_b64 === undefined,
+    );
+    if (draftIntent !== null) {
+      requireLocalDraftSigningContext(
+        this._localSigningContext,
+        "approveMultisigContractCall",
+      );
+    }
     const response = await this._request("POST", "/v1/contracts/call/multisig/approve", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
@@ -9537,9 +9927,15 @@ export class ToriiClient {
     if (!body) {
       throw new Error("multisig contract approve endpoint returned no payload");
     }
-    return normalizeMultisigContractCallResponse(
-      body,
+    return validateMultisigResponseRequestBinding(
+      normalizeMultisigContractCallResponse(
+        body,
+        "multisig contract approve response",
+      ),
+      payload,
       "multisig contract approve response",
+      draftIntent,
+      this._localSigningContext,
     );
   }
 
@@ -16351,11 +16747,7 @@ function normalizeConfigurationTransport(value, context) {
     record.norito_rpc,
     `${context}.norito_rpc`,
   );
-  const streaming = normalizeConfigurationTransportStreaming(
-    record.streaming,
-    `${context}.streaming`,
-  );
-  return { noritoRpc, streaming };
+  return { noritoRpc };
 }
 
 function normalizeConfigurationTransportNoritoRpc(value, context) {
@@ -16374,69 +16766,6 @@ function normalizeConfigurationTransportNoritoRpc(value, context) {
       record.canary_allowlist_size ?? 0,
       `${context}.canary_allowlist_size`,
       { allowZero: true },
-    ),
-  };
-}
-
-function normalizeConfigurationTransportStreaming(value, context) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const record = ensureRecord(value, context);
-  const soranet = normalizeConfigurationStreamingSoranet(
-    record.soranet,
-    `${context}.soranet`,
-  );
-  return { soranet };
-}
-
-function normalizeConfigurationStreamingSoranet(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  const paddingRaw = record.padding_budget_ms ?? null;
-  const paddingBudgetMs =
-    paddingRaw === null
-      ? null
-      : ToriiClient._normalizeUnsignedInteger(
-          paddingRaw,
-          `${context}.padding_budget_ms`,
-          { allowZero: true },
-        );
-  return {
-    enabled: coerceBoolean(record.enabled ?? false, `${context}.enabled`),
-    streamTag: requireNonEmptyString(
-      record.stream_tag ?? "",
-      `${context}.stream_tag`,
-    ),
-    exitMultiaddr: requireNonEmptyString(
-      record.exit_multiaddr ?? "",
-      `${context}.exit_multiaddr`,
-    ),
-    paddingBudgetMs,
-    accessKind: requireNonEmptyString(
-      record.access_kind ?? "",
-      `${context}.access_kind`,
-    ),
-    garCategory: requireNonEmptyString(
-      record.gar_category ?? "",
-      `${context}.gar_category`,
-    ),
-    channelSalt: requireNonEmptyString(
-      record.channel_salt ?? "",
-      `${context}.channel_salt`,
-    ),
-    provisionSpoolDir: requireNonEmptyString(
-      record.provision_spool_dir ?? "",
-      `${context}.provision_spool_dir`,
-    ),
-    provisionWindowSegments: ToriiClient._normalizeUnsignedInteger(
-      record.provision_window_segments,
-      `${context}.provision_window_segments`,
-      { allowZero: false },
-    ),
-    provisionQueueCapacity: ToriiClient._normalizeUnsignedInteger(
-      record.provision_queue_capacity,
-      `${context}.provision_queue_capacity`,
-      { allowZero: false },
     ),
   };
 }
@@ -20456,6 +20785,7 @@ function normalizeManifestPublicKeyPayload(value, context) {
   ) {
     throw new Error(`${context} algorithm prefix does not match the multihash payload`);
   }
+  validatePublicKeyForCurve(entry.id, payload, context);
   const fnHex = bytes.subarray(0, functionCode.nextIndex).toString("hex");
   const lenHex = bytes.subarray(functionCode.nextIndex, digestLength.nextIndex).toString("hex");
   const payloadHex = payload.toString("hex").toUpperCase();
@@ -21904,6 +22234,35 @@ function normalizeArbitraryHex(value, name) {
   return hex.toLowerCase();
 }
 
+function contractAliasDataspaceSegment(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  if (/[@#$\s]/u.test(literal)) {
+    throw new TypeError(`${context} must use canonical contract-alias syntax`);
+  }
+  const separator = literal.indexOf("::");
+  if (
+    separator <= 0
+    || separator !== literal.lastIndexOf("::")
+    || separator + 2 >= literal.length
+  ) {
+    throw new TypeError(
+      `${context} must use <name>::<dataspace> or <name>::<domain>.<dataspace>`,
+    );
+  }
+  const name = literal.slice(0, separator);
+  const scopeParts = literal.slice(separator + 2).split(".");
+  if (
+    scopeParts.length < 1
+    || scopeParts.length > 2
+    || [name, ...scopeParts].some(
+      (segment) => segment.length === 0 || segment.includes(":"),
+    )
+  ) {
+    throw new TypeError(`${context} contains an invalid alias segment`);
+  }
+  return scopeParts[scopeParts.length - 1];
+}
+
 function normalizeContractTargetSelector(record, context) {
   const contractAddress = pickOverride(record, "contract_address", "contractAddress");
   const contractAlias = pickOverride(record, "contract_alias", "contractAlias");
@@ -21917,19 +22276,120 @@ function normalizeContractTargetSelector(record, context) {
     );
   }
   if (hasContractAddress) {
+    const normalizedAddress = requireExactNonEmptyString(
+      contractAddress,
+      `${context}.contract_address`,
+    );
+    parseCanonicalContractAddress(
+      normalizedAddress,
+      `${context}.contract_address`,
+    );
     return {
-      contract_address: requireNonEmptyString(
-        contractAddress,
-        `${context}.contract_address`,
-      ),
+      contract_address: normalizedAddress,
     };
   }
+  const normalizedAlias = requireExactNonEmptyString(
+    contractAlias,
+    `${context}.contract_alias`,
+  );
+  contractAliasDataspaceSegment(
+    normalizedAlias,
+    `${context}.contract_alias`,
+  );
   return {
-    contract_alias: requireNonEmptyString(
-      contractAlias,
-      `${context}.contract_alias`,
-    ),
+    contract_alias: normalizedAlias,
   };
+}
+
+function normalizeLocalTransactionDraftIntent(input, context, required) {
+  const record = ensureRecord(input, `${context} request`);
+  const raw = pickOverride(record, "draft_intent", "draftIntent");
+  if (raw === undefined || raw === null) {
+    if (required) {
+      throw new TypeError(
+        `${context} requires a caller-trusted draftIntent for unsigned preparation`,
+      );
+    }
+    return null;
+  }
+  const intent = ensureRecord(raw, `${context}.draftIntent`);
+  assertSupportedOptionKeys(
+    intent,
+    new Set(["executableB64", "metadataB64"]),
+    `${context}.draftIntent`,
+  );
+  const executableB64 = normalizeRequiredExactBase64Payload(
+    intent.executableB64,
+    `${context}.draftIntent.executableB64`,
+  );
+  const metadataB64 = normalizeRequiredExactBase64Payload(
+    intent.metadataB64,
+    `${context}.draftIntent.metadataB64`,
+  );
+  return Object.freeze({
+    executableArchive: Buffer.from(strictDecodeBase64(executableB64)),
+    metadataArchive: Buffer.from(strictDecodeBase64(metadataB64)),
+  });
+}
+
+function normalizeContractCallDraftIntent(input, context) {
+  const record = ensureRecord(input, `${context} request`);
+  const raw = pickOverride(record, "draft_intent", "draftIntent");
+  if (raw === undefined || raw === null) {
+    throw new TypeError(
+      `${context} requires a caller-trusted draftIntent for unsigned preparation`,
+    );
+  }
+  const intent = ensureRecord(raw, `${context}.draftIntent`);
+  assertSupportedOptionKeys(
+    intent,
+    new Set([
+      "executableB64",
+      "metadataB64",
+      "contractAddress",
+      "codeHashHex",
+      "payloadDigestHex",
+    ]),
+    `${context}.draftIntent`,
+  );
+  const executableB64 = normalizeRequiredExactBase64Payload(
+    intent.executableB64,
+    `${context}.draftIntent.executableB64`,
+  );
+  const metadataB64 = normalizeRequiredExactBase64Payload(
+    intent.metadataB64,
+    `${context}.draftIntent.metadataB64`,
+  );
+  const contractAddress = requireExactNonEmptyString(
+    intent.contractAddress,
+    `${context}.draftIntent.contractAddress`,
+  );
+  parseCanonicalContractAddress(
+    contractAddress,
+    `${context}.draftIntent.contractAddress`,
+  );
+  return Object.freeze({
+    executableArchive: Buffer.from(strictDecodeBase64(executableB64)),
+    metadataArchive: Buffer.from(strictDecodeBase64(metadataB64)),
+    contractAddress,
+    codeHashHex: requireExactLowerHex32String(
+      intent.codeHashHex,
+      `${context}.draftIntent.codeHashHex`,
+    ),
+    payloadDigestHex: requireExactLowerHex32String(
+      intent.payloadDigestHex,
+      `${context}.draftIntent.payloadDigestHex`,
+    ),
+  });
+}
+
+function requireLocalDraftSigningContext(localSigningContext, context) {
+  if (!(localSigningContext instanceof LocalSigningContext)) {
+    throw new TypeError(
+      `${context} requires ToriiClient options.localSigningContext`,
+    );
+  }
+  return localSigningContext;
 }
 
 function normalizeContractCallRequest(input) {
@@ -21952,11 +22412,18 @@ function normalizeContractCallRequest(input) {
   if (record.payload !== undefined) {
     normalized.payload = cloneJsonValue(record.payload, "contractCall.payload");
   }
+  if (record.metadata !== undefined) {
+    normalized.metadata = cloneJsonValue(
+      ensureRecord(record.metadata, "contractCall.metadata"),
+      "contractCall.metadata",
+    );
+  }
   const creationTimeMs = record.creation_time_ms ?? record.creationTimeMs;
   if (creationTimeMs !== undefined && creationTimeMs !== null) {
     normalized.creation_time_ms = ToriiClient._normalizeUnsignedInteger(
       creationTimeMs,
       "contractCall.creationTimeMs",
+      { allowZero: false },
     );
   }
   const transactionTtlMs =
@@ -22139,7 +22606,12 @@ function normalizeContractCallResponse(payload) {
   return normalized;
 }
 
-function normalizeContractCallDraftResponse(payload, request) {
+function normalizeContractCallDraftResponse(
+  payload,
+  request,
+  draftIntent,
+  localSigningContext,
+) {
   const response = normalizeContractCallResponse(payload);
   const receipt = response.operation_receipt;
   if (!response.ok || response.submitted) {
@@ -22171,18 +22643,88 @@ function normalizeContractCallDraftResponse(payload, request) {
     throw new TypeError("contractCall draft is not bound to the requested entrypoint");
   }
   if (
-    request.contract_address !== undefined &&
-    (response.contract_address !== request.contract_address ||
-      receipt.contract_address !== request.contract_address)
+    receipt.transport !== "torii"
+    || receipt.dataspace !== response.dataspace
+    || receipt.gas_used !== null
   ) {
-    throw new TypeError("contractCall draft is not bound to the requested address");
+    throw new TypeError(
+      "contractCall operation_receipt does not match the exact pending draft context",
+    );
+  }
+  const expectedResponseTtl = request.transaction_ttl_ms ?? null;
+  if (response.transaction_ttl_ms !== expectedResponseTtl) {
+    throw new TypeError("contractCall draft transaction_ttl_ms is not bound to the request");
   }
   if (
-    request.contract_alias !== undefined &&
-    receipt.contract_alias !== request.contract_alias
+    request.creation_time_ms !== undefined
+    && response.creation_time_ms !== request.creation_time_ms
   ) {
+    throw new TypeError("contractCall draft creation_time_ms is not bound to the request");
+  }
+  if (
+    response.contract_address !== draftIntent.contractAddress
+    || receipt.contract_address !== draftIntent.contractAddress
+  ) {
+    throw new TypeError(
+      "contractCall draft resolved address changed the caller-trusted draftIntent",
+    );
+  }
+  const expectedAlias = request.contract_alias ?? null;
+  if (receipt.contract_alias !== expectedAlias) {
     throw new TypeError("contractCall draft is not bound to the requested alias");
   }
+  if (
+    expectedAlias !== null
+    && response.dataspace !== contractAliasDataspaceSegment(
+      expectedAlias,
+      "contractCall request.contract_alias",
+    )
+  ) {
+    throw new TypeError(
+      "contractCall draft dataspace does not match the requested alias",
+    );
+  }
+  if (
+    response.contract_address !== receipt.contract_address
+    || response.code_hash_hex !== receipt.code_hash_hex
+    || response.abi_hash_hex !== receipt.abi_hash_hex
+  ) {
+    throw new TypeError(
+      "contractCall draft receipt does not match the resolved contract binding",
+    );
+  }
+  if (response.code_hash_hex !== draftIntent.codeHashHex) {
+    throw new TypeError(
+      "contractCall draft code hash changed the caller-trusted draftIntent",
+    );
+  }
+  if (
+    receipt.fee_payment === null
+    || !feeQuoteSelectionsMatch(receipt.fee_payment, request.fee_payment)
+  ) {
+    throw new TypeError(
+      "contractCall draft fee_payment changed the requested payer, sponsor revision, or gas bound",
+    );
+  }
+  if (receipt.gas_limit !== receipt.fee_payment.value.gas_limit) {
+    throw new TypeError(
+      "contractCall operation_receipt gas_limit does not match its fee_payment",
+    );
+  }
+  if (receipt.payload_digest_hex !== draftIntent.payloadDigestHex) {
+    throw new TypeError(
+      "contractCall operation_receipt payload digest changed the caller-trusted draftIntent",
+    );
+  }
+  validateUnsignedResponsePayloadBinding(
+    response,
+    request.authority,
+    receipt.fee_payment,
+    request.transaction_ttl_ms ?? 100_000,
+    draftIntent,
+    localSigningContext,
+    "contractCall draft",
+  );
   return response;
 }
 
@@ -23133,7 +23675,10 @@ function normalizeMultisigContractCallResponse(
       `${context}.resolved_multisig_account_id`,
     ),
     submitted: requireExactBoolean(record.submitted, `${context}.submitted`),
-    proposal_id: optionalString(record.proposal_id, `${context}.proposal_id`),
+    proposal_id: requireOptionalExactLowerHex32String(
+      record.proposal_id,
+      `${context}.proposal_id`,
+    ),
     instructions_hash: requireOptionalExactLowerHex32String(
       record.instructions_hash,
       `${context}.instructions_hash`,
@@ -23160,6 +23705,10 @@ function normalizeMultisigContractCallResponse(
             `${context}.creation_time_ms`,
             { allowZero: true },
           ),
+    fee_payment: normalizeFeePaymentIntentResponse(
+      record.fee_payment,
+      `${context}.fee_payment`,
+    ),
     transaction_payload_b64: normalizeOptionalExactBase64Payload(
       record.transaction_payload_b64,
       `${context}.transaction_payload_b64`,
@@ -23169,6 +23718,15 @@ function normalizeMultisigContractCallResponse(
       `${context}.signing_message_b64`,
     ),
   };
+  if (
+    normalized.proposal_id !== null
+    && normalized.instructions_hash !== null
+    && normalized.proposal_id !== normalized.instructions_hash
+  ) {
+    throw new TypeError(
+      `${context}.proposal_id and instructions_hash must identify the same proposal`,
+    );
+  }
   if (normalized.submitted) {
     if (
       normalized.tx_hash_hex === null ||
@@ -23195,6 +23753,102 @@ function normalizeMultisigContractCallResponse(
     );
   }
   return normalized;
+}
+
+function exactArchiveEquals(left, right) {
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function validateUnsignedResponsePayloadBinding(
+  response,
+  authority,
+  feePayment,
+  expectedTtlMs,
+  draftIntent,
+  localSigningContext,
+  context,
+) {
+  if (draftIntent === null) {
+    throw new TypeError(`${context} requires a caller-trusted draftIntent`);
+  }
+  requireLocalDraftSigningContext(localSigningContext, context);
+  let bindings;
+  try {
+    bindings = inspectCanonicalTransactionPayloadBindings(
+      strictDecodeBase64(response.transaction_payload_b64),
+      authority,
+    );
+  } catch (error) {
+    throw new TypeError(
+      `${context}.transaction_payload_b64 must contain one canonical transaction payload bound to the requested signer`,
+      { cause: error },
+    );
+  }
+  const expectedNetworkId = Buffer.from(
+    networkIdBytes(localSigningContext.networkId, `${context}.networkId`),
+  );
+  if (!exactArchiveEquals(expectedNetworkId, bindings.networkId)) {
+    throw new TypeError(`${context} transaction payload changed caller-trusted networkId`);
+  }
+  const encodedResponseFee = Buffer.from(
+    noritoEncodeFeePaymentIntentArchive(feePayment),
+  );
+  for (const [field, expected, actual] of [
+    ["executable", draftIntent.executableArchive, bindings.executableArchive],
+    ["fee_payment", encodedResponseFee, bindings.feePaymentArchive],
+    ["metadata", draftIntent.metadataArchive, bindings.metadataArchive],
+  ]) {
+    if (!exactArchiveEquals(expected, actual)) {
+      throw new TypeError(
+        `${context} transaction payload changed caller-trusted ${field}`,
+      );
+    }
+  }
+  if (
+    response.creation_time_ms === null
+    || BigInt(response.creation_time_ms) !== bindings.creationTimeMs
+  ) {
+    throw new TypeError(
+      `${context}.creation_time_ms does not match the exact transaction payload`,
+    );
+  }
+  if (BigInt(expectedTtlMs) !== bindings.ttlMs) {
+    throw new TypeError(`${context} transaction payload changed caller-trusted ttlMs`);
+  }
+}
+
+function validateMultisigResponseRequestBinding(
+  response,
+  request,
+  context,
+  draftIntent,
+  localSigningContext,
+) {
+  if (!feeQuoteSelectionsMatch(response.fee_payment, request.fee_payment)) {
+    throw new TypeError(
+      `${context}.fee_payment changed the requested payer, sponsor revision, or gas bound`,
+    );
+  }
+  if (
+    request.creation_time_ms !== undefined
+    && response.creation_time_ms !== request.creation_time_ms
+  ) {
+    throw new TypeError(
+      `${context}.creation_time_ms is not bound to the request`,
+    );
+  }
+  if (!response.submitted) {
+    validateUnsignedResponsePayloadBinding(
+      response,
+      request.signer_account_id,
+      response.fee_payment,
+      100_000,
+      draftIntent,
+      localSigningContext,
+      context,
+    );
+  }
+  return response;
 }
 
 function normalizeMultisigSpecResponse(payload, context = "multisig spec response") {
@@ -30565,8 +31219,10 @@ function normalizeKaigiCallView(payload, expectedCallId) {
           0xffff_ffff,
         )
     : undefined;
-  if (maxParticipants === 0) {
-    throw new RangeError(`${context}.max_participants must be between 1 and 4294967295`);
+  if (maxParticipants === 0 || maxParticipants > KAIGI_MAX_PARTICIPANTS_V1) {
+    throw new RangeError(
+      `${context}.max_participants must be between 1 and ${KAIGI_MAX_PARTICIPANTS_V1}`,
+    );
   }
   const createdAtMs = normalizeKaigiU64(
     record.created_at_ms,
@@ -31377,7 +32033,7 @@ async function readSccpNoritoResponse(
   response,
   label,
   maximumBodyBytes,
-  expectedTypeName,
+  expectedTypeNames,
 ) {
   const contentType = response.headers?.get?.("content-type") ?? "";
   if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
@@ -31388,12 +32044,35 @@ async function readSccpNoritoResponse(
     throw error;
   }
   const body = await readBoundedSccpResponseBytes(response, maximumBodyBytes, label);
-  validateNoritoFrame(body, {
-    context: `${label} response`,
-    expectedTypeName,
-    expectedPaddingLength: 0,
-    requireNonEmptyPayload: true,
-  });
+  const closedTypeNames = typeof expectedTypeNames === "string"
+    ? [expectedTypeNames]
+    : expectedTypeNames;
+  if (!Array.isArray(closedTypeNames) || closedTypeNames.length === 0) {
+    throw new TypeError(`${label} response must declare a closed Norito type set`);
+  }
+  let matchedClosedType = false;
+  for (const typeName of closedTypeNames) {
+    try {
+      validateNoritoFrame(body, {
+        context: `${label} response`,
+        expectedTypeName: typeName,
+        expectedPaddingLength: 0,
+        requireNonEmptyPayload: true,
+      });
+      matchedClosedType = true;
+      break;
+    } catch {
+      // Validate framing once below before reporting a closed-set mismatch.
+    }
+  }
+  if (!matchedClosedType) {
+    validateNoritoFrame(body, {
+      context: `${label} response`,
+      expectedPaddingLength: 0,
+      requireNonEmptyPayload: true,
+    });
+    throw new Error(`${label} response schema hash did not match the closed type set`);
+  }
   return body;
 }
 

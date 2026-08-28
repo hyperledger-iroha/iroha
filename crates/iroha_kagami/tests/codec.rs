@@ -1,6 +1,6 @@
 //! Tests for Kagami codec error handling and Norito/JSON roundtrips.
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use iroha_data_model::{account::NewAccount, domain::Domain, trigger::Trigger};
+use iroha_data_model::{account::NewAccount, domain::Domain};
 use norito::{
     core::{Error, MAGIC},
     decode_from_bytes,
@@ -48,10 +48,6 @@ fn account_roundtrip() {
 #[test]
 fn domain_roundtrip() {
     roundtrip::<Domain>("domain");
-}
-#[test]
-fn trigger_roundtrip() {
-    roundtrip::<Trigger>("trigger");
 }
 #[test]
 fn decoder_returns_invalid_magic_error_on_bad_prefix() {

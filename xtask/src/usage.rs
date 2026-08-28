@@ -262,10 +262,6 @@ fn print_usage() {
     eprintln!(
         "    Emit cross-SDK compute fixtures (call, receipt, rejection catalog) into fixtures/compute/sdk_parity or the provided directory."
     );
-    eprintln!("  cargo xtask sorafs-taikai-cache-bundle [--profile <id|path>] [--out <dir>]");
-    eprintln!(
-        "    Package Taikai cache profiles (JSON + Norito + manifest) into artifacts/taikai_cache or the provided directory."
-    );
     eprintln!(
         "  cargo xtask taikai-anchor-bundle [--spool <dir>] [--copy-dir <dir>] [--receipt-public-key <multihash>] [--signing-key <path>] [--out <path|->]"
     );

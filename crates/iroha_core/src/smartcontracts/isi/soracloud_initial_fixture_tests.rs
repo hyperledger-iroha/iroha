@@ -552,6 +552,7 @@ fn sample_bundle(
                     iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
             },
             replicas: NonZeroU16::new(2).expect("nonzero"),
+            placement_targets: BTreeSet::new(),
             route: Some(SoraRouteTargetV1 {
                 host: format!("{service_name}.example.test"),
                 path_prefix: "/".to_string(),

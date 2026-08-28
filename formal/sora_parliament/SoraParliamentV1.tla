@@ -12,6 +12,8 @@ The model is not a liveness proof, a cryptographic proof, or release evidence.
 
 CONSTANTS
     MaxHeight,
+    SortitionPulseDelayBlocks,
+    MaxSortitionRetries,
     RegistrationBlocks,
     SurvivorBlocks,
     CommitmentBlocks,
@@ -21,6 +23,10 @@ CONSTANTS
     FindingBlocks,
     EnactDelay,
     MaxRetries,
+    MaxConcurrentReservations,
+    ReservationIds,
+    FirstConflictingReservation,
+    SecondConflictingReservation,
     Bodies,
     SeatedAssignments,
     FirstAssignment,
@@ -33,6 +39,8 @@ CONSTANTS
     None
 
 ASSUME /\ MaxHeight \in Nat \ {0}
+       /\ SortitionPulseDelayBlocks \in Nat \ {0}
+       /\ MaxSortitionRetries \in Nat
        /\ RegistrationBlocks \in Nat \ {0}
        /\ SurvivorBlocks \in Nat \ {0}
        /\ CommitmentBlocks \in Nat \ {0}
@@ -42,6 +50,11 @@ ASSUME /\ MaxHeight \in Nat \ {0}
        /\ FindingBlocks \in Nat \ {0}
        /\ EnactDelay \in Nat \ {0}
        /\ MaxRetries \in Nat
+       /\ Cardinality(ReservationIds) >= 3
+       /\ MaxConcurrentReservations \in 2..Cardinality(ReservationIds)
+       /\ FirstConflictingReservation \in ReservationIds
+       /\ SecondConflictingReservation \in ReservationIds
+       /\ FirstConflictingReservation # SecondConflictingReservation
        /\ Bodies # {}
        /\ SeatedAssignments # {}
        /\ SeatedAssignments = {FirstAssignment, SecondAssignment}
@@ -60,6 +73,10 @@ VARIABLES
     height,
     attemptStatus,
     sortitionState,
+    sortitionSequence,
+    sortitionFailureKind,
+    sortitionFailureHeight,
+    supersededSortitionAttempts,
     requestHeight,
     sortitionPulseHeight,
     sortitionPulseKnown,
@@ -107,12 +124,19 @@ VARIABLES
     effectApplied,
     terminalHeight,
     plaintextPath,
-    fallbackPath
+    fallbackPath,
+    timedOvnResourceReservations,
+    rejectedReservationSnapshot,
+    reservationAuditStep
 
 vars == <<
     height,
     attemptStatus,
     sortitionState,
+    sortitionSequence,
+    sortitionFailureKind,
+    sortitionFailureHeight,
+    supersededSortitionAttempts,
     requestHeight,
     sortitionPulseHeight,
     sortitionPulseKnown,
@@ -160,14 +184,20 @@ vars == <<
     effectApplied,
     terminalHeight,
     plaintextPath,
-    fallbackPath
+    fallbackPath,
+    timedOvnResourceReservations,
+    rejectedReservationSnapshot,
+    reservationAuditStep
 >>
 
 AttemptStates == {
     "Active", "Certified", "Rejected", "Enacted", "Superseded",
     "ExecutionFailed"
 }
-SortitionStates == {"None", "AwaitingPulse", "Drawn", "RosterSealed"}
+SortitionStates == {
+    "None", "AwaitingPulse", "NoRoster", "Drawn", "RosterSealed"
+}
+SortitionFailureKinds == {None, "PulseUnavailable"}
 FindingStates == {
     "None", "AwaitingReflection", "Collecting", "Approved", "NoResult"
 }
@@ -176,6 +206,15 @@ BallotStates == {
     "None", "Registration", "SurvivorFreeze", "TimedCommitment",
     "AwaitingRelease", "Opening", "Approved", "Rejected", "NoResult"
 }
+OptionalReservationSet == (SUBSET ReservationIds) \cup {None}
+ReservationConflicts == {
+    <<FirstConflictingReservation, SecondConflictingReservation>>,
+    <<SecondConflictingReservation, FirstConflictingReservation>>
+}
+NonConflictingReservation ==
+    CHOOSE reservation \in
+        ReservationIds \ {FirstConflictingReservation, SecondConflictingReservation}:
+            TRUE
 CertificateStates == {"Certified", "Enacted", "Superseded", "ExecutionFailed"}
 OptionalHeight == (0..MaxHeight) \cup {None}
 
@@ -213,6 +252,10 @@ Init ==
     /\ height = 0
     /\ attemptStatus = "Active"
     /\ sortitionState = "None"
+    /\ sortitionSequence = 0
+    /\ sortitionFailureKind = None
+    /\ sortitionFailureHeight = None
+    /\ supersededSortitionAttempts = 0
     /\ requestHeight = None
     /\ sortitionPulseHeight = None
     /\ sortitionPulseKnown = FALSE
@@ -261,6 +304,9 @@ Init ==
     /\ terminalHeight = None
     /\ plaintextPath = FALSE
     /\ fallbackPath = FALSE
+    /\ timedOvnResourceReservations = {}
+    /\ rejectedReservationSnapshot = None
+    /\ reservationAuditStep = 0
 
 FindingLifecycleFrame ==
     UNCHANGED <<
@@ -281,9 +327,18 @@ FindingCertificateFrame ==
 
 FindingFrame == FindingLifecycleFrame /\ FindingCertificateFrame
 
+ReservationFrame ==
+    UNCHANGED <<
+        timedOvnResourceReservations,
+        rejectedReservationSnapshot,
+        reservationAuditStep
+    >>
+
 CoreFrame ==
     UNCHANGED <<
-        height, attemptStatus, sortitionState, requestHeight,
+        height, attemptStatus, sortitionState, sortitionSequence,
+        sortitionFailureKind, sortitionFailureHeight,
+        supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -297,7 +352,8 @@ CoreFrame ==
 
 CoreFrameExceptAttemptStatus ==
     UNCHANGED <<
-        height, sortitionState, requestHeight,
+        height, sortitionState, sortitionSequence, sortitionFailureKind,
+        sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -314,7 +370,9 @@ Tick ==
     /\ ~(attemptStatus = "Certified" /\ height = enactAtHeight)
     /\ height' = height + 1
     /\ UNCHANGED <<
-        attemptStatus, sortitionState, requestHeight, sortitionPulseHeight,
+        attemptStatus, sortitionState, sortitionSequence,
+        sortitionFailureKind, sortitionFailureHeight,
+        supersededSortitionAttempts, requestHeight, sortitionPulseHeight,
         sortitionPulseKnown, candidateSnapshotFrozen, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence, currentTleSession,
         usedTleSessions, registeredAtHeight, registrationCloseHeight,
@@ -329,13 +387,15 @@ Tick ==
 CommitInitialSortitionBatch ==
     /\ attemptStatus = "Active"
     /\ sortitionState = "None"
-    /\ height < MaxHeight
+    /\ height + SortitionPulseDelayBlocks <= MaxHeight
     /\ sortitionState' = "AwaitingPulse"
     /\ requestHeight' = height
-    /\ sortitionPulseHeight' = height + 1
+    /\ sortitionPulseHeight' = height + SortitionPulseDelayBlocks
     /\ candidateSnapshotFrozen' = TRUE
     /\ UNCHANGED <<
-        height, attemptStatus, sortitionPulseKnown, rosterBodies,
+        height, attemptStatus, sortitionSequence, sortitionFailureKind,
+        sortitionFailureHeight, supersededSortitionAttempts,
+        sortitionPulseKnown, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence, currentTleSession,
         usedTleSessions, registeredAtHeight, registrationCloseHeight,
         survivorFreezeHeight, commitmentCloseHeight, releaseHeight,
@@ -352,7 +412,9 @@ RevealSortitionPulse ==
     /\ height >= sortitionPulseHeight
     /\ sortitionPulseKnown' = TRUE
     /\ UNCHANGED <<
-        height, attemptStatus, sortitionState, requestHeight,
+        height, attemptStatus, sortitionState, sortitionSequence,
+        sortitionFailureKind, sortitionFailureHeight,
+        supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight, candidateSnapshotFrozen, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence, currentTleSession,
         usedTleSessions, registeredAtHeight, registrationCloseHeight,
@@ -371,8 +433,64 @@ ConsumeInitialSortitionBatch ==
     /\ sortitionState' = "Drawn"
     /\ rosterBodies' = Bodies
     /\ UNCHANGED <<
-        height, attemptStatus, requestHeight, sortitionPulseHeight,
+        height, attemptStatus, sortitionSequence, sortitionFailureKind,
+        sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
+        sortitionPulseHeight,
         sortitionPulseKnown, candidateSnapshotFrozen, invitationCloseHeight,
+        ballotState, ballotSequence, currentTleSession, usedTleSessions,
+        registeredAtHeight, registrationCloseHeight, survivorFreezeHeight,
+        commitmentCloseHeight, releaseHeight, registrationClosedAt,
+        survivorsFrozenAt, commitmentClosedAt, releasePulseKnown,
+        openingHeight, failureHeight, ballotApproved, certifiedAtHeight,
+        enactAtHeight, certificateHead, observedHead, effectApplied,
+        terminalHeight, plaintextPath, fallbackPath
+        >>
+    /\ FindingFrame
+
+FailSortitionPulseUnavailable ==
+    /\ attemptStatus = "Active"
+    /\ sortitionState = "AwaitingPulse"
+    /\ ~sortitionPulseKnown
+    /\ height > sortitionPulseHeight
+    /\ sortitionState' = "NoRoster"
+    /\ sortitionFailureKind' = "PulseUnavailable"
+    /\ sortitionFailureHeight' = height
+    /\ attemptStatus' =
+          IF sortitionSequence = MaxSortitionRetries THEN "Rejected"
+          ELSE attemptStatus
+    /\ UNCHANGED <<
+        height, sortitionSequence, supersededSortitionAttempts,
+        requestHeight, sortitionPulseHeight, sortitionPulseKnown,
+        candidateSnapshotFrozen, rosterBodies, invitationCloseHeight,
+        ballotState, ballotSequence, currentTleSession, usedTleSessions,
+        registeredAtHeight, registrationCloseHeight, survivorFreezeHeight,
+        commitmentCloseHeight, releaseHeight, registrationClosedAt,
+        survivorsFrozenAt, commitmentClosedAt, releasePulseKnown,
+        openingHeight, failureHeight, ballotApproved, certifiedAtHeight,
+        enactAtHeight, certificateHead, observedHead, effectApplied,
+        terminalHeight, plaintextPath, fallbackPath
+        >>
+    /\ FindingFrame
+
+RetryInitialSortitionBatch ==
+    /\ attemptStatus = "Active"
+    /\ sortitionState = "NoRoster"
+    /\ sortitionFailureKind = "PulseUnavailable"
+    /\ sortitionFailureHeight # None
+    /\ sortitionSequence < MaxSortitionRetries
+    /\ height >= sortitionFailureHeight
+    /\ height + SortitionPulseDelayBlocks <= MaxHeight
+    /\ sortitionState' = "AwaitingPulse"
+    /\ sortitionSequence' = sortitionSequence + 1
+    /\ supersededSortitionAttempts' = supersededSortitionAttempts + 1
+    /\ requestHeight' = height
+    /\ sortitionPulseHeight' = height + SortitionPulseDelayBlocks
+    /\ sortitionPulseKnown' = FALSE
+    /\ sortitionFailureKind' = None
+    /\ sortitionFailureHeight' = None
+    /\ candidateSnapshotFrozen' = TRUE
+    /\ UNCHANGED <<
+        height, attemptStatus, rosterBodies, invitationCloseHeight,
         ballotState, ballotSequence, currentTleSession, usedTleSessions,
         registeredAtHeight, registrationCloseHeight, survivorFreezeHeight,
         commitmentCloseHeight, releaseHeight, registrationClosedAt,
@@ -392,7 +510,9 @@ SealInvitationRosters ==
     /\ invitationCloseHeight' = height + 1
     /\ findingState' = "AwaitingReflection"
     /\ UNCHANGED <<
-        height, attemptStatus, requestHeight, sortitionPulseHeight,
+        height, attemptStatus, sortitionSequence, sortitionFailureKind,
+        sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
+        sortitionPulseHeight,
         sortitionPulseKnown, candidateSnapshotFrozen, rosterBodies,
         ballotState, ballotSequence, currentTleSession, usedTleSessions,
         registeredAtHeight, registrationCloseHeight, survivorFreezeHeight,
@@ -562,7 +682,9 @@ RegisterPrivateBallot ==
         /\ failureHeight' = None
         /\ ballotApproved' = FALSE
     /\ UNCHANGED <<
-        height, attemptStatus, sortitionState, requestHeight,
+        height, attemptStatus, sortitionState, sortitionSequence,
+        sortitionFailureKind, sortitionFailureHeight,
+        supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, certifiedAtHeight, enactAtHeight,
         certificateHead, observedHead, effectApplied, terminalHeight,
@@ -577,7 +699,9 @@ CloseRegistrationAtBoundary ==
     /\ ballotState' = "SurvivorFreeze"
     /\ registrationClosedAt' = height
     /\ UNCHANGED <<
-        height, attemptStatus, sortitionState, requestHeight,
+        height, attemptStatus, sortitionState, sortitionSequence,
+        sortitionFailureKind, sortitionFailureHeight,
+        supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -597,7 +721,9 @@ FreezeSurvivorsAtBoundary ==
     /\ ballotState' = "TimedCommitment"
     /\ survivorsFrozenAt' = height
     /\ UNCHANGED <<
-        height, attemptStatus, sortitionState, requestHeight,
+        height, attemptStatus, sortitionState, sortitionSequence,
+        sortitionFailureKind, sortitionFailureHeight,
+        supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -624,7 +750,9 @@ FreezeCommitmentInWindow ==
     /\ ballotState' = "AwaitingRelease"
     /\ commitmentClosedAt' = height
     /\ UNCHANGED <<
-        height, attemptStatus, sortitionState, requestHeight,
+        height, attemptStatus, sortitionState, sortitionSequence,
+        sortitionFailureKind, sortitionFailureHeight,
+        supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -644,7 +772,9 @@ ObserveCommittedReleasePulse ==
     /\ currentTleSession \in AvailableReleaseSessions
     /\ releasePulseKnown' = TRUE
     /\ UNCHANGED <<
-        height, attemptStatus, sortitionState, requestHeight,
+        height, attemptStatus, sortitionState, sortitionSequence,
+        sortitionFailureKind, sortitionFailureHeight,
+        supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -665,7 +795,9 @@ BeginAggregateOpening ==
     /\ ballotState' = "Opening"
     /\ openingHeight' = height
     /\ UNCHANGED <<
-        height, attemptStatus, sortitionState, requestHeight,
+        height, attemptStatus, sortitionState, sortitionSequence,
+        sortitionFailureKind, sortitionFailureHeight,
+        supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -698,7 +830,8 @@ FailPrivateBallotNoResult ==
     /\ attemptStatus' =
           IF ballotSequence = MaxRetries THEN "Rejected" ELSE attemptStatus
     /\ UNCHANGED <<
-        height, sortitionState, requestHeight,
+        height, sortitionState, sortitionSequence, sortitionFailureKind,
+        sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -730,7 +863,8 @@ FinalizeAggregateApprovedAndCertify ==
     /\ certificateFindingEndorsementCount' = findingEndorsementCount
     /\ certificateFindingQuorum' = PublicFindingQuorum
     /\ UNCHANGED <<
-        height, sortitionState, requestHeight,
+        height, sortitionState, sortitionSequence, sortitionFailureKind,
+        sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -752,7 +886,9 @@ FinalizeAggregateRejected ==
     /\ attemptStatus' = "Rejected"
     /\ terminalHeight' = height
     /\ UNCHANGED <<
-        height, sortitionState, requestHeight, sortitionPulseHeight,
+        height, sortitionState, sortitionSequence, sortitionFailureKind,
+        sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
+        sortitionPulseHeight,
         sortitionPulseKnown, candidateSnapshotFrozen, rosterBodies,
         invitationCloseHeight, ballotSequence, currentTleSession,
         usedTleSessions, registeredAtHeight, registrationCloseHeight,
@@ -769,7 +905,9 @@ ChangeGovernedHead ==
     /\ observedHead = ExpectedHead
     /\ observedHead' = CompetingHead
     /\ UNCHANGED <<
-        height, attemptStatus, sortitionState, requestHeight,
+        height, attemptStatus, sortitionState, sortitionSequence,
+        sortitionFailureKind, sortitionFailureHeight,
+        supersededSortitionAttempts, requestHeight,
         sortitionPulseHeight, sortitionPulseKnown, candidateSnapshotFrozen,
         rosterBodies, invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -790,7 +928,9 @@ EnactAtExactHeight ==
     /\ effectApplied' = TRUE
     /\ terminalHeight' = height
     /\ UNCHANGED <<
-        height, sortitionState, requestHeight, sortitionPulseHeight,
+        height, sortitionState, sortitionSequence, sortitionFailureKind,
+        sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
+        sortitionPulseHeight,
         sortitionPulseKnown, candidateSnapshotFrozen, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -811,7 +951,9 @@ RecordInternalExecutionFailureAtExactHeight ==
     /\ effectApplied' = FALSE
     /\ terminalHeight' = height
     /\ UNCHANGED <<
-        height, sortitionState, requestHeight, sortitionPulseHeight,
+        height, sortitionState, sortitionSequence, sortitionFailureKind,
+        sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
+        sortitionPulseHeight,
         sortitionPulseKnown, candidateSnapshotFrozen, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -831,7 +973,9 @@ SupersedeAtExactHeight ==
     /\ attemptStatus' = "Superseded"
     /\ terminalHeight' = height
     /\ UNCHANGED <<
-        height, sortitionState, requestHeight, sortitionPulseHeight,
+        height, sortitionState, sortitionSequence, sortitionFailureKind,
+        sortitionFailureHeight, supersededSortitionAttempts, requestHeight,
+        sortitionPulseHeight,
         sortitionPulseKnown, candidateSnapshotFrozen, rosterBodies,
         invitationCloseHeight, ballotState, ballotSequence,
         currentTleSession, usedTleSessions, registeredAtHeight,
@@ -844,10 +988,46 @@ SupersedeAtExactHeight ==
         >>
     /\ FindingFrame
 
-Next ==
+ReservationConflictsWithActive(candidate) ==
+    \E incumbent \in timedOvnResourceReservations:
+        <<candidate, incumbent>> \in ReservationConflicts
+
+ReservationAdmissionAllowed(candidate) ==
+    /\ candidate \notin timedOvnResourceReservations
+    /\ Cardinality(timedOvnResourceReservations) < MaxConcurrentReservations
+    /\ ~ReservationConflictsWithActive(candidate)
+
+AdmitTimedOvnResourceReservation(candidate) ==
+    /\ candidate \in ReservationIds
+    /\ ReservationAdmissionAllowed(candidate)
+    /\ timedOvnResourceReservations' =
+          timedOvnResourceReservations \cup {candidate}
+    /\ rejectedReservationSnapshot' = None
+    /\ CoreFrame
+    /\ FindingFrame
+
+RejectTimedOvnResourceReservation(candidate) ==
+    /\ candidate \in ReservationIds
+    /\ ~ReservationAdmissionAllowed(candidate)
+    /\ timedOvnResourceReservations' = timedOvnResourceReservations
+    /\ rejectedReservationSnapshot' = timedOvnResourceReservations
+    /\ CoreFrame
+    /\ FindingFrame
+
+ReleaseTimedOvnResourceReservation(candidate) ==
+    /\ candidate \in timedOvnResourceReservations
+    /\ timedOvnResourceReservations' =
+          timedOvnResourceReservations \ {candidate}
+    /\ rejectedReservationSnapshot' = None
+    /\ CoreFrame
+    /\ FindingFrame
+
+ReducerNext ==
     \/ Tick
     \/ CommitInitialSortitionBatch
     \/ RevealSortitionPulse
+    \/ FailSortitionPulseUnavailable
+    \/ RetryInitialSortitionBatch
     \/ ConsumeInitialSortitionBatch
     \/ SealInvitationRosters
     \/ EnterPublicFindingReflection
@@ -869,12 +1049,48 @@ Next ==
     \/ RecordInternalExecutionFailureAtExactHeight
     \/ SupersedeAtExactHeight
 
+ReservationNext ==
+    \/ /\ reservationAuditStep = 0
+       /\ AdmitTimedOvnResourceReservation(FirstConflictingReservation)
+       /\ reservationAuditStep' = 1
+    \/ /\ reservationAuditStep = 1
+       /\ RejectTimedOvnResourceReservation(SecondConflictingReservation)
+       /\ reservationAuditStep' = 2
+    \/ /\ reservationAuditStep = 2
+       /\ AdmitTimedOvnResourceReservation(NonConflictingReservation)
+       /\ reservationAuditStep' = 3
+    \/ /\ reservationAuditStep = 3
+       /\ RejectTimedOvnResourceReservation(SecondConflictingReservation)
+       /\ reservationAuditStep' = 4
+    \/ /\ reservationAuditStep = 4
+       /\ ReleaseTimedOvnResourceReservation(FirstConflictingReservation)
+       /\ reservationAuditStep' = 5
+    \/ /\ reservationAuditStep = 5
+       /\ AdmitTimedOvnResourceReservation(SecondConflictingReservation)
+       /\ reservationAuditStep' = 6
+    \/ /\ reservationAuditStep = 6
+       /\ ReleaseTimedOvnResourceReservation(NonConflictingReservation)
+       /\ reservationAuditStep' = 7
+    \/ /\ reservationAuditStep = 7
+       /\ ReleaseTimedOvnResourceReservation(SecondConflictingReservation)
+       /\ reservationAuditStep' = 8
+
+Next ==
+    \/ /\ reservationAuditStep = 8
+       /\ ReducerNext
+       /\ ReservationFrame
+    \/ ReservationNext
+
 Spec == Init /\ [][Next]_vars
 
 TypeOK ==
     /\ height \in 0..MaxHeight
     /\ attemptStatus \in AttemptStates
     /\ sortitionState \in SortitionStates
+    /\ sortitionSequence \in 0..MaxSortitionRetries
+    /\ sortitionFailureKind \in SortitionFailureKinds
+    /\ sortitionFailureHeight \in OptionalHeight
+    /\ supersededSortitionAttempts \in 0..MaxSortitionRetries
     /\ requestHeight \in OptionalHeight
     /\ sortitionPulseHeight \in OptionalHeight
     /\ sortitionPulseKnown \in BOOLEAN
@@ -927,14 +1143,75 @@ TypeOK ==
     /\ terminalHeight \in OptionalHeight
     /\ plaintextPath \in BOOLEAN
     /\ fallbackPath \in BOOLEAN
+    /\ timedOvnResourceReservations \subseteq ReservationIds
+    /\ rejectedReservationSnapshot \in OptionalReservationSet
+    /\ reservationAuditStep \in 0..8
 
 FuturePulseSortition ==
     /\ (sortitionState = "None")
        \/ /\ candidateSnapshotFrozen
           /\ requestHeight # None
           /\ sortitionPulseHeight # None
-          /\ sortitionPulseHeight > requestHeight
+          /\ sortitionPulseHeight =
+                requestHeight + SortitionPulseDelayBlocks
     /\ sortitionPulseKnown => height >= sortitionPulseHeight
+
+ObjectiveBoundedSortitionRetries ==
+    /\ supersededSortitionAttempts = sortitionSequence
+    /\ sortitionState = "None" =>
+          /\ sortitionSequence = 0
+          /\ sortitionFailureKind = None
+          /\ sortitionFailureHeight = None
+          /\ ~sortitionPulseKnown
+    /\ sortitionState = "AwaitingPulse" =>
+          /\ attemptStatus = "Active"
+          /\ sortitionFailureKind = None
+          /\ sortitionFailureHeight = None
+    /\ sortitionState = "NoRoster" =>
+          /\ sortitionFailureKind = "PulseUnavailable"
+          /\ sortitionFailureHeight # None
+          /\ sortitionFailureHeight > sortitionPulseHeight
+          /\ ~sortitionPulseKnown
+          /\ attemptStatus =
+                IF sortitionSequence = MaxSortitionRetries
+                THEN "Rejected"
+                ELSE "Active"
+    /\ sortitionState \in {"Drawn", "RosterSealed"} =>
+          /\ sortitionPulseKnown
+          /\ sortitionFailureKind = None
+          /\ sortitionFailureHeight = None
+
+TimedOvnReservationSafety ==
+    /\ Cardinality(timedOvnResourceReservations) <=
+          MaxConcurrentReservations
+    /\ \A left, right \in timedOvnResourceReservations:
+          left = right \/
+              <<left, right>> \notin ReservationConflicts
+
+RejectedReservationDoesNotLeak ==
+    rejectedReservationSnapshot = None \/
+        timedOvnResourceReservations = rejectedReservationSnapshot
+
+TimedOvnReservationAuditShape ==
+    CASE reservationAuditStep = 0 ->
+             timedOvnResourceReservations = {}
+      [] reservationAuditStep \in {1, 2} ->
+             timedOvnResourceReservations = {FirstConflictingReservation}
+      [] reservationAuditStep \in {3, 4} ->
+             timedOvnResourceReservations = {
+                 FirstConflictingReservation,
+                 NonConflictingReservation
+             }
+      [] reservationAuditStep = 5 ->
+             timedOvnResourceReservations = {NonConflictingReservation}
+      [] reservationAuditStep = 6 ->
+             timedOvnResourceReservations = {
+                 NonConflictingReservation,
+                 SecondConflictingReservation
+             }
+      [] reservationAuditStep = 7 ->
+             timedOvnResourceReservations = {SecondConflictingReservation}
+      [] OTHER -> timedOvnResourceReservations = {}
 
 SimultaneousInitialDraw == rosterBodies = {} \/ rosterBodies = Bodies
 

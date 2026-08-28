@@ -51,15 +51,12 @@ fn invocation_count(path: &Path, expected: &str) -> usize {
     contents.lines().filter(|line| *line == expected).count()
 }
 pub(super) fn install_kagami_stub(root: &Path) -> (PathBuf, TestEnvGuard) {
-    let permissioned_manifest = fixture_manifest(SumeragiConsensusMode::Permissioned);
-    let npos_manifest = fixture_manifest(SumeragiConsensusMode::Npos);
+    let permissioned_manifest =
+        fixture_manifest(SumeragiConsensusMode::Permissioned, "$requested_chain");
+    let npos_manifest = fixture_manifest(SumeragiConsensusMode::Npos, "$requested_chain");
     let script = format!(
         r#"#!/bin/sh
 set -e
-if [ "$1" = "--version" ]; then
-  echo "kagami-stub iroha3"
-  exit 0
-fi
 if [ "$1" = "verify" ]; then
   exit 0
 fi
@@ -69,19 +66,24 @@ if [ "$1" = "genesis" ] && [ "$2" = "generate" ]; then
     printf '%s\n' "$@" >> "$LOG_FILE"
   fi
   requested_mode=permissioned
+  requested_chain=
   previous=
   for argument in "$@"; do
     if [ "$previous" = "--consensus-mode" ]; then
       requested_mode="$argument"
     fi
+    if [ "$previous" = "--chain-id" ]; then
+      requested_chain="$argument"
+    fi
     previous="$argument"
   done
+  test -n "$requested_chain"
   if [ "$requested_mode" = "npos" ]; then
-    cat <<'JSON'
+    cat <<JSON
 {npos_manifest}
 JSON
   else
-    cat <<'JSON'
+    cat <<JSON
 {permissioned_manifest}
 JSON
   fi
@@ -117,7 +119,8 @@ if [ "$1" = "genesis" ] && [ "$2" = "sign" ]; then
         shift 2
         ;;
       *)
-        shift
+        printf 'unsupported kagami genesis sign argument: %s\n' "$1" >&2
+        exit 1
         ;;
     esac
   done
@@ -139,7 +142,7 @@ exit 1
         TestEnvGuard::set("MOCHI_TEST_FINALIZE_KAGAMI_STUB_SIGNATURE", Path::new("1"));
     (path, signature_guard)
 }
-fn fixture_manifest(consensus_mode: SumeragiConsensusMode) -> String {
+fn fixture_manifest(consensus_mode: SumeragiConsensusMode, chain: &str) -> String {
     let mut transaction = Map::new();
     if consensus_mode == SumeragiConsensusMode::Npos {
         let mut parameters = Parameters::default();
@@ -152,10 +155,7 @@ fn fixture_manifest(consensus_mode: SumeragiConsensusMode) -> String {
         );
     }
     let mut manifest = Map::new();
-    manifest.insert(
-        "chain".to_owned(),
-        Value::String("mochi-fixture".to_owned()),
-    );
+    manifest.insert("chain".to_owned(), Value::String(chain.to_owned()));
     manifest.insert(
         "chain_discriminant".to_owned(),
         Value::Number(u64::from(iroha_data_model::account::address::chain_discriminant()).into()),

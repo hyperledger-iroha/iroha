@@ -155,14 +155,35 @@ final class ToriiContractAPITests: XCTestCase {
     }
 
     private func detachedRequest() -> ToriiContractCallRequest {
-        ToriiContractCallRequest(
+        let payload = ToriiJSONValue.object([
+            "merchant_account_id": .string(merchantAccount),
+            "amount": .string("750"),
+        ])
+        let argumentRecord = try! CanonicalUnsignedTransactionTestSupport
+            .contractArgumentRecord(for: payload)
+        let invocation = try! TransactionContractInvocation(
+            contractAddress: contractAddress,
+            expectedCodeHash: Data(hexString: codeHash)!,
+            entrypoint: "spend_to_merchant",
+            arguments: argumentRecord
+        )
+        let callerMetadata = ["client_reference": ToriiJSONValue.string("invoice-7")]
+        var exactMetadata = callerMetadata
+        exactMetadata["contract_address"] = .string(contractAddress)
+        exactMetadata["contract_code_hash"] = .string(codeHash)
+        exactMetadata["contract_alias"] = .string(contractAlias)
+        exactMetadata["contract_entrypoint"] = .string("spend_to_merchant")
+        exactMetadata["contract_payload"] = payload
+        return ToriiContractCallRequest(
             authority: authority,
             contractAlias: contractAlias,
             entrypoint: "spend_to_merchant",
-            payload: .object([
-                "merchant_account_id": .string(merchantAccount),
-                "amount": .string("750"),
-            ]),
+            payload: payload,
+            metadata: callerMetadata,
+            draftIntent: try! ToriiContractCallDraftIntent(
+                invocation: invocation,
+                metadata: exactMetadata
+            ),
             creationTimeMs: detachedCreationTimeMs,
             transactionTtlMs: 120_000,
             feePayment: testFeePayment(gasLimit: 500_000)
@@ -311,6 +332,11 @@ final class ToriiContractAPITests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/contracts/call")
             let body = try self.jsonBody(request)
             XCTAssertNil(body["private_key"])
+            XCTAssertNil(body["draft_intent"])
+            XCTAssertEqual(
+                body["metadata"] as? NSDictionary,
+                ["client_reference": "invoice-7"] as NSDictionary
+            )
             XCTAssertEqual(body["transaction_ttl_ms"] as? Int, 120_000)
             if requestIndex == 1 {
                 XCTAssertNil(body["public_key_hex"])
@@ -347,6 +373,70 @@ final class ToriiContractAPITests: XCTestCase {
         XCTAssertEqual(requestIndex, 2)
     }
 
+    func testDetachedPreparationAcceptsOnlyToriiEnrichedFeeMaxima() async throws {
+        let enrichedFee = FeePaymentIntent.authority(
+            chargeLimits: [
+                try FeeChargeLimit(
+                    kind: .pipelineGas,
+                    assetDefinitionId: assetId,
+                    maxAmount: "10"
+                )
+            ],
+            gasLimit: 500_000
+        )
+        let enrichedPayload = try CanonicalUnsignedTransactionTestSupport.contractPayload(
+            request: detachedRequest(),
+            contractAddress: contractAddress,
+            codeHashHex: codeHash,
+            networkId: TestNetworkIds.canonical,
+            feePayment: enrichedFee
+        )
+        StubURLProtocol.handler = { request in
+            var json = self.contractCallResponse(submitted: false)
+            var receipt = json["operation_receipt"] as! [String: Any]
+            receipt["fee_payment"] = testFeePaymentObject(enrichedFee)
+            json["operation_receipt"] = receipt
+            json["transaction_payload_b64"] = enrichedPayload.base64EncodedString()
+            json["signing_message_b64"] = IrohaHash.hash(enrichedPayload).base64EncodedString()
+            return try self.response(for: request, json: json)
+        }
+
+        let draft = try await makeClient().prepareDetachedContractCall(detachedRequest())
+        XCTAssertEqual(draft.transactionPayload, enrichedPayload)
+    }
+
+    func testDetachedPreparationBindsCallerTrustedEventMetadata() async throws {
+        var request = detachedRequest()
+        let eventMetadata: [String: ToriiJSONValue] = [
+            "contract_module": .string("intents"),
+            "contract_event_kind": .string("intent_opened"),
+            "contract_event_schema_version": .number(1),
+            "contract_event_provenance": .string("emitted"),
+        ]
+        var exactMetadata = try XCTUnwrap(request.draftIntent).metadata
+        exactMetadata.merge(eventMetadata) { _, expected in expected }
+        request.draftIntent = try ToriiContractCallDraftIntent(
+            invocation: try XCTUnwrap(request.draftIntent).invocation,
+            metadata: exactMetadata
+        )
+        let eventPayload = try CanonicalUnsignedTransactionTestSupport.contractPayload(
+            request: request,
+            contractAddress: contractAddress,
+            codeHashHex: codeHash,
+            networkId: TestNetworkIds.canonical,
+            additionalMetadata: eventMetadata
+        )
+        StubURLProtocol.handler = { urlRequest in
+            var json = self.contractCallResponse(submitted: false)
+            json["transaction_payload_b64"] = eventPayload.base64EncodedString()
+            json["signing_message_b64"] = IrohaHash.hash(eventPayload).base64EncodedString()
+            return try self.response(for: urlRequest, json: json)
+        }
+
+        let draft = try await makeClient().prepareDetachedContractCall(request)
+        XCTAssertEqual(draft.transactionPayload, eventPayload)
+    }
+
     func testDetachedContractCallPayloadDigestMatchesToriiCanonicalJSON() throws {
         XCTAssertEqual(
             try detachedRequest().canonicalContractPayloadDigestHex(),
@@ -370,6 +460,7 @@ final class ToriiContractAPITests: XCTestCase {
             { $0.creationTimeMs = 1 },
             { $0.creationTimeMs = UInt64.max },
             { $0.feePayment = testFeePayment() },
+            { $0.draftIntent = nil },
         ]
         for mutation in mutations {
             var request = detachedRequest()
@@ -446,6 +537,50 @@ final class ToriiContractAPITests: XCTestCase {
                     contractAddress: self.contractAddress,
                     codeHashHex: self.codeHash,
                     networkId: TestNetworkIds.other
+                )
+                $0["transaction_payload_b64"] = payload.base64EncodedString()
+                $0["signing_message_b64"] = IrohaHash.hash(payload).base64EncodedString()
+            },
+            {
+                let payload = try! CanonicalUnsignedTransactionTestSupport.contractPayload(
+                    request: self.detachedRequest(),
+                    contractAddress: self.contractAddress,
+                    codeHashHex: self.codeHash,
+                    networkId: TestNetworkIds.canonical,
+                    admissionIntent: .queuePlanSynced
+                )
+                $0["transaction_payload_b64"] = payload.base64EncodedString()
+                $0["signing_message_b64"] = IrohaHash.hash(payload).base64EncodedString()
+            },
+            {
+                var tamperedRequest = self.detachedRequest()
+                let originalIntent = tamperedRequest.draftIntent!
+                let invocation = try! TransactionContractInvocation(
+                    contractAddress: originalIntent.invocation.contractAddress,
+                    expectedCodeHash: originalIntent.invocation.expectedCodeHash,
+                    entrypoint: originalIntent.invocation.entrypoint,
+                    arguments: Data("different arguments".utf8)
+                )
+                tamperedRequest.draftIntent = try! ToriiContractCallDraftIntent(
+                    invocation: invocation,
+                    metadata: originalIntent.metadata
+                )
+                let payload = try! CanonicalUnsignedTransactionTestSupport.contractPayload(
+                    request: tamperedRequest,
+                    contractAddress: self.contractAddress,
+                    codeHashHex: self.codeHash,
+                    networkId: TestNetworkIds.canonical
+                )
+                $0["transaction_payload_b64"] = payload.base64EncodedString()
+                $0["signing_message_b64"] = IrohaHash.hash(payload).base64EncodedString()
+            },
+            {
+                let payload = try! CanonicalUnsignedTransactionTestSupport.contractPayload(
+                    request: self.detachedRequest(),
+                    contractAddress: self.contractAddress,
+                    codeHashHex: self.codeHash,
+                    networkId: TestNetworkIds.canonical,
+                    additionalMetadata: ["server_added_intent": .bool(true)]
                 )
                 $0["transaction_payload_b64"] = payload.base64EncodedString()
                 $0["signing_message_b64"] = IrohaHash.hash(payload).base64EncodedString()

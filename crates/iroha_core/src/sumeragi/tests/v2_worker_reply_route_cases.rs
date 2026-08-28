@@ -517,6 +517,232 @@ fn ordinary_exact_output_does_not_suppress_retryable_sidecar_control_ownership()
     );
 }
 #[test]
+#[allow(clippy::too_many_lines)]
+fn generation_fence_cancels_only_older_request_and_close_for_exact_endpoint() {
+    let (service, _) = fixture();
+    let requester = service.local_peer.clone();
+    let responder = service.context.roster[1].validator.clone();
+    let other_responder = service.context.roster[2].validator.clone();
+    let ack_target = service.context.roster[3].validator.clone();
+    let scope = service.exact_output_scope();
+    let generation = |value| {
+        crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1(
+            NonZeroU64::new(value).expect("test service generation is non-zero"),
+        )
+    };
+    let old_generation = generation(1);
+    let current_generation = generation(3);
+    let newer_generation = generation(4);
+    let request =
+        |target: &PeerId,
+         service_generation: crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1,
+         ordinal: u64| {
+            let (message, _) = certified_sidecar_outputs(&requester, target);
+            let CertifiedMergeSidecarMessage::Request(mut request) = message else {
+                unreachable!("worker sidecar fixture returns one request")
+            };
+            request.service_generation = service_generation;
+            request.stream_epoch = CertifiedMergeSidecarStreamEpochV1(
+                NonZeroU64::new(ordinal).expect("test request stream epoch is non-zero"),
+            );
+            request.semantic_sequence = CertifiedMergeSidecarSemanticSequenceV1(
+                NonZeroU64::new(ordinal).expect("test request semantic sequence is non-zero"),
+            );
+            request.request_id = request.canonical_request_id();
+            request
+        };
+    let request_fanout = |request: CertifiedMergeSidecarRequestV1| {
+        let target = request.responder.clone();
+        let transfer = CertifiedSidecarTransferIdentity::from_request(&request);
+        let request_hash = HashOf::new(&request);
+        PendingExactFanout::claimed(
+            vec![NetworkMessage::CertifiedMergeSidecar(Arc::new(
+                CertifiedMergeSidecarMessage::Request(request),
+            ))],
+            vec![target.clone()],
+            ExactOutputRolloverClaim::CertifiedSidecarRequest {
+                scope,
+                target,
+                transfer,
+                request_hash,
+            },
+        )
+        .expect("valid exact sidecar request claim")
+        .expect("one exact sidecar request fanout")
+    };
+    let close =
+        |target: &PeerId,
+         service_generation: crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1,
+         ordinal: u64| {
+            let mut close = crate::merge_sidecar::CertifiedMergeSidecarCloseV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                service_generation,
+                stream_epoch: CertifiedMergeSidecarStreamEpochV1(
+                    NonZeroU64::new(ordinal).expect("test close stream epoch is non-zero"),
+                ),
+                closed_through: ordinal,
+                close_id: Hash::prehashed([0; Hash::LENGTH]),
+                requester: requester.clone(),
+                responder: target.clone(),
+            };
+            close.close_id = close.canonical_close_id();
+            close
+        };
+    let close_fanout = |close: crate::merge_sidecar::CertifiedMergeSidecarCloseV1| {
+        let target = close.responder.clone();
+        certified_sidecar_control_fanout(scope, &target, CertifiedMergeSidecarMessage::Close(close))
+    };
+
+    let stale_request = request(&responder, old_generation, 1);
+    let observed_message_hash = HashOf::new(&stale_request).into();
+    let mut hint = CertifiedMergeSidecarGenerationHintV1 {
+        version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+        observed_generation: old_generation,
+        current_generation,
+        observed_message_hash,
+        hint_id: Hash::prehashed([0; Hash::LENGTH]),
+        requester: requester.clone(),
+        responder: responder.clone(),
+    };
+    hint.hint_id = hint.canonical_hint_id();
+
+    let (_, chunk_message) = certified_sidecar_outputs(&responder, &requester);
+    let CertifiedMergeSidecarMessage::Chunk(chunk) = &chunk_message else {
+        unreachable!("worker sidecar fixture returns one chunk")
+    };
+    assert_eq!(chunk.requester, requester);
+    assert_eq!(chunk.responder, responder);
+    let chunk_target = chunk.requester.clone();
+    let chunk_transfer = CertifiedSidecarTransferIdentity::from_chunk(chunk);
+    let chunk_index = chunk.chunk_index;
+    let chunk_count = chunk.chunk_count;
+    let chunk_hash = HashOf::new(chunk);
+    let chunk_fanout = PendingExactFanout::claimed(
+        vec![NetworkMessage::CertifiedMergeSidecar(Arc::new(
+            chunk_message,
+        ))],
+        vec![chunk_target.clone()],
+        ExactOutputRolloverClaim::CertifiedSidecarChunk {
+            scope,
+            target: chunk_target,
+            transfer: chunk_transfer,
+            chunk_index,
+            chunk_count,
+            response_hash: chunk_hash,
+        },
+    )
+    .expect("valid exact sidecar chunk claim")
+    .expect("one exact sidecar chunk fanout");
+    let cases = vec![
+        (
+            "older request for authenticated endpoint",
+            true,
+            request_fanout(stale_request),
+        ),
+        (
+            "older close for authenticated endpoint",
+            true,
+            close_fanout(close(&responder, old_generation, 2)),
+        ),
+        (
+            "equal-generation request",
+            false,
+            request_fanout(request(&responder, current_generation, 3)),
+        ),
+        (
+            "newer-generation request",
+            false,
+            request_fanout(request(&responder, newer_generation, 4)),
+        ),
+        (
+            "equal-generation close",
+            false,
+            close_fanout(close(&responder, current_generation, 5)),
+        ),
+        (
+            "newer-generation close",
+            false,
+            close_fanout(close(&responder, newer_generation, 6)),
+        ),
+        (
+            "older request for another responder",
+            false,
+            request_fanout(request(&other_responder, old_generation, 7)),
+        ),
+        (
+            "older close for another responder",
+            false,
+            close_fanout(close(&other_responder, old_generation, 8)),
+        ),
+        (
+            "CloseAck singleton",
+            false,
+            certified_sidecar_control_fanout(
+                scope,
+                &ack_target,
+                certified_sidecar_close_ack(&service.local_peer, &ack_target, 9),
+            ),
+        ),
+        (
+            "GenerationHint singleton",
+            false,
+            certified_sidecar_control_fanout(
+                scope,
+                &requester,
+                CertifiedMergeSidecarMessage::GenerationHint(hint.clone()),
+            ),
+        ),
+        ("Chunk singleton", false, chunk_fanout),
+    ];
+    let expected = cases
+        .iter()
+        .map(|(label, cancel, fanout)| {
+            (
+                *label,
+                *cancel,
+                fanout
+                    .message_hashes
+                    .first()
+                    .copied()
+                    .expect("singleton fanout has one message hash"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let frozen_targets = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    let mut pending = PendingExactOutput::new(32, 1, 1, &frozen_targets)
+        .expect("all exact boundary cases fit the bounded output corridor");
+    for (label, _, fanout) in cases {
+        assert_eq!(fanout.messages.len(), 1, "{label} must stay singleton");
+        assert_eq!(
+            pending.enqueue(fanout),
+            Ok(ExactFanoutOwnership::Owned),
+            "{label} must be ranked before cancellation"
+        );
+    }
+    assert_eq!(
+        pending.cancel_obsolete_certified_merge_sidecar_generation_hints(&[hint]),
+        Ok(2)
+    );
+    let retained_hashes = pending
+        .fanouts
+        .iter()
+        .flat_map(|fanout| fanout.message_hashes.iter().copied())
+        .collect::<Vec<_>>();
+    for (label, cancelled, message_hash) in expected {
+        assert_eq!(
+            retained_hashes.contains(&message_hash),
+            !cancelled,
+            "generation-fence boundary mismatch for {label}"
+        );
+    }
+    assert_eq!(pending.fanouts.len(), 9);
+}
+#[test]
 fn unrelated_parked_reply_does_not_suppress_responsive_target_control() {
     let (service, _) = fixture();
     let peer_a = service.context.roster[1].validator.clone();

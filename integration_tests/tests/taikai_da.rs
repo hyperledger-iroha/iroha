@@ -5,6 +5,7 @@ use eyre::Result;
 use integration_tests::sandbox::start_network_async_or_skip;
 use iroha_config::parameters::actual::DaReplicationPolicy;
 use iroha_config_base::toml::Writer;
+use iroha_crypto::Signature;
 use iroha_data_model::{
     da::{
         ingest::{DaIngestRequest, DaIngestRequestIntentV1},
@@ -19,9 +20,17 @@ use iroha_data_model::{
 };
 use iroha_test_network::{Network, NetworkBuilder};
 use iroha_test_samples::ALICE_KEYPAIR;
+use iroha_torii::{
+    HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
+    canonical_network_request_signature_message, signature_header_value,
+};
 use norito::json::{self, Value};
 use reqwest::{Client, Response, StatusCode};
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tempfile::tempdir;
 use toml::Value as TomlValue;
 const META_EVENT_ID: &str = "taikai.event_id";
@@ -315,76 +324,46 @@ fn taikai_replication_policy_uses_availability_overrides() {
         assert_eq!(enforced.governance_tag.0, expectation.governance_tag);
     }
 }
-#[test]
-fn taikai_ingest_tags_cover_replication_and_proofs() {
-    let payload = TEST_PAYLOAD;
-    let payload_digest = BlobDigest::from_hash(blake3_hash(payload));
-    let retention = RetentionPolicy {
-        hot_retention_secs: 7_200,
-        cold_retention_secs: 86_400,
-        required_replicas: 5,
-        storage_class: StorageClass::Hot,
-        governance_tag: GovernanceTag::new("da.taikai.ops"),
-    };
-    let metadata = ExtraMetadata {
-        items: base_taikai_metadata(),
-    };
-    let tagged = iroha_torii::compute_taikai_ingest_tags(
-        metadata,
-        Some(TaikaiAvailabilityClass::Warm),
-        &retention,
-        payload_digest,
-        payload.len() as u64,
-    )
-    .expect("tagging succeeds");
-    assert_eq!(value_for(&tagged, "taikai.availability_class"), "warm");
-    assert_eq!(
-        value_for(&tagged, "da.proof.tier"),
-        "hot",
-        "proof tier follows enforced storage class"
-    );
-    assert_eq!(value_for(&tagged, "taikai.replication.replicas"), "5");
-    assert_eq!(
-        value_for(&tagged, "taikai.replication.storage_class"),
-        "hot"
-    );
-    assert_eq!(
-        value_for(&tagged, "taikai.replication.hot_retention_secs"),
-        "7200"
-    );
-    assert_eq!(
-        value_for(&tagged, "taikai.replication.cold_retention_secs"),
-        "86400"
-    );
-    assert_eq!(value_for(&tagged, "da.proof.pdp.sample_window"), "32");
-    assert_eq!(value_for(&tagged, "da.proof.potr.sample_window"), "32");
-    let cache_hint_entry = tagged
-        .items
-        .iter()
-        .find(|entry| entry.key == "taikai.cache_hint")
-        .expect("cache hint present");
-    let cache_hint: Value = json::from_slice(&cache_hint_entry.value).expect("cache hint is JSON");
-    let cache_hint = cache_hint.as_object().expect("cache hint object");
-    assert_eq!(
-        cache_hint
-            .get("payload_blake3_hex")
-            .and_then(Value::as_str)
-            .expect("payload digest"),
-        hex::encode(payload_digest.as_ref())
-    );
-}
 async fn post_ingest(network: &Network, request: &DaIngestRequest) -> Result<Response> {
+    static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let http = Client::new();
-    let json_value = json::to_value(request)?;
-    let request_body = json::to_string(&json_value)?;
+    let request_body = json::to_vec(request)?;
     let url = network
         .client()
         .torii_url
         .join("/v1/da/ingest")
         .expect("compose DA ingest URL");
+    let timestamp_ms: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis()
+        .try_into()?;
+    let nonce = format!(
+        "taikai-da-ingest-{}",
+        NONCE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let signing_uri: Uri = match url.query() {
+        Some(query) => format!("{}?{query}", url.path()).parse()?,
+        None => url.path().parse()?,
+    };
+    let message = canonical_network_request_signature_message(
+        &network.network_id(),
+        &Method::POST,
+        &signing_uri,
+        &request_body,
+        timestamp_ms,
+        &nonce,
+    )?;
+    let signature = Signature::try_new(ALICE_KEYPAIR.private_key(), &message)
+        .expect("sign canonical Taikai DA ingest HTTP request");
     let response = http
         .post(url)
         .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header(HEADER_ACCOUNT, request.owner.to_canonical_hex()?)
+        .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
+        .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
+        .header(HEADER_NONCE, nonce)
         .body(request_body)
         .send()
         .await?;
@@ -402,7 +381,7 @@ fn build_taikai_request(
         client_blob_id: digest,
         lane_id: LaneId::SINGLE,
         epoch: 7,
-        sequence: 3,
+        sequence: 0,
         blob_class: BlobClass::TaikaiSegment,
         codec: BlobCodec("video/cmaf".into()),
         erasure_profile: ErasureProfile::default(),

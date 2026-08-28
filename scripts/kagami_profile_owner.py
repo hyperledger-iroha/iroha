@@ -38,10 +38,6 @@ MAX_LOCK_BYTES = 8 << 20
 PROFILE_FILES: Mapping[str, tuple[str, ...]] = {
     "iroha3-dev": (
         "README.md",
-        "config-peer-1.toml",
-        "config-peer-2.toml",
-        "config-peer-3.toml",
-        "config.toml",
         "docker-compose.yml",
         "genesis.expected_hash",
         "genesis.json",

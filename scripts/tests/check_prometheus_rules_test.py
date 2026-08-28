@@ -74,6 +74,58 @@ def test_checks_every_supplied_rule_file(tmp_path: Path) -> None:
     ]
 
 
+def test_test_mode_runs_every_supplied_rule_fixture(tmp_path: Path) -> None:
+    """The explicit test mode must execute every supplied promtool fixture."""
+
+    args_out = tmp_path / "promtool-args"
+    write_fake_executable(
+        tmp_path / "promtool",
+        'printf "%s\\n" "$@" > "${PROMTOOL_ARGS_OUT}"\n',
+    )
+    fixtures = [
+        "dashboards/alerts/tests/sora_parliament_rules.test.yml",
+        "dashboards/alerts/tests/sorafs_fetch_rules.test.yml",
+    ]
+
+    subprocess.run(
+        [str(CHECKER), "--test", *fixtures],
+        cwd=REPO_ROOT,
+        env=checker_env(tmp_path, PROMTOOL_ARGS_OUT=str(args_out)),
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert args_out.read_text(encoding="utf-8").splitlines() == [
+        "test",
+        "rules",
+        *(str(REPO_ROOT / fixture) for fixture in fixtures),
+    ]
+
+
+def test_unknown_option_fails_before_promtool(tmp_path: Path) -> None:
+    """Unknown modes must fail closed instead of becoming file paths."""
+
+    marker = tmp_path / "promtool-called"
+    write_fake_executable(
+        tmp_path / "promtool",
+        'touch "${PROMTOOL_CALLED}"\n',
+    )
+
+    result = subprocess.run(
+        [str(CHECKER), "--unknown"],
+        cwd=REPO_ROOT,
+        env=checker_env(tmp_path, PROMTOOL_CALLED=str(marker)),
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert "Unknown option:" in result.stderr
+    assert not marker.exists()
+
+
 def test_missing_rule_fails_before_promtool(tmp_path: Path) -> None:
     """A missing rule path must fail closed before any validator is launched."""
 

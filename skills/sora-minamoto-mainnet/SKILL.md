@@ -1,6 +1,6 @@
 ---
 name: sora-minamoto-mainnet
-description: "Work against the SORA Minamoto mainnet through its deployed Torii MCP endpoint for live account, asset, alias, contract, governance, Musubi package-registry, and transaction workflows. Use when Codex needs to inspect Minamoto mainnet, verify or add `https://minamoto.sora.org/v1/mcp`, prefer the curated `iroha.*` tool surface, classify Minamoto ingress and chain-health failures correctly, or handle runtime-only signing inputs such as `authority` and `private_key`."
+description: "Work against the SORA Minamoto mainnet through its deployed Torii MCP endpoint for live account, asset, alias, contract, governance, Musubi package-registry, and transaction workflows. Use when Codex needs to inspect Minamoto mainnet, verify or add `https://minamoto.sora.org/v1/mcp`, prefer the curated `iroha.*` tool surface, classify Minamoto ingress and chain-health failures correctly, or submit locally signed transaction envelopes."
 ---
 
 # SORA Minamoto Mainnet
@@ -17,8 +17,9 @@ Use the Minamoto mainnet through native Torii MCP.
    `tx_queue_saturated=false`, and `teu_dataspace_backlog` is not climbing.
 4. Prefer curated `iroha.*` tools over raw `torii.*` tools.
 5. Stay read-only until the user explicitly asks to mutate live mainnet state.
-6. Treat any signing inputs, API tokens, or forwarded auth headers as
-   runtime-only secrets.
+6. Never pass private keys or mnemonic phrases through MCP. Keep API tokens and
+   forwarded auth headers runtime-only, and use a local wallet/client for
+   signing.
 7. Do not use Taira testnet faucet, bootstrap, or canary assumptions on
    Minamoto.
 8. When the user asks to transact, follow the "Transaction Workflow" section
@@ -71,8 +72,9 @@ mainnet wiring with read-only calls only:
    `https://minamoto.sora.org/v1/mcp`.
 2. Confirm a Minamoto MCP namespace or server entry is visible in the current
    session.
-3. Call `iroha.sumeragi.status` and check that `commit_qc.height` is present,
-   `tx_queue.saturated=false`, and queue depth is low.
+3. Call `iroha.health`; use the direct read-only `/status` and
+   `/v1/sumeragi/status` HTTP diagnostics when finality or queue detail is
+   required.
 4. Fetch the latest known block with `iroha.blocks.get`.
 5. List recent transactions with `iroha.transactions.list`, then check one
    listed hash with `iroha.transactions.status`.
@@ -89,8 +91,9 @@ permission_denied`.
    deployed networks.
 2. Use explicit JSON `body` payloads when a write flow needs more than a couple
    of flat shortcut arguments.
-3. Keep `authority`, `private_key`, bearer tokens, and forwarded auth headers
-   out of files, docs, and commits.
+3. Keep private keys, mnemonic phrases, bearer tokens, and forwarded auth
+   headers out of MCP requests, files, docs, and commits. Use `authority` only
+   as the public signer identity required by a schema.
 4. Before any Minamoto write, verify the signer on-chain first: the account
    exists on the current Minamoto chain, holds the required fee asset balance,
    and has the permissions required for the specific mutation.
@@ -134,8 +137,9 @@ account operations:
    Re-check `inputSchema` for every tool used in the flow.
 2. Sample public health:
    - `GET https://minamoto.sora.org/status`
-   - `iroha.status`
-   - `iroha.sumeragi.status`
+   - `GET https://minamoto.sora.org/v1/sumeragi/status`
+   - `iroha.health`
+   - `iroha.node.capabilities`
 3. Identify the signer:
    - resolve the user-provided alias with `iroha.aliases.resolve`, when an
      alias was supplied
@@ -149,9 +153,9 @@ account operations:
    - record current values needed to verify the post-write state
 5. Build the unsigned instruction or transaction body using the specific
    `iroha.*` helper, or ask the user's wallet/client to build it.
-6. Get a signature outside Codex by default. Prefer a user-provided
-   `signed_tx_base64` envelope over raw private-key signing in the agent
-   session.
+6. Get the signature outside Codex in the user's trusted wallet/client, then
+   provide the resulting `signed_tx_base64` envelope. Never provide the raw
+   private key to the agent or MCP server.
 7. Before submission, apply the "Mainnet Write Confirmation Policy".
 8. Submit the pre-signed envelope with `iroha.transactions.submit_and_wait`.
 9. Verify final state with a read query against the object changed by the
@@ -210,14 +214,11 @@ For Minamoto, the default write path is:
 4. submit the pre-signed envelope
 5. verify state
 
-Do not ask for raw private keys, mnemonic phrases, bearer tokens, or forwarded
-auth headers for mainnet work unless the user explicitly insists on that path.
-If the user insists, treat the values as runtime-only secrets: do not persist
-them, do not echo them, do not put them in docs, and do not commit them.
-
-If a tool accepts `authority` and `private_key`, do not assume that makes
-agent-side signing appropriate on mainnet. Prefer pre-signed envelopes for
-value-moving or irreversible operations.
+Do not ask for or accept raw private keys or mnemonic phrases for mainnet work,
+and never pass signing secrets, bearer tokens, or forwarded auth headers through
+MCP tool arguments. Signing belongs in the user's trusted local wallet/client;
+submit only the resulting pre-signed envelope. An `authority` field identifies
+the public signer and is not permission to perform agent-side signing.
 
 ## Public-Node Diagnostics
 
@@ -230,11 +231,12 @@ value-moving or irreversible operations.
    queried node's current remote-peer count, not the network's validator-set
    length.
 4. When diagnosing public-write or finality issues, prefer this read bundle:
-   - `iroha.status`
-   - `iroha.sumeragi.status`
+   - `iroha.health`
+   - `iroha.node.capabilities`
    - `iroha.blocks.list`
    - `iroha.transactions.status` or `iroha.transactions.wait`
    - `GET https://minamoto.sora.org/status`
+   - `GET https://minamoto.sora.org/v1/sumeragi/status`
 5. If the latest committed block timestamp stops advancing and Sumeragi shows
    signals such as `membership.height > commit_qc.height`,
    `view_change_causes.last_cause = "missing_qc"`, or
@@ -286,11 +288,11 @@ value-moving or irreversible operations.
 
 1. Start with read-only public health:
    - `GET https://minamoto.sora.org/status`
-   - `iroha.status`
-   - `iroha.sumeragi.status`
+   - `GET https://minamoto.sora.org/v1/sumeragi/status`
+   - `iroha.health`
 2. Confirm the MCP server exposes the expected curated tools before choosing a
    workflow:
-   - `iroha.status`
+   - `iroha.health`
    - `iroha.transactions.submit_and_wait`
    - the specific `iroha.*` account, alias, asset, contract, governance, or
      Musubi tools required by the request
@@ -394,14 +396,13 @@ health and Sumeragi checks before rebuilding the transaction.
 ### Assets and balances
 
 - `iroha.assets.get`
-- `iroha.asset-definitions.get`
+- `iroha.assets.definitions.get`
 - `iroha.accounts.assets`
 
 ### Contracts
 
-- `iroha.contracts.deploy`
-- `iroha.contracts.instance.create`
-- `iroha.contracts.instance.activate`
+- `iroha.contracts.code.get`
+- `iroha.contracts.state.get`
 - `iroha.contracts.call`
 - `iroha.contracts.call_and_wait`
 
@@ -423,13 +424,7 @@ if the deployment exposes a slightly different field name.
 
 ### Health
 
-Tool: `iroha.status`
-
-```json
-{}
-```
-
-Tool: `iroha.sumeragi.status`
+Tool: `iroha.health`
 
 ```json
 {}
@@ -439,6 +434,7 @@ HTTP:
 
 ```text
 GET https://minamoto.sora.org/status
+GET https://minamoto.sora.org/v1/sumeragi/status
 ```
 
 ### Alias resolution
@@ -483,7 +479,7 @@ Tool: `iroha.assets.get`
 
 ### Asset definition lookup
 
-Tool: `iroha.asset-definitions.get`
+Tool: `iroha.assets.definitions.get`
 
 ```json
 {
@@ -541,9 +537,8 @@ Tool: `iroha.transactions.wait`
 
 ### Contract instance lookup
 
-Use the deployment's discovered contract read tool. Common names may include
-`iroha.contracts.instance.get` or a contract-specific query tool; confirm the
-actual name and schema with tool discovery before calling it.
+Use `iroha.contracts.state.get` or a contract-specific query tool returned by
+discovery; confirm the exact name and schema before calling it.
 
 ## Response Handling
 

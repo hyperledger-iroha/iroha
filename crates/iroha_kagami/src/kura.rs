@@ -1,13 +1,18 @@
 use crate::{Outcome, RunArgs, tui};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, eyre};
-use iroha_core::kura::{BlockIndex, BlockStore, PipelineRecoverySidecar};
-use iroha_data_model::block::decode_framed_signed_block;
+use iroha_core::kura::{BlockIndex, BlockStore};
+use iroha_data_model::block::{
+    consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES, decode_framed_signed_block,
+};
 use std::{
-    fs::File,
-    io::{BufWriter, Read, Seek, SeekFrom, Write},
+    fs,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
+
+const BLOCK_INDEX_BATCH_LEN: usize = 256;
+const BLOCK_INDEX_BATCH_LEN_U64: u64 = 256;
 /// Kura inspector
 #[derive(Debug, ClapArgs, Clone)]
 pub struct Args {
@@ -54,91 +59,79 @@ impl<T: Write> RunArgs<T> for Args {
         match args.command {
             Command::Print { length, output } => {
                 tui::status("Inspecting Kura block store");
-                let result = if let Some(path) = output {
-                    let file = std::fs::OpenOptions::new()
-                        .create(true)
-                        .write(true)
-                        .truncate(true)
-                        .open(&path)
-                        .wrap_err(format!("failed to open output file: {path:?}"))?;
-                    let mut out = BufWriter::new(file);
+                write_inspection_output(writer, &args.path_to_block_store, output, |out| {
                     print_blockchain(
-                        &mut out,
+                        out,
                         &args.path_to_block_store,
                         from_height.unwrap_or(u64::MAX),
                         length,
                     )
                     .wrap_err("failed to print blockchain")
-                } else {
-                    print_blockchain(
-                        writer,
-                        &args.path_to_block_store,
-                        from_height.unwrap_or(u64::MAX),
-                        length,
-                    )
-                    .wrap_err("failed to print blockchain")
-                };
-                result?;
+                })?;
                 tui::success("Block inspection complete");
                 Ok(())
             }
             Command::Sidecar { height, output } => {
                 tui::status(format!("Retrieving pipeline sidecar for height {height}"));
-                let result = if let Some(path) = output {
-                    let file = std::fs::OpenOptions::new()
-                        .create(true)
-                        .write(true)
-                        .truncate(true)
-                        .open(&path)
-                        .wrap_err(format!("failed to open output file: {path:?}"))?;
-                    let mut out = BufWriter::new(file);
-                    print_sidecar(&mut out, &args.path_to_block_store, height)
+                write_inspection_output(writer, &args.path_to_block_store, output, |out| {
+                    print_sidecar(out, &args.path_to_block_store, height)
                         .wrap_err("failed to print sidecar")
-                } else {
-                    print_sidecar(writer, &args.path_to_block_store, height)
-                        .wrap_err("failed to print sidecar")
-                };
-                result?;
+                })?;
                 tui::success("Sidecar exported");
                 Ok(())
             }
         }
     }
 }
+
+fn write_inspection_output<T: Write>(
+    writer: &mut BufWriter<T>,
+    block_store_path: &Path,
+    output: Option<PathBuf>,
+    render: impl FnOnce(&mut dyn Write) -> Outcome,
+) -> Outcome {
+    let Some(output) = output else {
+        return render(writer);
+    };
+    let block_store = resolve_block_store_dir(block_store_path)?;
+    let output =
+        crate::atomic_output::resolve_outside_directory(&block_store, &output, "block store")?;
+    crate::atomic_output::write_file(&output, ".kagami-kura-", render)
+}
 fn resolve_block_store_dir(block_store_path: &Path) -> color_eyre::Result<PathBuf> {
-    let mut normalized: std::borrow::Cow<'_, Path> = block_store_path.into();
-    if let Some(os_str_file_name) = normalized.file_name() {
-        let file_name_str = os_str_file_name.to_str().unwrap_or("");
-        if matches!(
-            file_name_str,
-            "blocks.data" | "blocks.index" | "blocks.hashes"
-        ) {
-            normalized.to_mut().pop();
+    let metadata = fs::symlink_metadata(block_store_path).wrap_err_with(|| {
+        format!(
+            "failed to inspect block-store directory {}",
+            block_store_path.display()
+        )
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(eyre!(
+            "block-store path must be an explicit non-symlink lane directory: {}",
+            block_store_path.display()
+        ));
+    }
+    for file_name in ["blocks.index", "blocks.data", "blocks.hashes"] {
+        let path = block_store_path.join(file_name);
+        let metadata = fs::symlink_metadata(&path).wrap_err_with(|| {
+            format!(
+                "block-store directory is missing required file {}",
+                path.display()
+            )
+        })?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(eyre!(
+                "block-store file must be a non-symlink regular file: {}",
+                path.display()
+            ));
         }
     }
-    let candidate = normalized.into_owned();
-    if candidate.join("blocks.index").exists() {
-        return Ok(candidate);
-    }
-    let blocks_dir = candidate.join("blocks");
-    if blocks_dir.is_dir() {
-        let mut entries = std::fs::read_dir(&blocks_dir)
-            .wrap_err_with(|| format!("failed to read blocks directory {:?}", blocks_dir))?
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
-            .collect::<Vec<_>>();
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
-            let lane_dir = entry.path();
-            if lane_dir.join("blocks.index").exists() {
-                return Ok(lane_dir);
-            }
-        }
-    }
-    Err(color_eyre::eyre::eyre!(
-        "failed to locate block store files under {:?}",
-        candidate
-    ))
+    fs::canonicalize(block_store_path).wrap_err_with(|| {
+        format!(
+            "failed to resolve block-store directory {}",
+            block_store_path.display()
+        )
+    })
 }
 fn print_blockchain(
     writer: &mut dyn Write,
@@ -146,8 +139,12 @@ fn print_blockchain(
     from_height: u64,
     block_count: u64,
 ) -> Outcome {
+    if block_count == 0 {
+        return Err(eyre!("block count must be at least one"));
+    }
     let block_store_path = resolve_block_store_dir(block_store_path)?;
-    let mut block_store = BlockStore::new(&block_store_path);
+    let mut block_store = BlockStore::open_read_only(&block_store_path)
+        .wrap_err("failed to open canonical Kura journals read-only")?;
     let index_count = block_store
         .read_index_count()
         .wrap_err("failed to read index count from block store {block_store_path:?}.")?;
@@ -173,15 +170,8 @@ fn print_blockchain(
             start: 0,
             length: 0
         };
-        block_count
-            .try_into()
-            .wrap_err("block_count didn't fit in 32-bits")?
+        BLOCK_INDEX_BATCH_LEN
     ];
-    block_store
-        .read_block_indices(from_height, &mut block_indices)
-        .wrap_err("failed to read block indices")?;
-    let block_indices = block_indices;
-    // Now for the actual printing
     writeln!(writer, "Index file says there are {index_count} blocks.",)?;
     writeln!(
         writer,
@@ -189,35 +179,71 @@ fn print_blockchain(
         from_height + 1,
         from_height + block_count
     )?;
-    for i in 0..block_count {
-        let idx = block_indices[usize::try_from(i).wrap_err("index didn't fit in 32-bits")?];
-        let meta_index = from_height + i;
-        writeln!(
-            writer,
-            "Block#{} starts at byte offset {} and is {} bytes long.",
-            meta_index + 1,
-            idx.start,
-            idx.length
-        )?;
-        let mut block_buf =
-            vec![0_u8; usize::try_from(idx.length).wrap_err("index_len didn't fit in 32-bits")?];
+    let mut next_height = from_height;
+    let mut remaining = block_count;
+    let mut block_buf = Vec::new();
+    while remaining != 0 {
+        let batch_len_u64 = remaining.min(BLOCK_INDEX_BATCH_LEN_U64);
+        let batch_len = usize::try_from(batch_len_u64).expect("fixed batch length fits usize");
+        let batch = &mut block_indices[..batch_len];
         block_store
-            .read_block_data(idx.start, &mut block_buf)
-            .wrap_err(format!("failed to read block № {} data.", meta_index + 1))?;
-        let block = decode_framed_signed_block(&block_buf)
-            .map_err(|err| eyre!("Failed to decode block № {}: {err}", meta_index + 1))?;
-        writeln!(writer, "Block#{} :", meta_index + 1)?;
-        writeln!(writer, "{block:#?}")?;
+            .read_block_indices(next_height, batch)
+            .wrap_err("failed to read block indices")?;
+        for (offset, idx) in batch.iter().copied().enumerate() {
+            let offset = u64::try_from(offset).expect("fixed batch offset fits u64");
+            let meta_index = next_height + offset;
+            writeln!(
+                writer,
+                "Block#{} starts at byte offset {} and is {} bytes long.",
+                meta_index + 1,
+                idx.start,
+                idx.length
+            )?;
+            if idx.length == 0 || idx.length > MAX_EXECUTED_BLOCK_WIRE_BYTES {
+                return Err(eyre!(
+                    "block № {} has invalid wire length {}; expected 1..={MAX_EXECUTED_BLOCK_WIRE_BYTES}",
+                    meta_index + 1,
+                    idx.length
+                ));
+            }
+            let len = usize::try_from(idx.length).wrap_err("block length does not fit usize")?;
+            if len > block_buf.capacity() {
+                block_buf
+                    .try_reserve_exact(len - block_buf.len())
+                    .wrap_err_with(|| {
+                        format!(
+                            "failed to reserve {} bytes for block № {}",
+                            len,
+                            meta_index + 1
+                        )
+                    })?;
+            }
+            block_buf.resize(len, 0);
+            block_store
+                .read_block_data(idx.start, &mut block_buf)
+                .wrap_err(format!("failed to read block № {} data.", meta_index + 1))?;
+            let block = decode_framed_signed_block(&block_buf)
+                .map_err(|err| eyre!("Failed to decode block № {}: {err}", meta_index + 1))?;
+            writeln!(writer, "Block#{} :", meta_index + 1)?;
+            writeln!(writer, "{block:#?}")?;
+        }
+        next_height += batch_len_u64;
+        remaining -= batch_len_u64;
     }
     Ok(())
 }
 fn print_sidecar(writer: &mut dyn Write, block_store_path: &Path, height: u64) -> Outcome {
     // Resolve the concrete lane directory when multilane layout is in use.
     let block_store_path = resolve_block_store_dir(block_store_path)?;
-    // First try the current indexed sidecar store (`pipeline/sidecars.{norito,index}`).
-    if let Some(sidecar) = read_indexed_sidecar(&block_store_path, height) {
+    let mut block_store = BlockStore::open_read_only(&block_store_path)
+        .wrap_err("failed to open canonical Kura journals read-only")?;
+    if let Some(sidecar) = block_store
+        .read_pipeline_metadata(height)
+        .wrap_err("failed to read canonical pipeline sidecar")?
+    {
         let json = sidecar.to_json_value();
-        let serialized = norito::json::to_json_pretty(&json).expect("serialize pipeline sidecar");
+        let serialized =
+            norito::json::to_json_pretty(&json).wrap_err("failed to serialize pipeline sidecar")?;
         writer.write_all(serialized.as_bytes())?;
         return Ok(());
     }
@@ -226,48 +252,6 @@ fn print_sidecar(writer: &mut dyn Write, block_store_path: &Path, height: u64) -
         block_store_path,
         height
     ))
-}
-/// Attempt to read a pipeline recovery sidecar from the indexed sidecar store.
-fn read_indexed_sidecar(block_store_path: &Path, height: u64) -> Option<PipelineRecoverySidecar> {
-    const PIPELINE_DIR_NAME: &str = "pipeline";
-    const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
-    const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
-    const PIPELINE_INDEX_ENTRY_SIZE: u64 = 16; // two u64s: offset + len
-    if height == 0 {
-        return None;
-    }
-    let pipeline_dir = block_store_path.join(PIPELINE_DIR_NAME);
-    let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
-    let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
-    let mut index = File::open(&index_path).ok()?;
-    let index_meta = index.metadata().ok()?;
-    if index_meta.len() % PIPELINE_INDEX_ENTRY_SIZE != 0 {
-        return None;
-    }
-    let entries = index_meta.len() / PIPELINE_INDEX_ENTRY_SIZE;
-    if height > entries {
-        return None;
-    }
-    let mut entry_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE as usize];
-    index
-        .seek(SeekFrom::Start((height - 1) * PIPELINE_INDEX_ENTRY_SIZE))
-        .ok()?;
-    index.read_exact(&mut entry_buf).ok()?;
-    let offset = u64::from_le_bytes(entry_buf[..8].try_into().expect("slice len"));
-    let len = u64::from_le_bytes(entry_buf[8..].try_into().expect("slice len"));
-    if len == 0 {
-        return None;
-    }
-    let len_usize = usize::try_from(len).ok()?;
-    let mut data = File::open(&data_path).ok()?;
-    let data_len = data.metadata().ok()?.len();
-    if offset.saturating_add(len) > data_len {
-        return None;
-    }
-    let mut payload = vec![0u8; len_usize];
-    data.seek(SeekFrom::Start(offset)).ok()?;
-    data.read_exact(&mut payload).ok()?;
-    norito::decode_from_bytes::<PipelineRecoverySidecar>(&payload).ok()
 }
 #[cfg(test)]
 mod tests {
@@ -280,7 +264,7 @@ mod tests {
     };
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use std::{borrow::Cow, fs, sync::Arc};
-    fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
+    fn fixture_block(prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
         let network_id =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
                 b"kagami-kura-fixture-network",
@@ -304,8 +288,12 @@ mod tests {
             .expect("sign Kagami Kura fixture block")
             .unpack(|_| {})
             .into();
-        store.append_block_to_chain(&sb).expect("append");
         Arc::new(sb)
+    }
+    fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
+        let block = fixture_block(prev);
+        store.append_block_to_chain(&block).expect("append");
+        block
     }
     #[test]
     fn appended_block_uses_verifiable_checked_signature() {
@@ -345,6 +333,39 @@ mod tests {
         assert!(s.contains("Printing blocks 2-2"));
         assert!(s.contains("Block#2 starts at byte offset"));
     }
+    #[cfg(unix)]
+    #[test]
+    fn print_accepts_an_immutable_read_only_snapshot() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = BlockStore::new(temp.path());
+        store.create_files_if_they_do_not_exist().unwrap();
+        append_block(&mut store, None);
+        drop(store);
+        for file_name in ["blocks.index", "blocks.data", "blocks.hashes"] {
+            fs::set_permissions(
+                temp.path().join(file_name),
+                fs::Permissions::from_mode(0o444),
+            )
+            .expect("protect Kura journal snapshot");
+        }
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o555))
+            .expect("protect Kura snapshot directory");
+
+        let mut output = Vec::new();
+        print_blockchain(&mut output, temp.path(), 0, 1).expect("inspect read-only Kura snapshot");
+        assert!(String::from_utf8(output).unwrap().contains("Block#1"));
+        assert_eq!(
+            fs::metadata(temp.path().join("blocks.index"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o444,
+            "inspection must not rewrite journal permissions"
+        );
+    }
     #[test]
     fn print_writes_to_output_file() {
         // Prepare a temporary block store with two blocks.
@@ -353,8 +374,9 @@ mod tests {
         store.create_files_if_they_do_not_exist().unwrap();
         let first = append_block(&mut store, None);
         let _second = append_block(&mut store, Some(first.as_ref()));
-        // Prepare output file
-        let out_path = temp.path().join("out.txt");
+        // Keep inspection output separate from the protected store tree.
+        let output = tempfile::tempdir().unwrap();
+        let out_path = output.path().join("out.txt");
         // Build Kagami args (use output some file; writer should be ignored in this branch)
         let args = Args {
             from: None,
@@ -381,9 +403,11 @@ mod tests {
                 defaults::kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MERGE_LEDGER_CACHE_CAPACITY},
             },
         };
-        use iroha_core::kura::Kura;
-        // Prepare a temp store and write a synthetic sidecar via Kura
+        use iroha_core::kura::{Kura, PipelineRecoverySidecar};
+        // Prepare a temp store and write metadata for a canonical block.
         let temp = tempfile::tempdir().unwrap();
+        let lane_config = LaneConfig::default();
+        let block_store_path = lane_config.primary().blocks_dir(temp.path());
         let (kura, _count) = Kura::new_fresh_single_lane(
             &KuraConfig {
                 init_mode: iroha_config::kura::InitMode::Strict,
@@ -399,15 +423,17 @@ mod tests {
                     iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
                 replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
-            &LaneConfig::default(),
+            &lane_config,
         )
         .unwrap();
+        let block = fixture_block(None);
+        kura.store_block(block.clone())
+            .expect("store sidecar fixture block through authorized Kura mutation");
         let mut fingerprint = [0u8; 32];
         fingerprint[..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32]));
         let sidecar = PipelineRecoverySidecar::new(
-            7,
-            block_hash,
+            1,
+            block.hash(),
             PipelineDagSnapshot {
                 fingerprint,
                 key_count: 0,
@@ -415,12 +441,13 @@ mod tests {
             Vec::new(),
         );
         kura.write_pipeline_metadata(&sidecar);
-        let out_path = temp.path().join("sidecar.json");
+        let output = tempfile::tempdir().unwrap();
+        let out_path = output.path().join("sidecar.json");
         let args = Args {
             from: None,
-            path_to_block_store: temp.path().to_owned(),
+            path_to_block_store: block_store_path,
             command: Command::Sidecar {
-                height: 7,
+                height: 1,
                 output: Some(out_path.clone()),
             },
         };
@@ -428,8 +455,8 @@ mod tests {
         args.run(&mut sink).expect("sidecar ok");
         let read = std::fs::read_to_string(out_path).unwrap();
         assert!(read.contains("\"pipeline.recovery\""));
-        assert!(read.contains("\"height\": 7"));
-        assert!(read.contains(&block_hash.to_string()));
+        assert!(read.contains("\"height\": 1"));
+        assert!(read.contains(&block.hash().to_string()));
     }
     #[test]
     fn print_clamps_overflowing_length() {
@@ -459,6 +486,69 @@ mod tests {
         assert!(
             err.to_string().contains("no indexed pipeline sidecar"),
             "unexpected error: {err}"
+        );
+    }
+    #[test]
+    fn print_rejects_oversized_index_entry_before_allocating() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut index = Vec::new();
+        index.extend_from_slice(&0_u64.to_le_bytes());
+        index.extend_from_slice(&(MAX_EXECUTED_BLOCK_WIRE_BYTES + 1).to_le_bytes());
+        fs::write(temp.path().join("blocks.index"), index).expect("seed index");
+        fs::write(temp.path().join("blocks.data"), b"").expect("seed data");
+        fs::write(temp.path().join("blocks.hashes"), b"").expect("seed hashes");
+        let error = print_blockchain(&mut Vec::new(), temp.path(), 0, 1)
+            .expect_err("oversized block must be rejected");
+        assert!(error.to_string().contains("invalid wire length"));
+    }
+    #[test]
+    fn output_is_atomic_and_cannot_target_the_block_store() {
+        let store = tempfile::tempdir().unwrap();
+        fs::write(store.path().join("blocks.index"), b"original index").expect("seed index");
+        fs::write(store.path().join("blocks.data"), b"").expect("seed data");
+        fs::write(store.path().join("blocks.hashes"), b"").expect("seed hashes");
+        let output = tempfile::tempdir().unwrap();
+        let output_path = output.path().join("inspection.txt");
+        fs::write(&output_path, b"previous output").expect("seed output");
+        let mut sink = BufWriter::new(Vec::new());
+        let error = write_inspection_output(
+            &mut sink,
+            store.path(),
+            Some(output_path.clone()),
+            |_writer| Err(eyre!("synthetic render failure")),
+        )
+        .expect_err("failed render must not publish");
+        assert!(error.to_string().contains("synthetic render failure"));
+        assert_eq!(
+            fs::read(&output_path).expect("read output"),
+            b"previous output"
+        );
+
+        let index_path = store.path().join("blocks.index");
+        let error = write_inspection_output(
+            &mut sink,
+            store.path(),
+            Some(index_path.clone()),
+            |_writer| Ok(()),
+        )
+        .expect_err("block-store target must be rejected");
+        assert!(error.to_string().contains("inside the block store"));
+        assert_eq!(fs::read(index_path).expect("read index"), b"original index");
+    }
+    #[test]
+    fn block_store_path_must_name_an_explicit_lane_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let lane = root.path().join("blocks").join("lane0");
+        fs::create_dir_all(&lane).expect("create lane");
+        for file_name in ["blocks.index", "blocks.data", "blocks.hashes"] {
+            fs::write(lane.join(file_name), b"").expect("seed lane file");
+        }
+        let error = resolve_block_store_dir(root.path())
+            .expect_err("store root must not silently select its first lane");
+        assert!(error.to_string().contains("missing required file"));
+        assert_eq!(
+            resolve_block_store_dir(&lane).expect("explicit lane"),
+            fs::canonicalize(lane).expect("canonical lane")
         );
     }
 }

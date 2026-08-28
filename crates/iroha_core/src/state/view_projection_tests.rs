@@ -592,6 +592,7 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
                     iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
             },
             replicas: std::num::NonZeroU16::new(1).expect("nonzero"),
+            placement_targets: BTreeSet::new(),
             route: None,
             rollout: iroha_data_model::soracloud::SoraRolloutPolicyV1 {
                 canary_percent: 0,

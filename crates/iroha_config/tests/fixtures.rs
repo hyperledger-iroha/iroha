@@ -11,8 +11,7 @@ use iroha_config::parameters::{
         LaneProfile, NexusFeeSettlementMode, NexusStorage, OperatorAuthLockout,
         OperatorTokenFallback, OperatorTokenSource, OracleChangeThresholds, OracleEconomics,
         OracleGovernance, OracleTwitterBinding, Queue, Root as Config, SoranetVpn, Streaming,
-        StreamingSoranetAccessKind, StreamingSoravpn, StreamingSync, ToriiOperatorAuth,
-        TransactionGossiper,
+        StreamingSync, ToriiOperatorAuth, TransactionGossiper,
     },
     defaults,
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
@@ -510,8 +509,6 @@ fn nexus_storage_weights_require_full_budget() {
                 kura_blocks_bps: 9_000,
                 wsv_snapshots_bps: 0,
                 sorafs_bps: 0,
-                soranet_spool_bps: 0,
-                soravpn_spool_bps: 0,
             },
             ..NexusStorage::default()
         },
@@ -533,10 +530,8 @@ fn nexus_storage_weights_require_positive_subsystem_shares() {
         storage: NexusStorage {
             disk_budget_weights: NexusStorageWeights {
                 kura_blocks_bps: 4_000,
-                wsv_snapshots_bps: 2_500,
-                sorafs_bps: 1_500,
-                soranet_spool_bps: 2_000,
-                soravpn_spool_bps: 0,
+                wsv_snapshots_bps: 6_000,
+                sorafs_bps: 0,
             },
             ..NexusStorage::default()
         },
@@ -548,7 +543,7 @@ fn nexus_storage_weights_require_positive_subsystem_shares() {
         .expect_err("a zero subsystem storage share must be rejected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "nexus.storage.disk_budget_weights");
-    assert_contains!(debug, "soravpn_spool_bps");
+    assert_contains!(debug, "sorafs_bps");
     assert_contains!(debug, "greater than zero");
 }
 #[test]
@@ -799,41 +794,24 @@ fn lane_profile_home_applies_throttles() {
     );
 }
 #[test]
-fn streaming_soranet_overrides_apply() {
-    let config = load_config_from_fixtures("streaming_soranet_override.toml")
-        .expect("config should load with soranet overrides");
-    let soranet = &config.streaming.soranet;
+fn retired_streaming_soranet_table_is_rejected() {
+    let table = r#"
+[streaming.soranet]
+enabled = false
+exit_multiaddr = "/dns/retired.example/udp/9443/quic"
+"#
+    .parse()
+    .expect("retired inline TOML should parse");
+    let error = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base config should load")
+        .with_toml_source(TomlSource::inline(table))
+        .read_and_complete::<UserConfig>()
+        .expect_err("retired streaming.soranet configuration must be unknown");
+    let report = strip_ansi_codes(&format!("{error:?}"));
     assert!(
-        !soranet.enabled,
-        "token-bearing SoraNet exit publication must remain disabled"
-    );
-    assert_eq!(
-        soranet.exit_multiaddr, "/dns/test-exit/quic",
-        "override exit multiaddr should propagate"
-    );
-    assert_eq!(
-        soranet.padding_budget_ms,
-        Some(42),
-        "override padding budget should propagate"
-    );
-    assert_eq!(
-        soranet.access_kind,
-        StreamingSoranetAccessKind::ReadOnly,
-        "access policy override should convert into runtime enum"
-    );
-    assert_eq!(
-        soranet.channel_salt, "custom.seed.v1",
-        "channel salt override should propagate as provided string"
-    );
-    assert_eq!(
-        soranet.provision_window_segments,
-        defaults::streaming::soranet::PROVISION_WINDOW_SEGMENTS,
-        "provision window should default when not overridden"
-    );
-    assert_eq!(
-        soranet.provision_queue_capacity,
-        defaults::streaming::soranet::PROVISION_QUEUE_CAPACITY,
-        "provision queue capacity should default when not overridden"
+        report.contains("unknown parameter: `streaming.soranet"),
+        "unexpected retired-table diagnostic: {report}"
     );
 }
 #[test]
@@ -1536,6 +1514,31 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .join("configs/soranexus/taira/config.toml");
     let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
     let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
+    let network = doc
+        .get("network")
+        .and_then(TomlValue::as_table)
+        .expect("Taira network config");
+    let governance = doc
+        .get("gov")
+        .and_then(TomlValue::as_table)
+        .expect("Taira governance config");
+    assert_eq!(
+        network
+            .get("soranet_vpn")
+            .and_then(TomlValue::as_table)
+            .and_then(|vpn| vpn.get("operator_account_id")),
+        governance.get("bond_escrow_account"),
+        "the parsed disabled VPN profile must use the Taira-prefixed governance identity"
+    );
+    assert_eq!(
+        governance.get("sorafs_pin_fee_treasury_account"),
+        doc.get("nexus")
+            .and_then(TomlValue::as_table)
+            .and_then(|nexus| nexus.get("fees"))
+            .and_then(TomlValue::as_table)
+            .and_then(|fees| fees.get("fee_sink_account_id")),
+        "the SoraFS pin-fee treasury must use the Taira-prefixed fee-sink identity"
+    );
     assert!(
         doc.get("settlement")
             .and_then(TomlValue::as_table)
@@ -1822,6 +1825,20 @@ fn taira_config_enables_untrusted_cid_hosting() {
         runtime.get("production_mode").and_then(TomlValue::as_bool),
         Some(true),
         "Taira profile should run the Soracloud runtime in production posture"
+    );
+    assert_eq!(
+        runtime
+            .get("hydration_concurrency")
+            .and_then(TomlValue::as_integer),
+        Some(4),
+        "Taira must pin the first-release artifact hydration worker bound"
+    );
+    assert_eq!(
+        runtime
+            .get("prepared_runtime_cache_capacity")
+            .and_then(TomlValue::as_integer),
+        Some(4),
+        "Taira must pin the independent first-release prepared-runtime cache bound"
     );
     let inrou = runtime
         .get("inrou")

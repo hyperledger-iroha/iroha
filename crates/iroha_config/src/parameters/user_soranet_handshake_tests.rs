@@ -45,6 +45,36 @@ fn test_handshake_config(kem_id: u8, sig_id: u8) -> SoranetHandshake {
     }
 }
 
+fn test_pow_config() -> SoranetHandshakePow {
+    test_handshake_config(1, 1).pow
+}
+
+fn assert_pow_parse_error(config: SoranetHandshakePow, expected: &str) {
+    let mut emitter = Emitter::new();
+    let _ = config.parse(&mut emitter);
+    let error = emitter
+        .into_result()
+        .expect_err("invalid SoraNet PoW configuration must be rejected");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains(expected),
+        "expected error containing {expected:?}, got {rendered}"
+    );
+}
+
+fn assert_puzzle_parse_error(config: SoranetHandshakePuzzle, expected: &str) {
+    let mut emitter = Emitter::new();
+    let _ = config.parse(&mut emitter);
+    let error = emitter
+        .into_result()
+        .expect_err("invalid SoraNet puzzle configuration must be rejected");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains(expected),
+        "expected error containing {expected:?}, got {rendered}"
+    );
+}
+
 #[test]
 fn parse_rejects_unsupported_handshake_suite_ids() {
     let mut kem_emitter = Emitter::new();
@@ -86,7 +116,7 @@ fn parse_accepts_supported_handshake_suite_ids() {
             .iter()
             .find(|capability| capability.ty == 0x0101)
             .expect("default capabilities advertise snnet.pqkem");
-        assert_eq!(kem.value, [2]);
+        assert_eq!(kem.value, [2, 1]);
     }
 }
 
@@ -151,44 +181,232 @@ fn default_ticket_ttl_uses_full_future_skew_window() {
 }
 
 #[test]
-fn puzzle_work_capacity_is_nonzero_and_bounded() {
+fn parse_accepts_first_release_pow_boundaries() {
+    let mut lower = test_pow_config();
+    lower.difficulty = NonZeroU16::new(1).expect("non-zero difficulty");
+    lower.max_future_skew_secs = 2;
+    lower.min_ticket_ttl_secs = 1;
+    lower.ticket_ttl_secs = 2;
+    lower.outbound_mint_capacity = nonzero!(1usize);
+    lower.inbound_verify_capacity = nonzero!(1usize);
+    lower.revocation_store_capacity = 1;
+    lower.revocation_store_ttl_secs = 2;
+    lower.puzzle = SoranetHandshakePuzzle {
+        memory_kib: iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB,
+        time_cost: 1,
+        lanes: 1,
+    };
+    let mut lower_emitter = Emitter::new();
+    let lower = lower.parse(&mut lower_emitter);
+    lower_emitter
+        .into_result()
+        .expect("lower first-release boundaries must parse");
+    assert_eq!(lower.difficulty, 1);
+    assert_eq!(lower.max_future_skew, Duration::from_secs(2));
+    assert_eq!(lower.min_ticket_ttl, Duration::from_secs(1));
+    assert_eq!(lower.ticket_ttl, Duration::from_secs(2));
+    assert_eq!(lower.outbound_mint_capacity.get(), 1);
+    assert_eq!(lower.inbound_verify_capacity.get(), 1);
+    assert_eq!(lower.revocation_store_capacity, 1);
+    assert_eq!(lower.revocation_max_ttl, Duration::from_secs(2));
     assert_eq!(
-        SoranetHandshakePow::default_puzzle_work_capacity(),
-        actual::SoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION
+        lower.puzzle.memory_kib.get(),
+        iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
+    );
+    assert_eq!(lower.puzzle.time_cost.get(), 1);
+    assert_eq!(lower.puzzle.lanes.get(), 1);
+
+    let mut upper = test_pow_config();
+    upper.difficulty = NonZeroU16::new(u16::from(iroha_crypto::soranet::puzzle::MAX_DIFFICULTY))
+        .expect("non-zero difficulty");
+    upper.outbound_mint_capacity =
+        NonZeroUsize::new(actual::SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION)
+            .expect("non-zero work capacity");
+    upper.inbound_verify_capacity = upper.outbound_mint_capacity;
+    upper.revocation_store_capacity =
+        u64::try_from(iroha_crypto::soranet::pow::TICKET_REVOCATION_STORE_MAX_ENTRIES_V1)
+            .expect("first-release revocation capacity fits u64");
+    upper.puzzle = SoranetHandshakePuzzle {
+        memory_kib: iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB,
+        time_cost: iroha_crypto::soranet::puzzle::MAX_TIME_COST,
+        lanes: iroha_crypto::soranet::puzzle::MAX_LANES,
+    };
+    let mut upper_emitter = Emitter::new();
+    let upper = upper.parse(&mut upper_emitter);
+    upper_emitter
+        .into_result()
+        .expect("upper first-release boundaries must parse");
+    assert_eq!(
+        upper.difficulty,
+        iroha_crypto::soranet::puzzle::MAX_DIFFICULTY
     );
     assert_eq!(
-        SoranetHandshakePow::bound_puzzle_work_capacity(nonzero!(usize::MAX)).get(),
+        upper.outbound_mint_capacity.get(),
         actual::SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION
+    );
+    assert_eq!(
+        upper.inbound_verify_capacity.get(),
+        actual::SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION
+    );
+    assert_eq!(
+        upper.revocation_store_capacity,
+        iroha_crypto::soranet::pow::TICKET_REVOCATION_STORE_MAX_ENTRIES_V1
+    );
+    assert_eq!(
+        upper.puzzle.memory_kib.get(),
+        iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB
+    );
+    assert_eq!(
+        upper.puzzle.time_cost.get(),
+        iroha_crypto::soranet::puzzle::MAX_TIME_COST
+    );
+    assert_eq!(
+        upper.puzzle.lanes.get(),
+        iroha_crypto::soranet::puzzle::MAX_LANES
     );
 }
 
 #[test]
-fn parse_bounds_argon2_resource_costs() {
-    let upper = SoranetHandshakePuzzle {
-        memory_kib: u32::MAX,
-        time_cost: u32::MAX,
-        lanes: u32::MAX,
-    }
-    .parse();
-    assert_eq!(
-        upper.memory_kib.get(),
-        iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB
+fn parse_rejects_difficulty_above_first_release_maximum() {
+    let mut config = test_pow_config();
+    config.difficulty =
+        NonZeroU16::new(u16::from(iroha_crypto::soranet::puzzle::MAX_DIFFICULTY + 1))
+            .expect("non-zero difficulty");
+    assert_pow_parse_error(
+        config,
+        "network.soranet_handshake.pow.difficulty 33 exceeds the supported maximum 32",
     );
-    assert_eq!(
-        upper.time_cost.get(),
-        iroha_crypto::soranet::puzzle::MAX_TIME_COST
+}
+
+#[test]
+fn parse_rejects_invalid_ticket_and_revocation_windows() {
+    let mut zero_minimum = test_pow_config();
+    zero_minimum.min_ticket_ttl_secs = 0;
+    assert_pow_parse_error(
+        zero_minimum,
+        "network.soranet_handshake.pow.min_ticket_ttl_secs must be greater than zero",
     );
-    assert_eq!(upper.lanes.get(), iroha_crypto::soranet::puzzle::MAX_LANES);
-    let lower = SoranetHandshakePuzzle {
-        memory_kib: 0,
-        time_cost: 0,
-        lanes: 0,
-    }
-    .parse();
-    assert_eq!(
-        lower.memory_kib.get(),
-        iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
+
+    let mut closed_window = test_pow_config();
+    closed_window.max_future_skew_secs = closed_window.min_ticket_ttl_secs;
+    assert_pow_parse_error(
+        closed_window,
+        "network.soranet_handshake.pow.max_future_skew_secs 30 must exceed min_ticket_ttl_secs 30",
     );
-    assert_eq!(lower.time_cost.get(), 1);
-    assert_eq!(lower.lanes.get(), 1);
+
+    let mut short_ticket = test_pow_config();
+    short_ticket.ticket_ttl_secs = short_ticket.min_ticket_ttl_secs;
+    assert_pow_parse_error(
+        short_ticket,
+        "network.soranet_handshake.pow.ticket_ttl_secs 30 must exceed min_ticket_ttl_secs 30",
+    );
+
+    let mut long_ticket = test_pow_config();
+    long_ticket.ticket_ttl_secs = long_ticket.max_future_skew_secs + 1;
+    assert_pow_parse_error(
+        long_ticket,
+        "network.soranet_handshake.pow.ticket_ttl_secs 301 must not exceed max_future_skew_secs 300",
+    );
+
+    let mut zero_revocation_ttl = test_pow_config();
+    zero_revocation_ttl.revocation_store_ttl_secs = 0;
+    assert_pow_parse_error(
+        zero_revocation_ttl,
+        "network.soranet_handshake.pow.revocation_store_ttl_secs must be greater than zero",
+    );
+
+    let mut short_revocation_ttl = test_pow_config();
+    short_revocation_ttl.revocation_store_ttl_secs = short_revocation_ttl.max_future_skew_secs - 1;
+    assert_pow_parse_error(
+        short_revocation_ttl,
+        "network.soranet_handshake.pow.revocation_store_ttl_secs 299 must cover max_future_skew_secs 300",
+    );
+}
+
+#[test]
+fn parse_rejects_out_of_range_work_and_revocation_capacities() {
+    let oversized_work_capacity =
+        NonZeroUsize::new(actual::SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION + 1)
+            .expect("non-zero work capacity");
+    let mut outbound = test_pow_config();
+    outbound.outbound_mint_capacity = oversized_work_capacity;
+    assert_pow_parse_error(
+        outbound,
+        "network.soranet_handshake.pow.outbound_mint_capacity 9 exceeds the supported maximum 8",
+    );
+
+    let mut inbound = test_pow_config();
+    inbound.inbound_verify_capacity = oversized_work_capacity;
+    assert_pow_parse_error(
+        inbound,
+        "network.soranet_handshake.pow.inbound_verify_capacity 9 exceeds the supported maximum 8",
+    );
+
+    let mut zero_revocation_capacity = test_pow_config();
+    zero_revocation_capacity.revocation_store_capacity = 0;
+    assert_pow_parse_error(
+        zero_revocation_capacity,
+        "network.soranet_handshake.pow.revocation_store_capacity 0 must be in 1..=65536",
+    );
+
+    let mut oversized_revocation_capacity = test_pow_config();
+    oversized_revocation_capacity.revocation_store_capacity =
+        u64::try_from(iroha_crypto::soranet::pow::TICKET_REVOCATION_STORE_MAX_ENTRIES_V1)
+            .expect("first-release revocation capacity fits u64")
+            + 1;
+    assert_pow_parse_error(
+        oversized_revocation_capacity,
+        "network.soranet_handshake.pow.revocation_store_capacity 65537 must be in 1..=65536",
+    );
+}
+
+#[test]
+fn parse_rejects_out_of_range_argon2_resource_costs() {
+    let valid = || SoranetHandshakePuzzle {
+        memory_kib: SoranetHandshakePuzzle::default_memory_kib(),
+        time_cost: SoranetHandshakePuzzle::default_time_cost(),
+        lanes: SoranetHandshakePuzzle::default_lanes(),
+    };
+
+    let mut memory_below_minimum = valid();
+    memory_below_minimum.memory_kib = iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB - 1;
+    assert_puzzle_parse_error(
+        memory_below_minimum,
+        "network.soranet_handshake.pow.puzzle.memory_kib 4095 must be in 4096..=131072",
+    );
+
+    let mut memory_above_maximum = valid();
+    memory_above_maximum.memory_kib = iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB + 1;
+    assert_puzzle_parse_error(
+        memory_above_maximum,
+        "network.soranet_handshake.pow.puzzle.memory_kib 131073 must be in 4096..=131072",
+    );
+
+    let mut zero_time_cost = valid();
+    zero_time_cost.time_cost = 0;
+    assert_puzzle_parse_error(
+        zero_time_cost,
+        "network.soranet_handshake.pow.puzzle.time_cost 0 must be in 1..=8",
+    );
+
+    let mut excessive_time_cost = valid();
+    excessive_time_cost.time_cost = iroha_crypto::soranet::puzzle::MAX_TIME_COST + 1;
+    assert_puzzle_parse_error(
+        excessive_time_cost,
+        "network.soranet_handshake.pow.puzzle.time_cost 9 must be in 1..=8",
+    );
+
+    let mut zero_lanes = valid();
+    zero_lanes.lanes = 0;
+    assert_puzzle_parse_error(
+        zero_lanes,
+        "network.soranet_handshake.pow.puzzle.lanes 0 must be in 1..=16",
+    );
+
+    let mut excessive_lanes = valid();
+    excessive_lanes.lanes = iroha_crypto::soranet::puzzle::MAX_LANES + 1;
+    assert_puzzle_parse_error(
+        excessive_lanes,
+        "network.soranet_handshake.pow.puzzle.lanes 17 must be in 1..=16",
+    );
 }

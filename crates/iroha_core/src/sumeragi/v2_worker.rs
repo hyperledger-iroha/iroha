@@ -83,9 +83,10 @@ use crate::{
     merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
         CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarCloseAckV1,
-        CertifiedMergeSidecarClosedPrefix, CertifiedMergeSidecarMessage,
-        CertifiedMergeSidecarRequestV1, CertifiedMergeSidecarSemanticSequenceV1,
-        CertifiedMergeSidecarStreamEpochV1, MergeSidecarError, reliable_flush_topic_tag,
+        CertifiedMergeSidecarClosedPrefix, CertifiedMergeSidecarGenerationHintV1,
+        CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
+        CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarStreamEpochV1,
+        MergeSidecarError, reliable_flush_topic_tag,
     },
     native_amx::NativeAmxMessage,
 };

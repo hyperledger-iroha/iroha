@@ -6,8 +6,8 @@ NODE_OVERRIDE="${PRIVACY_JS_SDK_NODE_BIN:-}"
 PYTHON_BIN="${PRIVACY_JS_SDK_PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
-ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
+TRACKED_ROOT_CARGO_LOCK_SHA256="0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7"
+ABI23_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-js-native.XXXXXX")"
 
 # Preserve the tracked root source authority independently from the distinct
@@ -112,11 +112,6 @@ PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-}"
   || { echo "error: privacy JavaScript requires a distinct external release Cargo.lock" >&2; exit 1; }
 [[ "$(sha256_file "${PRIVACY_RELEASE_CARGO_LOCK}")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
   || { echo "error: privacy JavaScript external Cargo.lock is not the frozen release lock" >&2; exit 1; }
-echo \
-  "error: privacy JavaScript native tooling requires external-lock requalification before it can consume cd9e without replacing the tracked c90b root authority" \
-  >&2
-exit 1
-
 RUSTUP_BIN="${PRIVACY_JS_SDK_RUSTUP_BIN:-$(command -v rustup)}"
 IROHA_JS_CARGO_PATH="$("${RUSTUP_BIN}" which --toolchain 1.93.1 cargo)"
 RUSTC="$("${RUSTUP_BIN}" which --toolchain 1.93.1 rustc)"
@@ -149,16 +144,16 @@ export PYTHONDONTWRITEBYTECODE=1
 "${NODE_BIN}" scripts/build-native.mjs
 "${NODE_BIN}" scripts/copy-native.mjs
 NATIVE_ARTIFACT="${IROHA_JS_NATIVE_DIR}/iroha_js_host.node"
-NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/node-native-abi22.json"
+NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/node-native-abi23.json"
 NATIVE_TARGET="$("${NODE_BIN}" --eval 'process.stdout.write(`${process.platform}-${process.arch}-node${process.versions.node.split(".")[0]}`)')"
-"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" record \
+"${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" record \
   --artifact "${NATIVE_ARTIFACT}" \
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --node "${NODE_BIN}" \
   --sdk node \
   --target "${NATIVE_TARGET}"
-"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \
+"${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" verify \
   --artifact "${NATIVE_ARTIFACT}" \
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
@@ -183,7 +178,7 @@ NATIVE_TARGET="$("${NODE_BIN}" --eval 'process.stdout.write(`${process.platform}
 "${NODE_BIN}" --test --test-name-pattern "browser crypto exposes only the privacy compiled-profile catalog bridge as a safe stub" \
   test/crypto.browser.test.js
 
-"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \
+"${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" verify \
   --artifact "${NATIVE_ARTIFACT}" \
   --manifest "${NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}" \

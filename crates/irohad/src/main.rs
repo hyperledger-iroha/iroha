@@ -23,6 +23,9 @@ mod kagemusha_validator_qualification_command;
 pub mod musubi_publication_service;
 /// Asynchronous Nexus DPN fee settlement relay.
 mod nexus_fee_relay_worker;
+/// Synchronizes peer-gossip voter authority with the committed validator roster.
+#[path = "main/peers_gossiper_topology_sync.rs"]
+mod peers_gossiper_topology_sync;
 /// Root-custodied immutable no-replace artifact publication.
 #[path = "main/root_owned_artifact_publication.rs"]
 mod root_owned_artifact_publication;
@@ -181,7 +184,6 @@ use std::{
     ffi::OsString,
     fs,
     future::Future,
-    io,
     num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, Weak},
@@ -8562,7 +8564,6 @@ impl Iroha {
             .apply_codec_config(&config.streaming.codec)
             .map_err(|err| Report::new(err).change_context(StartError::StartP2p))?;
         streaming.apply_crypto_config(&config.crypto);
-        streaming.set_soranet_config(&config.streaming.soranet);
         streaming.apply_sync_config(&config.streaming.sync);
         #[cfg(feature = "telemetry")]
         if let Some(ref telemetry_handle) = streaming_telemetry {
@@ -8570,10 +8571,9 @@ impl Iroha {
         }
         if emergency_fast {
             iroha_logger::warn!(
-                "emergency Fast startup disabled streaming control, durable session snapshots, and filesystem spool provisioning"
+                "emergency Fast startup disabled streaming control and durable session snapshots"
             );
         } else {
-            configure_soranet_transport(&mut streaming, &config.streaming.soranet)?;
             let snapshot_file = config
                 .streaming
                 .session_store_dir
@@ -8618,8 +8618,6 @@ impl Iroha {
         let zk_cfg = config.zk.clone();
         let gov_cfg = config.gov.clone();
         let oracle_cfg = config.oracle.clone();
-        let streaming_soranet_spool_dir = config.streaming.soranet.provision_spool_dir.clone();
-        let streaming_soravpn_spool_dir = config.streaming.soravpn.provision_spool_dir.clone();
         let merge_cache_capacity = config.kura.merge_ledger_cache_capacity;
         if emergency_fast {
             iroha_logger::warn!(
@@ -8635,10 +8633,6 @@ impl Iroha {
             state.set_pipeline(pipeline_cfg);
             state.set_sumeragi_parameters(&sumeragi_cfg);
             state.set_oracle(oracle_cfg);
-            state.set_streaming_storage_paths(
-                streaming_soranet_spool_dir,
-                streaming_soravpn_spool_dir,
-            );
             state.set_fraud_monitoring(fraud_cfg);
             // Settlement runtime state was installed before Kura replay. Preserve
             // its lazily derived escrow bindings instead of replacing the replayed snapshot after Kura has started.
@@ -8807,6 +8801,7 @@ impl Iroha {
             supervisor.monitor(child);
             telemetry
         };
+        let peers_gossiper_topology_events = events_sender.subscribe();
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
             expected_network_id,
@@ -8824,6 +8819,18 @@ impl Iroha {
             supervisor.shutdown_signal(),
         );
         supervisor.monitor(child);
+        let peers_gossiper_topology_state = Arc::clone(&state);
+        let peers_gossiper_topology_handle = peers_gossiper.clone();
+        let peers_gossiper_topology_shutdown = supervisor.shutdown_signal();
+        supervisor.monitor(tokio::spawn(async move {
+            peers_gossiper_topology_sync::run(
+                peers_gossiper_topology_state,
+                peers_gossiper_topology_handle,
+                peers_gossiper_topology_events,
+                peers_gossiper_topology_shutdown,
+            )
+            .await;
+        }));
         log_startup_trace("irohad.peers_gossiper.ready", startup_trace_started_at);
         #[cfg(feature = "telemetry")]
         let torii_telemetry =
@@ -9078,23 +9085,14 @@ impl Iroha {
                     genesis
                 };
             let local_consensus_peer = config.common.trusted_peers.value().myself.id().clone();
-            match validate_threshold_signer_startup_readiness_v1(
+            // Active Parliament TLE custody is mandatory: private timed-OVN has no alternate
+            // ballot-opening path when this validator owns a release-share seat.
+            validate_threshold_signer_startup_readiness_v1(
                 &state,
                 &local_consensus_peer,
                 &runtime_deps,
             )
-            .map_err(|message| Report::new(StartError::StartP2p).attach(message))?
-            {
-                ThresholdSignerStartupReadinessV1::Ready => {}
-                ThresholdSignerStartupReadinessV1::ParliamentTleShareUnavailable {
-                    key_session_id,
-                } => {
-                    iroha_logger::warn!(
-                        key_session_id = ?key_session_id,
-                        "local Parliament TLE committee seat is not operational: no partial-release signer is resolved"
-                    );
-                }
-            }
+            .map_err(|message| Report::new(StartError::StartP2p).attach(message))?;
             log_startup_trace("irohad.sumeragi.starting", startup_trace_started_at);
             let (sumeragi, child) = SumeragiStartArgs {
                 config: config.sumeragi.clone(),
@@ -9186,22 +9184,6 @@ impl Iroha {
         } else {
             sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage)
         };
-        let soracloud_operator_preseed_store = if !emergency_fast
-            && config.soracloud_runtime.inrou.enabled
-            && !sorafs_storage_config.enabled()
-        {
-            Some(Arc::new(
-                sorafs_node::store::StorageBackend::new(sorafs_storage_config.clone()).map_err(
-                    |error| {
-                        Report::new(StartError::StartTorii).attach(format!(
-                            "failed to open the local operator-preseed SoraFS store for Inrou hydration: {error}"
-                        ))
-                    },
-                )?,
-            ))
-        } else {
-            None
-        };
         let sorafs_repair_config = if emergency_fast {
             sorafs_node::config::RepairConfig::default()
         } else {
@@ -9246,6 +9228,52 @@ impl Iroha {
             runtime_deps.sorafs_orderbook_transaction_signer.clone();
         let soracloud_runtime_mutation_signer =
             runtime_deps.soracloud_runtime_mutation_signer.clone();
+        let soracloud_local_validator_account_id =
+            soracloud_runtime_mutation_signer.as_ref().map_or_else(
+                || {
+                    AccountId::new(
+                        config
+                            .common
+                            .trusted_peers
+                            .value()
+                            .myself
+                            .id()
+                            .public_key()
+                            .clone(),
+                    )
+                },
+                |signer| signer.authority(),
+            );
+        let soracloud_local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
+        let soracloud_operator_preseed_store = if !emergency_fast
+            && config.soracloud_runtime.inrou.enabled
+            && !sorafs_storage_config.enabled()
+        {
+            let store = Arc::new(
+                sorafs_node::store::StorageBackend::new(sorafs_storage_config.clone()).map_err(
+                    |error| {
+                        Report::new(StartError::StartTorii).attach(format!(
+                            "failed to open the local operator-preseed SoraFS store for Inrou hydration: {error}"
+                        ))
+                    },
+                )?,
+            );
+            let qualified_manifest_digests =
+                sorafs_node::operator_preseed::validate_operator_preseed_store_receipts(
+                &store,
+                sorafs_storage_config.max_capacity_bytes().0,
+                &soracloud_local_validator_account_id.to_string(),
+                &soracloud_local_peer_id,
+            )
+            .map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to validate durable local Inrou operator-preseed qualifications: {error}"
+                ))
+            })?;
+            Some((store, qualified_manifest_digests))
+        } else {
+            None
+        };
         let sorafs_moderation_transaction_signer =
             runtime_deps.sorafs_moderation_transaction_signer.clone();
         let sorafs_moderation_settlement_handoff =
@@ -9859,23 +9887,8 @@ impl Iroha {
             );
             None
         } else {
-            let local_validator_account_id =
-                soracloud_runtime_mutation_signer.as_ref().map_or_else(
-                    || {
-                        AccountId::new(
-                            config
-                                .common
-                                .trusted_peers
-                                .value()
-                                .myself
-                                .id()
-                                .public_key()
-                                .clone(),
-                        )
-                    },
-                    |signer| signer.authority(),
-                );
-            let local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
+            let local_validator_account_id = soracloud_local_validator_account_id;
+            let local_peer_id = soracloud_local_peer_id;
             let runtime_manager = SoracloudRuntimeManager::new(
                 soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
                     &config.soracloud_runtime,
@@ -9889,8 +9902,16 @@ impl Iroha {
                     .expect("Soracloud is disabled during emergency Fast startup"),
             ))
             .with_remote_stream_token_operator_from_config(&config);
-            let runtime_manager = if let Some(store) = soracloud_operator_preseed_store {
-                runtime_manager.with_operator_preseed_store(store)
+            let runtime_manager = if let Some((store, qualified_manifest_digests)) =
+                soracloud_operator_preseed_store
+            {
+                runtime_manager
+                    .with_operator_preseed_store(store, qualified_manifest_digests)
+                    .map_err(|error| {
+                        Report::new(StartError::StartTorii).attach(format!(
+                            "failed to attach qualified Inrou operator-preseed store: {error:#}"
+                        ))
+                    })?
             } else {
                 runtime_manager
             };
@@ -10399,20 +10420,6 @@ impl Iroha {
     pub fn manifest_publisher(&self) -> ManifestPublisher<IrohaNetwork> {
         ManifestPublisher::new(self.streaming.clone(), self.network.clone())
     }
-}
-fn configure_soranet_transport(
-    streaming: &mut iroha_core::streaming::StreamingHandle,
-    soranet: &iroha_config::parameters::actual::StreamingSoranet,
-) -> ReportResult<(), StartError> {
-    streaming.set_soranet_transport(None);
-    if soranet.enabled {
-        return Err(Report::new(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "streaming.soranet.enabled cannot be enabled in V1: token-bearing filesystem exit publication requires RouteOpen proof and durable revocation tombstones",
-        ))
-        .change_context(StartError::StartP2p));
-    }
-    Ok(())
 }
 #[cfg(feature = "telemetry")]
 async fn start_telemetry(
@@ -11005,7 +11012,7 @@ mod genesis_key_tests {
 /// Errors raised while reading configuration and genesis data.
 #[derive(Debug, Clone)]
 pub enum ConfigError {
-    /// Failed to read configuration from disk or environment.
+    /// Failed to read the selected configuration source.
     ReadConfig,
     /// Configuration contents failed validation.
     ParseConfig,
@@ -11056,10 +11063,7 @@ pub enum ConfigError {
 impl core::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::ReadConfig => write!(
-                f,
-                "Error occurred while reading configuration from file(s) and environment"
-            ),
+            Self::ReadConfig => write!(f, "Error occurred while reading configuration sources"),
             Self::ParseConfig => {
                 write!(f, "Error occurred while validating configuration integrity")
             }
@@ -11201,7 +11205,11 @@ fn read_config_and_genesis_with_kagemusha_sources(
     ConfigError,
 > {
     let mut flattened_toml_config_source = None;
-    let mut config = ConfigReader::new();
+    let mut config = if args.config.is_some() {
+        ConfigReader::new().without_env()
+    } else {
+        ConfigReader::new()
+    };
     if let Some(path) = &args.config {
         config = if let Some(expected) = args.startup.config_blake3.as_deref() {
             if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -11257,7 +11265,8 @@ fn read_config_and_genesis_with_kagemusha_sources(
         config.contains_toml_parameter(["sorafs", "storage", "enabled"]);
     let sorafs_discovery_enabled_is_explicit =
         config.contains_toml_parameter(["sorafs", "discovery", "discovery_enabled"]);
-    let mut config = UserConfig::read_and_complete(config)
+    let mut config = config
+        .read_and_complete::<UserConfig>()
         .change_context(ConfigError::ReadConfig)?
         .parse()
         .change_context(ConfigError::ParseConfig)?;
@@ -11637,14 +11646,6 @@ fn effective_nexus_storage_component_roots(
         NexusStorageBudgetComponent::Sorafs,
         config.torii.sorafs_storage.data_dir.clone(),
     ));
-    roots.push((
-        NexusStorageBudgetComponent::SoranetSpool,
-        config.streaming.soranet.provision_spool_dir.clone(),
-    ));
-    roots.push((
-        NexusStorageBudgetComponent::SoravpnSpool,
-        config.streaming.soravpn.provision_spool_dir.clone(),
-    ));
     roots
 }
 fn derive_runtime_nexus_storage_budget(
@@ -11754,12 +11755,6 @@ fn effective_assigned_budget_for_filesystem(
                 NexusStorageBudgetComponent::WsvCold => config.tiered_state.max_cold_bytes.get(),
                 NexusStorageBudgetComponent::Sorafs => {
                     config.torii.sorafs_storage.max_capacity_bytes.get()
-                }
-                NexusStorageBudgetComponent::SoranetSpool => {
-                    config.streaming.soranet.provision_spool_max_bytes.get()
-                }
-                NexusStorageBudgetComponent::SoravpnSpool => {
-                    config.streaming.soravpn.provision_spool_max_bytes.get()
                 }
             };
             total.saturating_add(component_budget)
@@ -13433,7 +13428,7 @@ fn run_main_with_config_guard(
             .change_context(MainError::Config)
             .attach_with(|| {
             args.config.as_ref().map_or_else(
-                || "`--config` arg was not set, therefore configuration relies fully on environment variables".to_owned(),
+                || "`--config` arg was not set, therefore development environment inputs and built-in defaults are in use".to_owned(),
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;
@@ -15243,7 +15238,7 @@ mod tests {
     #[test]
     fn repository_iroha3_dev_default_config_requests_no_runtime_providers() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../defaults/kagami/iroha3-dev/config.toml");
+            .join("../../defaults/kagami/iroha3-dev/peer0.toml");
         let config = load_unprovisioned_profile_for_inspection(&path);
         let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
             .expect("project default provider bindings");
@@ -15729,7 +15724,6 @@ mod tests {
             .split_once("}else{")
             .expect("Strict streaming branch")
             .1;
-        assert!(strict_branch.contains("configure_soranet_transport("));
         assert!(strict_branch.contains("streaming.set_snapshot_path("));
         assert!(strict_branch.contains("streaming.load_snapshots()"));
 

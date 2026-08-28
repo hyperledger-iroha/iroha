@@ -350,7 +350,7 @@ fn decode_norito_value_with_optional_inner_tlv<T>(
     label: &str,
 ) -> Result<T>
 where
-    for<'de> T: norito::NoritoDeserialize<'de>,
+    for<'de> T: norito::NoritoDeserialize<'de> + norito::NoritoSerialize,
 {
     if let Ok(value) = norito::decode_from_bytes::<T>(payload) {
         return Ok(value);

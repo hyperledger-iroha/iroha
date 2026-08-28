@@ -12,7 +12,6 @@ mod tests {
         pin::Pin,
         sync::Arc,
         task::{Context, Poll},
-        time::Duration,
     };
     use tokio::io::AsyncWrite;
     const TEST_SORANET_TRANSPORT_BINDING: [u8; iroha_crypto::Hash::LENGTH] =
@@ -99,7 +98,7 @@ mod tests {
         assert_eq!(
             second.canonical_signed_frame.len(),
             super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES,
-            "the public-key encodings and present channel binding define the exact V5 cap"
+            "the current signed V5 layout and present channel binding define the exact cap"
         );
         let first_decoded = decode_delegation(&first.canonical_signed_frame);
         let second_decoded = decode_delegation(&second.canonical_signed_frame);
@@ -113,7 +112,7 @@ mod tests {
             &delegation_test_challenge(0x32),
             Some(TEST_SORANET_TRANSPORT_BINDING),
         )
-        .expect("exact v5 frame");
+        .expect("exact maximum-size v5 frame");
         assert_eq!(
             verified.relay_authentication_verifier.ed25519_public_key(),
             transport.public_key()
@@ -145,6 +144,42 @@ mod tests {
                 found: 4_526,
                 max: 4_525,
             })
+        ));
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn soranet_transport_v5_rejects_oversized_declared_frame_before_payload_read() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let network_id = test_network_id("v5-oversized");
+        let node = delegation_test_key(0x38, Algorithm::BlsNormal);
+        let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
+        let challenge = delegation_test_challenge(0x39);
+        let oversized_len = u16::try_from(
+            super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES
+                .checked_add(1)
+                .expect("bounded frame cap"),
+        )
+        .expect("V5 frame cap fits the two-byte length prefix");
+        let (mut sender, mut receiver) = tokio::io::duplex(2);
+        sender
+            .write_all(&oversized_len.to_be_bytes())
+            .await
+            .expect("write only the rejected length prefix");
+
+        let error = super::read_and_verify_soranet_transport_delegation_v5(
+            &mut receiver,
+            &network_id,
+            &node_id,
+            &challenge,
+            Some(TEST_SORANET_TRANSPORT_BINDING),
+        )
+        .await
+        .expect_err("oversized declaration must fail before reading a payload");
+        assert!(matches!(
+            unwrap_delegation_error(error),
+            crate::SoranetTransportDelegationError::FrameTooLarge { found, max }
+                if found == usize::from(oversized_len)
+                    && max == super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES
         ));
     }
     #[test]
@@ -347,38 +382,17 @@ mod tests {
         assert_ne!(transcript_a, transcript_b);
         let binding_config = SoranetHandshakeConfig::defaults();
         assert_ne!(
-            binding_config.pow_binding(&transcript_a),
-            binding_config.pow_binding(&transcript_b)
+            binding_config.puzzle_binding(&transcript_a),
+            binding_config.puzzle_binding(&transcript_b)
         );
-        let config = || {
-            SoranetHandshakeConfig::new(
-                iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
-                iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
-                iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
-                true,
-                1,
-                1,
-                None,
-                true,
-                iroha_crypto::soranet::pow::Parameters::new(
-                    1,
-                    Duration::from_secs(300),
-                    Duration::from_secs(30),
-                ),
-                None,
-                Duration::from_secs(60),
-                super::test_ticket_revocation_store(),
-            )
-            .expect("valid admission config")
-        };
+        let config = SoranetHandshakeConfig::defaults;
         let relay_a = config();
         let relay_b = config();
         let mut rng = rand::rngs::StdRng::from_seed([0x66; 32]);
         let mut minted = relay_a
             .mint_challenge_ticket(&transcript_a, &mut rng)
-            .expect("mint ticket")
-            .expect("admission enabled");
-        let mut ticket = minted.frames.pop().expect("ticket frame");
+            .expect("mint ticket");
+        let mut ticket = std::mem::take(&mut minted.credential);
         let result = relay_b.verify_challenge_ticket(&ticket, &transcript_b);
         super::clear_sensitive_vec(&mut ticket);
         result.expect_err("one presentation must not verify for a second server identity");
@@ -497,27 +511,7 @@ mod tests {
     }
     #[tokio::test(flavor = "current_thread")]
     async fn soranet_admission_rejects_plain_unbound_transport_before_ticket() {
-        let config = Arc::new(
-            SoranetHandshakeConfig::new(
-                iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
-                iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
-                iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
-                true,
-                1,
-                1,
-                None,
-                false,
-                iroha_crypto::soranet::pow::Parameters::new(
-                    1,
-                    Duration::from_secs(300),
-                    Duration::from_secs(30),
-                ),
-                None,
-                Duration::from_secs(60),
-                super::test_ticket_revocation_store(),
-            )
-            .expect("valid admission config"),
-        );
+        let config = Arc::new(SoranetHandshakeConfig::defaults());
         let network_id = test_network_id("plain-admission-rejected");
         let outbound_keys = delegation_test_key(0x91, Algorithm::BlsNormal);
         let inbound_keys = delegation_test_key(0x92, Algorithm::BlsNormal);

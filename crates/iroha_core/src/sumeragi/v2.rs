@@ -7,11 +7,13 @@ use super::v2_core as reducer;
 #[path = "v2_pending_kura_recovery.rs"]
 mod pending_kura_recovery;
 pub(crate) use pending_kura_recovery::{
-    DeferredPendingKuraValidatedMarkerV1, PendingKuraValidatedApplySuccessorV1,
+    DeferredPendingKuraValidatedMarkerV1, DeferredReleasedLifecycleValidatedMarkerV1,
+    PendingKuraValidatedApplySuccessorV1,
 };
 pub(in crate::sumeragi) use pending_kura_recovery::{
     InstalledPendingKuraApplyV1, PreparedPendingKuraValidatedApplyV1,
-    PreparedRecoveredPendingKuraApplyReplayV1, RecoveredPendingKuraApplyReplayV1,
+    PreparedRecoveredPendingKuraApplyReplayV1, PreparedReleasedLifecycleValidatedApplyV1,
+    RecoveredPendingKuraApplyReplayV1, ReleasedLifecycleValidateTerminalProofV1,
 };
 
 #[cfg(test)]
@@ -54,6 +56,7 @@ use super::{
     },
     v2_lifecycle_coordinator::{
         AdapterEffectAdmissionError, AuthenticatedRecoveredLifecycleSuccessorFloorV1,
+        AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
         AuthenticatedRecoveredWalControlProjection,
         AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalValidateLifecycleRepair, CandidateAdmission,
@@ -3750,6 +3753,15 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyRegistryCarrierV1 {
     apply_effect: AdapterEffect,
     apply_pending: PendingRuntimeEffectBinding,
     validated_receipt: ValidatedBodyReceipt,
+    source: RecoveredDecisionApplyLedgerSourceV1,
+}
+/// Durable ledger authority retained by one recovered Decision Apply carrier.
+#[must_use = "recovered Decision Apply ledger authority must remain attached"]
+enum RecoveredDecisionApplyLedgerSourceV1 {
+    /// The current Decision owns the ordinary Fetch/Store/Validate/Apply chain.
+    FullChain,
+    /// An older successful Validate is an immutable no-successor tombstone.
+    ReleasedTerminal(AuthenticatedRecoveredReleasedValidateNoSuccessorV1),
 }
 /// Exact lifecycle Apply completion projected by the installed registry carrier.
 /// Finality remains bound to the exact lineage, Apply tag, and dispatch key.
@@ -3763,6 +3775,28 @@ pub(in crate::sumeragi) struct LifecycleDecisionApplyAdapterCompletionAuthorityV
     artifact: wire::finality::V2FinalityArtifact,
 }
 impl LifecycleDecisionApplyAdapterCompletionAuthorityV1 {
+    /// Build recovered completion authority for queue-preflight regression tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn recovered_for_queue_preflight_test(
+        tag: reducer::EventTag,
+        subject: wire::BlockSubject,
+        dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+        validate_predecessor_ordinal: u128,
+        artifact: wire::finality::V2FinalityArtifact,
+    ) -> Self {
+        assert_ne!(validate_predecessor_ordinal, 0);
+        assert!(validate_predecessor_ordinal < dispatch_key.lifecycle_ordinal());
+        Self {
+            tag,
+            subject,
+            dispatch_key: dispatch_key
+                .with_lineage_for_test(LifecycleDecisionApplyLineageV1::Recovered),
+            validate_predecessor_ordinal,
+            receipt: KuraV2CommitReceipt::for_test(&artifact),
+            artifact,
+        }
+    }
+
     /// Return the immutable registry lineage without exposing completion material.
     pub(in crate::sumeragi) const fn lineage(&self) -> LifecycleDecisionApplyLineageV1 {
         self.dispatch_key.lineage()
@@ -5828,6 +5862,10 @@ impl RecoveredDecisionApplyStagedStorageV1 {
     ) -> &AuthenticatedRecoveredWalDecisionFetchProjection {
         &self.fetch
     }
+    /// Borrow the already-revalidated body receipt for exact cold ledger joins.
+    pub(in crate::sumeragi) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
+        &self.validated_receipt
+    }
     /// Consume the staged adapter into the sole dedicated registry carrier.
     ///
     /// Only the concrete work registry can mint the projection permit. Failure
@@ -5870,6 +5908,62 @@ impl RecoveredDecisionApplyStagedStorageV1 {
                 apply_effect,
                 apply_pending,
                 validated_receipt,
+                source: RecoveredDecisionApplyLedgerSourceV1::FullChain,
+            },
+        )))
+    }
+    /// Consume the staged adapter beside one storage-authenticated released
+    /// Validate tombstone.
+    ///
+    /// Failure returns every move-only authority to the caller. The current
+    /// Decision retains its WAL Fetch only as body-lineage evidence; it does
+    /// not authorize a fabricated Fetch/Store/Validate ledger chain.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_released_registry_carrier(
+        self: Box<Self>,
+        _permit: RecoveredDecisionApplyRegistryProjectionPermit,
+        verified: &VerifiedHeightContext,
+        effects: Vec<AdapterEffect>,
+        released: AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
+    ) -> Result<
+        Box<(
+            ProductionLifecycleAdapterStartupV1,
+            RecoveredDecisionApplyRegistryCarrierV1,
+        )>,
+        (
+            Box<Self>,
+            Vec<AdapterEffect>,
+            AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
+        ),
+    > {
+        let mut context = [0_u8; 32];
+        context.copy_from_slice(verified.context().id().0.as_ref());
+        let context =
+            LifecycleContext::new(LifecycleDigest::new(context), verified.context().height);
+        if !self.validates(verified)
+            || !effects.is_empty()
+            || !released.exactly_matches_validated_receipt(context, &self.validated_receipt)
+        {
+            return Err((self, effects, released));
+        }
+        let Self {
+            adapter,
+            fetch,
+            lineage,
+            apply_effect,
+            apply_pending,
+            validated_receipt,
+        } = *self;
+        Ok(Box::new((
+            ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
+            RecoveredDecisionApplyRegistryCarrierV1 {
+                context,
+                fetch,
+                lineage,
+                apply_effect,
+                apply_pending,
+                validated_receipt,
+                source: RecoveredDecisionApplyLedgerSourceV1::ReleasedTerminal(released),
             },
         )))
     }
@@ -5896,9 +5990,14 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
             == LifecycleContext::new(LifecycleDigest::new(context), verified.context().height)
             && self.fetch.owns_apply_lineage(verified, &self.lineage)
             && self.exact_body_binding()
+            && match &self.source {
+                RecoveredDecisionApplyLedgerSourceV1::FullChain => true,
+                RecoveredDecisionApplyLedgerSourceV1::ReleasedTerminal(released) => released
+                    .exactly_matches_validated_receipt(self.context, &self.validated_receipt),
+            }
     }
 
-    /// Rejoin this carrier to its exact four-row ledger lineage.
+    /// Rejoin this carrier to its exact full-chain or released-terminal ledger lineage.
     pub(in crate::sumeragi) fn validates_in_ledger(
         &self,
         verified: &VerifiedHeightContext,
@@ -5906,11 +6005,34 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
         installed_apply_ordinal: u128,
     ) -> bool {
         self.validates(verified)
-            && ledger.exactly_matches_recovered_decision_apply_carrier(
-                &self.fetch,
-                &self.lineage,
-                installed_apply_ordinal,
-            )
+            && match &self.source {
+                RecoveredDecisionApplyLedgerSourceV1::FullChain => ledger
+                    .exactly_matches_recovered_decision_apply_carrier(
+                        &self.fetch,
+                        &self.lineage,
+                        installed_apply_ordinal,
+                    ),
+                RecoveredDecisionApplyLedgerSourceV1::ReleasedTerminal(released) => ledger
+                    .exactly_matches_recovered_released_decision_apply_carrier(
+                        &self.fetch,
+                        &self.lineage,
+                        released,
+                        installed_apply_ordinal,
+                    ),
+            }
+    }
+
+    /// Rejoin a released source to the exact reconstructed terminal Validate.
+    pub(in crate::sumeragi) fn validates_released_terminal_in_coordinator(
+        &self,
+        coordinator: &super::v2_lifecycle_coordinator::LifecycleCoordinator,
+    ) -> bool {
+        match &self.source {
+            RecoveredDecisionApplyLedgerSourceV1::FullChain => true,
+            RecoveredDecisionApplyLedgerSourceV1::ReleasedTerminal(released) => {
+                released.matches_current_terminal_record(self.context, coordinator)
+            }
+        }
     }
 
     /// Authenticate the exact durable Validate row which advanced into this
@@ -9084,6 +9206,12 @@ pub(crate) enum AdapterError {
     /// The interrupted canonical Kura tip did not own the sole recovered Decision Fetch.
     #[error("Sumeragi v2 pending Kura tip does not match its recovered Decision Fetch")]
     RecoveredPendingKuraApplyMismatch,
+    /// An ordinal-free lifecycle validation marker could not rejoin its exact
+    /// live Decision-owned Apply continuation.
+    #[error(
+        "Sumeragi v2 released lifecycle validation does not match its live Decision Apply continuation"
+    )]
+    ReleasedLifecycleValidatedApplyMismatch,
     /// No-clock activation was requested before exact pending-tip completion.
     #[error("Sumeragi v2 pending Kura tip is not ready for no-clock activation")]
     PendingKuraActivationNotReady,
@@ -11704,8 +11832,25 @@ impl SumeragiV2Adapter {
                     ));
                 }
             }
-            wire::ConsensusMessageV2Payload::QuorumCertificate(_)
-            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                if certificate.phase == wire::GlobalPhase::Prepare
+                    && certificate.round.view > current_view
+                {
+                    // A PrepareQC can outrun the TimeoutCertificate which
+                    // installs its view. Keep the authenticated runtime
+                    // carrier at its exact FIFO position, just like a future
+                    // Proposal above. Terminally classifying it as irrelevant
+                    // would leave the durable leader-wire gate coalescing the
+                    // exact retransmission after that view becomes current,
+                    // preventing this validator from supplying a Commit vote.
+                    return Ok((
+                        Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
+                        None,
+                    ));
+                }
+                return Ok((None, None));
+            }
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
             | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
@@ -14853,6 +14998,7 @@ impl SumeragiV2Adapter {
         let min_signers = u32::try_from(self.reducer.context().minimum_signer_count())
             .map_err(|_| wire::ValidationError::RosterTooLarge)?;
         let total_power = self.reducer.context().total_voting_power().get();
+        let current_view = self.reducer.current_tag().view();
         let mut prepare_quorums = Vec::new();
         let mut commit_quorums = Vec::new();
         for snapshot in self.reducer.vote_pool_snapshots() {
@@ -14878,6 +15024,12 @@ impl SumeragiV2Adapter {
             .reducer
             .timeout_pool_snapshots()
             .into_iter()
+            // The reducer deliberately retains the adjacent-future pool so a
+            // lagging peer can form a TC and catch up. Public liveness status
+            // remains a projection of the reported current view, however;
+            // exposing that private catch-up pool would violate the status
+            // schema's non-future-round contract.
+            .filter(|snapshot| snapshot.round.view() <= current_view)
             .map(|snapshot| {
                 Ok(wire::SumeragiV2TimeoutQuorumStatus {
                     round: self.registry.round_to_wire(snapshot.round),
@@ -14893,14 +15045,19 @@ impl SumeragiV2Adapter {
         let outbound_intents = self.outbound_intent_statuses()?;
         let work = self.local_work_status();
         let queues = self.adapter_queue_statuses();
-        let last_progress = self.last_progress.map(|(generation, round, transition)| {
-            wire::SumeragiV2ProgressTransitionStatus {
-                generation: generation.get(),
-                round: self.registry.round_to_wire(round),
-                transition,
-                age_ms: 0,
-            }
-        });
+        let last_progress = self
+            .last_progress
+            .filter(|(_, round, transition)| {
+                progress_transition_is_public_at_view(*transition, round.view(), current_view)
+            })
+            .map(
+                |(generation, round, transition)| wire::SumeragiV2ProgressTransitionStatus {
+                    generation: generation.get(),
+                    round: self.registry.round_to_wire(round),
+                    transition,
+                    age_ms: 0,
+                },
+            );
         let ignore_counts = ALL_IGNORE_REASONS
             .into_iter()
             .map(|(core, wire)| wire::SumeragiV2IgnoreCount {
@@ -16956,7 +17113,9 @@ impl SumeragiV2Adapter {
             | reducer::Event::ValidationCompleted { valid: false, .. }
             | reducer::Event::PersistenceFailed { .. } => None,
         };
-        if let Some((transition, round)) = progress {
+        if let Some((transition, round)) = progress
+            && progress_transition_is_public_at_view(transition, round.view(), current.view())
+        {
             self.last_progress = Some((self.reducer.generation(), round, transition));
         }
     }
@@ -18298,6 +18457,18 @@ const fn outbound_stage_rank(stage: wire::SumeragiV2OutboundIntentStage) -> u8 {
         wire::SumeragiV2OutboundIntentStage::Queued => 2,
         wire::SumeragiV2OutboundIntentStage::Sent => 3,
     }
+}
+const fn progress_transition_is_public_at_view(
+    transition: wire::SumeragiV2ProgressTransition,
+    progress_view: u64,
+    current_view: u64,
+) -> bool {
+    progress_view <= current_view
+        || matches!(
+            transition,
+            wire::SumeragiV2ProgressTransition::CommitQuorum
+                | wire::SumeragiV2ProgressTransition::DecisionPersisted
+        )
 }
 fn bounded_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)

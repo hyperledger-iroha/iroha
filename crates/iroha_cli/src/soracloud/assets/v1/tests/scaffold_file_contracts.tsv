@@ -250,6 +250,7 @@ app_init_split_app_template_scaffolds_live_and_vault_services	excludes	doctor.sh
 app_init_split_app_template_scaffolds_live_and_vault_services	contains	doctor.sh	exec "${IROHA_CMD[@]}"
 app_init_split_app_template_scaffolds_live_and_vault_services	excludes	release.sh	"$SCRIPT_DIR/doctor.sh"
 app_init_split_app_template_scaffolds_live_and_vault_services	contains	release.sh	soracloud app release
+app_init_split_app_template_scaffolds_live_and_vault_services	contains	release.sh	--sorafs-retention-epoch "$SORAFS_RETENTION_EPOCH"
 app_init_split_app_template_scaffolds_live_and_vault_services	contains	release.sh	IROHA_BIN
 app_init_split_app_template_scaffolds_live_and_vault_services	contains	release.sh	IROHA_BIN_SHA256
 app_init_split_app_template_scaffolds_live_and_vault_services	excludes	release.sh	IROHA_MANIFEST_PATH
@@ -297,10 +298,10 @@ init_http_service_template_scaffolds_inrou_service	contains	http-service/README.
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	wrappers return the same route, handler-count, replica, and
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service build --container ./container_manifest.json --service ./service_manifest.json
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --bundle-file ./http-service/build/http-service.tgz --torii-url http://127.0.0.1:8080
+init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --bundle-file ./http-service/build/http-service.tgz --sorafs-retention-epoch 2000000000 --torii-url http://127.0.0.1:8080
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	direct `iroha soracloud service deploy` and `upgrade` commands also keep the
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --bundle-file ./http-service/build/http-service.tgz --torii-url http://127.0.0.1:8080
+init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --bundle-file ./http-service/build/http-service.tgz --sorafs-retention-epoch 2000000000 --torii-url http://127.0.0.1:8080
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	status` is driven from `--container` plus `--service`
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	## Service control-plane commands
@@ -319,6 +320,7 @@ init_http_service_template_scaffolds_inrou_service	contains	http-service/README.
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	model upload-status
 init_http_service_template_scaffolds_inrou_service	contains	deploy.sh	soracloud service deploy
 init_http_service_template_scaffolds_inrou_service	contains	deploy.sh	--bundle-file "$SCRIPT_DIR/http-service/build/http-service.tgz"
+init_http_service_template_scaffolds_inrou_service	contains	deploy.sh	--sorafs-retention-epoch "$SORAFS_RETENTION_EPOCH"
 init_http_service_template_scaffolds_inrou_service	contains	deploy.sh	${BASH_SOURCE[0]}
 init_http_service_template_scaffolds_inrou_service	excludes	deploy.sh	${{BASH_SOURCE[0]}}
 init_http_service_template_scaffolds_inrou_service	contains	deploy.sh	IROHA_BIN
@@ -342,12 +344,14 @@ init_http_service_template_scaffolds_inrou_service	contains	doctor.sh	exec "${IR
 init_http_service_template_scaffolds_inrou_service	contains	release.sh	"$SCRIPT_DIR/doctor.sh"
 init_http_service_template_scaffolds_inrou_service	contains	release.sh	soracloud service deploy
 init_http_service_template_scaffolds_inrou_service	contains	release.sh	--bundle-file "$SCRIPT_DIR/http-service/build/http-service.tgz"
+init_http_service_template_scaffolds_inrou_service	contains	release.sh	--sorafs-retention-epoch "$SORAFS_RETENTION_EPOCH"
 init_http_service_template_scaffolds_inrou_service	contains	release.sh	IROHA_BIN
 init_http_service_template_scaffolds_inrou_service	contains	release.sh	IROHA_BIN_SHA256
 init_http_service_template_scaffolds_inrou_service	excludes	release.sh	IROHA_MANIFEST_PATH
 init_http_service_template_scaffolds_inrou_service	contains	release.sh	exec "${IROHA_CMD[@]}"
 init_http_service_template_scaffolds_inrou_service	contains	upgrade.sh	soracloud service upgrade
 init_http_service_template_scaffolds_inrou_service	contains	upgrade.sh	--bundle-file "$SCRIPT_DIR/http-service/build/http-service.tgz"
+init_http_service_template_scaffolds_inrou_service	contains	upgrade.sh	--sorafs-retention-epoch "$SORAFS_RETENTION_EPOCH"
 init_http_service_template_scaffolds_inrou_service	contains	upgrade.sh	"$SCRIPT_DIR/build-and-sync.sh"
 init_http_service_template_scaffolds_inrou_service	contains	upgrade.sh	IROHA_BIN
 init_http_service_template_scaffolds_inrou_service	contains	upgrade.sh	IROHA_BIN_SHA256
@@ -368,6 +372,7 @@ app_init_single_api_template_scaffolds_admissible_root_binding_service	executabl
 app_init_single_api_template_scaffolds_admissible_root_binding_service	bash	doctor.sh
 app_init_single_api_template_scaffolds_admissible_root_binding_service	bash	release.sh
 app_init_single_api_template_scaffolds_admissible_root_binding_service	contains	release.sh	soracloud app release
+app_init_single_api_template_scaffolds_admissible_root_binding_service	contains	release.sh	--sorafs-retention-epoch "$SORAFS_RETENTION_EPOCH"
 app_init_single_api_template_scaffolds_admissible_root_binding_service	contains	release.sh	IROHA_BIN
 app_init_single_api_template_scaffolds_admissible_root_binding_service	contains	release.sh	IROHA_BIN_SHA256
 app_init_single_api_template_scaffolds_admissible_root_binding_service	excludes	release.sh	--skip-build

@@ -64,7 +64,7 @@ pub struct DetachedSubmitArgs {
 }
 #[derive(clap::Args, Debug)]
 pub struct SubmitDestinationProofArgs {
-    /// File containing one canonical Norito SCCP Groth16 destination artifact.
+    /// File containing one canonical Norito closed SCCP destination-proof envelope.
     #[arg(long, value_name = "PATH")]
     artifact: PathBuf,
     #[command(flatten)]
@@ -507,10 +507,10 @@ fn sccp_submit_destination_proof(
 ) -> Result<()> {
     let authority = ctx.config().account.clone();
     let fee_payment = ctx.transaction_fee_payment()?;
-    let artifact = read_bounded_binary_artifact(
+    let proof_envelope = read_bounded_binary_artifact(
         &args.artifact,
-        iroha_sccp::SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1,
-        "SCCP destination artifact",
+        iroha_sccp::SCCP_DESTINATION_PROOF_MAX_ENCODED_BYTES_V1,
+        "closed SCCP destination-proof envelope",
     )?;
     let detached = load_detached_submit_material(&args.detached, &authority)?;
     let request = SccpDestinationProofSubmitRequest {
@@ -518,7 +518,7 @@ fn sccp_submit_destination_proof(
         fee_payment,
         signature_b64: detached.signature_b64,
         transaction_payload_b64: detached.transaction_payload_b64,
-        destination_proof_b64: base64::engine::general_purpose::STANDARD.encode(artifact),
+        destination_proof_b64: base64::engine::general_purpose::STANDARD.encode(proof_envelope),
         creation_time_ms: detached.creation_time_ms,
     };
     let client = ctx.client_from_config();
@@ -555,7 +555,7 @@ fn sccp_submit_native_message(
 }
 fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
     format!(
-        "sccp capabilities: version={} registry_revision={} registry={} bundle={} proof_request={} recent={} proof_submit={} native_submit={}\nregistry_limits: lanes={} live_total={} live_per_lane={} retained_routes_per_lane={} retained_anchors_per_lane={}\nresource_limits: outbound_messages_block={} outbound_payload_bytes={} pending_messages/pending_bytes={}/{} proofs_tx/block={}/{} proof_bytes_each/tx/block={}/{}/{} native_headers_tx/block={}/{} eth_updates_tx/block={}/{} native_bytes_tx/block={}/{} secp_tx/block={}/{} bls_checks_tx/block={}/{} bls_contributions_tx/block={}/{} bn254_tx/block={}/{}",
+        "sccp capabilities: version={} registry_revision={} registry={} bundle={} proof_request={} recent={} proof_submit={} native_submit={}\nregistry_limits: lanes={} live_total={} live_per_lane={} retained_routes_per_lane={} retained_anchors_per_lane={}\nresource_limits: outbound_messages_block={} outbound_payload_bytes={} pending_messages/pending_bytes={}/{} proofs_tx/block={}/{} proof_bytes_each/tx/block={}/{}/{} native_headers_tx/block={}/{} eth_updates_tx/block={}/{} native_bytes_tx/block={}/{} secp_tx/block={}/{} bls_checks_tx/block={}/{} bls_contributions_tx/block={}/{} ed25519_sigs_tx/block={}/{} ed25519_keys_tx/block={}/{} bn254_tx/block={}/{} bls12381_tx/block={}/{}",
         capabilities.version,
         capabilities.registry_revision,
         capabilities.registry_path,
@@ -614,8 +614,26 @@ fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
             .bls_signer_contributions_per_block,
         capabilities
             .resource_limits
+            .ed25519_signature_checks_per_transaction,
+        capabilities
+            .resource_limits
+            .ed25519_signature_checks_per_block,
+        capabilities
+            .resource_limits
+            .ed25519_validator_key_checks_per_transaction,
+        capabilities
+            .resource_limits
+            .ed25519_validator_key_checks_per_block,
+        capabilities
+            .resource_limits
             .bn254_pairing_checks_per_transaction,
         capabilities.resource_limits.bn254_pairing_checks_per_block,
+        capabilities
+            .resource_limits
+            .bls12_381_pairing_checks_per_transaction,
+        capabilities
+            .resource_limits
+            .bls12_381_pairing_checks_per_block,
     )
 }
 fn render_sccp_registry_summary(registry: &SccpRegistryV1) -> String {
@@ -721,23 +739,31 @@ fn render_sccp_message_bundle_summary(bundle: &iroha_sccp::TairaSccpMessageProof
     )
 }
 fn render_sccp_proof_request_summary(
-    request: &iroha_sccp::SccpGroth16Bn254ProofRequestV1,
+    request: &iroha_sccp::SccpDestinationProofRequestV1,
 ) -> String {
-    format!(
-        "sccp proof request: id={} backend={} {}->{} finality_height={} request_hash={} statement_hash={} binding={} configuration={} verifier_key={} semantic_profile={} finality_anchor={}",
-        hex::encode(request.public_inputs.message_id),
-        request.backend.backend_label(),
-        request.source_network.profile_key(),
-        request.target_network.profile_key(),
-        request.public_inputs.finality_height,
-        hex::encode(request.request_hash),
-        hex::encode(request.statement_hash),
-        hex::encode(request.destination_binding_hash),
-        hex::encode(request.route_configuration_hash),
-        hex::encode(request.verifier_key_hash),
-        hex::encode(request.semantic_proof_profile_hash),
-        hex::encode(request.sora_finality_anchor_hash),
-    )
+    macro_rules! render {
+        ($request:expr) => {
+            format!(
+                "sccp proof request: id={} backend={} {}->{} finality_height={} request_hash={} statement_hash={} binding={} configuration={} verifier_key={} semantic_profile={} finality_anchor={}",
+                hex::encode($request.public_inputs.message_id),
+                $request.backend.backend_label(),
+                $request.source_network.profile_key(),
+                $request.target_network.profile_key(),
+                $request.public_inputs.finality_height,
+                hex::encode($request.request_hash),
+                hex::encode($request.statement_hash),
+                hex::encode($request.destination_binding_hash),
+                hex::encode($request.route_configuration_hash),
+                hex::encode($request.verifier_key_hash),
+                hex::encode($request.semantic_proof_profile_hash),
+                hex::encode($request.sora_finality_anchor_hash),
+            )
+        };
+    }
+    match request {
+        iroha_sccp::SccpDestinationProofRequestV1::Groth16Bn254(request) => render!(request),
+        iroha_sccp::SccpDestinationProofRequestV1::Groth16Bls12381(request) => render!(request),
+    }
 }
 fn render_sccp_payload_projection_summary(
     projection: &iroha_sccp::SccpPayloadProjectionV1,
@@ -766,6 +792,12 @@ fn render_sccp_normalized_codec_value(value: &iroha_sccp::SccpNormalizedCodecVal
         }
         iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes } => {
             format!("solana_pubkey32:0x{}", hex::encode(bytes))
+        }
+        iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 { workchain, account } => {
+            let mut bytes = [0_u8; 36];
+            bytes[..4].copy_from_slice(&workchain.to_be_bytes());
+            bytes[4..].copy_from_slice(account);
+            format!("ton_account36:0x{}", hex::encode(bytes))
         }
     }
 }
@@ -933,6 +965,52 @@ mod tests {
             read_bounded_binary_artifact(&path, 4, "SCCP test artifact")
                 .expect("maximum-size artifact"),
             vec![1_u8; 4]
+        );
+    }
+    #[test]
+    fn destination_proof_reader_uses_the_closed_outer_envelope_bound() {
+        let directory = tempdir().expect("temporary SCCP destination-proof directory");
+        let path = directory.path().join("destination-proof.norito");
+        let file = fs::File::create(&path).expect("create sparse destination-proof file");
+        let old_inner_bound = iroha_sccp::SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1;
+        let closed_outer_bound = iroha_sccp::SCCP_DESTINATION_PROOF_MAX_ENCODED_BYTES_V1;
+        assert!(closed_outer_bound > old_inner_bound);
+
+        file.set_len(u64::try_from(old_inner_bound + 1).expect("bound fits u64"))
+            .expect("size destination proof above the retired inner bound");
+        assert_eq!(
+            read_bounded_binary_artifact(
+                &path,
+                closed_outer_bound,
+                "closed SCCP destination-proof envelope",
+            )
+            .expect("closed envelope accepts bytes above the inner-artifact bound")
+            .len(),
+            old_inner_bound + 1
+        );
+
+        file.set_len(u64::try_from(closed_outer_bound).expect("bound fits u64"))
+            .expect("size destination proof at the closed-envelope bound");
+        assert_eq!(
+            read_bounded_binary_artifact(
+                &path,
+                closed_outer_bound,
+                "closed SCCP destination-proof envelope",
+            )
+            .expect("closed envelope accepts its exact maximum")
+            .len(),
+            closed_outer_bound
+        );
+
+        file.set_len(u64::try_from(closed_outer_bound + 1).expect("bound fits u64"))
+            .expect("size destination proof above the closed-envelope bound");
+        assert!(
+            read_bounded_binary_artifact(
+                &path,
+                closed_outer_bound,
+                "closed SCCP destination-proof envelope",
+            )
+            .is_err()
         );
     }
     #[test]
@@ -1125,13 +1203,26 @@ mod tests {
                 bls_aggregate_checks_per_block: 4_016,
                 bls_signer_contributions_per_transaction: 131_713,
                 bls_signer_contributions_per_block: 526_852,
+                ed25519_signature_checks_per_transaction: 65_536,
+                ed25519_signature_checks_per_block: 262_144,
+                ed25519_validator_key_checks_per_transaction: 198_656,
+                ed25519_validator_key_checks_per_block: 794_624,
                 bn254_pairing_checks_per_transaction: 1,
                 bn254_pairing_checks_per_block: 4,
+                bls12_381_pairing_checks_per_transaction: 1,
+                bls12_381_pairing_checks_per_block: 4,
             },
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             native_message_submit_path: Some("/v1/bridge/messages".to_owned()),
         });
         for required in ["registry=", "bundle=", "proof_request=", "proof_submit="] {
+            assert!(summary.contains(required));
+        }
+        for required in [
+            "ed25519_sigs_tx/block=65536/262144",
+            "ed25519_keys_tx/block=198656/794624",
+            "bls12381_tx/block=1/4",
+        ] {
             assert!(summary.contains(required));
         }
         for retired in ["manifest", "artifact", "job", "solana", "ton-"] {
@@ -1145,6 +1236,27 @@ mod tests {
             render_sccp_normalized_codec_value(&value),
             format!("solana_pubkey32:0x{}", "13".repeat(32))
         );
+    }
+    #[test]
+    fn normalized_codec_summary_renders_ton_account_bytes() {
+        let value = iroha_sccp::SccpNormalizedCodecValueV1::TonAccount36 {
+            workchain: 0,
+            account: [0x14; 32],
+        };
+        assert_eq!(
+            render_sccp_normalized_codec_value(&value),
+            format!("ton_account36:0x{}{}", "00".repeat(4), "14".repeat(32))
+        );
+    }
+    #[test]
+    fn proof_request_summary_renders_ton_backend_and_profile() {
+        let fixture = iroha_sccp::sccp_exact_ton_outbound_test_fixture_v1();
+        let summary = render_sccp_proof_request_summary(
+            &iroha_sccp::SccpDestinationProofRequestV1::Groth16Bls12381(fixture.request),
+        );
+        assert!(summary.contains("backend=ton-groth16-bls12381-v1"));
+        assert!(summary.contains("sora-taira->ton-mainnet"));
+        assert!(summary.contains("request_hash="));
     }
     #[test]
     fn recent_query_enforces_closed_first_release_bounds() {
@@ -1210,7 +1322,7 @@ mod tests {
                 asset_id: Some("xor".to_owned()),
                 route_id: Some("taira_eth_xor".to_owned()),
                 recipient: None,
-                amount: "5".to_owned(),
+                amount: 5_u64.into(),
                 payload_projection: iroha_sccp::SccpPayloadProjectionV1::Transfer(
                     iroha_sccp::SccpTransferProjectionV1 {
                         version: 1,

@@ -554,11 +554,6 @@ impl Actor {
         pow: &mut SoranetPow,
         update: &SoranetHandshakePowUpdate,
     ) -> Result<(), String> {
-        if matches!(update.required, Some(false)) {
-            return Err(
-                "SoraNet PoW admission is mandatory in the first-release policy".to_string(),
-            );
-        }
         if let Some(difficulty) = update.difficulty {
             if difficulty == 0 {
                 return Err(
@@ -599,12 +594,6 @@ impl Actor {
             }
         }
         if let Some(puzzle_update) = &update.puzzle {
-            if matches!(puzzle_update.enabled, Some(false)) {
-                return Err(
-                    "SoraNet Argon2 puzzle admission is mandatory in the first-release policy"
-                        .to_string(),
-                );
-            }
             if let Some(memory) = puzzle_update.memory_kib
                 && !(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
                     ..=iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB)
@@ -685,7 +674,7 @@ mod tests {
                 DataspaceGossip, FraudMonitoring, Genesis, Governance, IsoBridge, Ivm, Kura,
                 LiveQueryStore, Logger, Network, Nexus, Queue, Root, Settlement,
                 SoranetHandshake as ActualSoranetHandshake, SoranetPow, SoranetPrivacy, Streaming,
-                StreamingSoranet, Sumeragi, TieredState, Torii, TransactionGossiper, TrustedPeers,
+                Sumeragi, TieredState, Torii, TransactionGossiper, TrustedPeers,
             },
             defaults,
         },
@@ -733,7 +722,6 @@ mod tests {
             lanes: Option<u32>,
         ) -> SoranetHandshakePowUpdate {
             SoranetHandshakePowUpdate {
-                required: Some(true),
                 difficulty,
                 max_future_skew_secs: Some(999),
                 min_ticket_ttl_secs: None,
@@ -741,7 +729,6 @@ mod tests {
                 outbound_mint_capacity: None,
                 inbound_verify_capacity: None,
                 puzzle: Some(SoranetHandshakePuzzleUpdate {
-                    enabled: Some(true),
                     memory_kib,
                     time_cost,
                     lanes,
@@ -809,15 +796,23 @@ mod tests {
             assert_eq!(pow.puzzle, original_puzzle);
         }
         let mut pow = SoranetPow::default();
+        let original_outbound_mint_capacity = pow.outbound_mint_capacity.get();
         let mut update = update(None, None, None, None);
-        update.outbound_mint_capacity = Some(2);
+        update.outbound_mint_capacity = Some(if original_outbound_mint_capacity == 1 {
+            2
+        } else {
+            1
+        });
         let error = Actor::apply_pow_update(&mut pow, &update)
             .expect_err("live puzzle-work capacity change must require restart");
         assert!(
             error.contains("restart required"),
             "unexpected error: {error}"
         );
-        assert_eq!(pow.outbound_mint_capacity.get(), 1);
+        assert_eq!(
+            pow.outbound_mint_capacity.get(),
+            original_outbound_mint_capacity
+        );
     }
     #[allow(clippy::too_many_lines)]
     fn test_config() -> Root {
@@ -866,6 +861,9 @@ mod tests {
                 require_sm_handshake_match: true,
                 require_sm_openssl_preview_match: true,
                 idle_timeout: std::time::Duration::from_secs(5),
+                preauth_timeout: defaults::network::PREAUTH_TIMEOUT,
+                preauth_max_connections_per_ip:
+                    defaults::network::PREAUTH_MAX_CONNECTIONS_PER_IP,
                 reply_writer_flush_timeout: defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
                 connect_startup_delay: defaults::network::CONNECT_STARTUP_DELAY,
                 dial_timeout: defaults::network::DIAL_TIMEOUT,
@@ -888,6 +886,10 @@ mod tests {
                 p2p_proxy: None,
                 p2p_proxy_required: false,
                 p2p_no_proxy: Vec::new(),
+                outbound_dial_allow_cidrs: Vec::new(),
+                outbound_dial_deny_cidrs: Vec::new(),
+                outbound_dial_allow_dns_suffixes: Vec::new(),
+                outbound_dial_deny_dns_suffixes: Vec::new(),
                 p2p_proxy_tls_verify: true,
                 p2p_proxy_tls_pinned_cert_der_base64: None,
                 quic_enabled: false,
@@ -1071,6 +1073,10 @@ mod tests {
                     iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
                 attachments_per_tenant_max_bytes:
                     iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_BYTES,
+                attachments_global_max_count:
+                    iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT,
+                attachments_global_max_bytes:
+                    iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_BYTES,
                 attachments_allowed_mime_types:
                     iroha_config::parameters::defaults::torii::attachments_allowed_mime_types(),
                 attachments_max_expanded_bytes:
@@ -1769,6 +1775,8 @@ mod tests {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
                 parliament_quorum_bps:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
+                parliament_sortition_pulse_delay_blocks:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
                 parliament_invitation_phase_blocks:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
                 parliament_public_finding_phase_blocks:
@@ -1891,8 +1899,6 @@ mod tests {
                     iroha_config::parameters::defaults::streaming::SESSION_STORE_DIR,
                 ),
                 feature_bits: iroha_config::parameters::defaults::streaming::FEATURE_BITS,
-                soranet: StreamingSoranet::from_defaults(),
-                soravpn: iroha_config::parameters::actual::StreamingSoravpn::from_defaults(),
                 sync: iroha_config::parameters::actual::StreamingSync::from_defaults(),
                 codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
             },
@@ -2087,8 +2093,8 @@ mod tests {
     async fn soranet_handshake_update_applies() {
         let config = test_config();
         let (kiso, _) = KisoHandle::start(config);
-        let descriptor_hex = "0123456789abcdef".to_string();
-        let resume_hex = "feedface".to_string();
+        let descriptor_hex = "01".repeat(iroha_crypto::Hash::LENGTH);
+        let resume_hex = "fe".repeat(iroha_crypto::Hash::LENGTH);
         let descriptor_bytes = hex::decode(&descriptor_hex).expect("descriptor hex");
         let resume_bytes = hex::decode(&resume_hex).expect("resume hex");
         let mut handshake_rx = kiso
@@ -2121,11 +2127,10 @@ mod tests {
                 descriptor_commit_hex: Some(descriptor_hex.clone()),
                 client_capabilities_hex: None,
                 relay_capabilities_hex: None,
-                kem_id: Some(3),
-                sig_id: Some(7),
+                kem_id: Some(2),
+                sig_id: Some(1),
                 resume_hash_hex: Some(ResumeHashDirective::Set(resume_hex.clone())),
                 pow: Some(SoranetHandshakePowUpdate {
-                    required: Some(true),
                     difficulty: Some(6),
                     max_future_skew_secs: Some(1200),
                     min_ticket_ttl_secs: Some(90),
@@ -2133,7 +2138,6 @@ mod tests {
                     outbound_mint_capacity: None,
                     inbound_verify_capacity: None,
                     puzzle: Some(SoranetHandshakePuzzleUpdate {
-                        enabled: Some(true),
                         memory_kib: Some(131_072),
                         time_cost: Some(3),
                         lanes: Some(2),
@@ -2154,8 +2158,8 @@ mod tests {
             observed.descriptor_commit.value(),
             descriptor_bytes.as_slice()
         );
-        assert_eq!(observed.kem_id, 3);
-        assert_eq!(observed.sig_id, 7);
+        assert_eq!(observed.kem_id, 2);
+        assert_eq!(observed.sig_id, 1);
         let resume = observed
             .resume_hash
             .as_ref()
@@ -2173,15 +2177,14 @@ mod tests {
         let dto = kiso.get_dto().await.expect("fetch handshake dto");
         let handshake = dto.network.soranet_handshake;
         assert_eq!(handshake.descriptor_commit_hex, descriptor_hex);
-        assert_eq!(handshake.kem_id, 3);
-        assert_eq!(handshake.sig_id, 7);
+        assert_eq!(handshake.kem_id, 2);
+        assert_eq!(handshake.sig_id, 1);
         assert_eq!(handshake.resume_hash_hex, Some(resume_hex.clone()));
-        assert!(handshake.pow.required);
         assert_eq!(handshake.pow.difficulty, 6);
         assert_eq!(handshake.pow.max_future_skew_secs, 1200);
         assert_eq!(handshake.pow.min_ticket_ttl_secs, 90);
         assert_eq!(handshake.pow.ticket_ttl_secs, 240);
-        let puzzle = handshake.pow.puzzle.expect("puzzle summary present");
+        let puzzle = handshake.pow.puzzle;
         assert_eq!(puzzle.memory_kib, 131_072);
         assert_eq!(puzzle.time_cost, 3);
         assert_eq!(puzzle.lanes, 2);
@@ -2209,95 +2212,6 @@ mod tests {
         .expect("resume hash clear should succeed");
         let dto = kiso.get_dto().await.expect("fetch updated dto");
         assert_eq!(dto.network.soranet_handshake.resume_hash_hex, None);
-        let dto_default = kiso
-            .get_dto()
-            .await
-            .expect("fetch dto before puzzle update");
-        assert!(
-            dto_default.network.soranet_handshake.pow.puzzle.is_some(),
-            "puzzle gate should be enabled by default"
-        );
-        let err = kiso
-            .update_with_dto(ConfigUpdateDTO {
-                logger: LoggerDTO {
-                    level: Level::INFO,
-                    filter: None,
-                },
-                network_acl: None,
-                network: None,
-                soranet_handshake: Some(SoranetHandshakeUpdate {
-                    descriptor_commit_hex: None,
-                    client_capabilities_hex: None,
-                    relay_capabilities_hex: None,
-                    kem_id: None,
-                    sig_id: None,
-                    resume_hash_hex: None,
-                    pow: Some(SoranetHandshakePowUpdate {
-                        required: Some(false),
-                        difficulty: None,
-                        max_future_skew_secs: None,
-                        min_ticket_ttl_secs: None,
-                        ticket_ttl_secs: None,
-                        outbound_mint_capacity: None,
-                        inbound_verify_capacity: None,
-                        puzzle: None,
-                    }),
-                }),
-                transport: None,
-                compute_pricing: None,
-            })
-            .await
-            .expect_err("PoW disable should be rejected");
-        assert!(
-            err.to_string().contains("PoW admission is mandatory"),
-            "unexpected error: {err}"
-        );
-        let err = kiso
-            .update_with_dto(ConfigUpdateDTO {
-                logger: LoggerDTO {
-                    level: Level::INFO,
-                    filter: None,
-                },
-                network_acl: None,
-                network: None,
-                soranet_handshake: Some(SoranetHandshakeUpdate {
-                    descriptor_commit_hex: None,
-                    client_capabilities_hex: None,
-                    relay_capabilities_hex: None,
-                    kem_id: None,
-                    sig_id: None,
-                    resume_hash_hex: None,
-                    pow: Some(SoranetHandshakePowUpdate {
-                        required: None,
-                        difficulty: None,
-                        max_future_skew_secs: None,
-                        min_ticket_ttl_secs: None,
-                        ticket_ttl_secs: None,
-                        outbound_mint_capacity: None,
-                        inbound_verify_capacity: None,
-                        puzzle: Some(SoranetHandshakePuzzleUpdate {
-                            enabled: Some(false),
-                            memory_kib: None,
-                            time_cost: None,
-                            lanes: None,
-                        }),
-                    }),
-                }),
-                transport: None,
-                compute_pricing: None,
-            })
-            .await
-            .expect_err("puzzle disable should be rejected");
-        assert!(
-            err.to_string()
-                .contains("Argon2 puzzle admission is mandatory"),
-            "unexpected error: {err}"
-        );
-        let dto = kiso.get_dto().await.expect("fetch post-rejection dto");
-        assert!(
-            dto.network.soranet_handshake.pow.puzzle.is_some(),
-            "rejected update must not disable the puzzle gate"
-        );
         runtime.await.expect("runtime responder task");
     }
     #[tokio::test]
@@ -2317,7 +2231,6 @@ mod tests {
                 .expect("Kiso request should remain active");
         });
         let updated_pow = SoranetHandshakePowUpdate {
-            required: Some(true),
             difficulty: Some(9),
             max_future_skew_secs: Some(30),
             min_ticket_ttl_secs: Some(15),
@@ -2325,7 +2238,6 @@ mod tests {
             outbound_mint_capacity: None,
             inbound_verify_capacity: None,
             puzzle: Some(SoranetHandshakePuzzleUpdate {
-                enabled: Some(true),
                 memory_kib: Some(32 * 1024),
                 time_cost: Some(1),
                 lanes: Some(2),
@@ -2361,6 +2273,8 @@ mod tests {
         assert_eq!(snapshot.pow.difficulty, 9);
         assert_eq!(snapshot.pow.ticket_ttl.as_secs(), 45);
         assert_eq!(snapshot.pow.puzzle.memory_kib.get(), 32 * 1024);
+        assert_eq!(snapshot.pow.puzzle.time_cost.get(), 1);
+        assert_eq!(snapshot.pow.puzzle.lanes.get(), 2);
         runtime.await.expect("runtime responder task");
     }
     #[tokio::test]
@@ -2410,7 +2324,6 @@ mod tests {
                 sig_id: None,
                 resume_hash_hex: None,
                 pow: Some(SoranetHandshakePowUpdate {
-                    required: None,
                     difficulty: Some(difficulty),
                     max_future_skew_secs: None,
                     min_ticket_ttl_secs: None,

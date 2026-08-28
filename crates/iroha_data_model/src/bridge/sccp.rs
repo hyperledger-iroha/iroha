@@ -925,8 +925,10 @@ impl SccpTonAddressV1 {
 /// Exact governed TON source bridge identity.
 ///
 /// TON account-state proofs authenticate the account code hash and persistent
-/// route commitment. The source bridge is intentionally a distinct role from
-/// the destination route and verifier contracts.
+/// route commitment. V1 uses the same immutable bidirectional bridge contract
+/// for native outbound events and proof-authenticated destination execution;
+/// registry validation therefore requires this identity to match the TON
+/// destination route address and code hash exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]

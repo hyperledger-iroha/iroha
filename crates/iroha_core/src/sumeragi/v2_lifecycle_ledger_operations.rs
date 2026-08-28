@@ -2008,6 +2008,190 @@ impl LifecycleLedgerV1 {
         self.reject_terminal_recovered_decision_apply(projection)?;
         self.stage_recovered_decision_apply_projection(projection)
     }
+    /// Classify whether cold Decision recovery must retain its ordinary
+    /// four-row chain or publish only a standalone Apply beside an older
+    /// no-successor Validate tombstone.
+    pub(super) fn classify_recovered_decision_apply_startup(
+        &self,
+        projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
+    ) -> Result<RecoveredDecisionApplyStartupShapeV1, LifecycleLedgerError> {
+        self.classify_recovered_decision_apply_startup_projection(projection)
+    }
+    fn classify_recovered_decision_apply_startup_projection(
+        &self,
+        projection: &impl RecoveredDecisionReleasedApplyStageProjectionV1,
+    ) -> Result<RecoveredDecisionApplyStartupShapeV1, LifecycleLedgerError> {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        if !projection.belongs_to_context(self.context()) {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered Decision Apply startup belongs to another lifecycle context".to_owned(),
+            ));
+        }
+        let fetch_count = self
+            .records
+            .iter()
+            .filter(|record| projection.names_fetch_record(record))
+            .count();
+        if fetch_count != 0 {
+            return Ok(RecoveredDecisionApplyStartupShapeV1::FullChain);
+        }
+        let terminal_count = self
+            .records
+            .iter()
+            .filter(|record| projection.names_terminal_validate_record(self.context(), record))
+            .count();
+        let standalone_count = self
+            .records
+            .iter()
+            .filter(|record| {
+                projection
+                    .lineage()
+                    .exactly_matches_standalone_apply_record(self.context(), record)
+            })
+            .count();
+        match (terminal_count, standalone_count) {
+            (0, 0) => Ok(RecoveredDecisionApplyStartupShapeV1::FullChain),
+            (1, 0) | (1, 1) => Ok(RecoveredDecisionApplyStartupShapeV1::ReleasedTerminal),
+            (0, _) => Err(LifecycleLedgerError::InvalidLedger(
+                "standalone recovered Decision Apply has no exact released Validate tombstone"
+                    .to_owned(),
+            )),
+            _ => Err(LifecycleLedgerError::InvalidLedger(
+                "released recovered Decision Apply names ambiguous durable history".to_owned(),
+            )),
+        }
+    }
+    /// Stage or exactly coalesce a recovered Decision's independent Apply row.
+    ///
+    /// The historical Validate remains byte-for-byte unchanged as an
+    /// `AdvancedNoSuccessor` tombstone. No current Fetch, Store, or Validate is
+    /// fabricated; the new Apply receives a fresh owner rooted at its ordinal.
+    pub(super) fn stage_recovered_released_decision_apply(
+        &self,
+        projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
+    ) -> Result<(Self, u128, bool), LifecycleLedgerError> {
+        self.stage_recovered_released_decision_apply_projection(projection)
+    }
+    fn stage_recovered_released_decision_apply_projection(
+        &self,
+        projection: &impl RecoveredDecisionReleasedApplyStageProjectionV1,
+    ) -> Result<(Self, u128, bool), LifecycleLedgerError> {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        if !projection.belongs_to_context(self.context())
+            || !projection.lineage().is_exact(self.context())
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "released recovered Decision Apply belongs to another lifecycle context".to_owned(),
+            ));
+        }
+        if self
+            .records
+            .iter()
+            .any(|record| projection.names_fetch_record(record))
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "released recovered Decision Apply cannot retain a current Fetch row".to_owned(),
+            ));
+        }
+        let matching_terminals = self
+            .records
+            .iter()
+            .filter(|record| projection.names_terminal_validate_record(self.context(), record))
+            .collect::<Vec<_>>();
+        let [terminal] = matching_terminals.as_slice() else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "released recovered Decision Apply requires one exact no-successor Validate"
+                    .to_owned(),
+            ));
+        };
+        if terminal.work_class() != Some(LifecycleWorkClass::Validate)
+            || terminal.terminal() != Some(Some(TerminalOutcome::Advanced))
+            || terminal.continuation() != Some(DurableContinuation::AdvancedNoSuccessor)
+            || !projection.lineage().exactly_continues_released_validate(
+                self.context(),
+                &terminal.replay_authority,
+                terminal
+                    .durable_payload()
+                    .expect("validated released Validate payload"),
+            )
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "released recovered Decision Apply changed its Validate tombstone".to_owned(),
+            ));
+        }
+        if self.records.iter().any(|record| {
+            projection
+                .lineage()
+                .exactly_matches_terminal_standalone_apply_record(self.context(), record)
+        }) {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "terminal standalone recovered Decision Apply requires CompleteTip retirement"
+                    .to_owned(),
+            ));
+        }
+        let exact_applies = self
+            .records
+            .iter()
+            .filter(|record| {
+                projection
+                    .lineage()
+                    .exactly_matches_standalone_apply_record(self.context(), record)
+            })
+            .collect::<Vec<_>>();
+        if let [apply] = exact_applies.as_slice() {
+            if terminal.ordinal() >= apply.ordinal()
+                || terminal.owner().causal_root() == apply.owner().causal_root()
+                || apply.ordinal() > self.high_water
+                || self
+                    .records
+                    .iter()
+                    .filter(|record| record.owner().causal_root() == apply.owner().causal_root())
+                    .count()
+                    != 1
+            {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "coalesced standalone recovered Decision Apply changed exact ownership"
+                        .to_owned(),
+                ));
+            }
+            return Ok((self.clone(), apply.ordinal(), false));
+        }
+        if !exact_applies.is_empty() {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "standalone recovered Decision Apply is duplicated".to_owned(),
+            ));
+        }
+        let apply_ordinal = self.high_water.checked_add(1).ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "standalone recovered Decision Apply ordinal exhausted".to_owned(),
+            )
+        })?;
+        let apply = projection
+            .lineage()
+            .standalone_apply_record(self.context(), apply_ordinal)
+            .ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "standalone recovered Decision Apply record is not exact".to_owned(),
+                )
+            })?;
+        if terminal.ordinal() >= apply_ordinal
+            || terminal.owner().causal_root() == apply.owner().causal_root()
+            || self.records.iter().any(|record| {
+                record.owner().causal_root() == apply.owner().causal_root()
+                    || record.key() == apply.key()
+            })
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "standalone recovered Decision Apply collides with durable ownership".to_owned(),
+            ));
+        }
+        let mut staged = self.clone();
+        staged.records.push(apply);
+        staged.records.sort_by_key(LifecycleLedgerRecordV1::ordinal);
+        staged.high_water = apply_ordinal;
+        staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        Ok((staged, apply_ordinal, true))
+    }
     fn stage_recovered_decision_apply_projection(
         &self,
         projection: &impl RecoveredDecisionApplyStageProjectionV1,
@@ -2167,8 +2351,7 @@ impl LifecycleLedgerV1 {
             }
             let apply_ordinal = self.high_water.checked_add(1).ok_or_else(|| {
                 LifecycleLedgerError::InvalidLedger(
-                    "recovered Decision Apply ordinal exhausted after Validate restart"
-                        .to_owned(),
+                    "recovered Decision Apply ordinal exhausted after Validate restart".to_owned(),
                 )
             })?;
             let [advanced_store, advanced_validate, apply] = lineage
@@ -2231,6 +2414,26 @@ impl LifecycleLedgerV1 {
     ) -> bool {
         let projection = RecoveredDecisionApplyCarrierLedgerProjectionV1 { fetch, lineage };
         self.stage_recovered_decision_apply_projection(&projection)
+            .is_ok_and(|(staged, apply_ordinal, changed)| {
+                !changed && staged == *self && apply_ordinal == installed_apply_ordinal
+            })
+    }
+
+    /// Rejoin an installed recovered standalone Apply carrier to its exact
+    /// released Validate tombstone without rewriting either row.
+    pub(in crate::sumeragi) fn exactly_matches_recovered_released_decision_apply_carrier(
+        &self,
+        fetch: &AuthenticatedRecoveredWalDecisionFetchProjection,
+        lineage: &RecoveredDecisionApplyCandidateLineageV1,
+        released: &AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
+        installed_apply_ordinal: u128,
+    ) -> bool {
+        let projection = RecoveredReleasedDecisionApplyCarrierLedgerProjectionV1 {
+            fetch,
+            lineage,
+            released,
+        };
+        self.stage_recovered_released_decision_apply_projection(&projection)
             .is_ok_and(|(staged, apply_ordinal, changed)| {
                 !changed && staged == *self && apply_ordinal == installed_apply_ordinal
             })
@@ -2425,6 +2628,9 @@ impl LifecycleLedgerV1 {
     }
     /// Join one terminal recovered-Decision Apply row to the complete
     /// Kura-authenticated CompleteTip evidence retained for successor startup.
+    /// The Apply may end the ordinary adjacent four-row chain or may be the
+    /// sole row of a fresh owner whose exact replay envelope joins an older
+    /// `AdvancedNoSuccessor` Validate tombstone.
     ///
     /// This remains a predecessor-chain oracle, not retirement authority: it
     /// neither censes nor retires unrelated live rows, leases, waits, debt,
@@ -2463,6 +2669,43 @@ impl LifecycleLedgerV1 {
             ));
         }
         let apply_ordinal = apply.ordinal();
+        let apply_owner = apply.owner();
+        if apply_owner.first_admission_ordinal() == apply_ordinal
+            && apply.reconstruction_source() == apply_owner.causal_root().digest()
+            && self
+                .records
+                .iter()
+                .filter(|record| record.owner() == apply_owner)
+                .count()
+                == 1
+        {
+            let apply_payload = apply
+                .durable_payload()
+                .expect("validated standalone Apply payload");
+            let mut released_validates = self.records.iter().filter(|record| {
+                record.ordinal() < apply_ordinal
+                    && record.owner() != apply_owner
+                    && record.work_class() == Some(LifecycleWorkClass::Validate)
+                    && record.stage().is_some_and(|stage| {
+                        stage.kind() == LifecycleStageKind::ValidateBody
+                            && stage.predecessor_scope() == PredecessorScope::Independent
+                    })
+                    && record.terminal() == Some(Some(TerminalOutcome::Advanced))
+                    && record.continuation() == Some(DurableContinuation::AdvancedNoSuccessor)
+                    && record.durable_payload().is_some_and(|validate_payload| {
+                        recovered_decision_body_continuation_is_exact(
+                            DurableContinuationEdge::ValidateToApply,
+                            &record.replay_authority,
+                            validate_payload,
+                            &apply.replay_authority,
+                            apply_payload,
+                        ) == Some(true)
+                    })
+            });
+            if released_validates.next().is_some() && released_validates.next().is_none() {
+                return Ok(apply_ordinal);
+            }
+        }
         let validate_ordinal = apply_ordinal.checked_sub(1).ok_or_else(|| {
             LifecycleLedgerError::InvalidLedger(
                 "terminal Decision Apply has no Validate predecessor".to_owned(),
@@ -2573,8 +2816,9 @@ impl LifecycleLedgerV1 {
     ///
     /// The Apply worker can durably commit State/Kura before its completion is
     /// observed by the serialized lifecycle owner. A process failure in that
-    /// interval leaves the exact four-row Decision lineage in LedgerV1 with a
-    /// live Apply tail, while Kura already exposes a canonical CompleteTip.
+    /// interval leaves either the exact four-row Decision lineage or one
+    /// released-terminal standalone Apply live in LedgerV1, while Kura already
+    /// exposes a canonical CompleteTip.
     /// CompleteTip is sufficient to terminalize only that exact tail: its full
     /// finality artifact reauthenticates the retained replay envelope, and the
     /// ordinary terminal-chain oracle below rechecks every immutable owner,

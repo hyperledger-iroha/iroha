@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_LIB="${ROOT_DIR}/crates/connect_norito_bridge/src/lib.rs"
 PARLIAMENT_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/parliament_timed_ovn_ffi.rs"
 DATA_MODEL_PRIVACY="${ROOT_DIR}/crates/iroha_data_model/src/privacy/protocol.rs"
+HIJIRI_API="${ROOT_DIR}/crates/iroha_torii_shared/src/validation_fee_api.rs"
 HEADER="${ROOT_DIR}/crates/connect_norito_bridge/include/connect_norito_bridge.h"
 UMBRELLA="${ROOT_DIR}/crates/connect_norito_bridge/include/NoritoBridge.h"
 SWIFT_CONTRACT="${ROOT_DIR}/IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
@@ -37,6 +38,9 @@ SELF_TESTS=(
   --self-test-bad-privacy-signature
   --self-test-missing-privacy-rust-symbol
   --self-test-missing-parliament-header-symbol
+  --self-test-missing-hijiri-header-symbol
+  --self-test-bad-hijiri-signature
+  --self-test-bad-hijiri-constant
   --self-test-missing-sorafs-reference-header-symbol
   --self-test-missing-sorafs-reference-rust-symbol
   --self-test-bad-sorafs-reference-bundle-signature
@@ -56,8 +60,9 @@ run_contract_check() {
   local swift_contract="$4"
   local data_model_privacy="$5"
   local parliament_rust="$6"
+  local hijiri_api="$7"
 
-  python3 - "${rust_lib}" "${header}" "${umbrella}" "${swift_contract}" "${data_model_privacy}" "${parliament_rust}" <<'PY'
+  python3 - "${rust_lib}" "${header}" "${umbrella}" "${swift_contract}" "${data_model_privacy}" "${parliament_rust}" "${hijiri_api}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -68,6 +73,7 @@ umbrella = Path(sys.argv[3]).read_text(encoding="utf-8")
 swift = Path(sys.argv[4]).read_text(encoding="utf-8")
 privacy_model = Path(sys.argv[5]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[6]).read_text(encoding="utf-8")
+hijiri_api = Path(sys.argv[7]).read_text(encoding="utf-8")
 
 KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
@@ -181,9 +187,15 @@ DETACHED_EXPORTS = {
 }
 
 PARLIAMENT_TIMED_OVN_EXPORTS = {
+    "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1",
     "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
     "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",
     "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
+}
+
+VALIDATION_FEE_HIJIRI_QUOTE_EXPORTS = {
+    "connect_norito_validation_fee_hijiri_quote_request_v1",
+    "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
 }
 
 TRANSACTION_SIGNER_BASE_EXPORTS = {
@@ -546,6 +558,19 @@ exact(
     header_parliament_timed_ovn,
 )
 
+rust_hijiri_quote = rust_exports("connect_norito_validation_fee_hijiri_quote_")
+header_hijiri_quote = header_exports("connect_norito_validation_fee_hijiri_quote_")
+exact(
+    "Rust validation-fee Hijiri quote",
+    VALIDATION_FEE_HIJIRI_QUOTE_EXPORTS,
+    rust_hijiri_quote,
+)
+exact(
+    "C header validation-fee Hijiri quote",
+    VALIDATION_FEE_HIJIRI_QUOTE_EXPORTS,
+    header_hijiri_quote,
+)
+
 signer_name = re.compile(
     r"^connect_norito_encode_[a-z0-9_]+_signed_transaction(?:_alg)?$"
 )
@@ -602,6 +627,7 @@ require_signature_parity(
     | SORAFS_REFERENCE_EXPORTS
     | DETACHED_EXPORTS
     | PARLIAMENT_TIMED_OVN_EXPORTS
+    | VALIDATION_FEE_HIJIRI_QUOTE_EXPORTS
     | rust_transaction_signers
     | {"connect_norito_bridge_abi_version", "connect_norito_free"}
 )
@@ -626,6 +652,51 @@ if re.search(r"const\s+ERR_PARLIAMENT_TIMED_OVN\s*:\s*c_int\s*=\s*-505\s*;", rus
     raise SystemExit("Rust Parliament timed-OVN error code must be exactly -505")
 if re.search(r"#define\s+CONNECT_NORITO_ERR_PARLIAMENT_TIMED_OVN\s+-505(?:\s|$)", header) is None:
     raise SystemExit("C Parliament timed-OVN error code must be exactly -505")
+if re.search(r"const\s+ERR_VALIDATION_FEE_HIJIRI_QUOTE\s*:\s*c_int\s*=\s*-506\s*;", rust) is None:
+    raise SystemExit("Rust validation-fee Hijiri quote error code must be exactly -506")
+if re.search(
+    r"#define\s+CONNECT_NORITO_ERR_VALIDATION_FEE_HIJIRI_QUOTE\s+-506(?:\s|$)",
+    header,
+) is None:
+    raise SystemExit("C validation-fee Hijiri quote error code must be exactly -506")
+
+for rust_name, rust_type, rust_value, header_name, header_value in (
+    (
+        "VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1",
+        "u16",
+        r"1",
+        "CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1",
+        "1",
+    ),
+    (
+        "VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1",
+        "u32",
+        r"100_000",
+        "CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS_V1",
+        "100000",
+    ),
+    (
+        "VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1",
+        "usize",
+        r"4\s*\*\s*1024",
+        "CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1",
+        "4096",
+    ),
+    (
+        "VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1",
+        "usize",
+        r"64\s*\*\s*1024",
+        "CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1",
+        "65536",
+    ),
+):
+    if re.search(
+        rf"pub\s+const\s+{rust_name}\s*:\s*{rust_type}\s*=\s*{rust_value}\s*;",
+        hijiri_api,
+    ) is None:
+        raise SystemExit(f"shared validation-fee Hijiri quote constant drift: {rust_name}")
+    if re.search(rf"#define\s+{header_name}\s+{header_value}(?:\s|$)", header) is None:
+        raise SystemExit(f"C validation-fee Hijiri quote constant drift: {header_name}")
 if re.search(
     r"pub\s+const\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1\s*:\s*usize\s*=\s*32\s*;",
     rust,
@@ -641,6 +712,16 @@ if re.search(
     header,
 ) is None:
     raise SystemExit("C Parliament timed-OVN casting-proof bound must be exactly 8 MiB")
+if re.search(
+    r"pub\s+const\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1\s*:\s*usize\s*=\s*41\s*;",
+    rust,
+) is None:
+    raise SystemExit("Rust Parliament timed-OVN casting-proof page result width must be 41")
+if re.search(
+    r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_RESULT_BYTES_V1\s+41(?:\s|$)",
+    header,
+) is None:
+    raise SystemExit("C Parliament timed-OVN casting-proof page result width must be 41")
 if re.search(
     r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1\s+32(?:\s|$)",
     header,
@@ -697,7 +778,8 @@ print(
     f"{len(PRIVACY_EXPORTS)} privacy exports, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS exports, "
     f"{len(DETACHED_EXPORTS)} detached-transaction exports, and "
-    f"{len(PARLIAMENT_TIMED_OVN_EXPORTS)} Parliament timed-OVN exports"
+    f"{len(PARLIAMENT_TIMED_OVN_EXPORTS)} Parliament timed-OVN exports, and "
+    f"{len(VALIDATION_FEE_HIJIRI_QUOTE_EXPORTS)} validation-fee Hijiri quote exports"
 )
 PY
 }
@@ -746,6 +828,7 @@ make_negative_workspace() {
   cp "${RUST_LIB}" "${tmp}/lib.rs"
   cp "${PARLIAMENT_RUST}" "${tmp}/parliament_timed_ovn_ffi.rs"
   cp "${DATA_MODEL_PRIVACY}" "${tmp}/privacy.rs"
+  cp "${HIJIRI_API}" "${tmp}/validation_fee_api.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"
   cp "${UMBRELLA}" "${tmp}/NoritoBridge.h"
   cp "${SWIFT_CONTRACT}" "${tmp}/KagemushaRecursiveSpendV2.swift"
@@ -761,7 +844,8 @@ expect_contract_rejection() {
       "${tmp}/NoritoBridge.h" \
       "${tmp}/KagemushaRecursiveSpendV2.swift" \
       "${tmp}/privacy.rs" \
-      "${tmp}/parliament_timed_ovn_ffi.rs" 2>&1)"; then
+      "${tmp}/parliament_timed_ovn_ffi.rs" \
+      "${tmp}/validation_fee_api.rs" 2>&1)"; then
     echo "[bridge-header] negative control unexpectedly passed: ${MODE}" >&2
     exit 1
   fi
@@ -786,7 +870,8 @@ if [[ "${MODE}" == --self-test-* ]]; then
     "${UMBRELLA}" \
     "${SWIFT_CONTRACT}" \
     "${DATA_MODEL_PRIVACY}" \
-    "${PARLIAMENT_RUST}" >/dev/null
+    "${PARLIAMENT_RUST}" \
+    "${HIJIRI_API}" >/dev/null
   tmp="$(make_negative_workspace)"
   trap 'rm -rf "${tmp}"' EXIT
   tmp_rust="${tmp}/lib.rs"
@@ -810,6 +895,21 @@ if [[ "${MODE}" == --self-test-* ]]; then
       replace_once "${tmp_header}" \
         "connect_norito_parliament_timed_ovn_ballot_from_proof_v1" \
         "removed_connect_norito_parliament_timed_ovn_ballot_from_proof_v1"
+      ;;
+    --self-test-missing-hijiri-header-symbol)
+      replace_once "${tmp_header}" \
+        "connect_norito_validation_fee_hijiri_quote_response_verify_v1" \
+        "removed_connect_norito_validation_fee_hijiri_quote_response_verify_v1"
+      ;;
+    --self-test-bad-hijiri-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_validation_fee_hijiri_quote_response_verify_v1\s*\(\s*const uint8_t\* response_norito,\s*)unsigned long response_norito_len' \
+        '\g<1>uint32_t response_norito_len'
+      ;;
+    --self-test-bad-hijiri-constant)
+      replace_once "${tmp_header}" \
+        "#define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1 65536" \
+        "#define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1 65535"
       ;;
     --self-test-forbidden-v3-alias)
       replace_once "${tmp_header}" \
@@ -980,7 +1080,8 @@ run_contract_check \
   "${UMBRELLA}" \
   "${SWIFT_CONTRACT}" \
   "${DATA_MODEL_PRIVACY}" \
-  "${PARLIAMENT_RUST}"
+  "${PARLIAMENT_RUST}" \
+  "${HIJIRI_API}"
 
 if ! command -v "${CC:-cc}" >/dev/null 2>&1; then
   echo "[connect-norito-header] required C compiler not found: ${CC:-cc}" >&2

@@ -14,7 +14,8 @@ v2_apply_test!(
             isi::SetKeyValue,
         };
         // Finality reauthentication binds the fixture context to the State network.
-        let fixture = ApplyFixture::new_with_options_and_network(false, false, true, true, true);
+        let fixture =
+            ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle();
         let assert_fixture_context = |stage: &str| {
             assert_eq!(
                 crate::sumeragi::v2_recovery::committed_execution_policy_hash(

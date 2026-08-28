@@ -1289,6 +1289,7 @@ fn prepare_tombstoned_autonomous_archive(
             &claim_path,
             &pending_claim,
             false,
+            AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared,
             0,
             AutonomousLaneReleasedClaimDisposition::QueueReleasePrepared,
         )
@@ -1311,6 +1312,7 @@ fn prepare_tombstoned_autonomous_archive(
             &claim_path,
             &released_claim,
             true,
+            AutonomousLaneClaimReleaseAuthorizationMode::QueuePrepared,
             0,
             AutonomousLaneReleasedClaimDisposition::QueueReleasePrepared,
         )

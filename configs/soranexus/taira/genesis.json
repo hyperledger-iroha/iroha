@@ -249,6 +249,32 @@
           "max_transactions": 512
         },
         "custom": {
+          "iroha:hijiri_parameters_v1": {
+            "id": "iroha:hijiri_parameters_v1",
+            "payload": {
+              "version": 1,
+              "revision": 1,
+              "previous_digest": null,
+              "fee_policy": {
+                "bands": [
+                  {
+                    "max_risk": [
+                      65536
+                    ],
+                    "multiplier": [
+                      65536
+                    ]
+                  }
+                ],
+                "penalty_cap": [
+                  65536
+                ]
+              },
+              "default_account_risk": [
+                0
+              ]
+            }
+          },
           "ivm_gas_limit_per_block": {
             "id": "ivm_gas_limit_per_block",
             "payload": 50000000

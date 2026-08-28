@@ -167,6 +167,14 @@ test(
     const health = await client.getHealth();
     assert.ok(health, "health snapshot should be present");
 
+    const offlineCapability = await client.getOfflineCapability();
+    assert.deepEqual(offlineCapability, {
+      cash_handoff_capability: "cash_handoff_v1",
+      required_bridge_abi_version: 23,
+      max_hops: 8,
+      ready: true,
+    });
+
     const metricsText = await client.getMetrics({ asText: true });
     assert.equal(typeof metricsText, "string");
     assert.notEqual(metricsText.length, 0);

@@ -685,6 +685,7 @@ fn sample_service(state_bindings: Vec<SoraStateBindingV1>) -> SoraServiceManifes
             expected_schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
         },
         replicas: NonZeroU16::new(3).expect("nonzero"),
+        placement_targets: BTreeSet::new(),
         route: Some(SoraRouteTargetV1 {
             host: "portal.sora".to_string(),
             path_prefix: "/app".to_string(),
