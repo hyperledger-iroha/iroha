@@ -2519,9 +2519,7 @@ mod tests {
         activation_block.commit().unwrap();
         let view = state.view();
         let roster =
-            <crate::state::StateView as crate::state::StakeSnapshot>::epoch_validator_peer_ids(
-                &view, 0,
-            )
+            view.epoch_validator_peer_ids_for_testing(0)
             .expect("stake-elected roster should be present");
         assert_eq!(
             roster,
@@ -4212,7 +4210,7 @@ mod tests {
         );
         {
             let view = state.view();
-            let roster = crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0)
+            let roster = view.epoch_validator_peer_ids_for_testing(0)
                 .expect("active validator should appear before key disable");
             assert!(
                 roster.contains(&validator_peer),
@@ -4228,7 +4226,7 @@ mod tests {
         state_block.commit().unwrap();
         let view = state.view();
         let roster =
-            crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0).unwrap_or_default();
+            view.epoch_validator_peer_ids_for_testing(0).unwrap_or_default();
         assert!(
             !roster.contains(&validator_peer),
             "disabled consensus key should remove validator from snapshot"
@@ -4284,7 +4282,7 @@ mod tests {
         );
         {
             let view = state.view();
-            let roster = crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0)
+            let roster = view.epoch_validator_peer_ids_for_testing(0)
                 .expect("validator should appear before topology change");
             assert!(
                 roster.contains(&validator_peer),
@@ -4303,7 +4301,7 @@ mod tests {
         state_block.commit().unwrap();
         let view = state.view();
         let roster =
-            crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0).unwrap_or_default();
+            view.epoch_validator_peer_ids_for_testing(0).unwrap_or_default();
         assert!(
             roster.contains(&validator_peer),
             "active validator should remain in the snapshot even if commit topology omits it"
@@ -4359,7 +4357,7 @@ mod tests {
         );
         {
             let view = state.view();
-            let roster = crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0)
+            let roster = view.epoch_validator_peer_ids_for_testing(0)
                 .expect("validator should appear before peer removal");
             assert!(
                 roster.contains(&validator_peer),
@@ -4382,7 +4380,7 @@ mod tests {
         state_block.commit().unwrap();
         let view = state.view();
         let roster =
-            crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0).unwrap_or_default();
+            view.epoch_validator_peer_ids_for_testing(0).unwrap_or_default();
         assert!(
             !roster.contains(&validator_peer),
             "validator should be dropped when its peer is removed from WSV"
@@ -5146,9 +5144,7 @@ mod tests {
             .expect("validator record after peer removal");
         assert!(matches!(record.status, PublicLaneValidatorStatus::Exited));
         let roster =
-            <crate::state::StateView as crate::state::StakeSnapshot>::epoch_validator_peer_ids(
-                &view, 0,
-            );
+            view.epoch_validator_peer_ids_for_testing(0);
         assert!(
             roster
                 .as_ref()

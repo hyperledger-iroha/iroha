@@ -806,13 +806,13 @@ pub(crate) fn current_axt_slot_from_block(header: &BlockHeader, slot_length_ms: 
 }
 include!("state/axt_handle_budget.rs");
 /// Helper utilities for mutating MV cells that store vectors.
-pub trait CellVecExt<T: MvValue> {
+trait CellVecExt<T: MvValue> {
     /// Apply a mutation to the vector contents within a transaction boundary.
     fn mutate_vec<R>(&mut self, f: impl FnOnce(&mut Vec<T>) -> R) -> R;
-    /// Replace the stored vector with `new_vec`, returning the previous contents.
-    fn replace_vec(&mut self, new_vec: Vec<T>) -> Vec<T>;
     /// Remove and return the stored vector, leaving the cell empty.
-    fn take_vec(&mut self) -> Vec<T>;
+    fn take_vec(&mut self) -> Vec<T> {
+        self.mutate_vec(core::mem::take)
+    }
 }
 impl<T: MvValue> CellVecExt<T> for Cell<Vec<T>> {
     fn mutate_vec<R>(&mut self, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
@@ -823,16 +823,6 @@ impl<T: MvValue> CellVecExt<T> for Cell<Vec<T>> {
         block.commit();
         result
     }
-    fn replace_vec(&mut self, new_vec: Vec<T>) -> Vec<T> {
-        let mut incoming = new_vec;
-        self.mutate_vec(|current| {
-            core::mem::swap(current, &mut incoming);
-        });
-        incoming
-    }
-    fn take_vec(&mut self) -> Vec<T> {
-        self.replace_vec(Vec::new())
-    }
 }
 impl<T: MvValue> CellVecExt<T> for CellBlock<'_, Vec<T>> {
     fn mutate_vec<R>(&mut self, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
@@ -841,30 +831,10 @@ impl<T: MvValue> CellVecExt<T> for CellBlock<'_, Vec<T>> {
         transaction.apply();
         result
     }
-    fn replace_vec(&mut self, new_vec: Vec<T>) -> Vec<T> {
-        let mut incoming = new_vec;
-        self.mutate_vec(|current| {
-            core::mem::swap(current, &mut incoming);
-        });
-        incoming
-    }
-    fn take_vec(&mut self) -> Vec<T> {
-        self.replace_vec(Vec::new())
-    }
 }
 impl<T: MvValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
     fn mutate_vec<R>(&mut self, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
         f(&mut **self)
-    }
-    fn replace_vec(&mut self, new_vec: Vec<T>) -> Vec<T> {
-        let mut incoming = new_vec;
-        self.mutate_vec(|current| {
-            core::mem::swap(current, &mut incoming);
-        });
-        incoming
-    }
-    fn take_vec(&mut self) -> Vec<T> {
-        self.replace_vec(Vec::new())
     }
 }
 // Keep the overlay field inventory centralized: constructors for block, transaction, and
@@ -6929,8 +6899,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> &mut StorageTransaction<'block, 'world, StatePath, Vec<u8>> {
         &mut self.smart_contract_state
     }
-    /// Provides mutable access to contract manifests for tests and migration
-    /// fixtures that need to simulate pre-existing world-state records.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to contract manifests for tests that need to
+    /// simulate corrupted pre-existing world-state records.
     pub fn contract_manifests_mut_for_testing(
         &mut self,
     ) -> &mut StorageTransaction<
@@ -13370,17 +13341,6 @@ where
     peers.dedup();
     peers
 }
-/// Legacy test-only stake-snapshot facade.
-///
-/// Production Sumeragi v2 constructs successor rosters only through
-/// `epoch_validator_peer_ids_from_world_with_seed`, after authenticating a
-/// finalized threshold-beacon pulse. This facade remains solely for staking
-/// eligibility fixtures which do not construct consensus contexts.
-#[cfg(test)]
-pub trait StakeSnapshot {
-    /// Return ordered validator `PeerIds` for the given `epoch`, or `None` if unavailable.
-    fn epoch_validator_peer_ids(&self, epoch: u64) -> Option<Vec<PeerId>>;
-}
 fn bounded_global_committee_size(
     world: &impl WorldReadOnly,
     available_candidates: usize,
@@ -13432,30 +13392,6 @@ fn select_prf_committee(
     committee.sort();
     Some(committee)
 }
-#[cfg(test)]
-pub(crate) fn epoch_validator_peer_ids_from_world<I>(
-    world: &impl WorldReadOnly,
-    commit_topology: I,
-    block_height: u64,
-    nexus: &iroha_config::parameters::actual::Nexus,
-    epoch: u64,
-) -> Option<Vec<PeerId>>
-where
-    I: IntoIterator<Item = PeerId>,
-{
-    let selection_seed = world
-        .sumeragi_npos_parameters()
-        .map_or([0; 32], |params| params.epoch_seed);
-    epoch_validator_peer_ids_from_world_with_seed(
-        world,
-        commit_topology,
-        block_height,
-        nexus,
-        epoch,
-        selection_seed,
-    )
-}
-
 /// Resolve an epoch validator committee using one already-authenticated seed.
 ///
 /// Consensus boundary construction must use this entry point so roster
@@ -13642,15 +13578,27 @@ where
     select_prf_committee(world, epoch, selection_seed, candidates)
 }
 #[cfg(test)]
-impl StakeSnapshot for StateView<'_> {
-    fn epoch_validator_peer_ids(&self, epoch: u64) -> Option<Vec<PeerId>> {
+impl StateView<'_> {
+    /// Resolve a configured-seed epoch roster for staking eligibility tests.
+    ///
+    /// Production consensus uses [`epoch_validator_peer_ids_from_world_with_seed`]
+    /// after authenticating the finalized threshold-beacon pulse.
+    pub(crate) fn epoch_validator_peer_ids_for_testing(
+        &self,
+        epoch: u64,
+    ) -> Option<Vec<PeerId>> {
         let block_height = u64::try_from(self.block_hashes.len()).unwrap_or(u64::MAX);
-        epoch_validator_peer_ids_from_world(
+        let selection_seed = self
+            .world()
+            .sumeragi_npos_parameters()
+            .map_or([0; 32], |params| params.epoch_seed);
+        epoch_validator_peer_ids_from_world_with_seed(
             self.world(),
             self.commit_topology.iter().cloned(),
             block_height,
             &self.nexus,
             epoch,
+            selection_seed,
         )
     }
 }
@@ -14317,7 +14265,7 @@ mod stake_snapshot_tests {
         wb.commit();
         let sv = state.view();
         let roster =
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+            sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
         live_peers.sort();
         assert_eq!(
             roster, live_peers,
@@ -14507,17 +14455,13 @@ mod stake_snapshot_tests {
         wb.council.insert(0, council);
         wb.commit();
         let sv = state.view();
-        let out = <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).unwrap();
-        let fast = state
-            .epoch_validator_peer_ids_fast(0)
-            .expect("fast epoch roster should exist");
+        let out = sv.epoch_validator_peer_ids_for_testing(0).unwrap();
         let mut expected: Vec<_> = kp
             .iter()
             .map(|keypair| PeerId::from(keypair.public_key().clone()))
             .collect();
         expected.sort();
         assert_eq!(out, expected);
-        assert_eq!(fast, out);
     }
     #[test]
     fn council_members_without_eligible_validator_bindings_cannot_fill_epoch_roster() {
@@ -14549,7 +14493,7 @@ mod stake_snapshot_tests {
         );
         world.commit();
         assert!(
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&state.view(), 0).is_none(),
+            state.view().epoch_validator_peer_ids_for_testing(0).is_none(),
             "council membership must not synthesize validator authority without an eligible lane binding"
         );
     }
@@ -14584,7 +14528,7 @@ mod stake_snapshot_tests {
         );
         world.commit();
         assert!(
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&state.view(), 0).is_none(),
+            state.view().epoch_validator_peer_ids_for_testing(0).is_none(),
             "ignoring the multisig member leaves an underfilled committee"
         );
     }
@@ -14645,7 +14589,7 @@ mod stake_snapshot_tests {
         }
         let sv = state.view();
         let roster =
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+            sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
         let mut expected = peers;
         expected.sort();
         assert_eq!(
@@ -14702,7 +14646,7 @@ mod stake_snapshot_tests {
         }
         wb.commit();
         let sv = state.view();
-        let roster = <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).unwrap();
+        let roster = sv.epoch_validator_peer_ids_for_testing(0).unwrap();
         assert_eq!(roster.len(), 4);
         assert!(roster.contains(&PeerId::from(active_kp.public_key().clone())));
         assert!(!roster.contains(&PeerId::from(jailed_kp.public_key().clone())));
@@ -14757,7 +14701,7 @@ mod stake_snapshot_tests {
         wb.commit();
         let sv = state.view();
         let roster =
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+            sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
         assert_eq!(roster.len(), 4);
         assert!(roster.contains(&active_peer));
         assert!(
@@ -14813,7 +14757,7 @@ mod stake_snapshot_tests {
         wb.commit();
         let sv = state.view();
         let roster =
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+            sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
         assert_eq!(roster.len(), 4);
         assert!(roster.contains(&PeerId::from(present_kp.public_key().clone())));
         assert!(!roster.contains(&PeerId::from(missing_kp.public_key().clone())));
@@ -14859,7 +14803,7 @@ mod stake_snapshot_tests {
         }
         let sv = state.view();
         let roster =
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+            sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
         assert_eq!(roster.len(), peers.len());
         for peer in peers {
             assert!(roster.contains(&peer));
@@ -14947,7 +14891,7 @@ mod stake_snapshot_tests {
         }
         let sv = state.view();
         let roster =
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+            sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
         let expected: Vec<_> = public_keypairs
             .iter()
             .map(|kp| PeerId::from(kp.public_key().clone()))
@@ -15021,7 +14965,7 @@ mod stake_snapshot_tests {
         wb.commit();
         let sv = state.view();
         let roster =
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+            sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
         assert_eq!(roster.len(), 4);
         assert_eq!(
             roster.iter().filter(|peer| *peer == &peer_a).count(),
@@ -15107,7 +15051,7 @@ mod stake_snapshot_tests {
         wb.commit();
         let sv = state.view();
         let roster =
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+            sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
         assert_eq!(roster.len(), 4);
         assert!(roster.contains(&live_peer));
         assert!(!roster.contains(&expired_peer));
@@ -15137,7 +15081,7 @@ mod stake_snapshot_tests {
         wb.commit();
         let sv = state.view();
         assert!(
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).is_none(),
+            sv.epoch_validator_peer_ids_for_testing(0).is_none(),
             "disabled consensus key should be excluded from the roster"
         );
     }
@@ -15210,7 +15154,7 @@ mod stake_snapshot_tests {
         wb.commit();
         let sv = state.view();
         let roster =
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+            sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
         assert_eq!(roster.len(), 4);
         assert!(roster.contains(&stake_peer));
         assert!(!roster.contains(&admin_peer));
@@ -15234,7 +15178,7 @@ mod stake_snapshot_tests {
         wb.commit();
         let sv = state.view();
         assert!(
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).is_none(),
+            sv.epoch_validator_peer_ids_for_testing(0).is_none(),
             "admin-managed lane validators must not substitute for an empty NPoS candidate set"
         );
     }
@@ -15262,7 +15206,7 @@ mod stake_snapshot_tests {
         wb.commit();
         let sv = state.view();
         assert!(
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).is_none(),
+            sv.epoch_validator_peer_ids_for_testing(0).is_none(),
             "world peers without eligible public-lane stake must not become NPoS validators"
         );
     }
@@ -15284,7 +15228,7 @@ mod stake_snapshot_tests {
         wb.commit();
         let sv = state.view();
         assert!(
-            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).is_none(),
+            sv.epoch_validator_peer_ids_for_testing(0).is_none(),
             "below-minimum-stake validators must not substitute for an empty NPoS candidate set"
         );
     }
@@ -28082,19 +28026,6 @@ impl State {
         hash: &HashOf<TransactionEntrypoint>,
     ) -> Option<NonZeroUsize> {
         self.transactions.view().get(hash)
-    }
-    /// Legacy test-only epoch roster lookup without constructing a full [`StateView`].
-    ///
-    /// Production consensus must authenticate and inject the finalized global
-    /// threshold-beacon seed instead of calling this configured-seed fallback.
-    #[cfg(test)]
-    #[track_caller]
-    pub fn epoch_validator_peer_ids_fast(&self, epoch: u64) -> Option<Vec<PeerId>> {
-        let block_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
-        let world = self.world_view();
-        let commit_topology = self.commit_topology_snapshot();
-        let nexus = self.nexus_snapshot();
-        epoch_validator_peer_ids_from_world(&world, commit_topology, block_height, &nexus, epoch)
     }
     /// Borrow the configured chain identifier.
     ///
@@ -46154,8 +46085,7 @@ impl<'state> StateBlock<'state> {
         self.validate_da_commitment_uniqueness(bundle)?;
         self.da_receipt_cursors
             .read()
-            .clone()
-            .record_bundle(height, &bundle.commitments)
+            .validate_bundle(height, &bundle.commitments)
             .map_err(BlockValidationError::DaReceiptCursor)?;
         if let Err(err) =
             cursors.record_records(&self.nexus.lane_config, &bundle.commitments, height)

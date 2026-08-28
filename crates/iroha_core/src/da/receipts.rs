@@ -347,6 +347,10 @@ pub struct DaReceiptCursor {
     /// Block height that advanced the cursor.
     pub last_block_height: u64,
 }
+struct DaReceiptCursorPlan {
+    advanced: Vec<(LaneEpoch, u64)>,
+    updates: BTreeMap<LaneEpoch, DaReceiptCursor>,
+}
 impl DaReceiptCursorIndex {
     /// Record a single cursor advancement.
     ///
@@ -361,47 +365,14 @@ impl DaReceiptCursorIndex {
         sequence: u64,
         block_height: u64,
     ) -> Result<(), DaReceiptCursorError> {
-        match self.by_lane_epoch.get_mut(&lane_epoch) {
-            None => {
-                self.by_lane_epoch.insert(
-                    lane_epoch,
-                    DaReceiptCursor {
-                        epoch: lane_epoch.epoch,
-                        sequence,
-                        last_block_height: block_height,
-                    },
-                );
-                Ok(())
-            }
-            Some(cursor) => {
-                if sequence < cursor.sequence {
-                    return Err(DaReceiptCursorError::Regression {
-                        lane: lane_epoch.lane_id,
-                        epoch: lane_epoch.epoch,
-                        observed: sequence,
-                        recorded: cursor.sequence,
-                    });
-                }
-                if sequence == cursor.sequence {
-                    return Ok(());
-                }
-                let expected = cursor.sequence.saturating_add(1);
-                if sequence != expected {
-                    return Err(DaReceiptCursorError::MissingSequence {
-                        lane: lane_epoch.lane_id,
-                        epoch: lane_epoch.epoch,
-                        expected,
-                        observed: sequence,
-                    });
-                }
-                *cursor = DaReceiptCursor {
-                    epoch: lane_epoch.epoch,
-                    sequence,
-                    last_block_height: block_height,
-                };
-                Ok(())
-            }
-        }
+        let cursor = Self::next_cursor(
+            self.by_lane_epoch.get(&lane_epoch).copied(),
+            lane_epoch,
+            sequence,
+            block_height,
+        )?;
+        self.by_lane_epoch.insert(lane_epoch, cursor);
+        Ok(())
     }
     /// Record all cursors present in the commitment bundle.
     ///
@@ -414,15 +385,81 @@ impl DaReceiptCursorIndex {
         block_height: u64,
         records: &[DaCommitmentRecord],
     ) -> Result<Vec<(LaneEpoch, u64)>, DaReceiptCursorError> {
-        let mut candidate = self.clone();
-        let mut advanced = Vec::new();
+        let plan = self.plan_bundle(block_height, records)?;
+        self.by_lane_epoch.extend(plan.updates);
+        Ok(plan.advanced)
+    }
+    /// Validate a bundle without mutating the cursor index.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DaReceiptCursorError`] when any record regresses or skips the next expected
+    /// sequence relative to its cursor or an earlier record in the same bundle.
+    pub(crate) fn validate_bundle(
+        &self,
+        block_height: u64,
+        records: &[DaCommitmentRecord],
+    ) -> Result<(), DaReceiptCursorError> {
+        self.plan_bundle(block_height, records).map(|_| ())
+    }
+    fn plan_bundle(
+        &self,
+        block_height: u64,
+        records: &[DaCommitmentRecord],
+    ) -> Result<DaReceiptCursorPlan, DaReceiptCursorError> {
+        let mut advanced = Vec::with_capacity(records.len());
+        let mut updates = BTreeMap::new();
         for record in records {
             let lane_epoch = LaneEpoch::new(record.lane_id, record.epoch);
-            candidate.record(lane_epoch, record.sequence, block_height)?;
+            let current = updates
+                .get(&lane_epoch)
+                .copied()
+                .or_else(|| self.by_lane_epoch.get(&lane_epoch).copied());
+            let cursor =
+                Self::next_cursor(current, lane_epoch, record.sequence, block_height)?;
+            updates.insert(lane_epoch, cursor);
             advanced.push((lane_epoch, record.sequence));
         }
-        *self = candidate;
-        Ok(advanced)
+        Ok(DaReceiptCursorPlan { advanced, updates })
+    }
+    fn next_cursor(
+        current: Option<DaReceiptCursor>,
+        lane_epoch: LaneEpoch,
+        sequence: u64,
+        block_height: u64,
+    ) -> Result<DaReceiptCursor, DaReceiptCursorError> {
+        let Some(cursor) = current else {
+            return Ok(DaReceiptCursor {
+                epoch: lane_epoch.epoch,
+                sequence,
+                last_block_height: block_height,
+            });
+        };
+        if sequence < cursor.sequence {
+            return Err(DaReceiptCursorError::Regression {
+                lane: lane_epoch.lane_id,
+                epoch: lane_epoch.epoch,
+                observed: sequence,
+                recorded: cursor.sequence,
+            });
+        }
+        if sequence == cursor.sequence {
+            return Ok(cursor);
+        }
+        let expected = cursor.sequence.saturating_add(1);
+        if sequence != expected {
+            return Err(DaReceiptCursorError::MissingSequence {
+                lane: lane_epoch.lane_id,
+                epoch: lane_epoch.epoch,
+                expected,
+                observed: sequence,
+            });
+        }
+        Ok(DaReceiptCursor {
+            epoch: lane_epoch.epoch,
+            sequence,
+            last_block_height: block_height,
+        })
     }
     /// Return the highest recorded sequence for a `(lane, epoch)` pair.
     #[must_use]
@@ -1149,6 +1186,66 @@ mod tests {
                 .expect("cursor")
                 .last_block_height,
             1
+        );
+    }
+    #[test]
+    fn receipt_cursor_validate_bundle_is_read_only() {
+        let lane_epoch = LaneEpoch::new(LaneId::new(0), 1);
+        let mut index = DaReceiptCursorIndex::default();
+        index
+            .record(lane_epoch, 1, 1)
+            .expect("initial receipt cursor record");
+        let records = [
+            sample_record(&sample_receipt(0, 1, 2), 2),
+            sample_record(&sample_receipt(0, 1, 3), 3),
+        ];
+        index
+            .validate_bundle(2, &records)
+            .expect("consecutive in-bundle advances must validate");
+        assert_eq!(index.highest(lane_epoch), Some(1));
+        assert_eq!(
+            index
+                .by_lane_epoch
+                .get(&lane_epoch)
+                .expect("original cursor")
+                .last_block_height,
+            1,
+            "validation must not publish its staged cursor"
+        );
+        let advanced = index
+            .record_bundle(2, &records)
+            .expect("validated bundle must commit");
+        assert_eq!(advanced, vec![(lane_epoch, 2), (lane_epoch, 3)]);
+        assert_eq!(index.highest(lane_epoch), Some(3));
+        assert_eq!(
+            index
+                .by_lane_epoch
+                .get(&lane_epoch)
+                .expect("advanced cursor")
+                .last_block_height,
+            2
+        );
+    }
+    #[test]
+    fn receipt_cursor_bundle_plan_only_stages_touched_lane_epochs() {
+        const INDEXED_LANES: u32 = 2_048;
+        let mut index = DaReceiptCursorIndex::default();
+        for lane in 0..INDEXED_LANES {
+            index
+                .record(LaneEpoch::new(LaneId::new(lane), 1), 1, 1)
+                .expect("seed receipt cursor");
+        }
+        let target_lane = LaneId::new(INDEXED_LANES - 1);
+        let record = sample_record(&sample_receipt(target_lane.as_u32(), 1, 2), 2);
+        let plan = index
+            .plan_bundle(2, std::slice::from_ref(&record))
+            .expect("single-lane bundle plan");
+        assert_eq!(index.by_lane_epoch.len(), INDEXED_LANES as usize);
+        assert_eq!(plan.updates.len(), 1);
+        assert_eq!(
+            plan.advanced,
+            vec![(LaneEpoch::new(target_lane, 1), 2)],
+            "planning work must scale with touched lane/epoch keys, not the full cursor index"
         );
     }
     #[test]
